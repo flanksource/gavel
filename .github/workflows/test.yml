@@ -1,0 +1,75 @@
+name: Test
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        go-version: ["1.25"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Install dependencies
+        run: |
+          go mod download
+          go mod tidy
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: make test
+        env:
+          CGO_ENABLED: 1
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        run: make build
+
+      - name: Test binary
+        run: |
+          ./gavel --help
+          ./gavel version
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gavel-linux-amd64
+          path: gavel

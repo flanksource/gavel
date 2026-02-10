@@ -1,0 +1,115 @@
+version: "3"
+
+vars:
+  BINARY_NAME: gavel
+  MAIN_PACKAGE: ./cmd/gavel
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build the binary
+    vars:
+      VERSION:
+        sh: git describe --tags --always 2>/dev/null || echo "dev"
+      COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      DATE:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      DIRTY:
+        sh: if [ -n "$(git status --porcelain 2>/dev/null)" ]; then echo "true"; else echo "false"; fi
+      LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}} -X main.dirty={{.DIRTY}}
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_PACKAGE}}
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - ./{{.BINARY_NAME}}
+
+  install:
+    desc: Install the binary to $GOPATH/bin
+    deps:
+      - build
+    cmds:
+      - mv "./{{.BINARY_NAME}}" "$GOPATH/bin/"
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
+    env:
+      CGO_ENABLED: 1
+
+  test:unit:
+    desc: Run unit tests only
+    cmds:
+      - go test -v -short $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report generated at coverage.html"
+
+  lint:
+    desc: Run linters
+    cmds:
+      - cmd: golangci-lint run
+        ignore_error: true
+      - go vet ./...
+      - go mod tidy
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+      - gofmt -s -w .
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -f coverage.out coverage.html
+      - rm -rf dist/
+      - go clean -cache
+
+  mod:
+    desc: Download and tidy modules
+    cmds:
+      - go mod download
+      - go mod tidy
+
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t {{.BINARY_NAME}}:latest .
+
+  docker:run:
+    desc: Run Docker container
+    deps: [docker:build]
+    cmds:
+      - docker run --rm {{.BINARY_NAME}}:latest --help
+
+  release:
+    desc: Create a new release
+    cmds:
+      - goreleaser release --clean
+
+  release:snapshot:
+    desc: Create a snapshot release
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  ci:
+    desc: Run CI pipeline locally
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+      - task: build
