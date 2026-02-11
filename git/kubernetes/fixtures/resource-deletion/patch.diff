@@ -1,0 +1,24 @@
+diff --git a/k8s/old-deployment.yaml b/k8s/old-deployment.yaml
+deleted file mode 100644
+index bbb222..0000000
+--- a/k8s/old-deployment.yaml
++++ /dev/null
+@@ -1,17 +0,0 @@
+-apiVersion: apps/v1
+-kind: Deployment
+-metadata:
+-  name: old-deployment
+-  namespace: default
+-spec:
+-  replicas: 1
+-  selector:
+-    matchLabels:
+-      app: old
+-  template:
+-    metadata:
+-      labels:
+-        app: old
+-    spec:
+-      containers:
+-      - name: old
+-        image: old-app:1.0

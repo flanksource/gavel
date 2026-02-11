@@ -1,0 +1,20 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Deployment",
+      "name": "api-deployment",
+      "namespace": "production",
+      "changeType": "modified",
+      "severity": "medium",
+      "sourceType": "yaml",
+      "summary": "",
+      "fieldsChanged": ["spec.template.spec.containers.0.image"],
+      "hasVersionChange": true,
+      "versionChange": {
+        "oldVersion": "v1.14.0",
+        "newVersion": "v1.16.2"
+      }
+    }
+  ]
+}

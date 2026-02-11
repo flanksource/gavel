@@ -1,0 +1,13 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Service",
+      "name": "test-service",
+      "namespace": "test-ns",
+      "changeType": "added",
+      "severity": "low",
+      "sourceType": "yaml"
+    }
+  ]
+}

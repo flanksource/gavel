@@ -66,6 +66,15 @@ type CloneInfo struct {
 	Hash      string
 }
 
+// VersionInfo contains information about a specific version
+type VersionInfo struct {
+	Version    string    `json:"version"`
+	Depth      int       `json:"depth"`
+	Source     string    `json:"source"`
+	CommitSHA  string    `json:"commit_sha,omitempty"`
+	CommitDate time.Time `json:"commit_date,omitempty"`
+}
+
 // GitRef is a Git reference (branch, tag) "latest"
 type GitRef string
 

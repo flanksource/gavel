@@ -1,0 +1,14 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Service",
+      "name": "nginx-service",
+      "namespace": "default",
+      "changeType": "added",
+      "severity": "low",
+      "sourceType": "yaml",
+      "summary": "➕ added"
+    }
+  ]
+}

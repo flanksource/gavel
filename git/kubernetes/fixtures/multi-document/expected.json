@@ -1,0 +1,15 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "ConfigMap",
+      "name": "app-config",
+      "namespace": "production",
+      "changeType": "modified",
+      "severity": "low",
+      "sourceType": "yaml",
+      "summary": "data:\n  debug: false → true\n  timeout: = 30s",
+      "fieldsChanged": ["data.debug", "data.timeout"]
+    }
+  ]
+}

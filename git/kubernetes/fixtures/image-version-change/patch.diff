@@ -1,0 +1,12 @@
+diff --git a/k8s/api-deployment.yaml b/k8s/api-deployment.yaml
+index 111222..333444 100644
+--- a/k8s/api-deployment.yaml
++++ b/k8s/api-deployment.yaml
+@@ -14,7 +14,7 @@ spec:
+     spec:
+       containers:
+       - name: api
+-        image: myapp/api:v1.14.0
++        image: myapp/api:v1.16.2
+         ports:
+         - containerPort: 8080

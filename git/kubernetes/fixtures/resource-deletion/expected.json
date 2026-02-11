@@ -1,0 +1,14 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Deployment",
+      "name": "old-deployment",
+      "namespace": "default",
+      "changeType": "deleted",
+      "severity": "high",
+      "sourceType": "yaml",
+      "summary": "➖ deleted"
+    }
+  ]
+}

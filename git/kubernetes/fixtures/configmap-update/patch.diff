@@ -1,0 +1,14 @@
+diff --git a/k8s/configmap.yaml b/k8s/configmap.yaml
+index aaa111..bbb222 100644
+--- a/k8s/configmap.yaml
++++ b/k8s/configmap.yaml
+@@ -4,6 +4,6 @@ metadata:
+   name: app-config
+   namespace: default
+ data:
+-  database.url: "postgres://localhost:5432/mydb"
+-  log.level: "info"
+-  feature.flag: "false"
++  database.url: "postgres://prod-db:5432/mydb"
++  log.level: "debug"
++  feature.flag: "true"

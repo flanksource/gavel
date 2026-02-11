@@ -1,0 +1,15 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "ConfigMap",
+      "name": "app-config",
+      "namespace": "default",
+      "changeType": "modified",
+      "severity": "low",
+      "sourceType": "yaml",
+      "summary": "data:\n  database:\n    url: postgres://localhost:5432/mydb → postgres://prod-db:5432/mydb\n  feature:\n    flag: false → true\n  log:\n    level: info → debug",
+      "fieldsChanged": ["data.database.url", "data.log.level", "data.feature.flag"]
+    }
+  ]
+}

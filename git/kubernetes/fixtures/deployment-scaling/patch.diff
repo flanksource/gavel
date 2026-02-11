@@ -1,0 +1,13 @@
+diff --git a/k8s/deployment.yaml b/k8s/deployment.yaml
+index abc123..def456 100644
+--- a/k8s/deployment.yaml
++++ b/k8s/deployment.yaml
+@@ -4,7 +4,7 @@ metadata:
+   name: nginx-deployment
+   namespace: default
+ spec:
+-  replicas: 2
++  replicas: 5
+   selector:
+     matchLabels:
+       app: nginx

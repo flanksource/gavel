@@ -1,0 +1,20 @@
+diff --git a/deploy.yaml b/deploy.yaml
+index 1234567..abcdefg 100644
+--- a/deploy.yaml
++++ b/deploy.yaml
+@@ -10,14 +10,3 @@ metadata:
+ data:
+   env: "production"
+   debug: "false"
+----
+-apiVersion: v1
+-kind: Service
+-metadata:
+-  name: app-service
+-  namespace: production
+-spec:
+-  selector:
+-    app: myapp
+-  ports:
+-  - port: 80
+-    targetPort: 8080

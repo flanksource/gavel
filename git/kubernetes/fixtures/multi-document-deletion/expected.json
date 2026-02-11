@@ -1,0 +1,14 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Service",
+      "name": "app-service",
+      "namespace": "production",
+      "changeType": "deleted",
+      "severity": "high",
+      "sourceType": "yaml",
+      "summary": "➖ deleted"
+    }
+  ]
+}

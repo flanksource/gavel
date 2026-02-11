@@ -1,0 +1,14 @@
+diff --git a/k8s/app.yaml b/k8s/app.yaml
+index ccc333..ddd444 100644
+--- a/k8s/app.yaml
++++ b/k8s/app.yaml
+@@ -9,7 +9,8 @@ metadata:
+   namespace: production
+ data:
+   env: "production"
+-  debug: "false"
++  debug: "true"
++  timeout: "30s"
+ ---
+ apiVersion: v1
+ kind: Service

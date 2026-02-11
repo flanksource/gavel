@@ -1,0 +1,20 @@
+{
+  "expectedCount": 1,
+  "changes": [
+    {
+      "kind": "Deployment",
+      "name": "nginx-deployment",
+      "namespace": "default",
+      "changeType": "modified",
+      "severity": "medium",
+      "sourceType": "yaml",
+      "summary": "",
+      "fieldsChanged": ["spec.replicas"],
+      "hasScaling": true,
+      "scaling": {
+        "oldReplicas": 2,
+        "newReplicas": 5
+      }
+    }
+  ]
+}
