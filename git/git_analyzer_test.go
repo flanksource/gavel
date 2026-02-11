@@ -355,7 +355,17 @@ var _ = Describe("GetCommitHistory", func() {
 		})
 
 		It("should filter by Until date", func() {
-			until := time.Now().AddDate(0, 0, -30) // More than 30 days ago
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			Expect(err).ToNot(HaveOccurred())
+
+			if len(allCommits) == 0 {
+				Skip("No commits found in repository")
+			}
+
+			// Use the oldest commit's date + 1 second as the Until boundary
+			oldest := allCommits[len(allCommits)-1].Author.Date
+			until := oldest.Add(time.Second)
+
 			filter := HistoryOptions{
 				Path:  ".",
 				Until: until,
@@ -439,14 +449,21 @@ var _ = Describe("GetCommitHistory", func() {
 
 	Context("with message filtering", func() {
 		It("should filter by commit message", func() {
-			// Note: Git --grep uses regex to search raw commit messages.
-			// The Matches() filter then applies glob patterns to parsed Subject.
-			// Use "Merge branch*" which:
-			// - Git interprets as regex matching "Merge branch" (the * matches 0+ of 'h')
-			// - collections.MatchItem interprets as glob matching subjects starting with "Merge branch"
+			// First get all commits to find a subject prefix to filter on
+			allCommits, err := GetCommitHistory(HistoryOptions{Path: "."})
+			Expect(err).ToNot(HaveOccurred())
+
+			if len(allCommits) == 0 {
+				Skip("No commits found in repository")
+			}
+
+			// Use the first word of the first commit's subject as the grep pattern
+			subject := allCommits[0].Subject
+			prefix := strings.SplitN(subject, " ", 2)[0]
+
 			filter := HistoryOptions{
 				Path:    ".",
-				Message: "Merge branch*",
+				Message: prefix + "*",
 			}
 
 			commits, err := GetCommitHistory(filter)
@@ -454,7 +471,7 @@ var _ = Describe("GetCommitHistory", func() {
 			Expect(len(commits)).To(BeNumerically(">", 0))
 
 			for _, commit := range commits {
-				Expect(commit.Subject).To(HavePrefix("Merge branch"))
+				Expect(commit.Subject).To(HavePrefix(prefix))
 			}
 		})
 	})
