@@ -52,7 +52,7 @@ coverage.html
 .env.local
 
 # Build artifacts
-gavel
+/gavel
 .task
 .cache
 __debug*
