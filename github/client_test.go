@@ -401,3 +401,57 @@ func TestMapRestJobToJob(t *testing.T) {
 	assert.Equal(t, "failure", job.Steps[1].Conclusion)
 	assert.Equal(t, 2, job.Steps[1].Number)
 }
+
+func TestParseLogSections(t *testing.T) {
+	raw := `2024-01-15T10:00:00.0000000Z ##[group]Set up job
+2024-01-15T10:00:01.0000000Z Preparing environment
+2024-01-15T10:00:02.0000000Z ##[endgroup]
+2024-01-15T10:00:03.0000000Z ##[group]Run tests
+2024-01-15T10:00:04.0000000Z go test ./...
+2024-01-15T10:00:05.0000000Z FAIL: TestFoo
+2024-01-15T10:00:06.0000000Z exit status 1
+2024-01-15T10:00:07.0000000Z ##[endgroup]`
+
+	sections := parseLogSections(raw)
+	require.Contains(t, sections, "Set up job")
+	require.Contains(t, sections, "Run tests")
+	assert.Contains(t, sections["Set up job"], "Preparing environment")
+	assert.Contains(t, sections["Run tests"], "FAIL: TestFoo")
+	assert.Contains(t, sections["Run tests"], "exit status 1")
+}
+
+func TestAttachLogsToSteps(t *testing.T) {
+	job := &Job{
+		Name: "test", Conclusion: "failure",
+		Steps: []Step{
+			{Name: "Set up job", Status: "completed", Conclusion: "success", Number: 1},
+			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 2},
+		},
+	}
+
+	raw := `2024-01-15T10:00:00.0000000Z ##[group]Set up job
+2024-01-15T10:00:01.0000000Z OK
+2024-01-15T10:00:02.0000000Z ##[endgroup]
+2024-01-15T10:00:03.0000000Z ##[group]Run tests
+2024-01-15T10:00:04.0000000Z FAIL: TestBar
+2024-01-15T10:00:05.0000000Z ##[endgroup]`
+
+	attachLogsToSteps(job, raw, 100)
+	assert.Empty(t, job.Steps[0].Logs)
+	assert.Contains(t, job.Steps[1].Logs, "FAIL: TestBar")
+}
+
+func TestTailString(t *testing.T) {
+	tests := []struct {
+		input    string
+		max      int
+		expected string
+	}{
+		{"a\nb\nc\nd\ne", 3, "c\nd\ne"},
+		{"a\nb", 5, "a\nb"},
+		{"a\nb\nc", 0, "a\nb\nc"},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.expected, tailString(tc.input, tc.max))
+	}
+}

@@ -64,6 +64,7 @@ type Step struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	Number     int    `json:"number"`
+	Logs       string `json:"logs,omitempty"`
 }
 
 func (sc StatusChecks) AllComplete() bool {
@@ -107,9 +108,15 @@ func StatusIcon(status, conclusion string) api.Text {
 }
 
 func (s Step) Pretty() api.Text {
-	return clicky.Text("      ", "").
+	text := clicky.Text("      ", "").
 		Add(StatusIcon(strings.ToUpper(s.Status), strings.ToUpper(s.Conclusion))).
 		Append(" "+s.Name, "text-gray-500")
+	if s.Logs != "" {
+		for _, line := range strings.Split(strings.TrimSpace(s.Logs), "\n") {
+			text = text.NewLine().Append("        "+line, "text-gray-500")
+		}
+	}
+	return text
 }
 
 func (j Job) Pretty() api.Text {

@@ -142,7 +142,12 @@ type restStep struct {
 }
 
 func (s restStep) toStep() Step {
-	return Step(s)
+	return Step{
+		Name:       s.Name,
+		Status:     s.Status,
+		Conclusion: s.Conclusion,
+		Number:     s.Number,
+	}
 }
 
 func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
@@ -198,21 +203,23 @@ func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
 	return result, nil
 }
 
-func FetchFailedLogs(opts Options, run *WorkflowRun, tailLines int) (string, error) {
+func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
 	token, err := opts.token()
 	if err != nil {
-		return "", err
+		logger.Warnf("cannot fetch logs: %v", err)
+		return
 	}
 	repo, err := opts.resolveRepo()
 	if err != nil {
-		return "", fmt.Errorf("resolve repo: %w", err)
+		logger.Warnf("cannot resolve repo for logs: %v", err)
+		return
 	}
 
 	ctx := context.Background()
 	client := newClient(token)
 
-	var allLines []string
-	for _, job := range run.Jobs {
+	for i := range run.Jobs {
+		job := &run.Jobs[i]
 		if !strings.EqualFold(job.Conclusion, "failure") {
 			continue
 		}
@@ -232,15 +239,70 @@ func FetchFailedLogs(opts Options, run *WorkflowRun, tailLines int) (string, err
 			logger.Warnf("failed to read logs for job %d (%s): %v", job.DatabaseID, job.Name, err)
 			continue
 		}
-		allLines = append(allLines, strings.Split(body, "\n")...)
+		attachLogsToSteps(job, body, tailLines)
 	}
+}
 
-	total := len(allLines)
-	if tailLines > 0 && total > tailLines {
-		allLines = allLines[total-tailLines:]
+func attachLogsToSteps(job *Job, rawLog string, tailLines int) {
+	sections := parseLogSections(rawLog)
+	for i := range job.Steps {
+		step := &job.Steps[i]
+		if !strings.EqualFold(step.Conclusion, "failure") {
+			continue
+		}
+		if logs, ok := sections[step.Name]; ok {
+			step.Logs = tailString(logs, tailLines)
+		}
 	}
-	logger.Debugf("fetched %d log lines for run %d (showing last %d)", total, run.DatabaseID, len(allLines))
-	return strings.Join(allLines, "\n"), nil
+}
+
+var logTimestampPrefix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*`)
+
+func parseLogSections(raw string) map[string]string {
+	sections := make(map[string]string)
+	var currentStep string
+	var buf strings.Builder
+
+	for _, line := range strings.Split(raw, "\n") {
+		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
+		if strings.HasPrefix(cleaned, "##[group]") {
+			if currentStep != "" {
+				sections[currentStep] = buf.String()
+			}
+			currentStep = strings.TrimPrefix(cleaned, "##[group]")
+			buf.Reset()
+			continue
+		}
+		if strings.HasPrefix(cleaned, "##[endgroup]") {
+			if currentStep != "" {
+				sections[currentStep] = buf.String()
+				currentStep = ""
+				buf.Reset()
+			}
+			continue
+		}
+		if currentStep != "" {
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
+			}
+			buf.WriteString(cleaned)
+		}
+	}
+	if currentStep != "" {
+		sections[currentStep] = buf.String()
+	}
+	return sections
+}
+
+func tailString(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[len(lines)-maxLines:], "\n")
 }
 
 func ParsePRJSON(data []byte) (*PRInfo, error) {
