@@ -439,6 +439,21 @@ func TestAttachLogsToSteps(t *testing.T) {
 	attachLogsToSteps(job, raw, 100)
 	assert.Empty(t, job.Steps[0].Logs)
 	assert.Contains(t, job.Steps[1].Logs, "FAIL: TestBar")
+	assert.Contains(t, job.Logs, "FAIL: TestBar", "job-level logs always attached")
+}
+
+func TestAttachLogsToStepsFallback(t *testing.T) {
+	job := &Job{
+		Name: "test", Conclusion: "failure",
+		Steps: []Step{
+			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 1},
+		},
+	}
+
+	raw := "FAIL: TestBaz\nexit status 1"
+	attachLogsToSteps(job, raw, 100)
+	assert.Empty(t, job.Steps[0].Logs, "no group markers means no step match")
+	assert.Contains(t, job.Logs, "FAIL: TestBaz", "job-level logs still present")
 }
 
 func TestTailString(t *testing.T) {

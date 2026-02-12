@@ -244,6 +244,7 @@ func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
 }
 
 func attachLogsToSteps(job *Job, rawLog string, tailLines int) {
+	job.Logs = tailString(rawLog, tailLines)
 	sections := parseLogSections(rawLog)
 	for i := range job.Steps {
 		step := &job.Steps[i]

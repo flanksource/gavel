@@ -57,6 +57,7 @@ type Job struct {
 	CompletedAt time.Time `json:"completedAt"`
 	URL         string    `json:"url"`
 	Steps       []Step    `json:"steps"`
+	Logs        string    `json:"logs,omitempty"`
 }
 
 type Step struct {
@@ -128,8 +129,25 @@ func (j Job) Pretty() api.Text {
 	if !strings.EqualFold(j.Conclusion, "failure") {
 		return text
 	}
+
+	hasStepLogs := false
 	for _, step := range j.Steps {
 		text = text.NewLine().Add(step.Pretty())
+		if step.Logs != "" {
+			hasStepLogs = true
+		}
+	}
+
+	if !hasStepLogs && j.Logs != "" {
+		text = text.NewLine().Add(prettyLogTail(j.Logs))
+	}
+	return text
+}
+
+func prettyLogTail(logTail string) api.Text {
+	text := clicky.Text("      ── Log tail ──────────", "text-red-600")
+	for _, line := range strings.Split(strings.TrimSpace(logTail), "\n") {
+		text = text.NewLine().Append("      "+line, "text-gray-500")
 	}
 	return text
 }

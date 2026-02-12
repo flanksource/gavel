@@ -76,6 +76,36 @@ func TestPRWatchResultPrettyWithStepLogs(t *testing.T) {
 	assert.Contains(t, text, "exit status 1")
 }
 
+func TestPRWatchResultPrettyWithJobLevelLogs(t *testing.T) {
+	result := PRWatchResult{
+		PR: &github.PRInfo{
+			Number: 50, Title: "fix: bug", Author: github.PRAuthor{Login: "bob"},
+			HeadRefName: "fix/bug", BaseRefName: "main",
+			StatusCheckRollup: github.StatusChecks{
+				{Name: "test", Status: "COMPLETED", Conclusion: "FAILURE", DetailsURL: "https://github.com/org/repo/actions/runs/100/job/1"},
+			},
+		},
+		Runs: map[int64]*github.WorkflowRun{
+			100: {
+				DatabaseID: 100, Name: "Tests", Status: "completed", Conclusion: "failure",
+				Jobs: []github.Job{{
+					Name: "test", Status: "completed", Conclusion: "failure",
+					StartedAt:   time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC),
+					CompletedAt: time.Date(2024, 1, 1, 10, 0, 45, 0, time.UTC),
+					Logs:        "FAIL: TestBaz\nexit status 1",
+					Steps: []github.Step{
+						{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 1},
+					},
+				}},
+			},
+		},
+	}
+
+	text := result.Pretty().String()
+	assert.Contains(t, text, "FAIL: TestBaz", "job-level logs render when no step logs")
+	assert.Contains(t, text, "Log tail")
+}
+
 func TestPRWatchResultNoChecks(t *testing.T) {
 	result := PRWatchResult{
 		PR: &github.PRInfo{
