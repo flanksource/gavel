@@ -3,6 +3,7 @@ package todos
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -35,6 +36,7 @@ type ExecutionResult struct {
 	NumTurns         int           // Number of interaction rounds
 	ActionsPerformed []string      // List of actions taken (tool uses, etc.)
 	ErrorMessage     string
+	CommitSHA        string
 	Transcript       *ExecutionTranscript
 }
 
@@ -69,11 +71,7 @@ func (e ExecutionResult) Pretty() api.Text {
 		result = result.Append("   Actions: ", "text-gray-500").Append(fmt.Sprintf("%v", e.ActionsPerformed), "text-gray-500")
 	}
 
-	for _, msg := range e.Transcript.Entries {
-		result = result.NewLine().Add(msg.Pretty().Indent(2))
-	}
 	return result
-
 }
 
 // TODOExecutor orchestrates TODO execution with any AI executor.
@@ -136,6 +134,12 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	if err != nil {
 		ctx.Logger.Errorf("Execution failed: %v", err)
 		todo.Status = types.StatusFailed
+		todo.Attempts++
+		if result != nil {
+			if saveErr := saveAttempt(todo, result); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+			}
+		}
 		return result, err
 	}
 
@@ -152,6 +156,10 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 			todo.Status = types.StatusFailed
 			result.Success = false
 			result.ErrorMessage = "Verification tests failed"
+			todo.Attempts++
+			if saveErr := saveAttempt(todo, result); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+			}
 			return result, fmt.Errorf("verification failed")
 		}
 	}
@@ -175,6 +183,10 @@ func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResu
 	todo.LLM.Model = result.ExecutorName
 	todo.LLM.TokensUsed = result.TokensUsed
 	todo.LLM.CostIncurred = result.CostUSD
+
+	if err := saveAttempt(todo, result); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", err)
+	}
 }
 
 // stepsAlreadyPass checks if reproduction steps already pass.

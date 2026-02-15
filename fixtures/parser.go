@@ -116,7 +116,9 @@ func parseTableRow(headers, values []string) *FixtureNode {
 		case "cel validation", "cel", "validation", "expr":
 			fixture.Expected.CEL = value
 		default:
-			// Store unknown headers as properties
+			if fixture.Expected.Properties == nil {
+				fixture.Expected.Properties = make(map[string]any)
+			}
 			fixture.Expected.Properties[header] = value
 		}
 	}

@@ -49,6 +49,17 @@ func priorityOrder(p Priority) int {
 	}
 }
 
+type Attempt struct {
+	Status     Status
+	Timestamp  time.Time
+	Duration   time.Duration
+	Cost       float64
+	Tokens     int
+	Model      string
+	Commit     string
+	Transcript string // relative path to transcript .md
+}
+
 // TODO represents a structured TODO item parsed from a markdown file.
 // It combines fixture test nodes with TODO-specific metadata for tracking
 // implementation tasks including reproduction steps, verification tests, and execution status.
@@ -217,12 +228,14 @@ type TODOFrontmatter struct {
 	fixtures.FrontMatter `yaml:",inline" json:",inline"` // Embed standard fixture frontmatter
 
 	// TODO-specific fields
-	Priority Priority   `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Status   Status     `yaml:"status,omitempty" json:"status,omitempty"`
-	LastRun  *time.Time `yaml:"last_run,omitempty" json:"last_run,omitempty"`
-	Attempts int        `yaml:"attempts,omitempty" json:"attempts,omitempty"`
-	Language Language   `yaml:"language,omitempty" json:"language,omitempty"`
-	LLM      *LLM       `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Title         string     `yaml:"title,omitempty" json:"title,omitempty"`
+	Priority      Priority   `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Status        Status     `yaml:"status,omitempty" json:"status,omitempty"`
+	LastRun       *time.Time `yaml:"last_run,omitempty" json:"last_run,omitempty"`
+	Attempts      int        `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Language      Language   `yaml:"language,omitempty" json:"language,omitempty"`
+	WorkingCommit string     `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
+	LLM           *LLM       `yaml:"llm,omitempty" json:"llm,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -235,12 +248,15 @@ func (f *TODOFrontmatter) CleanMetadata() {
 		return
 	}
 	// Keys from TODOFrontmatter
+	delete(f.Metadata, "title")
 	delete(f.Metadata, "priority")
 	delete(f.Metadata, "status")
 	delete(f.Metadata, "last_run")
 	delete(f.Metadata, "attempts")
 	delete(f.Metadata, "language")
 	delete(f.Metadata, "llm")
+	delete(f.Metadata, "working_commit")
+	delete(f.Metadata, "max_turns")
 }
 
 // Pretty returns a formatted text representation of the TODOFrontmatter
@@ -294,6 +310,8 @@ type LLM struct {
 	TokensUsed int `yaml:"tokens_used,omitempty" json:"tokens_used,omitempty"`
 	// CostIncurred records the actual cost in USD cents, populated after running the todo
 	CostIncurred float64 `yaml:"cost_incurred,omitempty" json:"cost_incurred,omitempty"`
+	// MaxTurns is the maximum number of conversation turns allowed
+	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 	// Existing session ID for continuing conversations with the LLM
 	SessionId string `yaml:"session_id,omitempty" json:"session_id,omitempty"`
 }
