@@ -59,6 +59,50 @@ func TestDiscoverTODOs_SortsByPriorityAndName(t *testing.T) {
 	}
 }
 
+func TestDiscoverTODOs_RecursivelyFindsNestedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	todosDir := filepath.Join(tmpDir, ".todos")
+
+	// Create nested structure: .todos/root.md, .todos/99/ci-lint.md, .todos/99/code-review-100.md
+	for _, dir := range []string{todosDir, filepath.Join(todosDir, "99")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("Failed to create dir %s: %v", dir, err)
+		}
+	}
+
+	todoContent := func(priority string) string {
+		return "---\npriority: " + priority + "\nstatus: pending\nattempts: 0\nlanguage: go\n---\n\n# TODO: Test\n\n## Verification\n\n```bash\necho test\n```\n"
+	}
+
+	testFiles := map[string]string{
+		filepath.Join(todosDir, "root.md"):                  todoContent("low"),
+		filepath.Join(todosDir, "99", "ci-lint.md"):         todoContent("high"),
+		filepath.Join(todosDir, "99", "code-review-100.md"): todoContent("medium"),
+	}
+	for path, content := range testFiles {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write %s: %v", path, err)
+		}
+	}
+
+	todos, err := DiscoverTODOs(todosDir, DiscoveryFilters{})
+	if err != nil {
+		t.Fatalf("DiscoverTODOs failed: %v", err)
+	}
+
+	if len(todos) != 3 {
+		t.Fatalf("Expected 3 TODOs, got %d", len(todos))
+	}
+
+	// Sorted by priority: high, medium, low
+	expectedBases := []string{"ci-lint.md", "code-review-100.md", "root.md"}
+	for i, expected := range expectedBases {
+		if actual := filepath.Base(todos[i].FilePath); actual != expected {
+			t.Errorf("Position %d: expected %s, got %s", i, expected, actual)
+		}
+	}
+}
+
 func TestDiscoverTODOs_FiltersByStatus(t *testing.T) {
 	// Setup: Create TODOs with status: pending, completed, failed
 	// Expected: Only pending and failed returned (skip completed)

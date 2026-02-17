@@ -99,18 +99,17 @@ func (todo TODO) AsYaml() (string, error) {
 }
 
 func (t TODO) PrettyRow(opts interface{}) map[string]api.Text {
-	row := map[string]api.Text{
-		"File":     clicky.Text(t.Filename()),
-		"Status":   t.Status.Pretty(),
-		"Priority": t.Priority.Pretty(),
-		"Attempts": clicky.Text(fmt.Sprintf("%d", t.Attempts)),
+	title := t.Title
+	if title == "" {
+		title = t.Filename()
 	}
-
-	if t.LLM != nil {
-		row["LLM"] = clicky.Text(t.LLM.Model)
-		row["Cost"] = clicky.Text(fmt.Sprintf("$%.4f", t.LLM.CostIncurred))
-		row["Tokens"] = clicky.Text(fmt.Sprintf("%d", t.LLM.TokensUsed))
-
+	row := map[string]api.Text{
+		"Title":    clicky.Text(title, "order-1"),
+		"Status":   t.Status.Pretty().Styles("order-2"),
+		"Priority": t.Priority.Pretty().Styles("order-3"),
+	}
+	if t.LastRun != nil {
+		row["Updated"] = clicky.Text("", "order-4").Append(time.Since(*t.LastRun), "text-muted")
 	}
 	return row
 }

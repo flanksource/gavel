@@ -3,14 +3,15 @@
 package todos
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/goccy/go-yaml"
 )
 
 // ParseTODO parses a TODO markdown file from the given path and returns a structured TODO object.
@@ -30,131 +31,83 @@ import (
 //
 // Returns an error if the file cannot be read or parsing fails.
 func ParseTODO(filePath string) (*types.TODO, error) {
-	// Parse as fixture - this captures ALL frontmatter in metadata
+	// Parse YAML frontmatter directly into TODOFrontmatter
+	todoFrontmatter, err := parseTODOFrontmatter(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse frontmatter: %w", err)
+	}
+
+	if todoFrontmatter.CWD == "" {
+		todoFrontmatter.CWD = findGitRoot(filePath)
+	}
+
+	if err := validateFrontmatter(&todoFrontmatter); err != nil {
+		return nil, err
+	}
+
+	// Parse fixture tree for sections (Steps to Reproduce, Verification, etc.)
 	fileNode, err := fixtures.ParseMarkdownFixturesWithTree(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse markdown: %w", err)
 	}
 
-	// Extract TODO-specific fields from fixture metadata
-	todoFrontmatter := extractTODOFrontmatter(fileNode)
-
-	// Set default cwd to git root if not specified
-	if todoFrontmatter.CWD == "" {
-		todoFrontmatter.CWD = findGitRoot(filePath)
-	}
-
-	// Validate required TODO fields
-	if err := validateFrontmatter(&todoFrontmatter); err != nil {
-		return nil, err
-	}
-
-	// Extract sections for backward compatibility
-	stepsToReproduce := extractSection(fileNode, "Steps to Reproduce")
-	implementation := extractImplementationText(fileNode, "Implementation")
-	verification := extractSection(fileNode, "Verification")
-	customValidations := extractSection(fileNode, "Custom Validations")
-
 	return &types.TODO{
 		FilePath:          filePath,
 		FileNode:          fileNode,
 		TODOFrontmatter:   todoFrontmatter,
-		StepsToReproduce:  stepsToReproduce,
-		Implementation:    implementation,
-		Verification:      verification,
-		CustomValidations: customValidations,
+		StepsToReproduce:  extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:    extractImplementationText(fileNode, "Implementation"),
+		Verification:      extractSection(fileNode, "Verification"),
+		CustomValidations: extractSection(fileNode, "Custom Validations"),
 	}, nil
 }
 
-// extractTODOFrontmatter extracts TODO-specific fields from fixture metadata.
-// Since the fixture parser captures all frontmatter fields in metadata,
-// we just need to extract and type-convert the TODO fields.
-// We walk the tree to find the first test node which contains the frontmatter.
-func extractTODOFrontmatter(fileNode *fixtures.FixtureNode) types.TODOFrontmatter {
-	todoFM := types.TODOFrontmatter{}
+// parseTODOFrontmatter reads YAML frontmatter directly from a markdown file
+// and unmarshals it into TODOFrontmatter. This works regardless of whether
+// the file contains executable code blocks.
+func parseTODOFrontmatter(filePath string) (types.TODOFrontmatter, error) {
+	var fm types.TODOFrontmatter
 
-	// Walk the tree to find first test node with frontmatter
-	var firstTest *fixtures.FixtureTest
-	var walk func(*fixtures.FixtureNode)
-	walk = func(node *fixtures.FixtureNode) {
-		if firstTest != nil {
-			return // Already found
-		}
-		if node.Test != nil {
-			firstTest = node.Test
-			return
-		}
-		for _, child := range node.Children {
-			walk(child)
-		}
+	rawYAML, err := extractRawFrontmatter(filePath)
+	if err != nil {
+		return fm, err
 	}
-	walk(fileNode)
-
-	// If no test found, return empty frontmatter
-	if firstTest == nil {
-		return todoFM
+	if rawYAML == "" {
+		return fm, nil
 	}
 
-	// Copy the fixture frontmatter
-	todoFM.FrontMatter = firstTest.FrontMatter
+	if err := yaml.Unmarshal([]byte(rawYAML), &fm); err != nil {
+		return fm, fmt.Errorf("failed to unmarshal frontmatter: %w", err)
+	}
+	fm.CleanMetadata()
+	return fm, nil
+}
 
-	// Extract TODO-specific fields from metadata
-	if firstTest.Metadata != nil {
-		metadata := firstTest.Metadata
+// extractRawFrontmatter reads the YAML frontmatter string from a markdown file
+// delimited by --- markers.
+func extractRawFrontmatter(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
 
-		// Priority
-		if val, ok := metadata["priority"].(string); ok {
-			todoFM.Priority = types.Priority(val)
-		}
-
-		// Status
-		if val, ok := metadata["status"].(string); ok {
-			todoFM.Status = types.Status(val)
-		}
-
-		// Language
-		if val, ok := metadata["language"].(string); ok {
-			todoFM.Language = types.Language(val)
-		}
-
-		// Attempts
-		if val, ok := metadata["attempts"].(int); ok {
-			todoFM.Attempts = val
-		}
-
-		// LastRun (parse time string)
-		if val, ok := metadata["last_run"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, val); err == nil {
-				todoFM.LastRun = &t
-			}
-		}
-
-		// LLM configuration
-		if llmData, ok := metadata["llm"].(map[string]interface{}); ok {
-			llm := &types.LLM{}
-			if model, ok := llmData["model"].(string); ok {
-				llm.Model = model
-			}
-			if maxTokens, ok := llmData["max_tokens"].(int); ok {
-				llm.MaxTokens = maxTokens
-			}
-			if maxCost, ok := llmData["max_cost"].(float64); ok {
-				llm.MaxCost = maxCost
-			}
-			if tokensUsed, ok := llmData["tokens_used"].(int); ok {
-				llm.TokensUsed = tokensUsed
-			}
-			if costIncurred, ok := llmData["cost_incurred"].(float64); ok {
-				llm.CostIncurred = costIncurred
-			}
-			if sessionId, ok := llmData["session_id"].(string); ok {
-				llm.SessionId = sessionId
-			}
-			todoFM.LLM = llm
-		}
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		return "", nil
+	}
+	if strings.TrimSpace(scanner.Text()) != "---" {
+		return "", nil
 	}
 
-	return todoFM
+	var lines []string
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) == "---" {
+			return strings.Join(lines, "\n"), nil
+		}
+		lines = append(lines, scanner.Text())
+	}
+	return "", scanner.Err()
 }
 
 // validateFrontmatter validates that required fields in the TODO frontmatter are present

@@ -238,10 +238,7 @@ func (te TranscriptEntry) Pretty() api.Text {
 
 	// Add content (truncated if too long)
 	content := te.Content
-	if len(content) > 100 {
-		content = content[:97] + "..."
-	}
-	result = result.Append(": ", "text-gray-600").Append(content, "text-gray-800")
+	result = result.Append(": ", "text-gray-600").Append(content, "text-gray-400 max-w-[120ch]")
 
 	return result
 }

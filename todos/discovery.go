@@ -56,34 +56,26 @@ func (filters DiscoveryFilters) Matches(todo *types.TODO) bool {
 func DiscoverTODOs(dir string, filters DiscoveryFilters) (types.TODOS, error) {
 	var todos types.TODOS
 
-	// Read all markdown files in directory
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		if !strings.HasSuffix(entry.Name(), ".md") {
-			continue
-		}
-
-		filePath := filepath.Join(dir, entry.Name())
-		todo, err := ParseTODO(filePath)
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			// Log error but continue with other files
-			continue
+			return nil
 		}
-
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		todo, err := ParseTODO(path)
+		if err != nil {
+			return nil
+		}
 		if filters.Matches(todo) {
 			todos = append(todos, todo)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
 
 	todos.Sort()
-
 	return todos, nil
 }

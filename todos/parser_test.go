@@ -115,9 +115,58 @@ language: go
 	}
 }
 
+func TestParseTODO_NoExecutableCodeBlocks(t *testing.T) {
+	// Input: TODO with only diff/yaml code blocks (no executable code)
+	// This matches the format produced by prwatch for code review comments
+	content := `---
+priority: medium
+status: pending
+build: git fetch origin && git checkout pr/fix-terminal
+title: "Fragile nodeID reconstruction"
+---
+
+# Code Review Comment
+
+## Suggested fix
+
+` + "```diff" + `
+- nodeID := fmt.Sprintf("node-%d", r.nodeCounter)
++ nodeID := r.generateNodeID()
+` + "```" + `
+
+## Context
+
+` + "```yaml" + `
+file: api/tree_html.go
+line: 92
+` + "```" + `
+`
+	tmpDir := t.TempDir()
+	todoPath := filepath.Join(tmpDir, "test.md")
+	if err := os.WriteFile(todoPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	todo, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("Expected no error for TODO without executable code blocks, got: %v", err)
+	}
+
+	if todo.Priority != types.PriorityMedium {
+		t.Errorf("Expected priority medium, got %v", todo.Priority)
+	}
+	if todo.Status != types.StatusPending {
+		t.Errorf("Expected status pending, got %v", todo.Status)
+	}
+	if todo.Title != "Fragile nodeID reconstruction" {
+		t.Errorf("Expected title 'Fragile nodeID reconstruction', got %q", todo.Title)
+	}
+	if todo.Build != "git fetch origin && git checkout pr/fix-terminal" {
+		t.Errorf("Expected build command, got %q", todo.Build)
+	}
+}
+
 func TestParseTODO_ExtractSections(t *testing.T) {
-	// Input: TODO with "Steps to Reproduce", "Implementation", "Verification" sections
-	// NOTE: Parser requires code blocks to extract metadata from frontmatter
 	content := "---\npriority: high\nstatus: pending\nattempts: 0\nlanguage: go\n---\n\n# TODO: Test\n\n## Steps to Reproduce\n\n```bash\necho reproduction\n```\n\n## Implementation\n\nSome implementation instructions\n\n## Verification\n\n```bash\necho verification\n```\n"
 
 	tmpDir := t.TempDir()

@@ -69,7 +69,7 @@ After implementing your fix, verify it works by running:
 2. Investigate the codebase to understand the root cause
 3. Implement a fix that addresses the underlying issue
 4. Run verification tests to confirm the fix works
-5. Use ` + "`git add`" + ` to stage your changes
+5. Do NOT run git add or git commit — gavel manages commits automatically
 
 Your fix should:
 - Address the root cause, not mask symptoms

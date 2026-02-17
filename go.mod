@@ -5,6 +5,9 @@ go 1.25.1
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/charmbracelet/bubbles v0.21.0
+	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/flanksource/clicky v1.16.2
 	github.com/flanksource/commons v1.44.1
 	github.com/flanksource/commons-db v0.1.5
@@ -19,10 +22,10 @@ require (
 	github.com/samber/lo v1.52.0
 	github.com/samber/oops v1.19.3
 	github.com/sergi/go-diff v1.4.0
-	github.com/severity1/claude-agent-sdk-go v0.6.12
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/yuin/goldmark v1.4.13
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -81,9 +84,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cert-manager/cert-manager v1.16.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/charmbracelet/bubbletea v1.3.10 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
-	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.10.1 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
@@ -299,7 +300,6 @@ require (
 	gopkg.in/sourcemap.v1 v1.0.5 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/gorm v1.31.0 // indirect
 	k8s.io/api v0.34.1 // indirect
 	k8s.io/apiextensions-apiserver v0.31.1 // indirect
@@ -317,3 +317,7 @@ require (
 )
 
 replace github.com/flanksource/clicky => ../clicky
+
+replace github.com/flanksource/commons => ../commons
+
+replace github.com/flanksource/gomplate => ../gomplate
