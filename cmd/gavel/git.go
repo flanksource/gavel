@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/models"
 	"github.com/spf13/cobra"
 )
 

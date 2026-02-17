@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/git/rules"
 	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/gavel/repomap"
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/commons/logger"
 	"github.com/mattbaird/jsonpatch"
 )
 

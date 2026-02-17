@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	. "github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )

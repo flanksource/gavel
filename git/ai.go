@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
+	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/ghodss/yaml"
 )

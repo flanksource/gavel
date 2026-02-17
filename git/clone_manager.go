@@ -13,9 +13,9 @@ import (
 
 	"log/slog"
 
+	"github.com/flanksource/commons/logger"
 	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/shutdown"
-	"github.com/flanksource/commons/logger"
 )
 
 // contextKey is used for storing values in context

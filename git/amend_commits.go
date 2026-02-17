@@ -8,10 +8,10 @@ import (
 	"os/exec"
 	"strings"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	. "github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )

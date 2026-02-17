@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flanksource/gavel/git/rules"
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/git/rules"
+	. "github.com/flanksource/gavel/models"
 	"github.com/ghodss/yaml"
 	"github.com/samber/lo"
 	"github.com/samber/oops"

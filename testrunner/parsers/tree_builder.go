@@ -401,7 +401,6 @@ func isSuiteNode(test Test) bool {
 	return test.Name == test.Suite[len(test.Suite)-1]
 }
 
-
 // GetTestTreeAsTreeNodes converts Test tree to TreeNode slice
 func GetTestTreeAsTreeNodes(tests []Test) []api.TreeNode {
 	nodes := make([]api.TreeNode, len(tests))

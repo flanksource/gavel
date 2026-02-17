@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/flanksource/gavel/repomap"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/gavel/repomap"
 )
 
 type RepomapGetOptions struct {

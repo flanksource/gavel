@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	. "github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )

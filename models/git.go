@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/collections"
+	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/samber/lo"
 )
 
@@ -552,4 +552,3 @@ func (c CommitChange) Pretty() api.Text {
 
 	return t
 }
-

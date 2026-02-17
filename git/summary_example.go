@@ -3,8 +3,8 @@ package git
 import (
 	"context"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky/ai"
+	. "github.com/flanksource/gavel/models"
 )
 
 // Example usage of Summarize with AI integration

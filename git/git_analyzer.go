@@ -12,11 +12,11 @@ import (
 
 	. "github.com/flanksource/gavel/models"
 
-	"github.com/flanksource/gavel/git/kubernetes"
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/git/kubernetes"
 )
 
 func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) (CommitAnalysis, error) {

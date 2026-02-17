@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/git/rules"
 	"github.com/flanksource/gavel/repomap"
-	"github.com/flanksource/commons/logger"
 
 	. "github.com/flanksource/gavel/models"
 )
