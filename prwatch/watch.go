@@ -37,7 +37,12 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		runs := fetchRuns(opts, pr, cachedRuns)
 		maps.Copy(cachedRuns, runs)
 
-		result := &PRWatchResult{PR: pr, Runs: runs}
+		comments, err := github.FetchPRComments(opts.Options, pr.Number)
+		if err != nil {
+			logger.Warnf("failed to fetch PR comments: %v", err)
+		}
+
+		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
 
 		if !opts.Follow {
 			if pr.StatusCheckRollup.HasFailure() {
@@ -84,6 +89,9 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.Wo
 
 		if run.Conclusion == "failure" {
 			github.FetchAndAttachLogs(opts.Options, run, opts.TailLogs)
+			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
+				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
+			}
 		}
 		runs[runID] = run
 	}

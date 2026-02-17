@@ -89,6 +89,8 @@ type restRun struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	HTMLURL    string `json:"html_url"`
+	HeadSHA    string `json:"head_sha"`
+	WorkflowID int64  `json:"workflow_id"`
 }
 
 func (r restRun) toWorkflowRun(jobs []Job) *WorkflowRun {
@@ -98,6 +100,8 @@ func (r restRun) toWorkflowRun(jobs []Job) *WorkflowRun {
 		Status:     r.Status,
 		Conclusion: r.Conclusion,
 		URL:        r.HTMLURL,
+		HeadSHA:    r.HeadSHA,
+		WorkflowID: r.WorkflowID,
 		Jobs:       jobs,
 	}
 }
@@ -243,8 +247,83 @@ func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
 	}
 }
 
+type restWorkflow struct {
+	Path string `json:"path"`
+}
+
+func FetchWorkflowDefinition(opts Options, run *WorkflowRun) (string, error) {
+	if run.WorkflowID == 0 {
+		return "", fmt.Errorf("workflow ID not set on run %d", run.DatabaseID)
+	}
+	token, err := opts.token()
+	if err != nil {
+		return "", err
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return "", err
+	}
+
+	ctx := context.Background()
+	client := newClient(token)
+
+	wfURL := fmt.Sprintf("/repos/%s/actions/workflows/%d", repo, run.WorkflowID)
+	logger.Tracef("fetching workflow: GET %s", wfURL)
+	resp, err := client.R(ctx).Get(wfURL)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", wfURL, err)
+	}
+	if !resp.IsOK() {
+		body, _ := resp.AsString()
+		return "", fmt.Errorf("GET %s: status %d: %s", wfURL, resp.StatusCode, body)
+	}
+	var wf restWorkflow
+	if err := resp.Into(&wf); err != nil {
+		return "", fmt.Errorf("parse workflow response: %w", err)
+	}
+	run.WorkflowPath = wf.Path
+
+	ref := run.HeadSHA
+	if ref == "" {
+		ref = "HEAD"
+	}
+	contentURL := fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, wf.Path, ref)
+	logger.Tracef("fetching workflow content: GET %s", contentURL)
+	resp, err = client.R(ctx).Header("Accept", "application/vnd.github.raw+json").Get(contentURL)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", contentURL, err)
+	}
+	if !resp.IsOK() {
+		body, _ := resp.AsString()
+		return "", fmt.Errorf("GET %s: status %d: %s", contentURL, resp.StatusCode, body)
+	}
+	yaml, err := resp.AsString()
+	if err != nil {
+		return "", fmt.Errorf("read workflow content: %w", err)
+	}
+	run.WorkflowYAML = yaml
+	return yaml, nil
+}
+
+func cleanRawLog(s string) string {
+	var sb strings.Builder
+	for i, line := range strings.Split(s, "\n") {
+		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
+		cleaned = ansiEscape.ReplaceAllString(cleaned, "")
+		if strings.HasPrefix(cleaned, "##[group]") || strings.HasPrefix(cleaned, "##[endgroup]") {
+			continue
+		}
+		cleaned = actionsAnnotation.ReplaceAllString(cleaned, "")
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(cleaned)
+	}
+	return sb.String()
+}
+
 func attachLogsToSteps(job *Job, rawLog string, tailLines int) {
-	job.Logs = tailString(rawLog, tailLines)
+	job.Logs = tailString(cleanRawLog(rawLog), tailLines)
 	sections := parseLogSections(rawLog)
 	for i := range job.Steps {
 		step := &job.Steps[i]
@@ -258,6 +337,12 @@ func attachLogsToSteps(job *Job, rawLog string, tailLines int) {
 }
 
 var logTimestampPrefix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s*`)
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+var actionsAnnotation = regexp.MustCompile(`##\[(error|warning|debug|notice|command)\]`)
+
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
 
 func parseLogSections(raw string) map[string]string {
 	sections := make(map[string]string)
@@ -266,6 +351,7 @@ func parseLogSections(raw string) map[string]string {
 
 	for _, line := range strings.Split(raw, "\n") {
 		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
+		cleaned = stripANSI(cleaned)
 		if strings.HasPrefix(cleaned, "##[group]") {
 			if currentStep != "" {
 				sections[currentStep] = buf.String()
@@ -283,6 +369,7 @@ func parseLogSections(raw string) map[string]string {
 			continue
 		}
 		if currentStep != "" {
+			cleaned = actionsAnnotation.ReplaceAllString(cleaned, "")
 			if buf.Len() > 0 {
 				buf.WriteByte('\n')
 			}
@@ -304,6 +391,118 @@ func tailString(s string, maxLines int) string {
 		return s
 	}
 	return strings.Join(lines[len(lines)-maxLines:], "\n")
+}
+
+type restIssueComment struct {
+	ID        int64           `json:"id"`
+	Body      string          `json:"body"`
+	User      restCommentUser `json:"user"`
+	HTMLURL   string          `json:"html_url"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type restCommentUser struct {
+	Login string `json:"login"`
+}
+
+type restReview struct {
+	ID        int64           `json:"id"`
+	Body      string          `json:"body"`
+	User      restCommentUser `json:"user"`
+	HTMLURL   string          `json:"html_url"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+type restReviewComment struct {
+	ID        int64           `json:"id"`
+	Body      string          `json:"body"`
+	User      restCommentUser `json:"user"`
+	HTMLURL   string          `json:"html_url"`
+	CreatedAt time.Time       `json:"created_at"`
+	Path      string          `json:"path"`
+	Line      int             `json:"line"`
+}
+
+func FetchPRComments(opts Options, prNumber int) ([]PRComment, error) {
+	token, err := opts.token()
+	if err != nil {
+		return nil, err
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	client := newClient(token)
+	var comments []PRComment
+
+	// Fetch issue comments
+	issueURL := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, prNumber)
+	logger.Tracef("fetching issue comments: GET %s", issueURL)
+	resp, err := client.R(ctx).Get(issueURL)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", issueURL, err)
+	}
+	if resp.IsOK() {
+		var issueComments []restIssueComment
+		if err := resp.Into(&issueComments); err != nil {
+			return nil, fmt.Errorf("parse issue comments: %w", err)
+		}
+		for _, c := range issueComments {
+			comments = append(comments, PRComment{
+				ID: c.ID, Body: c.Body, Author: c.User.Login,
+				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
+			})
+		}
+	}
+
+	// Fetch review comments (inline comments on diffs)
+	reviewCommentsURL := fmt.Sprintf("/repos/%s/pulls/%d/comments", repo, prNumber)
+	logger.Tracef("fetching review comments: GET %s", reviewCommentsURL)
+	resp, err = client.R(ctx).Get(reviewCommentsURL)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", reviewCommentsURL, err)
+	}
+	if resp.IsOK() {
+		var reviewComments []restReviewComment
+		if err := resp.Into(&reviewComments); err != nil {
+			return nil, fmt.Errorf("parse review comments: %w", err)
+		}
+		for _, c := range reviewComments {
+			comments = append(comments, PRComment{
+				ID: c.ID, Body: c.Body, Author: c.User.Login,
+				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
+				Path: c.Path, Line: c.Line,
+			})
+		}
+	}
+
+	// Fetch review bodies (top-level review comments)
+	reviewsURL := fmt.Sprintf("/repos/%s/pulls/%d/reviews", repo, prNumber)
+	logger.Tracef("fetching reviews: GET %s", reviewsURL)
+	resp, err = client.R(ctx).Get(reviewsURL)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", reviewsURL, err)
+	}
+	if resp.IsOK() {
+		var reviews []restReview
+		if err := resp.Into(&reviews); err != nil {
+			return nil, fmt.Errorf("parse reviews: %w", err)
+		}
+		for _, r := range reviews {
+			if r.Body == "" {
+				continue
+			}
+			comments = append(comments, PRComment{
+				ID: r.ID, Body: r.Body, Author: r.User.Login,
+				URL: r.HTMLURL, CreatedAt: r.CreatedAt,
+			})
+		}
+	}
+
+	logger.Debugf("fetched %d PR comments for #%d", len(comments), prNumber)
+	return comments, nil
 }
 
 func ParsePRJSON(data []byte) (*PRInfo, error) {

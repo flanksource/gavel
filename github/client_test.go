@@ -402,6 +402,34 @@ func TestMapRestJobToJob(t *testing.T) {
 	assert.Equal(t, 2, job.Steps[1].Number)
 }
 
+func TestStripANSI(t *testing.T) {
+	tests := []struct {
+		input, expected string
+	}{
+		{"\x1b[31mERROR\x1b[0m: something failed", "ERROR: something failed"},
+		{"\x1b[1;33mWARN\x1b[0m line", "WARN line"},
+		{"no ansi here", "no ansi here"},
+		{"\x1b[32m\x1b[1mbold green\x1b[0m", "bold green"},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.expected, stripANSI(tc.input), "input=%q", tc.input)
+	}
+}
+
+func TestParseLogSectionsStripsANSI(t *testing.T) {
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run tests\n" +
+		"2024-01-15T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
+		"2024-01-15T10:00:02.0000000Z ##[error]Process completed with exit code 1\n" +
+		"2024-01-15T10:00:03.0000000Z ##[endgroup]"
+
+	sections := parseLogSections(raw)
+	require.Contains(t, sections, "Run tests")
+	assert.Contains(t, sections["Run tests"], "FAIL: TestFoo")
+	assert.NotContains(t, sections["Run tests"], "\x1b[")
+	assert.NotContains(t, sections["Run tests"], "##[error]")
+}
+
 func TestParseLogSections(t *testing.T) {
 	raw := `2024-01-15T10:00:00.0000000Z ##[group]Set up job
 2024-01-15T10:00:01.0000000Z Preparing environment
@@ -454,6 +482,42 @@ func TestAttachLogsToStepsFallback(t *testing.T) {
 	attachLogsToSteps(job, raw, 100)
 	assert.Empty(t, job.Steps[0].Logs, "no group markers means no step match")
 	assert.Contains(t, job.Logs, "FAIL: TestBaz", "job-level logs still present")
+}
+
+func TestCleanRawLog(t *testing.T) {
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run tests\n" +
+		"2024-01-15T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
+		"2024-01-15T10:00:02.0000000Z ##[error]Process completed with exit code 1\n" +
+		"2024-01-15T10:00:03.0000000Z ##[command]/usr/bin/bash script.sh\n" +
+		"2024-01-15T10:00:04.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:05.0000000Z ##[warning]Node.js 16 is deprecated\n" +
+		"plain line no timestamp"
+
+	result := cleanRawLog(raw)
+	assert.NotContains(t, result, "2024-01-15T", "timestamps stripped")
+	assert.NotContains(t, result, "\x1b[", "ANSI stripped")
+	assert.NotContains(t, result, "##[error]", "error annotations stripped")
+	assert.NotContains(t, result, "##[command]", "command annotations stripped")
+	assert.NotContains(t, result, "##[warning]", "warning annotations stripped")
+	assert.NotContains(t, result, "##[group]", "group markers removed")
+	assert.NotContains(t, result, "##[endgroup]", "endgroup markers removed")
+	assert.Contains(t, result, "FAIL: TestFoo")
+	assert.Contains(t, result, "Process completed with exit code 1")
+	assert.Contains(t, result, "plain line no timestamp")
+}
+
+func TestAttachLogsToStepsCleansFallback(t *testing.T) {
+	job := &Job{
+		Name: "test", Conclusion: "failure",
+		Steps: []Step{
+			{Name: "Run tests", Status: "completed", Conclusion: "failure", Number: 1},
+		},
+	}
+	raw := "2024-01-15T10:00:00.0000000Z ##[error]FAIL: TestBaz\n2024-01-15T10:00:01.0000000Z exit status 1"
+	attachLogsToSteps(job, raw, 100)
+	assert.NotContains(t, job.Logs, "##[error]", "fallback logs should be cleaned")
+	assert.NotContains(t, job.Logs, "2024-01-15T", "fallback logs should strip timestamps")
+	assert.Contains(t, job.Logs, "FAIL: TestBaz")
 }
 
 func TestTailString(t *testing.T) {

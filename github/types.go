@@ -40,12 +40,16 @@ type StatusCheck struct {
 }
 
 type WorkflowRun struct {
-	DatabaseID int64  `json:"databaseId"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	URL        string `json:"url"`
-	Jobs       []Job  `json:"jobs"`
+	DatabaseID   int64  `json:"databaseId"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Conclusion   string `json:"conclusion"`
+	URL          string `json:"url"`
+	HeadSHA      string `json:"headSha,omitempty"`
+	WorkflowID   int64  `json:"workflowId,omitempty"`
+	WorkflowPath string `json:"workflowPath,omitempty"`
+	WorkflowYAML string `json:"workflowYaml,omitempty"`
+	Jobs         []Job  `json:"jobs"`
 }
 
 type Job struct {
@@ -66,6 +70,16 @@ type Step struct {
 	Conclusion string `json:"conclusion"`
 	Number     int    `json:"number"`
 	Logs       string `json:"logs,omitempty"`
+}
+
+type PRComment struct {
+	ID        int64     `json:"id"`
+	Body      string    `json:"body"`
+	Author    string    `json:"author"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"createdAt"`
+	Path      string    `json:"path,omitempty"`
+	Line      int       `json:"line,omitempty"`
 }
 
 func (sc StatusChecks) AllComplete() bool {

@@ -7,8 +7,9 @@ import (
 )
 
 type PRWatchResult struct {
-	PR   *github.PRInfo                `json:"pr"`
-	Runs map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	PR       *github.PRInfo                `json:"pr"`
+	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	Comments []github.PRComment            `json:"comments,omitempty"`
 }
 
 func (r PRWatchResult) Pretty() api.Text {

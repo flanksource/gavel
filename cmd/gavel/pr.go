@@ -7,17 +7,19 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/formatters"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/spf13/cobra"
 )
 
 var (
-	watchFollow   bool
-	watchInterval time.Duration
-	watchTailLogs int
-	watchRepo     string
-	watchOpts     clicky.FormatOptions
+	watchFollow    bool
+	watchInterval  time.Duration
+	watchTailLogs  int
+	watchRepo      string
+	watchSyncTodos string
+	watchOpts      clicky.FormatOptions
 )
 
 var prCmd = &cobra.Command{
@@ -65,6 +67,14 @@ func runPRWatch(cmd *cobra.Command, args []string) error {
 	result, code := prwatch.Run(opts)
 	if result != nil {
 		clicky.MustPrint(result, watchOpts)
+		if watchSyncTodos != "" {
+			if err := prwatch.SyncTodos(result, watchSyncTodos); err != nil {
+				logger.Warnf("failed to sync todos: %v", err)
+			}
+			if err := prwatch.SyncCommentTodos(result.Comments, result.PR, watchSyncTodos); err != nil {
+				logger.Warnf("failed to sync comment todos: %v", err)
+			}
+		}
 	}
 	exitCode = code
 	return nil
@@ -77,5 +87,7 @@ func init() {
 	prWatchCmd.Flags().BoolVar(&watchFollow, "follow", false, "Keep watching until all checks complete")
 	prWatchCmd.Flags().DurationVar(&watchInterval, "interval", 30*time.Second, "Poll interval")
 	prWatchCmd.Flags().IntVar(&watchTailLogs, "tail-logs", 100, "Number of failed log lines to show per step")
+	prWatchCmd.Flags().StringVar(&watchSyncTodos, "sync-todos", "", "Sync TODO files for failed jobs to directory")
+	prWatchCmd.Flag("sync-todos").NoOptDefVal = ".todos"
 	formatters.BindPFlags(prWatchCmd.Flags(), &watchOpts)
 }
