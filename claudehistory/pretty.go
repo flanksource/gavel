@@ -57,6 +57,15 @@ func (t ToolUse) Pretty() api.Text {
 	filepath, _ := t.Input["file_path"].(string)
 	data := t.Input
 
+	if desc, ok := data["description"].(string); ok && desc != "" {
+		text = text.Append(": ", "text-gray-400").Append(desc, "text-gray-700")
+		delete(data, "description")
+	}
+
+	if timeout, ok := data["timeout"].(float64); ok && timeout > 0 {
+		data["timeout"] = time.Duration(timeout) * time.Millisecond
+	}
+
 	if filepath != "" {
 		delete(data, "file_path")
 		filepath = getRelativePath(filepath, cwd)
@@ -84,7 +93,10 @@ func (t ToolUse) Pretty() api.Text {
 		offset, _ := t.Input["offset"].(float64)
 		delete(data, "limit")
 		delete(data, "offset")
-		text = text.Append(filepath).Append(fmt.Sprintf("[%0f:%0f]", offset, limit))
+		text = text.Append(filepath)
+		if offset > 0 || limit > 0 {
+			text = text.Append(fmt.Sprintf("[%d:%d]", int(offset), int(limit)), "text-gray-500")
+		}
 
 	case "Grep":
 		pattern, _ := t.Input["pattern"].(string)
@@ -105,13 +117,36 @@ func (t ToolUse) Pretty() api.Text {
 		}
 		delete(data, "url")
 
+	case "Task":
+		desc, _ := t.Input["description"].(string)
+		if desc == "" {
+			if prompt, ok := t.Input["prompt"].(string); ok && len(prompt) > 80 {
+				desc = prompt[:80] + "..."
+			} else {
+				desc, _ = t.Input["prompt"].(string)
+			}
+		}
+		text = text.Add(api.Text{}.Add(icons.ArrowRight)).
+			Append(" Task", "text-blue-600")
+		if desc != "" {
+			text = text.Append(": ", "text-gray-400").Append(desc, "text-gray-700")
+		}
+		data = nil
+
+	case "TodoWrite":
+		text = text.Add(api.Text{}.Add(icons.ArrowRight)).
+			Append(" TodoWrite", "text-blue-600")
+		data = nil
+
 	default:
 		text = text.Add(api.Text{}.Add(icons.ArrowRight)).
 			Append(fmt.Sprintf(" %s", t.Tool), "text-blue-600")
 
 	}
 
-	text = text.Add(clicky.Map(data, "max-w-[100ch]"))
+	if len(data) > 0 {
+		text = text.Add(clicky.Map(data, "max-w-[100ch]"))
+	}
 
 	return text
 }
@@ -215,7 +250,6 @@ func (e NoResultsError) Error() string {
 	}
 	return "no commands found in history"
 }
-
 
 func getRelativePath(filePath string, workDir string) string {
 	if rel, err := filepath.Rel(workDir, filePath); err == nil {

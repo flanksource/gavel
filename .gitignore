@@ -56,3 +56,5 @@ coverage.html
 .task
 .cache
 __debug*
+.ginkgo/
+.gingko/

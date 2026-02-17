@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	. "github.com/flanksource/gavel/models"
 )
 
 func GetCommitHistory(filter HistoryOptions) (Commits, error) {
@@ -54,12 +54,20 @@ func GetCommitHistory(filter HistoryOptions) (Commits, error) {
 
 	// Mode 3: Use git log with filters (existing behavior)
 	if len(filter.CommitShas) == 0 && len(filter.CommitRanges) == 0 {
-		// Build git log command
+		hasFilters := !filter.Since.IsZero() || !filter.Until.IsZero() || len(filter.Author) > 0 || filter.Message != ""
+
 		args := []string{
 			"log",
-			"--all",
 			"--date=iso-strict",
 			"--pretty=format:%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%b%x1f%(trailers:unfold,separator=%x1d,keyonly)%x1f%(trailers:unfold,separator=%x1d,valueonly)%x00",
+		}
+
+		if hasFilters {
+			args = append(args, "--all")
+		} else if hasRef(filter.Path, "origin/main") {
+			args = append(args, "origin/main..HEAD")
+		} else {
+			args = append(args, "--all")
 		}
 
 		// Apply date filters
@@ -295,4 +303,10 @@ func getCommitsByRange(repoPath, commitRange string, pathFilters []string) ([]Co
 	}
 
 	return commits, nil
+}
+
+func hasRef(repoPath, ref string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	cmd.Dir = repoPath
+	return cmd.Run() == nil
 }
