@@ -128,6 +128,7 @@ func ExtractToolUses(sessionFile string) ([]ToolUse, error) {
 				CWD:       entry.CWD,
 				SessionID: entry.SessionID,
 				ToolUseID: content.ID,
+				Source:    "claude",
 			}
 			toolUses = append(toolUses, toolUse)
 		}
@@ -145,7 +146,7 @@ func ExtractToolUses(sessionFile string) ([]ToolUse, error) {
 // For search tools, it returns the pattern and path. Falls back to JSON representation.
 func FormatCommand(toolUse ToolUse) string {
 	switch toolUse.Tool {
-	case "Bash":
+	case "Bash", "CodexCommand":
 		if cmd, ok := toolUse.Input["command"].(string); ok {
 			return cmd
 		}
@@ -178,7 +179,10 @@ func FilterToolUses(toolUses []ToolUse, filter Filter) []ToolUse {
 	var filtered []ToolUse
 
 	for _, tu := range toolUses {
-		// Use collections.MatchAny for tool filter to support patterns like "Bash,Read" or "!Write"
+		if filter.Source != "" && tu.Source != filter.Source {
+			continue
+		}
+
 		if filter.Tool != "" {
 			// Split comma-separated patterns and pass as variadic args
 			patterns := strings.Split(filter.Tool, ",")
@@ -248,31 +252,46 @@ type ParseResult struct {
 // It discovers session files, extracts tool uses, applies filters, and returns aggregated results.
 // If searchAll is false, only sessions matching the currentDir are parsed.
 func ParseHistory(currentDir string, searchAll bool, filter Filter) (*ParseResult, error) {
-	projectsDir := GetProjectsDir()
-
-	sessionFiles, err := FindSessionFiles(projectsDir, currentDir, searchAll)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &ParseResult{
-		SessionsFound: len(sessionFiles),
-	}
-
-	if len(sessionFiles) == 0 {
-		return result, nil
-	}
-
+	result := &ParseResult{}
 	var allToolUses []ToolUse
-	for _, sessionFile := range sessionFiles {
-		toolUses, err := ExtractToolUses(sessionFile)
+
+	if filter.Source == "" || filter.Source == "claude" {
+		claudeFiles, err := FindSessionFiles(GetProjectsDir(), currentDir, searchAll)
 		if err != nil {
-			logger.Warnf("Error extracting tool uses from %s: %v", sessionFile, err)
-			continue
+			return nil, err
 		}
-		if len(toolUses) > 0 {
-			result.SessionsScanned++
-			allToolUses = append(allToolUses, toolUses...)
+		result.SessionsFound += len(claudeFiles)
+
+		for _, f := range claudeFiles {
+			toolUses, err := ExtractToolUses(f)
+			if err != nil {
+				logger.Warnf("Error extracting tool uses from %s: %v", f, err)
+				continue
+			}
+			if len(toolUses) > 0 {
+				result.SessionsScanned++
+				allToolUses = append(allToolUses, toolUses...)
+			}
+		}
+	}
+
+	if filter.Source == "" || filter.Source == "codex" {
+		codexFiles, err := FindCodexSessionFiles()
+		if err != nil {
+			logger.Warnf("Error finding codex sessions: %v", err)
+		} else {
+			result.SessionsFound += len(codexFiles)
+			for _, f := range codexFiles {
+				toolUses, err := ExtractCodexToolUses(f)
+				if err != nil {
+					logger.Warnf("Error extracting codex tool uses from %s: %v", f, err)
+					continue
+				}
+				if len(toolUses) > 0 {
+					result.SessionsScanned++
+					allToolUses = append(allToolUses, toolUses...)
+				}
+			}
 		}
 	}
 

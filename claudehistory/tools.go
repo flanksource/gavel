@@ -684,6 +684,10 @@ var Tools = []Tool{
 	McpPlaywrightBrowserTripleClick{},
 	McpPlaywrightBrowserType{},
 	McpPlaywrightBrowserWaitFor{},
+	CodexCommand{},
+	CodexReasoning{},
+	CodexMessage{},
+	CodexTokenSummary{},
 }
 
 func ParseTool(jsonString string) any {

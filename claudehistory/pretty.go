@@ -75,6 +75,34 @@ func (t ToolUse) Pretty() api.Text {
 	case "Bash":
 		text = text.Add(clicky.CodeBlock(t.Input["command"].(string), "bash"))
 		delete(data, "command")
+	case "CodexCommand":
+		if cmd, ok := t.Input["command"].(string); ok && cmd != "" {
+			text = text.Add(clicky.CodeBlock(cmd, "bash"))
+		}
+		if output, ok := t.Input["output"].(string); ok && output != "" {
+			lines := strings.Split(output, "\n")
+			preview := output
+			if len(lines) > 20 {
+				preview = strings.Join(lines[:20], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-20)
+			}
+			text = text.NewLine().Add(clicky.CodeBlock(preview, ""))
+		}
+		data = nil
+	case "CodexReasoning":
+		if reasoning, ok := t.Input["text"].(string); ok && reasoning != "" {
+			text = clicky.Text("").
+				Add(icons.Icon{Unicode: "💭", Iconify: "mdi:thought-bubble", Style: "muted"}).
+				Append(" ", "").Append(reasoning, "text-gray-500 italic")
+		}
+		data = nil
+	case "CodexMessage":
+		if msg, ok := t.Input["text"].(string); ok && msg != "" {
+			text = clicky.Text("").
+				Add(icons.Icon{Unicode: "🤖", Iconify: "mdi:robot", Style: "muted"}).
+				Append(" Assistant", "text-blue-600 font-medium").
+				NewLine().Append(msg, "text-gray-700")
+		}
+		data = nil
 	case "Edit":
 
 		oldStr, _ := t.Input["old_string"].(string)

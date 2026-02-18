@@ -9,10 +9,12 @@ type ToolUse struct {
 	CWD       string         `json:"cwd,omitempty"`
 	SessionID string         `json:"session_id,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Source    string         `json:"source,omitempty"` // "claude" or "codex"
 }
 
 type Filter struct {
 	Tool   string
+	Source string // "claude", "codex", or "" for all
 	Since  *time.Time
 	Before *time.Time
 	Limit  int
