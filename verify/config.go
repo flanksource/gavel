@@ -8,40 +8,24 @@ import (
 	"github.com/ghodss/yaml"
 )
 
+type ChecksConfig struct {
+	Disabled           []string `yaml:"disabled" json:"disabled"`
+	DisabledCategories []string `yaml:"disabledCategories" json:"disabledCategories"`
+}
+
 type VerifyConfig struct {
-	Model    string             `yaml:"model" json:"model"`
-	Prompt   string             `yaml:"prompt" json:"prompt"`
-	Sections []string           `yaml:"sections" json:"sections"`
-	Weights  map[string]float64 `yaml:"weights" json:"weights"`
+	Model  string       `yaml:"model" json:"model"`
+	Prompt string       `yaml:"prompt" json:"prompt"`
+	Checks ChecksConfig `yaml:"checks" json:"checks"`
 }
 
 type GavelConfig struct {
 	Verify VerifyConfig `yaml:"verify" json:"verify"`
 }
 
-var defaultSections = []string{
-	"security",
-	"performance",
-	"duplication",
-	"accuracy",
-	"regression",
-	"testing",
-}
-
-var defaultWeights = map[string]float64{
-	"security":    2.0,
-	"performance": 1.5,
-	"duplication": 1.0,
-	"accuracy":    1.0,
-	"regression":  1.0,
-	"testing":     1.0,
-}
-
 func DefaultVerifyConfig() VerifyConfig {
 	return VerifyConfig{
-		Model:    "claude",
-		Sections: defaultSections,
-		Weights:  defaultWeights,
+		Model: "claude",
 	}
 }
 
@@ -85,13 +69,11 @@ func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
 	if override.Prompt != "" {
 		base.Prompt = override.Prompt
 	}
-	if len(override.Sections) > 0 {
-		base.Sections = override.Sections
+	if len(override.Checks.Disabled) > 0 {
+		base.Checks.Disabled = append(base.Checks.Disabled, override.Checks.Disabled...)
 	}
-	if len(override.Weights) > 0 {
-		for k, v := range override.Weights {
-			base.Weights[k] = v
-		}
+	if len(override.Checks.DisabledCategories) > 0 {
+		base.Checks.DisabledCategories = append(base.Checks.DisabledCategories, override.Checks.DisabledCategories...)
 	}
 	return base
 }

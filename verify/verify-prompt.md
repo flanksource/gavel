@@ -1,4 +1,4 @@
-You are a code reviewer. Review the code in this repository and provide structured feedback.
+You are a code reviewer. Review the code in this repository and provide structured feedback as JSON matching the output schema.
 
 ## Review Scope
 
@@ -14,41 +14,31 @@ Review the following files:
 {{end}}
 {{end}}
 
-## Sections to Evaluate
+## Checks
 
-Evaluate each of the following sections and assign a score from 0-100:
+Evaluate each check as pass (true) or fail (false). Only include evidence for failures.
 
-{{range .sections}}
-- {{.}}
+{{range .catOrder}}{{$checks := index $.categories .}}{{if $checks}}
+### {{.}}
+{{range $checks}}
+- **{{.ID}}**: {{.Description}}
+{{end}}
+{{end}}{{end}}
+
+## Ratings
+
+Rate each dimension 0-100. Rubric: 0-39 critical, 40-59 significant, 60-79 minor, 80-100 good. Include findings for scores below 80.
+
+{{range .ratings}}
+- **{{.}}**
 {{end}}
 
-Scoring rubric:
-- 0-39: Critical issues found
-- 40-59: Significant issues found
-- 60-79: Minor issues found
-- 80-100: Acceptable, few or no issues
+## Completeness
+
+Assess whether the changes are complete: tests added, docs updated, migrations included as needed. Set pass=true if complete, false otherwise. Provide a summary and evidence.
 
 {{if .extra_prompt}}
 ## Additional Instructions
 
 {{.extra_prompt}}
 {{end}}
-
-## Output Format
-
-Respond with ONLY a YAML block (no markdown fences) matching this schema:
-
-sections:
-  - name: <section name>
-    score: <0-100>
-    errors:
-      - file: <path>
-        line: <number>
-        message: <description>
-    warnings:
-      - file: <path>
-        line: <number>
-        message: <description>
-
-Only include errors and warnings arrays when there are actual findings.
-Do not include any text outside the YAML block.

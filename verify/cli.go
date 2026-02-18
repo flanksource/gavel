@@ -11,16 +11,19 @@ import (
 
 type CLITool struct {
 	Binary    string
-	BuildArgs func(prompt, model string, debug bool) []string
+	BuildArgs func(prompt, model, schemaFile string, debug bool) []string
 }
 
 var cliTools = map[string]CLITool{
 	"claude": {
 		Binary: "claude",
-		BuildArgs: func(prompt, model string, debug bool) []string {
+		BuildArgs: func(prompt, model, schemaFile string, debug bool) []string {
 			args := []string{"-p", prompt, "--output-format", "json"}
 			if model != "" && model != "claude" {
 				args = append(args, "--model", model)
+			}
+			if schemaFile != "" {
+				args = append(args, "--output-schema", schemaFile)
 			}
 			if debug {
 				args = append(args, "--verbose")
@@ -30,7 +33,7 @@ var cliTools = map[string]CLITool{
 	},
 	"gemini": {
 		Binary: "gemini",
-		BuildArgs: func(prompt, model string, debug bool) []string {
+		BuildArgs: func(prompt, model, _ string, debug bool) []string {
 			args := []string{"-p", prompt, "--output-format", "json"}
 			if model != "" && model != "gemini" {
 				args = append(args, "-m", model)
@@ -43,14 +46,15 @@ var cliTools = map[string]CLITool{
 	},
 	"codex": {
 		Binary: "codex",
-		BuildArgs: func(prompt, model string, debug bool) []string {
-			args := []string{"exec", "--json", prompt}
+		BuildArgs: func(prompt, model, schemaFile string, debug bool) []string {
+			args := []string{"exec", "--json"}
 			if model != "" && model != "codex" {
 				args = append(args, "-m", model)
 			}
-			if debug {
-				args = append(args, "--verbose")
+			if schemaFile != "" {
+				args = append(args, "--output-schema", schemaFile)
 			}
+			args = append(args, "--", prompt)
 			return args
 		},
 	},
@@ -70,8 +74,8 @@ func ResolveCLI(model string) (CLITool, string) {
 	return cliTools["claude"], model
 }
 
-func Execute(tool CLITool, prompt, model, workDir string, debug bool) (string, error) {
-	args := tool.BuildArgs(prompt, model, debug)
+func Execute(tool CLITool, prompt, model, schemaFile, workDir string, debug bool) (string, error) {
+	args := tool.BuildArgs(prompt, model, schemaFile, debug)
 
 	logger.V(1).Infof("exec: %s %s", tool.Binary, strings.Join(args, " "))
 
