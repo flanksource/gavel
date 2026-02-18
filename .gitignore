@@ -58,3 +58,4 @@ coverage.html
 __debug*
 .ginkgo/
 .gingko/
+specs/
