@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 // CheckOptions configures the TODO check operation.
@@ -178,13 +179,51 @@ func checkSingleTODO(ctx context.Context, executor *TODOExecutor, todo *types.TO
 		Duration:  duration,
 	})
 
+	if allPassed && todo.Verify != nil {
+		allPassed = runVerifyGate(todo.Verify, executor.workDir, opts.Logger)
+	}
+
 	return &types.CheckResult{
 		TODO:       todo,
 		Results:    testResults,
 		AllPassed:  allPassed,
-		Duration:   duration,
+		Duration:   time.Since(start),
 		TestResult: testResultInfo,
 	}
+}
+
+func runVerifyGate(vc *types.TODOVerifyConfig, workDir string, log logger.Logger) bool {
+	cfg, err := verify.LoadConfig(workDir)
+	if err != nil {
+		log.Warnf("Failed to load verify config: %v", err)
+		return false
+	}
+
+	if len(vc.Categories) > 0 {
+		enabled := make(map[string]bool, len(vc.Categories))
+		for _, c := range vc.Categories {
+			enabled[c] = true
+		}
+		for _, cat := range verify.AllCategories {
+			if !enabled[cat] {
+				cfg.Checks.DisabledCategories = append(cfg.Checks.DisabledCategories, cat)
+			}
+		}
+	}
+
+	result, err := verify.RunVerify(verify.RunOptions{Config: cfg, RepoPath: workDir})
+	if err != nil {
+		log.Warnf("Verify failed: %v", err)
+		return false
+	}
+
+	threshold := vc.ScoreThreshold
+	if threshold <= 0 {
+		threshold = 80
+	}
+
+	log.Infof("Verify score: %d (threshold: %d)", result.Score, threshold)
+	return result.Score >= threshold
 }
 
 // buildTestResultInfo creates a TestResultInfo from fixture results.

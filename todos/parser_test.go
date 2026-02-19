@@ -166,6 +166,75 @@ line: 92
 	}
 }
 
+func TestParseTODO_VerifyConfig(t *testing.T) {
+	content := `---
+priority: high
+status: pending
+language: go
+verify:
+  categories: [testing, code-quality]
+  score_threshold: 90
+---
+
+# TODO: With Verify Gate
+
+## Verification
+
+` + "```bash\ngo test ./...\n```"
+
+	tmpDir := t.TempDir()
+	todoPath := filepath.Join(tmpDir, "test.md")
+	if err := os.WriteFile(todoPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	todo, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("Failed to parse TODO: %v", err)
+	}
+
+	if todo.Verify == nil {
+		t.Fatal("Expected Verify config to be parsed, got nil")
+	}
+	if len(todo.Verify.Categories) != 2 {
+		t.Errorf("Expected 2 categories, got %d", len(todo.Verify.Categories))
+	}
+	if todo.Verify.Categories[0] != "testing" {
+		t.Errorf("Expected first category 'testing', got %q", todo.Verify.Categories[0])
+	}
+	if todo.Verify.Categories[1] != "code-quality" {
+		t.Errorf("Expected second category 'code-quality', got %q", todo.Verify.Categories[1])
+	}
+	if todo.Verify.ScoreThreshold != 90 {
+		t.Errorf("Expected score_threshold 90, got %d", todo.Verify.ScoreThreshold)
+	}
+}
+
+func TestParseTODO_NoVerifyConfig(t *testing.T) {
+	content := `---
+priority: medium
+status: pending
+language: go
+---
+
+# TODO: Without Verify`
+
+	tmpDir := t.TempDir()
+	todoPath := filepath.Join(tmpDir, "test.md")
+	if err := os.WriteFile(todoPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	todo, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("Failed to parse TODO: %v", err)
+	}
+
+	if todo.Verify != nil {
+		t.Errorf("Expected Verify to be nil, got %+v", todo.Verify)
+	}
+}
+
 func TestParseTODO_ExtractSections(t *testing.T) {
 	content := "---\npriority: high\nstatus: pending\nattempts: 0\nlanguage: go\n---\n\n# TODO: Test\n\n## Steps to Reproduce\n\n```bash\necho reproduction\n```\n\n## Implementation\n\nSome implementation instructions\n\n## Verification\n\n```bash\necho verification\n```\n"
 

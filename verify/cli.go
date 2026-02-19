@@ -84,7 +84,7 @@ func Execute(tool CLITool, prompt, model, schemaFile, workDir string, debug bool
 
 	proc := clicky.Exec(tool.Binary, args...).
 		WithCwd(workDir).
-		WithTimeout(5 * time.Minute).
+		WithTimeout(5*time.Minute).
 		Stream(os.Stderr, os.Stderr)
 
 	if debug {

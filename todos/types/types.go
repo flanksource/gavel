@@ -227,14 +227,15 @@ type TODOFrontmatter struct {
 	fixtures.FrontMatter `yaml:",inline" json:",inline"` // Embed standard fixture frontmatter
 
 	// TODO-specific fields
-	Title         string     `yaml:"title,omitempty" json:"title,omitempty"`
-	Priority      Priority   `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Status        Status     `yaml:"status,omitempty" json:"status,omitempty"`
-	LastRun       *time.Time `yaml:"last_run,omitempty" json:"last_run,omitempty"`
-	Attempts      int        `yaml:"attempts,omitempty" json:"attempts,omitempty"`
-	Language      Language   `yaml:"language,omitempty" json:"language,omitempty"`
-	WorkingCommit string     `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
-	LLM           *LLM       `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Title         string            `yaml:"title,omitempty" json:"title,omitempty"`
+	Priority      Priority          `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Status        Status            `yaml:"status,omitempty" json:"status,omitempty"`
+	LastRun       *time.Time        `yaml:"last_run,omitempty" json:"last_run,omitempty"`
+	Attempts      int               `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Language      Language          `yaml:"language,omitempty" json:"language,omitempty"`
+	WorkingCommit string            `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
+	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -254,6 +255,7 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "attempts")
 	delete(f.Metadata, "language")
 	delete(f.Metadata, "llm")
+	delete(f.Metadata, "verify")
 	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "max_turns")
 }
@@ -294,6 +296,12 @@ func (f TODOFrontmatter) Pretty() api.Text {
 	}
 
 	return result
+}
+
+// TODOVerifyConfig specifies gavel verify gate settings for a TODO.
+type TODOVerifyConfig struct {
+	Categories     []string `yaml:"categories,omitempty" json:"categories,omitempty"`
+	ScoreThreshold int      `yaml:"score_threshold,omitempty" json:"score_threshold,omitempty"`
 }
 
 // LLM contains configuration and tracking for LLM usage when executing a TODO.
