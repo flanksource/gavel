@@ -9,11 +9,21 @@ import (
 )
 
 type VerifyOptions struct {
-	Model             string   `json:"model" flag:"model" help:"AI CLI to use: claude, gemini, codex (or model name like gemini-2.5-flash)" default:"claude"`
-	CommitRange       string   `json:"range" flag:"range" help:"Commit range to review (e.g. main..HEAD)"`
-	DisableChecks     []string `json:"disable-checks" flag:"disable-checks" help:"Check IDs to disable (comma-separated)"`
-	DisableCategories []string `json:"disable-categories" flag:"disable-categories" help:"Check categories to disable (comma-separated)"`
-	Args              []string `json:"-" args:"true"`
+	Model          string   `json:"model" flag:"model" help:"AI CLI to use: claude, gemini, codex (or model name like gemini-2.5-flash)" default:"claude"`
+	CommitRange    string   `json:"range" flag:"range" help:"Commit range to review (e.g. main..HEAD)"`
+	DisableChecks  []string `json:"disable-checks" flag:"disable-checks" help:"Check IDs to disable (comma-separated)"`
+	Completeness   bool     `json:"completeness" flag:"completeness" help:"Enable completeness checks" default:"true"`
+	CodeQuality    bool     `json:"code-quality" flag:"code-quality" help:"Enable code quality checks" default:"true"`
+	Testing        bool     `json:"testing" flag:"testing" help:"Enable testing checks" default:"true"`
+	Consistency    bool     `json:"consistency" flag:"consistency" help:"Enable consistency checks" default:"true"`
+	Security       bool     `json:"security" flag:"security" help:"Enable security checks" default:"true"`
+	Performance    bool     `json:"performance" flag:"performance" help:"Enable performance checks" default:"true"`
+	AutoFix        bool     `json:"auto-fix" flag:"auto-fix" help:"Enable iterative AI-powered fix loop"`
+	FixModel       string   `json:"fix-model" flag:"fix-model" help:"AI CLI to use for fixes (defaults to --model)"`
+	MaxTurns       int      `json:"max-turns" flag:"max-turns" help:"Maximum verify-fix cycles" default:"3"`
+	ScoreThreshold int      `json:"score-threshold" flag:"score-threshold" help:"Exit 0 if final score >= this value" default:"80"`
+	PatchOnly      bool     `json:"patch-only" flag:"patch-only" help:"AI outputs patches instead of interactive tool-use"`
+	Args           []string `json:"-" args:"true"`
 }
 
 func (o VerifyOptions) GetName() string { return "verify" }
@@ -39,7 +49,16 @@ EXAMPLES:
   gavel verify --model gemini
 
   # Disable specific checks
-  gavel verify --disable-checks migration-included,config-changes-documented`)
+  gavel verify --disable-checks migration-included,config-changes-documented
+
+  # Disable entire categories
+  gavel verify --testing=false --consistency=false
+
+  # Auto-fix findings iteratively
+  gavel verify --auto-fix
+
+  # Auto-fix with a different model for fixes
+  gavel verify --auto-fix --fix-model codex`)
 }
 
 func init() {
@@ -60,20 +79,35 @@ func init() {
 		if len(opts.DisableChecks) > 0 {
 			cfg.Checks.Disabled = append(cfg.Checks.Disabled, opts.DisableChecks...)
 		}
-		if len(opts.DisableCategories) > 0 {
-			cfg.Checks.DisabledCategories = append(cfg.Checks.DisabledCategories, opts.DisableCategories...)
+		for cat, enabled := range map[string]bool{
+			"completeness": opts.Completeness,
+			"code-quality": opts.CodeQuality,
+			"testing":      opts.Testing,
+			"consistency":  opts.Consistency,
+			"security":     opts.Security,
+			"performance":  opts.Performance,
+		} {
+			if !enabled {
+				cfg.Checks.DisabledCategories = append(cfg.Checks.DisabledCategories, cat)
+			}
 		}
 
-		result, err := verify.RunVerify(verify.RunOptions{
+		runOpts := verify.RunOptions{
 			Config:      cfg,
 			RepoPath:    workDir,
 			Args:        opts.Args,
 			CommitRange: opts.CommitRange,
-		})
-		if err != nil {
-			return nil, err
 		}
 
-		return result, nil
+		if opts.AutoFix {
+			return verify.RunAutoFix(runOpts, verify.AutoFixOptions{
+				FixModel:       opts.FixModel,
+				MaxTurns:       opts.MaxTurns,
+				ScoreThreshold: opts.ScoreThreshold,
+				PatchOnly:      opts.PatchOnly,
+			})
+		}
+
+		return verify.RunVerify(runOpts)
 	})
 }

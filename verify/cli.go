@@ -2,6 +2,7 @@ package verify
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -23,7 +24,9 @@ var cliTools = map[string]CLITool{
 				args = append(args, "--model", model)
 			}
 			if schemaFile != "" {
-				args = append(args, "--output-schema", schemaFile)
+				if data, err := os.ReadFile(schemaFile); err == nil {
+					args = append(args, "--json-schema", string(data))
+				}
 			}
 			if debug {
 				args = append(args, "--verbose")
@@ -81,7 +84,8 @@ func Execute(tool CLITool, prompt, model, schemaFile, workDir string, debug bool
 
 	proc := clicky.Exec(tool.Binary, args...).
 		WithCwd(workDir).
-		WithTimeout(5 * time.Minute)
+		WithTimeout(5 * time.Minute).
+		Stream(os.Stderr, os.Stderr)
 
 	if debug {
 		proc = proc.Debug()

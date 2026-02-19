@@ -86,12 +86,12 @@ func TestEnabledChecks(t *testing.T) {
 	})
 
 	t.Run("disable by ID", func(t *testing.T) {
-		checks := EnabledChecks(ChecksConfig{Disabled: []string{"tests-added", "null-safety"}})
+		checks := EnabledChecks(ChecksConfig{Disabled: []string{"tests-added", "no-hardcoded-secrets"}})
 		if len(checks) != len(AllChecks)-2 {
 			t.Errorf("got %d checks, want %d", len(checks), len(AllChecks)-2)
 		}
 		for _, c := range checks {
-			if c.ID == "tests-added" || c.ID == "null-safety" {
+			if c.ID == "tests-added" || c.ID == "no-hardcoded-secrets" {
 				t.Errorf("disabled check %q should not be present", c.ID)
 			}
 		}
