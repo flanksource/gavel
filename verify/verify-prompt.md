@@ -7,6 +7,18 @@ Run `git diff HEAD` to see the uncommitted changes and review them.
 {{else if eq .scope.Type "range"}}
 Review the changes in the commit range: {{.scope.CommitRange}}
 Use `git diff {{.scope.CommitRange}}` to see the changes.
+{{else if eq .scope.Type "commit"}}
+Review the changes introduced by commit {{.scope.Commit}}.
+Use `git show {{.scope.Commit}}` to see the diff.
+{{else if eq .scope.Type "branch"}}
+Review the changes between branch `{{.scope.Branch}}` and the current branch.
+Use `git diff {{.scope.Branch}}...HEAD` to see the changes.
+{{else if eq .scope.Type "pr"}}
+Review the changes in PR #{{.scope.PRNumber}}.
+Use `gh pr diff {{.scope.PRNumber}}` to get the diff.
+{{else if eq .scope.Type "date-range"}}
+Review commits between {{.scope.Since}} and {{.scope.Until}}.
+Use `git log --after="{{.scope.Since}}" --before="{{.scope.Until}}" --oneline` to list commits, then `git diff $(git log --after="{{.scope.Since}}" --before="{{.scope.Until}}" --format=%H | tail -1)~1..$(git log --after="{{.scope.Since}}" --before="{{.scope.Until}}" --format=%H | head -1)` to see the combined diff.
 {{else if eq .scope.Type "files"}}
 Review the following files:
 {{range .scope.Files}}
