@@ -72,8 +72,8 @@ func RunAutoFix(verifyOpts RunOptions, fixOpts AutoFixOptions) (*FixLoopResult, 
 
 		prompt := buildFixPrompt(result, verifyOpts, loop, turn)
 
-		fixTool, fixModelResolved := ResolveCLI(fixModel)
-		err := executeFix(fixTool, fixModelResolved, prompt, verifyOpts.RepoPath, fixOpts.PatchOnly)
+		fixAdapter, fixModelResolved := ResolveAdapter(fixModel)
+		err := executeFix(fixAdapter, fixModelResolved, prompt, verifyOpts.RepoPath, fixOpts.PatchOnly)
 		if err != nil {
 			logger.Warnf("Fix turn %d failed: %v", turn, err)
 			continue
@@ -282,64 +282,25 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 	return b.String()
 }
 
-func executeFix(tool CLITool, model, prompt, workDir string, patchOnly bool) error {
-	args := buildFixArgs(tool, model, prompt, patchOnly)
+func executeFix(adapter Adapter, model, prompt, workDir string, patchOnly bool) error {
+	args := adapter.BuildFixArgs(model, prompt, patchOnly)
+	name := adapter.Name()
 
-	logger.V(1).Infof("fix exec: %s %s", tool.Binary, strings.Join(args, " "))
+	logger.V(1).Infof("fix exec: %s %s", name, strings.Join(args, " "))
 
-	proc := clicky.Exec(tool.Binary, args...).WithCwd(workDir)
+	proc := clicky.Exec(name, args...).WithCwd(workDir)
 	if logger.V(2).Enabled() {
 		proc = proc.Debug()
 	}
 
 	result := proc.Run().Result()
 	if result.Error != nil {
-		return fmt.Errorf("%s fix failed: %w\nstderr: %s", tool.Binary, result.Error, result.Stderr)
+		return fmt.Errorf("%s fix failed: %w\nstderr: %s", name, result.Error, result.Stderr)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("%s fix exited with code %d\nstderr: %s", tool.Binary, result.ExitCode, result.Stderr)
+		return fmt.Errorf("%s fix exited with code %d\nstderr: %s", name, result.ExitCode, result.Stderr)
 	}
 	return nil
-}
-
-func buildFixArgs(tool CLITool, model, prompt string, patchOnly bool) []string {
-	switch tool.Binary {
-	case "claude":
-		if patchOnly {
-			args := []string{"-p", prompt, "--output-format", "json"}
-			if model != "" && model != "claude" {
-				args = append(args, "--model", model)
-			}
-			return args
-		}
-		// Interactive: claude with tool-use (no -p for interactive, use --prompt)
-		args := []string{"-p", prompt, "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep"}
-		if model != "" && model != "claude" {
-			args = append(args, "--model", model)
-		}
-		return args
-
-	case "codex":
-		args := []string{"exec"}
-		if !patchOnly {
-			args = append(args, "--full-auto")
-		}
-		if model != "" && model != "codex" {
-			args = append(args, "-m", model)
-		}
-		args = append(args, "--", prompt)
-		return args
-
-	case "gemini":
-		args := []string{"-p", prompt}
-		if model != "" && model != "gemini" {
-			args = append(args, "-m", model)
-		}
-		return args
-
-	default:
-		return tool.BuildArgs(prompt, model, "", false)
-	}
 }
 
 func (r FixLoopResult) Pretty() api.Text {

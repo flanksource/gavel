@@ -207,42 +207,42 @@ func TestBuildFixPrompt(t *testing.T) {
 func TestBuildFixArgs(t *testing.T) {
 	tests := []struct {
 		name      string
-		binary    string
+		adapter   Adapter
 		model     string
 		patchOnly bool
 		wantParts []string
 	}{
 		{
 			name:      "claude interactive",
-			binary:    "claude",
+			adapter:   Claude{},
 			model:     "claude-sonnet-4",
 			patchOnly: false,
 			wantParts: []string{"-p", "--allowedTools", "--model", "claude-sonnet-4"},
 		},
 		{
 			name:      "claude patch-only",
-			binary:    "claude",
+			adapter:   Claude{},
 			model:     "",
 			patchOnly: true,
 			wantParts: []string{"-p", "--output-format", "json"},
 		},
 		{
 			name:      "codex full-auto",
-			binary:    "codex",
+			adapter:   Codex{},
 			model:     "codex-mini",
 			patchOnly: false,
 			wantParts: []string{"exec", "--full-auto", "-m", "codex-mini"},
 		},
 		{
 			name:      "codex patch-only",
-			binary:    "codex",
+			adapter:   Codex{},
 			model:     "",
 			patchOnly: true,
 			wantParts: []string{"exec", "--"},
 		},
 		{
 			name:      "gemini",
-			binary:    "gemini",
+			adapter:   Gemini{},
 			model:     "gemini-2.5-flash",
 			patchOnly: false,
 			wantParts: []string{"-p", "-m", "gemini-2.5-flash"},
@@ -251,8 +251,7 @@ func TestBuildFixArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tool := CLITool{Binary: tt.binary}
-			args := buildFixArgs(tool, tt.model, "fix this", tt.patchOnly)
+			args := tt.adapter.BuildFixArgs(tt.model, "fix this", tt.patchOnly)
 			joined := strings.Join(args, " ")
 			for _, part := range tt.wantParts {
 				if !strings.Contains(joined, part) {

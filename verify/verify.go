@@ -4,12 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strings"
 
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/claudehistory"
 )
 
 type RunOptions struct {
@@ -20,8 +16,11 @@ type RunOptions struct {
 }
 
 func RunVerify(opts RunOptions) (*VerifyResult, error) {
-	scope := ResolveScope(opts.Args, opts.CommitRange)
-	tool, model := ResolveCLI(opts.Config.Model)
+	scope, err := ResolveScope(opts.Args, opts.CommitRange, opts.RepoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve scope: %w", err)
+	}
+	adapter, model := ResolveAdapter(opts.Config.Model)
 
 	logger.Infof("Verifying %s using %s", scope, model)
 
@@ -36,61 +35,20 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 	}
 	defer os.Remove(schemaFile)
 
-	raw, err := Execute(tool, prompt, model, schemaFile, opts.RepoPath, logger.V(2).Enabled())
+	raw, err := Execute(adapter, prompt, model, schemaFile, opts.RepoPath, logger.V(2).Enabled())
 	if err != nil {
 		return nil, fmt.Errorf("CLI execution failed: %w", err)
 	}
 
-	if tool.Binary == "codex" {
-		printCodexEvents(raw)
-	}
+	adapter.PostExecute(raw)
 
-	result, err := parseVerifyResponse(raw)
+	result, err := adapter.ParseResponse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	result.Score = ComputeOverallScore(result)
 	return &result, nil
-}
-
-func printCodexEvents(raw string) {
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "{") {
-			continue
-		}
-		event, err := claudehistory.ParseCodexLine(line)
-		if err != nil {
-			continue
-		}
-		var tu *claudehistory.ToolUse
-		switch event.Type {
-		case "response_item":
-			switch event.Payload.Type {
-			case "reasoning":
-				var text string
-				for _, s := range event.Payload.Summary {
-					if s.Text != "" {
-						text = s.Text
-					}
-				}
-				if text != "" {
-					tu = &claudehistory.ToolUse{Tool: "CodexReasoning", Input: map[string]any{"text": text}}
-				}
-			}
-		case "event_msg":
-			switch event.Payload.Type {
-			case "agent_reasoning":
-				if event.Payload.Text != "" {
-					tu = &claudehistory.ToolUse{Tool: "CodexReasoning", Input: map[string]any{"text": event.Payload.Text}}
-				}
-			}
-		}
-		if tu != nil {
-			os.Stderr.WriteString(clicky.MustFormat(tu.Pretty(), formatters.FormatOptions{Pretty: true}) + "\n")
-		}
-	}
 }
 
 func ComputeOverallScore(r VerifyResult) int {

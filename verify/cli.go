@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,79 +11,33 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
-type CLITool struct {
-	Binary    string
-	BuildArgs func(prompt, model, schemaFile string, debug bool) []string
+var adapters = map[string]Adapter{
+	"claude": Claude{},
+	"gemini": Gemini{},
+	"codex":  Codex{},
 }
 
-var cliTools = map[string]CLITool{
-	"claude": {
-		Binary: "claude",
-		BuildArgs: func(prompt, model, schemaFile string, debug bool) []string {
-			args := []string{"-p", prompt, "--output-format", "json"}
-			if model != "" && model != "claude" {
-				args = append(args, "--model", model)
-			}
-			if schemaFile != "" {
-				if data, err := os.ReadFile(schemaFile); err == nil {
-					args = append(args, "--json-schema", string(data))
-				}
-			}
-			if debug {
-				args = append(args, "--verbose")
-			}
-			return args
-		},
-	},
-	"gemini": {
-		Binary: "gemini",
-		BuildArgs: func(prompt, model, _ string, debug bool) []string {
-			args := []string{"-p", prompt, "--output-format", "json"}
-			if model != "" && model != "gemini" {
-				args = append(args, "-m", model)
-			}
-			if debug {
-				args = append(args, "--debug")
-			}
-			return args
-		},
-	},
-	"codex": {
-		Binary: "codex",
-		BuildArgs: func(prompt, model, schemaFile string, debug bool) []string {
-			args := []string{"exec", "--json"}
-			if model != "" && model != "codex" {
-				args = append(args, "-m", model)
-			}
-			if schemaFile != "" {
-				args = append(args, "--output-schema", schemaFile)
-			}
-			args = append(args, "--", prompt)
-			return args
-		},
-	},
-}
-
-func ResolveCLI(model string) (CLITool, string) {
-	if tool, ok := cliTools[model]; ok {
-		return tool, model
+func ResolveAdapter(model string) (Adapter, string) {
+	if a, ok := adapters[model]; ok {
+		return a, model
 	}
 	prefix := model
 	if idx := strings.IndexByte(model, '-'); idx > 0 {
 		prefix = model[:idx]
 	}
-	if tool, ok := cliTools[prefix]; ok {
-		return tool, model
+	if a, ok := adapters[prefix]; ok {
+		return a, model
 	}
-	return cliTools["claude"], model
+	return adapters["claude"], model
 }
 
-func Execute(tool CLITool, prompt, model, schemaFile, workDir string, debug bool) (string, error) {
-	args := tool.BuildArgs(prompt, model, schemaFile, debug)
+func Execute(adapter Adapter, prompt, model, schemaFile, workDir string, debug bool) (string, error) {
+	args := adapter.BuildVerifyArgs(prompt, model, schemaFile, debug)
+	name := adapter.Name()
 
-	logger.V(1).Infof("exec: %s %s", tool.Binary, strings.Join(args, " "))
+	logger.V(1).Infof("exec: %s %s", name, strings.Join(args, " "))
 
-	proc := clicky.Exec(tool.Binary, args...).
+	proc := clicky.Exec(name, args...).
 		WithCwd(workDir).
 		WithTimeout(5*time.Minute).
 		Stream(os.Stderr, os.Stderr)
@@ -98,13 +53,35 @@ func Execute(tool CLITool, prompt, model, schemaFile, workDir string, debug bool
 		logger.V(1).Infof("stderr: %s", result.Stderr)
 	}
 
-	if result.Error != nil {
-		return "", fmt.Errorf("%s failed: %w\nstderr: %s", tool.Binary, result.Error, result.Stderr)
+	if result.Error != nil || result.ExitCode != 0 {
+		msg := extractErrorMessage(result.Stdout)
+		if msg == "" {
+			msg = result.Stderr
+		}
+		if containsModelError(msg) {
+			if hint := formatModelHint(adapter); hint != "" {
+				msg = msg + "\n" + hint
+			}
+		}
+		if result.Error != nil {
+			return "", fmt.Errorf("%s failed: %w\n%s", name, result.Error, msg)
+		}
+		return "", fmt.Errorf("%s exited with code %d\n%s", name, result.ExitCode, msg)
 	}
-
-	if result.ExitCode != 0 {
-		return "", fmt.Errorf("%s exited with code %d\nstderr: %s", tool.Binary, result.ExitCode, result.Stderr)
-	}
-
 	return result.Stdout, nil
+}
+
+func extractErrorMessage(stdout string) string {
+	stdout = strings.TrimSpace(stdout)
+	if !strings.HasPrefix(stdout, "{") {
+		return ""
+	}
+	var envelope struct {
+		Result  string `json:"result"`
+		IsError bool   `json:"is_error"`
+	}
+	if json.Unmarshal([]byte(stdout), &envelope) == nil && envelope.Result != "" {
+		return envelope.Result
+	}
+	return ""
 }

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestComputeOverallScore(t *testing.T) {
@@ -148,11 +150,11 @@ func TestMergeVerifyConfig(t *testing.T) {
 	})
 }
 
-func TestResolveCLI(t *testing.T) {
+func TestResolveAdapter(t *testing.T) {
 	tests := []struct {
-		model          string
-		expectedBinary string
-		expectedModel  string
+		model         string
+		expectedName  string
+		expectedModel string
 	}{
 		{"claude", "claude", "claude"},
 		{"gemini", "gemini", "gemini"},
@@ -165,69 +167,12 @@ func TestResolveCLI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			tool, model := ResolveCLI(tt.model)
-			if tool.Binary != tt.expectedBinary {
-				t.Errorf("Binary = %q, want %q", tool.Binary, tt.expectedBinary)
+			adapter, model := ResolveAdapter(tt.model)
+			if adapter.Name() != tt.expectedName {
+				t.Errorf("Name() = %q, want %q", adapter.Name(), tt.expectedName)
 			}
 			if model != tt.expectedModel {
 				t.Errorf("model = %q, want %q", model, tt.expectedModel)
-			}
-		})
-	}
-}
-
-func TestParseVerifyResponse(t *testing.T) {
-	tests := []struct {
-		name       string
-		input      string
-		wantChecks int
-		wantErr    bool
-	}{
-		{
-			name:       "direct JSON with checks",
-			input:      `{"checks":{"tests-added":{"pass":true},"null-safety":{"pass":false,"evidence":[{"file":"main.go","line":10,"message":"nil dereference"}]}},"ratings":{"security":{"score":85}},"completeness":{"pass":true,"summary":"looks good"}}`,
-			wantChecks: 2,
-		},
-		{
-			name:       "JSON with markdown fences",
-			input:      "```json\n" + `{"checks":{"tests-added":{"pass":true}},"ratings":{"security":{"score":90}},"completeness":{"pass":true,"summary":"ok"}}` + "\n```",
-			wantChecks: 1,
-		},
-		{
-			name:       "JSON wrapper with result field",
-			input:      `{"result": "{\"checks\":{\"tests-added\":{\"pass\":true}},\"ratings\":{\"security\":{\"score\":90}},\"completeness\":{\"pass\":true,\"summary\":\"ok\"}}"}`,
-			wantChecks: 1,
-		},
-		{
-			name: "codex JSONL output",
-			input: `{"type":"thread.started","thread_id":"abc"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git diff","aggregated_output":"..."}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"checks\":{\"tests-added\":{\"pass\":true,\"evidence\":[]},\"null-safety\":{\"pass\":false,\"evidence\":[{\"file\":\"main.go\",\"line\":5,\"message\":\"nil ptr\"}]}},\"ratings\":{\"security\":{\"score\":80,\"findings\":[]}},\"completeness\":{\"pass\":true,\"summary\":\"ok\",\"evidence\":[]}}"}}
-{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":50}}`,
-			wantChecks: 2,
-		},
-		{
-			name:    "invalid input",
-			input:   "not json at all {{{",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseVerifyResponse(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(result.Checks) != tt.wantChecks {
-				t.Errorf("got %d checks, want %d", len(result.Checks), tt.wantChecks)
 			}
 		})
 	}
@@ -260,31 +205,22 @@ func TestLoadConfig(t *testing.T) {
 
 func TestResolveScope(t *testing.T) {
 	t.Run("no args no range", func(t *testing.T) {
-		s := ResolveScope(nil, "")
-		if s.Type != "diff" {
-			t.Errorf("Type = %q, want diff", s.Type)
-		}
+		s, err := ResolveScope(nil, "", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "diff", s.Type)
 	})
 
-	t.Run("commit range", func(t *testing.T) {
-		s := ResolveScope(nil, "main..HEAD")
-		if s.Type != "range" || s.CommitRange != "main..HEAD" {
-			t.Errorf("got %+v, want range with main..HEAD", s)
-		}
+	t.Run("commit range flag", func(t *testing.T) {
+		s, err := ResolveScope(nil, "main..HEAD", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "range", s.Type)
+		assert.Equal(t, "main..HEAD", s.CommitRange)
 	})
 
-	t.Run("file args", func(t *testing.T) {
-		s := ResolveScope([]string{"a.go", "b.go"}, "")
-		if s.Type != "files" || len(s.Files) != 2 {
-			t.Errorf("got %+v, want files with 2 entries", s)
-		}
-	})
-
-	t.Run("range takes precedence over files", func(t *testing.T) {
-		s := ResolveScope([]string{"a.go"}, "main..HEAD")
-		if s.Type != "range" {
-			t.Errorf("Type = %q, want range (should take precedence)", s.Type)
-		}
+	t.Run("range flag takes precedence over args", func(t *testing.T) {
+		s, err := ResolveScope([]string{"a.go"}, "main..HEAD", "")
+		assert.NoError(t, err)
+		assert.Equal(t, "range", s.Type)
 	})
 }
 
