@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -41,6 +42,14 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		if err != nil {
 			logger.Warnf("failed to fetch PR comments: %v", err)
 		}
+
+		threads, err := github.FetchReviewThreads(opts.Options, pr.Number)
+		if err != nil {
+			logger.Warnf("failed to fetch review threads: %v", err)
+		}
+		comments = mergeThreadState(comments, threads)
+		comments = extractNitpicks(comments)
+		comments = filterActionableComments(comments)
 
 		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
 
@@ -96,4 +105,67 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.Wo
 		runs[runID] = run
 	}
 	return runs
+}
+
+func mergeThreadState(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
+	threadByID := make(map[int64]github.PRComment, len(threads))
+	for _, t := range threads {
+		threadByID[t.ID] = t
+	}
+	for i, c := range comments {
+		if t, ok := threadByID[c.ID]; ok {
+			comments[i].IsResolved = t.IsResolved
+			comments[i].IsOutdated = t.IsOutdated
+			if comments[i].Path == "" {
+				comments[i].Path = t.Path
+			}
+			if comments[i].Line == 0 {
+				comments[i].Line = t.Line
+			}
+			if comments[i].Severity == "" {
+				comments[i].Severity = parseSeverityFromBadge(c.Body)
+			}
+		}
+	}
+	return comments
+}
+
+func extractNitpicks(comments []github.PRComment) []github.PRComment {
+	var result []github.PRComment
+	for _, c := range comments {
+		result = append(result, c)
+		if c.Author == "coderabbitai[bot]" {
+			result = append(result, parseNitpickComments(c)...)
+		}
+	}
+	return result
+}
+
+func filterActionableComments(comments []github.PRComment) []github.PRComment {
+	var result []github.PRComment
+	for _, c := range comments {
+		if c.Severity != "" || c.Path != "" {
+			result = append(result, c)
+			continue
+		}
+		body := strings.TrimSpace(c.Body)
+		if isNoiseComment(body) {
+			continue
+		}
+		result = append(result, c)
+	}
+	return result
+}
+
+func isNoiseComment(body string) bool {
+	if strings.HasPrefix(body, "> [!") {
+		return true
+	}
+	if strings.HasPrefix(body, "**Actionable comments posted:") {
+		return true
+	}
+	if strings.HasPrefix(body, "Actionable comments posted:") {
+		return true
+	}
+	return false
 }

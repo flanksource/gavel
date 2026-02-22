@@ -228,6 +228,125 @@ func (n graphQLCheckNode) statusContextToStatusCheck() StatusCheck {
 	return sc
 }
 
+const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          isOutdated
+          comments(first: 1) {
+            nodes {
+              databaseId
+              body
+              author { login }
+              path
+              line
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+type reviewThreadsResponse struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				ReviewThreads struct {
+					Nodes []struct {
+						IsResolved bool `json:"isResolved"`
+						IsOutdated bool `json:"isOutdated"`
+						Comments   struct {
+							Nodes []struct {
+								DatabaseID int64         `json:"databaseId"`
+								Body       string        `json:"body"`
+								Author     graphQLAuthor `json:"author"`
+								Path       string        `json:"path"`
+								Line       int           `json:"line"`
+								URL        string        `json:"url"`
+							} `json:"nodes"`
+						} `json:"comments"`
+					} `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+	Errors []graphQLError `json:"errors"`
+}
+
+func FetchReviewThreads(opts Options, prNumber int) ([]PRComment, error) {
+	token, err := opts.token()
+	if err != nil {
+		return nil, err
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid repo format %q", repo)
+	}
+
+	body := map[string]any{
+		"query": reviewThreadsQuery,
+		"variables": map[string]any{
+			"owner": parts[0], "repo": parts[1], "number": prNumber,
+		},
+	}
+
+	ctx := context.Background()
+	client := newClient(token)
+
+	logger.Tracef("fetching review threads via GraphQL for PR #%d", prNumber)
+	resp, err := client.R(ctx).
+		Header("Content-Type", "application/json").
+		Post("https://api.github.com/graphql", body)
+	if err != nil {
+		return nil, fmt.Errorf("GraphQL request: %w", err)
+	}
+	if !resp.IsOK() {
+		respBody, _ := resp.AsString()
+		return nil, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result reviewThreadsResponse
+	if err := resp.Into(&result); err != nil {
+		return nil, fmt.Errorf("parse review threads response: %w", err)
+	}
+	if len(result.Errors) > 0 {
+		msgs := make([]string, len(result.Errors))
+		for i, e := range result.Errors {
+			msgs[i] = e.Message
+		}
+		return nil, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
+	}
+
+	var comments []PRComment
+	for _, thread := range result.Data.Repository.PullRequest.ReviewThreads.Nodes {
+		if len(thread.Comments.Nodes) == 0 {
+			continue
+		}
+		c := thread.Comments.Nodes[0]
+		comments = append(comments, PRComment{
+			ID:         c.DatabaseID,
+			Body:       c.Body,
+			Author:     c.Author.Login,
+			URL:        c.URL,
+			Path:       c.Path,
+			Line:       c.Line,
+			IsResolved: thread.IsResolved,
+			IsOutdated: thread.IsOutdated,
+		})
+	}
+
+	logger.Debugf("fetched %d review threads for PR #%d", len(comments), prNumber)
+	return comments, nil
+}
+
 func FetchPR(opts Options, prNumber int) (*PRInfo, error) {
 	token, err := opts.token()
 	if err != nil {

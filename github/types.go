@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,13 +74,82 @@ type Step struct {
 }
 
 type PRComment struct {
-	ID        int64     `json:"id"`
-	Body      string    `json:"body"`
-	Author    string    `json:"author"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"createdAt"`
-	Path      string    `json:"path,omitempty"`
-	Line      int       `json:"line,omitempty"`
+	ID         int64     `json:"id"`
+	Body       string    `json:"body"`
+	Author     string    `json:"author"`
+	URL        string    `json:"url"`
+	CreatedAt  time.Time `json:"createdAt"`
+	Path       string    `json:"path,omitempty"`
+	Line       int       `json:"line,omitempty"`
+	IsResolved bool      `json:"isResolved,omitempty"`
+	IsOutdated bool      `json:"isOutdated,omitempty"`
+	Severity   string    `json:"severity,omitempty"` // "critical", "major", "minor", "nitpick"
+}
+
+func SeverityIcon(severity string) api.Text {
+	switch severity {
+	case "critical":
+		return clicky.Text("🔴", "")
+	case "major":
+		return clicky.Text("🟠", "")
+	case "minor":
+		return clicky.Text("🟡", "")
+	case "nitpick":
+		return clicky.Text("🧹", "")
+	default:
+		return clicky.Text("💬", "")
+	}
+}
+
+func (c PRComment) Pretty() api.Text {
+	text := clicky.Text("  ", "").Add(SeverityIcon(c.Severity))
+	if c.Path != "" {
+		loc := c.Path
+		if c.Line > 0 {
+			loc = fmt.Sprintf("%s:%d", c.Path, c.Line)
+		}
+		text = text.Append(" "+loc, "text-cyan-600")
+	}
+	title := c.Title()
+	if len(title) > 120 {
+		title = title[:117] + "..."
+	}
+	style := ""
+	if c.IsResolved || c.IsOutdated {
+		style = "text-gray-500 line-through"
+	}
+	text = text.Append(" "+title, style)
+	return text
+}
+
+var htmlTagRegex = regexp.MustCompile(`<[^>]+>`)
+
+func (c PRComment) Title() string {
+	body := htmlTagRegex.ReplaceAllString(strings.TrimSpace(c.Body), "")
+	for _, line := range strings.SplitN(body, "\n", 15) {
+		line = strings.TrimSpace(line)
+		if line == "" || isBadgeLine(line) {
+			continue
+		}
+		if idx := strings.Index(line, "**"); idx != -1 {
+			if end := strings.Index(line[idx+2:], "**"); end != -1 {
+				return strings.TrimSpace(line[idx+2 : idx+2+end])
+			}
+		}
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimSpace(line[2:])
+		}
+		return line
+	}
+	return strings.SplitN(body, "\n", 2)[0]
+}
+
+func isBadgeLine(line string) bool {
+	if !strings.HasPrefix(line, "_") {
+		return false
+	}
+	return strings.Contains(line, "🔴") || strings.Contains(line, "🟠") ||
+		strings.Contains(line, "🟡") || strings.Contains(line, "⚠️")
 }
 
 func (sc StatusChecks) AllComplete() bool {
