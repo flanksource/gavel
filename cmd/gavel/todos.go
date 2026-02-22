@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,8 @@ var (
 	maxBudget    float64
 	maxTurns     int
 	interactive  bool
+	groupBy      string
+	dirty        bool
 )
 
 var todosCmd = &cobra.Command{
@@ -44,8 +47,9 @@ var todosRunCmd = &cobra.Command{
 }
 
 type TodosListOptions struct {
-	Dir    string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
-	Status string `json:"status" flag:"status" help:"Filter TODOs by status"`
+	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
+	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
+	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, or none"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }
@@ -151,11 +155,16 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 
 	logger.Infof("Found %d TODOs", len(todoList))
 
-	fmt.Println(clicky.Text("Found TODOs to execute:", "text-blue-600 font-bold").ANSI())
-	for _, todo := range todoList {
-		fmt.Println(todo.Pretty().ANSI())
-	}
+	groups := todos.GroupTODOs(todoList, groupBy)
+	fmt.Println(clicky.MustFormat(todos.FlattenGrouped(groups)))
 	fmt.Println()
+
+	// Flatten groups to ordered list for execution
+	var orderedTodos types.TODOS
+	for _, group := range groups {
+		orderedTodos = append(orderedTodos, group.TODOs...)
+	}
+	todoList = orderedTodos
 
 	interaction := &todos.UserInteraction{
 		AskFunc: func(question todos.Question) (string, error) {
@@ -192,6 +201,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 			SessionID: sessionID,
 			Timeout:   30 * time.Minute,
 			Tools:     []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
+			Dirty:     dirty,
 		}
 		if todo.LLM != nil {
 			if todo.LLM.MaxCost > 0 {
@@ -244,7 +254,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Errorf("Panic during TODO execution: %v", r)
+					logger.Errorf("Panic during TODO execution: %v\n%s", r, debug.Stack())
 				}
 				executionDone <- true
 			}()
@@ -303,7 +313,17 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
 	}
 
-	return todos.DiscoverTODOs(dir, filters)
+	todoList, err := todos.DiscoverTODOs(dir, filters)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.GroupBy != "" && opts.GroupBy != todos.GroupByNone {
+		groups := todos.GroupTODOs(todoList, opts.GroupBy)
+		return todos.FlattenGrouped(groups), nil
+	}
+
+	return todoList, nil
 }
 
 func runTodosGet(cmd *cobra.Command, args []string) error {
@@ -456,6 +476,8 @@ func init() {
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
+	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, or none")
+	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
 
 	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 

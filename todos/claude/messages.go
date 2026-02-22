@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/flanksource/gavel/claudehistory"
 	"github.com/flanksource/gavel/todos"
@@ -85,10 +86,33 @@ func toolUseSummary(tool string, input map[string]any) string {
 		}
 		return truncate(str("prompt"), 80)
 	case "TodoWrite":
-		return "TodoWrite"
+		return todoWriteSummary(input)
 	default:
 		return tool
 	}
+}
+
+func todoWriteSummary(input map[string]any) string {
+	todosRaw, ok := input["todos"].([]any)
+	if !ok || len(todosRaw) == 0 {
+		return "TodoWrite (empty)"
+	}
+	var subjects []string
+	for _, t := range todosRaw {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		if subject, ok := m["subject"].(string); ok && subject != "" {
+			subjects = append(subjects, truncate(subject, 60))
+		} else if content, ok := m["content"].(string); ok && content != "" {
+			subjects = append(subjects, truncate(content, 60))
+		}
+	}
+	if len(subjects) == 0 {
+		return fmt.Sprintf("TodoWrite (%d todos)", len(todosRaw))
+	}
+	return fmt.Sprintf("TodoWrite: %s", strings.Join(subjects, ", "))
 }
 
 func ProcessMessage(ctx *todos.ExecutorContext, msg *AgentMessage, result *todos.ExecutionResult) {

@@ -14,33 +14,89 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func gitStash(workDir string) (restore func(), err error) {
+func gitCheckoutBranch(workDir, branch string) (restore func(), err error) {
 	noop := func() {}
 
-	// Check if working tree is dirty
-	diffCmd := exec.Command("git", "diff", "--quiet")
-	diffCmd.Dir = workDir
-	diffErr := diffCmd.Run()
+	currentCmd := exec.Command("git", "branch", "--show-current")
+	currentCmd.Dir = workDir
+	currentOut, err := currentCmd.Output()
+	if err != nil {
+		return noop, fmt.Errorf("failed to get current branch: %w", err)
+	}
+	currentBranch := strings.TrimSpace(string(currentOut))
 
-	cachedCmd := exec.Command("git", "diff", "--cached", "--quiet")
-	cachedCmd.Dir = workDir
-	cachedErr := cachedCmd.Run()
-
-	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	untrackedCmd.Dir = workDir
-	untrackedOut, _ := untrackedCmd.Output()
-
-	if diffErr == nil && cachedErr == nil && len(strings.TrimSpace(string(untrackedOut))) == 0 {
+	if currentBranch == branch {
 		return noop, nil
 	}
 
-	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run", "--include-untracked")
+	// Stash any dirty changes before switching
+	stashRestore, err := gitStash(workDir, false)
+	if err != nil {
+		return noop, fmt.Errorf("failed to stash before branch switch: %w", err)
+	}
+
+	logger.Infof("Switching from %s to %s", currentBranch, branch)
+	checkoutCmd := exec.Command("git", "checkout", branch)
+	checkoutCmd.Dir = workDir
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		stashRestore()
+		return noop, fmt.Errorf("git checkout %s failed: %w\n%s", branch, err, out)
+	}
+
+	return func() {
+		restoreCmd := exec.Command("git", "checkout", currentBranch)
+		restoreCmd.Dir = workDir
+		if out, err := restoreCmd.CombinedOutput(); err != nil {
+			logger.Warnf("git checkout %s failed: %v\n%s", currentBranch, err, out)
+		} else {
+			logger.Infof("Restored branch %s", currentBranch)
+		}
+		stashRestore()
+	}, nil
+}
+
+func gitStash(workDir string, dirty bool) (restore func(), err error) {
+	noop := func() {}
+
+	if dirty {
+		return noop, nil
+	}
+
+	statusCmd := exec.Command("git", "status", "--porcelain", "--", ".", ":!.todos")
+	statusCmd.Dir = workDir
+	statusOut, _ := statusCmd.Output()
+
+	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard", "--", ".", ":!.todos")
+	untrackedCmd.Dir = workDir
+	untrackedOut, _ := untrackedCmd.Output()
+
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
+		if f := strings.TrimSpace(line); f != "" {
+			files = append(files, strings.TrimSpace(f[2:]))
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(untrackedOut)), "\n") {
+		if f := strings.TrimSpace(line); f != "" {
+			files = append(files, f)
+		}
+	}
+
+	if len(files) == 0 {
+		return noop, nil
+	}
+
+	logger.Infof("Stashing %d files:", len(files))
+	for _, f := range files {
+		logger.Infof("  %s", f)
+	}
+
+	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run", "--include-untracked", "--", ".", ":!.todos")
 	stashCmd.Dir = workDir
 	if out, err := stashCmd.CombinedOutput(); err != nil {
 		return noop, fmt.Errorf("git stash failed: %w\n%s", err, out)
 	}
 
-	logger.Infof("Stashed dirty working tree")
 	return func() {
 		popCmd := exec.Command("git", "stash", "pop")
 		popCmd.Dir = workDir

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/models"
@@ -32,7 +33,7 @@ func initTestRepo(t *testing.T) string {
 
 func TestGitStash_CleanTree(t *testing.T) {
 	dir := initTestRepo(t)
-	restore, err := gitStash(dir)
+	restore, err := gitStash(dir, false)
 	require.NoError(t, err)
 
 	// restore should be a no-op
@@ -52,7 +53,7 @@ func TestGitStash_DirtyTree(t *testing.T) {
 	// Make the tree dirty
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644))
 
-	restore, err := gitStash(dir)
+	restore, err := gitStash(dir, false)
 	require.NoError(t, err)
 
 	// dirty.txt should be stashed (not present)
@@ -66,6 +67,21 @@ func TestGitStash_DirtyTree(t *testing.T) {
 	assert.NoError(t, err, "dirty.txt should be restored after stash pop")
 }
 
+func TestGitStash_DirtyFlag(t *testing.T) {
+	dir := initTestRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644))
+
+	restore, err := gitStash(dir, true)
+	require.NoError(t, err)
+
+	// dirty.txt should still be present (stash skipped)
+	_, err = os.Stat(filepath.Join(dir, "dirty.txt"))
+	assert.NoError(t, err, "dirty.txt should remain when dirty=true")
+
+	restore()
+}
+
 func TestGitStash_StagedChanges(t *testing.T) {
 	dir := initTestRepo(t)
 
@@ -75,7 +91,7 @@ func TestGitStash_StagedChanges(t *testing.T) {
 	cmd.Dir = dir
 	require.NoError(t, cmd.Run())
 
-	restore, err := gitStash(dir)
+	restore, err := gitStash(dir, false)
 	require.NoError(t, err)
 
 	// staged.txt should be stashed
@@ -86,6 +102,68 @@ func TestGitStash_StagedChanges(t *testing.T) {
 
 	_, err = os.Stat(filepath.Join(dir, "staged.txt"))
 	assert.NoError(t, err, "staged.txt should be restored after stash pop")
+}
+
+func TestGitCheckoutBranch_SameBranch(t *testing.T) {
+	dir := initTestRepo(t)
+
+	// Get current branch name
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	currentBranch := strings.TrimSpace(string(out))
+
+	restore, err := gitCheckoutBranch(dir, currentBranch)
+	require.NoError(t, err)
+
+	// Should be a noop
+	restore()
+
+	// Still on the same branch
+	cmd = exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err = cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, currentBranch, strings.TrimSpace(string(out)))
+}
+
+func TestGitCheckoutBranch_SwitchAndRestore(t *testing.T) {
+	dir := initTestRepo(t)
+
+	// Create a target branch
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+	run("branch", "feature-branch")
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	originalBranch := strings.TrimSpace(string(out))
+
+	restore, err := gitCheckoutBranch(dir, "feature-branch")
+	require.NoError(t, err)
+
+	// Should be on the target branch
+	cmd = exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err = cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, "feature-branch", strings.TrimSpace(string(out)))
+
+	restore()
+
+	// Should be back on original branch
+	cmd = exec.Command("git", "branch", "--show-current")
+	cmd.Dir = dir
+	out, err = cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, originalBranch, strings.TrimSpace(string(out)))
 }
 
 func TestGitCommitChanges_NoChanges(t *testing.T) {

@@ -36,6 +36,10 @@ func (t ToolUse) Pretty() api.Text {
 	text := clicky.Text("").
 		Append(t.Tool, "text-blue-300 wrap-space")
 
+	if t.Input == nil {
+		return text
+	}
+
 	// Add metadata on next line if available
 	if t.Timestamp != nil || t.CWD != "" {
 		text = text.NewLine()
@@ -164,6 +168,22 @@ func (t ToolUse) Pretty() api.Text {
 	case "TodoWrite":
 		text = text.Add(api.Text{}.Add(icons.ArrowRight)).
 			Append(" TodoWrite", "text-blue-600")
+		if todosRaw, ok := t.Input["todos"].([]any); ok {
+			for _, item := range todosRaw {
+				if m, ok := item.(map[string]any); ok {
+					subject, _ := m["subject"].(string)
+					if subject == "" {
+						subject, _ = m["content"].(string)
+					}
+					if subject != "" {
+						if len(subject) > 80 {
+							subject = subject[:77] + "..."
+						}
+						text = text.NewLine().Append("  - ", "text-gray-400").Append(subject, "text-gray-700")
+					}
+				}
+			}
+		}
 		data = nil
 
 	default:

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/ghodss/yaml"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTODOVerifyConfig_Serialization(t *testing.T) {
@@ -71,6 +73,83 @@ func TestTODOVerifyConfig_OmittedWhenNil(t *testing.T) {
 	if roundTripped.Verify != nil {
 		t.Errorf("Expected Verify to be nil after round-trip, got %+v", roundTripped.Verify)
 	}
+}
+
+func TestStringOrSlice_Unmarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected StringOrSlice
+	}{
+		{"single string", `path: pkg/auth/login.go`, StringOrSlice{"pkg/auth/login.go"}},
+		{"list of strings", "path:\n  - pkg/auth/login.go\n  - pkg/auth/session.go", StringOrSlice{"pkg/auth/login.go", "pkg/auth/session.go"}},
+		{"glob pattern", `path: "pkg/auth/*.go"`, StringOrSlice{"pkg/auth/*.go"}},
+		{"empty omitted", `priority: high`, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := "priority: high\nstatus: pending\n" + tc.input
+			var fm TODOFrontmatter
+			require.NoError(t, yaml.Unmarshal([]byte(input), &fm))
+			assert.Equal(t, tc.expected, fm.Path)
+		})
+	}
+}
+
+func TestStringOrSlice_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		path StringOrSlice
+	}{
+		{"single", StringOrSlice{"pkg/auth/login.go"}},
+		{"multiple", StringOrSlice{"pkg/auth/login.go", "pkg/auth/session.go"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fm := TODOFrontmatter{Priority: PriorityHigh, Status: StatusPending, Path: tc.path}
+			out, err := yaml.Marshal(&fm)
+			require.NoError(t, err)
+
+			var roundTripped TODOFrontmatter
+			require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+			assert.Equal(t, tc.path, roundTripped.Path)
+		})
+	}
+}
+
+func TestBranch_Serialization(t *testing.T) {
+	input := `title: test
+priority: high
+status: pending
+branch: pr/fix-terminal
+`
+	var fm TODOFrontmatter
+	require.NoError(t, yaml.Unmarshal([]byte(input), &fm))
+	assert.Equal(t, "pr/fix-terminal", fm.Branch)
+
+	out, err := yaml.Marshal(&fm)
+	require.NoError(t, err)
+
+	var roundTripped TODOFrontmatter
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, "pr/fix-terminal", roundTripped.Branch)
+}
+
+func TestBranch_OmittedWhenEmpty(t *testing.T) {
+	fm := TODOFrontmatter{Title: "test", Priority: PriorityHigh, Status: StatusPending}
+	out, err := yaml.Marshal(&fm)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "branch")
+}
+
+func TestCleanMetadata_RemovesBranchKey(t *testing.T) {
+	fm := TODOFrontmatter{Branch: "main"}
+	fm.Metadata = map[string]any{"branch": "main", "custom": "kept"}
+	fm.CleanMetadata()
+
+	_, exists := fm.Metadata["branch"]
+	assert.False(t, exists, "Expected 'branch' to be removed from Metadata")
+	assert.Equal(t, "kept", fm.Metadata["custom"])
 }
 
 func TestCleanMetadata_RemovesVerifyKey(t *testing.T) {

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -220,6 +221,51 @@ func formatFixtureTree(node *fixtures.FixtureNode, depth int) api.Text {
 	return result
 }
 
+// StringOrSlice handles YAML fields that can be either a single string or a list of strings.
+type StringOrSlice []string
+
+func (s StringOrSlice) MarshalYAML() (interface{}, error) {
+	if len(s) == 1 {
+		return s[0], nil
+	}
+	return []string(s), nil
+}
+
+func (s *StringOrSlice) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var single string
+	if err := unmarshal(&single); err == nil {
+		*s = StringOrSlice{single}
+		return nil
+	}
+	var list []string
+	if err := unmarshal(&list); err != nil {
+		return err
+	}
+	*s = list
+	return nil
+}
+
+func (s *StringOrSlice) UnmarshalJSON(data []byte) error {
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*s = StringOrSlice{single}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+	*s = list
+	return nil
+}
+
+func (s StringOrSlice) MarshalJSON() ([]byte, error) {
+	if len(s) == 1 {
+		return json.Marshal(s[0])
+	}
+	return json.Marshal([]string(s))
+}
+
 // TODOFrontmatter contains metadata for a TODO item parsed from YAML front-matter.
 // It extends the standard fixtures.FrontMatter with TODO-specific fields like priority,
 // status, and execution tracking.
@@ -234,6 +280,8 @@ type TODOFrontmatter struct {
 	Attempts      int               `yaml:"attempts,omitempty" json:"attempts,omitempty"`
 	Language      Language          `yaml:"language,omitempty" json:"language,omitempty"`
 	WorkingCommit string            `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
+	Branch        string            `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Path          StringOrSlice     `yaml:"path,omitempty" json:"path,omitempty"`
 	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
 	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
 }
@@ -254,9 +302,11 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "last_run")
 	delete(f.Metadata, "attempts")
 	delete(f.Metadata, "language")
+	delete(f.Metadata, "path")
 	delete(f.Metadata, "llm")
 	delete(f.Metadata, "verify")
 	delete(f.Metadata, "working_commit")
+	delete(f.Metadata, "branch")
 	delete(f.Metadata, "max_turns")
 }
 

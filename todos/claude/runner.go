@@ -32,6 +32,7 @@ type ClaudeExecutorConfig struct {
 	SystemPrompt string
 	Tools        []string
 	Timeout      time.Duration
+	Dirty        bool
 }
 
 type ClaudeExecutor struct {
@@ -57,8 +58,17 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 	}
 	startTime := time.Now()
 
+	// Checkout target branch if specified (uses --autostash internally)
+	if todo.Branch != "" {
+		restoreBranch, err := gitCheckoutBranch(e.config.WorkDir, todo.Branch)
+		if err != nil {
+			return result, fmt.Errorf("failed to checkout branch %s: %w", todo.Branch, err)
+		}
+		defer restoreBranch()
+	}
+
 	// Stash dirty working tree before Claude runs
-	restore, err := gitStash(e.config.WorkDir)
+	restore, err := gitStash(e.config.WorkDir, e.config.Dirty)
 	if err != nil {
 		return result, fmt.Errorf("failed to stash working tree: %w", err)
 	}

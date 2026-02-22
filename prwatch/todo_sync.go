@@ -78,6 +78,9 @@ func createJobTodo(path string, run *github.WorkflowRun, job github.Job, pr *git
 		LastRun:  &now,
 	}
 	fm.Build = fmt.Sprintf("git fetch origin && git checkout %s", pr.HeadRefName)
+	if paths := extractFilePathsFromLogs(job); len(paths) > 0 {
+		fm.Path = paths
+	}
 
 	body := formatJobBody(run, job, pr)
 	content, err := todos.WriteFrontmatter(&fm, body)
@@ -131,6 +134,13 @@ func completeJobTodo(path string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func autoCompleteTodo(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	}
+	return completeJobTodo(path)
 }
 
 func formatJobBody(run *github.WorkflowRun, job github.Job, pr *github.PRInfo) string {
@@ -262,17 +272,68 @@ func extractNonDetailsText(body string) string {
 	return strings.TrimSpace(text)
 }
 
+func severityToPriority(severity string) types.Priority {
+	switch severity {
+	case "critical":
+		return types.PriorityHigh
+	case "major":
+		return types.PriorityMedium
+	default:
+		return types.PriorityLow
+	}
+}
+
+func commentTodoPath(todosDir string, prNumber int, comment github.PRComment) string {
+	slug := slugify(comment.Title())
+	if comment.Path != "" {
+		pathSlug := nonAlphanumeric.ReplaceAllString(strings.ToLower(comment.Path), "-")
+		parts := []string{strings.Trim(pathSlug, "-")}
+		if comment.Line > 0 {
+			parts = append(parts, strconv.Itoa(comment.Line))
+		}
+		if slug != "" {
+			parts = append(parts, slug)
+		}
+		return filepath.Join(todosDir, strconv.Itoa(prNumber), strings.Join(parts, "-")+".md")
+	}
+	filename := fmt.Sprintf("code-review-%d", comment.ID)
+	if slug != "" {
+		filename += "-" + slug
+	}
+	return filepath.Join(todosDir, strconv.Itoa(prNumber), filename+".md")
+}
+
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	s = nonAlphanumeric.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if len(s) > 60 {
+		s = s[:60]
+		s = strings.TrimRight(s, "-")
+	}
+	return s
+}
+
 func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir string) error {
 	if pr == nil {
 		return nil
 	}
 	for _, comment := range comments {
-		promptBlocks := parseDetailsBlocks(comment.Body, "Fix all issues with AI agents")
-		suggestedFixBlocks := parseDetailsBlocks(comment.Body, "Suggested fix")
-		if len(promptBlocks) == 0 && len(suggestedFixBlocks) == 0 {
+		path := commentTodoPath(todosDir, pr.Number, comment)
+
+		if comment.IsResolved || comment.IsOutdated {
+			if err := autoCompleteTodo(path); err != nil {
+				return err
+			}
 			continue
 		}
-		path := filepath.Join(todosDir, strconv.Itoa(pr.Number), fmt.Sprintf("code-review-%d.md", comment.ID))
+
+		isNitpick := comment.Severity == "nitpick"
+		promptBlocks := parseDetailsBlocks(comment.Body, "Fix all issues with AI agents")
+		suggestedFixBlocks := parseDetailsBlocks(comment.Body, "Suggested fix")
+		if !isNitpick && len(promptBlocks) == 0 && len(suggestedFixBlocks) == 0 {
+			continue
+		}
 		if _, err := os.Stat(path); err == nil {
 			continue
 		}
@@ -280,14 +341,22 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 		}
 
+		priority := types.PriorityMedium
+		if comment.Severity != "" {
+			priority = severityToPriority(comment.Severity)
+		}
+
 		now := time.Now()
 		fm := types.TODOFrontmatter{
-			Priority: types.PriorityMedium,
+			Priority: priority,
 			Status:   types.StatusPending,
 			Attempts: 0,
 			LastRun:  &now,
 		}
 		fm.Build = fmt.Sprintf("git fetch origin && git checkout %s", pr.HeadRefName)
+		if comment.Path != "" {
+			fm.Path = types.StringOrSlice{comment.Path}
+		}
 		if title := extractTitle(comment.Body); title != "" {
 			fm.Title = title
 		}
@@ -307,22 +376,26 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			}
 		}
 
-		if desc := extractNonDetailsText(comment.Body); desc != "" {
+		if isNitpick {
 			sb.WriteString("\n")
-			sb.WriteString(desc)
+			sb.WriteString(comment.Body)
 			sb.WriteString("\n")
-		}
-
-		for _, block := range promptBlocks {
-			sb.WriteString("\n")
-			sb.WriteString(block.Body)
-			sb.WriteString("\n")
-		}
-
-		for _, block := range suggestedFixBlocks {
-			sb.WriteString(fmt.Sprintf("\n## %s\n\n", block.Summary))
-			sb.WriteString(block.Body)
-			sb.WriteString("\n")
+		} else {
+			if desc := extractNonDetailsText(comment.Body); desc != "" {
+				sb.WriteString("\n")
+				sb.WriteString(desc)
+				sb.WriteString("\n")
+			}
+			for _, block := range promptBlocks {
+				sb.WriteString("\n")
+				sb.WriteString(block.Body)
+				sb.WriteString("\n")
+			}
+			for _, block := range suggestedFixBlocks {
+				sb.WriteString(fmt.Sprintf("\n## %s\n\n", block.Summary))
+				sb.WriteString(block.Body)
+				sb.WriteString("\n")
+			}
 		}
 
 		content, err := todos.WriteFrontmatter(&fm, sb.String())
@@ -335,6 +408,34 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 		}
 	}
 	return nil
+}
+
+// goTestFileRegex matches Go test failure file references like "FAIL	github.com/org/repo/pkg [build failed]"
+// or compile errors like "pkg/file.go:42:10: undefined: Foo"
+var goFileRefRegex = regexp.MustCompile(`(?m)(\S+\.go):\d+`)
+
+func extractFilePathsFromLogs(job github.Job) types.StringOrSlice {
+	seen := map[string]bool{}
+	var paths []string
+	for _, step := range job.Steps {
+		for _, match := range goFileRefRegex.FindAllStringSubmatch(step.Logs, -1) {
+			p := match[1]
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	if len(paths) == 0 {
+		for _, match := range goFileRefRegex.FindAllStringSubmatch(job.Logs, -1) {
+			p := match[1]
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
 }
 
 func formatJobLogs(job github.Job) string {

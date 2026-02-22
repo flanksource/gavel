@@ -235,6 +235,39 @@ language: go
 	}
 }
 
+func TestParseTODO_BranchFrontmatter(t *testing.T) {
+	content := `---
+priority: medium
+status: pending
+branch: pr/fix-terminal
+title: "Branch checkout test"
+---
+
+# Code Review Comment
+
+## Implementation
+
+Fix the terminal handling
+`
+	tmpDir := t.TempDir()
+	todoPath := filepath.Join(tmpDir, "test.md")
+	if err := os.WriteFile(todoPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	todo, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("Failed to parse TODO: %v", err)
+	}
+
+	if todo.Branch != "pr/fix-terminal" {
+		t.Errorf("Expected branch 'pr/fix-terminal', got %q", todo.Branch)
+	}
+	if todo.Title != "Branch checkout test" {
+		t.Errorf("Expected title 'Branch checkout test', got %q", todo.Title)
+	}
+}
+
 func TestParseTODO_ExtractSections(t *testing.T) {
 	content := "---\npriority: high\nstatus: pending\nattempts: 0\nlanguage: go\n---\n\n# TODO: Test\n\n## Steps to Reproduce\n\n```bash\necho reproduction\n```\n\n## Implementation\n\nSome implementation instructions\n\n## Verification\n\n```bash\necho verification\n```\n"
 

@@ -510,7 +510,7 @@ func TestSyncCommentTodosCreatesFromMatchingComment(t *testing.T) {
 
 	require.NoError(t, SyncCommentTodos(comments, pr, dir))
 
-	path := filepath.Join(dir, "42", "code-review-100.md")
+	path := commentTodoPath(dir, pr.Number, comments[0])
 	require.FileExists(t, path)
 
 	parsed, err := todos.ParseFrontmatterFromFile(path)
@@ -548,7 +548,7 @@ func TestSyncCommentTodosCreatesFromSuggestedFix(t *testing.T) {
 
 	require.NoError(t, SyncCommentTodos(comments, pr, dir))
 
-	path := filepath.Join(dir, "42", "code-review-500.md")
+	path := commentTodoPath(dir, pr.Number, comments[0])
 	require.FileExists(t, path)
 
 	parsed, err := todos.ParseFrontmatterFromFile(path)
@@ -593,7 +593,7 @@ ignore this block
 
 	require.NoError(t, SyncCommentTodos(comments, pr, dir))
 
-	path := filepath.Join(dir, "42", "code-review-600.md")
+	path := commentTodoPath(dir, pr.Number, comments[0])
 	require.FileExists(t, path)
 
 	parsed, err := todos.ParseFrontmatterFromFile(path)
@@ -729,6 +729,103 @@ jobs:
 	assert.NoFileExists(t, windowsPath)
 }
 
+func TestSyncCommentTodosPathFromComment(t *testing.T) {
+	dir := t.TempDir()
+	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
+	comments := []github.PRComment{{
+		ID:     700,
+		Body:   `<details><summary>🤖 Fix all issues with AI agents</summary>fix it</details>`,
+		Author: "reviewer",
+		Path:   "pkg/handler.go",
+		Line:   10,
+	}}
+
+	require.NoError(t, SyncCommentTodos(comments, pr, dir))
+
+	parsed, err := todos.ParseFrontmatterFromFile(commentTodoPath(dir, pr.Number, comments[0]))
+	require.NoError(t, err)
+	assert.Equal(t, types.StringOrSlice{"pkg/handler.go"}, parsed.Frontmatter.Path)
+}
+
+func TestSyncCommentTodosNoPathWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
+	comments := []github.PRComment{{
+		ID:     800,
+		Body:   `<details><summary>🤖 Fix all issues with AI agents</summary>fix it</details>`,
+		Author: "reviewer",
+	}}
+
+	require.NoError(t, SyncCommentTodos(comments, pr, dir))
+
+	parsed, err := todos.ParseFrontmatterFromFile(commentTodoPath(dir, pr.Number, comments[0]))
+	require.NoError(t, err)
+	assert.Nil(t, parsed.Frontmatter.Path)
+}
+
+func TestExtractFilePathsFromLogs(t *testing.T) {
+	tests := []struct {
+		name     string
+		job      github.Job
+		expected types.StringOrSlice
+	}{
+		{
+			name: "go compile error",
+			job: github.Job{Steps: []github.Step{{
+				Logs: "pkg/auth/login.go:42:10: undefined: Foo\npkg/auth/session.go:15:3: missing return",
+			}}},
+			expected: types.StringOrSlice{"pkg/auth/login.go", "pkg/auth/session.go"},
+		},
+		{
+			name: "deduplicates files",
+			job: github.Job{Steps: []github.Step{{
+				Logs: "main.go:1:1: error\nmain.go:5:2: another error",
+			}}},
+			expected: types.StringOrSlice{"main.go"},
+		},
+		{
+			name:     "no file references",
+			job:      github.Job{Steps: []github.Step{{Logs: "FAIL: TestFoo"}}},
+			expected: nil,
+		},
+		{
+			name: "falls back to job logs",
+			job: github.Job{
+				Logs:  "cmd/main.go:10:5: error here",
+				Steps: []github.Step{{Logs: "no file refs here"}},
+			},
+			expected: types.StringOrSlice{"cmd/main.go"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, extractFilePathsFromLogs(tc.job))
+		})
+	}
+}
+
+func TestSyncTodosPathFromCIFailure(t *testing.T) {
+	dir := t.TempDir()
+	result := &PRWatchResult{
+		PR: &github.PRInfo{Number: 99, HeadRefName: "feat/x", BaseRefName: "main"},
+		Runs: map[int64]*github.WorkflowRun{
+			1: {
+				DatabaseID: 1, Name: "CI", Status: "completed", Conclusion: "failure",
+				Jobs: []github.Job{{
+					Name: "build", Status: "completed", Conclusion: "failure",
+					Steps: []github.Step{{Name: "Build", Conclusion: "failure", Logs: "pkg/api/handler.go:42:10: undefined: Response"}},
+				}},
+			},
+		},
+	}
+
+	require.NoError(t, SyncTodos(result, dir))
+
+	parsed, err := todos.ParseFrontmatterFromFile(filepath.Join(dir, "99", "ci-build.md"))
+	require.NoError(t, err)
+	assert.Equal(t, types.StringOrSlice{"pkg/api/handler.go"}, parsed.Frontmatter.Path)
+}
+
 func TestSyncCommentTodosIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
@@ -739,7 +836,7 @@ func TestSyncCommentTodosIdempotent(t *testing.T) {
 	}}
 
 	require.NoError(t, SyncCommentTodos(comments, pr, dir))
-	path := filepath.Join(dir, "42", "code-review-300.md")
+	path := commentTodoPath(dir, pr.Number, comments[0])
 	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 
