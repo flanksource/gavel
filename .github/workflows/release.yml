@@ -102,16 +102,3 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
           GITHUB_OWNER: ${{ github.repository_owner }}
-
-  announce:
-    name: Announce Release
-    needs: [semantic-release, goreleaser]
-    if: needs.semantic-release.outputs.new_release_published == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Release Summary
-        env:
-          VERSION: v${{ needs.semantic-release.outputs.new_release_version }}
-        run: |
-          echo "Gavel $VERSION has been released!"
-          echo "https://github.com/${{ github.repository }}/releases/tag/$VERSION"
