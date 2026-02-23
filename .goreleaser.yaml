@@ -55,7 +55,7 @@ checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
@@ -81,12 +81,12 @@ changelog:
 brews:
   - name: gavel
     repository:
-      owner: "{{ .Env.GITHUB_OWNER | default \"flanksource\" }}"
+      owner: "{{ .Env.GITHUB_OWNER }}"
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: https://github.com/{{ .Env.GITHUB_OWNER | default "flanksource" }}/gavel
+    homepage: https://github.com/{{ .Env.GITHUB_OWNER }}/gavel
     description: "Gavel - a CLI tool by Flanksource"
     license: "Apache-2.0"
     skip_upload: auto
@@ -100,20 +100,20 @@ brews:
 scoops:
   - name: gavel
     repository:
-      owner: "{{ .Env.GITHUB_OWNER | default \"flanksource\" }}"
+      owner: "{{ .Env.GITHUB_OWNER }}"
       name: scoop-bucket
       branch: main
       token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
     directory: bucket
-    homepage: https://github.com/{{ .Env.GITHUB_OWNER | default "flanksource" }}/gavel
+    homepage: https://github.com/{{ .Env.GITHUB_OWNER }}/gavel
     description: "Gavel - a CLI tool by Flanksource"
     license: "Apache-2.0"
     skip_upload: auto
 
 dockers:
   - image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:latest-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:latest-amd64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -125,8 +125,8 @@ dockers:
       - "--label=org.opencontainers.image.source={{.GitURL}}"
       - "--platform=linux/amd64"
   - image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:{{ .Version }}-arm64"
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:latest-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:latest-arm64"
     dockerfile: Dockerfile
     use: buildx
     build_flag_templates:
@@ -140,18 +140,18 @@ dockers:
     goarch: arm64
 
 docker_manifests:
-  - name_template: "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:{{ .Version }}"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:{{ .Version }}-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:latest"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:latest"
     image_templates:
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:latest-amd64"
-      - "ghcr.io/{{ .Env.GITHUB_OWNER | default \"flanksource\" }}/gavel:latest-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:latest-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:latest-arm64"
 
 release:
   github:
-    owner: "{{ .Env.GITHUB_OWNER | default \"flanksource\" }}"
+    owner: "{{ .Env.GITHUB_OWNER }}"
     name: gavel
   draft: false
   prerelease: auto
@@ -162,23 +162,23 @@ release:
     ## Docker Images
 
     ```bash
-    docker pull ghcr.io/{{ .Env.GITHUB_OWNER | default "flanksource" }}/gavel:{{ .Tag }}
+    docker pull ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Tag }}
     ```
 
     ## Installation
 
     ### Using Go
     ```bash
-    go install github.com/{{ .Env.GITHUB_OWNER | default "flanksource" }}/gavel/cmd/gavel@{{ .Tag }}
+    go install github.com/{{ .Env.GITHUB_OWNER }}/gavel/cmd/gavel@{{ .Tag }}
     ```
 
     ### Using Homebrew (macOS/Linux)
     ```bash
-    brew install {{ .Env.GITHUB_OWNER | default "flanksource" }}/tap/gavel
+    brew install {{ .Env.GITHUB_OWNER }}/tap/gavel
     ```
 
     ### Using Scoop (Windows)
     ```bash
-    scoop bucket add {{ .Env.GITHUB_OWNER | default "flanksource" }} https://github.com/{{ .Env.GITHUB_OWNER | default "flanksource" }}/scoop-bucket.git
+    scoop bucket add {{ .Env.GITHUB_OWNER }} https://github.com/{{ .Env.GITHUB_OWNER }}/scoop-bucket.git
     scoop install gavel
     ```
