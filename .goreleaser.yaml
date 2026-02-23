@@ -68,38 +68,6 @@ changelog:
     - title: Others
       order: 999
 
-brews:
-  - name: gavel
-    repository:
-      owner: "{{ .Env.GITHUB_OWNER }}"
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: https://github.com/{{ .Env.GITHUB_OWNER }}/gavel
-    description: "Gavel - a CLI tool by Flanksource"
-    license: "Apache-2.0"
-    skip_upload: auto
-    dependencies:
-      - name: git
-    install: |
-      bin.install "gavel"
-    test: |
-      system "#{bin}/gavel", "version"
-
-scoops:
-  - name: gavel
-    repository:
-      owner: "{{ .Env.GITHUB_OWNER }}"
-      name: scoop-bucket
-      branch: main
-      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
-    directory: bucket
-    homepage: https://github.com/{{ .Env.GITHUB_OWNER }}/gavel
-    description: "Gavel - a CLI tool by Flanksource"
-    license: "Apache-2.0"
-    skip_upload: auto
-
 dockers:
   - image_templates:
       - "ghcr.io/{{ .Env.GITHUB_OWNER }}/gavel:{{ .Version }}-amd64"
@@ -162,13 +130,3 @@ release:
     go install github.com/{{ .Env.GITHUB_OWNER }}/gavel/cmd/gavel@{{ .Tag }}
     ```
 
-    ### Using Homebrew (macOS/Linux)
-    ```bash
-    brew install {{ .Env.GITHUB_OWNER }}/tap/gavel
-    ```
-
-    ### Using Scoop (Windows)
-    ```bash
-    scoop bucket add {{ .Env.GITHUB_OWNER }} https://github.com/{{ .Env.GITHUB_OWNER }}/scoop-bucket.git
-    scoop install gavel
-    ```
