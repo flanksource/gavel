@@ -25,50 +25,39 @@ env:
   GO_VERSION: "1.25"
 
 jobs:
-  semantic-release:
-    name: Semantic Release
+  tag:
     runs-on: ubuntu-latest
     outputs:
-      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      created: ${{ steps.tag.outputs.created }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: flanksource/deps@v1.0.23
         with:
-          node-version: "20"
-
-      - name: Install semantic-release
+          tools: |
+            svu
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
         run: |
-          npm install -g semantic-release@23 \
-            @semantic-release/git@10 \
-            @semantic-release/github@10 \
-            @semantic-release/changelog@6 \
-            @semantic-release/exec@6 \
-            conventional-changelog-conventionalcommits@7
-
-      - name: Semantic Release (Dry Run)
-        if: github.event.inputs.dry-run == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx semantic-release --dry-run --no-ci
-
-      - name: Semantic Release
-        if: github.event.inputs.dry-run != 'true'
-        id: semantic
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx semantic-release
+          next=$(svu patch)
+          current=$(svu current)
+          if [ "$next" = "$current" ]; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "No new version to tag (current: $current)"
+            exit 0
+          fi
+          git tag "$next"
+          git push origin "$next"
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
   goreleaser:
     name: GoReleaser
-    needs: semantic-release
-    if: needs.semantic-release.outputs.new_release_published == 'true'
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -106,7 +95,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: ${{ needs.tag.outputs.tag }}
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
