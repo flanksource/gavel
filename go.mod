@@ -8,8 +8,8 @@ require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/flanksource/clicky v1.16.2
-	github.com/flanksource/commons v1.44.1
+	github.com/flanksource/clicky v1.17.0
+	github.com/flanksource/commons v1.45.0
 	github.com/flanksource/commons-db v0.1.5
 	github.com/flanksource/gomplate/v3 v3.24.66
 	github.com/ghodss/yaml v1.0.0
@@ -24,7 +24,7 @@ require (
 	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/yuin/goldmark v1.4.13
+	github.com/yuin/goldmark v1.7.16
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -290,7 +290,7 @@ require (
 	golang.org/x/tools v0.41.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/api v0.252.0 // indirect
-	google.golang.org/genai v1.34.0 // indirect
+	google.golang.org/genai v1.47.0 // indirect
 	google.golang.org/genproto v0.0.0-20250715232539-7130f93afb79 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250825161204-c5933d9347a5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251002232023-7c0ddcbb5797 // indirect
@@ -317,8 +317,8 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/flanksource/clicky => ../clicky
+// replace github.com/flanksource/clicky => ../clicky
 
-replace github.com/flanksource/commons => ../commons
+// replace github.com/flanksource/commons => ../commons
 
-replace github.com/flanksource/gomplate => ../gomplate
+// replace github.com/flanksource/gomplate => ../gomplate
