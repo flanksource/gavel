@@ -105,11 +105,12 @@ func groupKeys(todo *types.TODO, groupBy string) []string {
 	}
 	keys := make([]string, 0, len(todo.Path))
 	for _, p := range todo.Path {
+		file := types.ParsePathRef(p).File
 		switch groupBy {
 		case GroupByFile:
-			keys = append(keys, p)
+			keys = append(keys, file)
 		case GroupByDirectory:
-			keys = append(keys, filepath.Dir(p))
+			keys = append(keys, filepath.Dir(file))
 		}
 	}
 	return keys

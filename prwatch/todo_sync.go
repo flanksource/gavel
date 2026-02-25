@@ -78,6 +78,12 @@ func createJobTodo(path string, run *github.WorkflowRun, job github.Job, pr *git
 		LastRun:  &now,
 	}
 	fm.Build = fmt.Sprintf("git fetch origin && git checkout %s", pr.HeadRefName)
+	fm.PR = &types.PR{
+		Number: pr.Number,
+		URL:    pr.URL,
+		Head:   pr.HeadRefName,
+		Base:   pr.BaseRefName,
+	}
 	if paths := extractFilePathsFromLogs(job); len(paths) > 0 {
 		fm.Path = paths
 	}
@@ -328,10 +334,9 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			continue
 		}
 
-		isNitpick := comment.Severity == "nitpick"
 		promptBlocks := parseDetailsBlocks(comment.Body, "Fix all issues with AI agents")
 		suggestedFixBlocks := parseDetailsBlocks(comment.Body, "Suggested fix")
-		if !isNitpick && len(promptBlocks) == 0 && len(suggestedFixBlocks) == 0 {
+		if comment.Severity == "" && len(promptBlocks) == 0 && len(suggestedFixBlocks) == 0 {
 			continue
 		}
 		if _, err := os.Stat(path); err == nil {
@@ -354,29 +359,28 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			LastRun:  &now,
 		}
 		fm.Build = fmt.Sprintf("git fetch origin && git checkout %s", pr.HeadRefName)
+		fm.PR = &types.PR{
+			Number:        pr.Number,
+			URL:           pr.URL,
+			Head:          pr.HeadRefName,
+			Base:          pr.BaseRefName,
+			CommentID:     comment.ID,
+			CommentAuthor: comment.Author,
+			CommentURL:    comment.URL,
+		}
 		if comment.Path != "" {
-			fm.Path = types.StringOrSlice{comment.Path}
+			pathStr := comment.Path
+			if comment.Line > 0 {
+				pathStr = fmt.Sprintf("%s:%d", comment.Path, comment.Line)
+			}
+			fm.Path = types.StringOrSlice{pathStr}
 		}
 		if title := extractTitle(comment.Body); title != "" {
 			fm.Title = title
 		}
 
 		var sb strings.Builder
-		sb.WriteString("\n# Code Review Comment\n\n")
-		sb.WriteString(fmt.Sprintf("PR #%d (`%s`)\n", pr.Number, pr.HeadRefName))
-		sb.WriteString(fmt.Sprintf("Author: %s\n", comment.Author))
-		if comment.URL != "" {
-			sb.WriteString(fmt.Sprintf("Comment: %s\n", comment.URL))
-		}
-		if comment.Path != "" {
-			if comment.Line > 0 {
-				sb.WriteString(fmt.Sprintf("File: `%s:%d`\n", comment.Path, comment.Line))
-			} else {
-				sb.WriteString(fmt.Sprintf("File: `%s`\n", comment.Path))
-			}
-		}
-
-		if isNitpick {
+		if comment.Severity == "nitpick" {
 			sb.WriteString("\n")
 			sb.WriteString(comment.Body)
 			sb.WriteString("\n")

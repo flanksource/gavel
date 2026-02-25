@@ -57,6 +57,11 @@ func TestSyncTodosCreateOnFailure(t *testing.T) {
 	assert.Equal(t, "git fetch origin && git checkout feat/x", parsed.Frontmatter.Build)
 	assert.Contains(t, parsed.MarkdownContent, "CI / unit-tests")
 	assert.Contains(t, parsed.MarkdownContent, "FAIL: TestFoo")
+
+	require.NotNil(t, parsed.Frontmatter.PR)
+	assert.Equal(t, 99, parsed.Frontmatter.PR.Number)
+	assert.Equal(t, "feat/x", parsed.Frontmatter.PR.Head)
+	assert.Equal(t, "main", parsed.Frontmatter.PR.Base)
 }
 
 func TestSyncTodosCreateWithWorkflowYAML(t *testing.T) {
@@ -517,10 +522,38 @@ func TestSyncCommentTodosCreatesFromMatchingComment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, types.PriorityMedium, parsed.Frontmatter.Priority)
 	assert.Equal(t, types.StatusPending, parsed.Frontmatter.Status)
-	assert.Contains(t, parsed.MarkdownContent, "Code Review Comment")
 	assert.Contains(t, parsed.MarkdownContent, "null pointer in handler.go")
-	assert.Contains(t, parsed.MarkdownContent, "reviewer")
-	assert.Contains(t, parsed.MarkdownContent, "issuecomment-100")
+
+	require.NotNil(t, parsed.Frontmatter.PR)
+	assert.Equal(t, 42, parsed.Frontmatter.PR.Number)
+	assert.Equal(t, "reviewer", parsed.Frontmatter.PR.CommentAuthor)
+	assert.Equal(t, "https://github.com/org/repo/pull/42#issuecomment-100", parsed.Frontmatter.PR.CommentURL)
+}
+
+func TestSyncCommentTodosCreatesFromSeverity(t *testing.T) {
+	dir := t.TempDir()
+	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
+	comments := []github.PRComment{
+		{ID: 901, Body: "This variable is unused", Author: "reviewer", Severity: "major", Path: "pkg/handler.go", Line: 10},
+		{ID: 902, Body: "Missing error check", Author: "reviewer", Severity: "critical"},
+		{ID: 903, Body: "Consider renaming", Author: "reviewer", Severity: "minor"},
+	}
+
+	require.NoError(t, SyncCommentTodos(comments, pr, dir))
+
+	for _, c := range comments {
+		path := commentTodoPath(dir, pr.Number, c)
+		require.FileExists(t, path, "comment %d with severity %q should create a todo", c.ID, c.Severity)
+	}
+
+	parsed, err := todos.ParseFrontmatterFromFile(commentTodoPath(dir, pr.Number, comments[0]))
+	require.NoError(t, err)
+	assert.Equal(t, types.PriorityMedium, parsed.Frontmatter.Priority)
+	assert.Contains(t, parsed.MarkdownContent, "This variable is unused")
+
+	parsed, err = todos.ParseFrontmatterFromFile(commentTodoPath(dir, pr.Number, comments[1]))
+	require.NoError(t, err)
+	assert.Equal(t, types.PriorityHigh, parsed.Frontmatter.Priority)
 }
 
 func TestSyncCommentTodosSkipsNonMatchingComments(t *testing.T) {
@@ -603,9 +636,9 @@ ignore this block
 	assert.Equal(t, "Fragile nodeID reconstruction — use the value returned by generateNodeID().", parsed.Frontmatter.Title)
 
 	md := parsed.MarkdownContent
-	// File:line info
-	assert.Contains(t, md, "`pkg/handler.go:42`")
-	// Non-details text appears at top (after header)
+	// File:line info is no longer in body (moved to frontmatter path)
+	assert.NotContains(t, md, "File: `pkg/handler.go:42`")
+	// Non-details text appears at top
 	assert.Contains(t, md, "Fragile nodeID reconstruction")
 	assert.Contains(t, md, "_⚠️ Potential issue_")
 	// HTML comment stripped
@@ -731,11 +764,12 @@ jobs:
 
 func TestSyncCommentTodosPathFromComment(t *testing.T) {
 	dir := t.TempDir()
-	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
+	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review", BaseRefName: "main", URL: "https://github.com/org/repo/pull/42"}
 	comments := []github.PRComment{{
 		ID:     700,
 		Body:   `<details><summary>🤖 Fix all issues with AI agents</summary>fix it</details>`,
 		Author: "reviewer",
+		URL:    "https://github.com/org/repo/pull/42#discussion_r700",
 		Path:   "pkg/handler.go",
 		Line:   10,
 	}}
@@ -744,7 +778,16 @@ func TestSyncCommentTodosPathFromComment(t *testing.T) {
 
 	parsed, err := todos.ParseFrontmatterFromFile(commentTodoPath(dir, pr.Number, comments[0]))
 	require.NoError(t, err)
-	assert.Equal(t, types.StringOrSlice{"pkg/handler.go"}, parsed.Frontmatter.Path)
+	assert.Equal(t, types.StringOrSlice{"pkg/handler.go:10"}, parsed.Frontmatter.Path)
+
+	require.NotNil(t, parsed.Frontmatter.PR)
+	assert.Equal(t, 42, parsed.Frontmatter.PR.Number)
+	assert.Equal(t, "https://github.com/org/repo/pull/42", parsed.Frontmatter.PR.URL)
+	assert.Equal(t, "feat/review", parsed.Frontmatter.PR.Head)
+	assert.Equal(t, "main", parsed.Frontmatter.PR.Base)
+	assert.Equal(t, int64(700), parsed.Frontmatter.PR.CommentID)
+	assert.Equal(t, "reviewer", parsed.Frontmatter.PR.CommentAuthor)
+	assert.Equal(t, "https://github.com/org/repo/pull/42#discussion_r700", parsed.Frontmatter.PR.CommentURL)
 }
 
 func TestSyncCommentTodosNoPathWhenEmpty(t *testing.T) {

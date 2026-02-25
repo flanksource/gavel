@@ -88,7 +88,7 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := BuildPrompt(todo)
+	prompt := BuildPrompt(todo, e.config.WorkDir)
 
 	if err := e.runAgent(ctx, agentDir, prompt, todo, result); err != nil {
 		result.Duration = time.Since(startTime)
@@ -101,6 +101,79 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 		sha, commitErr := gitCommitChanges(ctx.Context, e.config.WorkDir, todo)
 		if commitErr != nil {
 			ctx.Logger.Warnf("Failed to commit changes: %v", commitErr)
+		} else {
+			result.CommitSHA = sha
+		}
+	}
+
+	result.Duration = time.Since(startTime)
+	return result, nil
+}
+
+func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup []*types.TODO) (*todos.ExecutionResult, error) {
+	if len(todosInGroup) == 0 {
+		return nil, fmt.Errorf("no TODOs in group")
+	}
+
+	// Validate all TODOs share the same branch
+	branch := todosInGroup[0].Branch
+	for _, t := range todosInGroup[1:] {
+		if t.Branch != branch {
+			return nil, fmt.Errorf("mixed branches in group: %q vs %q", branch, t.Branch)
+		}
+	}
+
+	result := &todos.ExecutionResult{
+		ExecutorName: e.Name(),
+		Transcript:   ctx.GetTranscript(),
+	}
+	startTime := time.Now()
+
+	if branch != "" {
+		restoreBranch, err := gitCheckoutBranch(e.config.WorkDir, branch)
+		if err != nil {
+			return result, fmt.Errorf("failed to checkout branch %s: %w", branch, err)
+		}
+		defer restoreBranch()
+	}
+
+	restore, err := gitStash(e.config.WorkDir, e.config.Dirty)
+	if err != nil {
+		return result, fmt.Errorf("failed to stash working tree: %w", err)
+	}
+	defer restore()
+
+	ctx.Notify(todos.Notification{
+		Type:    todos.NotifyProgress,
+		Message: fmt.Sprintf("Starting %s group session (%d TODOs)", e.Name(), len(todosInGroup)),
+	})
+
+	agentDir, err := prepareAgentDir()
+	if err != nil {
+		return result, fmt.Errorf("failed to prepare agent dir: %w", err)
+	}
+	if err := ensureDependencies(agentDir); err != nil {
+		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
+	}
+
+	prompt := BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+	if err := e.runAgent(ctx, agentDir, prompt, todosInGroup[0], result); err != nil {
+		result.Duration = time.Since(startTime)
+		result.ErrorMessage = err.Error()
+		return result, err
+	}
+
+	// Store session ID on all TODOs
+	for _, t := range todosInGroup {
+		if t.LLM == nil {
+			t.LLM = &types.LLM{}
+		}
+	}
+
+	if result.Success {
+		sha, commitErr := gitCommitGroupChanges(ctx.Context, e.config.WorkDir, todosInGroup)
+		if commitErr != nil {
+			ctx.Logger.Warnf("Failed to commit group changes: %v", commitErr)
 		} else {
 			result.CommitSHA = sha
 		}

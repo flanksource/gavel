@@ -266,6 +266,16 @@ func (s StringOrSlice) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string(s))
 }
 
+type PR struct {
+	Number        int    `yaml:"number,omitempty" json:"number,omitempty"`
+	URL           string `yaml:"url,omitempty" json:"url,omitempty"`
+	Head          string `yaml:"head,omitempty" json:"head,omitempty"`
+	Base          string `yaml:"base,omitempty" json:"base,omitempty"`
+	CommentID     int64  `yaml:"comment_id,omitempty" json:"comment_id,omitempty"`
+	CommentAuthor string `yaml:"comment_author,omitempty" json:"comment_author,omitempty"`
+	CommentURL    string `yaml:"comment_url,omitempty" json:"comment_url,omitempty"`
+}
+
 // TODOFrontmatter contains metadata for a TODO item parsed from YAML front-matter.
 // It extends the standard fixtures.FrontMatter with TODO-specific fields like priority,
 // status, and execution tracking.
@@ -284,6 +294,8 @@ type TODOFrontmatter struct {
 	Path          StringOrSlice     `yaml:"path,omitempty" json:"path,omitempty"`
 	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
 	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
+	PR            *PR               `yaml:"pr,omitempty" json:"pr,omitempty"`
+	Prompt        string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -308,6 +320,8 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "branch")
 	delete(f.Metadata, "max_turns")
+	delete(f.Metadata, "pr")
+	delete(f.Metadata, "prompt")
 }
 
 // Pretty returns a formatted text representation of the TODOFrontmatter

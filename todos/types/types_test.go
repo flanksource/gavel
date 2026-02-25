@@ -175,3 +175,62 @@ func TestCleanMetadata_RemovesVerifyKey(t *testing.T) {
 		t.Error("Expected 'custom' key to remain in Metadata")
 	}
 }
+
+func TestPR_Serialization(t *testing.T) {
+	input := `title: test
+priority: high
+status: pending
+prompt: "Fix the null pointer"
+pr:
+  number: 42
+  url: https://github.com/org/repo/pull/42
+  head: feat/review
+  base: main
+  comment_id: 100
+  comment_author: reviewer
+  comment_url: https://github.com/org/repo/pull/42#discussion_r100
+`
+	var fm TODOFrontmatter
+	require.NoError(t, yaml.Unmarshal([]byte(input), &fm))
+
+	assert.Equal(t, "Fix the null pointer", fm.Prompt)
+	require.NotNil(t, fm.PR)
+	assert.Equal(t, 42, fm.PR.Number)
+	assert.Equal(t, "https://github.com/org/repo/pull/42", fm.PR.URL)
+	assert.Equal(t, "feat/review", fm.PR.Head)
+	assert.Equal(t, "main", fm.PR.Base)
+	assert.Equal(t, int64(100), fm.PR.CommentID)
+	assert.Equal(t, "reviewer", fm.PR.CommentAuthor)
+	assert.Equal(t, "https://github.com/org/repo/pull/42#discussion_r100", fm.PR.CommentURL)
+
+	out, err := yaml.Marshal(&fm)
+	require.NoError(t, err)
+
+	var roundTripped TODOFrontmatter
+	require.NoError(t, yaml.Unmarshal(out, &roundTripped))
+	assert.Equal(t, fm.PR, roundTripped.PR)
+	assert.Equal(t, fm.Prompt, roundTripped.Prompt)
+}
+
+func TestPR_OmittedWhenNil(t *testing.T) {
+	fm := TODOFrontmatter{Title: "test", Priority: PriorityHigh, Status: StatusPending}
+	out, err := yaml.Marshal(&fm)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "pr:")
+	assert.NotContains(t, string(out), "prompt:")
+}
+
+func TestCleanMetadata_RemovesPRAndPromptKeys(t *testing.T) {
+	fm := TODOFrontmatter{
+		Prompt: "fix it",
+		PR:     &PR{Number: 42},
+	}
+	fm.Metadata = map[string]any{"pr": map[string]any{}, "prompt": "fix it", "custom": "kept"}
+	fm.CleanMetadata()
+
+	_, prExists := fm.Metadata["pr"]
+	_, promptExists := fm.Metadata["prompt"]
+	assert.False(t, prExists)
+	assert.False(t, promptExists)
+	assert.Equal(t, "kept", fm.Metadata["custom"])
+}
