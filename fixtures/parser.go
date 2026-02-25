@@ -92,6 +92,13 @@ func parseTableRow(headers, values []string) *FixtureNode {
 			fixture.Exec = value
 		case "cli args", "args", "arguments":
 			fixture.Args = strings.Split(value, " ")
+		case "exit code", "exitcode", "expected exit code":
+			if value != "" && value != "-" {
+				code, err := strconv.Atoi(value)
+				if err == nil {
+					fixture.Expected.ExitCode = &code
+				}
+			}
 		case "expected count", "count":
 			if value != "" && value != "-" {
 				count, err := strconv.Atoi(value)
