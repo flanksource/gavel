@@ -108,6 +108,42 @@ func gitStash(workDir string, dirty bool) (restore func(), err error) {
 	}, nil
 }
 
+func gitCommitGroupChanges(ctx context.Context, workDir string, todos []*types.TODO) (string, error) {
+	diffCmd := exec.Command("git", "diff", "--quiet")
+	diffCmd.Dir = workDir
+	hasDiff := diffCmd.Run() != nil
+
+	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	untrackedCmd.Dir = workDir
+	untrackedOut, _ := untrackedCmd.Output()
+	hasUntracked := len(strings.TrimSpace(string(untrackedOut))) > 0
+
+	if !hasDiff && !hasUntracked {
+		logger.Infof("No changes to commit")
+		return "", nil
+	}
+
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Dir = workDir
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git add failed: %w\n%s", err, out)
+	}
+
+	var names []string
+	for _, t := range todos {
+		names = append(names, t.Filename())
+	}
+	msg := fmt.Sprintf("fix: implement TODOs %s", strings.Join(names, ", "))
+
+	commitCmd := exec.Command("git", "commit", "-m", msg)
+	commitCmd.Dir = workDir
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git commit failed: %w\n%s", err, out)
+	}
+	logger.Infof("Committed changes: %s", msg)
+	return gitRevParseHEAD(workDir)
+}
+
 func gitCommitChanges(ctx context.Context, workDir string, todo *types.TODO) (string, error) {
 	// Check for unstaged changes
 	diffCmd := exec.Command("git", "diff", "--quiet")

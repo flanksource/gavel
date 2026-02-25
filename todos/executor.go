@@ -171,6 +171,125 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	return result, nil
 }
 
+// GroupExecutor is implemented by executors that support combined group execution.
+type GroupExecutor interface {
+	ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.TODO) (*ExecutionResult, error)
+}
+
+// ExecuteGroup orchestrates group execution: one AI session for multiple TODOs,
+// then independent verification per TODO.
+func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.TODO) ([]*ExecutionResult, error) {
+	groupExec, ok := e.executor.(GroupExecutor)
+	if !ok {
+		return nil, fmt.Errorf("executor %s does not support group execution", e.executor.Name())
+	}
+
+	now := time.Now()
+	for _, todo := range todosInGroup {
+		todo.Status = types.StatusInProgress
+		todo.LastRun = &now
+		if todo.LLM == nil {
+			todo.LLM = &types.LLM{}
+		}
+		if e.sessionID != "" {
+			todo.LLM.SessionId = e.sessionID
+		}
+	}
+
+	// Pre-check: filter out TODOs whose steps already pass
+	var needsExecution []*types.TODO
+	results := make(map[string]*ExecutionResult)
+	for _, todo := range todosInGroup {
+		if len(todo.StepsToReproduce) > 0 && e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
+			ctx.Logger.Infof("TODO %s already passes, skipping", todo.Filename())
+			todo.Status = types.StatusSkipped
+			results[todo.FilePath] = &ExecutionResult{
+				Skipped:      true,
+				ExecutorName: e.executor.Name(),
+				Transcript:   ctx.GetTranscript(),
+			}
+		} else {
+			needsExecution = append(needsExecution, todo)
+		}
+	}
+
+	// Run combined session if any TODOs need work
+	var groupResult *ExecutionResult
+	if len(needsExecution) > 0 {
+		var err error
+		groupResult, err = groupExec.ExecuteGroup(ctx, needsExecution)
+		if err != nil {
+			for _, todo := range needsExecution {
+				todo.Status = types.StatusFailed
+				todo.Attempts++
+				if groupResult != nil {
+					perTodo := e.splitResult(groupResult, len(needsExecution))
+					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+					}
+				}
+			}
+			return e.collectResults(todosInGroup, results), err
+		}
+
+		// Verify each TODO independently
+		for _, todo := range needsExecution {
+			perTodo := e.splitResult(groupResult, len(needsExecution))
+
+			if len(todo.Verification) > 0 {
+				ctx.Notify(Notification{
+					Type:    NotifyProgress,
+					Message: fmt.Sprintf("Verifying %s", todo.Filename()),
+				})
+				if !e.verificationPasses(ctx, todo.Verification) {
+					todo.Status = types.StatusFailed
+					perTodo.Success = false
+					perTodo.ErrorMessage = "Verification tests failed"
+					todo.Attempts++
+					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+					}
+					results[todo.FilePath] = perTodo
+					continue
+				}
+			}
+
+			e.updateFrontmatter(todo, perTodo)
+			results[todo.FilePath] = perTodo
+		}
+	}
+
+	return e.collectResults(todosInGroup, results), nil
+}
+
+func (e *TODOExecutor) splitResult(groupResult *ExecutionResult, count int) *ExecutionResult {
+	if count == 0 {
+		count = 1
+	}
+	return &ExecutionResult{
+		Success:      groupResult.Success,
+		ExecutorName: groupResult.ExecutorName,
+		TokensUsed:   groupResult.TokensUsed / count,
+		CostUSD:      groupResult.CostUSD / float64(count),
+		Duration:     groupResult.Duration,
+		NumTurns:     groupResult.NumTurns,
+		CommitSHA:    groupResult.CommitSHA,
+		Transcript:   groupResult.Transcript,
+	}
+}
+
+func (e *TODOExecutor) collectResults(todosInGroup []*types.TODO, resultMap map[string]*ExecutionResult) []*ExecutionResult {
+	out := make([]*ExecutionResult, len(todosInGroup))
+	for i, todo := range todosInGroup {
+		if r, ok := resultMap[todo.FilePath]; ok {
+			out[i] = r
+		} else {
+			out[i] = &ExecutionResult{ExecutorName: e.executor.Name()}
+		}
+	}
+	return out
+}
+
 // updateFrontmatter updates the TODO's frontmatter with execution results.
 func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResult) {
 	todo.Status = types.StatusCompleted

@@ -135,10 +135,7 @@ func (t Test) RerunCommand() string {
 
 // PrettyTODO returns the markdown body for a TODO file (excluding frontmatter).
 func (t Test) PrettyTODO() api.Text {
-	text := clicky.Text(fmt.Sprintf("# TODO: Fix Test - %s", t.Name)).NewLine().NewLine()
-
-	// Test Information section
-	text = text.Append("## Test Information", "").NewLine().NewLine()
+	text := clicky.Text("")
 	text = text.Add(api.KeyValuePair{Key: "Test Name", Value: t.Name}).NewLine()
 	if len(t.Suite) > 0 {
 		text = text.Add(api.KeyValuePair{Key: "Suite", Value: strings.Join(t.Suite, " > ")}).NewLine()
