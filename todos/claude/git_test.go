@@ -168,8 +168,11 @@ func TestGitCheckoutBranch_SwitchAndRestore(t *testing.T) {
 
 func TestGitCommitChanges_NoChanges(t *testing.T) {
 	dir := initTestRepo(t)
+	before, err := gitSnapshot(dir)
+	require.NoError(t, err)
+
 	todo := &types.TODO{}
-	sha, err := gitCommitChanges(t.Context(), dir, todo)
+	sha, err := gitCommitChanges(t.Context(), dir, todo, before)
 	assert.NoError(t, err)
 	assert.Empty(t, sha)
 
@@ -183,12 +186,14 @@ func TestGitCommitChanges_NoChanges(t *testing.T) {
 
 func TestGitCommitChanges_WithChanges(t *testing.T) {
 	dir := initTestRepo(t)
+	before, err := gitSnapshot(dir)
+	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "new.go"), []byte("package main\n"), 0644))
 
 	todo := &types.TODO{}
 	todo.Title = "test-todo"
-	sha, err := gitCommitChanges(t.Context(), dir, todo)
+	sha, err := gitCommitChanges(t.Context(), dir, todo, before)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, sha)
 
@@ -202,6 +207,8 @@ func TestGitCommitChanges_WithChanges(t *testing.T) {
 
 func TestGitCommitChanges_Fixup(t *testing.T) {
 	dir := initTestRepo(t)
+	before, err := gitSnapshot(dir)
+	require.NoError(t, err)
 
 	// Get the initial commit hash
 	cmd := exec.Command("git", "rev-parse", "HEAD")
@@ -215,7 +222,7 @@ func TestGitCommitChanges_Fixup(t *testing.T) {
 
 	todo := &types.TODO{}
 	todo.WorkingCommit = hash
-	sha, err := gitCommitChanges(t.Context(), dir, todo)
+	sha, err := gitCommitChanges(t.Context(), dir, todo, before)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, sha)
 
@@ -225,6 +232,76 @@ func TestGitCommitChanges_Fixup(t *testing.T) {
 	msgOut, err := cmd.Output()
 	require.NoError(t, err)
 	assert.Contains(t, string(msgOut), "fixup!")
+}
+
+func TestGitSnapshot(t *testing.T) {
+	dir := initTestRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new"), 0644))
+
+	snap, err := gitSnapshot(dir)
+	require.NoError(t, err)
+	assert.Contains(t, snap, "new.txt")
+	assert.Equal(t, "??", snap["new.txt"])
+
+	// Clean tree returns empty snapshot
+	dir2 := initTestRepo(t)
+	snap2, err := gitSnapshot(dir2)
+	require.NoError(t, err)
+	assert.Empty(t, snap2)
+}
+
+func TestGitChangedFiles_ExcludesTodos(t *testing.T) {
+	before := map[string]string{}
+	after := map[string]string{
+		"src/main.go":       "??",
+		".todos/task.md":    "??",
+		".todos":            "??",
+		".todos/done.md":    " M",
+		"pkg/handler.go":    " M",
+	}
+
+	changed := gitChangedFiles(before, after)
+	assert.ElementsMatch(t, []string{"src/main.go", "pkg/handler.go"}, changed)
+}
+
+func TestGitChangedFiles_IgnoresUnchanged(t *testing.T) {
+	before := map[string]string{
+		"existing.go": " M",
+	}
+	after := map[string]string{
+		"existing.go": " M",
+		"new.go":      "??",
+	}
+
+	changed := gitChangedFiles(before, after)
+	assert.Equal(t, []string{"new.go"}, changed)
+}
+
+func TestGitCommitChanges_ExcludesTodosDir(t *testing.T) {
+	dir := initTestRepo(t)
+	before, err := gitSnapshot(dir)
+	require.NoError(t, err)
+
+	// Create both a real file and a .todos file
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.go"), []byte("package main\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".todos"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".todos", "task.md"), []byte("# todo"), 0644))
+
+	todo := &types.TODO{}
+	todo.Title = "test-todo"
+	sha, err := gitCommitChanges(t.Context(), dir, todo, before)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, sha)
+
+	// Verify only real.go was committed, not .todos/task.md
+	cmd := exec.Command("git", "show", "--name-only", "--format=", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	files := strings.TrimSpace(string(out))
+	assert.Contains(t, files, "real.go")
+	assert.NotContains(t, files, ".todos")
 }
 
 func TestFormatCommitMsg(t *testing.T) {

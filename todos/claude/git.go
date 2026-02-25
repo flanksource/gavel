@@ -108,22 +108,51 @@ func gitStash(workDir string, dirty bool) (restore func(), err error) {
 	}, nil
 }
 
-func gitCommitGroupChanges(ctx context.Context, workDir string, todos []*types.TODO) (string, error) {
-	diffCmd := exec.Command("git", "diff", "--quiet")
-	diffCmd.Dir = workDir
-	hasDiff := diffCmd.Run() != nil
+func gitSnapshot(workDir string) (map[string]string, error) {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git status failed: %w", err)
+	}
+	snapshot := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		status := line[:2]
+		file := strings.TrimSpace(line[3:])
+		snapshot[file] = status
+	}
+	return snapshot, nil
+}
 
-	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	untrackedCmd.Dir = workDir
-	untrackedOut, _ := untrackedCmd.Output()
-	hasUntracked := len(strings.TrimSpace(string(untrackedOut))) > 0
+func gitChangedFiles(before, after map[string]string) []string {
+	var changed []string
+	for file, status := range after {
+		if strings.HasPrefix(file, ".todos/") || file == ".todos" {
+			continue
+		}
+		if beforeStatus, ok := before[file]; !ok || beforeStatus != status {
+			changed = append(changed, file)
+		}
+	}
+	return changed
+}
 
-	if !hasDiff && !hasUntracked {
+func gitCommitGroupChanges(ctx context.Context, workDir string, todos []*types.TODO, before map[string]string) (string, error) {
+	after, err := gitSnapshot(workDir)
+	if err != nil {
+		return "", fmt.Errorf("post-run snapshot failed: %w", err)
+	}
+
+	files := gitChangedFiles(before, after)
+	if len(files) == 0 {
 		logger.Infof("No changes to commit")
 		return "", nil
 	}
 
-	addCmd := exec.Command("git", "add", "-A")
+	addCmd := exec.Command("git", append([]string{"add", "--"}, files...)...)
 	addCmd.Dir = workDir
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git add failed: %w\n%s", err, out)
@@ -144,25 +173,19 @@ func gitCommitGroupChanges(ctx context.Context, workDir string, todos []*types.T
 	return gitRevParseHEAD(workDir)
 }
 
-func gitCommitChanges(ctx context.Context, workDir string, todo *types.TODO) (string, error) {
-	// Check for unstaged changes
-	diffCmd := exec.Command("git", "diff", "--quiet")
-	diffCmd.Dir = workDir
-	hasDiff := diffCmd.Run() != nil
+func gitCommitChanges(ctx context.Context, workDir string, todo *types.TODO, before map[string]string) (string, error) {
+	after, err := gitSnapshot(workDir)
+	if err != nil {
+		return "", fmt.Errorf("post-run snapshot failed: %w", err)
+	}
 
-	// Check for untracked files
-	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	untrackedCmd.Dir = workDir
-	untrackedOut, _ := untrackedCmd.Output()
-	hasUntracked := len(strings.TrimSpace(string(untrackedOut))) > 0
-
-	if !hasDiff && !hasUntracked {
+	files := gitChangedFiles(before, after)
+	if len(files) == 0 {
 		logger.Infof("No changes to commit")
 		return "", nil
 	}
 
-	// Stage all changes
-	addCmd := exec.Command("git", "add", "-A")
+	addCmd := exec.Command("git", append([]string{"add", "--"}, files...)...)
 	addCmd.Dir = workDir
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git add failed: %w\n%s", err, out)

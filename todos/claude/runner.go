@@ -90,15 +90,16 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 
 	prompt := BuildPrompt(todo, e.config.WorkDir)
 
+	before, _ := gitSnapshot(e.config.WorkDir)
+
 	if err := e.runAgent(ctx, agentDir, prompt, todo, result); err != nil {
 		result.Duration = time.Since(startTime)
 		result.ErrorMessage = err.Error()
 		return result, err
 	}
 
-	// Commit changes after successful execution
 	if result.Success {
-		sha, commitErr := gitCommitChanges(ctx.Context, e.config.WorkDir, todo)
+		sha, commitErr := gitCommitChanges(ctx.Context, e.config.WorkDir, todo, before)
 		if commitErr != nil {
 			ctx.Logger.Warnf("Failed to commit changes: %v", commitErr)
 		} else {
@@ -157,6 +158,9 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 	}
 
 	prompt := BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+
+	before, _ := gitSnapshot(e.config.WorkDir)
+
 	if err := e.runAgent(ctx, agentDir, prompt, todosInGroup[0], result); err != nil {
 		result.Duration = time.Since(startTime)
 		result.ErrorMessage = err.Error()
@@ -171,7 +175,7 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 	}
 
 	if result.Success {
-		sha, commitErr := gitCommitGroupChanges(ctx.Context, e.config.WorkDir, todosInGroup)
+		sha, commitErr := gitCommitGroupChanges(ctx.Context, e.config.WorkDir, todosInGroup, before)
 		if commitErr != nil {
 			ctx.Logger.Warnf("Failed to commit group changes: %v", commitErr)
 		} else {
