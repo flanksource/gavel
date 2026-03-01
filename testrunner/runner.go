@@ -160,12 +160,13 @@ func Run(opts RunOptions) (any, error) {
 	// Build hierarchical tree from flat test results
 	tree := parsers.BuildTestTree(tests)
 
-	// Discover and run fixture tests
-	if fixtureErr := runDiscoveredFixtures(opts.WorkDir); fixtureErr != nil {
-		return tree, fixtureErr
+	// Discover and run fixture tests (results returned, not printed)
+	fixtureTree, fixtureErr := runDiscoveredFixtures(opts.WorkDir)
+	if fixtureTree != nil {
+		tree = append(tree, fixtureNodeToTests(fixtureTree)...)
 	}
 
-	return tree, nil
+	return tree, fixtureErr
 }
 
 // Run executes tests and optionally syncs failures to TODOs.
@@ -561,10 +562,10 @@ func discoverFixtures(workDir string) []string {
 	return lo.Uniq(found)
 }
 
-func runDiscoveredFixtures(workDir string) error {
+func runDiscoveredFixtures(workDir string) (*fixtures.FixtureNode, error) {
 	fixtureFiles := discoverFixtures(workDir)
 	if len(fixtureFiles) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	execPath, _ := os.Executable()
@@ -575,9 +576,38 @@ func runDiscoveredFixtures(workDir string) error {
 		ExecutablePath: execPath,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create fixture runner: %w", err)
+		return nil, fmt.Errorf("failed to create fixture runner: %w", err)
 	}
 	return runner.Run()
+}
+
+func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
+	if node.Results != nil {
+		t := parsers.Test{
+			Name:      node.Name,
+			Framework: "fixture",
+			Duration:  node.Results.Duration,
+			Stdout:    node.Results.Stdout,
+			Stderr:    node.Results.Stderr,
+			Failed:    node.Results.Status == task.StatusFAIL || node.Results.Status == task.StatusFailed || node.Results.Status == task.StatusERR,
+			Passed:    node.Results.Status == task.StatusPASS || node.Results.Status == task.StatusSuccess,
+			Message:   node.Results.Error,
+		}
+		return []parsers.Test{t}
+	}
+
+	var children parsers.Tests
+	for _, child := range node.Children {
+		children = append(children, fixtureNodeToTests(child)...)
+	}
+
+	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
+		return []parsers.Test{{
+			Name:     node.Name,
+			Children: children,
+		}}
+	}
+	return children
 }
 
 func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
