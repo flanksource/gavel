@@ -313,7 +313,7 @@ func (f FixtureResult) Errorf(err error, format string, args ...interface{}) Fix
 
 func (f FixtureResult) Stats() Stats {
 	switch f.Status {
-	case task.StatusFailed:
+	case task.StatusFailed, task.StatusFAIL:
 		return Stats{Failed: 1, Total: 1}
 	case task.StatusPASS, task.StatusSuccess:
 		return Stats{Passed: 1, Total: 1}
@@ -395,7 +395,7 @@ func (s Stats) Add(result *FixtureResult) Stats {
 	}
 	s.Total++
 	switch result.Status {
-	case task.StatusFailed:
+	case task.StatusFailed, task.StatusFAIL:
 		s.Failed++
 	case task.StatusPASS, task.StatusSuccess:
 		s.Passed++
@@ -489,7 +489,7 @@ func (s *Stats) Visit(node *FixtureNode) {
 	s.Total++
 
 	switch test.Status {
-	case task.StatusFailed, task.StatusERR, task.StatusCancelled:
+	case task.StatusFailed, task.StatusFAIL, task.StatusERR, task.StatusCancelled:
 		s.Failed++
 	case task.StatusPASS, task.StatusSuccess:
 		s.Passed++

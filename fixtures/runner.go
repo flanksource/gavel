@@ -79,9 +79,11 @@ func (r *Runner) Run() error {
 
 	clicky.WaitForGlobalCompletion()
 
-	// Format children directly without root "Fixtures()" section
-	for _, child := range r.tree.Children {
-		fmt.Println(clicky.MustFormat(*child))
+	// Output as single JSON-compatible object (not multiple independent objects)
+	if len(r.tree.Children) == 1 {
+		fmt.Println(clicky.MustFormat(*r.tree.Children[0]))
+	} else {
+		fmt.Println(clicky.MustFormat(*r.tree))
 	}
 
 	// Return error if any tests failed
@@ -230,6 +232,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	}
 
 	r.tree.Stats = lo.ToPtr(r.tree.GetStats())
+	results.Summary = *r.tree.Stats
 
 	// Prune empty sections from the tree
 	r.tree.PruneEmptySections()

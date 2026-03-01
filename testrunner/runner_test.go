@@ -106,3 +106,47 @@ func TestRunnerNoTests(t *testing.T) {
 		t.Error("expected error for no tests")
 	}
 }
+
+func TestDiscoverFixtures(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create fixtures/ subdirectory with a .md file
+	fixturesDir := filepath.Join(tmpDir, "fixtures")
+	if err := os.MkdirAll(fixturesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixturesDir, "test.md"), []byte("# Test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create fixture*.md in root
+	if err := os.WriteFile(filepath.Join(tmpDir, "fixture-cli.md"), []byte("# CLI"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a non-matching file
+	if err := os.WriteFile(filepath.Join(tmpDir, "readme.md"), []byte("# Readme"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	found := discoverFixtures(tmpDir)
+
+	if len(found) != 2 {
+		t.Fatalf("expected 2 fixture files, got %d: %v", len(found), found)
+	}
+
+	// Verify expected files are found
+	foundMap := make(map[string]bool)
+	for _, f := range found {
+		foundMap[filepath.Base(f)] = true
+	}
+	if !foundMap["test.md"] {
+		t.Error("expected fixtures/test.md to be discovered")
+	}
+	if !foundMap["fixture-cli.md"] {
+		t.Error("expected fixture-cli.md to be discovered")
+	}
+	if foundMap["readme.md"] {
+		t.Error("readme.md should not be discovered")
+	}
+}

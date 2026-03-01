@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -13,6 +14,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/samber/lo"
@@ -149,6 +151,12 @@ func Run(opts RunOptions) (any, error) {
 
 	// Build hierarchical tree from flat test results
 	tree := parsers.BuildTestTree(tests)
+
+	// Discover and run fixture tests
+	if fixtureErr := runDiscoveredFixtures(opts.WorkDir); fixtureErr != nil {
+		return tree, fixtureErr
+	}
+
 	return tree, nil
 }
 
@@ -525,6 +533,43 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 // Runner is an alias for TestOrchestrator for backwards compatibility during migration.
 // Deprecated: use TestOrchestrator directly.
 type Runner = TestOrchestrator
+
+func discoverFixtures(workDir string) []string {
+	patterns := []string{
+		filepath.Join(workDir, "fixtures", "**", "*.md"),
+		filepath.Join(workDir, "fixture*.md"),
+		filepath.Join(workDir, "fixture-*.md"),
+	}
+
+	var found []string
+	for _, pattern := range patterns {
+		matches, err := doublestar.FilepathGlob(pattern)
+		if err != nil {
+			continue
+		}
+		found = append(found, matches...)
+	}
+	return lo.Uniq(found)
+}
+
+func runDiscoveredFixtures(workDir string) error {
+	fixtureFiles := discoverFixtures(workDir)
+	if len(fixtureFiles) == 0 {
+		return nil
+	}
+
+	execPath, _ := os.Executable()
+	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+		Paths:          fixtureFiles,
+		WorkDir:        workDir,
+		Logger:         logger.StandardLogger(),
+		ExecutablePath: execPath,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create fixture runner: %w", err)
+	}
+	return runner.Run()
+}
 
 func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
 	sync := NewTodoSync(o.TodosDir, o.TodoTemplate)
