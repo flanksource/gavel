@@ -77,6 +77,14 @@ func (r *Runner) Run() (*FixtureNode, error) {
 
 	clicky.WaitForGlobalCompletion()
 
+	// Output as single JSON-compatible object (not multiple independent objects)
+	if len(r.tree.Children) == 1 {
+		fmt.Println(clicky.MustFormat(*r.tree.Children[0]))
+	} else {
+		fmt.Println(clicky.MustFormat(*r.tree))
+	}
+
+	// Return error if any tests failed
 	if results.Summary.Failed > 0 {
 		return r.tree, fmt.Errorf("fixture tests failed")
 	}
