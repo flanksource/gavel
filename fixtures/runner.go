@@ -55,43 +55,33 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}, nil
 }
 
-// Run executes the fixture tests
-func (r *Runner) Run() error {
-	// Parse fixture files
+// Run executes the fixture tests and returns the result tree.
+// The caller is responsible for formatting/printing the output.
+func (r *Runner) Run() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
-		return fmt.Errorf("failed to parse fixture files: %w", err)
+		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
 	}
 
-	// Apply filter if specified
 	if r.options.Filter != "" {
 		r.filterTests()
 	}
 
 	if len(r.fixtures) == 0 {
-		return fmt.Errorf("no fixtures found")
+		return nil, fmt.Errorf("no fixtures found")
 	}
 
-	// Execute fixtures using TaskManager
 	results, err := r.executeFixtures()
 	if err != nil {
-		return fmt.Errorf("failed to execute fixtures: %w", err)
+		return nil, fmt.Errorf("failed to execute fixtures: %w", err)
 	}
 
 	clicky.WaitForGlobalCompletion()
 
-	// Output as single JSON-compatible object (not multiple independent objects)
-	if len(r.tree.Children) == 1 {
-		fmt.Println(clicky.MustFormat(*r.tree.Children[0]))
-	} else {
-		fmt.Println(clicky.MustFormat(*r.tree))
-	}
-
-	// Return error if any tests failed
 	if results.Summary.Failed > 0 {
-		return fmt.Errorf("fixture tests failed")
+		return r.tree, fmt.Errorf("fixture tests failed")
 	}
 
-	return nil
+	return r.tree, nil
 }
 
 // parseFixtureFiles parses all fixture files from the provided paths and builds tree structure

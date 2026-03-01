@@ -258,7 +258,15 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
 	}
 
-	return runner.Run()
+	tree, runErr := runner.Run()
+	if tree != nil {
+		if len(tree.Children) == 1 {
+			fmt.Println(clicky.MustFormat(*tree.Children[0]))
+		} else {
+			fmt.Println(clicky.MustFormat(*tree))
+		}
+	}
+	return runErr
 }
 
 func init() {
