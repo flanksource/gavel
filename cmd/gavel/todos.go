@@ -51,7 +51,7 @@ var todosRunCmd = &cobra.Command{
 type TodosListOptions struct {
 	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
-	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, or none"`
+	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, all, or none"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }

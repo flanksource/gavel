@@ -62,11 +62,11 @@ func gitStash(workDir string, dirty bool) (restore func(), err error) {
 		return noop, nil
 	}
 
-	statusCmd := exec.Command("git", "status", "--porcelain", "--", ".", ":!.todos")
+	statusCmd := exec.Command("git", "status", "--porcelain", "--", ".", ":!.todos", ":!.claude")
 	statusCmd.Dir = workDir
 	statusOut, _ := statusCmd.Output()
 
-	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard", "--", ".", ":!.todos")
+	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard", "--", ".", ":!.todos", ":!.claude")
 	untrackedCmd.Dir = workDir
 	untrackedOut, _ := untrackedCmd.Output()
 
@@ -91,7 +91,7 @@ func gitStash(workDir string, dirty bool) (restore func(), err error) {
 		logger.Infof("  %s", f)
 	}
 
-	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run", "--include-untracked", "--", ".", ":!.todos")
+	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run", "--include-untracked", "--", ".", ":!.todos", ":!.claude")
 	stashCmd.Dir = workDir
 	if out, err := stashCmd.CombinedOutput(); err != nil {
 		return noop, fmt.Errorf("git stash failed: %w\n%s", err, out)
@@ -130,7 +130,8 @@ func gitSnapshot(workDir string) (map[string]string, error) {
 func gitChangedFiles(before, after map[string]string) []string {
 	var changed []string
 	for file, status := range after {
-		if strings.HasPrefix(file, ".todos/") || file == ".todos" {
+		if strings.HasPrefix(file, ".todos/") || file == ".todos" ||
+			strings.HasPrefix(file, ".claude/") || file == ".claude" {
 			continue
 		}
 		if beforeStatus, ok := before[file]; !ok || beforeStatus != status {

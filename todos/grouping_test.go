@@ -100,6 +100,20 @@ func TestGroupTODOs_AllUngrouped(t *testing.T) {
 	assert.Len(t, groups[0].TODOs, 2)
 }
 
+func TestGroupTODOs_All(t *testing.T) {
+	todos := types.TODOS{
+		todo(types.StringOrSlice{"pkg/auth/login.go"}, types.PriorityHigh, "a"),
+		todo(types.StringOrSlice{"pkg/api/handler.go"}, types.PriorityMedium, "b"),
+		todo(nil, types.PriorityLow, "c"),
+	}
+
+	groups := GroupTODOs(todos, GroupByAll)
+
+	assert.Len(t, groups, 1)
+	assert.Equal(t, "All TODOs", groups[0].Name)
+	assert.Len(t, groups[0].TODOs, 3)
+}
+
 func TestGroupTODOs_GroupSortedByPriority(t *testing.T) {
 	todos := types.TODOS{
 		todo(types.StringOrSlice{"low/a.go"}, types.PriorityLow, "a"),

@@ -13,6 +13,7 @@ import (
 const (
 	GroupByFile      = "file"
 	GroupByDirectory = "directory"
+	GroupByAll       = "all"
 	GroupByNone      = "none"
 	UngroupedLabel   = "Ungrouped"
 )
@@ -60,6 +61,11 @@ func FlattenGrouped(groups []TODOGroup) []GroupedRow {
 func GroupTODOs(todos types.TODOS, groupBy string) []TODOGroup {
 	if groupBy == "" || groupBy == GroupByNone {
 		return []TODOGroup{{Name: "", TODOs: todos}}
+	}
+
+	if groupBy == GroupByAll {
+		todos.Sort()
+		return []TODOGroup{{Name: "All TODOs", TODOs: todos}}
 	}
 
 	grouped := map[string]types.TODOS{}

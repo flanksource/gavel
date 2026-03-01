@@ -104,6 +104,28 @@ func TestGitStash_StagedChanges(t *testing.T) {
 	assert.NoError(t, err, "staged.txt should be restored after stash pop")
 }
 
+func TestGitStash_ExcludesClaudeDir(t *testing.T) {
+	dir := initTestRepo(t)
+
+	// Create files in .claude and a regular file
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644))
+
+	restore, err := gitStash(dir, false)
+	require.NoError(t, err)
+
+	// dirty.txt should be stashed
+	_, err = os.Stat(filepath.Join(dir, "dirty.txt"))
+	assert.True(t, os.IsNotExist(err), "dirty.txt should be stashed")
+
+	// .claude/settings.json should NOT be stashed
+	_, err = os.Stat(filepath.Join(dir, ".claude", "settings.json"))
+	assert.NoError(t, err, ".claude/settings.json should not be stashed")
+
+	restore()
+}
+
 func TestGitCheckoutBranch_SameBranch(t *testing.T) {
 	dir := initTestRepo(t)
 
@@ -251,14 +273,16 @@ func TestGitSnapshot(t *testing.T) {
 	assert.Empty(t, snap2)
 }
 
-func TestGitChangedFiles_ExcludesTodos(t *testing.T) {
+func TestGitChangedFiles_ExcludesTodosAndClaude(t *testing.T) {
 	before := map[string]string{}
 	after := map[string]string{
-		"src/main.go":       "??",
-		".todos/task.md":    "??",
-		".todos":            "??",
-		".todos/done.md":    " M",
-		"pkg/handler.go":    " M",
+		"src/main.go":                  "??",
+		".todos/task.md":               "??",
+		".todos":                       "??",
+		".todos/done.md":               " M",
+		".claude/settings.local.json":  " M",
+		".claude":                      "??",
+		"pkg/handler.go":               " M",
 	}
 
 	changed := gitChangedFiles(before, after)
