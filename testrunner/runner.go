@@ -152,13 +152,15 @@ func Run(opts RunOptions) (any, error) {
 	// Build hierarchical tree from flat test results
 	tree := parsers.BuildTestTree(tests)
 
-	// Discover and run fixture tests (results returned, not printed)
-	fixtureTree, fixtureErr := runDiscoveredFixtures(opts.WorkDir)
+	// Discover and run fixture tests (results returned, not printed).
+	// Fixture failures are captured in the tree, not returned as errors,
+	// so that AddNamedCommand still prints the results.
+	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir)
 	if fixtureTree != nil {
 		tree = append(tree, fixtureNodeToTests(fixtureTree)...)
 	}
 
-	return tree, fixtureErr
+	return tree, nil
 }
 
 // Run executes tests and optionally syncs failures to TODOs.
