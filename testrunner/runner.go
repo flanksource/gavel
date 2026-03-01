@@ -168,7 +168,7 @@ func Run(opts RunOptions) (any, error) {
 		tree = append(tree, fixtureNodeToTests(fixtureTree)...)
 	}
 
-	return tree, nil
+	return tree, fixtureErr
 }
 
 // Run executes tests and optionally syncs failures to TODOs.
