@@ -126,6 +126,43 @@ func TestGitStash_ExcludesClaudeDir(t *testing.T) {
 	restore()
 }
 
+func TestGitStash_ExcludesIgnoredClaudeDir(t *testing.T) {
+	dir := initTestRepo(t)
+
+	// Add .claude to .gitignore and commit it
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".claude\n"), 0644))
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v failed: %s", args, out)
+	}
+	run("add", ".gitignore")
+	run("commit", "-m", "add gitignore")
+
+	// Create .claude dir (gitignored + untracked) and a regular untracked file
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644))
+
+	restore, err := gitStash(dir, false)
+	require.NoError(t, err)
+
+	// dirty.txt should be stashed
+	_, err = os.Stat(filepath.Join(dir, "dirty.txt"))
+	assert.True(t, os.IsNotExist(err), "dirty.txt should be stashed")
+
+	// .claude/settings.json should NOT be stashed
+	_, err = os.Stat(filepath.Join(dir, ".claude", "settings.json"))
+	assert.NoError(t, err, ".claude/settings.json should not be stashed")
+
+	restore()
+
+	// dirty.txt should be restored
+	_, err = os.Stat(filepath.Join(dir, "dirty.txt"))
+	assert.NoError(t, err, "dirty.txt should be restored after stash pop")
+}
+
 func TestGitCheckoutBranch_SameBranch(t *testing.T) {
 	dir := initTestRepo(t)
 
@@ -276,13 +313,13 @@ func TestGitSnapshot(t *testing.T) {
 func TestGitChangedFiles_ExcludesTodosAndClaude(t *testing.T) {
 	before := map[string]string{}
 	after := map[string]string{
-		"src/main.go":                  "??",
-		".todos/task.md":               "??",
-		".todos":                       "??",
-		".todos/done.md":               " M",
-		".claude/settings.local.json":  " M",
-		".claude":                      "??",
-		"pkg/handler.go":               " M",
+		"src/main.go":                 "??",
+		".todos/task.md":              "??",
+		".todos":                      "??",
+		".todos/done.md":              " M",
+		".claude/settings.local.json": " M",
+		".claude":                     "??",
+		"pkg/handler.go":              " M",
 	}
 
 	changed := gitChangedFiles(before, after)

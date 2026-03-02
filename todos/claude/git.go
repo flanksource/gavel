@@ -70,28 +70,51 @@ func gitStash(workDir string, dirty bool) (restore func(), err error) {
 	untrackedCmd.Dir = workDir
 	untrackedOut, _ := untrackedCmd.Output()
 
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
-		if f := strings.TrimSpace(line); f != "" {
-			files = append(files, strings.TrimSpace(f[2:]))
-		}
-	}
+	untrackedSet := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(string(untrackedOut)), "\n") {
 		if f := strings.TrimSpace(line); f != "" {
-			files = append(files, f)
+			untrackedSet[f] = true
 		}
 	}
 
-	if len(files) == 0 {
+	var trackedFiles []string
+	for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
+		if f := strings.TrimSpace(line); f != "" {
+			name := strings.TrimSpace(f[2:])
+			if !untrackedSet[name] {
+				trackedFiles = append(trackedFiles, name)
+			}
+		}
+	}
+
+	var untrackedFiles []string
+	for f := range untrackedSet {
+		untrackedFiles = append(untrackedFiles, f)
+	}
+
+	if len(trackedFiles) == 0 && len(untrackedFiles) == 0 {
 		return noop, nil
 	}
 
-	logger.Infof("Stashing %d files:", len(files))
-	for _, f := range files {
+	logger.Infof("Stashing %d files:", len(trackedFiles)+len(untrackedFiles))
+	for _, f := range trackedFiles {
 		logger.Infof("  %s", f)
 	}
+	for _, f := range untrackedFiles {
+		logger.Infof("  %s (untracked)", f)
+	}
 
-	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run", "--include-untracked", "--", ".", ":!.todos", ":!.claude")
+	// Stage untracked files so stash captures them without --include-untracked
+	// (which fails when gitignored directories like .claude exist)
+	if len(untrackedFiles) > 0 {
+		addCmd := exec.Command("git", append([]string{"add", "--"}, untrackedFiles...)...)
+		addCmd.Dir = workDir
+		if out, err := addCmd.CombinedOutput(); err != nil {
+			return noop, fmt.Errorf("git add failed: %w\n%s", err, out)
+		}
+	}
+
+	stashCmd := exec.Command("git", "stash", "push", "-m", "gavel-todos-run")
 	stashCmd.Dir = workDir
 	if out, err := stashCmd.CombinedOutput(); err != nil {
 		return noop, fmt.Errorf("git stash failed: %w\n%s", err, out)
