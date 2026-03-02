@@ -178,3 +178,164 @@ func TestDiscoverFixtures(t *testing.T) {
 		t.Error("readme.md should not be discovered")
 	}
 }
+
+func TestFixtureNodeToTests(t *testing.T) {
+	tests := []struct {
+		name     string
+		node     *fixtures.FixtureNode
+		expected []parsers.Test
+	}{
+		{
+			name: "leaf node with passed result",
+			node: &fixtures.FixtureNode{
+				Name: "echo test",
+				Type: fixtures.TestNode,
+				Results: &fixtures.FixtureResult{
+					Name:     "echo test",
+					Status:   task.StatusPASS,
+					Duration: 100 * time.Millisecond,
+					Stdout:   "hello\n",
+					Stderr:   "warn\n",
+					Error:    "",
+				},
+			},
+			expected: []parsers.Test{{
+				Name:      "echo test",
+				Framework: "fixture",
+				Duration:  100 * time.Millisecond,
+				Stdout:    "hello\n",
+				Stderr:    "warn\n",
+				Passed:    true,
+				Failed:    false,
+			}},
+		},
+		{
+			name: "leaf node with failed result",
+			node: &fixtures.FixtureNode{
+				Name: "bad test",
+				Type: fixtures.TestNode,
+				Results: &fixtures.FixtureResult{
+					Name:     "bad test",
+					Status:   task.StatusFAIL,
+					Duration: 50 * time.Millisecond,
+					Stdout:   "out",
+					Stderr:   "err",
+					Error:    "exit code 1",
+				},
+			},
+			expected: []parsers.Test{{
+				Name:      "bad test",
+				Framework: "fixture",
+				Duration:  50 * time.Millisecond,
+				Stdout:    "out",
+				Stderr:    "err",
+				Failed:    true,
+				Passed:    false,
+				Message:   "exit code 1",
+			}},
+		},
+		{
+			name: "section node wraps children",
+			node: &fixtures.FixtureNode{
+				Name: "section",
+				Type: fixtures.SectionNode,
+				Children: []*fixtures.FixtureNode{
+					{
+						Name: "child test",
+						Type: fixtures.TestNode,
+						Results: &fixtures.FixtureResult{
+							Name:   "child test",
+							Status: task.StatusPASS,
+						},
+					},
+				},
+			},
+			expected: []parsers.Test{{
+				Name: "section",
+				Children: parsers.Tests{{
+					Name:      "child test",
+					Framework: "fixture",
+					Passed:    true,
+				}},
+			}},
+		},
+		{
+			name: "node without results or section type returns children directly",
+			node: &fixtures.FixtureNode{
+				Name: "root",
+				Type: fixtures.NodeType(99), // unknown type
+				Children: []*fixtures.FixtureNode{
+					{
+						Name: "test1",
+						Type: fixtures.TestNode,
+						Results: &fixtures.FixtureResult{
+							Name:   "test1",
+							Status: task.StatusPASS,
+						},
+					},
+				},
+			},
+			expected: []parsers.Test{{
+				Name:      "test1",
+				Framework: "fixture",
+				Passed:    true,
+			}},
+		},
+		{
+			name: "ERR status maps to failed",
+			node: &fixtures.FixtureNode{
+				Name: "err test",
+				Type: fixtures.TestNode,
+				Results: &fixtures.FixtureResult{
+					Name:   "err test",
+					Status: task.StatusERR,
+					Error:  "timeout",
+				},
+			},
+			expected: []parsers.Test{{
+				Name:      "err test",
+				Framework: "fixture",
+				Failed:    true,
+				Message:   "timeout",
+			}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fixtureNodeToTests(tc.node)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected %d tests, got %d: %+v", len(tc.expected), len(got), got)
+			}
+			for i, exp := range tc.expected {
+				if got[i].Name != exp.Name {
+					t.Errorf("test[%d].Name = %q, want %q", i, got[i].Name, exp.Name)
+				}
+				if got[i].Framework != exp.Framework {
+					t.Errorf("test[%d].Framework = %q, want %q", i, got[i].Framework, exp.Framework)
+				}
+				if got[i].Failed != exp.Failed {
+					t.Errorf("test[%d].Failed = %v, want %v", i, got[i].Failed, exp.Failed)
+				}
+				if got[i].Passed != exp.Passed {
+					t.Errorf("test[%d].Passed = %v, want %v", i, got[i].Passed, exp.Passed)
+				}
+				if got[i].Message != exp.Message {
+					t.Errorf("test[%d].Message = %q, want %q", i, got[i].Message, exp.Message)
+				}
+				if got[i].Stdout != exp.Stdout {
+					t.Errorf("test[%d].Stdout = %q, want %q", i, got[i].Stdout, exp.Stdout)
+				}
+				if got[i].Stderr != exp.Stderr {
+					t.Errorf("test[%d].Stderr = %q, want %q", i, got[i].Stderr, exp.Stderr)
+				}
+				if got[i].Duration != exp.Duration {
+					t.Errorf("test[%d].Duration = %v, want %v", i, got[i].Duration, exp.Duration)
+				}
+				if len(exp.Children) > 0 && len(got[i].Children) != len(exp.Children) {
+					t.Errorf("test[%d].Children length = %d, want %d", i, len(got[i].Children), len(exp.Children))
+				}
+			}
+		})
+	}
+}
