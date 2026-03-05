@@ -66,6 +66,7 @@ type RunOptions struct {
 	TodoTemplate  string     `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
 	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
+	Recursive     bool       `json:"recursive,omitempty" flag:"recursive,r"`                       // Recursively discover test packages in subdirectories
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -231,7 +232,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		if len(startingPaths) > 0 {
 			packages, err = o.discoverPackagesInPaths(runner, startingPaths)
 		} else {
-			packages, err = runner.DiscoverPackages(o.WorkDir)
+			packages, err = runner.DiscoverPackages(o.WorkDir, o.Recursive)
 		}
 
 		if err != nil {
@@ -400,7 +401,7 @@ func (o *TestOrchestrator) discoverPackagesInPaths(runner runners.Runner, starti
 		}
 		logger.Debugf("Discovering packages in path: %s", fullPath)
 
-		packages, err := runner.DiscoverPackages(fullPath)
+		packages, err := runner.DiscoverPackages(fullPath, o.Recursive)
 		if err != nil {
 			return nil, fmt.Errorf("failed to discover packages in %s: %w", startPath, err)
 		}

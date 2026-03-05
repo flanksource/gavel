@@ -76,8 +76,16 @@ func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) bool {
 	return false
 }
 
-// DiscoverPackages returns all packages with go test files (excluding Ginkgo-only packages).
-func (r *GoTest) DiscoverPackages(workDir string) ([]string, error) {
+// DiscoverPackages returns packages with go test files (excluding Ginkgo-only packages).
+// When recursive is false, only the given directory is checked.
+func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
+	if !recursive {
+		if r.packageHasNonGinkgoTests(workDir) {
+			return []string{r.getRelativePath(workDir)}, nil
+		}
+		return nil, nil
+	}
+
 	var packages []string
 	seen := make(map[string]bool)
 
@@ -90,7 +98,6 @@ func (r *GoTest) DiscoverPackages(workDir string) ([]string, error) {
 			pkgDir := filepath.Dir(path)
 			if !seen[pkgDir] {
 				seen[pkgDir] = true
-				// Only include package if it has non-Ginkgo tests
 				if r.packageHasNonGinkgoTests(pkgDir) {
 					relPath := r.getRelativePath(pkgDir)
 					packages = append(packages, relPath)

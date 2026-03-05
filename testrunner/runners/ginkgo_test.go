@@ -95,7 +95,7 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 
 	runner := NewGinkgo(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir)
+	packages, err := runner.DiscoverPackages(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

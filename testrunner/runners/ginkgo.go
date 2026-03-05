@@ -56,13 +56,20 @@ func (r *Ginkgo) Detect(workDir string) (bool, error) {
 	return found, err
 }
 
-// DiscoverPackages returns all packages with Ginkgo tests.
-func (r *Ginkgo) DiscoverPackages(workDir string) ([]string, error) {
+// DiscoverPackages returns packages with Ginkgo tests.
+// When recursive is false, only the given directory is checked.
+func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
+	if !recursive {
+		if r.dirHasGinkgoTests(workDir) {
+			return []string{r.getRelativePath(workDir)}, nil
+		}
+		return nil, nil
+	}
+
 	var packages []string
 	seen := make(map[string]bool)
 
 	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
-
 		if err != nil {
 			return err
 		}
@@ -137,6 +144,21 @@ func (r *Ginkgo) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 // NormalizeFilePath makes file paths relative to workDir (exposed for orchestrator use).
 func (r *Ginkgo) NormalizeFilePath(filePath string) string {
 	return r.normalizeFilePath(filePath)
+}
+
+func (r *Ginkgo) dirHasGinkgoTests(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
+			if r.hasGinkgoImports(filepath.Join(dir, entry.Name())) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hasGinkgoImports checks if a file imports ginkgo.
