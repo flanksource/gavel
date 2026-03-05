@@ -11,6 +11,31 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+func TestStripExitStatus(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty", input: "", expected: ""},
+		{name: "no exit status", input: "some error output", expected: "some error output"},
+		{name: "only exit status", input: "exit status 1", expected: ""},
+		{name: "exit status at end", input: "some error\nexit status 1", expected: "some error"},
+		{name: "exit status 2", input: "error output\nexit status 2", expected: "error output"},
+		{name: "exit status with trailing newline", input: "error\nexit status 1\n", expected: "error"},
+		{name: "exit status in middle", input: "before\nexit status 1\nafter", expected: "before\n\nafter"},
+		{name: "multiple exit statuses", input: "exit status 1\nexit status 2", expected: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripExitStatus(tc.input); got != tc.expected {
+				t.Errorf("stripExitStatus(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestRunnerDetectAndRun(t *testing.T) {
 	tmpDir := t.TempDir()
 

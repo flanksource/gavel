@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -19,6 +20,12 @@ import (
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/samber/lo"
 )
+
+var exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
+
+func stripExitStatus(s string) string {
+	return strings.TrimSpace(exitStatusRe.ReplaceAllString(s, ""))
+}
 
 // OutputMode controls when stdout/stderr are displayed in test output.
 type OutputMode string
@@ -437,10 +444,11 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 	}
 
 	// Set package path and stderr on each test
+	processStderr := stripExitStatus(strings.TrimSpace(result.Stderr))
 	for i := range tests {
 		tests[i].PackagePath = pkgPath
 		if tests[i].Stderr == "" {
-			tests[i].Stderr = strings.TrimSpace(result.Stderr)
+			tests[i].Stderr = processStderr
 		}
 	}
 
