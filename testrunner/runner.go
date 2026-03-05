@@ -66,7 +66,7 @@ type RunOptions struct {
 	TodoTemplate  string     `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
 	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
-	Recursive     bool       `json:"recursive,omitempty" flag:"recursive"`                         // Recursively discover test packages in subdirectories
+	Recursive     bool       `json:"recursive,omitempty" flag:"recursive,r"`                       // Recursively discover test packages in subdirectories
 }
 
 func (opts RunOptions) Pretty() api.Text {
