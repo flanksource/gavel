@@ -9,7 +9,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/repomap"
+	"github.com/flanksource/gavel/repomap"
 )
 
 type InitConfigOptions struct {
@@ -36,16 +36,7 @@ func InitConfig(opts InitConfigOptions) (string, error) {
 	if _, err := os.Stat(configPath); err == nil {
 		logger.Infof("Found existing %s", configPath)
 	} else {
-		defaultCfg := `extends:
-  - preset:bots
-  - preset:noise
-  - preset:merges
-
-exclude:
-  files: []
-  authors: []
-`
-		if err := os.WriteFile(configPath, []byte(defaultCfg), 0o644); err != nil {
+		if err := os.WriteFile(configPath, []byte(defaultGitAnalyzeYAML), 0o644); err != nil {
 			return "", fmt.Errorf("failed to write %s: %w", configPath, err)
 		}
 		clicky.Infof("Created %s with default rules", configPath)
