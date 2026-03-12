@@ -14,7 +14,6 @@ import (
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/collections"
 	. "github.com/flanksource/gavel/models"
-	"github.com/samber/lo"
 )
 
 type HistoryOptions struct {
@@ -95,35 +94,15 @@ type AnalyzeOptions struct {
 	arch           repomap.ArchConf `json:"-"`
 }
 
-func match(item any, list []string) bool {
-	if len(list) == 0 {
-		return true
+func techToStrings(techs []ScopeTechnology) []string {
+	out := make([]string, len(techs))
+	for i, t := range techs {
+		out[i] = string(t)
 	}
-	if len(lo.Filter(list, func(i string, _ int) bool { return i != "" })) == 0 {
-		return true
-	}
-
-	s := ""
-	if item == nil {
-		s = ""
-	} else if _s, ok := item.(string); ok {
-		s = _s
-	} else {
-		s = fmt.Sprintf("%v", item)
-		return false
-	}
-
-	if s == "" {
-		_, negated := collections.MatchItem("", list...)
-		return !negated
-	}
-
-	match, _ := collections.MatchItem(s, list...)
-	return match
+	return out
 }
 
 func (a HistoryOptions) Matches(commit Commit) bool {
-
 	if len(a.Author) > 0 {
 		matched := false
 		for _, author := range a.Author {
@@ -136,8 +115,11 @@ func (a HistoryOptions) Matches(commit Commit) bool {
 			return false
 		}
 	}
-	if !match(commit.Subject, []string{a.Message}) {
-		return false
+	if a.Message != "" {
+		matched, _ := collections.MatchItem(commit.Subject, a.Message)
+		if !matched {
+			return false
+		}
 	}
 
 	if !a.Since.IsZero() && commit.Author.Date.Before(a.Since) {
@@ -148,40 +130,42 @@ func (a HistoryOptions) Matches(commit Commit) bool {
 	}
 
 	return true
-
 }
 
 func (a AnalyzeOptions) Matches(commit Commit, change CommitChange) bool {
 	f, _ := a.arch.GetFileMap(change.File, commit.Hash)
 
+	scopes := change.Scope.ToString()
+	techs := techToStrings(change.Tech)
 	if f != nil {
-		if len(a.ScopeTypes) > 0 {
-			matched, negated := collections.MatchAny(f.Scopes.ToString(), a.ScopeTypes...)
-			if negated || !matched {
-				return false
-			}
+		if len(f.Scopes) > 0 {
+			scopes = append(scopes, f.Scopes.ToString()...)
 		}
-		if len(a.Technologies) > 0 {
-			matched, negated := collections.MatchAny(f.Tech.ToString(), a.Technologies...)
-			if negated || !matched {
-				return false
-			}
+		if len(f.Tech) > 0 {
+			techs = append(techs, f.Tech.ToString()...)
 		}
-
 	}
 
-	if len(change.Scope) != 0 && !match(change.Scope, a.ScopeTypes) {
-		return false
+	if len(a.ScopeTypes) > 0 && len(scopes) > 0 {
+		matched, negated := collections.MatchAny(scopes, a.ScopeTypes...)
+		if negated || !matched {
+			return false
+		}
 	}
-	if len(change.Tech) > 0 && !match(change.Tech, a.Technologies) {
-		return false
+	if len(a.Technologies) > 0 && len(techs) > 0 {
+		matched, negated := collections.MatchAny(techs, a.Technologies...)
+		if negated || !matched {
+			return false
+		}
 	}
-	if !match(commit.CommitType, a.CommitTypes) {
-		return false
+	if len(a.CommitTypes) > 0 {
+		matched, negated := collections.MatchItem(string(commit.CommitType), a.CommitTypes...)
+		if negated || !matched {
+			return false
+		}
 	}
 
 	return true
-
 }
 
 // ParseArgs separates Args into CommitShas, CommitRanges, and FilePaths

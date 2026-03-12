@@ -1,10 +1,13 @@
 package git_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/models"
 )
 
 var _ = Describe("Argument Detection", func() {
@@ -143,5 +146,136 @@ var _ = Describe("Argument Detection", func() {
 			Entry("question mark wildcard", "test?.go", "path"),
 			Entry("nested path", "git/kubernetes/*.go", "path"),
 		)
+	})
+})
+
+var _ = Describe("AnalyzeOptions.Matches", func() {
+	commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "dev"}, CommitType: models.CommitTypeFeat}
+
+	It("should match when scope type filter matches change scope", func() {
+		opts := git.AnalyzeOptions{ScopeTypes: []string{"backend"}}
+		change := models.CommitChange{File: "main.go", Scope: models.Scopes{models.ScopeType("backend")}}
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+	})
+
+	It("should not match when scope type filter doesn't match", func() {
+		opts := git.AnalyzeOptions{ScopeTypes: []string{"frontend"}}
+		change := models.CommitChange{File: "main.go", Scope: models.Scopes{models.ScopeType("backend")}}
+		Expect(opts.Matches(commit, change)).To(BeFalse())
+	})
+
+	It("should match when technology filter matches", func() {
+		opts := git.AnalyzeOptions{Technologies: []string{"go"}}
+		change := models.CommitChange{File: "main.go", Tech: []models.ScopeTechnology{models.Go}}
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+	})
+
+	It("should not match when technology filter doesn't match", func() {
+		opts := git.AnalyzeOptions{Technologies: []string{"python"}}
+		change := models.CommitChange{File: "main.go", Tech: []models.ScopeTechnology{models.Go}}
+		Expect(opts.Matches(commit, change)).To(BeFalse())
+	})
+
+	It("should match commit type filter", func() {
+		opts := git.AnalyzeOptions{CommitTypes: []string{"feat", "fix"}}
+		change := models.CommitChange{File: "main.go"}
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+	})
+
+	It("should not match when commit type filter excludes", func() {
+		opts := git.AnalyzeOptions{CommitTypes: []string{"chore"}}
+		change := models.CommitChange{File: "main.go"}
+		Expect(opts.Matches(commit, change)).To(BeFalse())
+	})
+
+	It("should support glob patterns for scope types", func() {
+		opts := git.AnalyzeOptions{ScopeTypes: []string{"back*"}}
+		change := models.CommitChange{File: "main.go", Scope: models.Scopes{models.ScopeType("backend")}}
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+	})
+
+	It("should support negation patterns for commit types", func() {
+		opts := git.AnalyzeOptions{CommitTypes: []string{"!chore"}}
+		change := models.CommitChange{File: "main.go"}
+
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+
+		choreCommit := models.Commit{Hash: "def456", CommitType: models.CommitTypeChore}
+		Expect(opts.Matches(choreCommit, change)).To(BeFalse())
+	})
+
+	It("should match everything when filters are empty", func() {
+		opts := git.AnalyzeOptions{}
+		change := models.CommitChange{File: "main.go", Scope: models.Scopes{models.ScopeType("backend")}, Tech: []models.ScopeTechnology{models.Go}}
+		Expect(opts.Matches(commit, change)).To(BeTrue())
+	})
+})
+
+var _ = Describe("HistoryOptions.Matches", func() {
+	baseDate := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	It("should filter by author", func() {
+		opts := git.HistoryOptions{Author: []string{"john"}}
+		commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "john doe", Email: "john@example.com"}}
+		Expect(opts.Matches(commit)).To(BeTrue())
+
+		commit2 := models.Commit{Hash: "def456", Author: models.Author{Name: "jane doe"}}
+		Expect(opts.Matches(commit2)).To(BeFalse())
+	})
+
+	It("should filter by message glob", func() {
+		opts := git.HistoryOptions{Message: "feat:*"}
+		commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "dev"}, Subject: "feat: new feature"}
+		Expect(opts.Matches(commit)).To(BeTrue())
+
+		commit2 := models.Commit{Hash: "def456", Author: models.Author{Name: "dev"}, Subject: "fix: bug fix"}
+		Expect(opts.Matches(commit2)).To(BeFalse())
+	})
+
+	It("should filter by since date", func() {
+		opts := git.HistoryOptions{Since: baseDate}
+		commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "dev", Date: baseDate.Add(24 * time.Hour)}}
+		Expect(opts.Matches(commit)).To(BeTrue())
+
+		commit2 := models.Commit{Hash: "def456", Author: models.Author{Name: "dev", Date: baseDate.Add(-24 * time.Hour)}}
+		Expect(opts.Matches(commit2)).To(BeFalse())
+	})
+
+	It("should filter by until date", func() {
+		opts := git.HistoryOptions{Until: baseDate}
+		commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "dev", Date: baseDate.Add(-24 * time.Hour)}}
+		Expect(opts.Matches(commit)).To(BeTrue())
+
+		commit2 := models.Commit{Hash: "def456", Author: models.Author{Name: "dev", Date: baseDate.Add(24 * time.Hour)}}
+		Expect(opts.Matches(commit2)).To(BeFalse())
+	})
+
+	It("should apply all filters together", func() {
+		opts := git.HistoryOptions{
+			Author:  []string{"dev*"},
+			Message: "feat:*",
+			Since:   baseDate.Add(-7 * 24 * time.Hour),
+			Until:   baseDate,
+		}
+
+		commit := models.Commit{
+			Hash:    "abc123",
+			Author:  models.Author{Name: "developer", Date: baseDate.Add(-2 * 24 * time.Hour)},
+			Subject: "feat: add feature",
+		}
+		Expect(opts.Matches(commit)).To(BeTrue())
+
+		wrongAuthor := models.Commit{
+			Hash:    "def456",
+			Author:  models.Author{Name: "bot", Date: baseDate.Add(-2 * 24 * time.Hour)},
+			Subject: "feat: add feature",
+		}
+		Expect(opts.Matches(wrongAuthor)).To(BeFalse())
+	})
+
+	It("should match everything when no filters set", func() {
+		opts := git.HistoryOptions{}
+		commit := models.Commit{Hash: "abc123", Author: models.Author{Name: "anyone"}, Subject: "anything"}
+		Expect(opts.Matches(commit)).To(BeTrue())
 	})
 })
