@@ -142,4 +142,12 @@ func init() {
 	})
 
 	ai.BindFlags(amendCommits.Flags())
+
+	clicky.AddCommand(gitCmd, git.InitConfigOptions{}, func(opts git.InitConfigOptions) (any, error) {
+		configPath, err := git.InitConfig(opts)
+		if err != nil {
+			return nil, err
+		}
+		return configPath, nil
+	})
 }
