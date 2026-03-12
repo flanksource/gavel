@@ -66,23 +66,6 @@ gavel git analyze --input previous-run.json   # re-analyze from JSON
 | `--input` | Load from previous JSON output (repeatable) |
 | `--short` | Show condensed file-change summary |
 
-### `gavel git init-config`
-
-Create a `.gitanalyze.yaml` with sensible defaults, then optionally spawn an AI CLI to analyze the repo and recommend additional rules.
-
-```bash
-gavel git init-config                          # create defaults + AI recommendations via claude
-gavel git init-config --model gemini           # use gemini instead
-gavel git init-config --model codex            # use codex instead
-gavel git init-config --model none             # just create the defaults file, no AI
-```
-
-| Flag | Description |
-|------|-------------|
-| `--path` | Path to git repository (default: `.`) |
-| `--model` | AI CLI to use: `claude`, `gemini`, `codex`, or `none` (default: `claude`) |
-| `--debug` | Enable debug logging |
-
 ### `gavel git amend-commits`
 
 Interactively improve commit messages using AI. Rewrites commits below a quality score threshold.
