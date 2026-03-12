@@ -88,6 +88,9 @@ type AnalyzeOptions struct {
 	Summary        bool             `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
 	SummaryWindow  GroupByWindow    `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
 	Short          bool             `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
+	Include        []string         `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
+	Exclude        []string         `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
+	Verbose        bool             `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
 	agent          ai.Agent         `json:"-"`
 	arch           repomap.ArchConf `json:"-"`
 }

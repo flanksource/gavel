@@ -43,6 +43,12 @@ type AnalyzerContext struct {
 	context.Context
 	Arch           *repomap.ArchConf
 	severityEngine *rules.Engine
+	analyzeConfig  *GitAnalyzeConfig
+
+	// Skip counters for verbose reporting
+	skippedCommits   int
+	skippedFiles     int
+	skippedResources int
 }
 
 // NewAnalyzerContext creates a new AnalyzerContext with the given context and repository path
@@ -111,4 +117,17 @@ func (ac *AnalyzerContext) GetSeverityConfig() *rules.SeverityConfig {
 // GetSeverityEngine returns the cached severity engine
 func (ac *AnalyzerContext) GetSeverityEngine() *rules.Engine {
 	return ac.severityEngine
+}
+
+// LoadAnalyzeConfig loads the .gitanalyze.yaml config and resolves active filter sets
+func (ac *AnalyzerContext) LoadAnalyzeConfig(options AnalyzeOptions) error {
+	conf, err := GetAnalyzeConfig(ac.RepoPath())
+	if err != nil {
+		return err
+	}
+	if conf == nil {
+		return nil
+	}
+	ac.analyzeConfig = conf.ResolveActiveFilters(options.Include, options.Exclude)
+	return nil
 }

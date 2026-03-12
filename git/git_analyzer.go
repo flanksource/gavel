@@ -34,19 +34,38 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) 
 		options.arch = *ctx.Arch
 	}
 
-	for _, change := range changes {
-		conf, err := ctx.GetFileMap(change.File, commit.Hash)
+	for i := range changes {
+		conf, err := ctx.GetFileMap(changes[i].File, commit.Hash)
 		if err != nil {
 			return out, err
 		}
-		change.Scope = conf.Scopes
-		change.Tech = conf.Tech
+		changes[i].Scope = conf.Scopes
+		changes[i].Tech = conf.Tech
 
 		// Analyze Kubernetes resources if applicable
-		if err := kubernetes.AnalyzeKubernetesChanges(ctx, commit, &change); err != nil {
+		if err := kubernetes.AnalyzeKubernetesChanges(ctx, commit, &changes[i]); err != nil {
 			return out, err
 		}
+	}
 
+	// Apply .gitanalyze.yaml config filters
+	if ctx.analyzeConfig != nil {
+		result := ApplyConfigFilters(ctx.analyzeConfig, commit, changes)
+		if result.SkipCommit {
+			if options.Verbose {
+				logger.Infof("Skipping commit %s: %s", commit.Hash[:8], result.Reason)
+			}
+			ctx.skippedCommits++
+			ctx.skippedFiles += result.FilesSkipped
+			return out, nil
+		}
+		changes = result.Changes
+		ctx.skippedFiles += result.FilesSkipped
+		ctx.skippedResources += result.ResourcesSkipped
+	}
+
+	// Apply existing AnalyzeOptions filters (scope, tech, commit type)
+	for _, change := range changes {
 		if options.Matches(commit, change) {
 			out.Changes = append(out.Changes, change)
 		}
@@ -103,6 +122,12 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []Commit, options Analyz
 		options.AITimeout = 2 * time.Minute
 	}
 	start := time.Now()
+
+	// Load .gitanalyze.yaml config
+	if err := ctx.LoadAnalyzeConfig(options); err != nil {
+		logger.Warnf("Failed to load .gitanalyze.yaml: %v", err)
+	}
+
 	batch := task.Batch[CommitAnalysis]{
 		Name:        "Analyze Commit History",
 		ItemTimeout: options.AITimeout,
@@ -140,6 +165,11 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []Commit, options Analyz
 			err = fmt.Errorf("failed to analyze some commits: %w", item.Error)
 		}
 	}
+
+	if options.Verbose && (ctx.skippedCommits > 0 || ctx.skippedFiles > 0) {
+		logger.Infof("Skipped %d commits, %d file changes, %d resources", ctx.skippedCommits, ctx.skippedFiles, ctx.skippedResources)
+	}
+
 	logger.Infof("analyzed %d commits in %v", len(results), time.Since(start))
 	return results, err
 }
