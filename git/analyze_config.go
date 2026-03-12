@@ -243,10 +243,9 @@ func matchesCommitMessage(subject string, patterns []string) (bool, string) {
 	if len(patterns) == 0 {
 		return false, ""
 	}
-	for _, pattern := range patterns {
-		if matched, _ := collections.MatchItem(subject, pattern); matched {
-			return true, fmt.Sprintf("commit message matches '%s'", pattern)
-		}
+	matched, _ := collections.MatchItem(subject, patterns...)
+	if matched {
+		return true, fmt.Sprintf("commit message matches '%v'", patterns)
 	}
 	return false, ""
 }
@@ -257,10 +256,9 @@ func matchesCommitType(commitType CommitType, patterns []string) (bool, string) 
 		return false, ""
 	}
 	ct := string(commitType)
-	for _, pattern := range patterns {
-		if matched, _ := collections.MatchItem(ct, pattern); matched {
-			return true, fmt.Sprintf("commit type '%s' matches '%s'", ct, pattern)
-		}
+	matched, _ := collections.MatchItem(ct, patterns...)
+	if matched {
+		return true, fmt.Sprintf("commit type '%s' matches '%v'", ct, patterns)
 	}
 	return false, ""
 }
@@ -270,14 +268,11 @@ func matchesFile(file string, patterns []string) (bool, string) {
 	if len(patterns) == 0 {
 		return false, ""
 	}
-	for _, pattern := range patterns {
-		if matched, _ := collections.MatchItem(file, pattern); matched {
-			return true, fmt.Sprintf("file '%s' matches '%s'", file, pattern)
-		}
-		// Also try matching just the filename (for patterns like "*.lock")
-		if matched, _ := collections.MatchItem(filepath.Base(file), pattern); matched {
-			return true, fmt.Sprintf("file '%s' matches '%s'", file, pattern)
-		}
+	if matched, _ := collections.MatchItem(file, patterns...); matched {
+		return true, fmt.Sprintf("file '%s' matches patterns", file)
+	}
+	if matched, _ := collections.MatchItem(filepath.Base(file), patterns...); matched {
+		return true, fmt.Sprintf("file '%s' matches patterns (basename)", file)
 	}
 	return false, ""
 }
