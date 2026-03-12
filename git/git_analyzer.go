@@ -128,7 +128,7 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 		logger.Warnf("Failed to load .gitanalyze.yaml: %v", err)
 	}
 
-	batch := task.Batch[models.CommitAnalysis]{
+	batch := task.Batch[CommitAnalysis]{
 		Name:        "Analyze Commit History",
 		ItemTimeout: options.AITimeout,
 	}
