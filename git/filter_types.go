@@ -13,7 +13,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/collections"
-	"github.com/flanksource/gavel/models"
+	. "github.com/flanksource/gavel/models"
 )
 
 type HistoryOptions struct {
@@ -94,7 +94,7 @@ type AnalyzeOptions struct {
 	arch           repomap.ArchConf `json:"-"`
 }
 
-func techToStrings(techs []models.ScopeTechnology) []string {
+func techToStrings(techs []ScopeTechnology) []string {
 	out := make([]string, len(techs))
 	for i, t := range techs {
 		out[i] = string(t)
@@ -102,7 +102,7 @@ func techToStrings(techs []models.ScopeTechnology) []string {
 	return out
 }
 
-func (a HistoryOptions) Matches(commit models.Commit) bool {
+func (a HistoryOptions) Matches(commit Commit) bool {
 	if len(a.Author) > 0 {
 		matched := false
 		for _, author := range a.Author {
@@ -139,9 +139,10 @@ func (a AnalyzeOptions) Matches(commit models.Commit, change models.CommitChange
 	techs := techToStrings(change.Tech)
 	if f != nil {
 		if len(f.Scopes) > 0 {
-			scopeStrs := f.Scopes.ToString()
-			scopes = append(scopes, scopeStrs...)
-			techs = append(techs, scopeStrs...)
+			scopes = append(scopes, f.Scopes.ToString()...)
+		}
+		if len(f.Tech) > 0 {
+			techs = append(techs, f.Tech.ToString()...)
 		}
 	}
 
