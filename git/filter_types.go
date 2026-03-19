@@ -139,10 +139,9 @@ func (a AnalyzeOptions) Matches(commit models.Commit, change models.CommitChange
 	techs := techToStrings(change.Tech)
 	if f != nil {
 		if len(f.Scopes) > 0 {
-			scopes = append(scopes, f.Scopes.ToString()...)
-		}
-		if len(f.Tech) > 0 {
-			techs = append(techs, f.Tech.ToString()...)
+			scopeStrs := f.Scopes.ToString()
+			scopes = append(scopes, scopeStrs...)
+			techs = append(techs, scopeStrs...)
 		}
 	}
 

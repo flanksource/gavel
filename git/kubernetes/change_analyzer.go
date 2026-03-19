@@ -10,11 +10,11 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/repomap"
 	repomapcel "github.com/flanksource/repomap/cel"
 	repomapk8s "github.com/flanksource/repomap/kubernetes"
+	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/mattbaird/jsonpatch"
 )
 
@@ -378,7 +378,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit models.Commit, change 
 	return nil
 }
 
-func createKubernetesChange(commit models.Commit, change *models.CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *repomapcel.Engine) (kubernetes.KubernetesChange, error) {
+func createKubernetesChange(commit Commit, change *CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *repomapcel.Engine) (kubernetes.KubernetesChange, error) {
 	refDoc := afterDoc
 	if afterDoc.Content == nil && beforeDoc != nil {
 		refDoc = *beforeDoc
@@ -474,7 +474,7 @@ func extractRef(doc kubernetes.YAMLDocument) kubernetes.KubernetesRef {
 	}
 }
 
-func toRepomapChange(c *models.CommitChange) *repomap.CommitChange {
+func toRepomapChange(c *CommitChange) *repomap.CommitChange {
 	if c == nil {
 		return nil
 	}
