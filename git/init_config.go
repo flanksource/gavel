@@ -9,7 +9,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/repomap"
+	"github.com/flanksource/repomap"
 )
 
 type InitConfigOptions struct {
@@ -31,12 +31,21 @@ func InitConfig(opts InitConfigOptions) (string, error) {
 		return "", fmt.Errorf("not a git repository: %s", absPath)
 	}
 
-	configPath := filepath.Join(root, ".gitanalyze.yaml")
+	configPath := filepath.Join(root, "repomap.yaml")
 
 	if _, err := os.Stat(configPath); err == nil {
 		logger.Infof("Found existing %s", configPath)
 	} else {
-		if err := os.WriteFile(configPath, []byte(defaultGitAnalyzeYAML), 0o644); err != nil {
+		defaultCfg := `extends:
+  - preset:bots
+  - preset:noise
+  - preset:merges
+
+exclude:
+  files: []
+  authors: []
+`
+		if err := os.WriteFile(configPath, []byte(defaultCfg), 0o644); err != nil {
 			return "", fmt.Errorf("failed to write %s: %w", configPath, err)
 		}
 		clicky.Infof("Created %s with default rules", configPath)

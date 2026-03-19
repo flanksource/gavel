@@ -3,16 +3,24 @@ package git
 import (
 	"testing"
 
+	"github.com/flanksource/repomap"
 	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func compileConfig(t *testing.T, cfg *repomap.ExcludeConfig) *repomap.CompiledExcludeConfig {
+	t.Helper()
+	compiled, err := cfg.Compile()
+	require.NoError(t, err)
+	return compiled
+}
+
 func TestApplyConfigFilters_AuthorSkip(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreAuthors: []string{"dependabot*"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Authors: []string{"dependabot*"},
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -27,9 +35,9 @@ func TestApplyConfigFilters_AuthorSkip(t *testing.T) {
 }
 
 func TestApplyConfigFilters_CommitMessageSkip(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreCommits: []string{"fixup!*"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Commits: []string{"fixup!*"},
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -44,9 +52,9 @@ func TestApplyConfigFilters_CommitMessageSkip(t *testing.T) {
 }
 
 func TestApplyConfigFilters_CommitTypeSkip(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreCommitTypes: []string{"chore", "ci"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		CommitTypes: []string{"chore", "ci"},
+	})
 
 	commit := Commit{
 		Hash:       "abc12345",
@@ -62,9 +70,9 @@ func TestApplyConfigFilters_CommitTypeSkip(t *testing.T) {
 }
 
 func TestApplyConfigFilters_FileFilter(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreFiles: []string{"*.lock", "go.sum"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Files: []string{"*.lock", "go.sum"},
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -85,9 +93,9 @@ func TestApplyConfigFilters_FileFilter(t *testing.T) {
 }
 
 func TestApplyConfigFilters_AllFilesFiltered(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreFiles: []string{"*.lock", "package-lock.json"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Files: []string{"*.lock", "package-lock.json"},
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -105,12 +113,11 @@ func TestApplyConfigFilters_AllFilesFiltered(t *testing.T) {
 }
 
 func TestApplyConfigFilters_CELRule(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreCommitRules: []CommitRule{
-			{CEL: "commit.is_merge"},
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Rules: []repomap.ExcludeRule{
+			{When: "commit.is_merge"},
 		},
-	}
-	require.NoError(t, config.Compile())
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -125,12 +132,11 @@ func TestApplyConfigFilters_CELRule(t *testing.T) {
 }
 
 func TestApplyConfigFilters_CELRuleLineChanges(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreCommitRules: []CommitRule{
-			{CEL: "commit.line_changes > 100"},
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Rules: []repomap.ExcludeRule{
+			{When: "commit.line_changes > 100"},
 		},
-	}
-	require.NoError(t, config.Compile())
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -144,12 +150,12 @@ func TestApplyConfigFilters_CELRuleLineChanges(t *testing.T) {
 }
 
 func TestApplyConfigFilters_ResourceFilter(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreResources: []ResourceFilter{
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Resources: []repomap.ResourceFilter{
 			{Kind: "Secret"},
 			{Kind: "ConfigMap", Name: "*-generated"},
 		},
-	}
+	})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -177,7 +183,7 @@ func TestApplyConfigFilters_ResourceFilter(t *testing.T) {
 }
 
 func TestApplyConfigFilters_NoFilters(t *testing.T) {
-	config := &GitAnalyzeConfig{}
+	config := compileConfig(t, &repomap.ExcludeConfig{})
 
 	commit := Commit{
 		Hash:    "abc12345",
@@ -192,12 +198,12 @@ func TestApplyConfigFilters_NoFilters(t *testing.T) {
 }
 
 func TestApplyConfigFilters_PassesThrough(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreAuthors:     []string{"bot*"},
-		IgnoreCommits:     []string{"fixup!*"},
-		IgnoreCommitTypes: []string{"chore"},
-		IgnoreFiles:       []string{"*.lock"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Authors:     []string{"bot*"},
+		Commits:     []string{"fixup!*"},
+		CommitTypes: []string{"chore"},
+		Files:       []string{"*.lock"},
+	})
 
 	commit := Commit{
 		Hash:       "abc12345",
@@ -216,23 +222,22 @@ func TestApplyConfigFilters_PassesThrough(t *testing.T) {
 }
 
 func TestApplyConfigFilters_CommitTypeNegation(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreCommitTypes: []string{"!feat"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		CommitTypes: []string{"!feat"},
+	})
 
 	feat := Commit{Hash: "abc12345", Author: Author{Name: "dev"}, Subject: "feat: add", CommitType: CommitType("feat")}
 	chore := Commit{Hash: "def12345", Author: Author{Name: "dev"}, Subject: "chore: cleanup", CommitType: CommitType("chore")}
 	changes := []CommitChange{{File: "main.go", Adds: 10}}
 
-	// "!feat" means: skip everything EXCEPT feat
 	assert.False(t, ApplyConfigFilters(config, feat, changes).SkipCommit, "feat should NOT be skipped")
 	assert.True(t, ApplyConfigFilters(config, chore, changes).SkipCommit, "chore should be skipped")
 }
 
 func TestApplyConfigFilters_FileNegation(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreFiles: []string{"*.go", "!*_test.go"},
-	}
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Files: []string{"*.go", "!*_test.go"},
+	})
 
 	commit := Commit{Hash: "abc12345", Author: Author{Name: "dev"}, Subject: "feat: add"}
 	changes := []CommitChange{
@@ -251,26 +256,23 @@ func TestApplyConfigFilters_FileNegation(t *testing.T) {
 }
 
 func TestApplyConfigFilters_Combined(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreAuthors:     []string{"dependabot*"},
-		IgnoreFiles:       []string{"*.lock", "go.sum"},
-		IgnoreCommitTypes: []string{"chore"},
-		IgnoreResources: []ResourceFilter{
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Authors:     []string{"dependabot*"},
+		Files:       []string{"*.lock", "go.sum"},
+		CommitTypes: []string{"chore"},
+		Resources: []repomap.ResourceFilter{
 			{Kind: "Secret"},
 		},
-	}
+	})
 
-	// Bot commit should be skipped entirely
 	botCommit := Commit{Hash: "aaa12345", Author: Author{Name: "dependabot[bot]"}, Subject: "chore(deps): bump"}
 	botChanges := []CommitChange{{File: "go.mod", Adds: 1}}
 	assert.True(t, ApplyConfigFilters(config, botCommit, botChanges).SkipCommit)
 
-	// Chore commit from human should also be skipped
 	choreCommit := Commit{Hash: "bbb12345", Author: Author{Name: "dev"}, CommitType: CommitType("chore"), Subject: "chore: tidy"}
 	choreChanges := []CommitChange{{File: "main.go", Adds: 1}}
 	assert.True(t, ApplyConfigFilters(config, choreCommit, choreChanges).SkipCommit)
 
-	// Normal commit: lock files removed, resources trimmed, source files kept
 	normalCommit := Commit{Hash: "ccc12345", Author: Author{Name: "dev"}, CommitType: CommitType("feat"), Subject: "feat: deploy"}
 	normalChanges := []CommitChange{
 		{File: "main.go", Adds: 50},
@@ -297,10 +299,10 @@ func TestApplyConfigFilters_Combined(t *testing.T) {
 	assert.Equal(t, "Deployment", result.Changes[1].KubernetesChanges[0].Kind)
 }
 
-func TestMatchesFile_NegationPreservesTestFiles(t *testing.T) {
-	config := &GitAnalyzeConfig{
-		IgnoreFiles: []string{"*.go", "!*_test.go"},
-	}
+func TestApplyConfigFilters_FileNegationPreservesTestFiles(t *testing.T) {
+	config := compileConfig(t, &repomap.ExcludeConfig{
+		Files: []string{"*.go", "!*_test.go"},
+	})
 	commit := Commit{Hash: "abc12345", Author: Author{Name: "dev"}, Subject: "test"}
 
 	tests := []struct {

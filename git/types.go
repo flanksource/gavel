@@ -42,8 +42,8 @@ func NewCommit(message string) models.Commit {
 type AnalyzerContext struct {
 	context.Context
 	Arch           *repomap.ArchConf
-	severityEngine *rules.Engine
-	analyzeConfig  *GitAnalyzeConfig
+	severityEngine *repomapcel.Engine
+	analyzeConfig  *repomap.CompiledExcludeConfig
 
 	// Skip counters for verbose reporting
 	skippedCommits   int
@@ -100,7 +100,7 @@ func (ac *AnalyzerContext) ReadFile(path, commit string) (string, error) {
 }
 
 // GetFileMap returns file mapping information for the given path, converting repomap types to models types
-func (ac *AnalyzerContext) GetFileMap(path string, commit string) (*models.FileMap, error) {
+func (ac *AnalyzerContext) GetFileMap(path string, commit string) (*FileMap, error) {
 	if ac.Arch == nil {
 		return nil, fmt.Errorf("arch config not initialized")
 	}
@@ -124,15 +124,56 @@ func (ac *AnalyzerContext) GetSeverityEngine() *repomapcel.Engine {
 	return ac.severityEngine
 }
 
-// LoadAnalyzeConfig loads the .gitanalyze.yaml config and resolves active filter sets
+// LoadAnalyzeConfig loads the exclude config from the arch conf and compiles it
 func (ac *AnalyzerContext) LoadAnalyzeConfig(options AnalyzeOptions) error {
-	conf, err := GetAnalyzeConfig(ac.RepoPath())
+	if ac.Arch == nil {
+		return nil
+	}
+	exclude := ac.Arch.Exclude
+	if exclude.IsEmpty() {
+		return nil
+	}
+
+	// Apply CLI-level include/exclude overrides
+	if len(options.Include) > 0 || len(options.Exclude) > 0 {
+		exclude.ResolvePresets(options.Include, ac.Arch.Presets)
+	}
+
+	compiled, err := exclude.Compile()
 	if err != nil {
 		return err
 	}
-	if conf == nil {
+	ac.analyzeConfig = compiled
+	return nil
+}
+
+// convertFileMap converts a repomap FileMap to a models FileMap
+func convertFileMap(rm *repomap.FileMap) *FileMap {
+	if rm == nil {
 		return nil
 	}
-	ac.analyzeConfig = conf.ResolveActiveFilters(options.Include, options.Exclude)
-	return nil
+	f := &FileMap{
+		Path:     rm.Path,
+		Language: rm.Language,
+		Ignored:  rm.Ignored,
+	}
+	for _, s := range rm.Scopes {
+		f.Scopes = append(f.Scopes, ScopeType(s))
+	}
+	// Map repomap scopes that are technology-like to Tech field
+	for _, s := range rm.Scopes {
+		if isTechnologyScope(string(s)) {
+			f.Tech = append(f.Tech, ScopeTechnology(s))
+		}
+	}
+	return f
+}
+
+func isTechnologyScope(scope string) bool {
+	switch scope {
+	case "go", "nodejs", "python", "java", "ruby", "rust", "php", "shell",
+		"docker", "kubernetes", "helm", "terraform", "bazel", "jenkins", "markdown":
+		return true
+	}
+	return false
 }
