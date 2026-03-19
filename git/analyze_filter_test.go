@@ -3,6 +3,7 @@ package git
 import (
 	"testing"
 
+	"github.com/flanksource/repomap"
 	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/repomap"

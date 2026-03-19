@@ -31,7 +31,7 @@ func InitConfig(opts InitConfigOptions) (string, error) {
 		return "", fmt.Errorf("not a git repository: %s", absPath)
 	}
 
-	configPath := filepath.Join(root, ".gitanalyze.yaml")
+	configPath := filepath.Join(root, "repomap.yaml")
 
 	if _, err := os.Stat(configPath); err == nil {
 		logger.Infof("Found existing %s", configPath)
