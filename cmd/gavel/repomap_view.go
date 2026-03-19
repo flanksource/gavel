@@ -7,7 +7,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/gavel/repomap"
+	"github.com/flanksource/repomap"
 )
 
 type RepomapViewOptions struct {
@@ -103,9 +103,11 @@ func findConfigSource(path string) string {
 	path, _ = filepath.Abs(path)
 
 	for {
-		archFile := filepath.Join(path, "arch.yaml")
-		if stat, err := os.Stat(archFile); err == nil && !stat.IsDir() {
-			return archFile
+		for _, alias := range repomap.ConfigAliases {
+			candidate := filepath.Join(path, alias)
+			if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
+				return candidate
+			}
 		}
 
 		if repomap.IsGitRoot(path) {

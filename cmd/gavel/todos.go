@@ -14,7 +14,6 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
@@ -124,30 +123,15 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	}
 
 	if interactive && len(args) == 0 && len(todoList) > 0 {
-		items := make([]string, len(todoList))
-		for i, todo := range todoList {
-			title := todo.Title
-			if title == "" {
-				title = todo.Filename()
-			}
-			items[i] = fmt.Sprintf("%s (%s)", title, todo.Status)
-		}
-		selected, err := choose.Run(items,
-			choose.WithHeader("Select TODOs to run:"),
-			choose.WithLimit(0),
-		)
+		selected, err := selectTODOs(todoList, "Select TODOs to run:")
 		if err != nil {
-			return fmt.Errorf("interactive selection failed: %w", err)
+			return err
 		}
-		if len(selected) == 0 {
+		if selected == nil {
 			logger.Infof("No TODOs selected")
 			return nil
 		}
-		filtered := make([]*types.TODO, len(selected))
-		for i, idx := range selected {
-			filtered[i] = todoList[idx]
-		}
-		todoList = filtered
+		todoList = selected
 	}
 
 	if len(todoList) == 0 {

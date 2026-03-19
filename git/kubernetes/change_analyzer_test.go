@@ -12,7 +12,7 @@ import (
 	gkubernetes "github.com/flanksource/gavel/git/kubernetes"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
-	"github.com/flanksource/gavel/repomap"
+	repomapk8s "github.com/flanksource/repomap/kubernetes"
 )
 
 type ExpectedResult struct {
@@ -67,17 +67,16 @@ var _ = Describe("AnalyzeKubernetesChanges", func() {
 			patchDiff := loadFile(filepath.Join(fixturePath, "patch.diff"))
 			expected := loadExpectedResult(filepath.Join(fixturePath, "expected.json"))
 
-			var beforeDocs []kubernetes.YAMLDocument
-			var afterDocs []kubernetes.YAMLDocument
+			var beforeDocs, afterDocs []kubernetes.YAMLDocument
 			var err error
 
 			if beforeYAML != "" && beforeYAML != "# Empty file - service doesn't exist yet\n" && beforeYAML != "# File deleted - deployment removed\n" {
-				beforeDocs, err = repomap.ParseYAMLDocuments(beforeYAML)
+				beforeDocs, err = parseYAMLDocs(beforeYAML)
 				Expect(err).ToNot(HaveOccurred())
 			}
 
 			if afterYAML != "" && afterYAML != "# Empty file - service doesn't exist yet\n" && afterYAML != "# File deleted - deployment removed\n" {
-				afterDocs, err = repomap.ParseYAMLDocuments(afterYAML)
+				afterDocs, err = parseYAMLDocs(afterYAML)
 				Expect(err).ToNot(HaveOccurred())
 			}
 
@@ -102,17 +101,17 @@ var _ = Describe("AnalyzeKubernetesChanges", func() {
 				}
 
 				afterDoc := afterDocs[idx]
-				if !repomap.IsKubernetesResource(afterDoc.Content) {
+				if !repomapk8s.IsKubernetesResource(afterDoc.Content) {
 					continue
 				}
 
-				afterRef := repomap.ExtractKubernetesRef(afterDoc)
+				afterRef := extractTestRef(afterDoc)
 				var beforeDoc *kubernetes.YAMLDocument
 				for i := range beforeDocs {
-					if !repomap.IsKubernetesResource(beforeDocs[i].Content) {
+					if !repomapk8s.IsKubernetesResource(beforeDocs[i].Content) {
 						continue
 					}
-					beforeRef := repomap.ExtractKubernetesRef(beforeDocs[i])
+					beforeRef := extractTestRef(beforeDocs[i])
 
 					if beforeRef.Kind == afterRef.Kind &&
 						beforeRef.Name == afterRef.Name &&
@@ -128,7 +127,7 @@ var _ = Describe("AnalyzeKubernetesChanges", func() {
 
 			if len(beforeDocs) > 0 && len(afterDocs) == 0 {
 				for _, beforeDoc := range beforeDocs {
-					if !repomap.IsKubernetesResource(beforeDoc.Content) {
+					if !repomapk8s.IsKubernetesResource(beforeDoc.Content) {
 						continue
 					}
 
@@ -137,18 +136,18 @@ var _ = Describe("AnalyzeKubernetesChanges", func() {
 				}
 			} else if len(beforeDocs) > len(afterDocs) {
 				for _, beforeDoc := range beforeDocs {
-					if !repomap.IsKubernetesResource(beforeDoc.Content) {
+					if !repomapk8s.IsKubernetesResource(beforeDoc.Content) {
 						continue
 					}
 
-					beforeRef := repomap.ExtractKubernetesRef(beforeDoc)
+					beforeRef := extractTestRef(beforeDoc)
 					found := false
 
 					for _, afterDoc := range afterDocs {
-						if !repomap.IsKubernetesResource(afterDoc.Content) {
+						if !repomapk8s.IsKubernetesResource(afterDoc.Content) {
 							continue
 						}
-						afterRef := repomap.ExtractKubernetesRef(afterDoc)
+						afterRef := extractTestRef(afterDoc)
 
 						if beforeRef.Kind == afterRef.Kind &&
 							beforeRef.Name == afterRef.Name &&
@@ -283,7 +282,7 @@ spec:
     app: myapp
 `
 
-		docs, err := repomap.ParseYAMLDocuments(yaml)
+		docs, err := parseYAMLDocs(yaml)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(docs).To(HaveLen(3))
 
@@ -297,7 +296,7 @@ spec:
 		Expect(docs[2].EndLine).To(BeNumerically(">", docs[2].StartLine))
 
 		for i, doc := range docs {
-			ref := repomap.ExtractKubernetesRef(doc)
+			ref := extractTestRef(doc)
 			GinkgoWriter.Printf("Doc %d: %s/%s (lines %d-%d)\n", i, ref.Kind, ref.Name, doc.StartLine, doc.EndLine)
 		}
 	})
@@ -322,11 +321,11 @@ data:
   newkey: "test"
 `
 
-		beforeDocs, err := repomap.ParseYAMLDocuments(beforeYAML)
+		beforeDocs, err := parseYAMLDocs(beforeYAML)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(beforeDocs).To(HaveLen(1))
 
-		afterDocs, err := repomap.ParseYAMLDocuments(afterYAML)
+		afterDocs, err := parseYAMLDocs(afterYAML)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(afterDocs).To(HaveLen(1))
 
@@ -364,13 +363,36 @@ func loadExpectedResult(path string) ExpectedResult {
 	return result
 }
 
+func parseYAMLDocs(content string) ([]kubernetes.YAMLDocument, error) {
+	docs, err := repomapk8s.ParseYAMLDocuments(content)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]kubernetes.YAMLDocument, len(docs))
+	for i, d := range docs {
+		result[i] = kubernetes.YAMLDocument{StartLine: d.StartLine, EndLine: d.EndLine, Content: d.Content}
+	}
+	return result, nil
+}
+
+func extractTestRef(doc kubernetes.YAMLDocument) kubernetes.KubernetesRef {
+	r := repomapk8s.ExtractKubernetesRef(repomapk8s.YAMLDocument{
+		StartLine: doc.StartLine, EndLine: doc.EndLine, Content: doc.Content,
+	})
+	return kubernetes.KubernetesRef{
+		APIVersion: r.APIVersion, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
+		JSONPath: r.JSONPath, StartLine: r.StartLine, EndLine: r.EndLine,
+		Labels: r.Labels, Annotations: r.Annotations,
+	}
+}
+
 func createChange(beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument) kubernetes.KubernetesChange {
 	refDoc := afterDoc
 	if afterDoc.Content == nil && beforeDoc != nil {
 		refDoc = *beforeDoc
 	}
 
-	ref := repomap.ExtractKubernetesRef(refDoc)
+	ref := extractTestRef(refDoc)
 
 	var changeType kubernetes.SourceChangeType
 	var beforeContent, afterContent map[string]interface{}

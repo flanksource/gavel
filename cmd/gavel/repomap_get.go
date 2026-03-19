@@ -6,7 +6,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/gavel/repomap"
+	"github.com/flanksource/repomap"
 )
 
 type RepomapGetOptions struct {
