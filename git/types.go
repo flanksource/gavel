@@ -100,7 +100,7 @@ func (ac *AnalyzerContext) ReadFile(path, commit string) (string, error) {
 }
 
 // GetFileMap returns file mapping information for the given path, converting repomap types to models types
-func (ac *AnalyzerContext) GetFileMap(path string, commit string) (*FileMap, error) {
+func (ac *AnalyzerContext) GetFileMap(path string, commit string) (*models.FileMap, error) {
 	if ac.Arch == nil {
 		return nil, fmt.Errorf("arch config not initialized")
 	}
@@ -148,22 +148,22 @@ func (ac *AnalyzerContext) LoadAnalyzeConfig(options AnalyzeOptions) error {
 }
 
 // convertFileMap converts a repomap FileMap to a models FileMap
-func convertFileMap(rm *repomap.FileMap) *FileMap {
+func convertFileMap(rm *repomap.FileMap) *models.FileMap {
 	if rm == nil {
 		return nil
 	}
-	f := &FileMap{
+	f := &models.FileMap{
 		Path:     rm.Path,
 		Language: rm.Language,
 		Ignored:  rm.Ignored,
 	}
 	for _, s := range rm.Scopes {
-		f.Scopes = append(f.Scopes, ScopeType(s))
+		f.Scopes = append(f.Scopes, models.ScopeType(s))
 	}
 	// Map repomap scopes that are technology-like to Tech field
 	for _, s := range rm.Scopes {
 		if isTechnologyScope(string(s)) {
-			f.Tech = append(f.Tech, ScopeTechnology(s))
+			f.Tech = append(f.Tech, models.ScopeTechnology(s))
 		}
 	}
 	return f
