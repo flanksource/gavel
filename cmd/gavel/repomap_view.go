@@ -87,7 +87,10 @@ func runRepomapView(opts RepomapViewOptions) (any, error) {
 		return nil, fmt.Errorf("failed to load embedded defaults: %w", err)
 	}
 
-	merged := defaultConf.Merge(userConf)
+	merged, err := defaultConf.Merge(userConf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to merge configuration: %w", err)
+	}
 
 	return ArchConfView{
 		ConfigSource: configSource,
