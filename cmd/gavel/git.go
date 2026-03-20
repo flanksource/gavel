@@ -64,8 +64,8 @@ func init() {
 				return nil, fmt.Errorf("path '%s' does not exist", options.Path)
 			}
 
-			showPatches := options.HistoryOptions.ShowPatch
-			options.HistoryOptions.ShowPatch = true
+			showPatches := options.ShowPatch
+			options.ShowPatch = true
 			commits, err := git.GetCommitHistory(options.HistoryOptions)
 			if err != nil {
 				logger.Errorf("git-analyzer: failed to get commit history: %v", err)
@@ -87,7 +87,6 @@ func init() {
 
 			if !showPatches {
 				for i := range analyses {
-					analyses[i].Commit.Patch = ""
 					analyses[i].Patch = ""
 				}
 			}

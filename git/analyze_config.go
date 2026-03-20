@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/repomap"
 	"github.com/google/cel-go/common/types"
@@ -15,13 +15,13 @@ import (
 type FilterResult struct {
 	SkipCommit       bool
 	Reason           string
-	Changes          []CommitChange
+	Changes          []models.CommitChange
 	FilesSkipped     int
 	ResourcesSkipped int
 }
 
 // ApplyConfigFilters applies all config-based exclude filters to a commit and its changes
-func ApplyConfigFilters(config *repomap.CompiledExcludeConfig, commit Commit, changes []CommitChange) FilterResult {
+func ApplyConfigFilters(config *repomap.CompiledExcludeConfig, commit models.Commit, changes []models.CommitChange) FilterResult {
 	// 1. Author filter
 	if matched, reason := repomap.MatchesAuthor(toRepomapAuthor(commit.Author), config.Authors); matched {
 		return FilterResult{SkipCommit: true, Reason: reason}
@@ -46,7 +46,7 @@ func ApplyConfigFilters(config *repomap.CompiledExcludeConfig, commit Commit, ch
 	}
 
 	// 5. File path filter + resource filter (per-change)
-	var filtered []CommitChange
+	var filtered []models.CommitChange
 	filesSkipped := 0
 	resourcesSkipped := 0
 
@@ -103,7 +103,7 @@ func matchesResource(kc kubernetes.KubernetesChange, filters []repomap.ResourceF
 	return false
 }
 
-func evalCommitCELRules(config *repomap.CompiledExcludeConfig, commit Commit, changes []CommitChange) (bool, string) {
+func evalCommitCELRules(config *repomap.CompiledExcludeConfig, commit models.Commit, changes []models.CommitChange) (bool, string) {
 	programs := config.CompiledRules()
 	if len(programs) == 0 {
 		return false, ""
@@ -123,7 +123,7 @@ func evalCommitCELRules(config *repomap.CompiledExcludeConfig, commit Commit, ch
 	return false, ""
 }
 
-func buildFilterCommitContext(commit Commit, changes []CommitChange) map[string]any {
+func buildFilterCommitContext(commit models.Commit, changes []models.CommitChange) map[string]any {
 	files := make([]string, 0, len(changes))
 	totalAdds, totalDels := 0, 0
 	for _, c := range changes {
@@ -156,7 +156,7 @@ func buildFilterCommitContext(commit Commit, changes []CommitChange) map[string]
 	}
 }
 
-func toRepomapAuthor(a Author) repomap.Author {
+func toRepomapAuthor(a models.Author) repomap.Author {
 	return repomap.Author{
 		Name:  a.Name,
 		Email: a.Email,

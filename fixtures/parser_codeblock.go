@@ -4,28 +4,6 @@ import (
 	"strings"
 )
 
-// parseCodeFenceAttributes extracts attribute key=value pairs from a code fence info string
-// Example: "bash exitCode=1 timeout=30" returns map["exitCode":"1", "timeout":"30"]
-func parseCodeFenceAttributes(infoString string) map[string]string {
-	attrs := make(map[string]string)
-
-	// Split by whitespace
-	parts := strings.Fields(infoString)
-
-	// Skip first part (language)
-	for i := 1; i < len(parts); i++ {
-		part := parts[i]
-		if strings.Contains(part, "=") {
-			kv := strings.SplitN(part, "=", 2)
-			if len(kv) == 2 {
-				attrs[kv[0]] = kv[1]
-			}
-		}
-	}
-
-	return attrs
-}
-
 // extractLanguage extracts the language identifier from a code fence info string
 // Example: "bash exitCode=1" returns "bash"
 func extractLanguage(infoString string) string {
