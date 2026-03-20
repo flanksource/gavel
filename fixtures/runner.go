@@ -277,6 +277,15 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 
 // executeFixture runs a single fixture test
 func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest) (FixtureResult, error) {
+	if reason := fixture.FrontMatter.ShouldSkip(); reason != "" {
+		return FixtureResult{
+			Name:   fixture.Name,
+			Status: task.StatusSKIP,
+			Test:   fixture,
+			Error:  reason,
+		}, nil
+	}
+
 	// Get the appropriate fixture type from registry
 	fixtureType, err := DefaultRegistry.GetForFixture(fixture)
 	if err != nil {

@@ -3,7 +3,9 @@ package fixtures
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -223,6 +225,16 @@ type FrontMatter struct {
 	// Total timeout for test execution
 	Timeout *time.Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 
+	// OS constrains the fixture to specific operating systems (e.g. "linux", "darwin").
+	// Prefix with "!" to negate (e.g. "!darwin" runs on everything except macOS).
+	OS string `yaml:"os,omitempty" json:"os,omitempty"`
+
+	// Arch constrains the fixture to specific architectures (e.g. "amd64", "arm64").
+	Arch string `yaml:"arch,omitempty" json:"arch,omitempty"`
+
+	// Skip is a bash command; if it exits 0 (true), the fixture is skipped.
+	Skip string `yaml:"skip,omitempty" json:"skip,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -242,6 +254,37 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")
 	delete(f.Metadata, "timeout")
+	delete(f.Metadata, "os")
+	delete(f.Metadata, "arch")
+	delete(f.Metadata, "skip")
+}
+
+// ShouldSkip returns a non-empty reason string if the fixture should be skipped
+// based on os, arch, or skip command constraints.
+func (f *FrontMatter) ShouldSkip() string {
+	if f.OS != "" {
+		if strings.HasPrefix(f.OS, "!") {
+			if runtime.GOOS == f.OS[1:] {
+				return fmt.Sprintf("os %s excluded", runtime.GOOS)
+			}
+		} else if runtime.GOOS != f.OS {
+			return fmt.Sprintf("requires os %s, got %s", f.OS, runtime.GOOS)
+		}
+	}
+
+	if f.Arch != "" {
+		if runtime.GOARCH != f.Arch {
+			return fmt.Sprintf("requires arch %s, got %s", f.Arch, runtime.GOARCH)
+		}
+	}
+
+	if f.Skip != "" {
+		if err := exec.Command("bash", "-c", f.Skip).Run(); err == nil {
+			return fmt.Sprintf("skip command returned true: %s", f.Skip)
+		}
+	}
+
+	return ""
 }
 
 // TODO: Register custom renderer for status icons when clicky supports it
