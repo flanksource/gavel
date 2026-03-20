@@ -22,10 +22,6 @@ func BuildPrompt(todo *types.TODO, workDir string) string {
 func BuildGroupPrompt(todoList []*types.TODO, workDir string) string {
 	prompt := "You are implementing multiple related fixes in a codebase.\nEach TODO below describes a separate task. Implement ALL of them.\n\n"
 	for _, todo := range todoList {
-		name := todo.Title
-		if name == "" {
-			name = filepath.Base(todo.FilePath)
-		}
 		prompt += buildTODOSection(todo, workDir, true)
 	}
 	prompt += "---\n"
