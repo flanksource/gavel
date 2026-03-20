@@ -10,17 +10,18 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/git/rules"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
-	"github.com/flanksource/gavel/repomap"
+	"github.com/flanksource/repomap"
+	repomapcel "github.com/flanksource/repomap/cel"
+	repomapk8s "github.com/flanksource/repomap/kubernetes"
 	"github.com/mattbaird/jsonpatch"
 )
 
 type AnalyzerContext interface {
 	ReadFile(path, commit string) (string, error)
-	GetSeverityConfig() *rules.SeverityConfig
-	GetSeverityEngine() *rules.Engine
+	GetSeverityConfig() *repomap.SeverityConfig
+	GetSeverityEngine() *repomapcel.Engine
 }
 
 func FindAffectedDocuments(documents []kubernetes.YAMLDocument, changedLines []int) []int {
@@ -235,10 +236,10 @@ func ExtractFieldPaths(patches []kubernetes.ExtendedPatch) []string {
 	return paths
 }
 
-func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *CommitChange) error {
+func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit models.Commit, change *models.CommitChange) error {
 	logger.Tracef("[kubernetes] analyzing %s @ %s", change.File, commit.Hash)
 
-	if !repomap.IsYaml(change.File) {
+	if !repomapk8s.IsYaml(change.File) {
 		return nil
 	}
 
@@ -250,7 +251,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 	var beforeContent, afterContent string
 	var err error
 
-	if change.Type != SourceChangeTypeAdded {
+	if change.Type != models.SourceChangeTypeAdded {
 		beforeContent, err = ctx.ReadFile(change.File, beforeCommit)
 		if err != nil {
 			logger.Errorf("Error reading before %s:%s %w", change.File, beforeCommit, err)
@@ -258,7 +259,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 		}
 	}
 
-	if change.Type != SourceChangeTypeDeleted {
+	if change.Type != models.SourceChangeTypeDeleted {
 		afterContent, err = ctx.ReadFile(change.File, afterCommit)
 		if err != nil {
 			logger.Errorf("Error reading after %s:%s %w", change.File, afterCommit, err)
@@ -269,16 +270,16 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 	var beforeDocs, afterDocs []kubernetes.YAMLDocument
 
 	if beforeContent != "" {
-		beforeDocs, err = repomap.ParseYAMLDocuments(beforeContent)
+		beforeDocs, err = parseYAMLDocuments(beforeContent)
 		if err != nil {
-			return fmt.Errorf("Error parsing before %s:%s %w", change.File, beforeCommit, err)
+			return fmt.Errorf("error parsing before %s:%s %w", change.File, beforeCommit, err)
 		}
 	}
 
 	if afterContent != "" {
-		afterDocs, err = repomap.ParseYAMLDocuments(afterContent)
+		afterDocs, err = parseYAMLDocuments(afterContent)
 		if err != nil {
-			return fmt.Errorf("Error parsing after %s:%s %w", change.File, afterCommit, err)
+			return fmt.Errorf("error parsing after %s:%s %w", change.File, afterCommit, err)
 		}
 	}
 
@@ -296,17 +297,17 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 
 		afterDoc := afterDocs[idx]
 
-		if !repomap.IsKubernetesResource(afterDoc.Content) {
+		if !repomapk8s.IsKubernetesResource(afterDoc.Content) {
 			continue
 		}
 
-		afterRef := repomap.ExtractKubernetesRef(afterDoc)
+		afterRef := extractRef(afterDoc)
 		var beforeDoc *kubernetes.YAMLDocument
 		for i := range beforeDocs {
-			if !repomap.IsKubernetesResource(beforeDocs[i].Content) {
+			if !repomapk8s.IsKubernetesResource(beforeDocs[i].Content) {
 				continue
 			}
-			beforeRef := repomap.ExtractKubernetesRef(beforeDocs[i])
+			beforeRef := extractRef(beforeDocs[i])
 
 			if beforeRef.Kind == afterRef.Kind &&
 				beforeRef.Name == afterRef.Name &&
@@ -318,7 +319,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 
 		k8sChange, err := createKubernetesChange(commit, change, beforeDoc, afterDoc, severityEngine)
 		if err != nil {
-			return fmt.Errorf("Error creating Kubernetes change for %s:%s %w", change.File, afterCommit, err)
+			return fmt.Errorf("error creating kubernetes change for %s:%s %w", change.File, afterCommit, err)
 		}
 
 		for line := afterDoc.StartLine; line <= afterDoc.EndLine; line++ {
@@ -337,17 +338,17 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 			}
 
 			beforeDoc := beforeDocs[idx]
-			if !repomap.IsKubernetesResource(beforeDoc.Content) {
+			if !repomapk8s.IsKubernetesResource(beforeDoc.Content) {
 				continue
 			}
 
-			if idx < len(afterDocs) && repomap.IsKubernetesResource(afterDocs[idx].Content) {
+			if idx < len(afterDocs) && repomapk8s.IsKubernetesResource(afterDocs[idx].Content) {
 				continue
 			}
 
 			k8sChange, err := createKubernetesChange(commit, change, &beforeDoc, kubernetes.YAMLDocument{}, severityEngine)
 			if err != nil {
-				return fmt.Errorf("Error creating Kubernetes change for deleted %s:%s %w", change.File, beforeCommit, err)
+				return fmt.Errorf("error creating kubernetes change for deleted %s:%s %w", change.File, beforeCommit, err)
 			}
 
 			for line := beforeDoc.StartLine; line <= beforeDoc.EndLine; line++ {
@@ -363,27 +364,27 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 		for line := range changedLinesSet {
 			lines = append(lines, line)
 		}
-		change.LinesChanged = NewLineRanges(lines)
+		change.LinesChanged = models.NewLineRanges(lines)
 	}
 
 	if len(change.KubernetesChanges) > 0 {
-		var severities []Severity
+		var severities []models.Severity
 		for _, k8sChange := range change.KubernetesChanges {
-			severities = append(severities, Severity(k8sChange.Severity))
+			severities = append(severities, models.Severity(k8sChange.Severity))
 		}
-		change.Severity = MaxSeverities(severities)
+		change.Severity = models.MaxSeverities(severities)
 	}
 
 	return nil
 }
 
-func createKubernetesChange(commit Commit, change *CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *rules.Engine) (kubernetes.KubernetesChange, error) {
+func createKubernetesChange(commit models.Commit, change *models.CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *repomapcel.Engine) (kubernetes.KubernetesChange, error) {
 	refDoc := afterDoc
 	if afterDoc.Content == nil && beforeDoc != nil {
 		refDoc = *beforeDoc
 	}
 
-	ref := repomap.ExtractKubernetesRef(refDoc)
+	ref := extractRef(refDoc)
 
 	ref.StartLine = refDoc.StartLine
 	ref.EndLine = refDoc.EndLine
@@ -441,13 +442,94 @@ func createKubernetesChange(commit Commit, change *CommitChange, beforeDoc *kube
 	}
 
 	if engine != nil {
-		ctx := rules.BuildContext(nil, change, &k8sChange)
+		ctx := repomapcel.BuildContext(nil, toRepomapChange(change), toRepomapK8sChange(&k8sChange))
 		k8sChange.Severity = kubernetes.ChangeSeverity(engine.Evaluate(ctx))
 	} else {
 		k8sChange.Severity = DetermineChangeSeverity(changeType, patches, versionChanges)
 	}
 
 	return k8sChange, nil
+}
+
+func parseYAMLDocuments(content string) ([]kubernetes.YAMLDocument, error) {
+	docs, err := repomapk8s.ParseYAMLDocuments(content)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]kubernetes.YAMLDocument, len(docs))
+	for i, d := range docs {
+		result[i] = kubernetes.YAMLDocument{StartLine: d.StartLine, EndLine: d.EndLine, Content: d.Content}
+	}
+	return result, nil
+}
+
+func extractRef(doc kubernetes.YAMLDocument) kubernetes.KubernetesRef {
+	r := repomapk8s.ExtractKubernetesRef(repomapk8s.YAMLDocument{
+		StartLine: doc.StartLine, EndLine: doc.EndLine, Content: doc.Content,
+	})
+	return kubernetes.KubernetesRef{
+		APIVersion: r.APIVersion, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
+		JSONPath: r.JSONPath, StartLine: r.StartLine, EndLine: r.EndLine,
+		Labels: r.Labels, Annotations: r.Annotations,
+	}
+}
+
+func toRepomapChange(c *models.CommitChange) *repomap.CommitChange {
+	if c == nil {
+		return nil
+	}
+	rc := &repomap.CommitChange{
+		File: c.File, Type: repomap.SourceChangeType(c.Type),
+		Adds: c.Adds, Dels: c.Dels,
+	}
+	for _, kc := range c.KubernetesChanges {
+		rc.KubernetesChanges = append(rc.KubernetesChanges, *toRepomapK8sChange(&kc))
+	}
+	return rc
+}
+
+func toRepomapK8sChange(kc *kubernetes.KubernetesChange) *repomapk8s.KubernetesChange {
+	if kc == nil {
+		return nil
+	}
+	rk := &repomapk8s.KubernetesChange{
+		KubernetesRef: repomapk8s.KubernetesRef{
+			APIVersion: kc.APIVersion, Kind: kc.Kind, Namespace: kc.Namespace, Name: kc.Name,
+			StartLine: kc.StartLine, EndLine: kc.EndLine, Labels: kc.Labels, Annotations: kc.Annotations,
+		},
+		ChangeType:       repomapk8s.SourceChangeType(kc.ChangeType),
+		SourceType:       repomapk8s.KubernetesSourceType(kc.SourceType),
+		Severity:         repomapk8s.ChangeSeverity(kc.Severity),
+		Before:           kc.Before,
+		After:            kc.After,
+		FieldsChanged:    kc.FieldsChanged,
+		FieldChangeCount: kc.FieldChangeCount,
+	}
+	for _, p := range kc.Patches {
+		rk.Patches = append(rk.Patches, repomapk8s.ExtendedPatch{
+			Operation: p.Operation, Path: p.Path, Value: p.Value, OldValue: p.OldValue,
+		})
+	}
+	if kc.Scaling != nil {
+		rk.Scaling = &repomapk8s.Scaling{
+			Replicas: kc.Scaling.Replicas, NewReplicas: kc.Scaling.NewReplicas,
+			OldCPU: kc.Scaling.OldCPU, NewCPU: kc.Scaling.NewCPU,
+			OldMemory: kc.Scaling.OldMemory, NewMemory: kc.Scaling.NewMemory,
+		}
+	}
+	for _, vc := range kc.VersionChanges {
+		rk.VersionChanges = append(rk.VersionChanges, repomapk8s.VersionChange{
+			FieldPath: vc.FieldPath, OldVersion: vc.OldVersion, NewVersion: vc.NewVersion,
+			ChangeType: repomapk8s.VersionChangeType(vc.ChangeType),
+			ValueType:  vc.ValueType,
+		})
+	}
+	if kc.EnvironmentChange != nil {
+		rk.EnvironmentChange = &repomapk8s.EnvironmentChange{
+			Old: kc.EnvironmentChange.Old, New: kc.EnvironmentChange.New,
+		}
+	}
+	return rk
 }
 
 func DetermineSourceType(filePath string, content map[string]interface{}) kubernetes.KubernetesSourceType {

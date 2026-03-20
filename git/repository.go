@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
 // GitRepository interface defines operations on a single git repository
@@ -24,10 +24,10 @@ type GitRepository interface {
 	ResolveVersion(alias string) (string, error)
 
 	// GetCommitsBetween returns commits between two versions
-	GetCommitsBetween(from, to string) ([]Commit, error)
+	GetCommitsBetween(from, to string) ([]models.Commit, error)
 
 	// GetVersionInfo returns commit information for a specific version
-	GetVersionInfo(version string) (*VersionInfo, error)
+	GetVersionInfo(version string) (*models.VersionInfo, error)
 
 	// GetTagDate returns the creation date of a specific tag
 	GetTagDate(tag string) (time.Time, error)
@@ -36,7 +36,7 @@ type GitRepository interface {
 	FindLastGARelease() (string, error)
 
 	// ListWorktrees returns all active clones for this repository
-	ListWorktrees() ([]CloneInfo, error)
+	ListWorktrees() ([]models.CloneInfo, error)
 
 	// CleanupWorktree removes a specific worktree
 	CleanupWorktree(version string) error
@@ -94,7 +94,7 @@ type CloneManager interface {
 	RemoveClone(ctx context.Context, clonePath string) error
 
 	// ListClones lists all clones for a repository
-	ListClones(ctx context.Context, repoPath string) ([]CloneInfo, error)
+	ListClones(ctx context.Context, repoPath string) ([]models.CloneInfo, error)
 
 	// CleanupStaleClones removes clones that haven't been used recently
 	CleanupStaleClones(ctx context.Context, repoPath string, maxAge time.Duration) error

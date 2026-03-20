@@ -9,7 +9,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )
@@ -24,11 +24,11 @@ type Count struct {
 	// Number of files changed
 	Files int `json:"files,omitempty"`
 	// Number of commits per scope
-	Scopes map[ScopeType]int `json:"scopes,omitempty"`
+	Scopes map[models.ScopeType]int `json:"scopes,omitempty"`
 	// Number of commits per commit type
-	CommitTypes map[CommitType]int `json:"commit_types,omitempty"`
+	CommitTypes map[models.CommitType]int `json:"commit_types,omitempty"`
 	// Number of commits per technology
-	Tech map[ScopeTechnology]int `json:"tech,omitempty"`
+	Tech map[models.ScopeTechnology]int `json:"tech,omitempty"`
 }
 
 func (c Count) Pretty() api.Text {
@@ -75,21 +75,21 @@ func (c *Count) Add(other Count) {
 	c.Files += other.Files
 
 	if c.Scopes == nil {
-		c.Scopes = make(map[ScopeType]int)
+		c.Scopes = make(map[models.ScopeType]int)
 	}
 	for scope, count := range other.Scopes {
 		c.Scopes[scope] += count
 	}
 
 	if c.CommitTypes == nil {
-		c.CommitTypes = make(map[CommitType]int)
+		c.CommitTypes = make(map[models.CommitType]int)
 	}
 	for ctype, count := range other.CommitTypes {
 		c.CommitTypes[ctype] += count
 	}
 
 	if c.Tech == nil {
-		c.Tech = make(map[ScopeTechnology]int)
+		c.Tech = make(map[models.ScopeTechnology]int)
 	}
 	for tech, count := range other.Tech {
 		c.Tech[tech] += count
@@ -196,7 +196,7 @@ func (gs PathSummary) Pretty() api.Text {
 
 	// Show non-extension-based technologies only
 	if len(gs.Tech) > 0 {
-		filteredTech := make(map[ScopeTechnology]int)
+		filteredTech := make(map[models.ScopeTechnology]int)
 		for tech, count := range gs.Tech {
 			// For directories, show all tech
 			// For files, filter out extension-based tech
@@ -238,9 +238,9 @@ func NewGitSummary(path string) *PathSummary {
 	return &PathSummary{
 		Path: path,
 		Count: Count{
-			Scopes:      make(map[ScopeType]int),
-			CommitTypes: make(map[CommitType]int),
-			Tech:        make(map[ScopeTechnology]int),
+			Scopes:      make(map[models.ScopeType]int),
+			CommitTypes: make(map[models.CommitType]int),
+			Tech:        make(map[models.ScopeTechnology]int),
 		},
 		Children:    []PathSummary{},
 		uniqueFiles: make(map[string]struct{}),
@@ -258,9 +258,9 @@ func (gs *PathSummary) ensureChild(path string) *PathSummary {
 	child := PathSummary{
 		Path: path,
 		Count: Count{
-			Scopes:      make(map[ScopeType]int),
-			CommitTypes: make(map[CommitType]int),
-			Tech:        make(map[ScopeTechnology]int),
+			Scopes:      make(map[models.ScopeType]int),
+			CommitTypes: make(map[models.CommitType]int),
+			Tech:        make(map[models.ScopeTechnology]int),
 		},
 		Children:    []PathSummary{},
 		uniqueFiles: make(map[string]struct{}),
@@ -270,7 +270,7 @@ func (gs *PathSummary) ensureChild(path string) *PathSummary {
 }
 
 // AddFile adds file statistics to the tree, creating directory nodes as needed
-func (gs *PathSummary) AddFile(filePath string, changes []CommitChange) {
+func (gs *PathSummary) AddFile(filePath string, changes []models.CommitChange) {
 	if filePath == "" || filePath == "." {
 		return
 	}
@@ -321,7 +321,7 @@ func (gs *PathSummary) AddFile(filePath string, changes []CommitChange) {
 
 			if len(change.Scope) > 0 {
 				if fileStats.Scopes == nil {
-					fileStats.Scopes = make(map[ScopeType]int)
+					fileStats.Scopes = make(map[models.ScopeType]int)
 				}
 				for _, scope := range change.Scope {
 					fileStats.Scopes[scope]++
@@ -330,7 +330,7 @@ func (gs *PathSummary) AddFile(filePath string, changes []CommitChange) {
 
 			for _, tech := range change.Tech {
 				if fileStats.Tech == nil {
-					fileStats.Tech = make(map[ScopeTechnology]int)
+					fileStats.Tech = make(map[models.ScopeTechnology]int)
 				}
 				fileStats.Tech[tech]++
 			}
@@ -349,22 +349,22 @@ func (gs *PathSummary) AddFile(filePath string, changes []CommitChange) {
 }
 
 // BuildFromAnalyses builds the entire tree from commit analyses
-func (gs *PathSummary) BuildFromAnalyses(analyses CommitAnalyses) {
+func (gs *PathSummary) BuildFromAnalyses(analyses models.CommitAnalyses) {
 	// Process each commit analysis
 	for _, analysis := range analyses {
 		for _, change := range analysis.Changes {
 			// Get all changes for this file across all commits
-			var fileChanges []CommitChange
+			var fileChanges []models.CommitChange
 
 			// Enhance change with commit-level metadata
 			enhancedChange := change
 			if len(enhancedChange.Scope) == 0 {
-				enhancedChange.Scope = Scopes{analysis.Scope}
+				enhancedChange.Scope = models.Scopes{analysis.Scope}
 			}
 
 			// Add commit type to the change tracking
 			if gs.CommitTypes == nil {
-				gs.CommitTypes = make(map[CommitType]int)
+				gs.CommitTypes = make(map[models.CommitType]int)
 			}
 
 			fileChanges = append(fileChanges, enhancedChange)
@@ -419,9 +419,6 @@ func (gs *PathSummary) CollapseChains() {
 			// Note: Stats are already aggregated, no need to merge them
 		}
 	}
-	if len(gs.Children) == 1 {
-		gs = &gs.Children[0]
-	}
 }
 
 // getFileIcon returns an appropriate icon for the file type
@@ -458,24 +455,24 @@ func getFileIcon(path string) icons.Icon {
 }
 
 // isExtensionBasedTech returns true if the tech is just derived from file extension
-func isExtensionBasedTech(filePath string, tech ScopeTechnology) bool {
+func isExtensionBasedTech(filePath string, tech models.ScopeTechnology) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
 	// Map extensions to technologies that are "obvious" and should be filtered
-	extensionTech := map[string]ScopeTechnology{
-		".go":   Go,
-		".py":   Python,
-		".js":   NodeJS,
-		".jsx":  NodeJS,
-		".ts":   NodeJS,
-		".tsx":  NodeJS,
-		".java": Java,
-		".rb":   Ruby,
-		".rs":   Rust,
-		".php":  PHP,
-		".sql":  SQL,
-		".sh":   Shell,
-		".bash": Bash,
+	extensionTech := map[string]models.ScopeTechnology{
+		".go":   models.Go,
+		".py":   models.Python,
+		".js":   models.NodeJS,
+		".jsx":  models.NodeJS,
+		".ts":   models.NodeJS,
+		".tsx":  models.NodeJS,
+		".java": models.Java,
+		".rb":   models.Ruby,
+		".rs":   models.Rust,
+		".php":  models.PHP,
+		".sql":  models.SQL,
+		".sh":   models.Shell,
+		".bash": models.Bash,
 	}
 
 	return extensionTech[ext] == tech

@@ -1,14 +1,15 @@
 package choose
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/paginator"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/paginator"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type Option func(*model)
@@ -17,6 +18,12 @@ func WithHeader(h string) Option { return func(m *model) { m.header = h } }
 func WithLimit(n int) Option     { return func(m *model) { m.limit = n } }
 func WithShowHelp(b bool) Option { return func(m *model) { m.showHelp = b } }
 func WithHeight(n int) Option    { return func(m *model) { m.height = n } }
+
+// WithDetailFunc sets a callback to render the detail panel for the item at index i.
+// When set and the terminal is wide enough, a detail pane appears to the right.
+func WithDetailFunc(fn func(i int) string) Option {
+	return func(m *model) { m.detailFunc = fn }
+}
 
 type item struct {
 	text     string
@@ -49,17 +56,22 @@ type model struct {
 	limit        int // 0 = unlimited
 	numSelected  int
 	currentOrder int
-	height       int
+	height       int // items per page
 	paginator    paginator.Model
 	showHelp     bool
 	help         help.Model
 	keymap       keymap
+	detailFunc   func(int) string
+	termWidth    int
+	termHeight   int
 
 	cursorStyle       lipgloss.Style
 	headerStyle       lipgloss.Style
 	itemStyle         lipgloss.Style
 	selectedItemStyle lipgloss.Style
 }
+
+const minDetailWidth = 100
 
 func defaultKeymap(multiSelect bool) keymap {
 	km := keymap{
@@ -75,7 +87,7 @@ func defaultKeymap(multiSelect bool) keymap {
 			key.WithDisabled(),
 		),
 		Toggle: key.NewBinding(
-			key.WithKeys(" ", "tab", "x"),
+			key.WithKeys("space", "tab", "x"),
 			key.WithHelp("x", "toggle"),
 			key.WithDisabled(),
 		),
@@ -118,9 +130,10 @@ func newModel(items []string, opts ...Option) model {
 		m.limit = len(items)
 	}
 
-	p := paginator.New()
+	p := paginator.New(
+		paginator.WithPerPage(m.height),
+	)
 	p.Type = paginator.Dots
-	p.PerPage = m.height
 	p.SetTotalPages(len(items))
 	m.paginator = p
 
@@ -132,8 +145,10 @@ func (m model) Init() tea.Cmd { return nil }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.termWidth = msg.Width
+		m.termHeight = msg.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		start, end := m.paginator.GetSliceBounds(len(m.items))
 		km := m.keymap
 		switch {
@@ -233,11 +248,34 @@ func (m model) deselectAll() model {
 	return m
 }
 
-func (m model) View() string {
+func (m model) showDetail() bool {
+	return m.detailFunc != nil && m.termWidth >= minDetailWidth
+}
+
+func (m model) View() tea.View {
 	if m.quitting {
-		return ""
+		return tea.NewView("")
 	}
 
+	listContent := m.renderList()
+
+	if m.showDetail() {
+		return tea.NewView(m.renderSplitView(listContent))
+	}
+
+	var parts []string
+	if m.header != "" {
+		parts = append(parts, m.headerStyle.Render(m.header))
+	}
+	parts = append(parts, listContent)
+	if m.showHelp {
+		parts = append(parts, "", m.help.View(m.keymap))
+	}
+
+	return tea.NewView(lipgloss.JoinVertical(lipgloss.Left, parts...))
+}
+
+func (m model) renderList() string {
 	var s strings.Builder
 	start, end := m.paginator.GetSliceBounds(len(m.items))
 
@@ -270,16 +308,66 @@ func (m model) View() string {
 		s.WriteString("  " + m.paginator.View())
 	}
 
+	return s.String()
+}
+
+func (m model) renderSplitView(listContent string) string {
+	listWidth := m.termWidth * 2 / 5
+	detailWidth := m.termWidth - listWidth - 3 // 3 for border
+
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240"))
+
+	// Available height for content (reserve for header + help + border)
+	contentHeight := m.termHeight - 4
+	if m.header != "" {
+		contentHeight -= 1
+	}
+	if m.showHelp {
+		contentHeight -= 2
+	}
+	if contentHeight < 5 {
+		contentHeight = 5
+	}
+
+	listPane := lipgloss.NewStyle().
+		Width(listWidth).
+		Height(contentHeight).
+		Render(listContent)
+
+	detailText := ""
+	if m.detailFunc != nil {
+		detailText = m.detailFunc(m.index)
+	}
+
+	detailPane := borderStyle.
+		Width(detailWidth).
+		Height(contentHeight).
+		PaddingLeft(1).
+		PaddingRight(1).
+		Render(truncateHeight(detailText, contentHeight-2))
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
+
 	var parts []string
 	if m.header != "" {
 		parts = append(parts, m.headerStyle.Render(m.header))
 	}
-	parts = append(parts, s.String())
+	parts = append(parts, body)
 	if m.showHelp {
-		parts = append(parts, "", m.help.View(m.keymap))
+		parts = append(parts, m.help.View(m.keymap))
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+func truncateHeight(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
 
 // Run presents an interactive multi-select list and returns indices of selected items.
@@ -311,4 +399,128 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// FormatTODOListItem formats a TODO for the two-line list display.
+func FormatTODOListItem(title, priority, status, path string) string {
+	line1 := title
+	if priority != "" || status != "" {
+		line1 += "  "
+		if priority != "" {
+			line1 += priority
+		}
+		if status != "" {
+			if priority != "" {
+				line1 += "  "
+			}
+			line1 += status
+		}
+	}
+	if path != "" {
+		line1 += "\n       " + path
+	}
+	return line1
+}
+
+// FormatTODODetail renders the full detail panel content for a TODO.
+func FormatTODODetail(opts DetailOptions) string {
+	var s strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("99"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("33"))
+
+	s.WriteString(titleStyle.Render(opts.Title))
+	s.WriteRune('\n')
+	s.WriteRune('\n')
+
+	if opts.Priority != "" {
+		s.WriteString(labelStyle.Render("Priority: ") + opts.Priority + "\n")
+	}
+	if opts.Status != "" {
+		s.WriteString(labelStyle.Render("Status:   ") + opts.Status + "\n")
+	}
+	if opts.Attempts > 0 {
+		attemptStr := fmt.Sprintf("%d", opts.Attempts)
+		if opts.LastRun != "" {
+			attemptStr += " (last: " + opts.LastRun + ")"
+		}
+		s.WriteString(labelStyle.Render("Attempts: ") + attemptStr + "\n")
+	}
+	if opts.Language != "" {
+		s.WriteString(labelStyle.Render("Language: ") + opts.Language + "\n")
+	}
+	if opts.Branch != "" {
+		s.WriteString(labelStyle.Render("Branch:   ") + opts.Branch + "\n")
+	}
+
+	if opts.PRNumber > 0 {
+		s.WriteRune('\n')
+		s.WriteString(sectionStyle.Render("PR Info") + "\n")
+		s.WriteString(labelStyle.Render("  PR: ") + fmt.Sprintf("#%d", opts.PRNumber) + "\n")
+		if opts.PRAuthor != "" {
+			s.WriteString(labelStyle.Render("  Author: ") + opts.PRAuthor + "\n")
+		}
+	}
+
+	if len(opts.Paths) > 0 {
+		s.WriteRune('\n')
+		s.WriteString(sectionStyle.Render("Paths") + "\n")
+		for _, p := range opts.Paths {
+			s.WriteString("  " + p + "\n")
+		}
+	}
+
+	if len(opts.Tests) > 0 {
+		s.WriteRune('\n')
+		s.WriteString(sectionStyle.Render("Verification Tests") + "\n")
+		for _, t := range opts.Tests {
+			s.WriteString("  • " + t + "\n")
+		}
+	}
+
+	if opts.Implementation != "" {
+		s.WriteRune('\n')
+		s.WriteString(sectionStyle.Render("Implementation") + "\n")
+		lines := strings.Split(opts.Implementation, "\n")
+		if len(lines) > 10 {
+			lines = lines[:10]
+			lines = append(lines, "...")
+		}
+		for _, line := range lines {
+			s.WriteString("  " + line + "\n")
+		}
+	}
+
+	if opts.PRComment != "" {
+		s.WriteRune('\n')
+		s.WriteString(sectionStyle.Render("Review Comment") + "\n")
+		lines := strings.Split(opts.PRComment, "\n")
+		if len(lines) > 8 {
+			lines = lines[:8]
+			lines = append(lines, "...")
+		}
+		for _, line := range lines {
+			s.WriteString("  " + line + "\n")
+		}
+	}
+
+	return s.String()
+}
+
+// DetailOptions holds the data needed to render a TODO detail panel.
+type DetailOptions struct {
+	Title          string
+	Priority       string
+	Status         string
+	Attempts       int
+	LastRun        string
+	Language       string
+	Branch         string
+	PRNumber       int
+	PRAuthor       string
+	PRComment      string
+	Paths          []string
+	Tests          []string
+	Implementation string
 }

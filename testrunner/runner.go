@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -13,10 +15,17 @@ import (
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
 	"github.com/samber/lo"
 )
+
+var exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
+
+func stripExitStatus(s string) string {
+	return strings.TrimSpace(exitStatusRe.ReplaceAllString(s, ""))
+}
 
 // OutputMode controls when stdout/stderr are displayed in test output.
 type OutputMode string
@@ -57,6 +66,7 @@ type RunOptions struct {
 	TodoTemplate  string     `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
 	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
+	Recursive     bool       `json:"recursive,omitempty" flag:"recursive"`                         // Recursively discover test packages in subdirectories
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -149,6 +159,15 @@ func Run(opts RunOptions) (any, error) {
 
 	// Build hierarchical tree from flat test results
 	tree := parsers.BuildTestTree(tests)
+
+	// Discover and run fixture tests (results returned, not printed).
+	// Fixture failures are captured in the tree, not returned as errors,
+	// so that AddNamedCommand still prints the results.
+	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir)
+	if fixtureTree != nil {
+		tree = append(tree, fixtureNodeToTests(fixtureTree)...)
+	}
+
 	return tree, nil
 }
 
@@ -213,7 +232,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		if len(startingPaths) > 0 {
 			packages, err = o.discoverPackagesInPaths(runner, startingPaths)
 		} else {
-			packages, err = runner.DiscoverPackages(o.WorkDir)
+			packages, err = runner.DiscoverPackages(o.WorkDir, o.Recursive)
 		}
 
 		if err != nil {
@@ -382,7 +401,7 @@ func (o *TestOrchestrator) discoverPackagesInPaths(runner runners.Runner, starti
 		}
 		logger.Debugf("Discovering packages in path: %s", fullPath)
 
-		packages, err := runner.DiscoverPackages(fullPath)
+		packages, err := runner.DiscoverPackages(fullPath, o.Recursive)
 		if err != nil {
 			return nil, fmt.Errorf("failed to discover packages in %s: %w", startPath, err)
 		}
@@ -426,10 +445,11 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 	}
 
 	// Set package path and stderr on each test
+	processStderr := stripExitStatus(strings.TrimSpace(result.Stderr))
 	for i := range tests {
 		tests[i].PackagePath = pkgPath
 		if tests[i].Stderr == "" {
-			tests[i].Stderr = strings.TrimSpace(result.Stderr)
+			tests[i].Stderr = processStderr
 		}
 	}
 
@@ -525,6 +545,72 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 // Runner is an alias for TestOrchestrator for backwards compatibility during migration.
 // Deprecated: use TestOrchestrator directly.
 type Runner = TestOrchestrator
+
+func discoverFixtures(workDir string) []string {
+	patterns := []string{
+		filepath.Join(workDir, "fixtures", "**", "*.md"),
+		filepath.Join(workDir, "fixture*.md"),
+		filepath.Join(workDir, "fixture-*.md"),
+	}
+
+	var found []string
+	for _, pattern := range patterns {
+		matches, err := doublestar.FilepathGlob(pattern)
+		if err != nil {
+			continue
+		}
+		found = append(found, matches...)
+	}
+	return lo.Uniq(found)
+}
+
+func runDiscoveredFixtures(workDir string) (*fixtures.FixtureNode, error) {
+	fixtureFiles := discoverFixtures(workDir)
+	if len(fixtureFiles) == 0 {
+		return nil, nil
+	}
+
+	execPath, _ := os.Executable()
+	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+		Paths:          fixtureFiles,
+		WorkDir:        workDir,
+		Logger:         logger.StandardLogger(),
+		ExecutablePath: execPath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fixture runner: %w", err)
+	}
+	return runner.Run()
+}
+
+func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
+	if node.Results != nil {
+		t := parsers.Test{
+			Name:      node.Name,
+			Framework: "fixture",
+			Duration:  node.Results.Duration,
+			Stdout:    node.Results.Stdout,
+			Stderr:    node.Results.Stderr,
+			Failed:    node.Results.Status == task.StatusFAIL || node.Results.Status == task.StatusFailed || node.Results.Status == task.StatusERR,
+			Passed:    node.Results.Status == task.StatusPASS || node.Results.Status == task.StatusSuccess,
+			Message:   node.Results.Error,
+		}
+		return []parsers.Test{t}
+	}
+
+	var children parsers.Tests
+	for _, child := range node.Children {
+		children = append(children, fixtureNodeToTests(child)...)
+	}
+
+	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
+		return []parsers.Test{{
+			Name:     node.Name,
+			Children: children,
+		}}
+	}
+	return children
+}
 
 func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
 	sync := NewTodoSync(o.TodosDir, o.TodoTemplate)

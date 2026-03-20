@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/testrunner"
 )
 

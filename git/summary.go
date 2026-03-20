@@ -12,7 +12,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )
@@ -38,14 +38,14 @@ type SummaryOptions struct {
 
 type windowScopeKey struct {
 	windowStart time.Time
-	scope       ScopeType
+	scope       models.ScopeType
 }
 
 type summaryGroup struct {
 	windowStart  time.Time
 	window       *TimeWindow
-	scope        ScopeType
-	commits      CommitAnalyses
+	scope        models.ScopeType
+	commits      models.CommitAnalyses
 	repositories map[string]struct{}
 	isOther      bool
 }
@@ -61,10 +61,10 @@ type GitSummary struct {
 	From       *time.Time `json:"from,omitempty" tag:"from"`
 	Until      *time.Time `json:"until,omitempty" tag:"until"`
 
-	Scopes       []ScopeType       `json:"scopes,omitempty"`
-	Tech         []ScopeTechnology `json:"tech,omitempty"`
-	Repositories []string          `json:"repositories,omitempty"`
-	Commits      Count             `json:"commits,omitempty"`
+	Scopes       []models.ScopeType       `json:"scopes,omitempty"`
+	Tech         []models.ScopeTechnology `json:"tech,omitempty"`
+	Repositories []string                 `json:"repositories,omitempty"`
+	Commits      Count                    `json:"commits,omitempty"`
 }
 
 type TimeWindow struct {
@@ -127,7 +127,7 @@ func CalculateTimeWindows(from, until time.Time, window GroupByWindow) []TimeWin
 	return windows
 }
 
-func GetWindowForCommit(commit CommitAnalysis, windows []TimeWindow) *TimeWindow {
+func GetWindowForCommit(commit models.CommitAnalysis, windows []TimeWindow) *TimeWindow {
 	commitTime := commit.Author.Date
 	for i := range windows {
 		if (commitTime.Equal(windows[i].Start) || commitTime.After(windows[i].Start)) &&
@@ -138,16 +138,16 @@ func GetWindowForCommit(commit CommitAnalysis, windows []TimeWindow) *TimeWindow
 	return nil
 }
 
-func SelectTopScopes(commits CommitAnalyses, maxCategories int) []ScopeType {
-	scopeCounts := make(map[ScopeType]int)
+func SelectTopScopes(commits models.CommitAnalyses, maxCategories int) []models.ScopeType {
+	scopeCounts := make(map[models.ScopeType]int)
 	for _, commit := range commits {
-		if commit.Scope != ScopeTypeUnknown {
+		if commit.Scope != models.ScopeTypeUnknown {
 			scopeCounts[commit.Scope]++
 		}
 	}
 
 	type scopeCount struct {
-		scope ScopeType
+		scope models.ScopeType
 		count int
 	}
 
@@ -165,7 +165,7 @@ func SelectTopScopes(commits CommitAnalyses, maxCategories int) []ScopeType {
 		limit = maxCategories
 	}
 
-	result := make([]ScopeType, limit)
+	result := make([]models.ScopeType, limit)
 	for i := 0; i < limit; i++ {
 		result[i] = scopes[i].scope
 	}
@@ -175,25 +175,25 @@ func SelectTopScopes(commits CommitAnalyses, maxCategories int) []ScopeType {
 
 // SelectTopScopesPerWindow selects the top N-1 scopes per time window to leave room for "Other"
 // Returns a map of window start times to the top scope types for that window
-func SelectTopScopesPerWindow(grouped map[windowScopeKey]CommitAnalyses, maxCategories int) map[time.Time][]ScopeType {
+func SelectTopScopesPerWindow(grouped map[windowScopeKey]models.CommitAnalyses, maxCategories int) map[time.Time][]models.ScopeType {
 	if maxCategories <= 0 {
-		return make(map[time.Time][]ScopeType)
+		return make(map[time.Time][]models.ScopeType)
 	}
 
 	// Group commits by window and count per scope
-	windowScopeCounts := make(map[time.Time]map[ScopeType]int)
+	windowScopeCounts := make(map[time.Time]map[models.ScopeType]int)
 	for key, commits := range grouped {
 		if _, exists := windowScopeCounts[key.windowStart]; !exists {
-			windowScopeCounts[key.windowStart] = make(map[ScopeType]int)
+			windowScopeCounts[key.windowStart] = make(map[models.ScopeType]int)
 		}
 		windowScopeCounts[key.windowStart][key.scope] += len(commits)
 	}
 
 	// For each window, select top (maxCategories - 1) scopes to leave room for "Other"
-	result := make(map[time.Time][]ScopeType)
+	result := make(map[time.Time][]models.ScopeType)
 	for windowStart, scopeCounts := range windowScopeCounts {
 		type scopeCount struct {
-			scope ScopeType
+			scope models.ScopeType
 			count int
 		}
 
@@ -212,7 +212,7 @@ func SelectTopScopesPerWindow(grouped map[windowScopeKey]CommitAnalyses, maxCate
 			limit = maxCategories - 1
 		}
 
-		topScopes := make([]ScopeType, limit)
+		topScopes := make([]models.ScopeType, limit)
 		for i := 0; i < limit; i++ {
 			topScopes[i] = scopes[i].scope
 		}
@@ -222,11 +222,11 @@ func SelectTopScopesPerWindow(grouped map[windowScopeKey]CommitAnalyses, maxCate
 	return result
 }
 
-func AggregateCommitGroup(commits CommitAnalyses) Count {
+func AggregateCommitGroup(commits models.CommitAnalyses) Count {
 	count := Count{
-		Scopes:      make(map[ScopeType]int),
-		CommitTypes: make(map[CommitType]int),
-		Tech:        make(map[ScopeTechnology]int),
+		Scopes:      make(map[models.ScopeType]int),
+		CommitTypes: make(map[models.CommitType]int),
+		Tech:        make(map[models.ScopeTechnology]int),
 	}
 
 	uniqueFiles := make(map[string]struct{})
@@ -234,11 +234,11 @@ func AggregateCommitGroup(commits CommitAnalyses) Count {
 	for _, commit := range commits {
 		count.Commits++
 
-		if commit.Scope != ScopeTypeUnknown {
+		if commit.Scope != models.ScopeTypeUnknown {
 			count.Scopes[commit.Scope]++
 		}
 
-		if commit.CommitType != CommitTypeUnknown {
+		if commit.CommitType != models.CommitTypeUnknown {
 			count.CommitTypes[commit.CommitType]++
 		}
 
@@ -272,12 +272,12 @@ func formatTimeWindow(window *TimeWindow, windowType GroupByWindow) string {
 	}
 }
 
-func GenerateFallbackDescription(scope ScopeType, commits CommitAnalyses) (string, string) {
+func GenerateFallbackDescription(scope models.ScopeType, commits models.CommitAnalyses) (string, string) {
 	name := fmt.Sprintf("%s changes", scope)
 
-	typeCounts := make(map[CommitType]int)
+	typeCounts := make(map[models.CommitType]int)
 	for _, commit := range commits {
-		if commit.CommitType != CommitTypeUnknown {
+		if commit.CommitType != models.CommitTypeUnknown {
 			typeCounts[commit.CommitType]++
 		}
 	}
@@ -328,7 +328,7 @@ func (gs GitSummaries) Pretty() api.Text {
 
 }
 
-func Summarize(commits CommitAnalyses, options SummaryOptions) (GitSummaries, error) {
+func Summarize(commits models.CommitAnalyses, options SummaryOptions) (GitSummaries, error) {
 	clicky.Infof("Generating git summary with window=%s, maxCategories=%d", options.Window, options.MaxCategories)
 	if len(commits) == 0 {
 		return GitSummaries{}, nil
@@ -339,7 +339,7 @@ func Summarize(commits CommitAnalyses, options SummaryOptions) (GitSummaries, er
 	logger.Debugf("Using time windows: %v", windows)
 
 	// Group commits by (window, scope)
-	grouped := make(map[windowScopeKey]CommitAnalyses)
+	grouped := make(map[windowScopeKey]models.CommitAnalyses)
 
 	for _, commit := range commits {
 		window := GetWindowForCommit(commit, windows)
@@ -349,8 +349,8 @@ func Summarize(commits CommitAnalyses, options SummaryOptions) (GitSummaries, er
 
 		// Treat unknown scopes as "Other" to ensure all commits are included
 		scope := commit.Scope
-		if scope == ScopeTypeUnknown {
-			scope = ScopeTypeOther
+		if scope == models.ScopeTypeUnknown {
+			scope = models.ScopeTypeOther
 		}
 
 		key := windowScopeKey{
@@ -365,7 +365,7 @@ func Summarize(commits CommitAnalyses, options SummaryOptions) (GitSummaries, er
 
 	// Collect all groups for batch processing
 	var groups []summaryGroup
-	otherCommits := make(map[time.Time]CommitAnalyses)
+	otherCommits := make(map[time.Time]models.CommitAnalyses)
 
 	// Collect top scopes and track "Other" commits
 	for key, commits := range grouped {
@@ -435,7 +435,7 @@ func Summarize(commits CommitAnalyses, options SummaryOptions) (GitSummaries, er
 		groups = append(groups, summaryGroup{
 			windowStart:  windowStart,
 			window:       window,
-			scope:        ScopeTypeOther,
+			scope:        models.ScopeTypeOther,
 			commits:      commits,
 			repositories: repositories,
 			isOther:      true,

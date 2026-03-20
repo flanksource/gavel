@@ -2,6 +2,8 @@ package fixtures
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +52,9 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		expectedExitCode = *e.ExitCode
 	}
 	if p.ExitCode != expectedExitCode {
-		return fixture.Failf("expected exit code %d, got %d", expectedExitCode, p.ExitCode)
+		return fixture.Failf("expected exit code %d, got %d\n  stdout: %s\n  stderr: %s",
+			expectedExitCode, p.ExitCode,
+			truncateForError(p.Stdout), truncateForError(p.Stderr))
 	}
 	if e.Stdout != "" && p.Stdout != e.Stdout {
 		return fixture.Failf("expected stdout:\n%s\n got:\n%s", e.Stdout, p.Stdout)
@@ -88,7 +92,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		switch v := output.(type) {
 		case bool:
 			if !v {
-				return fixture.Failf("CEL expression evaluated to false")
+				return fixture.Failf("CEL expression evaluated to false\n  expression: %s\n  variables: %s", e.CEL, formatCELVars(t))
 			}
 		case string:
 			if strings.ToLower(strings.TrimSpace(v)) != "true" {
@@ -156,4 +160,30 @@ func MergeExpectations(inlineAttrs map[string]string, yamlExpects *Expectations)
 	}
 
 	return result
+}
+
+func formatCELVars(vars map[string]any) string {
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, k := range keys {
+		v := fmt.Sprintf("%v", vars[k])
+		if len(v) > 200 {
+			v = v[:200] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func truncateForError(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 200 {
+		return s[:200] + "..."
+	}
+	return s
 }

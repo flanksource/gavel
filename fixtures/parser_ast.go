@@ -530,6 +530,8 @@ func applyFrontMatterToFixture(fixture *FixtureTest, frontMatter *FrontMatter) {
 		return
 	}
 
+	fixture.FrontMatter = *frontMatter
+
 	if frontMatter.Build != "" {
 		fixture.Build = frontMatter.Build
 	}

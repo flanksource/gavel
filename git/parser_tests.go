@@ -1,7 +1,7 @@
 package git
 
 import (
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -10,37 +10,37 @@ var _ = Describe("Commit Parser", func() {
 
 	tests := []struct {
 		message string
-		commit  Commit
+		commit  models.Commit
 	}{
 		{
 			message: "feat(api): subject",
-			commit: Commit{
-				CommitType: CommitTypeFeat,
-				Scope:      ScopeType("api"),
+			commit: models.Commit{
+				CommitType: models.CommitTypeFeat,
+				Scope:      models.ScopeType("api"),
 				Subject:    "subject",
 			},
 		},
 		{
 			message: "fix: subject",
-			commit: Commit{
-				CommitType: CommitTypeFix,
-				Scope:      ScopeTypeUnknown,
+			commit: models.Commit{
+				CommitType: models.CommitTypeFix,
+				Scope:      models.ScopeTypeUnknown,
 				Subject:    "subject",
 			},
 		},
 		{
 			message: "chore(deps): update dependencies",
-			commit: Commit{
-				CommitType: CommitTypeChore,
-				Scope:      ScopeType("deps"),
+			commit: models.Commit{
+				CommitType: models.CommitTypeChore,
+				Scope:      models.ScopeType("deps"),
 				Subject:    "update dependencies",
 			},
 		},
 		{
 			message: "    fix: corect;y scope fsgroup instruction (#22738)",
-			commit: Commit{
-				CommitType: CommitTypeFix,
-				Scope:      ScopeTypeUnknown,
+			commit: models.Commit{
+				CommitType: models.CommitTypeFix,
+				Scope:      models.ScopeTypeUnknown,
 				Subject:    "corect;y scope fsgroup instruction",
 				Reference:  "22738",
 			},

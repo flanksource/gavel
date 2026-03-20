@@ -11,7 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
 )
@@ -24,7 +24,7 @@ type AmendCommitsOptions struct {
 }
 
 type CommitReview struct {
-	Commit       CommitAnalysis
+	Commit       models.CommitAnalysis
 	Score        int
 	SuggestedMsg string
 	UserDecision string // "accept", "skip", "cancel"
@@ -91,7 +91,7 @@ func AmendCommits(ctx context.Context, options AmendCommitsOptions) error {
 		return fmt.Errorf("failed to analyze commits: %w", err)
 	}
 
-	analyses = lo.Filter(analyses, func(a CommitAnalysis, _ int) bool {
+	analyses = lo.Filter(analyses, func(a models.CommitAnalysis, _ int) bool {
 		return a.IsAnalyzed()
 	})
 	// Review each flagged commit
@@ -169,7 +169,7 @@ func validateRef(ref string) error {
 	return cmd.Run()
 }
 
-func getCommitRange(baseRef string, options HistoryOptions) ([]Commit, error) {
+func getCommitRange(baseRef string, options HistoryOptions) ([]models.Commit, error) {
 	// Get commits in range baseRef..HEAD
 	cmd := exec.Command("git", "rev-list", fmt.Sprintf("%s..HEAD", baseRef))
 	cmd.Dir = options.Path
@@ -181,14 +181,14 @@ func getCommitRange(baseRef string, options HistoryOptions) ([]Commit, error) {
 
 	commitHashes := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(commitHashes) == 1 && commitHashes[0] == "" {
-		return []Commit{}, nil
+		return []models.Commit{}, nil
 	}
 
 	// Get full commit info
 	return GetCommitHistory(options)
 }
 
-func displayCommitReview(index, total int, commit CommitAnalysis, score int, suggestedMsg string) {
+func displayCommitReview(index, total int, commit models.CommitAnalysis, score int, suggestedMsg string) {
 	separator := strings.Repeat("─", 60)
 
 	fmt.Fprintf(os.Stderr, "\n%s\n", separator)
@@ -239,7 +239,7 @@ func displayCommitReview(index, total int, commit CommitAnalysis, score int, sug
 	fmt.Fprintf(os.Stderr, "\n")
 }
 
-func formatCommitMessage(analysis CommitAnalysis) string {
+func formatCommitMessage(analysis models.CommitAnalysis) string {
 	var parts []string
 
 	// First line: type(scope): subject
@@ -288,171 +288,7 @@ func promptUserDecision() (string, error) {
 	}
 }
 
-func executeRebase(baseRef string, reviews []CommitReview) error {
-	if 1 == 1 {
-		return fmt.Errorf("wait")
-	}
-	// Create a map of hash -> new message for accepted commits
-	newMessages := make(map[string]string)
-	for _, review := range reviews {
-		if review.UserDecision == "accept" {
-			newMessages[review.Commit.Hash] = review.SuggestedMsg
-		}
-	}
-
-	if len(newMessages) == 0 {
-		return nil
-	}
-
-	// Generate rebase todo script
-	todoScript, err := generateRebaseTodo(baseRef, newMessages)
-	if err != nil {
-		return fmt.Errorf("failed to generate rebase todo: %w", err)
-	}
-
-	// Create temporary files for the rebase process
-	todoFile, err := os.CreateTemp("", "git-rebase-todo-*")
-	if err != nil {
-		return fmt.Errorf("failed to create todo file: %w", err)
-	}
-	defer func() {
-		_ = os.Remove(todoFile.Name())
-	}()
-
-	if _, err := todoFile.WriteString(todoScript); err != nil {
-		return fmt.Errorf("failed to write todo file: %w", err)
-	}
-	if err := todoFile.Close(); err != nil {
-		return fmt.Errorf("failed to close todo file: %w", err)
-	}
-
-	// Create editor script that will provide commit messages
-	editorScript, err := createEditorScript(newMessages)
-	if err != nil {
-		return fmt.Errorf("failed to create editor script: %w", err)
-	}
-	defer func() {
-		_ = os.Remove(editorScript)
-	}()
-
-	// Execute git rebase
-	cmd := exec.Command("git", "rebase", "-i", baseRef)
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("GIT_SEQUENCE_EDITOR=cp %s", todoFile.Name()),
-		fmt.Sprintf("GIT_EDITOR=%s", editorScript),
-	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		// Check if rebase is in progress
-		if isRebaseInProgress() {
-			return fmt.Errorf("rebase failed - conflicts detected. Resolve conflicts and run 'git rebase --continue' or 'git rebase --abort'")
-		}
-		return fmt.Errorf("rebase failed: %w", err)
-	}
-
-	clicky.Infof("✓ Successfully rebased %d commits", len(newMessages))
-	return nil
-}
-
-func generateRebaseTodo(baseRef string, newMessages map[string]string) (string, error) {
-	// Get list of commits in range
-	cmd := exec.Command("git", "log", "--reverse", "--format=%H %s", fmt.Sprintf("%s..HEAD", baseRef))
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-
-	var todoLines []string
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
-			continue
-		}
-
-		hash := parts[0]
-		subject := parts[1]
-
-		// Check if this commit should be reworded
-		if _, shouldReword := newMessages[hash]; shouldReword {
-			todoLines = append(todoLines, fmt.Sprintf("reword %s %s", hash[:8], subject))
-		} else {
-			todoLines = append(todoLines, fmt.Sprintf("pick %s %s", hash[:8], subject))
-		}
-	}
-
-	return strings.Join(todoLines, "\n") + "\n", nil
-}
-
-func createEditorScript(newMessages map[string]string) (string, error) {
-	// Create a script that will replace commit messages
-	// This script is invoked by git for each "reword" command
-
-	scriptFile, err := os.CreateTemp("", "git-editor-*")
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		_ = scriptFile.Close()
-	}()
-
-	// Write the editor script
-	script := `#!/bin/bash
-# Git editor script for amending commit messages
-
-COMMIT_MSG_FILE="$1"
-
-# Get the current commit hash
-CURRENT_HASH=$(git rev-parse HEAD)
-
-# Check each hash we have a message for
-`
-
-	for hash, msg := range newMessages {
-		escapedMsg := strings.ReplaceAll(msg, `"`, `\"`)
-		escapedMsg = strings.ReplaceAll(escapedMsg, "\n", "\\n")
-		script += fmt.Sprintf(`
-if [ "$CURRENT_HASH" = "%s" ]; then
-    echo -e "%s" > "$COMMIT_MSG_FILE"
-    exit 0
-fi
-`, hash, escapedMsg)
-	}
-
-	script += `
-# If we don't have a message for this commit, leave it unchanged
-exit 0
-`
-
-	if _, err := scriptFile.WriteString(script); err != nil {
-		return "", err
-	}
-
-	scriptPath := scriptFile.Name()
-
-	// Make script executable
-	if err := os.Chmod(scriptPath, 0755); err != nil {
-		return "", err
-	}
-
-	return scriptPath, nil
-}
-
-func isRebaseInProgress() bool {
-	// Check if .git/rebase-merge or .git/rebase-apply exists
-	if _, err := os.Stat(".git/rebase-merge"); err == nil {
-		return true
-	}
-	if _, err := os.Stat(".git/rebase-apply"); err == nil {
-		return true
-	}
-	return false
+func executeRebase(_ string, _ []CommitReview) error {
+	// FIXME: rebase not yet implemented
+	return fmt.Errorf("rebase not yet implemented")
 }

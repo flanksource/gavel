@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
 // DefaultGitRepositoryManager implements GitRepositoryManager
 type DefaultGitRepositoryManager struct {
 	cacheDir        string
 	repositories    map[string]*repositoryEntry
-	versionCache    map[string]*CacheEntry // "repo:alias" -> resolved_version
+	versionCache    map[string]*models.CacheEntry // "repo:alias" -> resolved_version
 	mutex           sync.RWMutex
 	cloneManager    CloneManager
 	versionResolver VersionResolver
@@ -37,7 +37,7 @@ func NewGitRepositoryManager(cacheDir string) GitRepositoryManager {
 	manager := &DefaultGitRepositoryManager{
 		cacheDir:     cacheDir,
 		repositories: make(map[string]*repositoryEntry),
-		versionCache: make(map[string]*CacheEntry),
+		versionCache: make(map[string]*models.CacheEntry),
 	}
 
 	manager.cloneManager = NewCloneManager()
@@ -104,7 +104,7 @@ func (gm *DefaultGitRepositoryManager) ResolveVersionAlias(gitURL, alias string)
 			entry.AccessedAt = time.Now()
 			gm.mutex.RUnlock()
 			if entry.Error != nil {
-				return "", entry.Error.(error)
+				return "", entry.Error
 			}
 			return entry.Value.(string), nil
 		}
@@ -116,7 +116,7 @@ func (gm *DefaultGitRepositoryManager) ResolveVersionAlias(gitURL, alias string)
 
 	// Cache result
 	gm.mutex.Lock()
-	gm.versionCache[cacheKey] = &CacheEntry{
+	gm.versionCache[cacheKey] = &models.CacheEntry{
 		Value:      resolved,
 		Timestamp:  time.Now(),
 		AccessedAt: time.Now(),
@@ -218,7 +218,7 @@ func (gm *DefaultGitRepositoryManager) Close() error {
 
 	// Clear the repository and cache maps
 	gm.repositories = make(map[string]*repositoryEntry)
-	gm.versionCache = make(map[string]*CacheEntry)
+	gm.versionCache = make(map[string]*models.CacheEntry)
 
 	// Optionally clean up the entire cache directory if it's temporary
 	// This is commented out as it might be too aggressive

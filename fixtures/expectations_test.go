@@ -1,9 +1,12 @@
 package fixtures
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/flanksource/clicky/exec"
+	"github.com/flanksource/clicky/task"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -166,6 +169,72 @@ func TestParseInlineExpectations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCELFailureMessageIncludesContext(t *testing.T) {
+	exitCode := 0
+	exp := Expectations{
+		ExitCode: &exitCode,
+		CEL:      "stdout.contains('hello')",
+	}
+	fixture := FixtureResult{
+		Name:     "test-cel",
+		Status:   "pending",
+		Metadata: map[string]interface{}{},
+		Test: FixtureTest{
+			Name: "test-cel",
+		},
+	}
+	result := exp.Evaluate(fixture, exec.ExecResult{
+		Stdout:   "goodbye world",
+		ExitCode: 0,
+	})
+
+	assert.Equal(t, task.StatusFAIL, result.Status)
+	assert.Contains(t, result.Error, "CEL expression evaluated to false")
+	assert.Contains(t, result.Error, "stdout.contains('hello')")
+	assert.Contains(t, result.Error, "stdout=goodbye world")
+}
+
+func TestExitCodeFailureIncludesOutput(t *testing.T) {
+	exitCode := 0
+	exp := Expectations{ExitCode: &exitCode}
+	fixture := FixtureResult{
+		Name:     "test-exit-code",
+		Status:   "pending",
+		Metadata: map[string]interface{}{},
+		Test:     FixtureTest{Name: "test-exit-code"},
+	}
+	result := exp.Evaluate(fixture, exec.ExecResult{
+		Stdout:   "some output here",
+		Stderr:   "error: something went wrong",
+		ExitCode: 1,
+	})
+
+	assert.Equal(t, task.StatusFAIL, result.Status)
+	assert.Contains(t, result.Error, "expected exit code 0, got 1")
+	assert.Contains(t, result.Error, "some output here")
+	assert.Contains(t, result.Error, "error: something went wrong")
+}
+
+func TestTruncateForError(t *testing.T) {
+	short := "hello"
+	assert.Equal(t, "hello", truncateForError(short))
+
+	long := strings.Repeat("x", 300)
+	result := truncateForError(long)
+	assert.Equal(t, 203, len(result)) // 200 + "..."
+	assert.True(t, strings.HasSuffix(result, "..."))
+}
+
+func TestFormatCELVarsLimit(t *testing.T) {
+	vars := map[string]any{
+		"stdout": strings.Repeat("a", 250),
+	}
+	result := formatCELVars(vars)
+	assert.Contains(t, result, "stdout=")
+	assert.Contains(t, result, "...")
+	assert.Less(t, len(result), 250)
 }
 
 // Helper functions

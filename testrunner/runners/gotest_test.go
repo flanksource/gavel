@@ -54,7 +54,7 @@ func TestGoTestDiscoverPackages(t *testing.T) {
 	}
 
 	runner := NewGoTest(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir)
+	packages, err := runner.DiscoverPackages(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -68,6 +68,45 @@ func TestGoTestDiscoverPackages(t *testing.T) {
 		if !strings.HasPrefix(pkg, "./") {
 			t.Errorf("expected relative path, got %s", pkg)
 		}
+	}
+}
+
+func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create test file in root and in a subdirectory
+	if err := os.WriteFile(filepath.Join(tmpDir, "root_test.go"), []byte("package root\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(tmpDir, "sub")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "sub_test.go"), []byte("package sub\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewGoTest(tmpDir)
+
+	// Non-recursive should only find root
+	packages, err := runner.DiscoverPackages(tmpDir, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 1 {
+		t.Fatalf("expected 1 package, got %d: %v", len(packages), packages)
+	}
+	if packages[0] != "./." {
+		t.Errorf("expected './.', got %s", packages[0])
+	}
+
+	// Recursive should find both
+	packages, err = runner.DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 2 {
+		t.Fatalf("expected 2 packages, got %d: %v", len(packages), packages)
 	}
 }
 
@@ -214,7 +253,7 @@ func TestExample(t *testing.T) {}
 	}
 
 	runner := NewGoTest(tmpDir)
-	packages, err := runner.DiscoverPackages(tmpDir)
+	packages, err := runner.DiscoverPackages(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

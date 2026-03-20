@@ -8,7 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/ghodss/yaml"
 )
@@ -16,7 +16,7 @@ import (
 //go:embed ai-commit-analyze.md
 var commitAnalysisPrompt string
 
-func AnalyzeWithAI(ctx context.Context, commit CommitAnalysis, agent ai.Agent, opts AnalyzeOptions) (CommitAnalysis, error) {
+func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, opts AnalyzeOptions) (models.CommitAnalysis, error) {
 
 	if opts.MinScore > 0 && commit.QualityScore >= opts.MinScore {
 		return commit, nil
@@ -41,7 +41,7 @@ func AnalyzeWithAI(ctx context.Context, commit CommitAnalysis, agent ai.Agent, o
 		return commit, fmt.Errorf("AI prompt execution failed: %w", err)
 	}
 
-	aiAnalysis := AIAnalysisOutput{}
+	aiAnalysis := models.AIAnalysisOutput{}
 
 	if strings.HasPrefix(resp.Result, "```yaml") {
 		// Trim code block markers if present

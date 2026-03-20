@@ -4,13 +4,13 @@ import (
 	"context"
 
 	"github.com/flanksource/clicky/ai"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
 // Example usage of Summarize with AI integration
 func ExampleSummarize() {
 	// Get commits from analyzer
-	commits := CommitAnalyses{} // populated from git analyzer
+	commits := models.CommitAnalyses{} // populated from git analyzer
 
 	// Option 1: Use fallback descriptions (no AI)
 	summariesBasic, _ := Summarize(commits, SummaryOptions{

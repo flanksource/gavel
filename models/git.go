@@ -42,7 +42,7 @@ func (a Author) Matches(filter string) bool {
 	if negated {
 		return false
 	}
-	matched, negated = collections.MatchItem(a.Email, filter)
+	matched, _ = collections.MatchItem(a.Email, filter)
 	return matched
 }
 

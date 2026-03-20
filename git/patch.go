@@ -4,21 +4,21 @@ import (
 	"fmt"
 	"strings"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
 // ParsePatch takes a git patch string and returns a slice of CommitChange
 // representing the changes made in the commit.
-func ParsePatch(patch string) ([]CommitChange, error) {
+func ParsePatch(patch string) ([]models.CommitChange, error) {
 	if patch == "" {
 		return nil, nil
 	}
 
 	lines := strings.Split(patch, "\n")
-	var changes []CommitChange
+	var changes []models.CommitChange
 	var currentFile string
 	var adds, dels int
-	var changeType SourceChangeType
+	var changeType models.SourceChangeType
 	var currentLine int
 
 	// Pre-allocate linesChanged with upper bound to avoid reallocations
@@ -29,12 +29,12 @@ func ParsePatch(patch string) ([]CommitChange, error) {
 
 		if strings.HasPrefix(line, "diff --git") {
 			if currentFile != "" {
-				change := CommitChange{
+				change := models.CommitChange{
 					File:         currentFile,
 					Type:         changeType,
 					Adds:         adds,
 					Dels:         dels,
-					LinesChanged: NewLineRanges(linesChanged),
+					LinesChanged: models.NewLineRanges(linesChanged),
 				}
 				changes = append(changes, change)
 			}
@@ -58,20 +58,20 @@ func ParsePatch(patch string) ([]CommitChange, error) {
 			adds, dels = 0, 0
 			linesChanged = linesChanged[:0] // Reset length while keeping capacity
 			currentLine = 0
-			changeType = SourceChangeTypeModified
+			changeType = models.SourceChangeTypeModified
 		} else if strings.HasPrefix(line, "new file") {
-			changeType = SourceChangeTypeAdded
+			changeType = models.SourceChangeTypeAdded
 		} else if strings.HasPrefix(line, "deleted file") {
-			changeType = SourceChangeTypeDeleted
+			changeType = models.SourceChangeTypeDeleted
 		} else if strings.HasPrefix(line, "rename from") {
-			changeType = SourceChangeTypeRenamed
+			changeType = models.SourceChangeTypeRenamed
 		} else if strings.HasPrefix(line, "@@") {
 			// Parse hunk header to get starting line number
 			// Format: @@ -old_start,old_count +new_start,new_count @@
 			parts := strings.Fields(line)
 			if len(parts) >= 3 {
 				newRange := strings.TrimPrefix(parts[2], "+")
-				fmt.Sscanf(newRange, "%d", &currentLine)
+				_, _ = fmt.Sscanf(newRange, "%d", &currentLine)
 			}
 		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			adds++
@@ -91,12 +91,12 @@ func ParsePatch(patch string) ([]CommitChange, error) {
 	}
 
 	if currentFile != "" {
-		changes = append(changes, CommitChange{
+		changes = append(changes, models.CommitChange{
 			File:         currentFile,
 			Type:         changeType,
 			Adds:         adds,
 			Dels:         dels,
-			LinesChanged: NewLineRanges(linesChanged),
+			LinesChanged: models.NewLineRanges(linesChanged),
 		})
 	}
 

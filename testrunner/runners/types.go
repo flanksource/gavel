@@ -18,8 +18,9 @@ type Runner interface {
 	// Detect checks if this framework is used in the given working directory.
 	Detect(workDir string) (bool, error)
 
-	// DiscoverPackages returns all packages with tests for this framework.
-	DiscoverPackages(workDir string) ([]string, error)
+	// DiscoverPackages returns packages with tests for this framework.
+	// When recursive is true, it walks subdirectories; otherwise only the given directory.
+	DiscoverPackages(workDir string, recursive bool) ([]string, error)
 
 	// PackageHasTests checks if a package has tests for this framework.
 	PackageHasTests(packagePath string) (bool, error)

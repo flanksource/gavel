@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/ai"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
@@ -22,7 +22,7 @@ type AISummaryOutput struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
-func GenerateGroupSummary(ctx context.Context, scope ScopeType, window string, commits CommitAnalyses, agent ai.Agent) (string, string, error) {
+func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent) (string, string, error) {
 	if summaryGroupPrompt == "" {
 		return "", "", fmt.Errorf("AI summary group prompt template is empty")
 	}

@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flanksource/gavel/repomap"
+	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
 )
 

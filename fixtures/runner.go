@@ -55,41 +55,33 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}, nil
 }
 
-// Run executes the fixture tests
-func (r *Runner) Run() error {
-	// Parse fixture files
+// Run executes the fixture tests and returns the result tree.
+// The caller is responsible for formatting/printing the output.
+func (r *Runner) Run() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
-		return fmt.Errorf("failed to parse fixture files: %w", err)
+		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
 	}
 
-	// Apply filter if specified
 	if r.options.Filter != "" {
 		r.filterTests()
 	}
 
 	if len(r.fixtures) == 0 {
-		return fmt.Errorf("no fixtures found")
+		return nil, fmt.Errorf("no fixtures found")
 	}
 
-	// Execute fixtures using TaskManager
 	results, err := r.executeFixtures()
 	if err != nil {
-		return fmt.Errorf("failed to execute fixtures: %w", err)
+		return nil, fmt.Errorf("failed to execute fixtures: %w", err)
 	}
 
 	clicky.WaitForGlobalCompletion()
 
-	// Format children directly without root "Fixtures()" section
-	for _, child := range r.tree.Children {
-		fmt.Println(clicky.MustFormat(*child))
-	}
-
-	// Return error if any tests failed
 	if results.Summary.Failed > 0 {
-		return fmt.Errorf("fixture tests failed")
+		return r.tree, fmt.Errorf("fixture tests failed")
 	}
 
-	return nil
+	return r.tree, nil
 }
 
 // parseFixtureFiles parses all fixture files from the provided paths and builds tree structure
@@ -230,6 +222,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	}
 
 	r.tree.Stats = lo.ToPtr(r.tree.GetStats())
+	results.Summary = *r.tree.Stats
 
 	// Prune empty sections from the tree
 	r.tree.PruneEmptySections()
@@ -284,6 +277,15 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 
 // executeFixture runs a single fixture test
 func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest) (FixtureResult, error) {
+	if reason := fixture.ShouldSkip(); reason != "" {
+		return FixtureResult{
+			Name:   fixture.Name,
+			Status: task.StatusSKIP,
+			Test:   fixture,
+			Error:  reason,
+		}, nil
+	}
+
 	// Get the appropriate fixture type from registry
 	fixtureType, err := DefaultRegistry.GetForFixture(fixture)
 	if err != nil {
