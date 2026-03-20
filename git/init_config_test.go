@@ -22,9 +22,9 @@ func TestInitConfig_CreatesDefaultFile(t *testing.T) {
 
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "filter_sets:")
-	assert.Contains(t, string(data), "bots:")
-	assert.Contains(t, string(data), "noise:")
+	assert.Contains(t, string(data), "extends:")
+	assert.Contains(t, string(data), "preset:bots")
+	assert.Contains(t, string(data), "preset:noise")
 }
 
 func TestInitConfig_PreservesExistingFile(t *testing.T) {
