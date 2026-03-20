@@ -277,7 +277,7 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 
 // executeFixture runs a single fixture test
 func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest) (FixtureResult, error) {
-	if reason := fixture.ShouldSkip(); reason != "" {
+	if reason := fixture.FrontMatter.ShouldSkip(); reason != "" {
 		return FixtureResult{
 			Name:   fixture.Name,
 			Status: task.StatusSKIP,

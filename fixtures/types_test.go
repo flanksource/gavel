@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/flanksource/clicky/task"
@@ -55,4 +56,69 @@ func TestStatsHasFailuresWithStatusFAIL(t *testing.T) {
 	stats := result.Stats()
 	assert.True(t, stats.HasFailures())
 	assert.False(t, stats.IsOK())
+}
+
+func TestFrontMatterShouldSkip(t *testing.T) {
+	tests := []struct {
+		name     string
+		fm       FrontMatter
+		wantSkip bool
+	}{
+		{
+			name:     "no constraints",
+			fm:       FrontMatter{},
+			wantSkip: false,
+		},
+		{
+			name:     "matching os",
+			fm:       FrontMatter{OS: runtime.GOOS},
+			wantSkip: false,
+		},
+		{
+			name:     "non-matching os",
+			fm:       FrontMatter{OS: "plan9"},
+			wantSkip: true,
+		},
+		{
+			name:     "negated os excludes current",
+			fm:       FrontMatter{OS: "!" + runtime.GOOS},
+			wantSkip: true,
+		},
+		{
+			name:     "negated os allows other",
+			fm:       FrontMatter{OS: "!plan9"},
+			wantSkip: false,
+		},
+		{
+			name:     "matching arch",
+			fm:       FrontMatter{Arch: runtime.GOARCH},
+			wantSkip: false,
+		},
+		{
+			name:     "non-matching arch",
+			fm:       FrontMatter{Arch: "mips"},
+			wantSkip: true,
+		},
+		{
+			name:     "skip command returns true",
+			fm:       FrontMatter{Skip: "true"},
+			wantSkip: true,
+		},
+		{
+			name:     "skip command returns false",
+			fm:       FrontMatter{Skip: "false"},
+			wantSkip: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := tt.fm.ShouldSkip()
+			if tt.wantSkip {
+				assert.NotEmpty(t, reason)
+			} else {
+				assert.Empty(t, reason)
+			}
+		})
+	}
 }
