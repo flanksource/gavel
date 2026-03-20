@@ -4,33 +4,28 @@ import (
 	"regexp"
 	"strings"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
 var commitTypeScopeRegex = regexp.MustCompile(`^(\w+)(\(([^)]+)\))?:\s*(.+)$`)
 var commitTypeRegex = regexp.MustCompile(`^(\w+)\s+:\s*(.+)$`)
 
 // parses a conventional commit subject line (e.g. feat(scope): subject) into its type, scope, and subject components
-func parseCommitTypeAndScope(subject string) (CommitType, ScopeType, string) {
+func parseCommitTypeAndScope(subject string) (models.CommitType, models.ScopeType, string) {
 	matches := commitTypeScopeRegex.FindStringSubmatch(subject)
 	if len(matches) == 5 {
-		commitType := CommitType(matches[1])
-		scope := ScopeType(matches[3])
+		commitType := models.CommitType(matches[1])
+		scope := models.ScopeType(matches[3])
 		subject := matches[4]
 		return commitType, scope, subject
 	}
 	matches = commitTypeRegex.FindStringSubmatch(subject)
 	if len(matches) == 3 {
-		commitType := CommitType(matches[1])
+		commitType := models.CommitType(matches[1])
 		subject := matches[2]
-		return commitType, ScopeTypeUnknown, subject
+		return commitType, models.ScopeTypeUnknown, subject
 	}
-	return CommitTypeUnknown, ScopeTypeUnknown, subject
-
-}
-
-func trim(s string) string {
-	return strings.TrimSpace(s)
+	return models.CommitTypeUnknown, models.ScopeTypeUnknown, subject
 }
 
 var refRegex = regexp.MustCompile(`#(\d+)`)

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -22,7 +22,7 @@ type DefaultGitRepository struct {
 	gitURL       string
 	repoPath     string
 	gitRepo      *git.Repository
-	clones       map[string]CloneInfo // version-depth -> CloneInfo
+	clones       map[string]models.CloneInfo // version-depth -> models.CloneInfo
 	mutex        sync.RWMutex
 	cloneManager CloneManager
 	lastFetch    time.Time
@@ -33,7 +33,7 @@ func NewDefaultGitRepository(gitURL, repoPath string, cloneManager CloneManager)
 	repo := &DefaultGitRepository{
 		gitURL:       gitURL,
 		repoPath:     repoPath,
-		clones:       make(map[string]CloneInfo),
+		clones:       make(map[string]models.CloneInfo),
 		cloneManager: cloneManager,
 	}
 
@@ -165,7 +165,7 @@ func (r *DefaultGitRepository) GetWorktree(version string, depth int) (string, e
 	}
 
 	// Track the new clone
-	r.clones[cacheKey] = CloneInfo{
+	r.clones[cacheKey] = models.CloneInfo{
 		Path:      clonePath,
 		Version:   version,
 		Depth:     depth,
@@ -183,10 +183,8 @@ func (r *DefaultGitRepository) ResolveVersion(versionAlias string) (string, erro
 		return versionAlias, nil
 	}
 
-	// Ensure repository is up to date
-	if err := r.Fetch(context.Background()); err != nil {
-		// Continue with stale data if fetch fails
-	}
+	// Ensure repository is up to date (continue with stale data if fetch fails)
+	_ = r.Fetch(context.Background())
 
 	switch {
 	case versionAlias == "HEAD" || versionAlias == "latest":
@@ -203,7 +201,7 @@ func (r *DefaultGitRepository) ResolveVersion(versionAlias string) (string, erro
 }
 
 // GetCommitsBetween returns commits between two versions
-func (r *DefaultGitRepository) GetCommitsBetween(from, to string) ([]Commit, error) {
+func (r *DefaultGitRepository) GetCommitsBetween(from, to string) ([]models.Commit, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
@@ -226,7 +224,7 @@ func (r *DefaultGitRepository) GetCommitsBetween(from, to string) ([]Commit, err
 }
 
 // GetVersionInfo returns commit information for a specific version
-func (r *DefaultGitRepository) GetVersionInfo(version string) (*VersionInfo, error) {
+func (r *DefaultGitRepository) GetVersionInfo(version string) (*models.VersionInfo, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
@@ -244,7 +242,7 @@ func (r *DefaultGitRepository) GetVersionInfo(version string) (*VersionInfo, err
 		return nil, fmt.Errorf("failed to get commit for version %s: %w", version, err)
 	}
 
-	return &VersionInfo{
+	return &models.VersionInfo{
 		CommitSHA:  commit.Hash.String(),
 		CommitDate: commit.Committer.When,
 	}, nil
@@ -359,11 +357,11 @@ func (r *DefaultGitRepository) FindLastGARelease() (string, error) {
 }
 
 // ListWorktrees returns all active clones for this repository
-func (r *DefaultGitRepository) ListWorktrees() ([]CloneInfo, error) {
+func (r *DefaultGitRepository) ListWorktrees() ([]models.CloneInfo, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	var clones []CloneInfo
+	var clones []models.CloneInfo
 	for _, info := range r.clones {
 		clones = append(clones, info)
 	}
@@ -559,8 +557,8 @@ func (r *DefaultGitRepository) resolveRef(ref string) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, fmt.Errorf("reference %s not found", ref)
 }
 
-func (r *DefaultGitRepository) getCommitList(fromHash, toHash plumbing.Hash) ([]Commit, error) {
-	var commits []Commit
+func (r *DefaultGitRepository) getCommitList(fromHash, toHash plumbing.Hash) ([]models.Commit, error) {
+	var commits []models.Commit
 
 	// Get commit iterator
 	iter, err := r.gitRepo.Log(&git.LogOptions{From: toHash})
@@ -578,12 +576,12 @@ func (r *DefaultGitRepository) getCommitList(fromHash, toHash plumbing.Hash) ([]
 		// Create commit using NewCommit to parse message properly
 		newCommit := NewCommit(commit.Message)
 		newCommit.Hash = commit.Hash.String()
-		newCommit.Author = Author{
+		newCommit.Author = models.Author{
 			Name:  commit.Author.Name,
 			Email: commit.Author.Email,
 			Date:  commit.Author.When,
 		}
-		newCommit.Committer = Author{
+		newCommit.Committer = models.Author{
 			Name:  commit.Committer.Name,
 			Email: commit.Committer.Email,
 			Date:  commit.Committer.When,

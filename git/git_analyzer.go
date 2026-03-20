@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/task"
@@ -19,8 +19,8 @@ import (
 	"github.com/flanksource/gavel/git/kubernetes"
 )
 
-func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) (CommitAnalysis, error) {
-	out := CommitAnalysis{
+func AnalyzeCommit(ctx *AnalyzerContext, commit models.Commit, options AnalyzeOptions) (models.CommitAnalysis, error) {
+	out := models.CommitAnalysis{
 		Commit:   commit,
 		Original: commit,
 	}
@@ -75,10 +75,10 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) 
 	}
 
 	// Aggregate scope from changes if commit doesn't have one
-	if out.Scope == ScopeTypeUnknown && len(out.Changes) > 0 {
-		scopeCounts := make(map[ScopeType]int)
+	if out.Scope == models.ScopeTypeUnknown && len(out.Changes) > 0 {
+		scopeCounts := make(map[models.ScopeType]int)
 		for _, scope := range out.GetScopes() {
-			if scope != ScopeTypeUnknown {
+			if scope != models.ScopeTypeUnknown {
 				scopeCounts[scope]++
 			}
 		}
@@ -88,20 +88,20 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) 
 	}
 
 	// Aggregate tech from all changes
-	techSet := make(map[ScopeTechnology]struct{}, len(out.Changes))
+	techSet := make(map[models.ScopeTechnology]struct{}, len(out.Changes))
 	for _, change := range out.Changes {
 		for _, tech := range change.Tech {
 			techSet[tech] = struct{}{}
 		}
 	}
 	if len(techSet) > 0 {
-		out.Tech = make([]ScopeTechnology, 0, len(techSet))
+		out.Tech = make([]models.ScopeTechnology, 0, len(techSet))
 		for tech := range techSet {
 			out.Tech = append(out.Tech, tech)
 		}
 	}
 
-	out.QualityScore = GetQualityScore(out)
+	out.QualityScore = models.GetQualityScore(out)
 
 	// Pre-compute metrics for performance
 	for _, change := range out.Changes {
@@ -116,7 +116,7 @@ func AnalyzeCommit(ctx *AnalyzerContext, commit Commit, options AnalyzeOptions) 
 	return out, err
 }
 
-func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []Commit, options AnalyzeOptions) (CommitAnalyses, error) {
+func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options AnalyzeOptions) (models.CommitAnalyses, error) {
 
 	if options.AITimeout.Milliseconds() == 0 {
 		options.AITimeout = 2 * time.Minute
@@ -128,7 +128,7 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []Commit, options Analyz
 		logger.Warnf("Failed to load .gitanalyze.yaml: %v", err)
 	}
 
-	batch := task.Batch[CommitAnalysis]{
+	batch := task.Batch[models.CommitAnalysis]{
 		Name:        "Analyze Commit History",
 		ItemTimeout: options.AITimeout,
 	}
@@ -148,16 +148,16 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []Commit, options Analyz
 
 	for _, commit := range commits {
 		commit := commit
-		batch.Items = append(batch.Items, func(logger logger.Logger) (CommitAnalysis, error) {
+		batch.Items = append(batch.Items, func(logger logger.Logger) (models.CommitAnalysis, error) {
 			logger.Infof("analyzing %s with timeout %v", commit.PrettyShort().ANSI(), options.AITimeout)
 			analysis, err := AnalyzeCommit(ctx, commit, options)
 			if err != nil {
-				return CommitAnalysis{}, fmt.Errorf("failed to analyze commit %s: %w", commit.Hash, err)
+				return models.CommitAnalysis{}, fmt.Errorf("failed to analyze commit %s: %w", commit.Hash, err)
 			}
 			return analysis, nil
 		})
 	}
-	results := make(CommitAnalyses, 0, len(commits))
+	results := make(models.CommitAnalyses, 0, len(commits))
 	var err error
 	for item := range batch.Run() {
 		results = append(results, item.Value)
@@ -185,8 +185,8 @@ func ReadFileAtCommit(filter HistoryOptions, commit, path string) (string, error
 }
 
 // findMostCommonScope returns the scope that appears most frequently in the given counts
-func findMostCommonScope(scopeCounts map[ScopeType]int) ScopeType {
-	var mostCommon ScopeType
+func findMostCommonScope(scopeCounts map[models.ScopeType]int) models.ScopeType {
+	var mostCommon models.ScopeType
 	maxCount := 0
 	for scope, count := range scopeCounts {
 		if count > maxCount {
@@ -198,8 +198,8 @@ func findMostCommonScope(scopeCounts map[ScopeType]int) ScopeType {
 }
 
 // LoadCommitAnalysesFromJSON loads commit analyses from multiple JSON files and merges them
-func LoadCommitAnalysesFromJSON(filePaths []string) (CommitAnalyses, error) {
-	var allAnalyses CommitAnalyses
+func LoadCommitAnalysesFromJSON(filePaths []string) (models.CommitAnalyses, error) {
+	var allAnalyses models.CommitAnalyses
 
 	for _, filePath := range filePaths {
 		logger.Infof("Loading commit analyses from %s", filePath)
@@ -209,7 +209,7 @@ func LoadCommitAnalysesFromJSON(filePaths []string) (CommitAnalyses, error) {
 			return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
 
-		var analyses CommitAnalyses
+		var analyses models.CommitAnalyses
 		if err := json.Unmarshal(data, &analyses); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal JSON from %s: %w", filePath, err)
 		}
@@ -261,8 +261,8 @@ func getRepositoryName(path string) string {
 }
 
 // ApplyFilters applies HistoryOptions filters to a slice of commits
-func ApplyFilters(commits CommitAnalyses, filter HistoryOptions) CommitAnalyses {
-	var filtered CommitAnalyses
+func ApplyFilters(commits models.CommitAnalyses, filter HistoryOptions) models.CommitAnalyses {
+	var filtered models.CommitAnalyses
 	for _, commit := range commits {
 		if filter.Matches(commit.Commit) {
 			filtered = append(filtered, commit)

@@ -9,10 +9,10 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 )
 
-func GetCommitHistory(filter HistoryOptions) (Commits, error) {
+func GetCommitHistory(filter HistoryOptions) (models.Commits, error) {
 	if filter.Path == "" {
 		wd, _ := os.Getwd()
 		filter.Path = wd
@@ -30,7 +30,7 @@ func GetCommitHistory(filter HistoryOptions) (Commits, error) {
 	repoName := getRepositoryName(filter.Path)
 	start := time.Now()
 
-	var allCommits []Commit
+	var allCommits []models.Commit
 
 	// Mode 1: Specific commits provided
 	if len(filter.CommitShas) > 0 {
@@ -124,7 +124,7 @@ func GetCommitHistory(filter HistoryOptions) (Commits, error) {
 	}
 
 	// Apply additional filters that aren't handled by git CLI
-	var commits []Commit
+	var commits []models.Commit
 	for _, commit := range allCommits {
 		if filter.Matches(commit) {
 			commit.Repository = repoName
@@ -141,7 +141,7 @@ func GetCommitHistory(filter HistoryOptions) (Commits, error) {
 	return commits, nil
 }
 
-func ParseGitLogOutput(output []byte) ([]Commit, error) {
+func ParseGitLogOutput(output []byte) ([]models.Commit, error) {
 	if len(output) == 0 {
 		return nil, nil
 	}
@@ -154,7 +154,7 @@ func ParseGitLogOutput(output []byte) ([]Commit, error) {
 	)
 
 	commitRecords := strings.Split(string(output), RS)
-	var commits []Commit
+	var commits []models.Commit
 
 	for _, record := range commitRecords {
 		if strings.TrimSpace(record) == "" {
@@ -216,12 +216,12 @@ func ParseGitLogOutput(output []byte) ([]Commit, error) {
 		// Use NewCommit to parse conventional commit format, tags, references
 		commit := NewCommit(message)
 		commit.Hash = fields[0]
-		commit.Author = Author{
+		commit.Author = models.Author{
 			Name:  fields[1],
 			Email: fields[2],
 			Date:  authorDate,
 		}
-		commit.Committer = Author{
+		commit.Committer = models.Author{
 			Name:  fields[4],
 			Email: fields[5],
 			Date:  committerDate,
@@ -244,7 +244,7 @@ func ParseGitLogOutput(output []byte) ([]Commit, error) {
 }
 
 // getCommitBySHA fetches a single commit by SHA using git show
-func getCommitBySHA(repoPath, sha string, pathFilters []string) (Commit, error) {
+func getCommitBySHA(repoPath, sha string, pathFilters []string) (models.Commit, error) {
 	args := []string{
 		"show",
 		"--date=iso-strict",
@@ -263,19 +263,19 @@ func getCommitBySHA(repoPath, sha string, pathFilters []string) (Commit, error) 
 	cmd.Dir = repoPath
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return Commit{}, fmt.Errorf("failed to get commit %s: %w", sha, err)
+		return models.Commit{}, fmt.Errorf("failed to get commit %s: %w", sha, err)
 	}
 
 	commits, err := ParseGitLogOutput(output)
 	if err != nil || len(commits) == 0 {
-		return Commit{}, fmt.Errorf("failed to parse commit %s: %w", sha, err)
+		return models.Commit{}, fmt.Errorf("failed to parse commit %s: %w", sha, err)
 	}
 
 	return commits[0], nil
 }
 
 // getCommitsByRange fetches commits in a range using git log
-func getCommitsByRange(repoPath, commitRange string, pathFilters []string) ([]Commit, error) {
+func getCommitsByRange(repoPath, commitRange string, pathFilters []string) ([]models.Commit, error) {
 	args := []string{
 		"log",
 		"--date=iso-strict",

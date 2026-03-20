@@ -10,7 +10,7 @@ import (
 	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/git"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -309,15 +309,15 @@ func generateCommitMessage(ctx context.Context, workDir string, todo *types.TODO
 		return "", fmt.Errorf("git diff --cached failed: %w", err)
 	}
 
-	commit := CommitAnalysis{
-		Commit: Commit{
+	commit := models.CommitAnalysis{
+		Commit: models.Commit{
 			Subject: fmt.Sprintf("implement TODO %s", todo.Filename()),
 			Patch:   string(diffOut),
 		},
 	}
 
 	if changes, parseErr := git.ParsePatch(string(diffOut)); parseErr == nil {
-		commit.Changes = Changes(changes)
+		commit.Changes = models.Changes(changes)
 	}
 
 	agent, err := llm.NewLLMAgent(ai.DefaultConfig())
@@ -333,7 +333,7 @@ func generateCommitMessage(ctx context.Context, workDir string, todo *types.TODO
 	return formatCommitMsg(analyzed), nil
 }
 
-func formatCommitMsg(analysis CommitAnalysis) string {
+func formatCommitMsg(analysis models.CommitAnalysis) string {
 	firstLine := ""
 	if analysis.CommitType != "" {
 		firstLine = string(analysis.CommitType)
