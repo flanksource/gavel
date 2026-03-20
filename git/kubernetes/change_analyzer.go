@@ -10,11 +10,11 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/flanksource/repomap"
 	repomapcel "github.com/flanksource/repomap/cel"
 	repomapk8s "github.com/flanksource/repomap/kubernetes"
-	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/mattbaird/jsonpatch"
 )
 

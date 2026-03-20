@@ -39,6 +39,11 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
       - name: Run tests
         run: make test
         env:
@@ -59,6 +64,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
 
       - name: Build binary
         run: make build

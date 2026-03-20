@@ -13,9 +13,5 @@ linters:
     paths:
       - ".*\\.my\\.go$"
       - ".*_test\\.go$"
-
-run:
-  skip-dirs-use-default: true
-  skip-dirs:
-    - hack
-    - vendor
+      - "hack/"
+      - "vendor/"

@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/repomap"
 	. "github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
+	"github.com/flanksource/repomap"
 	"github.com/google/cel-go/common/types"
 )
 
