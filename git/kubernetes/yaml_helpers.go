@@ -138,7 +138,7 @@ func detectImageVersionChange(oldImage, newImage, fieldPath string) *kubernetes.
 
 	var oldVersion, newVersion string
 	var digest string
-	valueType := "unknown"
+	var valueType string
 
 	if oldRef.Digest != "" || newRef.Digest != "" {
 		digest = newRef.Digest

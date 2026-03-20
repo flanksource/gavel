@@ -14,7 +14,7 @@ import (
 	"log/slog"
 
 	"github.com/flanksource/commons/logger"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/shutdown"
 )
 
@@ -73,19 +73,19 @@ type contextLogger struct {
 }
 
 func (l *contextLogger) Debugf(format string, args ...interface{}) {
-	l.Logger.Debug(fmt.Sprintf(format, args...))
+	l.Debug(fmt.Sprintf(format, args...))
 }
 
 func (l *contextLogger) Infof(format string, args ...interface{}) {
-	l.Logger.Info(fmt.Sprintf(format, args...))
+	l.Info(fmt.Sprintf(format, args...))
 }
 
 func (l *contextLogger) Warnf(format string, args ...interface{}) {
-	l.Logger.Warn(fmt.Sprintf(format, args...))
+	l.Warn(fmt.Sprintf(format, args...))
 }
 
 func (l *contextLogger) Errorf(format string, args ...interface{}) {
-	l.Logger.Error(fmt.Sprintf(format, args...))
+	l.Error(fmt.Sprintf(format, args...))
 }
 
 // globalLogger wraps the global logger
@@ -260,13 +260,13 @@ func (cm *DefaultCloneManager) RemoveClone(ctx context.Context, clonePath string
 }
 
 // ListClones lists all clones for a repository
-func (cm *DefaultCloneManager) ListClones(ctx context.Context, repoPath string) ([]CloneInfo, error) {
+func (cm *DefaultCloneManager) ListClones(ctx context.Context, repoPath string) ([]models.CloneInfo, error) {
 	// This is a simplified implementation that looks at the active clones
 	// In a more complete implementation, we could scan the filesystem
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
-	var clones []CloneInfo
+	var clones []models.CloneInfo
 	for clonePath, sourceRepo := range cm.activeClones {
 		if sourceRepo == repoPath {
 			// Try to get info about the clone
@@ -287,7 +287,7 @@ func (cm *DefaultCloneManager) ListClones(ctx context.Context, repoPath string) 
 					}
 				}
 
-				clones = append(clones, CloneInfo{
+				clones = append(clones, models.CloneInfo{
 					Path:      clonePath,
 					Version:   version,
 					Depth:     depth,
@@ -377,7 +377,7 @@ func (cm *DefaultCloneManager) ensureRepoFetched(repoPath string) error {
 
 	if output, err := cmd.CombinedOutput(); err != nil {
 		// Don't fail if fetch fails (might be offline), just warn
-		return fmt.Errorf("Failed to fetch updates for %s: %v\nOutput: %s", repoPath, err, string(output))
+		return fmt.Errorf("failed to fetch updates for %s: %v\nOutput: %s", repoPath, err, string(output))
 	}
 
 	return nil

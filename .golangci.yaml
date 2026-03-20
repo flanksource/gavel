@@ -10,6 +10,11 @@ linters:
       - common-false-positives
       - legacy
 
+    rules:
+      - linters: [staticcheck]
+        path: ".*_tests\\.go$"
+        text: "ST1001"
+
     paths:
       - ".*\\.my\\.go$"
       - ".*_test\\.go$"
