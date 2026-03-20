@@ -13,7 +13,7 @@ import (
 	"github.com/flanksource/repomap"
 	repomapcel "github.com/flanksource/repomap/cel"
 	repomapk8s "github.com/flanksource/repomap/kubernetes"
-	. "github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/models/kubernetes"
 	"github.com/mattbaird/jsonpatch"
 )
@@ -236,7 +236,7 @@ func ExtractFieldPaths(patches []kubernetes.ExtendedPatch) []string {
 	return paths
 }
 
-func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *CommitChange) error {
+func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit models.Commit, change *models.CommitChange) error {
 	logger.Tracef("[kubernetes] analyzing %s @ %s", change.File, commit.Hash)
 
 	if !repomapk8s.IsYaml(change.File) {
@@ -251,7 +251,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 	var beforeContent, afterContent string
 	var err error
 
-	if change.Type != SourceChangeTypeAdded {
+	if change.Type != models.SourceChangeTypeAdded {
 		beforeContent, err = ctx.ReadFile(change.File, beforeCommit)
 		if err != nil {
 			logger.Errorf("Error reading before %s:%s %w", change.File, beforeCommit, err)
@@ -259,7 +259,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 		}
 	}
 
-	if change.Type != SourceChangeTypeDeleted {
+	if change.Type != models.SourceChangeTypeDeleted {
 		afterContent, err = ctx.ReadFile(change.File, afterCommit)
 		if err != nil {
 			logger.Errorf("Error reading after %s:%s %w", change.File, afterCommit, err)
@@ -272,14 +272,14 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 	if beforeContent != "" {
 		beforeDocs, err = parseYAMLDocuments(beforeContent)
 		if err != nil {
-			return fmt.Errorf("Error parsing before %s:%s %w", change.File, beforeCommit, err)
+			return fmt.Errorf("error parsing before %s:%s %w", change.File, beforeCommit, err)
 		}
 	}
 
 	if afterContent != "" {
 		afterDocs, err = parseYAMLDocuments(afterContent)
 		if err != nil {
-			return fmt.Errorf("Error parsing after %s:%s %w", change.File, afterCommit, err)
+			return fmt.Errorf("error parsing after %s:%s %w", change.File, afterCommit, err)
 		}
 	}
 
@@ -319,7 +319,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 
 		k8sChange, err := createKubernetesChange(commit, change, beforeDoc, afterDoc, severityEngine)
 		if err != nil {
-			return fmt.Errorf("Error creating Kubernetes change for %s:%s %w", change.File, afterCommit, err)
+			return fmt.Errorf("error creating kubernetes change for %s:%s %w", change.File, afterCommit, err)
 		}
 
 		for line := afterDoc.StartLine; line <= afterDoc.EndLine; line++ {
@@ -348,7 +348,7 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 
 			k8sChange, err := createKubernetesChange(commit, change, &beforeDoc, kubernetes.YAMLDocument{}, severityEngine)
 			if err != nil {
-				return fmt.Errorf("Error creating Kubernetes change for deleted %s:%s %w", change.File, beforeCommit, err)
+				return fmt.Errorf("error creating kubernetes change for deleted %s:%s %w", change.File, beforeCommit, err)
 			}
 
 			for line := beforeDoc.StartLine; line <= beforeDoc.EndLine; line++ {
@@ -364,21 +364,21 @@ func AnalyzeKubernetesChanges(ctx AnalyzerContext, commit Commit, change *Commit
 		for line := range changedLinesSet {
 			lines = append(lines, line)
 		}
-		change.LinesChanged = NewLineRanges(lines)
+		change.LinesChanged = models.NewLineRanges(lines)
 	}
 
 	if len(change.KubernetesChanges) > 0 {
-		var severities []Severity
+		var severities []models.Severity
 		for _, k8sChange := range change.KubernetesChanges {
-			severities = append(severities, Severity(k8sChange.Severity))
+			severities = append(severities, models.Severity(k8sChange.Severity))
 		}
-		change.Severity = MaxSeverities(severities)
+		change.Severity = models.MaxSeverities(severities)
 	}
 
 	return nil
 }
 
-func createKubernetesChange(commit Commit, change *CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *repomapcel.Engine) (kubernetes.KubernetesChange, error) {
+func createKubernetesChange(commit models.Commit, change *models.CommitChange, beforeDoc *kubernetes.YAMLDocument, afterDoc kubernetes.YAMLDocument, engine *repomapcel.Engine) (kubernetes.KubernetesChange, error) {
 	refDoc := afterDoc
 	if afterDoc.Content == nil && beforeDoc != nil {
 		refDoc = *beforeDoc
@@ -474,7 +474,7 @@ func extractRef(doc kubernetes.YAMLDocument) kubernetes.KubernetesRef {
 	}
 }
 
-func toRepomapChange(c *CommitChange) *repomap.CommitChange {
+func toRepomapChange(c *models.CommitChange) *repomap.CommitChange {
 	if c == nil {
 		return nil
 	}
