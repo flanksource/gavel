@@ -14,9 +14,33 @@
 //	| Find Controllers | *Controller* | 2 | nodes.all(n, n.type_name.endsWith("Controller")) |
 //	| Complex Methods | cyclomatic(*) > 10 | - | nodes.exists(n, n.cyclomatic_complexity > 15) |
 //
+// # Custom Columns as Template Variables
+//
+// Unrecognized table column headers become template variables usable in exec, args, and build.
+// Custom keys in YAML frontmatter provide global defaults, overridable per-row.
+//
+// Prefer markdown tables over command blocks unless commands are multi-line or need
+// per-test setup/teardown. Tables are more compact and easier to scan.
+//
+//	---
+//	exec: bash
+//	args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"]
+//	baseUrl: https://api.example.com
+//	flags: "-s"
+//	---
+//
+//	| Name | path | CEL Validation |
+//	|------|------|----------------|
+//	| get users | /users | json.size() > 0 |
+//	| get health | /health | json.status == "ok" |
+//
+// Priority order (highest to lowest): TemplateVars (file expansion) > Properties (table columns) > Metadata (frontmatter)
+//
 // # Command Block Format
 //
-// Define tests with command blocks and frontmatter:
+// Define tests with command blocks and frontmatter.
+// Use command blocks only when tests need multi-line scripts, setup/teardown,
+// or per-test YAML config that tables cannot express:
 //
 //	### command: json output validation
 //
@@ -68,8 +92,24 @@
 //	exec: "./myapp"
 //	env:
 //	  LOG_LEVEL: "debug"
+//	cwd: ./testdir
 //	timeout: 30s
 //	---
+//
+// # Working Directory (CWD) Resolution
+//
+// The working directory for test execution is resolved with the following priority:
+//
+//  1. Test-level CWD (per-test frontmatter block or table "cwd"/"dir"/"working directory" column)
+//  2. File-level CWD (YAML front-matter at top of fixture file)
+//  3. SourceDir (directory containing the fixture markdown file)
+//  4. Runner WorkDir (passed via RunOptions)
+//
+// Relative CWD paths are resolved from SourceDir (the fixture file's directory).
+// Absolute CWD paths are used directly.
+//
+// Environment variables from frontmatter and per-test config are passed to the
+// executed command.
 //
 // # Validation Types
 //
