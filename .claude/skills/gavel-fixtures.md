@@ -39,7 +39,7 @@ exec: ./myapp                      # Default executable (default: bash)
 args: [--verbose]                  # Default arguments
 env:                               # Environment variables
   LOG_LEVEL: debug
-cwd: ./testdir                     # Working directory (relative to fixture file)
+cwd: ./testdir                     # Working directory (resolved relative to fixture file location)
 codeBlocks: [bash]                 # Languages to execute (default: [bash])
 files: "**/*.go"                   # Glob: replicate tests per matching file
 timeout: 30s                       # Total timeout
@@ -59,9 +59,32 @@ Input: `name`, `cli`/`command`/`exec`, `args`, `cwd`, `query`
 
 Expectations: `exit code`, `expected output`/`output`, `expected error`/`error`, `format`, `count`, `cel`/`validation`/`expr`
 
-Unrecognized columns become `Properties`, accessible via `expectations.Properties["col"]`.
+Unrecognized columns become **custom template variables**, usable in `exec`, `args`, and `build` fields via Go template syntax (`{{.colName}}`). They are also accessible in CEL via `expectations.Properties["col"]`.
+
+Custom keys in YAML frontmatter provide **global defaults** for template variables. Per-row column values override frontmatter defaults. Empty cells fall through to the frontmatter default.
+
+Priority (highest to lowest): file expansion vars > table column values > frontmatter metadata
 
 Use sections (`## Section Name`) to group related tables within a file.
+
+#### Live examples — custom columns as template variables
+
+The most common pattern: frontmatter defines a command template, table columns fill in the variables per row.
+
+```yaml
+---
+exec: bash
+args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"]
+baseUrl: https://httpbin.flanksource.com
+flags: "-s"
+---
+```
+
+| Name | path | CEL Validation |
+|------|------|----------------|
+| get endpoint | /get | json.url.contains("httpbin") |
+| get ip | /ip | json.origin != "" |
+| get with headers | /get | stdout.contains("HTTP") |
 
 #### Live examples — basic table tests
 
@@ -218,11 +241,15 @@ Extended (gomplate): `strings.*`, `math.*`, `regexp.*`, `conv.*`, `coll.*`, `dat
 `exec`, `build`, and `args` support Go template syntax:
 
 ```yaml
-exec: "{{.executablePath}}"
-args: [--file, "{{.file}}"]
+exec: bash
+args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"]
 ```
 
-Available: `.executablePath`, `.workDir`, `.name`, `.query`, `.file`, `.filename`, `.dir`, etc.
+Sources (highest to lowest priority):
+- **File expansion** (when `files:` is set): `.file`, `.filename`, `.dir`, `.absfile`, `.absdir`, `.basename`, `.ext`
+- **Custom table columns**: any unrecognized column header (e.g., `.path`, `.flags`)
+- **Frontmatter metadata**: custom keys in YAML frontmatter (e.g., `.baseUrl`)
+- **Built-in**: `.executablePath`, `.workDir`, `.name`, `.query`
 
 ## Supported Languages
 
@@ -246,7 +273,37 @@ Non-executable (config): `yaml`, `frontmatter`
     gavel fixtures --json tests.md              # JSON output
     gavel fixtures --json tests.md 2>/dev/null  # JSON only, no logs
 
-Tests run in parallel (2-minute timeout per test, 5-minute for build). Working directory resolves relative to the fixture file.
+Tests run in parallel (2-minute timeout per test, 5-minute for build).
+
+### Working Directory (CWD) Resolution
+
+The working directory for each test is resolved with the following priority (highest wins):
+
+1. **Test-level CWD** — per-test `cwd` in a frontmatter code block, or `cwd`/`dir`/`working directory` table column
+2. **File-level CWD** — `cwd` in the YAML front-matter at the top of the fixture file
+3. **SourceDir** — the directory containing the fixture markdown file (implicit default)
+4. **Runner WorkDir** — the directory passed to the runner (e.g., from `--path` flag)
+
+Relative paths are resolved from SourceDir (the fixture file's directory). Absolute paths are used directly.
+
+Environment variables set via `env:` in file-level front-matter or per-test frontmatter blocks are passed to the executed command.
+
+Example — file-level CWD with per-test override:
+
+```yaml
+---
+cwd: ./src           # default for all tests in this file
+env:
+  NODE_ENV: test
+---
+```
+
+| Name | CWD | Command | CEL |
+|------|-----|---------|-----|
+| test from src | | ls | stdout.contains("main.go") |
+| test from root | .. | ls | stdout.contains("src") |
+
+In the table above, "test from src" inherits `./src` from front-matter. "test from root" overrides to `..` (resolved as `<fixture-dir>/..`).
 
 ## Process
 
@@ -287,8 +344,8 @@ Fix failures and iterate until all tests pass.
 
 ## Rules
 
-- PREFER markdown tables over command blocks — use tables as the default format for all tests that can be expressed as single-line commands with exit code and CEL validation
-- Only use command blocks (`### command: <name>`) when tests need multi-line scripts, setup/teardown, or per-test YAML config (env, cwd overrides)
+- ALWAYS prefer markdown tables over command blocks — tables with custom columns and frontmatter templates can handle most test patterns. Put the command template in frontmatter `args` with `{{.col}}` placeholders, and vary inputs per row via columns
+- Only use command blocks (`### command: <name>`) when tests need multi-line scripts, setup/teardown, or per-test YAML config that cannot be expressed as a single templated command
 - Use sections (`## Section Name`) to group related tables within a file
 - Place YAML config blocks BEFORE the executable code block within a command section
 - Use `codeBlocks: [bash]` in front-matter when mixing executable and non-executable code blocks

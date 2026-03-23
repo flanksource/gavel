@@ -128,15 +128,23 @@ gavel fixtures -v tests.md
 
 Fixtures support three formats in a single markdown file:
 
-**Table format** — each row is a test:
+**Table format** (preferred) — each row is a test. Custom columns become template variables in `exec`/`args`:
 
 ```markdown
-| Name       | CLI      | Args   | Exit Code | CEL                      |
-|------------|----------|--------|-----------|--------------------------|
-| help works | ./myapp  | --help | 0         | stdout.contains("Usage") |
+---
+exec: bash
+args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"]
+baseUrl: https://api.example.com
+flags: "-s"
+---
+
+| Name       | path    | CEL                      |
+|------------|---------|--------------------------|
+| get users  | /users  | json.size() > 0          |
+| get health | /health | json.status == "ok"      |
 ```
 
-**Command blocks** — heading + YAML config + code block:
+**Command blocks** — use when commands are multi-line or need per-test setup:
 
 ````markdown
 ### command: my test
@@ -165,7 +173,7 @@ echo "auto-detected"
 * cel: stdout.contains("auto-detected")
 ````
 
-Front-matter configures build steps, default executables, file expansion, environment variables, and timeouts. See `gavel fixtures --help` for the full reference.
+Front-matter configures build steps, default executables, file expansion, environment variables, working directory (`cwd`), and timeouts. The working directory resolves relative to the fixture file's location — set it at the file level for all tests or override per-test via table columns or command block frontmatter. See `gavel fixtures --help` for the full reference.
 
 ### `gavel test`
 
