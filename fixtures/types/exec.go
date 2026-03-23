@@ -38,25 +38,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	// Prepare template context
 	templateData := fixture.AsMap()
 
-	// Determine the base directory for working directory resolution
-	// Prefer fixture.SourceDir (directory containing fixture file) over opts.WorkDir
-	baseDir := opts.WorkDir
-	if fixture.SourceDir != "" {
-		baseDir = fixture.SourceDir
-	}
-
-	// Use the base directory as default working directory
-	// If fixture.CWD is specified, resolve it relative to base directory
-	workDir := baseDir
-	if fixture.CWD != "" && fixture.CWD != "." {
-		if filepath.IsAbs(fixture.CWD) {
-			// If CWD is absolute, use it directly
-			workDir = fixture.CWD
-		} else {
-			// If CWD is relative, resolve it from the base directory (fixture file location)
-			workDir = filepath.Join(baseDir, fixture.CWD)
-		}
-	}
+	workDir := ResolveWorkDir(fixture, opts)
 	templateData["workDir"] = workDir
 	templateData["executablePath"] = opts.ExecutablePath
 
@@ -82,12 +64,40 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
 	}
 
-	p := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir).Run().Result()
+	cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
+	if len(exec.Env) > 0 {
+		envMap := make(map[string]string, len(exec.Env))
+		for k, v := range exec.Env {
+			envMap[k] = fmt.Sprintf("%v", v)
+		}
+		cmd = cmd.WithEnv(envMap)
+	}
+	p := cmd.Run().Result()
 
 	result.Actual = p
 
 	return fixture.Expected.Evaluate(result, *p)
 
+}
+
+// ResolveWorkDir determines the working directory for fixture execution.
+// Priority: test-level CWD > file-level frontmatter CWD > SourceDir > opts.WorkDir
+// Relative CWD paths are resolved from SourceDir (fixture file location) or opts.WorkDir.
+func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
+	baseDir := opts.WorkDir
+	if fixture.SourceDir != "" {
+		baseDir = fixture.SourceDir
+	}
+
+	// Get the merged CWD (file-level frontmatter + test-level override)
+	cwd := fixture.ExecBase().CWD
+	if cwd == "" || cwd == "." {
+		return baseDir
+	}
+	if filepath.IsAbs(cwd) {
+		return cwd
+	}
+	return filepath.Join(baseDir, cwd)
 }
 
 // GetRequiredFields returns required fields

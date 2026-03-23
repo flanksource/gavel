@@ -58,7 +58,6 @@ require (
 	github.com/Masterminds/squirrel v1.5.4 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/Snawoot/go-http-digest-auth-client v1.1.3 // indirect
 	github.com/TomOnTime/utfutil v1.0.0 // indirect
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
@@ -87,6 +86,7 @@ require (
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/carlos7ags/folio v0.0.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cert-manager/cert-manager v1.19.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -285,15 +285,16 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	gocloud.dev v0.43.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
+	golang.org/x/image v0.37.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/term v0.41.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
@@ -325,7 +326,9 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// replace github.com/flanksource/clicky => ../clicky
+replace github.com/flanksource/clicky => ../clicky
+
+replace github.com/carlos7ags/folio => ../folio
 
 // replace github.com/flanksource/commons => ../commons
 

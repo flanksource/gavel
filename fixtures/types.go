@@ -76,6 +76,14 @@ func (fixture FixtureTest) AsMap() map[string]any {
 	for k, v := range fixture.ExecBase().AsMap() {
 		m[k] = v
 	}
+	// Global defaults from frontmatter metadata (lowest priority)
+	for k, v := range fixture.FrontMatter.Metadata {
+		m[k] = v
+	}
+	// Custom columns from table Properties (overrides metadata)
+	for k, v := range fixture.Expected.Properties {
+		m[k] = v
+	}
 	for k, v := range fixture.TemplateVars {
 		m[k] = v
 	}
@@ -147,6 +155,11 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 		return ExecFixtureBase{}, err
 	}
 
+	// Deep copy Args to avoid mutating the shared frontmatter slice
+	args := make([]string, len(e.Args))
+	copy(args, e.Args)
+	e.Args = args
+
 	for i := range e.Args {
 		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{
 			Template: e.Args[i],
@@ -198,10 +211,6 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	}
 	for k, v := range other.Env {
 		merged.Env[k] = v
-	}
-
-	if merged.CWD == "" {
-		merged.CWD, _ = os.Getwd()
 	}
 
 	if merged.Exec == "" {
