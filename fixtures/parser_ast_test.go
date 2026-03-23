@@ -293,6 +293,58 @@ Validations:
 		)
 	})
 
+	Context("when parsing tables with custom columns as template variables", func() {
+		It("should store custom columns in Properties for templating", func() {
+			content := `
+| Name | Args | url | token |
+|------|------|-----|-------|
+| fetch api | {{.url}} --header "Authorization: {{.token}}" | https://example.com | secret123 |
+`
+			fixtures, err := parseMarkdownWithGoldmark(content, nil, "/tmp/test")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fixtures).To(HaveLen(1))
+
+			f := fixtures[0].Test
+			Expect(f.Name).To(Equal("fetch api"))
+			Expect(f.Expected.Properties["url"]).To(Equal("https://example.com"))
+			Expect(f.Expected.Properties["token"]).To(Equal("secret123"))
+
+			// Verify custom columns are available in AsMap for templating
+			m := f.AsMap()
+			Expect(m["url"]).To(Equal("https://example.com"))
+			Expect(m["token"]).To(Equal("secret123"))
+		})
+
+		It("should use frontmatter metadata as global defaults for custom columns", func() {
+			fm := &FrontMatter{
+				Metadata: map[string]any{
+					"baseUrl": "https://api.example.com",
+					"env":     "staging",
+				},
+			}
+			fm.CleanMetadata()
+
+			content := `
+| Name | Args | env |
+|------|------|-----|
+| test1 | {{.baseUrl}}/v1 --env {{.env}} | production |
+| test2 | {{.baseUrl}}/v2 --env {{.env}} | |
+`
+			fixtures, err := parseMarkdownWithGoldmark(content, fm, "/tmp/test")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fixtures).To(HaveLen(2))
+
+			// test1: column "env" overrides frontmatter "env"
+			m1 := fixtures[0].Test.AsMap()
+			Expect(m1["baseUrl"]).To(Equal("https://api.example.com"))
+			Expect(m1["env"]).To(Equal("production"))
+
+			// test2: empty column, frontmatter "env" is used
+			m2 := fixtures[1].Test.AsMap()
+			Expect(m2["baseUrl"]).To(Equal("https://api.example.com"))
+		})
+	})
+
 	Context("when falling back to legacy parser", func() {
 		It("should handle legacy table parsing", func() {
 			// Test that legacy table parsing still works
