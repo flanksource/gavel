@@ -1,5 +1,5 @@
 ---
-name: gavel-fixtures
+name: gavel-fixture-tester
 description: Create and run gavel fixture-based tests using markdown files with command blocks, tables, and CEL assertions
 allowed-tools: [Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion]
 codeBlocks: [bash]
@@ -105,6 +105,14 @@ flags: "-s"
 | JSON object | echo '{"name":"test","count":3}' | 0 | json.name == "test" && json.count == 3.0 |
 | JSON array | echo '[{"id":1},{"id":2}]' | 0 | size(json) == 2 && json[0].id == 1.0 |
 | JSON nested | echo '{"data":{"items":["a","b"]}}' | 0 | size(json.data.items) == 2 |
+
+#### Live examples — ANSI color detection
+
+| Name | Command | Exit Code | CEL Validation |
+|------|---------|-----------|----------------|
+| Detect color codes | printf '\033[31mred text\033[0m' | 0 | ansi.has_color == true && ansi.has_any == true |
+| Plain text no ANSI | echo "no colors here" | 0 | ansi.has_any == false && ansi.has_color == false |
+| Cursor movement | printf '\033[2Amoved up' | 0 | ansi.has_updates == true |
 
 ### Format 2: Command Blocks
 
@@ -227,6 +235,9 @@ Override YAML block values on the code fence info string: `exitCode=N`, `timeout
 | `expectations` | object | Expected values |
 | `executablePath` | string | Path to gavel binary |
 | `workDir` | string | Working directory |
+| `ansi.has_color` | bool | Output contains ANSI color codes (foreground/background) |
+| `ansi.has_any` | bool | Output contains any ANSI escape sequences |
+| `ansi.has_updates` | bool | Output contains cursor movement/screen update codes |
 
 File expansion variables (when `files:` is set): `file`, `filename`, `dir`, `absfile`, `absdir`, `basename`, `ext`
 

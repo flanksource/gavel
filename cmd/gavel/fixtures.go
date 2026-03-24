@@ -167,6 +167,11 @@ CEL VALIDATION
     executablePath string    Path to the gavel binary
     workDir        string    Working directory
 
+  ANSI detection variables (auto-populated from stdout+stderr):
+    ansi.has_color bool      Output contains ANSI color codes (foreground/background)
+    ansi.has_any   bool      Output contains any ANSI escape sequences
+    ansi.has_updates bool    Output contains cursor movement/screen update codes
+
   File expansion variables (when "files" front-matter is set):
     file           string    Relative path to matched file
     filename       string    Filename without extension

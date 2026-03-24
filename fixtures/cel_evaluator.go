@@ -167,6 +167,9 @@ func (e *CELEvaluator) GetAvailableVariables() []string {
 		"isHelpError - Whether help text was detected",
 		"json - Parsed JSON data (when available)",
 		"temp - Temporary file data",
+		"has_color(s) - True if string contains ANSI color codes (foreground/background)",
+		"has_ansi(s) - True if string contains any ANSI escape sequences",
+		"has_cursor_updates(s) - True if string contains cursor movement/screen update codes",
 	}
 }
 

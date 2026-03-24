@@ -1,0 +1,13 @@
+{
+  "name": "gavel-skills",
+  "version": "0.1.0",
+  "description": "Claude Code skills for the Gavel CLI testing framework — fixture-based testing with markdown, CEL assertions, and template variables",
+  "author": {
+    "name": "Flanksource",
+    "url": "https://github.com/flanksource/gavel"
+  },
+  "repository": "https://github.com/flanksource/gavel",
+  "license": "Apache-2.0",
+  "keywords": ["gavel", "testing", "fixtures", "cli", "cel", "markdown"],
+  "skills": "./skills/"
+}
