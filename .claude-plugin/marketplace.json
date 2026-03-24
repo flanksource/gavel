@@ -1,0 +1,14 @@
+{
+  "name": "flanksource-gavel",
+  "owner": {
+    "name": "Flanksource",
+    "url": "https://github.com/flanksource"
+  },
+  "plugins": [
+    {
+      "name": "gavel-skills",
+      "description": "Skills for the Gavel CLI testing framework — fixture-based testing with markdown, CEL assertions, and template variables",
+      "source": "./.agents"
+    }
+  ]
+}
