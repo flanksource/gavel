@@ -84,6 +84,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		}
 		output, err := gomplate.RunExpression(t, gomplate.Template{
 			Expression: e.CEL,
+			CelEnvs:    ANSICelFunctions(),
 		})
 		if err != nil {
 			return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")

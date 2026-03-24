@@ -28,6 +28,9 @@ func ParseMarkdownFixtures(fixtureFilePath string) ([]FixtureNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse front-matter: %w", err)
 	}
+	if frontMatter != nil {
+		frontMatter.CleanMetadata()
+	}
 
 	// If we have content after front-matter, parse that
 	if content != "" {
@@ -123,10 +126,12 @@ func parseTableRow(headers, values []string) *FixtureNode {
 		case "cel validation", "cel", "validation", "expr":
 			fixture.Expected.CEL = value
 		default:
-			if fixture.Expected.Properties == nil {
-				fixture.Expected.Properties = make(map[string]any)
+			if value != "" {
+				if fixture.Expected.Properties == nil {
+					fixture.Expected.Properties = make(map[string]any)
+				}
+				fixture.Expected.Properties[header] = value
 			}
-			fixture.Expected.Properties[header] = value
 		}
 	}
 
@@ -272,6 +277,9 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 	frontMatter, content, err := parseFrontMatter(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse front-matter: %w", err)
+	}
+	if frontMatter != nil {
+		frontMatter.CleanMetadata()
 	}
 
 	// If no content after front-matter, read the entire file
