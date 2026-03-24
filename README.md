@@ -342,6 +342,24 @@ gavel git analyze --include generated  # activate the "generated" filter set
 gavel git analyze --verbose            # show skip reasons
 ```
 
+## Agent Skills
+
+Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents the ability to create and run fixture-based tests. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+
+| Skill | Description |
+|-------|-------------|
+| `gavel-fixture-tester` | Create and run fixture-based tests using markdown files with command blocks, tables, and CEL assertions |
+
+### Install
+
+```bash
+npx skills add flanksource/gavel
+```
+
+Use `-g` to install globally (all projects) or omit for project-only. Preview available skills first with `npx skills add flanksource/gavel -l`.
+
+See [.agents/skills/README.md](.agents/skills/README.md) for alternative installation methods.
+
 ## Development
 
 ```bash
