@@ -43,9 +43,13 @@ func fixturesHelp() api.Text {
 		Add(code("  env:")).Add(dim("                               # Environment variables for all tests")).NewLine().
 		Add(code("    LOG_LEVEL: debug")).NewLine().
 		Add(code("  cwd: ./testdir")).Add(dim("                     # Default working directory")).NewLine().
+		Add(code("  terminal: pty")).Add(dim("                      # Use pseudo-terminal (merges stdout/stderr)")).NewLine().
 		Add(code("  files: \"**/*.go\"")).Add(dim("                   # Glob pattern: replicate tests per matching file")).NewLine().
 		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
 		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
+		Add(code("  os: linux")).Add(dim("                          # Skip on other OSes (prefix ! to negate: !darwin)")).NewLine().
+		Add(code("  arch: amd64")).Add(dim("                        # Skip on other architectures")).NewLine().
+		Add(code("  skip: \"! command -v docker\"")).Add(dim("        # Skip if command exits 0")).NewLine().
 		Add(code("  ---")).NewLine()
 
 	// Format 1: Markdown tables
@@ -59,6 +63,10 @@ func fixturesHelp() api.Text {
 		Add(kv("cli, command, exec", "Executable to run")).
 		Add(kv("cli args, args", "Arguments (space-separated)")).
 		Add(kv("cwd, working directory", "Working directory")).
+		Add(kv("terminal, term", "Terminal mode (\"pty\" for pseudo-terminal)")).
+		Add(kv("os", "OS constraint (e.g. \"linux\", \"!darwin\")")).
+		Add(kv("arch", "Architecture constraint (e.g. \"amd64\")")).
+		Add(kv("skip", "Bash command; exit 0 = skip test")).
 		Add(kv("query", "Query string")).NewLine().
 		Add(sh("Expectation columns")).
 		Add(kv("exit code, exitcode", "Expected exit code (default: 0, \"-\" to skip)")).
@@ -71,7 +79,8 @@ func fixturesHelp() api.Text {
 	// Format 2: Command blocks
 	t = t.Add(h("FORMAT 2: COMMAND BLOCKS")).
 		Append("  Use heading ").Add(code("### command: <test name>")).Append(" followed by code blocks:").NewLine().NewLine().
-		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
+		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
+		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, terminal, os, arch, skip")).NewLine().NewLine().
 		Add(sh("Validations")).
 		Append("    ").Add(code("* cel: stdout.contains(\"hello\")")).NewLine().
 		Append("    ").Add(code("* contains: hello")).NewLine().
@@ -81,12 +90,29 @@ func fixturesHelp() api.Text {
 	// Supported languages
 	t = t.Add(h("SUPPORTED LANGUAGES")).
 		Add(kv("bash, sh, shell", "bash -c <content>")).
-		Add(kv("python, py", "python -c <content>")).
+		Add(kv("python, py, python3", "python -c <content>")).
 		Add(kv("typescript, ts", "ts-node -e <content>")).
 		Add(kv("javascript, js", "node -e <content>")).
 		Add(kv("pwsh, powershell", "pwsh -Command <content>")).
 		Add(kv("go", "go <content>")).NewLine().
-		Append("  Non-executable labels (parsed as config): ", "text-muted").Add(code("yaml, frontmatter")).NewLine()
+		Append("  Non-executable labels (parsed as config): ", "text-muted").Add(code("yaml, frontmatter, json")).NewLine()
+
+	// Inline code fence attributes
+	t = t.Add(h("INLINE CODE FENCE ATTRIBUTES")).
+		Append("  Attributes on the opening fence override YAML block values:").NewLine().NewLine().
+		Append("    ").Add(code("```bash exitCode=1 timeout=30")).NewLine().
+		Append("    ").Add(code("exit 1")).NewLine().
+		Append("    ").Add(code("```")).NewLine().NewLine().
+		Append("  Supported: ", "text-muted").Add(code("exitCode=N")).Append(" (integer), ", "text-muted").Add(code("timeout=N")).Append(" (seconds).", "text-muted").NewLine()
+
+	// Validation shorthand
+	t = t.Add(h("VALIDATION SHORTHAND")).
+		Append("  Bullet lists after a code block define validations (joined with &&):").NewLine().NewLine().
+		Add(kv("cel: <expr>", "Raw CEL expression")).
+		Add(kv("contains: <text>", "stdout.contains(\"<text>\")")).
+		Add(kv("regex: <pattern>", "stdout.matches(\"<pattern>\")")).
+		Add(kv("not: contains: <text>", "!stdout.contains(\"<text>\")")).
+		Add(kv("not: <expr>", "!(<expr>)")).NewLine()
 
 	// CEL Validation
 	t = t.Add(h("CEL VALIDATION")).
@@ -116,6 +142,13 @@ func fixturesHelp() api.Text {
 		Add(kv("absdir", "string    Absolute directory")).
 		Add(kv("basename", "string    Full filename with extension")).
 		Add(kv("ext", "string    File extension")).NewLine().
+		Add(sh("Temp file variables")).
+		Append("  ", "text-muted").Append("(when ", "text-muted").Add(code("temp_files")).Append(" configured)", "text-muted").NewLine().
+		Add(kv("<name>.path", "string    Path to temp file")).
+		Add(kv("<name>.content", "string    File content")).
+		Add(kv("<name>.ext", "string    File extension")).
+		Add(kv("<name>.detected", "string    Detected type (text, json, xml, yaml)")).
+		Add(kv("<name>.json", "any       Parsed JSON (if content is JSON)")).NewLine().
 		Add(sh("Built-in CEL functions")).
 		Append("    ").Add(code("string.contains(s)  startsWith(s)  endsWith(s)  matches(regex)")).NewLine().
 		Append("    ").Add(code("size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)")).NewLine()
@@ -133,11 +166,20 @@ func fixturesHelp() api.Text {
 		Append("  Set ").Add(code("files")).Append(" in front-matter to replicate each test per matching file:").NewLine().NewLine().
 		Add(code("  ---\n  files: \"**/*.go\"\n  exec: golint\n  args: [\"{{.file}}\"]\n  ---")).NewLine()
 
+	// CWD resolution
+	t = t.Add(h("CWD RESOLUTION")).
+		Append("  Working directory is resolved with the following priority:").NewLine().NewLine().
+		Append("    1. ", "text-yellow-400").Append("Test-level CWD").Append(" (per-test frontmatter or table column)", "text-muted").NewLine().
+		Append("    2. ", "text-yellow-400").Append("File-level CWD").Append(" (YAML front-matter at top of file)", "text-muted").NewLine().
+		Append("    3. ", "text-yellow-400").Append("SourceDir").Append(" (directory containing the fixture file)", "text-muted").NewLine().
+		Append("    4. ", "text-yellow-400").Add(code("--cwd")).Append(" flag or current working directory", "text-muted").NewLine().NewLine().
+		Append("  Relative CWD paths are resolved from SourceDir.", "text-muted").NewLine()
+
 	// Execution
 	t = t.Add(h("EXECUTION")).
 		Append("  Tests run in parallel with a 2-minute default timeout per test").NewLine().
-		Append("  and 5-minute timeout for the build step. Working directory resolves").NewLine().
-		Append("  relative to the fixture file directory, falling back to ").Add(code("--cwd")).Append(".").NewLine()
+		Append("  and 5-minute timeout for the build step. The build command runs").NewLine().
+		Append("  once before any tests.").NewLine()
 
 	// Examples
 	t = t.Add(h("EXAMPLES")).

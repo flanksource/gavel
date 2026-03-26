@@ -40,6 +40,7 @@ args: [--verbose]                  # Default arguments
 env:                               # Environment variables
   LOG_LEVEL: debug
 cwd: ./testdir                     # Working directory (resolved relative to fixture file location)
+terminal: pty                      # Pseudo-terminal mode (merges stdout/stderr)
 codeBlocks: [bash]                 # Languages to execute (default: [bash])
 files: "**/*.go"                   # Glob: replicate tests per matching file
 timeout: 30s                       # Total timeout
@@ -55,7 +56,7 @@ Each row is a test. Column headers map to fixture fields. This is the preferred 
 
 **Supported column headers** (case-insensitive):
 
-Input: `name`, `cli`/`command`/`exec`, `args`, `cwd`, `query`
+Input: `name`, `cli`/`command`/`exec`, `args`, `cwd`, `query`, `terminal`/`term`, `os`, `arch`, `skip`
 
 Expectations: `exit code`, `expected output`/`output`, `expected error`/`error`, `format`, `count`, `cel`/`validation`/`expr`
 
@@ -118,7 +119,7 @@ flags: "-s"
 
 Use `### command: <test name>` headings for tests that need multi-line scripts, setup/teardown, or per-test YAML config.
 
-YAML config block fields: `cwd`, `exitCode`, `env`, `timeout`
+YAML config block fields: `cwd`, `exitCode`, `env`, `timeout`, `terminal`, `os`, `arch`, `skip`
 
 Validation bullet prefixes:
 - `cel: <expr>` — Raw CEL expression
@@ -235,6 +236,9 @@ Override YAML block values on the code fence info string: `exitCode=N`, `timeout
 | `expectations` | object | Expected values |
 | `executablePath` | string | Path to gavel binary |
 | `workDir` | string | Working directory |
+| `GIT_ROOT_DIR` | string | Nearest parent with `.git` (also env var) |
+| `GO_ROOT_DIR` | string | Nearest parent with `go.mod` (also env var) |
+| `ROOT_DIR` | string | GIT_ROOT_DIR > GO_ROOT_DIR > workDir (also env var) |
 | `ansi.has_color` | bool | Output contains ANSI color codes (foreground/background) |
 | `ansi.has_any` | bool | Output contains any ANSI escape sequences |
 | `ansi.has_updates` | bool | Output contains cursor movement/screen update codes |
@@ -260,27 +264,29 @@ Sources (highest to lowest priority):
 - **File expansion** (when `files:` is set): `.file`, `.filename`, `.dir`, `.absfile`, `.absdir`, `.basename`, `.ext`
 - **Custom table columns**: any unrecognized column header (e.g., `.path`, `.flags`)
 - **Frontmatter metadata**: custom keys in YAML frontmatter (e.g., `.baseUrl`)
-- **Built-in**: `.executablePath`, `.workDir`, `.name`, `.query`
+- **Built-in**: `.executablePath`, `.workDir`, `.name`, `.query`, `.GIT_ROOT_DIR`, `.GO_ROOT_DIR`, `.ROOT_DIR`
 
 ## Supported Languages
 
 | Language | Executor |
 |----------|----------|
 | bash, sh, shell | bash -c |
-| python, py | python -c |
+| python, py, python3 | python -c |
 | typescript, ts | ts-node -e |
 | javascript, js | node -e |
 | pwsh, powershell | pwsh -Command |
 | go | go (direct) |
 
-Non-executable (config): `yaml`, `frontmatter`
+Non-executable (config): `yaml`, `frontmatter`, `json`
 
 ## Running Fixtures
 
     gavel fixtures <fixture-files...>
     gavel fixtures tests.md
     gavel fixtures fixtures/**/*.md
-    gavel fixtures -v tests.md                  # Verbose
+    gavel fixtures -v tests.md                  # Verbose (stderr on pass, stdout+stderr on fail)
+    gavel fixtures -vv tests.md                 # More verbose (stdout+stderr always)
+    gavel fixtures --no-progress tests.md       # Disable progress display
     gavel fixtures --json tests.md              # JSON output
     gavel fixtures --json tests.md 2>/dev/null  # JSON only, no logs
 

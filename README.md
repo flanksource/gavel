@@ -123,7 +123,9 @@ Run declarative tests defined in markdown files using tables, command blocks, or
 ```bash
 gavel fixtures tests.md
 gavel fixtures fixtures/**/*.md
-gavel fixtures -v tests.md
+gavel fixtures -v tests.md                  # verbose (stderr on pass, stdout+stderr on fail)
+gavel fixtures -vv tests.md                 # more verbose
+gavel fixtures --no-progress tests.md       # disable progress display
 ```
 
 Fixtures support three formats in a single markdown file:
@@ -173,7 +175,46 @@ echo "auto-detected"
 * cel: stdout.contains("auto-detected")
 ````
 
-Front-matter configures build steps, default executables, file expansion, environment variables, working directory (`cwd`), and timeouts. The working directory resolves relative to the fixture file's location — set it at the file level for all tests or override per-test via table columns or command block frontmatter. See `gavel fixtures --help` for the full reference.
+#### Front-matter reference
+
+File-level front-matter applies to all tests. Fields marked with **†** can also be set per-test via table columns or command block YAML.
+
+```yaml
+---
+build: go build -o myapp           # run once before all tests
+exec: ./myapp                      # † default executable (default: bash)
+args: [--verbose]                  # † default arguments
+env:                               # † environment variables
+  LOG_LEVEL: debug
+cwd: ./testdir                     # † working directory (relative to fixture file)
+terminal: pty                      # † pseudo-terminal mode (merges stdout/stderr)
+files: "**/*.go"                   # glob: replicate tests per matching file
+codeBlocks: [bash, python]         # languages to execute (default: [bash])
+timeout: 30s                       # † total timeout
+os: linux                          # † skip on other OSes (prefix ! to negate: !darwin)
+arch: amd64                        # † skip on other architectures
+skip: "! command -v docker"        # † skip if command exits 0
+---
+```
+
+#### Auto-injected variables
+
+Available as both template variables (`{{.GIT_ROOT_DIR}}`) and environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `GIT_ROOT_DIR` | Nearest parent directory containing `.git` |
+| `GO_ROOT_DIR` | Nearest parent directory containing `go.mod` |
+| `ROOT_DIR` | `GIT_ROOT_DIR` if available, else `GO_ROOT_DIR`, else working directory |
+
+#### CWD resolution priority
+
+1. Test-level CWD (per-test frontmatter or table column)
+2. File-level CWD (YAML front-matter)
+3. SourceDir (directory containing the fixture file)
+4. `--cwd` flag or current working directory
+
+See `gavel fixtures --help` for the full reference including CEL variables, validation shorthand, supported languages, and template syntax.
 
 ### `gavel test`
 

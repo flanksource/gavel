@@ -434,6 +434,10 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			ExitCode *int           `yaml:"exitCode"`
 			Env      map[string]any `yaml:"env"`
 			Timeout  string         `yaml:"timeout"`
+			Terminal string         `yaml:"terminal"`
+			OS       string         `yaml:"os"`
+			Arch     string         `yaml:"arch"`
+			Skip     string         `yaml:"skip"`
 		}
 
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &cmdFrontMatter); err == nil {
@@ -445,6 +449,18 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			}
 			if cmdFrontMatter.Env != nil {
 				fixture.Env = cmdFrontMatter.Env
+			}
+			if cmdFrontMatter.Terminal != "" {
+				fixture.Terminal = cmdFrontMatter.Terminal
+			}
+			if cmdFrontMatter.OS != "" {
+				fixture.TestOS = cmdFrontMatter.OS
+			}
+			if cmdFrontMatter.Arch != "" {
+				fixture.TestArch = cmdFrontMatter.Arch
+			}
+			if cmdFrontMatter.Skip != "" {
+				fixture.TestSkip = cmdFrontMatter.Skip
 			}
 		}
 	}
