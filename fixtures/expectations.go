@@ -69,6 +69,12 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		t["stdout"] = p.Stdout
 		t["stderr"] = p.Stderr
 		t["exitCode"] = p.ExitCode
+		combined := p.Stdout + p.Stderr
+		t["ansi"] = map[string]any{
+			"has_any":     hasAnyANSI(combined),
+			"has_color":   hasColorCodes(combined),
+			"has_updates": hasCursorUpdates(combined),
+		}
 		// Try to parse JSON output if it looks like JSON
 		if strings.HasPrefix(strings.TrimSpace(p.Stdout), "{") || strings.HasPrefix(strings.TrimSpace(p.Stdout), "[") {
 			var jsonData interface{}

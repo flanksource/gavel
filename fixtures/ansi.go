@@ -41,5 +41,8 @@ func ANSICelFunctions() []cel.EnvOption {
 		cel.Function("has_color", cel.Overload("has_color_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasColorCodes))),
 		cel.Function("has_ansi", cel.Overload("has_ansi_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasAnyANSI))),
 		cel.Function("has_cursor_updates", cel.Overload("has_cursor_updates_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasCursorUpdates))),
+		cel.Function("ansi.has_color", cel.Overload("ansi_has_color_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasColorCodes))),
+		cel.Function("ansi.has_any", cel.Overload("ansi_has_any_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasAnyANSI))),
+		cel.Function("ansi.has_updates", cel.Overload("ansi_has_updates_string", []*cel.Type{cel.StringType}, cel.BoolType, celStringToBool(hasCursorUpdates))),
 	}
 }
