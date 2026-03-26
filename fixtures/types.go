@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -170,6 +172,12 @@ func (e ExecFixtureBase) IsEmpty() bool {
 func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) {
 	var err error
 
+	logger.V(5).Infof("Template data keys: %v", sortedKeys(data))
+
+	orig := e
+	origArgs := make([]string, len(e.Args))
+	copy(origArgs, e.Args)
+
 	e.Exec = ExpandVars(e.Exec, data)
 	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Exec,
@@ -200,7 +208,39 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 			return ExecFixtureBase{}, err
 		}
 	}
+
+	// Log a single consolidated summary of all changed fields
+	if logger.IsLevelEnabled(4) {
+		var changes []string
+		if e.Exec != orig.Exec {
+			changes = append(changes, fmt.Sprintf("exec: %q→%q", orig.Exec, e.Exec))
+		}
+		if e.Build != orig.Build {
+			changes = append(changes, fmt.Sprintf("build: %q→%q", orig.Build, e.Build))
+		}
+		if e.CWD != orig.CWD {
+			changes = append(changes, fmt.Sprintf("cwd: %q→%q", orig.CWD, e.CWD))
+		}
+		for i, a := range e.Args {
+			if i < len(origArgs) && a != origArgs[i] {
+				changes = append(changes, fmt.Sprintf("args[%d]: %q→%q", i, origArgs[i], a))
+			}
+		}
+		if len(changes) > 0 {
+			logger.V(4).Infof("Template: %s", strings.Join(changes, ", "))
+		}
+	}
+
 	return e, nil
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (e ExecFixtureBase) AsMap() map[string]string {
@@ -432,6 +472,14 @@ func (f FixtureResult) Pretty() api.Text {
 
 	isFailed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
 	verbosity := clicky.Flags.LevelCount
+
+	if verbosity >= 2 && f.Command != "" {
+		cmd := f.Command
+		if f.CWD != "" {
+			cmd += " (cwd: " + relativePath(f.CWD) + ")"
+		}
+		t = t.Append("$ "+cmd, "text-gray-500")
+	}
 
 	if isFailed {
 		switch {

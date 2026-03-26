@@ -3,6 +3,8 @@ package fixtures
 import (
 	"fmt"
 	"os"
+
+	"github.com/flanksource/commons/logger"
 )
 
 // ExpandVars replaces $VAR and ${VAR} references in s with values from vars.
@@ -11,7 +13,9 @@ import (
 func ExpandVars(s string, vars map[string]any) string {
 	return os.Expand(s, func(key string) string {
 		if v, ok := vars[key]; ok {
-			return fmt.Sprintf("%v", v)
+			val := fmt.Sprintf("%v", v)
+			logger.V(6).Infof("ExpandVars: $%s → %s", key, val)
+			return val
 		}
 		return "$" + key
 	})

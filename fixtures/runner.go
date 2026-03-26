@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -163,21 +164,15 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		Summary: Stats{},
 	}
 
-	// Check if any fixtures need build
+	// Run build command synchronously before any fixtures
 	buildCmd := r.getBuildCommand()
-	var buildTask *clicky.Task
-
-	// Create build task if needed (as dependency for other tasks)
 	if buildCmd != "" {
-		buildTypedTask := clicky.StartTask[bool](
-			fmt.Sprintf("Build: %s", buildCmd),
-			func(ctx flanksourceContext.Context, t *task.Task) (bool, error) {
-				err := r.executeBuildCommand(ctx, buildCmd)
-				return err == nil, err
-			},
-			clicky.WithTaskTimeout(5*time.Minute),
-		)
-		buildTask = buildTypedTask.Task
+		logger.V(2).Infof("Running build command: %s", buildCmd)
+		ctx := flanksourceContext.NewContext(context.Background())
+		if err := r.executeBuildCommand(ctx, buildCmd); err != nil {
+			return nil, fmt.Errorf("build failed, skipping all fixtures: %w", err)
+		}
+		logger.V(2).Infof("Build completed successfully")
 	}
 
 	// Create typed task group for fixture execution
@@ -188,7 +183,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		if node.Test != nil {
 			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
 				return r.executeFixture(ctx, *node.Test)
-			}, clicky.WithDependencies(buildTask), clicky.WithTaskTimeout(2*time.Minute))
+			}, clicky.WithTaskTimeout(2*time.Minute))
 			taskToNodeMap[typedTask] = node
 		}
 	})
