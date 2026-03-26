@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/types"
@@ -12,232 +13,142 @@ import (
 )
 
 var fixturesCmd = &cobra.Command{
-	Use:   "fixtures [fixture-files...]",
-	Short: "Run fixture-based tests from markdown tables and command blocks",
-	Long:  fixturesHelp,
-	Args:  cobra.MinimumNArgs(1),
-	RunE:  runFixtures,
-	Example: `  # Run a single fixture file
-  gavel fixtures tests.md
-
-  # Run multiple fixtures with glob
-  gavel fixtures fixtures/**/*.md
-
-  # Run with verbose output
-  gavel fixtures -v tests.md`,
+	Use:          "fixtures [fixture-files...]",
+	Short:        "Run fixture-based tests from markdown tables and command blocks",
+	Args:         cobra.MinimumNArgs(1),
+	RunE:         runFixtures,
 	SilenceUsage: true,
 }
 
-var fixturesHelp = `Run fixture-based tests defined in markdown files.
+func fixturesHelp() api.Text {
+	h := func(title string) api.Text { return clicky.Text("\n"+title, "font-bold text-cyan-400").NewLine() }
+	sh := func(title string) api.Text { return clicky.Text("  "+title, "font-bold text-blue-400").NewLine() }
+	code := func(s string) api.Text { return clicky.Text(s, "text-green-400") }
+	dim := func(s string) api.Text { return clicky.Text(s, "text-muted") }
+	kv := func(k, v string) api.Text {
+		return clicky.Text("    ").Append(k, "text-yellow-400").Append("  " + v).NewLine()
+	}
 
-Fixtures are markdown files that define test cases using tables or command blocks.
-Each file can have optional YAML front-matter for global configuration.
+	t := clicky.Text("Run fixture-based tests defined in markdown files.", "font-bold").NewLine().
+		NewLine().
+		Append("Fixtures are markdown files that define test cases using tables or command blocks.").NewLine().
+		Append("Each file can have optional YAML front-matter for global configuration.").NewLine()
 
-FILE STRUCTURE
-  ---
-  build: go build -o myapp           # Shell command run once before all tests
-  exec: ./myapp                      # Default executable (default: bash)
-  args: [--verbose]                  # Default arguments for exec
-  env:                               # Environment variables for all tests
-    LOG_LEVEL: debug
-  cwd: ./testdir                     # Default working directory
-  files: "**/*.go"                   # Glob pattern: replicate tests per matching file
-  codeBlocks: [bash, python]         # Languages to execute (default: [bash])
-  timeout: 30s                       # Total timeout for test execution
-  ---
+	// File structure
+	t = t.Add(h("FILE STRUCTURE")).
+		Add(code(`  ---
+  build: go build -o myapp`)).Add(dim("           # Shell command run once before all tests")).NewLine().
+		Add(code("  exec: ./myapp")).Add(dim("                      # Default executable (default: bash)")).NewLine().
+		Add(code("  args: [--verbose]")).Add(dim("                  # Default arguments for exec")).NewLine().
+		Add(code("  env:")).Add(dim("                               # Environment variables for all tests")).NewLine().
+		Add(code("    LOG_LEVEL: debug")).NewLine().
+		Add(code("  cwd: ./testdir")).Add(dim("                     # Default working directory")).NewLine().
+		Add(code("  files: \"**/*.go\"")).Add(dim("                   # Glob pattern: replicate tests per matching file")).NewLine().
+		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
+		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
+		Add(code("  ---")).NewLine()
 
-FORMAT 1: MARKDOWN TABLES
+	// Format 1: Markdown tables
+	t = t.Add(h("FORMAT 1: MARKDOWN TABLES")).
+		Append("  Each row defines a test. Column headers map to fixture fields:").NewLine().NewLine().
+		Add(code("  | Name | CLI        | Args     | Exit Code | CEL               |")).NewLine().
+		Add(code("  |------|------------|----------|-----------|-------------------|")).NewLine().
+		Add(code("  | test | ./myapp    | --help   | 0         | stdout.contains() |")).NewLine().NewLine().
+		Add(sh("Input columns")).
+		Add(kv("name, test name", "Test name (required)")).
+		Add(kv("cli, command, exec", "Executable to run")).
+		Add(kv("cli args, args", "Arguments (space-separated)")).
+		Add(kv("cwd, working directory", "Working directory")).
+		Add(kv("query", "Query string")).NewLine().
+		Add(sh("Expectation columns")).
+		Add(kv("exit code, exitcode", "Expected exit code (default: 0, \"-\" to skip)")).
+		Add(kv("expected output, output", "Expected stdout (exact match)")).
+		Add(kv("expected error, error", "Expected stderr substring (implies non-zero exit)")).
+		Add(kv("expected format, format", "Output format validation (json, yaml)")).
+		Add(kv("cel, validation, expr", "CEL validation expression")).NewLine().
+		Append("  Unrecognized columns become Properties available in CEL.", "text-muted").NewLine()
 
-  Each row defines a test. Column headers map to fixture fields:
+	// Format 2: Command blocks
+	t = t.Add(h("FORMAT 2: COMMAND BLOCKS")).
+		Append("  Use heading ").Add(code("### command: <test name>")).Append(" followed by code blocks:").NewLine().NewLine().
+		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
+		Add(sh("Validations")).
+		Append("    ").Add(code("* cel: stdout.contains(\"hello\")")).NewLine().
+		Append("    ").Add(code("* contains: hello")).NewLine().
+		Append("    ").Add(code("* regex: .*world.*")).NewLine().
+		Append("    ").Add(code("* not: contains: error")).NewLine()
 
-  | Name | CLI        | Args     | Exit Code | CEL               |
-  |------|------------|----------|-----------|-------------------|
-  | test | ./myapp    | --help   | 0         | stdout.contains() |
+	// Supported languages
+	t = t.Add(h("SUPPORTED LANGUAGES")).
+		Add(kv("bash, sh, shell", "bash -c <content>")).
+		Add(kv("python, py", "python -c <content>")).
+		Add(kv("typescript, ts", "ts-node -e <content>")).
+		Add(kv("javascript, js", "node -e <content>")).
+		Add(kv("pwsh, powershell", "pwsh -Command <content>")).
+		Add(kv("go", "go <content>")).NewLine().
+		Append("  Non-executable labels (parsed as config): ", "text-muted").Add(code("yaml, frontmatter")).NewLine()
 
-  Supported column headers (case-insensitive):
+	// CEL Validation
+	t = t.Add(h("CEL VALIDATION")).
+		Append("  Expressions must evaluate to ").Add(code("true")).Append(".").NewLine().NewLine().
+		Add(sh("Variables")).
+		Add(kv("stdout", "string    Process stdout")).
+		Add(kv("stderr", "string    Process stderr")).
+		Add(kv("exitCode", "int       Process exit code")).
+		Add(kv("json", "any       Auto-parsed JSON (when stdout starts with { or [)")).
+		Add(kv("name", "string    Test name")).
+		Add(kv("sourceDir", "string    Directory containing the fixture file")).
+		Add(kv("workDir", "string    Working directory")).
+		Add(kv("executablePath", "string    Path to the gavel binary")).NewLine().
+		Add(sh("Auto-injected root directories")).
+		Add(kv("GIT_ROOT_DIR", "string    Nearest parent with .git")).
+		Add(kv("GO_ROOT_DIR", "string    Nearest parent with go.mod")).
+		Add(kv("ROOT_DIR", "string    GIT_ROOT_DIR > GO_ROOT_DIR > workDir")).NewLine().
+		Add(sh("ANSI detection")).
+		Add(kv("ansi.has_color", "bool   Output contains ANSI color codes")).
+		Add(kv("ansi.has_any", "bool   Output contains any ANSI escape sequences")).
+		Add(kv("ansi.has_updates", "bool   Output contains cursor movement codes")).NewLine().
+		Add(sh("File expansion variables")).
+		Add(kv("file", "string    Relative path to matched file")).
+		Add(kv("filename", "string    Filename without extension")).
+		Add(kv("dir", "string    Directory containing the file")).
+		Add(kv("absfile", "string    Absolute file path")).
+		Add(kv("absdir", "string    Absolute directory")).
+		Add(kv("basename", "string    Full filename with extension")).
+		Add(kv("ext", "string    File extension")).NewLine().
+		Add(sh("Built-in CEL functions")).
+		Append("    ").Add(code("string.contains(s)  startsWith(s)  endsWith(s)  matches(regex)")).NewLine().
+		Append("    ").Add(code("size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)")).NewLine()
 
-  Input columns:
-    name, test name          Test name (required, rows without names are skipped)
-    cli, command, exec       Executable to run
-    cli args, args           Arguments (space-separated)
-    cwd, working directory   Working directory
-    query                    Query string
+	// Template variables
+	t = t.Add(h("TEMPLATE VARIABLES")).
+		Append("  The ").Add(code("exec")).Append(", ").Add(code("build")).Append(", and ").Add(code("args")).Append(" fields support Go template syntax:").NewLine().NewLine().
+		Add(code("    exec: {{.executablePath}}")).NewLine().
+		Add(code("    args: [--file, \"{{.file}}\"]")).NewLine().
+		Add(code("    build: go build -o {{.workDir}}/myapp")).NewLine().
+		Add(code("    cwd: {{.GIT_ROOT_DIR}}/testdata")).NewLine()
 
-  Expectation columns:
-    exit code, exitcode      Expected exit code (default: 0, use "-" to skip)
-    expected output, output  Expected stdout (exact match)
-    expected error, error    Expected stderr substring (implies non-zero exit)
-    expected format, format  Output format validation (e.g., json, yaml)
-    expected count, count    Expected count (use "-" to skip)
-    expected matches         Expected output substring
-    expected results         Expected output substring
-    expected files           Expected output substring
-    template output          Expected output substring
-    cel, validation, expr    CEL validation expression
+	// File expansion
+	t = t.Add(h("FILE EXPANSION")).
+		Append("  Set ").Add(code("files")).Append(" in front-matter to replicate each test per matching file:").NewLine().NewLine().
+		Add(code("  ---\n  files: \"**/*.go\"\n  exec: golint\n  args: [\"{{.file}}\"]\n  ---")).NewLine()
 
-  Any unrecognized column header is stored in Properties and available
-  in CEL expressions via expectations.Properties["column_name"].
+	// Execution
+	t = t.Add(h("EXECUTION")).
+		Append("  Tests run in parallel with a 2-minute default timeout per test").NewLine().
+		Append("  and 5-minute timeout for the build step. Working directory resolves").NewLine().
+		Append("  relative to the fixture file directory, falling back to ").Add(code("--cwd")).Append(".").NewLine()
 
-FORMAT 2: COMMAND BLOCKS
+	// Examples
+	t = t.Add(h("EXAMPLES")).
+		Add(code("  gavel fixtures tests.md")).Add(dim("                  # Run a single fixture file")).NewLine().
+		Add(code("  gavel fixtures fixtures/**/*.md")).Add(dim("          # Run with glob")).NewLine().
+		Add(code("  gavel fixtures -v tests.md")).Add(dim("               # Verbose output")).NewLine().
+		Add(code("  gavel fixtures -vv tests.md")).Add(dim("              # More verbose")).NewLine().
+		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine()
 
-  Use heading "### command: <test name>" followed by code blocks:
-
-  ### command: my test
-  ` + "```" + `yaml
-  cwd: ./testdir
-  exitCode: 0
-  env:
-    KEY: value
-  timeout: 60
-  ` + "```" + `
-
-  ` + "```" + `bash
-  echo "hello world"
-  ` + "```" + `
-
-  Validations:
-  * cel: stdout.contains("hello")
-  * contains: hello
-  * regex: .*world.*
-  * not: contains: error
-
-  Command block YAML fields: cwd, exitCode, env (map), timeout.
-
-FORMAT 3: STANDALONE CODE BLOCKS
-
-  Executable code blocks outside a "command:" heading are auto-detected
-  as tests. The test name comes from the nearest preceding heading.
-
-  ## My Tests
-
-  ` + "```" + `bash
-  echo "auto-detected test"
-  ` + "```" + `
-
-  * contains: auto-detected
-
-SUPPORTED LANGUAGES
-
-  Language         Executor    Args format
-  bash, sh, shell  bash        -c <content>
-  python, py       python      -c <content>
-  typescript, ts   ts-node     -e <content>
-  javascript, js   node        -e <content>
-  pwsh, powershell pwsh        -Command <content>
-  go               go          <content>
-
-  Non-executable labels (parsed as config): yaml, frontmatter
-
-INLINE CODE FENCE ATTRIBUTES
-
-  Attributes on the code fence override YAML block values:
-
-  ` + "```" + `bash exitCode=1 timeout=30
-  exit 1
-  ` + "```" + `
-
-  Supported: exitCode=N (integer), timeout=N (seconds).
-
-VALIDATION SHORTHAND
-
-  In bullet lists following a code block, these prefixes are supported:
-
-  * cel: <expr>               Raw CEL expression
-  * contains: <text>          Converts to stdout.contains("<text>")
-  * regex: <pattern>          Converts to stdout.matches("<pattern>")
-  * not: contains: <text>     Converts to !stdout.contains("<text>")
-  * not: <expr>               Converts to !(<expr>)
-
-  Multiple validations are joined with &&.
-
-CEL VALIDATION
-
-  CEL expressions must evaluate to true (boolean or string "true").
-
-  Available variables:
-    stdout         string    Process stdout
-    output         string    Alias for stdout
-    stderr         string    Process stderr
-    exitCode       int       Process exit code
-    json           any       Auto-parsed JSON (when stdout starts with { or [)
-    name           string    Test name
-    sourceDir      string    Directory containing the fixture file
-    query          string    Query string (if set)
-    expectations   object    Expected values from the table/config
-    executablePath string    Path to the gavel binary
-    workDir        string    Working directory
-
-  ANSI detection variables (auto-populated from stdout+stderr):
-    ansi.has_color bool      Output contains ANSI color codes (foreground/background)
-    ansi.has_any   bool      Output contains any ANSI escape sequences
-    ansi.has_updates bool    Output contains cursor movement/screen update codes
-
-  File expansion variables (when "files" front-matter is set):
-    file           string    Relative path to matched file
-    filename       string    Filename without extension
-    dir            string    Directory containing the file
-    absfile        string    Absolute file path
-    absdir         string    Absolute directory
-    basename       string    Full filename with extension
-    ext            string    File extension
-
-  Temp file variables (when temp_files configured):
-    <name>.path    string    Path to temp file
-    <name>.content string    File content
-    <name>.ext     string    File extension
-    <name>.detected string   Detected type (text, json, xml, yaml)
-    <name>.json    any       Parsed JSON (if content is JSON)
-
-  Built-in CEL functions:
-    string.contains(s)           Check substring
-    string.startsWith(s)         Check prefix
-    string.endsWith(s)           Check suffix
-    string.matches(regex)        Regex match
-    size(list)                   List/string length
-    list.all(x, predicate)       All elements match
-    list.exists(x, predicate)    Any element matches
-    list.filter(x, predicate)    Filter elements
-
-  Extended functions (via gomplate):
-    strings.Contains, strings.TrimSpace, strings.Split, ...
-    math.Abs, math.Max, math.Min, ...
-    regexp.Match, regexp.FindAll, regexp.Replace, ...
-    conv.ToInt, conv.ToString, conv.ToBool, ...
-    coll.Has, coll.Keys, coll.Values, ...
-    data.JSON, data.YAML, data.CSV, ...
-    file.Exists, file.Read, file.IsDir, ...
-    time.Now, time.Parse, ...
-
-TEMPLATE VARIABLES
-
-  The exec, build, and args fields support Go template syntax:
-
-    exec: {{.executablePath}}
-    args: [--file, "{{.file}}"]
-    build: go build -o {{.workDir}}/myapp
-
-  Available: .executablePath, .workDir, .name, .query, .file,
-  .filename, .dir, .absfile, .absdir, .basename, .ext
-
-FILE EXPANSION
-
-  Set "files" in front-matter to replicate each test per matching file:
-
-  ---
-  files: "**/*.go"
-  exec: golint
-  args: ["{{.file}}"]
-  ---
-
-  Each test copy gets file template variables and is named
-  "<original name> [<relative path>]".
-
-EXECUTION
-
-  Tests run in parallel with a 2-minute default timeout per test
-  and 5-minute timeout for the build step. The build command runs
-  once before any tests. Working directory resolves relative to the
-  fixture file directory (sourceDir), falling back to --workdir.`
+	return t
+}
 
 func runFixtures(cmd *cobra.Command, args []string) error {
 	wd, err := getWorkingDir()
@@ -275,5 +186,8 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 }
 
 func init() {
+	fixturesCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		fmt.Fprintln(os.Stderr, fixturesHelp().ANSI())
+	})
 	rootCmd.AddCommand(fixturesCmd)
 }
