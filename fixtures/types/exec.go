@@ -16,6 +16,7 @@ import (
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/repomap"
 )
 
 // ExecFixture implements FixtureType for command execution tests
@@ -50,9 +51,31 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	templateData["workDir"] = workDir
 	templateData["executablePath"] = opts.ExecutablePath
 
+	gitRoot := repomap.FindGitRoot(workDir)
+	goRoot := findGoModRoot(workDir)
+	rootDir := gitRoot
+	if rootDir == "" {
+		rootDir = goRoot
+	}
+	if rootDir == "" {
+		rootDir = workDir
+	}
+	templateData["GIT_ROOT_DIR"] = gitRoot
+	templateData["GO_ROOT_DIR"] = goRoot
+	templateData["ROOT_DIR"] = rootDir
+
 	exec, err := fixture.ExecBase().Template(templateData)
 	if err != nil {
 		return result.Errorf(err, "failed to template exec base")
+	}
+
+	if exec.Env == nil {
+		exec.Env = make(map[string]any)
+	}
+	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR"} {
+		if _, ok := exec.Env[k]; !ok {
+			exec.Env[k] = templateData[k]
+		}
 	}
 
 	bash := clicky.Exec("bash", "-c").AsWrapper()
@@ -164,6 +187,26 @@ func (e *ExecFixture) GetRequiredFields() []string {
 // GetOptionalFields returns optional fields
 func (e *ExecFixture) GetOptionalFields() []string {
 	return []string{"CWD", "CEL", "Expected.Output", "Expected.Error", "Expected.exitCode", "env"}
+}
+
+func findGoModRoot(path string) string {
+	dir := path
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		dir = filepath.Dir(path)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			if abs, err := filepath.Abs(dir); err == nil {
+				return abs
+			}
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func init() {

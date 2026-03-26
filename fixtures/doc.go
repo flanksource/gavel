@@ -111,6 +111,18 @@
 // Environment variables from frontmatter and per-test config are passed to the
 // executed command.
 //
+// # Auto-Injected Root Directory Variables
+//
+// The following variables are automatically computed from the working directory
+// and available as both gomplate template variables (e.g. {{.GIT_ROOT_DIR}}) and
+// environment variables in executed commands:
+//
+//   - GIT_ROOT_DIR: nearest parent directory containing .git
+//   - GO_ROOT_DIR: nearest parent directory containing go.mod
+//   - ROOT_DIR: GIT_ROOT_DIR if available, else GO_ROOT_DIR, else working directory
+//
+// User-defined env vars with the same name take precedence over auto-injected values.
+//
 // # Validation Types
 //
 //   - cel: Full CEL expression validation
