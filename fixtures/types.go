@@ -169,17 +169,22 @@ func (e ExecFixtureBase) IsEmpty() bool {
 
 func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) {
 	var err error
+
+	e.Exec = ExpandVars(e.Exec, data)
 	if e.Exec, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Exec,
 	}); err != nil {
 		return ExecFixtureBase{}, err
 	}
 
+	e.Build = ExpandVars(e.Build, data)
 	if e.Build, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Build,
 	}); err != nil {
 		return ExecFixtureBase{}, err
 	}
+
+	e.CWD = ExpandVars(e.CWD, data)
 
 	// Deep copy Args to avoid mutating the shared frontmatter slice
 	args := make([]string, len(e.Args))
@@ -187,6 +192,7 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 	e.Args = args
 
 	for i := range e.Args {
+		e.Args[i] = ExpandVars(e.Args[i], data)
 		e.Args[i], err = gomplate.RunTemplate(data, gomplate.Template{
 			Template: e.Args[i],
 		})

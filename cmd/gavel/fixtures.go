@@ -126,10 +126,14 @@ func fixturesHelp() api.Text {
 		Add(kv("sourceDir", "string    Directory containing the fixture file")).
 		Add(kv("workDir", "string    Working directory")).
 		Add(kv("executablePath", "string    Path to the gavel binary")).NewLine().
-		Add(sh("Auto-injected root directories")).
+		Add(sh("Auto-injected variables (use as $VAR or {{.VAR}})")).
 		Add(kv("GIT_ROOT_DIR", "string    Nearest parent with .git")).
 		Add(kv("GO_ROOT_DIR", "string    Nearest parent with go.mod")).
-		Add(kv("ROOT_DIR", "string    GIT_ROOT_DIR > GO_ROOT_DIR > workDir")).NewLine().
+		Add(kv("ROOT_DIR", "string    GIT_ROOT_DIR > GO_ROOT_DIR > workDir")).
+		Add(kv("CWD", "string    Resolved working directory")).
+		Add(kv("GOOS", "string    Go runtime OS (linux, darwin, ...)")).
+		Add(kv("GOARCH", "string    Go runtime arch (amd64, arm64, ...)")).
+		Add(kv("GOPATH", "string    Go workspace path")).NewLine().
 		Add(sh("ANSI detection")).
 		Add(kv("ansi.has_color", "bool   Output contains ANSI color codes")).
 		Add(kv("ansi.has_any", "bool   Output contains any ANSI escape sequences")).
@@ -155,11 +159,11 @@ func fixturesHelp() api.Text {
 
 	// Template variables
 	t = t.Add(h("TEMPLATE VARIABLES")).
-		Append("  The ").Add(code("exec")).Append(", ").Add(code("build")).Append(", and ").Add(code("args")).Append(" fields support Go template syntax:").NewLine().NewLine().
-		Add(code("    exec: {{.executablePath}}")).NewLine().
-		Add(code("    args: [--file, \"{{.file}}\"]")).NewLine().
-		Add(code("    build: go build -o {{.workDir}}/myapp")).NewLine().
-		Add(code("    cwd: {{.GIT_ROOT_DIR}}/testdata")).NewLine()
+		Append("  The ").Add(code("exec")).Append(", ").Add(code("build")).Append(", ").Add(code("args")).Append(", and ").Add(code("cwd")).Append(" fields support shell-style $VAR and Go template syntax:").NewLine().NewLine().
+		Add(code("    exec: $executablePath")).NewLine().
+		Add(code("    args: [--file, \"$file\"]")).NewLine().
+		Add(code("    build: go build -o $workDir/myapp")).NewLine().
+		Add(code("    cwd: $GIT_ROOT_DIR/testdata")).NewLine()
 
 	// File expansion
 	t = t.Add(h("FILE EXPANSION")).

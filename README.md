@@ -199,13 +199,17 @@ skip: "! command -v docker"        # † skip if command exits 0
 
 #### Auto-injected variables
 
-Available as both template variables (`{{.GIT_ROOT_DIR}}`) and environment variables:
+Available using `$VAR` syntax, Go template syntax (`{{.VAR}}`), and as environment variables:
 
 | Variable | Description |
 |----------|-------------|
 | `GIT_ROOT_DIR` | Nearest parent directory containing `.git` |
 | `GO_ROOT_DIR` | Nearest parent directory containing `go.mod` |
 | `ROOT_DIR` | `GIT_ROOT_DIR` if available, else `GO_ROOT_DIR`, else working directory |
+| `CWD` | Resolved working directory for the test |
+| `GOOS` | Go runtime OS (e.g. `linux`, `darwin`) |
+| `GOARCH` | Go runtime architecture (e.g. `amd64`, `arm64`) |
+| `GOPATH` | Go workspace path |
 
 #### CWD resolution priority
 
