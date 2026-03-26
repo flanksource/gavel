@@ -1,11 +1,19 @@
 package types
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	osExec "os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/creack/pty"
 	"github.com/flanksource/clicky"
+	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 )
@@ -64,20 +72,68 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
 	}
 
-	cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
-	if len(exec.Env) > 0 {
-		envMap := make(map[string]string, len(exec.Env))
-		for k, v := range exec.Env {
-			envMap[k] = fmt.Sprintf("%v", v)
+	var p *clickyExec.ExecResult
+	if exec.Terminal == "pty" {
+		p = runWithPTY(exec, workDir)
+	} else {
+		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
+		if len(exec.Env) > 0 {
+			envMap := make(map[string]string, len(exec.Env))
+			for k, v := range exec.Env {
+				envMap[k] = fmt.Sprintf("%v", v)
+			}
+			cmd = cmd.WithEnv(envMap)
 		}
-		cmd = cmd.WithEnv(envMap)
+		p = cmd.Run().Result()
 	}
-	p := cmd.Run().Result()
 
 	result.Actual = p
-
 	return fixture.Expected.Evaluate(result, *p)
+}
 
+func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+	cmdLine := execBase.Exec
+	if len(execBase.Args) > 0 {
+		cmdLine += " " + strings.Join(execBase.Args, " ")
+	}
+
+	cmd := osExec.Command("bash", "-c", cmdLine)
+	cmd.Dir = workDir
+	cmd.Env = os.Environ()
+	for k, v := range execBase.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))
+	}
+
+	now := time.Now()
+	var buf bytes.Buffer
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return &clickyExec.ExecResult{
+			Stdout:  "",
+			Stderr:  "",
+			Error:   fmt.Errorf("failed to start PTY: %w", err),
+			Started: &now,
+		}
+	}
+	defer ptmx.Close()
+
+	// PTY merges stdout+stderr into a single stream
+	_, _ = io.Copy(&buf, ptmx)
+	_ = cmd.Wait()
+
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
+	return &clickyExec.ExecResult{
+		Stdout:   buf.String(),
+		Stderr:   buf.String(),
+		ExitCode: exitCode,
+		Started:  &now,
+		Duration: time.Since(now),
+	}
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.

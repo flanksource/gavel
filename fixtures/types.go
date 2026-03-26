@@ -113,6 +113,8 @@ type ExecFixtureBase struct {
 	Env map[string]any `yaml:"env,omitempty" json:"env,omitempty"`
 	// Working directory for executing tests
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
+	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
 }
 
 func relativePath(path string) string {
@@ -182,6 +184,9 @@ func (e ExecFixtureBase) AsMap() map[string]string {
 	if e.Exec != "" {
 		envMap["EXEC"] = e.Exec
 	}
+	if e.Terminal != "" {
+		envMap["TERMINAL"] = e.Terminal
+	}
 	for k, v := range e.Env {
 		envMap[k] = fmt.Sprintf("%v", v)
 	}
@@ -211,6 +216,10 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	}
 	for k, v := range other.Env {
 		merged.Env[k] = v
+	}
+
+	if other.Terminal != "" {
+		merged.Terminal = other.Terminal
 	}
 
 	if merged.Exec == "" {
@@ -259,6 +268,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "args")
 	delete(f.Metadata, "env")
 	delete(f.Metadata, "cwd")
+	delete(f.Metadata, "terminal")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")

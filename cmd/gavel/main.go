@@ -54,7 +54,7 @@ func getWorkingDir() (string, error) {
 }
 
 func init() {
-	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format")
+	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
 	logger.Configure(logger.Flags{LogToStderr: true, Color: true})
 	rootCmd.PersistentFlags().StringVar(&workingDir, "cwd", "", "Working directory")
 
