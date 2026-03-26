@@ -8,6 +8,7 @@ import (
 	"os"
 	osExec "os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,6 +38,33 @@ func (e *ExecFixture) Name() string {
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
+	// Compute root dirs from the base working directory (before CWD expansion)
+	baseDir := ResolveWorkDir(fixture, opts)
+	gitRoot := repomap.FindGitRoot(baseDir)
+	goRoot := findGoModRoot(baseDir)
+	rootDir := gitRoot
+	if rootDir == "" {
+		rootDir = goRoot
+	}
+	if rootDir == "" {
+		rootDir = baseDir
+	}
+
+	// Inject auto-injected vars into TemplateVars so they're available
+	// in both Template() expansion and CEL evaluation via AsMap()
+	if fixture.TemplateVars == nil {
+		fixture.TemplateVars = make(map[string]any)
+	}
+	fixture.TemplateVars["workDir"] = baseDir
+	fixture.TemplateVars["executablePath"] = opts.ExecutablePath
+	fixture.TemplateVars["GIT_ROOT_DIR"] = gitRoot
+	fixture.TemplateVars["GO_ROOT_DIR"] = goRoot
+	fixture.TemplateVars["ROOT_DIR"] = rootDir
+	fixture.TemplateVars["GOOS"] = runtime.GOOS
+	fixture.TemplateVars["GOARCH"] = runtime.GOARCH
+	fixture.TemplateVars["GOPATH"] = os.Getenv("GOPATH")
+	fixture.TemplateVars["CWD"] = baseDir
+
 	result := fixtures.FixtureResult{
 		Test:     fixture,
 		Name:     fixture.Name,
@@ -44,35 +72,27 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		Metadata: make(map[string]interface{}),
 	}
 
-	// Prepare template context
 	templateData := fixture.AsMap()
-
-	workDir := ResolveWorkDir(fixture, opts)
-	templateData["workDir"] = workDir
-	templateData["executablePath"] = opts.ExecutablePath
-
-	gitRoot := repomap.FindGitRoot(workDir)
-	goRoot := findGoModRoot(workDir)
-	rootDir := gitRoot
-	if rootDir == "" {
-		rootDir = goRoot
-	}
-	if rootDir == "" {
-		rootDir = workDir
-	}
-	templateData["GIT_ROOT_DIR"] = gitRoot
-	templateData["GO_ROOT_DIR"] = goRoot
-	templateData["ROOT_DIR"] = rootDir
 
 	exec, err := fixture.ExecBase().Template(templateData)
 	if err != nil {
 		return result.Errorf(err, "failed to template exec base")
 	}
 
+	// Resolve final workDir: use expanded CWD if set, otherwise baseDir
+	workDir := baseDir
+	if exec.CWD != "" && exec.CWD != "." {
+		if filepath.IsAbs(exec.CWD) {
+			workDir = exec.CWD
+		} else {
+			workDir = filepath.Join(baseDir, exec.CWD)
+		}
+	}
+
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR"} {
+	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "GOOS", "GOARCH", "GOPATH"} {
 		if _, ok := exec.Env[k]; !ok {
 			exec.Env[k] = templateData[k]
 		}
