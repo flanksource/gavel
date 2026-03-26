@@ -30,6 +30,11 @@ type FixtureTest struct {
 	Query     string       `json:"query,omitempty"`
 	Expected  Expectations `json:"expected,omitempty"`
 
+	// Per-test overrides for skip conditions (override file-level FrontMatter values)
+	TestOS   string `json:"test_os,omitempty"`
+	TestArch string `json:"test_arch,omitempty"`
+	TestSkip string `json:"test_skip,omitempty"`
+
 	TemplateVars map[string]any           `json:"template_vars,omitempty"` // Template variables (.file, .filename, .dir)
 	TempFiles    map[string]*TempFileInfo `json:"temp_files,omitempty"`
 }
@@ -100,6 +105,25 @@ func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 
 func (fixture FixtureTest) Pretty() api.Text {
 	return clicky.Text(fixture.Name, "italic text-orange-500")
+}
+
+// ShouldSkip checks per-test overrides first, then falls back to file-level FrontMatter.
+func (fixture FixtureTest) ShouldSkip() string {
+	os := fixture.TestOS
+	if os == "" {
+		os = fixture.FrontMatter.OS
+	}
+	arch := fixture.TestArch
+	if arch == "" {
+		arch = fixture.FrontMatter.Arch
+	}
+	skip := fixture.TestSkip
+	if skip == "" {
+		skip = fixture.FrontMatter.Skip
+	}
+
+	fm := FrontMatter{OS: os, Arch: arch, Skip: skip}
+	return fm.ShouldSkip()
 }
 
 type ExecFixtureBase struct {

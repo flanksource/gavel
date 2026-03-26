@@ -95,6 +95,12 @@ func parseTableRow(headers, values []string) *FixtureNode {
 			fixture.Exec = value
 		case "terminal", "term":
 			fixture.Terminal = value
+		case "os":
+			fixture.TestOS = value
+		case "arch":
+			fixture.TestArch = value
+		case "skip":
+			fixture.TestSkip = value
 		case "cli args", "args", "arguments":
 			fixture.Args = strings.Split(value, " ")
 		case "exit code", "exitcode", "expected exit code":

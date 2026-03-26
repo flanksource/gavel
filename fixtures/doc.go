@@ -93,8 +93,15 @@
 //	env:
 //	  LOG_LEVEL: "debug"
 //	cwd: ./testdir
+//	terminal: pty
 //	timeout: 30s
+//	os: linux
+//	arch: amd64
+//	skip: "! command -v docker"
 //	---
+//
+// The fields terminal, os, arch, and skip can also be set per-test via
+// table columns or command block YAML frontmatter (test-level overrides file-level).
 //
 // # Working Directory (CWD) Resolution
 //
