@@ -50,6 +50,10 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		rootDir = baseDir
 	}
 
+	if gitRoot != goRoot {
+		logger.V(3).Infof("Directories: base=%s git=%s go=%s root=%s", baseDir, gitRoot, goRoot, rootDir)
+	}
+
 	// Inject auto-injected vars into TemplateVars so they're available
 	// in both Template() expansion and CEL evaluation via AsMap()
 	if fixture.TemplateVars == nil {
@@ -88,6 +92,9 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 			workDir = filepath.Join(baseDir, exec.CWD)
 		}
 	}
+	if workDir != baseDir {
+		logger.V(3).Infof("WorkDir: %s (expanded from %s)", workDir, exec.CWD)
+	}
 
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
@@ -96,19 +103,6 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		if _, ok := exec.Env[k]; !ok {
 			exec.Env[k] = templateData[k]
 		}
-	}
-
-	bash := clicky.Exec("bash", "-c").AsWrapper()
-
-	// Execute build command if specified (but skip it in task mode since build task handles it)
-	if exec.Build != "" {
-		logger.V(4).Infof("🔨 Build command: %s", exec.Build)
-
-		p, err := bash(exec.Build)
-		if err != nil {
-			return result.Errorf(err, "build failed: %s", p.Pretty().ANSI())
-		}
-
 	}
 
 	if exec.Exec == "" {
@@ -190,13 +184,16 @@ func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) stri
 
 	// Get the merged CWD (file-level frontmatter + test-level override)
 	cwd := fixture.ExecBase().CWD
+	var result string
 	if cwd == "" || cwd == "." {
-		return baseDir
+		result = baseDir
+	} else if filepath.IsAbs(cwd) {
+		result = cwd
+	} else {
+		result = filepath.Join(baseDir, cwd)
 	}
-	if filepath.IsAbs(cwd) {
-		return cwd
-	}
-	return filepath.Join(baseDir, cwd)
+	logger.V(4).Infof("ResolveWorkDir: opts.WorkDir=%s sourceDir=%s cwd=%s → %s", opts.WorkDir, fixture.SourceDir, cwd, result)
+	return result
 }
 
 // GetRequiredFields returns required fields
