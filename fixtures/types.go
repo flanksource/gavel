@@ -390,17 +390,43 @@ func (f FixtureResult) Pretty() api.Text {
 	}
 	t = t.Space()
 
-	// For failures, show full output including stdout/stderr
 	isFailed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
-	if f.Actual != nil {
-		if isFailed {
-			if full, ok := f.Actual.(api.PrettyFull); ok {
-				t = t.Append(full.PrettyFull())
-			} else {
-				t = t.Append(f.Actual)
+	verbosity := clicky.Flags.LevelCount
+
+	if isFailed {
+		switch {
+		case verbosity >= 2:
+			if f.Stdout != "" {
+				t = t.NewLine().Append(f.Stdout, "max-lines-[50]")
 			}
-		} else {
-			t = t.Append(f.Actual)
+			if f.Stderr != "" {
+				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[50]")
+			}
+		case verbosity >= 1:
+			if f.Stdout != "" {
+				t = t.NewLine().Append(f.Stdout, "max-lines-[10]")
+			}
+			if f.Stderr != "" {
+				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[10]")
+			}
+		default:
+			if f.Stderr != "" {
+				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[2]")
+			}
+		}
+	} else {
+		switch {
+		case verbosity >= 2:
+			if f.Stdout != "" {
+				t = t.NewLine().Append(f.Stdout, "max-lines-[50]")
+			}
+			if f.Stderr != "" {
+				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[50]")
+			}
+		case verbosity >= 1:
+			if f.Stderr != "" {
+				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[10]")
+			}
 		}
 	}
 
