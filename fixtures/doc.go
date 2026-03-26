@@ -118,15 +118,22 @@
 // Environment variables from frontmatter and per-test config are passed to the
 // executed command.
 //
-// # Auto-Injected Root Directory Variables
+// # Auto-Injected Variables
 //
-// The following variables are automatically computed from the working directory
-// and available as both gomplate template variables (e.g. {{.GIT_ROOT_DIR}}) and
-// environment variables in executed commands:
+// The following variables are automatically available using shell-style $VAR
+// syntax (e.g. $GIT_ROOT_DIR), Go template syntax (e.g. {{.GIT_ROOT_DIR}}),
+// and as environment variables in executed commands:
 //
 //   - GIT_ROOT_DIR: nearest parent directory containing .git
 //   - GO_ROOT_DIR: nearest parent directory containing go.mod
 //   - ROOT_DIR: GIT_ROOT_DIR if available, else GO_ROOT_DIR, else working directory
+//   - CWD: resolved working directory for the test
+//   - GOOS: Go runtime OS (e.g. linux, darwin)
+//   - GOARCH: Go runtime architecture (e.g. amd64, arm64)
+//   - GOPATH: Go workspace path from environment
+//
+// Shell-style $VAR references to unknown variables pass through unchanged,
+// so commands like "echo $HOME" work as expected in bash execution.
 //
 // User-defined env vars with the same name take precedence over auto-injected values.
 //

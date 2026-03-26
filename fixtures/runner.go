@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -246,8 +247,12 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 	templateData := make(map[string]interface{})
 	templateData["PWD"] = r.options.WorkDir
 	templateData["WorkDir"] = r.options.WorkDir
+	templateData["GOOS"] = runtime.GOOS
+	templateData["GOARCH"] = runtime.GOARCH
+	templateData["GOPATH"] = os.Getenv("GOPATH")
 
-	// Template the build command
+	// Template the build command (expand $VAR first, then gomplate)
+	buildCmd = ExpandVars(buildCmd, templateData)
 	templatedCmd, err := renderBuildTemplate(buildCmd, templateData)
 	if err != nil {
 		ctx.Errorf("Failed to template build command: %v", err)
