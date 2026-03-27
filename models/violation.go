@@ -15,13 +15,16 @@ const (
 )
 
 type Violation struct {
-	File     string            `json:"file,omitempty"`
-	Line     int               `json:"line,omitempty"`
-	Column   int               `json:"column,omitempty"`
-	Message  *string           `json:"message,omitempty"`
-	Source   string            `json:"source,omitempty"`
-	Rule     *Rule             `json:"rule,omitempty"`
-	Severity ViolationSeverity `yaml:"severity,omitempty"`
+	File             string            `json:"file,omitempty"`
+	Line             int               `json:"line,omitempty"`
+	Column           int               `json:"column,omitempty"`
+	Message          *string           `json:"message,omitempty"`
+	Source           string            `json:"source,omitempty"`
+	Rule             *Rule             `json:"rule,omitempty"`
+	Severity         ViolationSeverity `yaml:"severity,omitempty"`
+	Fixable          bool              `json:"fixable,omitempty"`
+	FixApplicability string            `json:"fix_applicability,omitempty"`
+	Code             *string           `json:"code,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 }
