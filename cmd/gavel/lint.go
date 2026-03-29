@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
+	"github.com/flanksource/gavel/linters/jscpd"
 	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/ruff"
@@ -47,10 +48,12 @@ func (o LintOptions) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale.
+Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd.
 
 Examples:
   gavel lint
+  gavel lint jscpd
+  gavel lint jscpd eslint
   gavel lint --linters=golangci-lint
   gavel lint --linters=golangci-lint,ruff
   gavel lint --fix
@@ -74,10 +77,25 @@ func runLint(opts LintOptions) (any, error) {
 	linters.DefaultRegistry.Register(pyright.NewPyright(opts.WorkDir))
 	linters.DefaultRegistry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
 	linters.DefaultRegistry.Register(vale.NewVale(opts.WorkDir))
+	linters.DefaultRegistry.Register(jscpd.NewJSCPD(opts.WorkDir))
 
-	// Filter linters based on --linters flag
+	// Check if any positional args are linter names
+	var linterFilter []string
+	var actualFiles []string
+	for _, f := range opts.Files {
+		if linters.DefaultRegistry.Has(f) {
+			linterFilter = append(linterFilter, f)
+		} else {
+			actualFiles = append(actualFiles, f)
+		}
+	}
+	opts.Files = actualFiles
+
+	// Filter linters based on --linters flag or positional linter names
 	requestedLinters := linters.DefaultRegistry.List()
-	if opts.Linters != "*" {
+	if len(linterFilter) > 0 {
+		requestedLinters = linterFilter
+	} else if opts.Linters != "*" {
 		requestedLinters = strings.Split(opts.Linters, ",")
 	}
 
