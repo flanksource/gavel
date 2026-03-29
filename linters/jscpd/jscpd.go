@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
@@ -141,17 +142,20 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 		return nil, fmt.Errorf("failed to read jscpd report: %w", err)
 	}
 
-	return j.parseViolations(reportData)
+	return j.parseViolations(reportData, excludes)
 }
 
 func (j *JSCPD) buildExcludes() []string {
+	var excludes []string
 	if j.ArchConfig != nil {
-		return j.ArchConfig.GetAllLanguageExcludes("", j.DefaultExcludes())
+		excludes = j.ArchConfig.GetAllLanguageExcludes("", j.DefaultExcludes())
+	} else {
+		excludes = append(models.GetBuiltinExcludePatterns(), j.DefaultExcludes()...)
 	}
-	return append(models.GetBuiltinExcludePatterns(), j.DefaultExcludes()...)
+	return append(excludes, j.Ignores...)
 }
 
-func (j *JSCPD) parseViolations(data []byte) ([]models.Violation, error) {
+func (j *JSCPD) parseViolations(data []byte, excludes []string) ([]models.Violation, error) {
 	var report JscpdReport
 	if err := json.Unmarshal(data, &report); err != nil {
 		logger.Debugf("Failed to parse jscpd JSON output: %v\nOutput: %s", err, string(data))
@@ -160,22 +164,48 @@ func (j *JSCPD) parseViolations(data []byte) ([]models.Violation, error) {
 
 	var violations []models.Violation
 	for _, dup := range report.Duplicates {
+		if matchesAny(dup.FirstFile.Name, excludes) || matchesAny(dup.SecondFile.Name, excludes) {
+			continue
+		}
+
 		firstFile := normalizePath(j.WorkDir, dup.FirstFile.Name)
 		secondFile := normalizePath(j.WorkDir, dup.SecondFile.Name)
 
-		msg := fmt.Sprintf("Duplicate code (%d lines, %s) also in %s:%d",
-			dup.Lines, dup.Format, secondFile, dup.SecondFile.StartLoc.Line)
+		var msg string
+		if firstFile == secondFile {
+			msg = fmt.Sprintf("Duplicate code (%d lines, %s) lines %d-%d, also at lines %d-%d",
+				dup.Lines, dup.Format,
+				dup.FirstFile.StartLoc.Line, dup.FirstFile.EndLoc.Line,
+				dup.SecondFile.StartLoc.Line, dup.SecondFile.EndLoc.Line)
+		} else {
+			msg = fmt.Sprintf("Duplicate code (%d lines, %s) lines %d-%d, also in %s:%d-%d",
+				dup.Lines, dup.Format,
+				dup.FirstFile.StartLoc.Line, dup.FirstFile.EndLoc.Line,
+				secondFile, dup.SecondFile.StartLoc.Line, dup.SecondFile.EndLoc.Line)
+		}
 
-		violations = append(violations, models.NewViolationBuilder().
+		b := models.NewViolationBuilder().
 			WithFile(firstFile).
-			WithLocation(dup.FirstFile.StartLoc.Line, dup.FirstFile.StartLoc.Column).
+			WithLocation(dup.FirstFile.StartLoc.Line, 0).
 			WithMessage(msg).
 			WithSource("jscpd").
-			WithRuleFromLinter("jscpd", fmt.Sprintf("duplicate-%s", dup.Format)).
-			Build())
+			WithRuleFromLinter("jscpd", fmt.Sprintf("duplicate-%s", dup.Format))
+		if dup.Fragment != "" {
+			b = b.WithCode(dup.Fragment)
+		}
+		violations = append(violations, b.Build())
 	}
 
 	return violations, nil
+}
+
+func matchesAny(path string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matched, _ := doublestar.Match(pattern, path); matched {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePath(workDir, name string) string {

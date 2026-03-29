@@ -21,6 +21,7 @@ import (
 
 type LintOptions struct {
 	Linters string   `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
+	Ignore  []string `flag:"ignore" help:"Glob patterns to exclude from linting"`
 	Fix     bool     `flag:"fix" help:"Enable auto-fixing"`
 	NoCache bool     `flag:"no-cache" help:"Disable caching/debounce"`
 	WorkDir string   `flag:"work-dir" help:"Working directory"`
@@ -132,6 +133,7 @@ func runLint(opts LintOptions) (any, error) {
 		runOpts := linters.RunOptions{
 			WorkDir:   opts.WorkDir,
 			Files:     opts.Files,
+			Ignores:   opts.Ignore,
 			Fix:       opts.Fix,
 			NoCache:   opts.NoCache,
 			ForceJSON: true,
