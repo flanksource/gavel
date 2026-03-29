@@ -82,6 +82,7 @@ type RunOptions struct {
 	ForceJSON  bool
 	Fix        bool // Enable auto-fixing mode
 	NoCache    bool // Disable caching
+	Ignores    []string
 	ExtraArgs  []string
 }
 
@@ -303,6 +304,15 @@ func (vn *violationNode) Pretty() api.Text {
 				t = t.NewLine().Append(fmt.Sprintf("  %s │ ", gutter), "text-muted").Append(pointer, "text-red-500")
 			}
 		}
+	}
+
+	// At -vv, show code fragment if available (e.g. jscpd duplicate code)
+	if clicky.Flags.LevelCount >= 2 && vn.v.Code != nil && *vn.v.Code != "" {
+		lang := ""
+		if vn.v.Rule != nil {
+			lang = strings.TrimPrefix(vn.v.Rule.Method, "duplicate-")
+		}
+		t = t.NewLine().Append(api.NewCode(*vn.v.Code, lang).ANSI(), "")
 	}
 
 	return t
