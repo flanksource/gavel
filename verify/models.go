@@ -20,6 +20,10 @@ type modelListResponse struct {
 }
 
 func fetchModelIDs(url, authHeader, authValue, version string) ([]string, error) {
+	if os.Getenv("MOCK") != "false" {
+		return []string{"mock-model"}, nil
+	}
+
 	req := chttp.NewClient().R(context.Background()).
 		Header(authHeader, authValue)
 	if version != "" {

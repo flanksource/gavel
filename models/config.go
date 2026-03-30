@@ -71,8 +71,24 @@ type LanguageConfig struct {
 type LinterConfig struct {
 	Enabled      bool     `yaml:"enabled"`
 	Debounce     string   `yaml:"debounce,omitempty"`
+	Timeout      string   `yaml:"timeout,omitempty"`
 	Args         []string `yaml:"args,omitempty"`
 	OutputFormat string   `yaml:"output_format,omitempty"`
+}
+
+// DefaultLinterTimeout is the default timeout for linter execution
+const DefaultLinterTimeout = 5 * time.Minute
+
+// GetTimeout returns the parsed timeout duration, falling back to DefaultLinterTimeout
+func (l *LinterConfig) GetTimeout() time.Duration {
+	if l.Timeout == "" {
+		return DefaultLinterTimeout
+	}
+	d, err := time.ParseDuration(l.Timeout)
+	if err != nil {
+		return DefaultLinterTimeout
+	}
+	return d
 }
 
 // BuiltinRuleConfig represents configuration for a built-in rule
