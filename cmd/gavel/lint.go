@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
@@ -17,15 +20,19 @@ import (
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/vale"
+	"github.com/flanksource/gavel/models"
 )
 
 type LintOptions struct {
-	Linters string   `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
-	Ignore  []string `flag:"ignore" help:"Glob patterns to exclude from linting"`
-	Fix     bool     `flag:"fix" help:"Enable auto-fixing"`
-	NoCache bool     `flag:"no-cache" help:"Disable caching/debounce"`
-	WorkDir string   `flag:"work-dir" help:"Working directory"`
-	Files   []string `args:"true"`
+	Linters   string   `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
+	Ignore    []string `flag:"ignore" help:"Glob patterns to exclude from linting"`
+	Fix       bool     `flag:"fix" help:"Enable auto-fixing"`
+	NoCache   bool     `flag:"no-cache" help:"Disable caching/debounce"`
+	Timeout   string   `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
+	SyncTodos string   `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
+	GroupBy   string   `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
+	WorkDir   string   `flag:"work-dir" help:"Working directory"`
+	Files     []string `args:"true"`
 }
 
 func (o LintOptions) Pretty() api.Text {
@@ -69,6 +76,12 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+
+	timeout, err := time.ParseDuration(opts.Timeout)
+	if err != nil {
+		timeout = models.DefaultLinterTimeout
+	}
+
 	logger.Infof("Running linters %s", opts.Pretty().ANSI())
 
 	// Register linters with the working directory
@@ -136,6 +149,7 @@ func runLint(opts LintOptions) (any, error) {
 			Ignores:   opts.Ignore,
 			Fix:       opts.Fix,
 			NoCache:   opts.NoCache,
+			Timeout:   timeout,
 			ForceJSON: true,
 		}
 
@@ -145,6 +159,20 @@ func runLint(opts LintOptions) (any, error) {
 
 		result := linters.RunLinter(linter, runOpts)
 		allResults = append(allResults, &result)
+	}
+
+	if opts.SyncTodos != "" {
+		todosDir := filepath.Join(opts.SyncTodos, "lint")
+		syncResult, err := linters.SyncLintTodos(allResults, linters.SyncOptions{
+			TodosDir: todosDir,
+			GroupBy:  opts.GroupBy,
+			WorkDir:  opts.WorkDir,
+		})
+		if err != nil {
+			return allResults, fmt.Errorf("failed to sync todos: %w", err)
+		}
+		logger.Infof("Synced TODOs: %d created, %d updated, %d completed",
+			len(syncResult.Created), len(syncResult.Updated), len(syncResult.Completed))
 	}
 
 	return allResults, nil

@@ -2,11 +2,11 @@ package todos
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 )
 
 // DiscoveryFilters specifies criteria for filtering TODOs during discovery.
@@ -56,7 +56,7 @@ func (filters DiscoveryFilters) Matches(todo *types.TODO) bool {
 func DiscoverTODOs(dir string, filters DiscoveryFilters) (types.TODOS, error) {
 	var todos types.TODOS
 
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	err := utils.WalkGitIgnored(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
