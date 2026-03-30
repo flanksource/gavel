@@ -66,7 +66,7 @@ type RunOptions struct {
 	TodoTemplate  string     `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
 	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
-	Recursive     bool       `json:"recursive,omitempty" flag:"recursive"`                         // Recursively discover test packages in subdirectories
+	Recursive     bool       `json:"recursive,omitempty" flag:"recursive" default:"true"`           // Recursively discover test packages in subdirectories
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -602,9 +602,17 @@ func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
 	}
 
 	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
+		failed := false
+		for _, child := range children {
+			if child.Failed || child.Sum().Failed > 0 {
+				failed = true
+				break
+			}
+		}
 		return []parsers.Test{{
 			Name:     node.Name,
 			Children: children,
+			Failed:   failed,
 		}}
 	}
 	return children

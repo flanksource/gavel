@@ -108,10 +108,16 @@ func (t Test) Pretty() api.Text {
 		s = s.Space().Append(t.Message, textStyle)
 	}
 	if t.Failed && t.Stdout != "" {
-		s = s.NewLine().Append(t.Stdout, "text-red-500 max-lines-[5] truncate-headtail")
+		s = s.NewLine().Add(api.Collapsed{
+			Label:   "stdout",
+			Content: clicky.Text(t.Stdout, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
+		})
 	}
 	if t.Stderr != "" {
-		s = s.NewLine().Append(t.Stderr, "text-red-500 max-lines-[5] truncate-headtail")
+		s = s.NewLine().Add(api.Collapsed{
+			Label:   "stderr",
+			Content: clicky.Text(t.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
+		})
 	}
 
 	return s

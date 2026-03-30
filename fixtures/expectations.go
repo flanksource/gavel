@@ -99,7 +99,9 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		switch v := output.(type) {
 		case bool:
 			if !v {
-				return fixture.Failf("CEL expression evaluated to false\n  expression: %s\n  variables: %s", e.CEL, formatCELVars(t))
+				fixture.CELExpression = e.CEL
+				fixture.CELVars = t
+				return fixture.Failf("CEL expression evaluated to false")
 			}
 		case string:
 			if strings.ToLower(strings.TrimSpace(v)) != "true" {

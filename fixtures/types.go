@@ -415,6 +415,10 @@ type FixtureResult struct {
 	Actual    interface{} `json:"actual,omitempty" pretty:"label=Actual,omitempty"`
 	CELResult bool        `json:"cel_result,omitempty" pretty:"label=CEL Result,omitempty"`
 
+	// CEL failure details
+	CELExpression string         `json:"cel_expression,omitempty"`
+	CELVars       map[string]any `json:"cel_vars,omitempty"`
+
 	// Execution metadata
 	Command  string                 `json:"command,omitempty" pretty:"label=Command,style=text-cyan-600,omitempty"`
 	CWD      string                 `json:"cwd,omitempty" pretty:"label=Working Dir,style=text-purple-500,omitempty"`
@@ -465,57 +469,48 @@ func (f FixtureResult) String() string {
 func (f FixtureResult) Pretty() api.Text {
 	t := f.Status.Pretty().Append(" ").Add(f.Test.Pretty())
 
-	if f.Error != "" {
+	if f.Duration > 0 {
+		t = t.Space().Append(fmt.Sprintf("(%s)", f.Duration), "text-muted")
+	}
+
+	if f.CELExpression != "" {
+		t = t.Space().Append(f.CELExpression, "font-mono text-red-500")
+	} else if f.Error != "" {
 		t = t.Space().Append(f.Error, "text-red-600")
 	}
-	t = t.Space()
+
+	if len(f.CELVars) > 0 {
+		t = t.NewLine().Add(api.Collapsed{
+			Label:   "variables",
+			Content: clicky.Map(f.CELVars, "max-w-[100ch]"),
+		})
+	}
 
 	isFailed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
-	verbosity := clicky.Flags.LevelCount
 
-	if verbosity >= 2 && f.Command != "" {
+	if f.Command != "" {
 		cmd := f.Command
 		if f.CWD != "" {
 			cmd += " (cwd: " + relativePath(f.CWD) + ")"
 		}
-		t = t.Append("$ "+cmd, "text-gray-500")
+		t = t.NewLine().Append("$ "+cmd, "text-gray-500")
 	}
 
-	if isFailed {
-		switch {
-		case verbosity >= 2:
-			if f.Stdout != "" {
-				t = t.NewLine().Append(f.Stdout, "max-lines-[50]")
-			}
-			if f.Stderr != "" {
-				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[50]")
-			}
-		case verbosity >= 1:
-			if f.Stdout != "" {
-				t = t.NewLine().Append(f.Stdout, "max-lines-[10]")
-			}
-			if f.Stderr != "" {
-				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[10]")
-			}
-		default:
-			if f.Stderr != "" {
-				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[2]")
-			}
+	if f.Stdout != "" {
+		label := "stdout"
+		if isFailed {
+			label = "stdout (failed)"
 		}
-	} else {
-		switch {
-		case verbosity >= 2:
-			if f.Stdout != "" {
-				t = t.NewLine().Append(f.Stdout, "max-lines-[50]")
-			}
-			if f.Stderr != "" {
-				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[50]")
-			}
-		case verbosity >= 1:
-			if f.Stderr != "" {
-				t = t.NewLine().Append(f.Stderr, "text-red-500 max-lines-[10]")
-			}
-		}
+		t = t.NewLine().Add(api.Collapsed{
+			Label:   label,
+			Content: clicky.Text(f.Stdout, "font-mono text-xs whitespace-pre-wrap"),
+		})
+	}
+	if f.Stderr != "" {
+		t = t.NewLine().Add(api.Collapsed{
+			Label:   "stderr",
+			Content: clicky.Text(f.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
+		})
 	}
 
 	return t

@@ -1,6 +1,7 @@
 package runners
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/utils"
 )
 
 // GoTest implements the test runner for go test.
@@ -89,12 +91,12 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 	var packages []string
 	seen := make(map[string]bool)
 
-	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "_test.go") {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
 			pkgDir := filepath.Dir(path)
 			if !seen[pkgDir] {
 				seen[pkgDir] = true
