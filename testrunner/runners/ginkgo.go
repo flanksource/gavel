@@ -2,6 +2,7 @@ package runners
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/gavel/utils"
 )
 
 // Ginkgo implements the test runner for Ginkgo with --json-report.
@@ -39,12 +41,12 @@ func (r *Ginkgo) Parser() parsers.ResultParser {
 func (r *Ginkgo) Detect(workDir string) (bool, error) {
 	var found bool
 
-	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || found {
 			return err
 		}
 
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "_test.go") {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
 			if r.hasGinkgoImports(path) {
 				found = true
 			}
@@ -69,12 +71,12 @@ func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, err
 	var packages []string
 	seen := make(map[string]bool)
 
-	err := filepath.Walk(workDir, func(path string, info os.FileInfo, err error) error {
+	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && strings.HasSuffix(info.Name(), "_test.go") {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
 			if r.hasGinkgoImports(path) {
 				pkgDir := filepath.Dir(path)
 				if !seen[pkgDir] {

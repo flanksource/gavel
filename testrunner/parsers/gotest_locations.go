@@ -4,9 +4,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strings"
+
+	"github.com/flanksource/gavel/utils"
 )
 
 type TestLocation struct {
@@ -20,8 +21,8 @@ type TestLocation struct {
 func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 	locations := make(map[string]TestLocation)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, "_test.go") {
+	err := utils.WalkGitIgnored(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
 			return err
 		}
 
