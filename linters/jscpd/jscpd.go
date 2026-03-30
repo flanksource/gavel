@@ -97,8 +97,8 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 	args := []string{"--reporters", "json", "--output", tempDir, "--gitignore"}
 
 	excludes := j.buildExcludes()
-	for _, pattern := range excludes {
-		args = append(args, "--ignore", pattern)
+	if len(excludes) > 0 {
+		args = append(args, "--ignore", strings.Join(excludes, ","))
 	}
 
 	if j.Config != nil {
@@ -152,7 +152,13 @@ func (j *JSCPD) buildExcludes() []string {
 	} else {
 		excludes = append(models.GetBuiltinExcludePatterns(), j.DefaultExcludes()...)
 	}
-	return append(excludes, j.Ignores...)
+	excludes = append(excludes, j.Ignores...)
+	for i, pattern := range excludes {
+		if !strings.HasPrefix(pattern, "**/") {
+			excludes[i] = "**/" + pattern
+		}
+	}
+	return excludes
 }
 
 func (j *JSCPD) parseViolations(data []byte, excludes []string) ([]models.Violation, error) {

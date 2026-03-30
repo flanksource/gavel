@@ -82,6 +82,7 @@ type RunOptions struct {
 	ForceJSON  bool
 	Fix        bool // Enable auto-fixing mode
 	NoCache    bool // Disable caching
+	Timeout    time.Duration
 	Ignores    []string
 	ExtraArgs  []string
 }
@@ -137,6 +138,7 @@ type LinterResult struct {
 	Linter       string             `json:"linter"`
 	Success      bool               `json:"success"`
 	Skipped      bool               `json:"skipped,omitempty"`
+	TimedOut     bool               `json:"timed_out,omitempty"`
 	Duration     time.Duration      `json:"duration"`
 	Violations   []models.Violation `json:"violations"`
 	RawOutput    string             `json:"raw_output,omitempty"`
@@ -170,6 +172,9 @@ func (lr *LinterResult) Pretty() api.Text {
 	if lr.Skipped {
 		status = "⊘"
 		style = "text-muted"
+	} else if lr.TimedOut {
+		status = "⏱"
+		style = "text-red-600"
 	} else if lr.Success {
 		if lr.HasViolations() {
 			status = "⚠️"
@@ -186,6 +191,8 @@ func (lr *LinterResult) Pretty() api.Text {
 	text := fmt.Sprintf("%s %s", status, lr.Linter)
 	if lr.Skipped {
 		text += " (skipped: " + lr.Error + ")"
+	} else if lr.TimedOut {
+		text += fmt.Sprintf(" (timed out after %v)", lr.Duration)
 	} else if lr.Debounced {
 		text += fmt.Sprintf(" (cached, %v)", lr.DebounceUsed)
 	} else {
@@ -339,18 +346,25 @@ func readFileLine(path string, lineNum int) string {
 
 // RunLinter executes a single linter and returns the result.
 func RunLinter(linter Linter, opts RunOptions) LinterResult {
-	ctx := commonsContext.NewContext(context.Background())
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = models.DefaultLinterTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	start := time.Now()
 
-	task := clicky.StartTask[[]models.Violation](fmt.Sprintf("Running %s", linter.Name()), func(fCtx commonsContext.Context, t *clicky.Task) ([]models.Violation, error) {
-		return linter.Run(fCtx, t)
+	task := clicky.StartTask[[]models.Violation](fmt.Sprintf("Running %s", linter.Name()), func(_ commonsContext.Context, t *clicky.Task) ([]models.Violation, error) {
+		return linter.Run(commonsContext.NewContext(ctx), t)
 	})
 	violations, _ := task.GetResult()
 
-	_ = ctx
+	timedOut := ctx.Err() == context.DeadlineExceeded
 	return LinterResult{
 		Linter:     linter.Name(),
-		Success:    task.IsOk(),
+		Success:    task.IsOk() && !timedOut,
+		TimedOut:   timedOut,
 		Duration:   time.Since(start),
 		Violations: violations,
 		Error:      formatErr(task.Error()),
