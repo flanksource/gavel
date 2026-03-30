@@ -130,6 +130,11 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 	// Get configuration
 	config := r.config.GetLinterConfig(linterName, r.workDir)
 
+	// Apply per-linter timeout
+	timeout := config.GetTimeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Check intelligent debounce (only if cache is enabled)
 	if r.linterStats != nil {
 		shouldSkip, actualDebounce, err := r.linterStats.ShouldSkipLinter(linterName, r.workDir, config.Debounce)
@@ -175,9 +180,11 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 
 	r.updateTaskStatus(task.Task, linterName, task.IsOk(), len(violations), task.Error())
 
+	timedOut := ctx.Err() == context.DeadlineExceeded
 	result := &LinterResult{
 		Linter:     linterName,
-		Success:    task.IsOk(),
+		Success:    task.IsOk() && !timedOut,
+		TimedOut:   timedOut,
 		Duration:   task.Duration(),
 		Violations: violations,
 		Error:      r.formatError(err),
