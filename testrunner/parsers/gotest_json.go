@@ -240,9 +240,9 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 			}
 
 		case "pass":
-			// Mark test as passed
 			duration := time.Duration(event.Elapsed * float64(time.Second))
 			if test, exists := tests[testKey]; exists {
+				test.Passed = true
 				test.Failed = false
 				test.Skipped = false
 				test.Duration = duration
@@ -251,8 +251,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 					Name:      event.Test,
 					Package:   event.Package,
 					Framework: GoTest,
-					Failed:    false,
-					Skipped:   false,
+					Passed:    true,
 					Duration:  duration,
 				}
 			}
@@ -297,8 +296,8 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 		if output, exists := testOutputs[testKey]; exists {
 			test.Stdout = strings.TrimSpace(output.String())
 		}
-		// Look up file:line from AST-based location map
 		p.applyLocationFromMap(test)
+		p.applyContext(test)
 		results = append(results, *test)
 	}
 
@@ -338,6 +337,16 @@ func (p *GoTestJSON) applyLocationFromMap(test *Test) {
 			test.File = loc.File
 			test.Line = loc.Line
 		}
+	}
+}
+
+func (p *GoTestJSON) applyContext(test *Test) {
+	ctx := GoTestContext{}
+	if idx := strings.LastIndex(test.Name, "/"); idx > 0 {
+		ctx.ParentTest = test.Name[:idx]
+	}
+	if ctx != (GoTestContext{}) {
+		test.Context = ctx
 	}
 }
 

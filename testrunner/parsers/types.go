@@ -41,10 +41,33 @@ type Test struct {
 	Skipped     bool          `json:"skipped,omitempty"`
 	Failed      bool          `json:"failed,omitempty"`
 	Passed      bool          `json:"passed,omitempty"`
+	Pending     bool          `json:"pending,omitempty"`
 	Stdout      string        `json:"stdout,omitempty"`
 	Stderr      string        `json:"stderr,omitempty"`
 	Children    Tests         `json:"children,omitempty"`
 	Summary     *TestSummary  `json:"summary,omitempty"`
+	Context     any           `json:"context,omitempty"`
+}
+
+type GoTestContext struct {
+	ParentTest string `json:"parent_test,omitempty"`
+	ImportPath string `json:"import_path,omitempty"`
+}
+
+type GinkgoContext struct {
+	SuiteDescription string `json:"suite_description,omitempty"`
+	SuitePath        string `json:"suite_path,omitempty"`
+	FailureLocation  string `json:"failure_location,omitempty"`
+}
+
+type FixtureContext struct {
+	Command       string         `json:"command,omitempty"`
+	ExitCode      int            `json:"exit_code,omitempty"`
+	CWD           string         `json:"cwd,omitempty"`
+	CELExpression string         `json:"cel_expression,omitempty"`
+	CELVars       map[string]any `json:"cel_vars,omitempty"`
+	Expected      any            `json:"expected,omitempty"`
+	Actual        any            `json:"actual,omitempty"`
 }
 
 func (t Test) IsFolder() bool {
@@ -200,6 +223,8 @@ func (tr Test) Sum() TestSummary {
 		summary.Skipped = 1
 	} else if tr.Passed {
 		summary.Passed = 1
+	} else if tr.Pending {
+		summary.Pending = 1
 	} else {
 		summary.Total = 0
 	}
@@ -210,6 +235,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Passed += childSummary.Passed
 		summary.Failed += childSummary.Failed
 		summary.Skipped += childSummary.Skipped
+		summary.Pending += childSummary.Pending
 		summary.Duration += childSummary.Duration
 	}
 
@@ -333,6 +359,7 @@ type TestSummary struct {
 	Passed   int
 	Failed   int
 	Skipped  int
+	Pending  int
 	Duration time.Duration
 }
 
@@ -359,6 +386,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Passed:   tr.Passed + other.Passed,
 		Failed:   tr.Failed + other.Failed,
 		Skipped:  tr.Skipped + other.Skipped,
+		Pending:  tr.Pending + other.Pending,
 		Duration: tr.Duration + other.Duration,
 	}
 }

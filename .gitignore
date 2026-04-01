@@ -51,6 +51,9 @@ coverage.html
 .env
 .env.local
 
+# Node
+node_modules/
+
 # Build artifacts
 /gavel
 .task
@@ -59,3 +62,7 @@ __debug*
 .ginkgo/
 .gingko/
 specs/
+*.png
+hack/
+*.cast
+.playwright-mcp/
