@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
-	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

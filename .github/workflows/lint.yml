@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.26"
 
 jobs:
   golangci-lint:
@@ -32,7 +32,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.4.0
+          version: v2.5.0
           args: --timeout=10m --tests=false --verbose
           skip-cache: true
 
@@ -70,6 +70,14 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build test UI
+        run: cd testrunner/ui && npm ci && npm run build
 
       - name: Check go mod tidy
         run: |
