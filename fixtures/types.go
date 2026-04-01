@@ -131,6 +131,9 @@ func (fixture FixtureTest) ShouldSkip() string {
 type ExecFixtureBase struct {
 	// Build command to run before tests
 	Build string `yaml:"build,omitempty" json:"build,omitempty"`
+	// Daemon command to run in the background after build, before tests.
+	// Supports {{.port}} template for a free port. Terminated after all tests complete.
+	Daemon string `yaml:"daemon,omitempty" json:"daemon,omitempty"`
 	// Exec command to run for each test, can be overridden per test, defaults to running bash -c
 	Exec string `yaml:"exec,omitempty" json:"exec,omitempty"`
 	// Args are the base arguments to pass to the command
@@ -166,7 +169,7 @@ func (e ExecFixtureBase) Pretty() api.Text {
 }
 
 func (e ExecFixtureBase) IsEmpty() bool {
-	return e.Exec == "" && e.Build == "" && len(e.Args) == 0
+	return e.Exec == "" && e.Build == "" && e.Daemon == "" && len(e.Args) == 0
 }
 
 func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) {
@@ -188,6 +191,13 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 	e.Build = ExpandVars(e.Build, data)
 	if e.Build, err = gomplate.RunTemplate(data, gomplate.Template{
 		Template: e.Build,
+	}); err != nil {
+		return ExecFixtureBase{}, err
+	}
+
+	e.Daemon = ExpandVars(e.Daemon, data)
+	if e.Daemon, err = gomplate.RunTemplate(data, gomplate.Template{
+		Template: e.Daemon,
 	}); err != nil {
 		return ExecFixtureBase{}, err
 	}
@@ -217,6 +227,9 @@ func (e ExecFixtureBase) Template(data map[string]any) (ExecFixtureBase, error) 
 		}
 		if e.Build != orig.Build {
 			changes = append(changes, fmt.Sprintf("build: %q→%q", orig.Build, e.Build))
+		}
+		if e.Daemon != orig.Daemon {
+			changes = append(changes, fmt.Sprintf("daemon: %q→%q", orig.Daemon, e.Daemon))
 		}
 		if e.CWD != orig.CWD {
 			changes = append(changes, fmt.Sprintf("cwd: %q→%q", orig.CWD, e.CWD))
@@ -251,6 +264,9 @@ func (e ExecFixtureBase) AsMap() map[string]string {
 	if e.Build != "" {
 		envMap["BUILD"] = e.Build
 	}
+	if e.Daemon != "" {
+		envMap["DAEMON"] = e.Daemon
+	}
 	if e.Exec != "" {
 		envMap["EXEC"] = e.Exec
 	}
@@ -271,6 +287,9 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 	merged := e
 	if other.Build != "" {
 		merged.Build = other.Build
+	}
+	if other.Daemon != "" {
+		merged.Daemon = other.Daemon
 	}
 	if other.Exec != "" {
 		merged.Exec = other.Exec
@@ -334,6 +353,7 @@ func (f *FrontMatter) CleanMetadata() {
 	}
 	// Keys from ExecFixtureBase
 	delete(f.Metadata, "build")
+	delete(f.Metadata, "daemon")
 	delete(f.Metadata, "exec")
 	delete(f.Metadata, "args")
 	delete(f.Metadata, "env")
