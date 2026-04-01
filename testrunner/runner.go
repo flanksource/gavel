@@ -52,6 +52,7 @@ func (o OutputMode) ShouldShow(failed bool) bool {
 type TestOrchestrator struct {
 	RunOptions
 	registry *Registry
+	streamer *TestStreamer
 }
 
 // RunOptions configures test execution behavior.
@@ -67,6 +68,8 @@ type RunOptions struct {
 	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
 	Recursive     bool       `json:"recursive,omitempty" flag:"recursive" default:"true"`           // Recursively discover test packages in subdirectories
+	UI            bool       `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	Updates       chan<- []parsers.Test `json:"-"`                                                  // Channel for streaming test result updates to UI
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -134,23 +137,33 @@ func Run(opts RunOptions) (any, error) {
 	}
 	logger.Infof("Running tests  %s", opts.Pretty().ANSI())
 
+	var streamer *TestStreamer
+	if opts.Updates != nil {
+		streamer = NewTestStreamer(opts.Updates)
+		defer streamer.Done()
+	}
+
 	t := &TestOrchestrator{
 		RunOptions: opts,
 		registry:   DefaultRegistry(opts.WorkDir),
+		streamer:   streamer,
 	}
 	results, err := t.Run()
 	if err != nil {
 		return nil, err
 	}
 	tests := []parsers.Test{}
+	showAll := opts.UI || opts.ShowPassed
 	for _, result := range results {
 		for _, test := range result.Tests {
-			if test.Failed || opts.ShowPassed {
-				if !opts.ShowStdout.ShouldShow(test.Failed) {
-					test.Stdout = ""
-				}
-				if !opts.ShowStderr.ShouldShow(test.Failed) {
-					test.Stderr = ""
+			if test.Failed || showAll {
+				if !opts.UI {
+					if !opts.ShowStdout.ShouldShow(test.Failed) {
+						test.Stdout = ""
+					}
+					if !opts.ShowStderr.ShouldShow(test.Failed) {
+						test.Stderr = ""
+					}
 				}
 				tests = append(tests, test)
 			}
@@ -165,10 +178,12 @@ func Run(opts RunOptions) (any, error) {
 	// so that AddNamedCommand still prints the results.
 	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir)
 	if fixtureTree != nil {
-		tree = append(tree, fixtureNodeToTests(fixtureTree)...)
+		for _, child := range fixtureTree.Children {
+			tree = append(tree, fixtureNodeToTests(child)...)
+		}
 	}
 
-	return tree, fixtureErr
+	return tree, nil
 }
 
 // Run executes tests and optionally syncs failures to TODOs.
@@ -264,6 +279,22 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		return o.displayDryRun(packagesByFramework, extraArgs), nil
 	}
 
+	// Send pending package outline to UI before execution
+	if o.streamer != nil {
+		var outline []parsers.Test
+		for fw, packages := range packagesByFramework {
+			for _, pkg := range packages {
+				outline = append(outline, parsers.Test{
+					Name:        pkg,
+					PackagePath: pkg,
+					Framework:   fw,
+					Pending:     true,
+				})
+			}
+		}
+		o.streamer.SetPackageOutline(outline)
+	}
+
 	// Create task group to orchestrate parallel package test execution
 	group := task.StartGroup[packageResult]("Running tests across packages")
 
@@ -283,7 +314,11 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 			taskName := fmt.Sprintf("%s %s", fw, pkgPath)
 			group.Add(taskName, func(ctx commonsCtx.Context, t *task.Task) (packageResult, error) {
-				return o.runPackageTest(ctx, pkgPath, fw, runner, t, extraArgs)
+				result, err := o.runPackageTest(ctx, pkgPath, fw, runner, t, extraArgs)
+				if o.streamer != nil {
+					o.streamer.CompletePackage(pkgPath, fw, result.testResults)
+				}
+				return result, err
 			})
 		}
 	}
@@ -564,36 +599,76 @@ func discoverFixtures(workDir string) []string {
 	return lo.Uniq(found)
 }
 
-func runDiscoveredFixtures(workDir string) (*fixtures.FixtureNode, error) {
+func runDiscoveredFixtures(workDir string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
 	fixtureFiles := discoverFixtures(workDir)
 	if len(fixtureFiles) == 0 {
 		return nil, nil
 	}
 
 	execPath, _ := os.Executable()
-	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+	runnerOpts := fixtures.RunnerOptions{
 		Paths:          fixtureFiles,
 		WorkDir:        workDir,
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: execPath,
-	})
+	}
+
+	if streamer != nil {
+		runnerOpts.OnParsed = func(tree *fixtures.FixtureNode) {
+			streamer.SetFixtureOutline(fixtureTreeToPending(tree))
+		}
+	}
+
+	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fixture runner: %w", err)
 	}
-	return runner.Run()
+
+	if streamer != nil {
+		runner.SetOnResult(func(_ fixtures.FixtureResult) {
+			tree := runner.Tree()
+			var fixtureTests []parsers.Test
+			for _, child := range tree.Children {
+				fixtureTests = append(fixtureTests, fixtureNodeToTests(child)...)
+			}
+			streamer.UpdateFixtures(fixtureTests)
+		})
+	}
+
+	result, err := runner.Run()
+
+	if streamer != nil && result != nil {
+		var fixtureTests []parsers.Test
+		for _, child := range result.Children {
+			fixtureTests = append(fixtureTests, fixtureNodeToTests(child)...)
+		}
+		streamer.UpdateFixtures(fixtureTests)
+	}
+
+	return result, err
 }
 
 func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
 	if node.Results != nil {
+		r := node.Results
 		t := parsers.Test{
 			Name:      node.Name,
 			Framework: "fixture",
-			Duration:  node.Results.Duration,
-			Stdout:    node.Results.Stdout,
-			Stderr:    node.Results.Stderr,
-			Failed:    node.Results.Status == task.StatusFAIL || node.Results.Status == task.StatusFailed || node.Results.Status == task.StatusERR,
-			Passed:    node.Results.Status == task.StatusPASS || node.Results.Status == task.StatusSuccess,
-			Message:   node.Results.Error,
+			Duration:  r.Duration,
+			Stdout:    r.Stdout,
+			Stderr:    r.Stderr,
+			Failed:    r.Status == task.StatusFAIL || r.Status == task.StatusFailed || r.Status == task.StatusERR,
+			Passed:    r.Status == task.StatusPASS || r.Status == task.StatusSuccess,
+			Message:   r.Error,
+			Context: parsers.FixtureContext{
+				Command:       r.Command,
+				ExitCode:      r.ExitCode,
+				CWD:           r.CWD,
+				CELExpression: r.CELExpression,
+				CELVars:       r.CELVars,
+				Expected:      r.Expected,
+				Actual:        r.Actual,
+			},
 		}
 		return []parsers.Test{t}
 	}
@@ -612,9 +687,44 @@ func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
 			}
 		}
 		return []parsers.Test{{
-			Name:     node.Name,
-			Children: children,
-			Failed:   failed,
+			Name:      node.Name,
+			Framework: "fixture",
+			Children:  children,
+			Failed:    failed,
+		}}
+	}
+	return children
+}
+
+func fixtureTreeToPending(node *fixtures.FixtureNode) []parsers.Test {
+	if node == nil {
+		return nil
+	}
+	var result []parsers.Test
+	for _, child := range node.Children {
+		result = append(result, fixtureNodeToPending(child)...)
+	}
+	return result
+}
+
+func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
+	if node.Test != nil {
+		return []parsers.Test{{
+			Name:      node.Name,
+			Framework: "fixture",
+			Pending:   true,
+		}}
+	}
+	var children parsers.Tests
+	for _, child := range node.Children {
+		children = append(children, fixtureNodeToPending(child)...)
+	}
+	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
+		return []parsers.Test{{
+			Name:      node.Name,
+			Framework: "fixture",
+			Children:  children,
+			Pending:   true,
 		}}
 	}
 	return children

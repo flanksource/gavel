@@ -10,8 +10,23 @@ tasks:
     cmds:
       - task --list
 
+  test-ui:
+    desc: Build the test UI frontend bundle (Preact + Vite)
+    dir: testrunner/ui
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - testrunner/ui/src/**/*
+      - testrunner/ui/package.json
+      - testrunner/ui/vite.config.ts
+    generates:
+      - testrunner/ui/dist/testui.js
+
   build:
     desc: Build the binary
+    deps:
+      - test-ui
     vars:
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
