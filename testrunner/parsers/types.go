@@ -200,7 +200,6 @@ func (t Test) PrettyTODO() api.Text {
 	return text
 }
 
-
 func truncateOutput(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
