@@ -23,6 +23,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build test UI
+        run: cd testrunner/ui && npm ci && npm run build
+
       - name: Install dependencies
         run: |
           go mod download
@@ -56,6 +64,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Install Task
         uses: arduino/setup-task@v2

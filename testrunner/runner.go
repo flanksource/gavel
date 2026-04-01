@@ -57,19 +57,19 @@ type TestOrchestrator struct {
 
 // RunOptions configures test execution behavior.
 type RunOptions struct {
-	SyncTodos     bool       `json:"sync_todos,omitempty" flag:"sync-todos"`                       // Whether to sync test failures to TODOs
-	StartingPaths []string   `json:"starting_paths,omitempty" args:"true"`                         // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
-	ExtraArgs     []string   `json:"extra_args,omitempty" flag:"extra-args"`                       // Additional arguments to pass to test runners (e.g., ["--focus", "TestName"])
-	ShowPassed    bool       `json:"show_passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
-	ShowStdout    OutputMode `json:"show_stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
-	ShowStderr    OutputMode `json:"show_stderr,omitempty" flag:"show-stderr" default:"OnFailure"` // When to show stderr: false|Never, OnFailure (default), true|Always
-	TodosDir      string     `json:"todos_dir,omitempty" flag:"todos-dir" default:".todos"`        // Directory to store TODO files (default: .todos/)
-	TodoTemplate  string     `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
-	WorkDir       string     `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
-	DryRun        bool       `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
-	Recursive     bool       `json:"recursive,omitempty" flag:"recursive" default:"true"`           // Recursively discover test packages in subdirectories
-	UI            bool       `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
-	Updates       chan<- []parsers.Test `json:"-"`                                                  // Channel for streaming test result updates to UI
+	SyncTodos     bool                  `json:"sync_todos,omitempty" flag:"sync-todos"`                       // Whether to sync test failures to TODOs
+	StartingPaths []string              `json:"starting_paths,omitempty" args:"true"`                         // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
+	ExtraArgs     []string              `json:"extra_args,omitempty" flag:"extra-args"`                       // Additional arguments to pass to test runners (e.g., ["--focus", "TestName"])
+	ShowPassed    bool                  `json:"show_passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
+	ShowStdout    OutputMode            `json:"show_stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
+	ShowStderr    OutputMode            `json:"show_stderr,omitempty" flag:"show-stderr" default:"OnFailure"` // When to show stderr: false|Never, OnFailure (default), true|Always
+	TodosDir      string                `json:"todos_dir,omitempty" flag:"todos-dir" default:".todos"`        // Directory to store TODO files (default: .todos/)
+	TodoTemplate  string                `json:"todo_template,omitempty" flag:"todo-template"`                 // Path to TODO template file
+	WorkDir       string                `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
+	DryRun        bool                  `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
+	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
+	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 }
 
 func (opts RunOptions) Pretty() api.Text {
