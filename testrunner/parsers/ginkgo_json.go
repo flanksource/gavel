@@ -91,6 +91,11 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 	// Extract package name from suite path (directory name)
 	packagePath := filepath.Base(suite.SuitePath)
 
+	ctx := GinkgoContext{
+		SuiteDescription: suite.SuiteDescription,
+		SuitePath:        suite.SuitePath,
+	}
+
 	test := Test{
 		Name:      spec.LeafNodeText,
 		Suite:     suiteHierarchy,
@@ -101,7 +106,6 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		Package:   packagePath,
 	}
 
-	// Set pass/fail/skip status
 	switch spec.State {
 	case "passed":
 		test.Passed = true
@@ -109,12 +113,16 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		test.Failed = true
 		if spec.Failure != nil {
 			test.Message = spec.Failure.Message
-			// Keep LeafNodeLocation for File/Line - it's correct for table-driven tests
-			// where each Entry has a unique location but shares the same Failure.Location
+			failLoc := fmt.Sprintf("%s:%d", spec.Failure.Location.FileName, spec.Failure.Location.LineNumber)
+			testLoc := fmt.Sprintf("%s:%d", spec.LeafNodeLocation.FileName, spec.LeafNodeLocation.LineNumber)
+			if failLoc != testLoc {
+				ctx.FailureLocation = failLoc
+			}
 		}
 	case "skipped":
 		test.Skipped = true
 	}
 
+	test.Context = ctx
 	return test
 }
