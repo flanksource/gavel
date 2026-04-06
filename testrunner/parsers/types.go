@@ -32,6 +32,7 @@ type Test struct {
 	Name        string        `json:"name,omitempty"`
 	Package     string        `json:"package,omitempty"`
 	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
+	Command     string        `json:"command,omitempty"`      // Command used to run this test
 	Suite       []string      `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
 	Message     string        `json:"message,omitempty"`
 	File        string        `json:"file,omitempty"`
@@ -44,9 +45,10 @@ type Test struct {
 	Pending     bool          `json:"pending,omitempty"`
 	Stdout      string        `json:"stdout,omitempty"`
 	Stderr      string        `json:"stderr,omitempty"`
-	Children    Tests         `json:"children,omitempty"`
-	Summary     *TestSummary  `json:"summary,omitempty"`
-	Context     any           `json:"context,omitempty"`
+	Children    Tests            `json:"children,omitempty"`
+	Summary     *TestSummary     `json:"summary,omitempty"`
+	Context     any              `json:"context,omitempty"`
+	Benchmark   *BenchmarkResult `json:"benchmark,omitempty"`
 }
 
 type GoTestContext struct {
@@ -58,6 +60,31 @@ type GinkgoContext struct {
 	SuiteDescription string `json:"suite_description,omitempty"`
 	SuitePath        string `json:"suite_path,omitempty"`
 	FailureLocation  string `json:"failure_location,omitempty"`
+}
+
+type BenchmarkResult struct {
+	Iterations  int     `json:"iterations,omitempty"`
+	NsPerOp     float64 `json:"ns_per_op,omitempty"`
+	BytesPerOp  int64   `json:"bytes_per_op,omitempty"`
+	AllocsPerOp int64   `json:"allocs_per_op,omitempty"`
+	MBPerSec    float64 `json:"mb_per_sec,omitempty"`
+}
+
+func (b BenchmarkResult) Pretty() string {
+	parts := []string{fmt.Sprintf("%d iterations", b.Iterations)}
+	if b.NsPerOp > 0 {
+		parts = append(parts, fmt.Sprintf("%.2f ns/op", b.NsPerOp))
+	}
+	if b.MBPerSec > 0 {
+		parts = append(parts, fmt.Sprintf("%.2f MB/s", b.MBPerSec))
+	}
+	if b.BytesPerOp > 0 {
+		parts = append(parts, fmt.Sprintf("%d B/op", b.BytesPerOp))
+	}
+	if b.AllocsPerOp > 0 {
+		parts = append(parts, fmt.Sprintf("%d allocs/op", b.AllocsPerOp))
+	}
+	return " [" + strings.Join(parts, ", ") + "]"
 }
 
 type FixtureContext struct {
@@ -124,6 +151,11 @@ func (t Test) Pretty() api.Text {
 	// Add duration if non-zero
 	if t.Duration > 0 {
 		s = s.Append(fmt.Sprintf("(%s)", t.Duration), "text-muted")
+	}
+
+	// Add benchmark metrics if present
+	if t.Benchmark != nil {
+		s = s.Append(t.Benchmark.Pretty(), "text-muted")
 	}
 
 	// Add message if present
@@ -425,6 +457,7 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Name:        tr.Name,
 		Package:     tr.Package,
 		PackagePath: tr.PackagePath,
+		Command:     tr.Command,
 		Suite:       tr.Suite,
 		Message:     tr.Message,
 		File:        tr.File,
@@ -436,6 +469,7 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Stdout:      tr.Stdout,
 		Stderr:      tr.Stderr,
 		Framework:   tr.Framework,
+		Benchmark:   tr.Benchmark,
 		// Set summary before filtering to maintain summary even if child tests are filtered out
 		Summary: lo.ToPtr(tr.Sum()),
 	}

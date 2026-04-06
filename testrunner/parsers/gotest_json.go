@@ -6,11 +6,21 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+)
+
+// benchmarkResultRe matches Go benchmark result lines like:
+// BenchmarkFoo-8   	 1000000	      1234 ns/op	     256 B/op	       3 allocs/op
+var benchmarkResultRe = regexp.MustCompile(
+	`^(Benchmark\S+)\s+(\d+)\s+([\d.]+)\s+ns/op` +
+		`(?:\s+([\d.]+)\s+MB/s)?` +
+		`(?:\s+(\d+)\s+B/op)?` +
+		`(?:\s+(\d+)\s+allocs/op)?`,
 )
 
 // GoTestJSON parses go test -json output format (shared by go test and Ginkgo with --gojson-report).
@@ -166,6 +176,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 	tests := make(map[string]*Test)
 	testOutputs := make(map[string]*strings.Builder)
 	buildErrors := make(map[string]*strings.Builder)
+	packageOutputs := make(map[string]*strings.Builder)
 	scanner := bufio.NewScanner(output)
 
 	for scanner.Scan() {
@@ -199,6 +210,29 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 					Failed:    true,
 					Message:   buildMsg,
 				}
+			case "output":
+				// Collect package-level output for benchmark parsing
+				if _, exists := packageOutputs[pkg]; !exists {
+					packageOutputs[pkg] = &strings.Builder{}
+				}
+				packageOutputs[pkg].WriteString(event.Output)
+			case "pass":
+				// Package-level pass — check for benchmark results in collected output
+				if builder, exists := packageOutputs[pkg]; exists {
+					for _, outputLine := range strings.Split(builder.String(), "\n") {
+						if name, br := parseBenchmarkLine(outputLine); br != nil {
+							testKey := pkg + "::" + name
+							tests[testKey] = &Test{
+								Name:      name,
+								Package:   pkg,
+								Framework: GoTest,
+								Passed:    true,
+								Duration:  time.Duration(event.Elapsed * float64(time.Second)),
+								Benchmark: br,
+							}
+						}
+					}
+				}
 			case "skip":
 				testKey := pkg + "::package-skipped"
 				tests[testKey] = &Test{
@@ -219,9 +253,26 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 			// Skip test header/footer lines
 			trimmed := strings.TrimSpace(event.Output)
 			if strings.HasPrefix(trimmed, "=== RUN") || strings.HasPrefix(trimmed, "--- PASS") ||
-				strings.HasPrefix(trimmed, "--- FAIL") || strings.HasPrefix(trimmed, "--- SKIP") {
+				strings.HasPrefix(trimmed, "--- FAIL") || strings.HasPrefix(trimmed, "--- SKIP") ||
+				strings.HasPrefix(trimmed, "=== PAUSE") || strings.HasPrefix(trimmed, "=== CONT") {
 				continue
 			}
+
+			// Parse benchmark result lines from test-level output
+			if name, br := parseBenchmarkLine(trimmed); br != nil {
+				benchKey := event.Package + "::" + name
+				if t, exists := tests[benchKey]; exists {
+					t.Benchmark = br
+				} else {
+					tests[benchKey] = &Test{
+						Name:      name,
+						Package:   event.Package,
+						Framework: GoTest,
+						Benchmark: br,
+					}
+				}
+			}
+
 			if _, exists := testOutputs[testKey]; !exists {
 				testOutputs[testKey] = &strings.Builder{}
 			}
@@ -239,7 +290,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 				}
 			}
 
-		case "pass":
+		case "pass", "bench":
 			duration := time.Duration(event.Elapsed * float64(time.Second))
 			if test, exists := tests[testKey]; exists {
 				test.Passed = true
@@ -348,6 +399,38 @@ func (p *GoTestJSON) applyContext(test *Test) {
 	if ctx != (GoTestContext{}) {
 		test.Context = ctx
 	}
+}
+
+// parseBenchmarkLine parses a benchmark result line and returns a BenchmarkResult.
+// Returns nil if the line is not a benchmark result.
+func parseBenchmarkLine(line string) (name string, result *BenchmarkResult) {
+	m := benchmarkResultRe.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return "", nil
+	}
+	iterations, _ := strconv.Atoi(m[2])
+	nsPerOp, _ := strconv.ParseFloat(m[3], 64)
+	br := &BenchmarkResult{
+		Iterations: iterations,
+		NsPerOp:    nsPerOp,
+	}
+	if m[4] != "" {
+		br.MBPerSec, _ = strconv.ParseFloat(m[4], 64)
+	}
+	if m[5] != "" {
+		br.BytesPerOp, _ = strconv.ParseInt(m[5], 10, 64)
+	}
+	if m[6] != "" {
+		br.AllocsPerOp, _ = strconv.ParseInt(m[6], 10, 64)
+	}
+	// Strip the -N GOMAXPROCS suffix from the name
+	name = m[1]
+	if idx := strings.LastIndex(name, "-"); idx > 0 {
+		if _, err := strconv.Atoi(name[idx+1:]); err == nil {
+			name = name[:idx]
+		}
+	}
+	return name, br
 }
 
 // parseTestOutput extracts failure message from go test output.

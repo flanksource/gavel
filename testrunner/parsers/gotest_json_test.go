@@ -227,3 +227,202 @@ func TestGoTestJSONParseFiltersGinkgoBootstrap(t *testing.T) {
 		t.Errorf("expected TestRealTest, got %s", results[0].Name)
 	}
 }
+
+func TestGoTestJSONParseBenchmarkNoTests(t *testing.T) {
+	// Real output from `go test -bench -json` with no regular tests
+	input := `{"Time":"2026-04-06T16:03:17.126328+03:00","Action":"start","Package":"github.com/flanksource/duty/bench"}
+{"Time":"2026-04-06T16:03:24.234715+03:00","Action":"output","Package":"github.com/flanksource/duty/bench","Output":"testing: warning: no tests to run\n"}
+{"Time":"2026-04-06T16:03:24.234809+03:00","Action":"output","Package":"github.com/flanksource/duty/bench","Output":"PASS\n"}
+{"Time":"2026-04-06T16:03:24.843343+03:00","Action":"output","Package":"github.com/flanksource/duty/bench","Output":"ok  \tgithub.com/flanksource/duty/bench\t7.716s [no tests to run]\n"}
+{"Time":"2026-04-06T16:03:24.844506+03:00","Action":"pass","Package":"github.com/flanksource/duty/bench","Elapsed":7.718}`
+
+	parser := NewGoTestJSON("")
+	results, err := parser.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No benchmark result lines → no tests should be created; package-level pass is benign
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for benchmark-only pass with no benchmark lines, got %d", len(results))
+		for _, r := range results {
+			t.Logf("  - %s (passed=%v)", r.Name, r.Passed)
+		}
+	}
+}
+
+func TestGoTestJSONParseBenchmarkResults(t *testing.T) {
+	input := `{"Time":"2026-04-06T16:03:17.126+03:00","Action":"start","Package":"github.com/example/bench"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"goos: darwin\n"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"goarch: arm64\n"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"pkg: github.com/example/bench\n"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"BenchmarkFoo-8   \t 1000000\t      1234 ns/op\t     256 B/op\t       3 allocs/op\n"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"BenchmarkBar-8   \t  500000\t      2500 ns/op\n"}
+{"Time":"2026-04-06T16:03:20.234+03:00","Action":"output","Package":"github.com/example/bench","Output":"PASS\n"}
+{"Time":"2026-04-06T16:03:24.844+03:00","Action":"pass","Package":"github.com/example/bench","Elapsed":5.0}`
+
+	parser := NewGoTestJSON("")
+	results, err := parser.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 benchmark results, got %d", len(results))
+	}
+
+	// Find the two benchmarks
+	benchmarks := make(map[string]*Test)
+	for i := range results {
+		benchmarks[results[i].Name] = &results[i]
+	}
+
+	foo := benchmarks["BenchmarkFoo"]
+	if foo == nil {
+		t.Fatal("expected BenchmarkFoo")
+	}
+	if !foo.Passed {
+		t.Error("expected BenchmarkFoo to be passed")
+	}
+	if foo.Benchmark == nil {
+		t.Fatal("expected BenchmarkFoo to have benchmark data")
+	}
+	if foo.Benchmark.Iterations != 1000000 {
+		t.Errorf("expected 1000000 iterations, got %d", foo.Benchmark.Iterations)
+	}
+	if foo.Benchmark.NsPerOp != 1234.0 {
+		t.Errorf("expected 1234 ns/op, got %f", foo.Benchmark.NsPerOp)
+	}
+	if foo.Benchmark.BytesPerOp != 256 {
+		t.Errorf("expected 256 B/op, got %d", foo.Benchmark.BytesPerOp)
+	}
+	if foo.Benchmark.AllocsPerOp != 3 {
+		t.Errorf("expected 3 allocs/op, got %d", foo.Benchmark.AllocsPerOp)
+	}
+
+	bar := benchmarks["BenchmarkBar"]
+	if bar == nil {
+		t.Fatal("expected BenchmarkBar")
+	}
+	if bar.Benchmark == nil {
+		t.Fatal("expected BenchmarkBar to have benchmark data")
+	}
+	if bar.Benchmark.Iterations != 500000 {
+		t.Errorf("expected 500000 iterations, got %d", bar.Benchmark.Iterations)
+	}
+	if bar.Benchmark.NsPerOp != 2500.0 {
+		t.Errorf("expected 2500 ns/op, got %f", bar.Benchmark.NsPerOp)
+	}
+	if bar.Benchmark.BytesPerOp != 0 {
+		t.Errorf("expected 0 B/op, got %d", bar.Benchmark.BytesPerOp)
+	}
+}
+
+func TestGoTestJSONParseBenchmarkWithTests(t *testing.T) {
+	// Benchmark results alongside regular test results
+	input := `{"Time":"2026-04-06T16:03:17.126+03:00","Action":"start","Package":"github.com/example/pkg"}
+{"Time":"2026-04-06T16:03:17.126+03:00","Action":"run","Package":"github.com/example/pkg","Test":"TestFoo"}
+{"Time":"2026-04-06T16:03:17.126+03:00","Action":"pass","Package":"github.com/example/pkg","Test":"TestFoo","Elapsed":0.01}
+{"Time":"2026-04-06T16:03:17.126+03:00","Action":"run","Package":"github.com/example/pkg","Test":"BenchmarkBar"}
+{"Time":"2026-04-06T16:03:17.126+03:00","Action":"output","Package":"github.com/example/pkg","Test":"BenchmarkBar","Output":"BenchmarkBar-8   \t  200000\t      5000 ns/op\t     128 B/op\t       2 allocs/op\n"}
+{"Time":"2026-04-06T16:03:17.126+03:00","Action":"pass","Package":"github.com/example/pkg","Test":"BenchmarkBar","Elapsed":1.5}
+{"Time":"2026-04-06T16:03:24.844+03:00","Action":"pass","Package":"github.com/example/pkg","Elapsed":2.0}`
+
+	parser := NewGoTestJSON("")
+	results, err := parser.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (1 test + 1 benchmark), got %d", len(results))
+	}
+
+	benchmarks := make(map[string]*Test)
+	for i := range results {
+		benchmarks[results[i].Name] = &results[i]
+	}
+
+	// Regular test should not have benchmark data
+	foo := benchmarks["TestFoo"]
+	if foo == nil {
+		t.Fatal("expected TestFoo")
+	}
+	if foo.Benchmark != nil {
+		t.Error("expected TestFoo to not have benchmark data")
+	}
+
+	// Benchmark should have data
+	bar := benchmarks["BenchmarkBar"]
+	if bar == nil {
+		t.Fatal("expected BenchmarkBar")
+	}
+	if bar.Benchmark == nil {
+		t.Fatal("expected BenchmarkBar to have benchmark data")
+	}
+	if bar.Benchmark.Iterations != 200000 {
+		t.Errorf("expected 200000 iterations, got %d", bar.Benchmark.Iterations)
+	}
+	if bar.Benchmark.BytesPerOp != 128 {
+		t.Errorf("expected 128 B/op, got %d", bar.Benchmark.BytesPerOp)
+	}
+}
+
+func TestParseBenchmarkLine(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantName   string
+		wantResult *BenchmarkResult
+	}{
+		"full": {
+			input:    "BenchmarkFoo-8   \t 1000000\t      1234 ns/op\t     256 B/op\t       3 allocs/op",
+			wantName: "BenchmarkFoo",
+			wantResult: &BenchmarkResult{
+				Iterations: 1000000, NsPerOp: 1234, BytesPerOp: 256, AllocsPerOp: 3,
+			},
+		},
+		"no_allocs": {
+			input:    "BenchmarkBar-16   \t  500000\t      2500.50 ns/op",
+			wantName: "BenchmarkBar",
+			wantResult: &BenchmarkResult{
+				Iterations: 500000, NsPerOp: 2500.50,
+			},
+		},
+		"with_mb_per_sec": {
+			input:    "BenchmarkIO-4   \t    10000\t    100000 ns/op\t  95.37 MB/s",
+			wantName: "BenchmarkIO",
+			wantResult: &BenchmarkResult{
+				Iterations: 10000, NsPerOp: 100000, MBPerSec: 95.37,
+			},
+		},
+		"not_benchmark": {
+			input:    "TestFoo passed",
+			wantName: "",
+		},
+		"empty": {
+			input:    "",
+			wantName: "",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gotName, gotResult := parseBenchmarkLine(tc.input)
+			if gotName != tc.wantName {
+				t.Errorf("name: expected %q, got %q", tc.wantName, gotName)
+			}
+			if tc.wantResult == nil {
+				if gotResult != nil {
+					t.Errorf("expected nil result, got %+v", gotResult)
+				}
+				return
+			}
+			if gotResult == nil {
+				t.Fatal("expected non-nil result")
+			}
+			if *gotResult != *tc.wantResult {
+				t.Errorf("result:\n  expected %+v\n  got      %+v", *tc.wantResult, *gotResult)
+			}
+		})
+	}
+}
