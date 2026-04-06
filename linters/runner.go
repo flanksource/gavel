@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/gavel/internal/cache"
-	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/models"
 )
 
 // Runner orchestrates execution of multiple linters with intelligent debouncing

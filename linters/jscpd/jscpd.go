@@ -75,10 +75,10 @@ func (j *JSCPD) GetEffectiveIncludes(language string, config *models.Config) []s
 	return config.GetAllLanguageIncludes(language, j.DefaultIncludes())
 }
 
-func (j *JSCPD) SupportsJSON() bool        { return true }
-func (j *JSCPD) JSONArgs() []string         { return []string{"--reporters", "json"} }
-func (j *JSCPD) SupportsFix() bool          { return false }
-func (j *JSCPD) FixArgs() []string          { return nil }
+func (j *JSCPD) SupportsJSON() bool { return true }
+func (j *JSCPD) JSONArgs() []string { return []string{"--reporters", "json"} }
+func (j *JSCPD) SupportsFix() bool  { return false }
+func (j *JSCPD) FixArgs() []string  { return nil }
 
 func (j *JSCPD) ValidateConfig(config *models.LinterConfig) error {
 	if config == nil {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/flanksource/gavel/models"
 	commonsLogger "github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

@@ -29,22 +29,22 @@ func (f Framework) String() string {
 
 // Test represents a single test failure.
 type Test struct {
-	Name        string        `json:"name,omitempty"`
-	Package     string        `json:"package,omitempty"`
-	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
-	Command     string        `json:"command,omitempty"`      // Command used to run this test
-	Suite       []string      `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
-	Message     string        `json:"message,omitempty"`
-	File        string        `json:"file,omitempty"`
-	Line        int           `json:"line,omitempty"`
-	Framework   Framework     `json:"framework,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	Skipped     bool          `json:"skipped,omitempty"`
-	Failed      bool          `json:"failed,omitempty"`
-	Passed      bool          `json:"passed,omitempty"`
-	Pending     bool          `json:"pending,omitempty"`
-	Stdout      string        `json:"stdout,omitempty"`
-	Stderr      string        `json:"stderr,omitempty"`
+	Name        string           `json:"name,omitempty"`
+	Package     string           `json:"package,omitempty"`
+	PackagePath string           `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
+	Command     string           `json:"command,omitempty"`      // Command used to run this test
+	Suite       []string         `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
+	Message     string           `json:"message,omitempty"`
+	File        string           `json:"file,omitempty"`
+	Line        int              `json:"line,omitempty"`
+	Framework   Framework        `json:"framework,omitempty"`
+	Duration    time.Duration    `json:"duration,omitempty"`
+	Skipped     bool             `json:"skipped,omitempty"`
+	Failed      bool             `json:"failed,omitempty"`
+	Passed      bool             `json:"passed,omitempty"`
+	Pending     bool             `json:"pending,omitempty"`
+	Stdout      string           `json:"stdout,omitempty"`
+	Stderr      string           `json:"stderr,omitempty"`
 	Children    Tests            `json:"children,omitempty"`
 	Summary     *TestSummary     `json:"summary,omitempty"`
 	Context     any              `json:"context,omitempty"`

@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/models"
 )
 
 // Markdownlint implements the Linter interface for markdownlint

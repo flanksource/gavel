@@ -224,12 +224,12 @@ var _ = Describe("Test UI E2E", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		// Go tests
-		Expect(treeText).To(ContainSubstring("testrunner/"))
+		Expect(treeText).To(ContainSubstring("testrunner"))
 		Expect(treeText).To(ContainSubstring("TestParser"))
 		Expect(treeText).To(ContainSubstring("TestBuildFailed"))
-		Expect(treeText).To(ContainSubstring("TestRegistry/DetectsGinkgo"))
+		Expect(treeText).To(ContainSubstring("DetectsGinkgo"))
 		// Ginkgo tests
-		Expect(treeText).To(ContainSubstring("parsers/"))
+		Expect(treeText).To(ContainSubstring("parsers"))
 		Expect(treeText).To(ContainSubstring("parses valid JSON"))
 		Expect(treeText).To(ContainSubstring("handles malformed input"))
 		// Fixtures

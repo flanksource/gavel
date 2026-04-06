@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/gavel/internal/cache"
-	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/models"
 )
 
 // RunnerV2 orchestrates execution of multiple linters with intelligent debouncing
