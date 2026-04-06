@@ -45,12 +45,15 @@ type ginkgoFailure struct {
 
 // ginkgoSpecReport represents a single test spec in Ginkgo JSON format.
 type ginkgoSpecReport struct {
-	ContainerHierarchyTexts []string       `json:"ContainerHierarchyTexts"`
-	LeafNodeText            string         `json:"LeafNodeText"`
-	LeafNodeLocation        ginkgoLocation `json:"LeafNodeLocation"`
-	State                   string         `json:"State"`
-	RunTime                 int64          `json:"RunTime"`
-	Failure                 *ginkgoFailure `json:"Failure"`
+	ContainerHierarchyTexts    []string       `json:"ContainerHierarchyTexts"`
+	LeafNodeText               string         `json:"LeafNodeText"`
+	LeafNodeLocation           ginkgoLocation `json:"LeafNodeLocation"`
+	State                      string         `json:"State"`
+	RunTime                    int64          `json:"RunTime"`
+	Failure                    *ginkgoFailure `json:"Failure"`
+	CapturedStdOutOutput       string         `json:"CapturedStdOutOutput"`
+	CapturedStdErrOutput       string         `json:"CapturedStdErrOutput"`
+	CapturedGinkgoWriterOutput string         `json:"CapturedGinkgoWriterOutput"`
 }
 
 // ginkoSuiteReport represents a complete test suite in Ginkgo JSON format.
@@ -96,6 +99,14 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		SuitePath:        suite.SuitePath,
 	}
 
+	stdout := spec.CapturedStdOutOutput
+	if spec.CapturedGinkgoWriterOutput != "" {
+		if stdout != "" {
+			stdout += "\n"
+		}
+		stdout += spec.CapturedGinkgoWriterOutput
+	}
+
 	test := Test{
 		Name:      spec.LeafNodeText,
 		Suite:     suiteHierarchy,
@@ -104,6 +115,8 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		Framework: Ginkgo,
 		Duration:  time.Duration(spec.RunTime),
 		Package:   packagePath,
+		Stdout:    stdout,
+		Stderr:    spec.CapturedStdErrOutput,
 	}
 
 	switch spec.State {

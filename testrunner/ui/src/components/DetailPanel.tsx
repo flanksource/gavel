@@ -86,6 +86,15 @@ export function DetailPanel({ test: t }: Props) {
         </Section>
       )}
 
+      {/* Command */}
+      {t.command && (
+        <Section title="Command">
+          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
+            <span class="text-gray-400">$ </span>{t.command}
+          </pre>
+        </Section>
+      )}
+
       {/* Framework-specific context */}
       {fw === 'fixture' && t.context && <FixtureDetail ctx={t.context as FixtureContext} />}
       {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} />}

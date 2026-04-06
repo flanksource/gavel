@@ -68,6 +68,7 @@ type RunOptions struct {
 	WorkDir       string                `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool                  `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
+	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                        // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 }
@@ -176,7 +177,7 @@ func Run(opts RunOptions) (any, error) {
 	// Discover and run fixture tests (results returned, not printed).
 	// Fixture failures are captured in the tree, not returned as errors,
 	// so that AddNamedCommand still prints the results.
-	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir)
+	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir, streamer)
 	if fixtureTree != nil {
 		for _, child := range fixtureTree.Children {
 			tree = append(tree, fixtureNodeToTests(child)...)
@@ -306,15 +307,21 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			continue
 		}
 
+		fwExtraArgs := extraArgs
+		if fw == parsers.Ginkgo && o.Nodes != 0 {
+			fwExtraArgs = append([]string{fmt.Sprintf("--nodes=%d", o.Nodes)}, extraArgs...)
+		}
+
 		for _, pkgPath := range packages {
 			// Capture variables for closure
 			pkgPath := pkgPath
 			fw := fw
 			runner := runner
+			fwExtraArgs := fwExtraArgs
 
 			taskName := fmt.Sprintf("%s %s", fw, pkgPath)
 			group.Add(taskName, func(ctx commonsCtx.Context, t *task.Task) (packageResult, error) {
-				result, err := o.runPackageTest(ctx, pkgPath, fw, runner, t, extraArgs)
+				result, err := o.runPackageTest(ctx, pkgPath, fw, runner, t, fwExtraArgs)
 				if o.streamer != nil {
 					o.streamer.CompletePackage(pkgPath, fw, result.testResults)
 				}
@@ -483,6 +490,7 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 	processStderr := stripExitStatus(strings.TrimSpace(result.Stderr))
 	for i := range tests {
 		tests[i].PackagePath = pkgPath
+		tests[i].Command = testRun.Process.Cmd + " " + strings.Join(testRun.Process.Args, " ")
 		if tests[i].Stderr == "" {
 			tests[i].Stderr = processStderr
 		}
