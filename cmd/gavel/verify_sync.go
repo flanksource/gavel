@@ -256,11 +256,11 @@ func formatEvidenceMarkdown(evidence []verify.Evidence) string {
 	sb.WriteString("## Findings\n\n")
 	for _, e := range evidence {
 		if e.Line > 0 {
-			sb.WriteString(fmt.Sprintf("- `%s:%d` — %s\n", e.File, e.Line, e.Message))
+			fmt.Fprintf(&sb, "- `%s:%d` — %s\n", e.File, e.Line, e.Message)
 		} else if e.File != "" {
-			sb.WriteString(fmt.Sprintf("- `%s` — %s\n", e.File, e.Message))
+			fmt.Fprintf(&sb, "- `%s` — %s\n", e.File, e.Message)
 		} else {
-			sb.WriteString(fmt.Sprintf("- %s\n", e.Message))
+			fmt.Fprintf(&sb, "- %s\n", e.Message)
 		}
 	}
 	return sb.String()
