@@ -45,21 +45,21 @@ func writeTranscript(todo *types.TODO, result *ExecutionResult) (string, error) 
 	fullPath := filepath.Join(attemptsDir, filename)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Attempt %d\n\n", todo.Attempts))
-	sb.WriteString(fmt.Sprintf("- **Status:** %s\n", result.statusString()))
-	sb.WriteString(fmt.Sprintf("- **Date:** %s\n", time.Now().Format("2006-01-02 15:04")))
-	sb.WriteString(fmt.Sprintf("- **Model:** %s\n", result.ExecutorName))
-	sb.WriteString(fmt.Sprintf("- **Duration:** %s\n", result.Duration.Round(time.Second)))
-	sb.WriteString(fmt.Sprintf("- **Cost:** $%.4f\n", result.CostUSD))
-	sb.WriteString(fmt.Sprintf("- **Tokens:** %d\n", result.TokensUsed))
+	fmt.Fprintf(&sb, "# Attempt %d\n\n", todo.Attempts)
+	fmt.Fprintf(&sb, "- **Status:** %s\n", result.statusString())
+	fmt.Fprintf(&sb, "- **Date:** %s\n", time.Now().Format("2006-01-02 15:04"))
+	fmt.Fprintf(&sb, "- **Model:** %s\n", result.ExecutorName)
+	fmt.Fprintf(&sb, "- **Duration:** %s\n", result.Duration.Round(time.Second))
+	fmt.Fprintf(&sb, "- **Cost:** $%.4f\n", result.CostUSD)
+	fmt.Fprintf(&sb, "- **Tokens:** %d\n", result.TokensUsed)
 	if result.CommitSHA != "" {
-		sb.WriteString(fmt.Sprintf("- **Commit:** `%s`\n", result.CommitSHA))
+		fmt.Fprintf(&sb, "- **Commit:** `%s`\n", result.CommitSHA)
 	}
 
 	if result.Transcript != nil && len(result.Transcript.Entries) > 0 {
 		sb.WriteString("\n## Transcript\n\n")
 		for _, entry := range result.Transcript.Entries {
-			sb.WriteString(fmt.Sprintf("**[%s] %s** (%s)\n", entry.Timestamp.Format("15:04:05"), entry.Type, entry.Role))
+			fmt.Fprintf(&sb, "**[%s] %s** (%s)\n", entry.Timestamp.Format("15:04:05"), entry.Type, entry.Role)
 			if entry.Content != "" {
 				sb.WriteString(entry.Content + "\n")
 			}

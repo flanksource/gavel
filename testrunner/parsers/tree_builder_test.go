@@ -1,12 +1,33 @@
 package parsers
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func isContainerNode(test Test) bool {
+	return isDirectoryNode(test) || isFileNode(test) || isSuiteNode(test)
+}
+
+func isDirectoryNode(test Test) bool {
+	return strings.HasSuffix(test.Name, "/")
+}
+
+func isFileNode(test Test) bool {
+	return test.File != "" && test.Name == filepath.Base(test.File) && len(test.Children) > 0
+}
+
+func isSuiteNode(test Test) bool {
+	if len(test.Suite) == 0 || test.Name == "" || isDirectoryNode(test) || isFileNode(test) {
+		return false
+	}
+	return test.Name == test.Suite[len(test.Suite)-1]
+}
 
 func TestTreeBuilder(t *testing.T) {
 	RegisterFailHandler(Fail)

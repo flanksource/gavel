@@ -34,7 +34,7 @@ func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framewo
 	// Remove matching pending package
 	filtered := s.pendingPkgs[:0:0]
 	for _, p := range s.pendingPkgs {
-		if !(p.PackagePath == pkgPath && p.Framework == framework) {
+		if p.PackagePath != pkgPath || p.Framework != framework {
 			filtered = append(filtered, p)
 		}
 	}

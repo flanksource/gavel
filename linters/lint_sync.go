@@ -249,16 +249,16 @@ func completeLintTodo(path string) error {
 
 func formatViolationsBody(group violationGroup) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n# Lint: %s\n\n", group.Key))
+	fmt.Fprintf(&sb, "\n# Lint: %s\n\n", group.Key)
 
 	linters := sortedKeys(group.Linters)
-	sb.WriteString(fmt.Sprintf("**Linters:** %s\n\n", strings.Join(linters, ", ")))
+	fmt.Fprintf(&sb, "**Linters:** %s\n\n", strings.Join(linters, ", "))
 	sb.WriteString("## Violations\n\n")
 
 	maxViolations := 100
 	for i, v := range group.Violations {
 		if i >= maxViolations {
-			sb.WriteString(fmt.Sprintf("\n... and %d more violations\n", len(group.Violations)-maxViolations))
+			fmt.Fprintf(&sb, "\n... and %d more violations\n", len(group.Violations)-maxViolations)
 			break
 		}
 		loc := v.File
@@ -273,7 +273,7 @@ func formatViolationsBody(group violationGroup) string {
 		if v.Message != nil {
 			msg = *v.Message
 		}
-		sb.WriteString(fmt.Sprintf("- `%s` [%s] %s\n", loc, source, msg))
+		fmt.Fprintf(&sb, "- `%s` [%s] %s\n", loc, source, msg)
 	}
 	return sb.String()
 }

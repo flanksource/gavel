@@ -1,6 +1,8 @@
 package fixtures
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,24 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/stretchr/testify/assert"
 )
+
+func formatCELVars(vars map[string]any) string {
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, k := range keys {
+		v := fmt.Sprintf("%v", vars[k])
+		if len(v) > 200 {
+			v = v[:200] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+	}
+	return strings.Join(parts, ", ")
+}
 
 func TestMergeExpectations(t *testing.T) {
 	tests := []struct {

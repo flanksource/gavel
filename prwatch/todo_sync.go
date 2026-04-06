@@ -151,18 +151,18 @@ func autoCompleteTodo(path string) error {
 
 func formatJobBody(run *github.WorkflowRun, job github.Job, pr *github.PRInfo) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\n# %s / %s\n\n", run.Name, job.Name))
-	sb.WriteString(fmt.Sprintf("PR #%d (`%s`)\n", pr.Number, pr.HeadRefName))
+	fmt.Fprintf(&sb, "\n# %s / %s\n\n", run.Name, job.Name)
+	fmt.Fprintf(&sb, "PR #%d (`%s`)\n", pr.Number, pr.HeadRefName)
 	if job.URL != "" {
-		sb.WriteString(fmt.Sprintf("Job: %s\n", job.URL))
+		fmt.Fprintf(&sb, "Job: %s\n", job.URL)
 	}
 	if run.WorkflowYAML != "" {
 		if steps := extractJobSteps(run.WorkflowYAML, job.Name); steps != "" {
 			sb.WriteString("\n## Workflow Steps\n\n")
-			sb.WriteString(fmt.Sprintf("```yaml\n%s\n```\n", strings.TrimSpace(steps)))
+			fmt.Fprintf(&sb, "```yaml\n%s\n```\n", strings.TrimSpace(steps))
 		} else {
 			sb.WriteString("\n## Workflow Definition\n\n")
-			sb.WriteString(fmt.Sprintf("```yaml\n%s\n```\n", strings.TrimSpace(run.WorkflowYAML)))
+			fmt.Fprintf(&sb, "```yaml\n%s\n```\n", strings.TrimSpace(run.WorkflowYAML))
 		}
 	}
 	sb.WriteString("\n## Logs\n\n")
@@ -396,7 +396,7 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 				sb.WriteString("\n")
 			}
 			for _, block := range suggestedFixBlocks {
-				sb.WriteString(fmt.Sprintf("\n## %s\n\n", block.Summary))
+				fmt.Fprintf(&sb, "\n## %s\n\n", block.Summary)
 				sb.WriteString(block.Body)
 				sb.WriteString("\n")
 			}
@@ -450,10 +450,10 @@ func formatJobLogs(job github.Job) string {
 			continue
 		}
 		hasStepLogs = true
-		sb.WriteString(fmt.Sprintf("### Step: %s\n\n```\n%s\n```\n\n", step.Name, strings.TrimSpace(step.Logs)))
+		fmt.Fprintf(&sb, "### Step: %s\n\n```\n%s\n```\n\n", step.Name, strings.TrimSpace(step.Logs))
 	}
 	if !hasStepLogs && job.Logs != "" {
-		sb.WriteString(fmt.Sprintf("```\n%s\n```\n", strings.TrimSpace(job.Logs)))
+		fmt.Fprintf(&sb, "```\n%s\n```\n", strings.TrimSpace(job.Logs))
 	}
 	return sb.String()
 }

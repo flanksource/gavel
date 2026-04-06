@@ -223,13 +223,13 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Text(`body`, &treeText, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		// Go tests
-		Expect(treeText).To(ContainSubstring("testrunner/"))
-		Expect(treeText).To(ContainSubstring("TestParser"))
-		Expect(treeText).To(ContainSubstring("TestBuildFailed"))
-		Expect(treeText).To(ContainSubstring("TestRegistry/DetectsGinkgo"))
+		// Go tests (humanizeName strips "Test" prefix and inserts spaces)
+		Expect(treeText).To(ContainSubstring("testrunner"))
+		Expect(treeText).To(ContainSubstring("Parser"))
+		Expect(treeText).To(ContainSubstring("Build Failed"))
+		Expect(treeText).To(ContainSubstring("DetectsGinkgo"))
 		// Ginkgo tests
-		Expect(treeText).To(ContainSubstring("parsers/"))
+		Expect(treeText).To(ContainSubstring("parsers"))
 		Expect(treeText).To(ContainSubstring("parses valid JSON"))
 		Expect(treeText).To(ContainSubstring("handles malformed input"))
 		// Fixtures

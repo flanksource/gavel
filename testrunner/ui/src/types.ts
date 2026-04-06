@@ -2,6 +2,7 @@ export interface Test {
   name: string;
   package?: string;
   package_path?: string;
+  command?: string;
   suite?: string[];
   message?: string;
   file?: string;

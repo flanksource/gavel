@@ -264,16 +264,16 @@ func TestBuildExcludes(t *testing.T) {
 		return false
 	}
 
-	require.True(t, has(excludes, ".git/**"), "should include builtin .git exclude")
-	require.True(t, has(excludes, "node_modules/**"), "should include builtin node_modules exclude")
+	require.True(t, has(excludes, "**/.git/**"), "should include builtin .git exclude")
+	require.True(t, has(excludes, "**/node_modules/**"), "should include builtin node_modules exclude")
 	require.True(t, has(excludes, "**/*_test.go"), "should include jscpd-specific test exclude")
 	require.True(t, has(excludes, "**/go.sum"), "should include lock file exclude")
 
 	j.Ignores = []string{"custom/**", "*.generated.ts"}
 	withIgnores := j.buildExcludes()
-	require.True(t, has(withIgnores, "custom/**"), "should include CLI ignore pattern")
-	require.True(t, has(withIgnores, "*.generated.ts"), "should include CLI ignore pattern")
-	require.True(t, has(withIgnores, ".git/**"), "should still include builtins")
+	require.True(t, has(withIgnores, "**/custom/**"), "should include CLI ignore pattern")
+	require.True(t, has(withIgnores, "**/*.generated.ts"), "should include CLI ignore pattern")
+	require.True(t, has(withIgnores, "**/.git/**"), "should still include builtins")
 }
 
 func TestDefaultExcludes(t *testing.T) {

@@ -84,7 +84,7 @@ func (fixture FixtureTest) AsMap() map[string]any {
 		m[k] = v
 	}
 	// Global defaults from frontmatter metadata (lowest priority)
-	for k, v := range fixture.FrontMatter.Metadata {
+	for k, v := range fixture.Metadata {
 		m[k] = v
 	}
 	// Custom columns from table Properties (overrides metadata)
@@ -113,15 +113,15 @@ func (fixture FixtureTest) Pretty() api.Text {
 func (fixture FixtureTest) ShouldSkip() string {
 	os := fixture.TestOS
 	if os == "" {
-		os = fixture.FrontMatter.OS
+		os = fixture.OS
 	}
 	arch := fixture.TestArch
 	if arch == "" {
-		arch = fixture.FrontMatter.Arch
+		arch = fixture.Arch
 	}
 	skip := fixture.TestSkip
 	if skip == "" {
-		skip = fixture.FrontMatter.Skip
+		skip = fixture.Skip
 	}
 
 	fm := FrontMatter{OS: os, Arch: arch, Skip: skip}

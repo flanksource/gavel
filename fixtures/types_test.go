@@ -108,15 +108,15 @@ func TestAsMapTemplatesCustomColumns(t *testing.T) {
 
 func TestCWDParsing(t *testing.T) {
 	tests := []struct {
-		name            string
-		content         string
-		frontMatter     *FrontMatter
-		expectedCWD     string
-		expectedFMCWD   string
-		expectedMerged  string
+		name           string
+		content        string
+		frontMatter    *FrontMatter
+		expectedCWD    string
+		expectedFMCWD  string
+		expectedMerged string
 	}{
 		{
-			name: "file-level frontmatter CWD inherited by test",
+			name:    "file-level frontmatter CWD inherited by test",
 			content: "### command: test\n```bash\npwd\n```\n\nValidations:\n* cel: exitCode == 0\n",
 			frontMatter: &FrontMatter{
 				ExecFixtureBase: ExecFixtureBase{CWD: "./project-root"},
@@ -126,7 +126,7 @@ func TestCWDParsing(t *testing.T) {
 			expectedMerged: "./project-root",
 		},
 		{
-			name: "test-level CWD overrides frontmatter CWD",
+			name:    "test-level CWD overrides frontmatter CWD",
 			content: "### command: test\n```bash\npwd\n```\n\n```frontmatter\ncwd: ./specific-dir\n```\n\nValidations:\n* cel: exitCode == 0\n",
 			frontMatter: &FrontMatter{
 				ExecFixtureBase: ExecFixtureBase{CWD: "./default-dir"},
@@ -144,8 +144,8 @@ func TestCWDParsing(t *testing.T) {
 			expectedMerged: "",
 		},
 		{
-			name: "only test-level CWD set via frontmatter block",
-			content: "### command: test\n```bash\npwd\n```\n\n```frontmatter\ncwd: /absolute/path\n```\n",
+			name:           "only test-level CWD set via frontmatter block",
+			content:        "### command: test\n```bash\npwd\n```\n\n```frontmatter\ncwd: /absolute/path\n```\n",
 			frontMatter:    nil,
 			expectedCWD:    "/absolute/path",
 			expectedFMCWD:  "",
@@ -174,18 +174,18 @@ func TestCWDFromTableColumns(t *testing.T) {
 		expectedCWD string
 	}{
 		{
-			name: "CWD column",
-			content: "| Name | CWD | CLI Args |\n|------|-----|----------|\n| test | ./mydir | --help |\n",
+			name:        "CWD column",
+			content:     "| Name | CWD | CLI Args |\n|------|-----|----------|\n| test | ./mydir | --help |\n",
 			expectedCWD: "./mydir",
 		},
 		{
-			name: "working directory column",
-			content: "| Name | Working Directory | CLI Args |\n|------|-------------------|----------|\n| test | /tmp/work | --help |\n",
+			name:        "working directory column",
+			content:     "| Name | Working Directory | CLI Args |\n|------|-------------------|----------|\n| test | /tmp/work | --help |\n",
 			expectedCWD: "/tmp/work",
 		},
 		{
-			name: "dir column",
-			content: "| Name | Dir | CLI Args |\n|------|-----|----------|\n| test | ./subdir | --help |\n",
+			name:        "dir column",
+			content:     "| Name | Dir | CLI Args |\n|------|-----|----------|\n| test | ./subdir | --help |\n",
 			expectedCWD: "./subdir",
 		},
 	}

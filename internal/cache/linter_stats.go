@@ -97,7 +97,7 @@ func (ls *LinterStats) RecordExecution(linterName, workDir string, duration time
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Record the execution
 	_, err = tx.Exec(`
@@ -187,10 +187,10 @@ func (ls *LinterStats) GetIntelligentDebounce(linterName, workDir string) (time.
 	avgDurationTime := time.Duration(avgDuration) * time.Millisecond
 
 	// Get adaptation factor
-	var adaptationFactor float64 = 1.0
-	ls.db.QueryRow(`
-		SELECT adaptation_factor 
-		FROM debounce_metadata 
+	adaptationFactor := 1.0
+	_ = ls.db.QueryRow(`
+		SELECT adaptation_factor
+		FROM debounce_metadata
 		WHERE linter_name = ? AND work_dir = ?`,
 		linterName, workDir).Scan(&adaptationFactor)
 

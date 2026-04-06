@@ -251,7 +251,8 @@ func TestFixtureNodeToTests(t *testing.T) {
 				},
 			},
 			expected: []parsers.Test{{
-				Name: "section",
+				Name:      "section",
+				Framework: "fixture",
 				Children: parsers.Tests{{
 					Name:      "child test",
 					Framework: "fixture",

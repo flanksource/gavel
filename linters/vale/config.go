@@ -93,9 +93,7 @@ func convertToValePattern(pattern string) string {
 	pattern = strings.TrimSuffix(pattern, "/")
 
 	// Vale patterns are relative to the working directory
-	if strings.HasPrefix(pattern, "/") {
-		pattern = pattern[1:]
-	}
+	pattern = strings.TrimPrefix(pattern, "/")
 
 	return pattern
 }

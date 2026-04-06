@@ -217,14 +217,14 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 		if cr.Pass {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("### Check: %s (FAILED)\n", id))
+		fmt.Fprintf(&b, "### Check: %s (FAILED)\n", id)
 		for _, e := range cr.Evidence {
 			if e.Line > 0 {
-				b.WriteString(fmt.Sprintf("- %s:%d — %s\n", e.File, e.Line, e.Message))
+				fmt.Fprintf(&b, "- %s:%d — %s\n", e.File, e.Line, e.Message)
 			} else if e.File != "" {
-				b.WriteString(fmt.Sprintf("- %s — %s\n", e.File, e.Message))
+				fmt.Fprintf(&b, "- %s — %s\n", e.File, e.Message)
 			} else {
-				b.WriteString(fmt.Sprintf("- %s\n", e.Message))
+				fmt.Fprintf(&b, "- %s\n", e.Message)
 			}
 		}
 		b.WriteString("\n")
@@ -234,12 +234,12 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 		if rr.Score >= 80 {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("### Rating: %s (score: %d/100)\n", dim, rr.Score))
+		fmt.Fprintf(&b, "### Rating: %s (score: %d/100)\n", dim, rr.Score)
 		for _, f := range rr.Findings {
 			if f.Line > 0 {
-				b.WriteString(fmt.Sprintf("- %s:%d — %s\n", f.File, f.Line, f.Message))
+				fmt.Fprintf(&b, "- %s:%d — %s\n", f.File, f.Line, f.Message)
 			} else {
-				b.WriteString(fmt.Sprintf("- %s\n", f.Message))
+				fmt.Fprintf(&b, "- %s\n", f.Message)
 			}
 		}
 		b.WriteString("\n")
@@ -248,10 +248,10 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 	if !r.Completeness.Pass {
 		b.WriteString("### Completeness (FAILED)\n")
 		if r.Completeness.Summary != "" {
-			b.WriteString(fmt.Sprintf("- %s\n", r.Completeness.Summary))
+			fmt.Fprintf(&b, "- %s\n", r.Completeness.Summary)
 		}
 		for _, e := range r.Completeness.Evidence {
-			b.WriteString(fmt.Sprintf("- %s — %s\n", e.File, e.Message))
+			fmt.Fprintf(&b, "- %s — %s\n", e.File, e.Message)
 		}
 		b.WriteString("\n")
 	}
@@ -259,7 +259,7 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 	if turn > 1 && len(loop.Turns) > 1 {
 		b.WriteString("## Previous attempts\n\n")
 		for _, tr := range loop.Turns {
-			b.WriteString(fmt.Sprintf("- Turn %d: score %d/100\n", tr.Turn, tr.Score))
+			fmt.Fprintf(&b, "- Turn %d: score %d/100\n", tr.Turn, tr.Score)
 		}
 		b.WriteString("\nThe above issues persist after previous fix attempts. Try a different approach.\n\n")
 

@@ -42,7 +42,7 @@ func TestResolveWorkDir(t *testing.T) {
 		{
 			name: "test-level CWD overrides frontmatter CWD",
 			fixture: fixtures.FixtureTest{
-				SourceDir: "/home/user/fixtures",
+				SourceDir:       "/home/user/fixtures",
 				ExecFixtureBase: fixtures.ExecFixtureBase{CWD: "./test-specific"},
 				FrontMatter: fixtures.FrontMatter{
 					ExecFixtureBase: fixtures.ExecFixtureBase{CWD: "./from-frontmatter"},

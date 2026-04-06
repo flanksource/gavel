@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/flanksource/gavel/models"
 	commonsLogger "github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -26,7 +26,7 @@ func NewDB(driverName, dataSourceName string) (*DB, error) {
 	if driverName == "sqlite" {
 		// Configure GORM with SQLite
 		// Enable SQL logging if verbosity level is 3 or higher (-vvv)
-		var logMode logger.LogLevel = logger.Silent
+		logMode := logger.Silent
 		if commonsLogger.IsLevelEnabled(3) {
 			logMode = logger.Info // Enable SQL query logging for high verbosity
 		}
