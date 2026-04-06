@@ -376,31 +376,6 @@ func pruneTreeByVerbosity(tests []Test, verbosity int) []Test {
 	return result
 }
 
-// isContainerNode checks if a test is a directory, file, or suite node
-func isContainerNode(test Test) bool {
-	return isDirectoryNode(test) || isFileNode(test) || isSuiteNode(test)
-}
-
-// isDirectoryNode checks if test represents a directory
-func isDirectoryNode(test Test) bool {
-	return strings.HasSuffix(test.Name, "/")
-}
-
-// isFileNode checks if test represents a source file
-func isFileNode(test Test) bool {
-	return test.File != "" && test.Name == filepath.Base(test.File) && len(test.Children) > 0
-}
-
-// isSuiteNode checks if test represents a suite container (not an individual test in a suite)
-func isSuiteNode(test Test) bool {
-	if len(test.Suite) == 0 || test.Name == "" || isDirectoryNode(test) || isFileNode(test) {
-		return false
-	}
-	// A suite node's name matches the last element of its suite path
-	// Individual tests have a suite path but their name is different
-	return test.Name == test.Suite[len(test.Suite)-1]
-}
-
 // GetTestTreeAsTreeNodes converts Test tree to TreeNode slice
 func GetTestTreeAsTreeNodes(tests []Test) []api.TreeNode {
 	nodes := make([]api.TreeNode, len(tests))

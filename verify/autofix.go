@@ -217,14 +217,14 @@ func buildFixPrompt(r *VerifyResult, verifyOpts RunOptions, loop *FixLoopResult,
 		if cr.Pass {
 			continue
 		}
-		b.WriteString(fmt.Sprintf("### Check: %s (FAILED)\n", id))
+		fmt.Fprintf(&b, "### Check: %s (FAILED)\n", id)
 		for _, e := range cr.Evidence {
 			if e.Line > 0 {
-				b.WriteString(fmt.Sprintf("- %s:%d — %s\n", e.File, e.Line, e.Message))
+				fmt.Fprintf(&b, "- %s:%d — %s\n", e.File, e.Line, e.Message)
 			} else if e.File != "" {
-				b.WriteString(fmt.Sprintf("- %s — %s\n", e.File, e.Message))
+				fmt.Fprintf(&b, "- %s — %s\n", e.File, e.Message)
 			} else {
-				b.WriteString(fmt.Sprintf("- %s\n", e.Message))
+				fmt.Fprintf(&b, "- %s\n", e.Message)
 			}
 		}
 		b.WriteString("\n")

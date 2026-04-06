@@ -95,7 +95,7 @@ func (m *MigrationManager) RunMigrations() error {
 	if err != nil {
 		return fmt.Errorf("failed to begin migration transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Execute migrations in order
 	for _, migration := range pendingMigrations {
@@ -208,7 +208,7 @@ func (m *MigrationManager) migrateASTCacheV1(mgr *MigrationManager) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin AST cache transaction: %w", err)
 	}
-	defer astTx.Rollback()
+	defer func() { _ = astTx.Rollback() }()
 
 	// Create AST cache schema
 	schema := `
@@ -350,7 +350,7 @@ func (m *MigrationManager) migrateViolationCacheV1(mgr *MigrationManager) error 
 	if err != nil {
 		return fmt.Errorf("failed to begin violation cache transaction: %w", err)
 	}
-	defer violationTx.Rollback()
+	defer func() { _ = violationTx.Rollback() }()
 
 	// Create violation cache schema
 	schema := `
@@ -403,7 +403,7 @@ func (m *MigrationManager) migrateASTCacheDependencyAliases(mgr *MigrationManage
 	if err != nil {
 		return fmt.Errorf("failed to begin AST cache transaction: %w", err)
 	}
-	defer astTx.Rollback()
+	defer func() { _ = astTx.Rollback() }()
 
 	// Add dependency aliases table
 	schema := `
@@ -442,7 +442,7 @@ func (m *MigrationManager) migrateViolationCacheStoredAt(mgr *MigrationManager) 
 	if err != nil {
 		return fmt.Errorf("failed to begin violation cache transaction: %w", err)
 	}
-	defer violationTx.Rollback()
+	defer func() { _ = violationTx.Rollback() }()
 
 	// Check if stored_at column exists
 	rows, err := violationTx.Query("PRAGMA table_info(violations)")
@@ -522,7 +522,7 @@ func (m *MigrationManager) migrateASTCacheForGORM() error {
 	if err != nil {
 		return fmt.Errorf("failed to begin AST cache transaction: %w", err)
 	}
-	defer astTx.Rollback()
+	defer func() { _ = astTx.Rollback() }()
 
 	// Add parent_id column to ast_nodes if it doesn't exist
 	if err := m.addColumnIfNotExists(astTx, "ast_nodes", "parent_id", "INTEGER DEFAULT 0"); err != nil {
@@ -574,7 +574,7 @@ func (m *MigrationManager) migrateViolationCacheForGORM() error {
 	if err != nil {
 		return fmt.Errorf("failed to begin violation cache transaction: %w", err)
 	}
-	defer violationTx.Rollback()
+	defer func() { _ = violationTx.Rollback() }()
 
 	// The violations table should already have stored_at from migration 4
 	// Just ensure it's there and has the right index
