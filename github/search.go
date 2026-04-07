@@ -26,6 +26,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
         state
         isDraft
         reviewDecision
+        mergeable
         url
         updatedAt
         repository {
@@ -49,6 +50,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
         state
         isDraft
         reviewDecision
+        mergeable
         url
         updatedAt
         repository {
@@ -154,7 +156,8 @@ type PRSearchOptions struct {
 	Limit   int
 	Status  bool // include GitHub Actions check status counts
 	Verbose bool // with --status, fetch and show failed step logs
-	ShowURL bool // show PR URL instead of #number
+	ShowURL    bool // show PR URL instead of #number
+	ShowAuthor bool // show author name (when not filtered to @me)
 }
 
 type searchResponse struct {
@@ -180,6 +183,7 @@ type searchPRNode struct {
 	State          string        `json:"state"`
 	IsDraft        bool          `json:"isDraft"`
 	ReviewDecision string        `json:"reviewDecision"`
+	Mergeable      string        `json:"mergeable"`
 	URL            string        `json:"url"`
 	UpdatedAt      time.Time     `json:"updatedAt"`
 	Repository     struct {
@@ -198,6 +202,7 @@ type PRListItem struct {
 	State          string        `json:"state"`
 	IsDraft        bool          `json:"isDraft"`
 	ReviewDecision string        `json:"reviewDecision,omitempty"`
+	Mergeable      string        `json:"mergeable,omitempty"`
 	URL            string        `json:"url"`
 	UpdatedAt      time.Time     `json:"updatedAt"`
 	IsCurrent      bool          `json:"isCurrent,omitempty"`
@@ -205,6 +210,7 @@ type PRListItem struct {
 	Behind         int           `json:"behind,omitempty"`
 	CheckStatus    *CheckSummary `json:"checkStatus,omitempty"`
 	ShowURL        bool          `json:"-"`
+	ShowAuthor     bool          `json:"-"`
 }
 
 type PRSearchResults []PRListItem
@@ -367,6 +373,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 			State:          node.State,
 			IsDraft:        node.IsDraft,
 			ReviewDecision: node.ReviewDecision,
+			Mergeable:      node.Mergeable,
 			URL:            node.URL,
 			UpdatedAt:      node.UpdatedAt,
 		}
@@ -374,6 +381,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 			item.CheckStatus = computeCheckSummary(node)
 		}
 		item.ShowURL = searchOpts.ShowURL
+		item.ShowAuthor = searchOpts.ShowAuthor
 		items = append(items, item)
 	}
 
@@ -527,6 +535,9 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 		text = text.Append(" "+item.URL, "text-gray-500")
 	} else {
 		text = text.Append(fmt.Sprintf(" #%d", item.Number), "text-gray-500")
+	}
+	if item.ShowAuthor {
+		text = text.Append(" @"+item.Author, "text-blue-600")
 	}
 	text = text.Append(" "+item.Title, "")
 
