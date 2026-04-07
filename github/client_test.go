@@ -223,6 +223,54 @@ func TestParseGitHubRepo(t *testing.T) {
 	}
 }
 
+func TestParsePRURL(t *testing.T) {
+	tests := []struct {
+		url      string
+		repo     string
+		prNumber int
+		hasErr   bool
+	}{
+		{"https://github.com/flanksource/gavel/pull/15", "flanksource/gavel", 15, false},
+		{"github.com/flanksource/duty/pull/1865", "flanksource/duty", 1865, false},
+		{"http://github.com/org/repo/pull/42", "org/repo", 42, false},
+		{"https://github.com/flanksource/gavel", "", 0, true},
+		{"not-a-url", "", 0, true},
+	}
+	for _, tc := range tests {
+		repo, pr, err := ParsePRURL(tc.url)
+		if tc.hasErr {
+			assert.Error(t, err, "url=%s", tc.url)
+		} else {
+			require.NoError(t, err, "url=%s", tc.url)
+			assert.Equal(t, tc.repo, repo)
+			assert.Equal(t, tc.prNumber, pr)
+		}
+	}
+}
+
+func TestParseRepoURL(t *testing.T) {
+	tests := []struct {
+		url    string
+		expect string
+		hasErr bool
+	}{
+		{"https://github.com/flanksource/gavel", "flanksource/gavel", false},
+		{"github.com/flanksource/duty", "flanksource/duty", false},
+		{"https://github.com/org/repo.git", "org/repo", false},
+		{"https://github.com/flanksource/gavel/pull/15", "flanksource/gavel", false},
+		{"not-a-url", "", true},
+	}
+	for _, tc := range tests {
+		result, err := ParseRepoURL(tc.url)
+		if tc.hasErr {
+			assert.Error(t, err, "url=%s", tc.url)
+		} else {
+			require.NoError(t, err, "url=%s", tc.url)
+			assert.Equal(t, tc.expect, result, "url=%s", tc.url)
+		}
+	}
+}
+
 func TestTokenResolution(t *testing.T) {
 	tests := []struct {
 		name      string
