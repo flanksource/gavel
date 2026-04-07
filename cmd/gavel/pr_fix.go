@@ -59,7 +59,7 @@ func runPRFix(cmd *cobra.Command, args []string) error {
 	result, _ := prwatch.Run(prwatch.WatchOptions{
 		Options:  ghOpts,
 		PRNumber: prNumber,
-		TailLogs: watchTailLogs,
+		TailLogs: statusTailLogs,
 	})
 
 	if result == nil {

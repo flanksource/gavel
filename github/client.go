@@ -65,6 +65,16 @@ var repoPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$`),
 }
 
+func ResolveRepoFromDir(dir string) (string, error) {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git remote get-url origin in %s: %w", dir, err)
+	}
+	return parseGitHubRepo(strings.TrimSpace(string(out)))
+}
+
 func parseGitHubRepo(remoteURL string) (string, error) {
 	for _, re := range repoPatterns {
 		if m := re.FindStringSubmatch(remoteURL); len(m) >= 2 {
@@ -72,6 +82,24 @@ func parseGitHubRepo(remoteURL string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("cannot parse GitHub owner/repo from %q", remoteURL)
+}
+
+var prURLPattern = regexp.MustCompile(`(?:https?://)?github\.com/([^/]+/[^/]+)/pull/(\d+)`)
+var repoURLPattern = regexp.MustCompile(`(?:https?://)?github\.com/([^/]+/[^/]+?)(?:\.git)?(?:/|$)`)
+
+func ParsePRURL(url string) (repo string, prNumber int, err error) {
+	if m := prURLPattern.FindStringSubmatch(url); len(m) >= 3 {
+		n, _ := strconv.Atoi(m[2])
+		return m[1], n, nil
+	}
+	return "", 0, fmt.Errorf("cannot parse PR URL: %q", url)
+}
+
+func ParseRepoURL(url string) (string, error) {
+	if m := repoURLPattern.FindStringSubmatch(url); len(m) >= 2 {
+		return m[1], nil
+	}
+	return "", fmt.Errorf("cannot parse repo URL: %q", url)
 }
 
 func newClient(token string) *http.Client {
