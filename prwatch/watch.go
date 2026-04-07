@@ -107,6 +107,13 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.Wo
 	return runs
 }
 
+// MergeAndFilter combines comments with thread state, extracts nitpick sub-comments, and filters noise.
+func MergeAndFilter(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
+	comments = mergeThreadState(comments, threads)
+	comments = extractNitpicks(comments)
+	return filterActionableComments(comments)
+}
+
 func mergeThreadState(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
 	threadByID := make(map[int64]github.PRComment, len(threads))
 	for _, t := range threads {
