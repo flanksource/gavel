@@ -54,9 +54,10 @@ export interface RepoGroup {
 }
 
 export function groupByRepo(prs: PRItem[]): RepoGroup[] {
+  const sorted = [...prs].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   const order: string[] = [];
   const groups = new Map<string, PRItem[]>();
-  for (const pr of prs) {
+  for (const pr of sorted) {
     if (!groups.has(pr.repo)) {
       order.push(pr.repo);
       groups.set(pr.repo, []);

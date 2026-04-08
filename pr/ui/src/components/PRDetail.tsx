@@ -2,6 +2,7 @@ import { useState, useMemo } from 'preact/hooks';
 import type { PRItem, PRDetail, WorkflowRun, Job, PRComment } from '../types';
 import { stateColor, reviewColor, timeAgo, statusIcon, statusColor, severityIcon } from '../utils';
 import { Markdown } from './Markdown';
+import { LogViewer } from './LogViewer';
 
 interface Props {
   pr: PRItem;
@@ -157,16 +158,12 @@ function JobView({ job }: { job: Job }) {
             {step.name}
           </span>
           {step.logs && (
-            <pre class="mt-0.5 ml-4 text-[11px] text-gray-500 bg-gray-50 rounded p-1.5 whitespace-pre-wrap max-h-40 overflow-y-auto border border-gray-100">
-              {step.logs}
-            </pre>
+            <LogViewer logs={step.logs} />
           )}
         </div>
       ))}
       {failed && !hasStepLogs(job) && job.logs && (
-        <pre class="ml-4 mt-1 text-[11px] text-gray-500 bg-red-50 rounded p-1.5 whitespace-pre-wrap max-h-40 overflow-y-auto border border-red-100">
-          {job.logs}
-        </pre>
+        <LogViewer logs={job.logs} bgClass="bg-red-50" borderClass="border-red-100" />
       )}
     </div>
   );

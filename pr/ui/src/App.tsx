@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
-import type { PRItem, PRDetail, Snapshot, SearchConfig } from './types';
+import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -21,6 +21,8 @@ export function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [filters, setFilters] = useState<Filters>(emptyFilters());
   const [config, setConfig] = useState<SearchConfig>(defaultConfig);
+  const [paused, setPaused] = useState(false);
+  const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [, tick] = useState(0);
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export function App() {
     });
     es.onerror = () => setError('Connection lost — retrying...');
 
-    const timer = setInterval(() => tick(n => n + 1), 5000);
+    const timer = setInterval(() => tick(n => n + 1), 1000);
     return () => { es.close(); clearInterval(timer); };
   }, []);
 
@@ -44,11 +46,17 @@ export function App() {
     setFetchedAt(snap.fetchedAt);
     setNextFetchIn(snap.nextFetchIn);
     setError(snap.error);
+    setPaused(snap.paused);
+    if (snap.rateLimit) setRateLimit(snap.rateLimit);
     if (snap.config) setConfig(snap.config);
   }
 
   function handleRefresh() {
     fetch('/api/prs/refresh', { method: 'POST' }).catch(() => {});
+  }
+
+  function handlePause() {
+    fetch('/api/prs/pause', { method: 'POST' }).catch(() => {});
   }
 
   function updateConfig(partial: Partial<SearchConfig>) {
@@ -102,7 +110,10 @@ export function App() {
             fetchedAt={fetchedAt}
             error={error}
             nextFetchIn={nextFetchIn}
+            paused={paused}
+            rateLimit={rateLimit}
             onRefresh={handleRefresh}
+            onPause={handlePause}
           />
         </div>
       </div>

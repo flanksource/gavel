@@ -270,10 +270,10 @@ func buildSearchQueryForRepo(repo string, searchOpts PRSearchOptions) string {
 	return strings.Join(parts, " ")
 }
 
-func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, error) {
+func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
 	token, err := opts.token()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(searchOpts.Repos) > 0 {
@@ -282,12 +282,12 @@ func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, error
 
 	queryString, err := buildSearchQuery(opts, searchOpts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	items, err := executeSearch(token, queryString, searchOpts)
+	items, rl, err := executeSearch(token, queryString, searchOpts)
 	if err != nil {
-		return nil, err
+		return nil, rl, err
 	}
 
 	if searchOpts.Verbose && searchOpts.Status {
@@ -298,24 +298,28 @@ func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, error
 		markCurrentBranch(opts, items)
 	}
 
-	return items, nil
+	return items, rl, nil
 }
 
-func searchMultipleRepos(token string, searchOpts PRSearchOptions) (PRSearchResults, error) {
+func searchMultipleRepos(token string, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
 	var all PRSearchResults
+	var lastRL *RateLimit
 	for _, repo := range searchOpts.Repos {
 		queryString := buildSearchQueryForRepo(repo, searchOpts)
-		items, err := executeSearch(token, queryString, searchOpts)
+		items, rl, err := executeSearch(token, queryString, searchOpts)
 		if err != nil {
 			logger.Warnf("failed to search %s: %v", repo, err)
 			continue
 		}
 		all = append(all, items...)
+		if rl != nil {
+			lastRL = rl
+		}
 	}
-	return all, nil
+	return all, lastRL, nil
 }
 
-func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSearchResults, error) {
+func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
 	limit := searchOpts.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -342,23 +346,24 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 		Header("Content-Type", "application/json").
 		Post("https://api.github.com/graphql", body)
 	if err != nil {
-		return nil, fmt.Errorf("GraphQL request: %w", err)
+		return nil, nil, fmt.Errorf("GraphQL request: %w", err)
 	}
+	rl := ParseRateLimit(resp.Header)
 	if !resp.IsOK() {
 		respBody, _ := resp.AsString()
-		return nil, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
+		return nil, rl, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
 	}
 
 	var result searchResponse
 	if err := resp.Into(&result); err != nil {
-		return nil, fmt.Errorf("parse search response: %w", err)
+		return nil, rl, fmt.Errorf("parse search response: %w", err)
 	}
 	if len(result.Errors) > 0 {
 		msgs := make([]string, len(result.Errors))
 		for i, e := range result.Errors {
 			msgs[i] = e.Message
 		}
-		return nil, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
+		return nil, rl, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 
 	var items PRSearchResults
@@ -386,7 +391,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	}
 
 	logger.Debugf("found %d PRs (total: %d)", len(items), result.Data.Search.IssueCount)
-	return items, nil
+	return items, rl, nil
 }
 
 func computeCheckSummary(node searchPRNode) *CheckSummary {

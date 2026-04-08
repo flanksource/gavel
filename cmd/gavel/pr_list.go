@@ -134,7 +134,7 @@ func runPRList(opts PRListOptions) (any, error) {
 		return nil, err
 	}
 
-	results, err := github.SearchPRs(ghOpts, searchOpts)
+	results, _, err := github.SearchPRs(ghOpts, searchOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +156,8 @@ func runPRUI(opts PRListOptions) error {
 	if err != nil {
 		return fmt.Errorf("invalid interval %q: %w", opts.Interval, err)
 	}
+
+	searchOpts.Status = true
 
 	author := searchOpts.Author
 	isAny := opts.Any
@@ -188,16 +190,17 @@ func runPRUI(opts PRListOptions) error {
 
 	srv.RepoSearchFn = func() (github.PRSearchResults, error) {
 		since, _ := parseSince("30d")
-		return github.SearchPRs(ghOpts, github.PRSearchOptions{
+		results, _, err := github.SearchPRs(ghOpts, github.PRSearchOptions{
 			All:   true,
 			Org:   searchOpts.Org,
 			State: "open",
 			Since: since,
 			Limit: 100,
 		})
+		return results, err
 	}
 
-	searchFn := func(since time.Time) (github.PRSearchResults, error) {
+	searchFn := func(since time.Time) (github.PRSearchResults, *github.RateLimit, error) {
 		cfg := srv.GetConfig()
 		so := searchOpts
 		if !since.IsZero() {
@@ -213,14 +216,14 @@ func runPRUI(opts PRListOptions) error {
 			so.Author = cfg.Author
 		}
 		so.ShowAuthor = so.Author != "@me"
-		results, err := github.SearchPRs(ghOpts, so)
+		results, rl, err := github.SearchPRs(ghOpts, so)
 		if err != nil {
-			return nil, err
+			return nil, rl, err
 		}
 		if !cfg.Bots {
 			results = filterByBot(results, false)
 		}
-		return results, nil
+		return results, rl, nil
 	}
 
 	poller := ui.NewPoller(srv, searchFn, interval)

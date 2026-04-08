@@ -116,7 +116,7 @@ func resolveOrFallbackPR(ghOpts github.Options) int {
 	}
 
 	logger.Infof("No PR found for current branch, checking most recent PR...")
-	results, searchErr := github.SearchPRs(ghOpts, github.PRSearchOptions{
+	results, _, searchErr := github.SearchPRs(ghOpts, github.PRSearchOptions{
 		Author: "@me",
 		State:  "all",
 		Limit:  1,

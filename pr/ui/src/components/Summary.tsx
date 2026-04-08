@@ -1,4 +1,4 @@
-import type { PRItem } from '../types';
+import type { PRItem, RateLimit } from '../types';
 import { ProgressBar } from './ProgressBar';
 import { computeCounts } from '../utils';
 
@@ -7,12 +7,18 @@ interface Props {
   fetchedAt: string;
   error?: string;
   nextFetchIn: number;
+  paused: boolean;
+  rateLimit?: RateLimit;
   onRefresh: () => void;
+  onPause: () => void;
 }
 
-export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh }: Props) {
+export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused, rateLimit, onPause }: Props) {
   const counts = computeCounts(prs);
   const ago = fetchedAt ? timeAgoShort(fetchedAt) : 'never';
+  const countdown = fetchedAt
+    ? Math.max(0, nextFetchIn - Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000))
+    : nextFetchIn;
 
   return (
     <div class="flex flex-col items-end gap-1">
@@ -23,17 +29,36 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh }: Props
         {counts.running > 0 && <><Sep /><span class="text-yellow-600">{counts.running} running</span></>}
         {counts.merged > 0 && <><Sep /><span class="text-purple-600">{counts.merged} merged</span></>}
         <Sep />
-        <span class="text-gray-400">
+        <span class="text-gray-400" title={`Refreshes every ${nextFetchIn}s`}>
           <iconify-icon icon="codicon:clock" class="mr-0.5" />
           {ago}
+          {paused
+            ? <span class="text-yellow-500 ml-1">(paused)</span>
+            : countdown > 0 && <span class="text-gray-300 ml-1">({countdown}s)</span>
+          }
         </span>
+        <button
+          onClick={onPause}
+          class={`transition-colors ${paused ? 'text-yellow-500 hover:text-green-600' : 'text-gray-400 hover:text-yellow-500'}`}
+          title={paused ? 'Resume polling' : 'Pause polling'}
+        >
+          <iconify-icon icon={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
+        </button>
         <button
           onClick={onRefresh}
           class="text-gray-400 hover:text-blue-600 transition-colors"
-          title={`Refresh (auto-refresh every ${nextFetchIn}s)`}
+          title="Refresh now"
         >
           <iconify-icon icon="codicon:refresh" />
         </button>
+        {rateLimit && (
+          <span
+            class={`text-xs ${rateLimit.remaining < 100 ? 'text-red-500' : 'text-gray-400'}`}
+            title={`API: ${rateLimit.used}/${rateLimit.limit} used (${rateLimit.resource}), resets ${new Date(rateLimit.reset * 1000).toLocaleTimeString()}`}
+          >
+            {rateLimit.remaining}/{rateLimit.limit}
+          </span>
+        )}
         {error && (
           <span class="text-red-500 text-xs" title={error}>
             <iconify-icon icon="codicon:warning" class="mr-0.5" />
