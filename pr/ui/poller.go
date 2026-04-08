@@ -11,7 +11,7 @@ import (
 
 type Poller struct {
 	srv        *Server
-	searchFn   func(since time.Time) (github.PRSearchResults, error)
+	searchFn   func(since time.Time) (github.PRSearchResults, *github.RateLimit, error)
 	interval   time.Duration
 	fullRefresh time.Duration
 	known      map[string]github.PRListItem
@@ -19,7 +19,7 @@ type Poller struct {
 	lastFull   time.Time
 }
 
-func NewPoller(srv *Server, searchFn func(since time.Time) (github.PRSearchResults, error), interval time.Duration) *Poller {
+func NewPoller(srv *Server, searchFn func(since time.Time) (github.PRSearchResults, *github.RateLimit, error), interval time.Duration) *Poller {
 	return &Poller{
 		srv:         srv,
 		searchFn:    searchFn,
@@ -50,6 +50,9 @@ func (p *Poller) loop(ctx context.Context) {
 		case <-p.srv.RefreshCh():
 			p.fetchFull()
 		case <-ticker.C:
+			if p.srv.IsPaused() {
+				continue
+			}
 			if time.Since(p.lastFull) >= p.fullRefresh {
 				p.fetchFull()
 			} else {
@@ -61,7 +64,8 @@ func (p *Poller) loop(ctx context.Context) {
 
 func (p *Poller) fetchFull() {
 	logger.Debugf("pr poller: full fetch")
-	results, err := p.searchFn(time.Time{})
+	results, rl, err := p.searchFn(time.Time{})
+	p.srv.SetRateLimit(rl)
 	if err != nil {
 		logger.Warnf("pr poller: full fetch failed: %v", err)
 		p.srv.SetError(err)
@@ -81,7 +85,8 @@ func (p *Poller) fetchIncremental() {
 	since := p.lastFetch.Add(-30 * time.Second)
 	logger.Debugf("pr poller: incremental fetch since %s", since.Format(time.RFC3339))
 
-	results, err := p.searchFn(since)
+	results, rl, err := p.searchFn(since)
+	p.srv.SetRateLimit(rl)
 	if err != nil {
 		logger.Warnf("pr poller: incremental fetch failed: %v", err)
 		p.srv.SetError(err)

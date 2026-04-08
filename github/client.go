@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	nethttp "net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -107,6 +108,27 @@ func newClient(token string) *http.Client {
 		BaseURL("https://api.github.com").
 		Header("Authorization", "Bearer "+token).
 		Header("Accept", "application/vnd.github+json")
+}
+
+type RateLimit struct {
+	Limit     int    `json:"limit"`
+	Remaining int    `json:"remaining"`
+	Used      int    `json:"used"`
+	Reset     int64  `json:"reset"`
+	Resource  string `json:"resource"`
+}
+
+func ParseRateLimit(header nethttp.Header) *RateLimit {
+	remaining := header.Get("X-RateLimit-Remaining")
+	if remaining == "" {
+		return nil
+	}
+	rl := &RateLimit{Resource: header.Get("X-RateLimit-Resource")}
+	rl.Remaining, _ = strconv.Atoi(remaining)
+	rl.Limit, _ = strconv.Atoi(header.Get("X-RateLimit-Limit"))
+	rl.Used, _ = strconv.Atoi(header.Get("X-RateLimit-Used"))
+	rl.Reset, _ = strconv.ParseInt(header.Get("X-RateLimit-Reset"), 10, 64)
+	return rl
 }
 
 // REST response types for /actions endpoints (snake_case JSON)

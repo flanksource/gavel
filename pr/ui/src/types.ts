@@ -41,13 +41,23 @@ export interface SearchConfig {
   bots?: boolean;
 }
 
+export interface RateLimit {
+  limit: number;
+  remaining: number;
+  used: number;
+  reset: number;
+  resource: string;
+}
+
 export interface Snapshot {
   prs: PRItem[];
   fetchedAt: string;
   nextFetchIn: number;
   incremental: boolean;
+  paused: boolean;
   error?: string;
   config: SearchConfig;
+  rateLimit?: RateLimit;
 }
 
 // Detail API types

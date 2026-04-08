@@ -35,6 +35,8 @@ type Server struct {
 	fetchedAt   time.Time
 	interval    time.Duration
 	err         error
+	paused      bool
+	rateLimit   *github.RateLimit
 	updated     chan struct{}
 	refreshCh   chan struct{}
 	subscribers []chan github.PRSearchResults
@@ -51,8 +53,10 @@ type snapshot struct {
 	FetchedAt   time.Time              `json:"fetchedAt"`
 	NextFetchIn int                    `json:"nextFetchIn"`
 	Incremental bool                   `json:"incremental"`
+	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
 	Config      SearchConfig           `json:"config"`
+	RateLimit   *github.RateLimit      `json:"rateLimit,omitempty"`
 }
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
@@ -108,6 +112,28 @@ func (s *Server) SetError(err error) {
 	s.notify()
 }
 
+func (s *Server) SetRateLimit(rl *github.RateLimit) {
+	if rl == nil {
+		return
+	}
+	s.mu.Lock()
+	s.rateLimit = rl
+	s.mu.Unlock()
+}
+
+func (s *Server) IsPaused() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.paused
+}
+
+func (s *Server) TogglePause() {
+	s.mu.Lock()
+	s.paused = !s.paused
+	s.mu.Unlock()
+	s.notify()
+}
+
 func (s *Server) notify() {
 	select {
 	case s.updated <- struct{}{}:
@@ -125,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
@@ -162,7 +189,9 @@ func (s *Server) snapshot() snapshot {
 		PRs:         s.prs,
 		FetchedAt:   s.fetchedAt,
 		NextFetchIn: int(s.interval.Seconds()),
+		Paused:      s.paused,
 		Config:      s.config,
+		RateLimit:   s.rateLimit,
 	}
 	if s.err != nil {
 		snap.Error = s.err.Error()
@@ -230,6 +259,19 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
+}
+
+func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.TogglePause()
+	s.mu.RLock()
+	paused := s.paused
+	s.mu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"paused":%v}`, paused)
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,5 @@
 import type { PRItem } from '../types';
-import { stateIcon, stateColor, reviewColor, checkSummaryText, timeAgo } from '../utils';
+import { reviewColor, checkSummaryText, timeAgo } from '../utils';
 
 interface Props {
   pr: PRItem;
@@ -7,21 +7,40 @@ interface Props {
   onClick: () => void;
 }
 
+function prStatusIcon(pr: PRItem): { icon: string; color: string; title: string } {
+  if (pr.isDraft) return { icon: '○', color: 'text-gray-400', title: 'Draft' };
+  if (pr.state === 'MERGED') return { icon: '●', color: 'text-purple-600', title: 'Merged' };
+  if (pr.state === 'CLOSED') return { icon: '●', color: 'text-red-600', title: 'Closed' };
+  if (pr.checkStatus) {
+    if (pr.checkStatus.failed > 0) return { icon: '✗', color: 'text-red-600', title: `${pr.checkStatus.failed} checks failed` };
+    if (pr.checkStatus.running > 0) return { icon: '●', color: 'text-yellow-600', title: `${pr.checkStatus.running} checks running` };
+    if (pr.checkStatus.passed > 0) return { icon: '✓', color: 'text-green-600', title: 'All checks passed' };
+  }
+  return { icon: '●', color: 'text-green-600', title: 'Open' };
+}
+
+function borderColor(pr: PRItem, selected: boolean): string {
+  if (selected) return 'border-blue-500';
+  if (pr.isDraft || pr.state === 'MERGED' || pr.state === 'CLOSED') return 'border-transparent';
+  if (pr.checkStatus?.failed) return 'border-red-400';
+  if (pr.checkStatus?.running) return 'border-yellow-400';
+  return 'border-transparent';
+}
+
 export function PRRow({ pr, selected, onClick }: Props) {
   const hasConflict = !pr.isDraft && pr.mergeable === 'CONFLICTING';
+  const status = prStatusIcon(pr);
 
   return (
     <div
-      class={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${
-        selected
-          ? 'bg-blue-50 border-blue-500'
-          : 'border-transparent hover:bg-gray-50'
+      class={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected)} ${
+        selected ? 'bg-blue-50' : 'hover:bg-gray-50'
       }`}
       onClick={onClick}
     >
       <div class="flex items-center gap-2">
-        <span class={`text-sm ${stateColor(pr.state, pr.isDraft)}`} title={pr.isDraft ? 'Draft' : pr.state}>
-          {stateIcon(pr.state, pr.isDraft)}
+        <span class={`text-sm ${status.color}`} title={status.title}>
+          {status.icon}
         </span>
         <span class="text-xs text-gray-400">#{pr.number}</span>
         <span class="text-sm font-medium text-gray-800 truncate flex-1">{pr.title}</span>

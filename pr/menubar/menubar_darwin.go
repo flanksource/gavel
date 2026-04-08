@@ -77,7 +77,9 @@ func (m *MenuBar) updateTitle() {
 	}
 
 	var title string
-	if failed > 0 {
+	if m.srv.IsPaused() {
+		title = "PR: ⏸"
+	} else if failed > 0 {
 		title = fmt.Sprintf("PR: %d/%d", failed, len(prs))
 	} else if len(prs) > 0 {
 		title = "PR: ✓"
@@ -137,6 +139,19 @@ func (m *MenuBar) menuItems() []menuet.MenuItem {
 			},
 		})
 	}
+	paused := m.srv.IsPaused()
+	pauseText := "Pause Polling"
+	if paused {
+		pauseText = "Resume Polling"
+	}
+	items = append(items, menuet.MenuItem{
+		Text:  pauseText,
+		State: paused,
+		Clicked: func() {
+			m.srv.TogglePause()
+			m.updateTitle()
+		},
+	})
 	items = append(items, menuet.MenuItem{
 		Text: "Refresh",
 		Clicked: func() {
