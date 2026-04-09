@@ -49,7 +49,9 @@ export function timeAgo(iso: string): string {
 
 export interface RepoGroup {
   repo: string;
+  repoOwner: string;
   repoShort: string;
+  repoAvatarUrl?: string;
   items: PRItem[];
 }
 
@@ -64,11 +66,17 @@ export function groupByRepo(prs: PRItem[]): RepoGroup[] {
     }
     groups.get(pr.repo)!.push(pr);
   }
-  return order.map(repo => ({
-    repo,
-    repoShort: repo.includes('/') ? repo.split('/')[1] : repo,
-    items: groups.get(repo)!,
-  }));
+  return order.map(repo => {
+    const items = groups.get(repo)!;
+    const slash = repo.indexOf('/');
+    return {
+      repo,
+      repoOwner: slash >= 0 ? repo.slice(0, slash) : '',
+      repoShort: slash >= 0 ? repo.slice(slash + 1) : repo,
+      repoAvatarUrl: items.find(p => p.repoAvatarUrl)?.repoAvatarUrl,
+      items,
+    };
+  });
 }
 
 export interface PRCounts {

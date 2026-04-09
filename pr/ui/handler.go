@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -153,6 +152,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
 	return mux
@@ -176,6 +176,15 @@ func pageHTML() string {
     <title>PR Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
+    <style>
+        @keyframes gavel-progress-slide {
+            0%   { left: -35%; }
+            100% { left: 100%; }
+        }
+        .gavel-progress-bar {
+            animation: gavel-progress-slide 1.1s ease-in-out infinite;
+        }
+    </style>
 </head>
 <body>
     <div id="root"></div>
@@ -433,9 +442,6 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 			logger.Warnf("failed to fetch run %d: %v", runID, err)
 			continue
 		}
-		if strings.EqualFold(run.Conclusion, "failure") {
-			github.FetchAndAttachLogs(opts, run, 100)
-		}
 		runs[runID] = run
 	}
 	result.Runs = runs
@@ -458,4 +464,85 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	if canFlush {
 		flusher.Flush()
 	}
+}
+
+type jobLogsResponse struct {
+	JobID int64         `json:"jobId"`
+	Logs  string        `json:"logs,omitempty"`
+	Steps []github.Step `json:"steps,omitempty"`
+	Error string        `json:"error,omitempty"`
+}
+
+func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	jobIDStr := r.URL.Query().Get("jobId")
+	if repo == "" || jobIDStr == "" {
+		http.Error(w, `{"error":"repo and jobId params required"}`, http.StatusBadRequest)
+		return
+	}
+	jobID, err := strconv.ParseInt(jobIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid jobId"}`, http.StatusBadRequest)
+		return
+	}
+	tail := 100
+	if t := r.URL.Query().Get("tail"); t != "" {
+		if n, err := strconv.Atoi(t); err == nil && n > 0 {
+			tail = n
+		}
+	}
+
+	opts := s.ghOpts
+	opts.Repo = repo
+
+	// We don't know the steps ahead of time — callers that already have the run can pass
+	// steps via the runId route. Simpler: fetch the run to learn the job's steps, then
+	// call FetchJobLogs. But that's an extra GitHub round-trip. Since the frontend already
+	// has the job + step metadata in memory (from /api/prs/detail), it can reconstruct
+	// the Job shell and we only need jobID for the log fetch. attachLogsToSteps needs
+	// step names to split — so we also need runId here.
+	runIDStr := r.URL.Query().Get("runId")
+	if runIDStr == "" {
+		http.Error(w, `{"error":"runId param required"}`, http.StatusBadRequest)
+		return
+	}
+	runID, err := strconv.ParseInt(runIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid runId"}`, http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	resp := jobLogsResponse{JobID: jobID}
+
+	run, err := github.FetchRunJobs(opts, runID)
+	if err != nil {
+		logger.Warnf("failed to fetch run %d: %v", runID, err)
+		resp.Error = err.Error()
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+		return
+	}
+
+	var job *github.Job
+	for i := range run.Jobs {
+		if run.Jobs[i].DatabaseID == jobID {
+			job = &run.Jobs[i]
+			break
+		}
+	}
+	if job == nil {
+		http.Error(w, `{"error":"job not found in run"}`, http.StatusNotFound)
+		return
+	}
+
+	if err := github.FetchJobLogs(opts, job, tail); err != nil {
+		logger.Warnf("failed to fetch logs for job %d: %v", jobID, err)
+		resp.Error = err.Error()
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+		return
+	}
+
+	resp.Logs = job.Logs
+	resp.Steps = job.Steps
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }

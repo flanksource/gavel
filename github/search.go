@@ -20,7 +20,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login }
+        author { login avatarUrl }
         headRefName
         baseRefName
         state
@@ -31,6 +31,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
         updatedAt
         repository {
           nameWithOwner
+          owner { avatarUrl }
         }
       }
     }
@@ -44,7 +45,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login }
+        author { login avatarUrl }
         headRefName
         baseRefName
         state
@@ -55,6 +56,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
         updatedAt
         repository {
           nameWithOwner
+          owner { avatarUrl }
         }
         commits(last: 1) {
           nodes {
@@ -154,8 +156,9 @@ type PRSearchOptions struct {
 	Org     string
 	Repos   []string // explicit list of owner/repo to search
 	Limit   int
-	Status  bool // include GitHub Actions check status counts
-	Verbose bool // with --status, fetch and show failed step logs
+	Status    bool // include GitHub Actions check status counts
+	Verbose   bool // with --status, enrich failed checks with failing step names
+	FetchLogs bool // with --status -v, also fetch failing job log tails (extra API quota)
 	ShowURL    bool // show PR URL instead of #number
 	ShowAuthor bool // show author name (when not filtered to @me)
 }
@@ -188,29 +191,34 @@ type searchPRNode struct {
 	UpdatedAt      time.Time     `json:"updatedAt"`
 	Repository     struct {
 		NameWithOwner string `json:"nameWithOwner"`
+		Owner         struct {
+			AvatarURL string `json:"avatarUrl"`
+		} `json:"owner"`
 	} `json:"repository"`
 	Commits graphQLCommits `json:"commits"`
 }
 
 type PRListItem struct {
-	Number         int           `json:"number"`
-	Title          string        `json:"title"`
-	Author         string        `json:"author"`
-	Repo           string        `json:"repo"`
-	Source         string        `json:"source"`
-	Target         string        `json:"target"`
-	State          string        `json:"state"`
-	IsDraft        bool          `json:"isDraft"`
-	ReviewDecision string        `json:"reviewDecision,omitempty"`
-	Mergeable      string        `json:"mergeable,omitempty"`
-	URL            string        `json:"url"`
-	UpdatedAt      time.Time     `json:"updatedAt"`
-	IsCurrent      bool          `json:"isCurrent,omitempty"`
-	Ahead          int           `json:"ahead,omitempty"`
-	Behind         int           `json:"behind,omitempty"`
-	CheckStatus    *CheckSummary `json:"checkStatus,omitempty"`
-	ShowURL        bool          `json:"-"`
-	ShowAuthor     bool          `json:"-"`
+	Number          int           `json:"number"`
+	Title           string        `json:"title"`
+	Author          string        `json:"author"`
+	AuthorAvatarURL string        `json:"authorAvatarUrl,omitempty"`
+	Repo            string        `json:"repo"`
+	RepoAvatarURL   string        `json:"repoAvatarUrl,omitempty"`
+	Source          string        `json:"source"`
+	Target          string        `json:"target"`
+	State           string        `json:"state"`
+	IsDraft         bool          `json:"isDraft"`
+	ReviewDecision  string        `json:"reviewDecision,omitempty"`
+	Mergeable       string        `json:"mergeable,omitempty"`
+	URL             string        `json:"url"`
+	UpdatedAt       time.Time     `json:"updatedAt"`
+	IsCurrent       bool          `json:"isCurrent,omitempty"`
+	Ahead           int           `json:"ahead,omitempty"`
+	Behind          int           `json:"behind,omitempty"`
+	CheckStatus     *CheckSummary `json:"checkStatus,omitempty"`
+	ShowURL         bool          `json:"-"`
+	ShowAuthor      bool          `json:"-"`
 }
 
 type PRSearchResults []PRListItem
@@ -291,7 +299,7 @@ func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, *Rate
 	}
 
 	if searchOpts.Verbose && searchOpts.Status {
-		enrichFailedChecks(opts, items)
+		enrichFailedChecks(opts, items, searchOpts.FetchLogs)
 	}
 
 	if !searchOpts.All {
@@ -369,18 +377,20 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	var items PRSearchResults
 	for _, node := range result.Data.Search.Nodes {
 		item := PRListItem{
-			Number:         node.Number,
-			Title:          node.Title,
-			Author:         node.Author.Login,
-			Repo:           node.Repository.NameWithOwner,
-			Source:         node.HeadRefName,
-			Target:         node.BaseRefName,
-			State:          node.State,
-			IsDraft:        node.IsDraft,
-			ReviewDecision: node.ReviewDecision,
-			Mergeable:      node.Mergeable,
-			URL:            node.URL,
-			UpdatedAt:      node.UpdatedAt,
+			Number:          node.Number,
+			Title:           node.Title,
+			Author:          node.Author.Login,
+			AuthorAvatarURL: node.Author.AvatarURL,
+			Repo:            node.Repository.NameWithOwner,
+			RepoAvatarURL:   node.Repository.Owner.AvatarURL,
+			Source:          node.HeadRefName,
+			Target:          node.BaseRefName,
+			State:           node.State,
+			IsDraft:         node.IsDraft,
+			ReviewDecision:  node.ReviewDecision,
+			Mergeable:       node.Mergeable,
+			URL:             node.URL,
+			UpdatedAt:       node.UpdatedAt,
 		}
 		if searchOpts.Status {
 			item.CheckStatus = computeCheckSummary(node)
@@ -424,7 +434,7 @@ func computeCheckSummary(node searchPRNode) *CheckSummary {
 	return &cs
 }
 
-func enrichFailedChecks(opts Options, items PRSearchResults) {
+func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 	for i := range items {
 		if items[i].CheckStatus == nil {
 			continue
@@ -443,7 +453,9 @@ func enrichFailedChecks(opts Options, items PRSearchResults) {
 				logger.Warnf("failed to fetch run %d: %v", runID, err)
 				continue
 			}
-			FetchAndAttachLogs(opts, run, 20)
+			if fetchLogs {
+				FetchAndAttachLogs(opts, run, 20)
+			}
 			for _, job := range run.Jobs {
 				if !strings.EqualFold(job.Conclusion, "failure") {
 					continue

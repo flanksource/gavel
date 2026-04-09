@@ -1,6 +1,7 @@
 import type { PRItem } from '../types';
 import { PRRow } from './PRRow';
 import { groupByRepo } from '../utils';
+import { Avatar } from './Avatar';
 
 interface Props {
   prs: PRItem[];
@@ -19,19 +20,28 @@ export function PRList({ prs, selected, onSelect }: Props) {
   }
 
   const groups = groupByRepo(prs);
-  const multiRepo = groups.length > 1;
 
   return (
     <div class="divide-y divide-gray-100">
       {groups.map(group => (
         <div key={group.repo}>
-          {multiRepo && (
-            <div class="px-3 py-1.5 bg-gray-50 text-xs font-semibold text-cyan-700 sticky top-0 border-b border-gray-100">
-              <iconify-icon icon="codicon:repo" class="mr-1" />
-              {group.repoShort}
-              <span class="text-gray-400 font-normal ml-1">({group.items.length})</span>
+          <div class="px-3 py-2 bg-gray-50 sticky top-0 border-b border-gray-200 flex items-center gap-2 z-10">
+            <Avatar
+              src={group.repoAvatarUrl}
+              alt={group.repo}
+              size={22}
+              rounded="md"
+              href={`https://github.com/${group.repo}`}
+              title={group.repo}
+            />
+            <div class="flex items-baseline gap-1 min-w-0 flex-1">
+              {group.repoOwner && (
+                <span class="text-xs text-gray-400 font-normal truncate">{group.repoOwner}/</span>
+              )}
+              <span class="text-sm font-semibold text-gray-800 truncate">{group.repoShort}</span>
             </div>
-          )}
+            <span class="text-xs text-gray-400 font-normal shrink-0">{group.items.length}</span>
+          </div>
           {group.items.map(pr => (
             <PRRow
               key={`${pr.repo}#${pr.number}`}
