@@ -258,43 +258,47 @@ func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
 }
 
 func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
-	token, err := opts.token()
-	if err != nil {
-		logger.Warnf("cannot fetch logs: %v", err)
-		return
-	}
-	repo, err := opts.resolveRepo()
-	if err != nil {
-		logger.Warnf("cannot resolve repo for logs: %v", err)
-		return
-	}
-
-	ctx := context.Background()
-	client := newClient(token)
-
 	for i := range run.Jobs {
 		job := &run.Jobs[i]
 		if !strings.EqualFold(job.Conclusion, "failure") {
 			continue
 		}
-		endpoint := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
-		logger.Tracef("fetching job logs: GET %s", endpoint)
-		resp, err := client.R(ctx).Get(endpoint)
-		if err != nil {
+		if err := FetchJobLogs(opts, job, tailLines); err != nil {
 			logger.Warnf("failed to fetch logs for job %d (%s): %v", job.DatabaseID, job.Name, err)
-			continue
 		}
-		if !resp.IsOK() {
-			logger.Warnf("failed to fetch logs for job %d (%s): status %d", job.DatabaseID, job.Name, resp.StatusCode)
-			continue
-		}
-		body, err := resp.AsString()
-		if err != nil {
-			logger.Warnf("failed to read logs for job %d (%s): %v", job.DatabaseID, job.Name, err)
-			continue
-		}
-		attachLogsToSteps(job, body, tailLines)
 	}
+}
+
+// FetchJobLogs fetches logs for a single job from the GitHub API and attaches them
+// to the job and its steps (via attachLogsToSteps). The job must have DatabaseID set.
+func FetchJobLogs(opts Options, job *Job, tailLines int) error {
+	token, err := opts.token()
+	if err != nil {
+		return fmt.Errorf("cannot fetch logs: %w", err)
+	}
+	repo, err := opts.resolveRepo()
+	if err != nil {
+		return fmt.Errorf("cannot resolve repo for logs: %w", err)
+	}
+
+	ctx := context.Background()
+	client := newClient(token)
+
+	endpoint := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
+	logger.Tracef("fetching job logs: GET %s", endpoint)
+	resp, err := client.R(ctx).Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("GET %s: %w", endpoint, err)
+	}
+	if !resp.IsOK() {
+		return fmt.Errorf("GET %s: status %d", endpoint, resp.StatusCode)
+	}
+	body, err := resp.AsString()
+	if err != nil {
+		return fmt.Errorf("read logs: %w", err)
+	}
+	attachLogsToSteps(job, body, tailLines)
+	return nil
 }
 
 type restWorkflow struct {
@@ -452,7 +456,8 @@ type restIssueComment struct {
 }
 
 type restCommentUser struct {
-	Login string `json:"login"`
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 type restReview struct {
@@ -501,7 +506,7 @@ func FetchPRComments(opts Options, prNumber int) ([]PRComment, error) {
 		}
 		for _, c := range issueComments {
 			comments = append(comments, PRComment{
-				ID: c.ID, Body: c.Body, Author: c.User.Login,
+				ID: c.ID, Body: c.Body, Author: c.User.Login, AvatarURL: c.User.AvatarURL,
 				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
 			})
 		}
@@ -521,7 +526,7 @@ func FetchPRComments(opts Options, prNumber int) ([]PRComment, error) {
 		}
 		for _, c := range reviewComments {
 			comments = append(comments, PRComment{
-				ID: c.ID, Body: c.Body, Author: c.User.Login,
+				ID: c.ID, Body: c.Body, Author: c.User.Login, AvatarURL: c.User.AvatarURL,
 				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
 				Path: c.Path, Line: c.Line,
 			})
@@ -545,7 +550,7 @@ func FetchPRComments(opts Options, prNumber int) ([]PRComment, error) {
 				continue
 			}
 			comments = append(comments, PRComment{
-				ID: r.ID, Body: r.Body, Author: r.User.Login,
+				ID: r.ID, Body: r.Body, Author: r.User.Login, AvatarURL: r.User.AvatarURL,
 				URL: r.HTMLURL, CreatedAt: r.CreatedAt,
 			})
 		}

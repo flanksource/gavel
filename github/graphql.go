@@ -32,7 +32,7 @@ const prByBranchQuery = `query($owner: String!, $repo: String!, $branch: String!
 const prFragment = `fragment prFields on PullRequest {
   number
   title
-  author { login }
+  author { login avatarUrl }
   headRefName
   baseRefName
   state
@@ -112,7 +112,8 @@ type graphQLPR struct {
 }
 
 type graphQLAuthor struct {
-	Login string `json:"login"`
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl"`
 }
 
 type graphQLCommits struct {
@@ -163,7 +164,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 	info := &PRInfo{
 		Number:         pr.Number,
 		Title:          pr.Title,
-		Author:         PRAuthor{Login: pr.Author.Login},
+		Author:         PRAuthor{Login: pr.Author.Login, AvatarURL: pr.Author.AvatarURL},
 		HeadRefName:    pr.HeadRefName,
 		BaseRefName:    pr.BaseRefName,
 		State:          pr.State,
@@ -239,7 +240,7 @@ const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!
             nodes {
               databaseId
               body
-              author { login }
+              author { login avatarUrl }
               path
               line
               url
@@ -335,6 +336,7 @@ func FetchReviewThreads(opts Options, prNumber int) ([]PRComment, error) {
 			ID:         c.DatabaseID,
 			Body:       c.Body,
 			Author:     c.Author.Login,
+			AvatarURL:  c.Author.AvatarURL,
 			URL:        c.URL,
 			Path:       c.Path,
 			Line:       c.Line,

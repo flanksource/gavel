@@ -17,7 +17,9 @@ export interface PRItem {
   number: number;
   title: string;
   author: string;
+  authorAvatarUrl?: string;
   repo: string;
+  repoAvatarUrl?: string;
   source: string;
   target: string;
   state: string;
@@ -65,7 +67,7 @@ export interface Snapshot {
 export interface PRInfo {
   number: number;
   title: string;
-  author: { login: string; name?: string };
+  author: { login: string; name?: string; avatarUrl?: string };
   headRefName: string;
   baseRefName: string;
   state: string;
@@ -117,6 +119,7 @@ export interface PRComment {
   id: number;
   body: string;
   author: string;
+  avatarUrl?: string;
   url: string;
   createdAt: string;
   path?: string;

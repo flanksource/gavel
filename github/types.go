@@ -26,8 +26,9 @@ type PRInfo struct {
 }
 
 type PRAuthor struct {
-	Login string `json:"login"`
-	Name  string `json:"name"`
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
 }
 
 type StatusChecks []StatusCheck
@@ -77,6 +78,7 @@ type PRComment struct {
 	ID         int64     `json:"id"`
 	Body       string    `json:"body"`
 	Author     string    `json:"author"`
+	AvatarURL  string    `json:"avatarUrl,omitempty"`
 	URL        string    `json:"url"`
 	CreatedAt  time.Time `json:"createdAt"`
 	Path       string    `json:"path,omitempty"`
