@@ -22,11 +22,13 @@ type Options struct {
 	Port        int
 	HostKeyPath string
 	RepoDir     string
+	HookWriter  func(bareRepo, gavelPath string) error
 }
 
 type Server struct {
-	opts Options
-	srv  *ssh.Server
+	opts       Options
+	srv        *ssh.Server
+	hookWriter func(bareRepo, gavelPath string) error
 }
 
 func NewServer(opts Options) (*Server, error) {
@@ -43,7 +45,10 @@ func NewServer(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("host key: %w", err)
 	}
 
-	s := &Server{opts: opts}
+	s := &Server{opts: opts, hookWriter: opts.HookWriter}
+	if s.hookWriter == nil {
+		s.hookWriter = writePostReceiveHook
+	}
 	s.srv = &ssh.Server{
 		Addr:    fmt.Sprintf("%s:%d", opts.Host, opts.Port),
 		Handler: s.handleSession,
@@ -65,20 +70,28 @@ func (s *Server) ListenAndServe() error {
 	return s.srv.Serve(ln)
 }
 
+func (s *Server) Serve(ln net.Listener) error {
+	return s.srv.Serve(ln)
+}
+
 func (s *Server) Close() error {
 	return s.srv.Close()
 }
 
 func (s *Server) handleSession(sess ssh.Session) {
 	cmd := sess.Command()
+	logger.V(1).Infof("SSH session from %s, command: %v", sess.RemoteAddr(), cmd)
 	if len(cmd) < 2 || cmd[0] != "git-receive-pack" {
+		logger.Infof("Rejected unsupported command from %s: %v", sess.RemoteAddr(), cmd)
 		fmt.Fprintf(sess.Stderr(), "unsupported command: %v\n", cmd)
 		sess.Exit(1) //nolint:errcheck
 		return
 	}
 
 	repoPath := cleanRepoPath(cmd[1])
-	exitCode := HandleGitReceive(sess, repoPath, s.opts.RepoDir)
+	logger.Infof("Receiving push for %s from %s", repoPath, sess.RemoteAddr())
+	exitCode := HandleGitReceive(sess, repoPath, s.opts.RepoDir, s.hookWriter)
+	logger.V(1).Infof("Push for %s completed with exit code %d", repoPath, exitCode)
 	sess.Exit(exitCode) //nolint:errcheck
 }
 
@@ -89,6 +102,7 @@ func loadOrGenerateHostKey(path string) (gossh.Signer, error) {
 	}
 
 	if data, err := os.ReadFile(path); err == nil {
+		logger.V(1).Infof("Loaded SSH host key from %s", path)
 		return gossh.ParsePrivateKey(data)
 	}
 

@@ -30,16 +30,16 @@ var _ = Describe("cleanRepoPath", func() {
 	)
 })
 
-var _ = Describe("writePreReceiveHook", func() {
+var _ = Describe("writePostReceiveHook", func() {
 	It("creates an executable hook script", func() {
 		tmpDir, err := os.MkdirTemp("", "gavel-test-*")
 		Expect(err).NotTo(HaveOccurred())
 		defer os.RemoveAll(tmpDir)
 
-		err = writePreReceiveHook(tmpDir, "/usr/local/bin/gavel")
+		err = writePostReceiveHook(tmpDir, "/usr/local/bin/gavel")
 		Expect(err).NotTo(HaveOccurred())
 
-		hookPath := filepath.Join(tmpDir, "hooks", "pre-receive")
+		hookPath := filepath.Join(tmpDir, "hooks", "post-receive")
 		info, err := os.Stat(hookPath)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(info.Mode().Perm() & 0o111).NotTo(BeZero()) // executable
