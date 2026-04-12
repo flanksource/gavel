@@ -491,10 +491,13 @@ func (o *TestOrchestrator) runPackageTest(
 
 	// Update task status based on results
 	sum := testResults.All().Sum()
-	t.SetName(clicky.Text("").Append(framework, "text-muted font-medium").Space().Append(pkgPath, "text-blue-500").Space().Append(sum).ANSI())
+	t.SetName(clicky.Text("").Append(framework, "text-muted font-medium").Space().Append(pkgPath, "text-blue-500").ANSI())
+	t.SetDescription(sum.Pretty().ANSI())
 
-	if sum.Failed > 0 || sum.Skipped > 0 {
+	if sum.Failed > 0 {
 		t.Failed()
+	} else if sum.Skipped > 0 {
+		t.Warning()
 	} else {
 		t.Success()
 		// Persist the passing outcome to the run cache so the next
