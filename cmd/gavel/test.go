@@ -17,6 +17,7 @@ import (
 	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner"
+	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -24,6 +25,14 @@ import (
 var uiServer *testui.Server
 
 func runTests(opts testrunner.RunOptions) (any, error) {
+	if opts.WorkDir == "" {
+		wd, err := getWorkingDir()
+		if err != nil {
+			return nil, err
+		}
+		opts.WorkDir = wd
+	}
+
 	if opts.UI {
 		uiServer = startTestUI()
 		updates := make(chan []parsers.Test, 16)
@@ -48,6 +57,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				Linters: "*",
 				Timeout: "5m",
 			})
+			if lintErr == nil {
+				gavelCfg, err := verify.LoadGavelConfig(workDir)
+				if err != nil {
+					logger.Warnf("Failed to load .gavel.yaml: %v", err)
+				}
+				linters.FilterIgnoredViolations(lintResults, gavelCfg.Lint.Ignore)
+			}
 		}()
 	}
 
