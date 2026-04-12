@@ -136,6 +136,7 @@ var DefaultRegistry = NewRegistry()
 // LinterResult represents the result of running a linter
 type LinterResult struct {
 	Linter       string             `json:"linter"`
+	WorkDir      string             `json:"work_dir,omitempty"`
 	Success      bool               `json:"success"`
 	Skipped      bool               `json:"skipped,omitempty"`
 	TimedOut     bool               `json:"timed_out,omitempty"`
@@ -227,7 +228,10 @@ func (lr *LinterResult) GetChildren() []api.TreeNode {
 	}
 	sort.Strings(fileOrder)
 
-	wd, _ := os.Getwd()
+	wd := lr.WorkDir
+	if wd == "" {
+		wd, _ = os.Getwd()
+	}
 	var children []api.TreeNode
 	for _, file := range fileOrder {
 		children = append(children, &fileViolationNode{
@@ -363,6 +367,7 @@ func RunLinter(linter Linter, opts RunOptions) LinterResult {
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	return LinterResult{
 		Linter:     linter.Name(),
+		WorkDir:    opts.WorkDir,
 		Success:    task.IsOk() && !timedOut,
 		TimedOut:   timedOut,
 		Duration:   time.Since(start),

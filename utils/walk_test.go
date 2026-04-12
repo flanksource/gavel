@@ -124,3 +124,76 @@ var _ = Describe("WalkGitIgnored", func() {
 		Expect(paths).NotTo(ContainElement(".git"))
 	})
 })
+
+var _ = Describe("FilterGitIgnored", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+	})
+
+	It("filters paths matching gitignore patterns", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("vendor/\n*.log\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "vendor", "dep.go"),
+			filepath.Join(root, "debug.log"),
+		}
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(ConsistOf(filepath.Join(root, "main.go")))
+	})
+
+	It("returns all paths when no git root exists", func() {
+		paths := []string{
+			filepath.Join(root, "a.go"),
+			filepath.Join(root, "b.go"),
+		}
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(Equal(paths))
+	})
+
+	It("handles nested gitignore files", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0644)
+		os.MkdirAll(filepath.Join(root, "sub"), 0755)
+		os.WriteFile(filepath.Join(root, "sub", ".gitignore"), []byte("build/\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "app.log"),
+			filepath.Join(root, "sub", "code.go"),
+			filepath.Join(root, "sub", "build", "out.bin"),
+		}
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(ConsistOf(
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "sub", "code.go"),
+		))
+	})
+
+	It("respects .git/info/exclude", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("secret/\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "secret", "key.pem"),
+		}
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(ConsistOf(filepath.Join(root, "main.go")))
+	})
+
+	It("returns empty slice for all-ignored input", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "debug.log"),
+			filepath.Join(root, "error.log"),
+		}
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(BeEmpty())
+	})
+})

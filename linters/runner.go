@@ -182,6 +182,7 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	result := &LinterResult{
 		Linter:     linterName,
+		WorkDir:    r.workDir,
 		Success:    task.IsOk() && !timedOut,
 		TimedOut:   timedOut,
 		Duration:   task.Duration(),
@@ -216,6 +217,7 @@ func (r *Runner) loadCachedResult(linterName string, debounce time.Duration) (*L
 
 		result := &LinterResult{
 			Linter:       linterName,
+			WorkDir:      r.workDir,
 			Success:      true,
 			Duration:     t.Duration(),
 			Violations:   violations,

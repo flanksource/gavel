@@ -142,7 +142,11 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 		return nil, fmt.Errorf("failed to read jscpd report: %w", err)
 	}
 
-	return j.parseViolations(reportData, excludes)
+	violations, err := j.parseViolations(reportData, excludes)
+	if err != nil {
+		return nil, err
+	}
+	return linters.FilterViolationsByGitIgnore(violations, j.WorkDir), nil
 }
 
 func (j *JSCPD) buildExcludes() []string {
