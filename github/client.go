@@ -14,6 +14,7 @@ import (
 
 	"github.com/flanksource/commons/http"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/cache"
 )
 
 type Options struct {
@@ -214,46 +215,58 @@ func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
 		return nil, err
 	}
 
-	ctx := context.Background()
-	client := newClient(token)
-
-	runURL := fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID)
-	logger.Tracef("fetching run: GET %s", runURL)
-	resp, err := client.R(ctx).Get(runURL)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", runURL, err)
+	// Phase 3 short-circuit: completed runs are immutable, so once we've
+	// stored one we never have to talk to GitHub again.
+	if payload := cache.Shared().GetCompletedRunPayload(runID); payload != nil {
+		var cached WorkflowRun
+		if err := json.Unmarshal(payload, &cached); err == nil {
+			logger.Tracef("github cache hit for completed run %d", runID)
+			return &cached, nil
+		}
+		logger.Warnf("github cache: corrupt completed run %d, refetching", runID)
 	}
-	if !resp.IsOK() {
-		body, _ := resp.AsString()
-		return nil, fmt.Errorf("GET %s: status %d: %s", runURL, resp.StatusCode, body)
+
+	ctx := context.Background()
+
+	runPath := fmt.Sprintf("/repos/%s/actions/runs/%d", repo, runID)
+	runResp, err := cachedGet(ctx, token, runPath, nil)
+	if err != nil {
+		return nil, err
 	}
 	var run restRun
-	if err := resp.Into(&run); err != nil {
+	if err := json.Unmarshal(runResp.Body, &run); err != nil {
 		return nil, fmt.Errorf("parse run response: %w", err)
 	}
 
-	jobsURL := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs", repo, runID)
-	logger.Tracef("fetching jobs: GET %s", jobsURL)
-	resp, err = client.R(ctx).Get(jobsURL)
+	jobsPath := fmt.Sprintf("/repos/%s/actions/runs/%d/jobs", repo, runID)
+	jobsResp, err := cachedGet(ctx, token, jobsPath, nil)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", jobsURL, err)
+		return nil, err
 	}
-	if !resp.IsOK() {
-		body, _ := resp.AsString()
-		return nil, fmt.Errorf("GET %s: status %d: %s", jobsURL, resp.StatusCode, body)
-	}
-	var jobsResp restJobsResponse
-	if err := resp.Into(&jobsResp); err != nil {
+	var jobsPayload restJobsResponse
+	if err := json.Unmarshal(jobsResp.Body, &jobsPayload); err != nil {
 		return nil, fmt.Errorf("parse jobs response: %w", err)
 	}
 
-	jobs := make([]Job, len(jobsResp.Jobs))
-	for i, j := range jobsResp.Jobs {
+	jobs := make([]Job, len(jobsPayload.Jobs))
+	for i, j := range jobsPayload.Jobs {
 		jobs[i] = j.toJob()
 	}
 
 	result := run.toWorkflowRun(jobs)
-	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d", result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs))
+	logger.Debugf("fetched run %d %q: status=%s conclusion=%s jobs=%d (cached=%t)",
+		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs),
+		runResp.FromCache && jobsResp.FromCache)
+
+	// Persist completed runs into the immutable cache. Subsequent calls
+	// (including from new processes) will short-circuit at the top of this
+	// function.
+	if result.Status == "completed" {
+		if payload, err := cache.MarshalJSON(result); err == nil {
+			cache.Shared().PutCompletedRun(repo, runID, result.Status, result.Conclusion, payload)
+		}
+	}
+
 	return result, nil
 }
 
@@ -271,6 +284,10 @@ func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
 
 // FetchJobLogs fetches logs for a single job from the GitHub API and attaches them
 // to the job and its steps (via attachLogsToSteps). The job must have DatabaseID set.
+//
+// Logs for jobs with a terminal Conclusion are persisted to the immutable
+// cache so a subsequent fetch of the same job is a zero-RTT lookup. In-flight
+// jobs (Conclusion == "") fall through to the ETag-aware HTTP cache only.
 func FetchJobLogs(opts Options, job *Job, tailLines int) error {
 	token, err := opts.token()
 	if err != nil {
@@ -281,23 +298,26 @@ func FetchJobLogs(opts Options, job *Job, tailLines int) error {
 		return fmt.Errorf("cannot resolve repo for logs: %w", err)
 	}
 
-	ctx := context.Background()
-	client := newClient(token)
+	if logs, ok := cache.Shared().GetJobLogs(job.DatabaseID); ok {
+		logger.Tracef("github cache hit for job logs %d", job.DatabaseID)
+		attachLogsToSteps(job, logs, tailLines)
+		return nil
+	}
 
-	endpoint := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
-	logger.Tracef("fetching job logs: GET %s", endpoint)
-	resp, err := client.R(ctx).Get(endpoint)
+	ctx := context.Background()
+	path := fmt.Sprintf("/repos/%s/actions/jobs/%d/logs", repo, job.DatabaseID)
+	result, err := cachedGet(ctx, token, path, nil)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", endpoint, err)
+		return err
 	}
-	if !resp.IsOK() {
-		return fmt.Errorf("GET %s: status %d", endpoint, resp.StatusCode)
+	logs := string(result.Body)
+	attachLogsToSteps(job, logs, tailLines)
+
+	// Only persist logs once the job has reached a terminal state — otherwise
+	// the cache would lock in a half-finished log stream.
+	if job.Conclusion != "" {
+		cache.Shared().PutJobLogs(job.DatabaseID, repo, logs)
 	}
-	body, err := resp.AsString()
-	if err != nil {
-		return fmt.Errorf("read logs: %w", err)
-	}
-	attachLogsToSteps(job, body, tailLines)
 	return nil
 }
 
@@ -318,21 +338,28 @@ func FetchWorkflowDefinition(opts Options, run *WorkflowRun) (string, error) {
 		return "", err
 	}
 
-	ctx := context.Background()
-	client := newClient(token)
-
-	wfURL := fmt.Sprintf("/repos/%s/actions/workflows/%d", repo, run.WorkflowID)
-	logger.Tracef("fetching workflow: GET %s", wfURL)
-	resp, err := client.R(ctx).Get(wfURL)
-	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", wfURL, err)
+	// Workflow YAML at a specific SHA is immutable; check the immutable
+	// cache before any HTTP. We need the path so the cache key is the
+	// (repo, workflowID, sha) tuple — the path is recovered from the cache
+	// when present.
+	if run.HeadSHA != "" {
+		if yaml, path, ok := cache.Shared().GetWorkflowDef(repo, run.WorkflowID, run.HeadSHA); ok {
+			logger.Tracef("github cache hit for workflow def %s/%d@%s", repo, run.WorkflowID, run.HeadSHA)
+			run.WorkflowPath = path
+			run.WorkflowYAML = yaml
+			return yaml, nil
+		}
 	}
-	if !resp.IsOK() {
-		body, _ := resp.AsString()
-		return "", fmt.Errorf("GET %s: status %d: %s", wfURL, resp.StatusCode, body)
+
+	ctx := context.Background()
+
+	wfPath := fmt.Sprintf("/repos/%s/actions/workflows/%d", repo, run.WorkflowID)
+	wfResp, err := cachedGet(ctx, token, wfPath, nil)
+	if err != nil {
+		return "", err
 	}
 	var wf restWorkflow
-	if err := resp.Into(&wf); err != nil {
+	if err := json.Unmarshal(wfResp.Body, &wf); err != nil {
 		return "", fmt.Errorf("parse workflow response: %w", err)
 	}
 	run.WorkflowPath = wf.Path
@@ -341,21 +368,19 @@ func FetchWorkflowDefinition(opts Options, run *WorkflowRun) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	contentURL := fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, wf.Path, ref)
-	logger.Tracef("fetching workflow content: GET %s", contentURL)
-	resp, err = client.R(ctx).Header("Accept", "application/vnd.github.raw+json").Get(contentURL)
+	contentPath := fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, wf.Path, ref)
+	contentResp, err := cachedGet(ctx, token, contentPath, map[string]string{
+		"Accept": "application/vnd.github.raw+json",
+	})
 	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", contentURL, err)
+		return "", err
 	}
-	if !resp.IsOK() {
-		body, _ := resp.AsString()
-		return "", fmt.Errorf("GET %s: status %d: %s", contentURL, resp.StatusCode, body)
-	}
-	yaml, err := resp.AsString()
-	if err != nil {
-		return "", fmt.Errorf("read workflow content: %w", err)
-	}
+	yaml := string(contentResp.Body)
 	run.WorkflowYAML = yaml
+
+	if run.HeadSHA != "" {
+		cache.Shared().PutWorkflowDef(repo, run.WorkflowID, run.HeadSHA, wf.Path, yaml)
+	}
 	return yaml, nil
 }
 
@@ -445,119 +470,6 @@ func tailString(s string, maxLines int) string {
 		return s
 	}
 	return strings.Join(lines[len(lines)-maxLines:], "\n")
-}
-
-type restIssueComment struct {
-	ID        int64           `json:"id"`
-	Body      string          `json:"body"`
-	User      restCommentUser `json:"user"`
-	HTMLURL   string          `json:"html_url"`
-	CreatedAt time.Time       `json:"created_at"`
-}
-
-type restCommentUser struct {
-	Login     string `json:"login"`
-	AvatarURL string `json:"avatar_url"`
-}
-
-type restReview struct {
-	ID        int64           `json:"id"`
-	Body      string          `json:"body"`
-	User      restCommentUser `json:"user"`
-	HTMLURL   string          `json:"html_url"`
-	CreatedAt time.Time       `json:"created_at"`
-}
-
-type restReviewComment struct {
-	ID        int64           `json:"id"`
-	Body      string          `json:"body"`
-	User      restCommentUser `json:"user"`
-	HTMLURL   string          `json:"html_url"`
-	CreatedAt time.Time       `json:"created_at"`
-	Path      string          `json:"path"`
-	Line      int             `json:"line"`
-}
-
-func FetchPRComments(opts Options, prNumber int) ([]PRComment, error) {
-	token, err := opts.token()
-	if err != nil {
-		return nil, err
-	}
-	repo, err := opts.resolveRepo()
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	client := newClient(token)
-	var comments []PRComment
-
-	// Fetch issue comments
-	issueURL := fmt.Sprintf("/repos/%s/issues/%d/comments", repo, prNumber)
-	logger.Tracef("fetching issue comments: GET %s", issueURL)
-	resp, err := client.R(ctx).Get(issueURL)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", issueURL, err)
-	}
-	if resp.IsOK() {
-		var issueComments []restIssueComment
-		if err := resp.Into(&issueComments); err != nil {
-			return nil, fmt.Errorf("parse issue comments: %w", err)
-		}
-		for _, c := range issueComments {
-			comments = append(comments, PRComment{
-				ID: c.ID, Body: c.Body, Author: c.User.Login, AvatarURL: c.User.AvatarURL,
-				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
-			})
-		}
-	}
-
-	// Fetch review comments (inline comments on diffs)
-	reviewCommentsURL := fmt.Sprintf("/repos/%s/pulls/%d/comments", repo, prNumber)
-	logger.Tracef("fetching review comments: GET %s", reviewCommentsURL)
-	resp, err = client.R(ctx).Get(reviewCommentsURL)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", reviewCommentsURL, err)
-	}
-	if resp.IsOK() {
-		var reviewComments []restReviewComment
-		if err := resp.Into(&reviewComments); err != nil {
-			return nil, fmt.Errorf("parse review comments: %w", err)
-		}
-		for _, c := range reviewComments {
-			comments = append(comments, PRComment{
-				ID: c.ID, Body: c.Body, Author: c.User.Login, AvatarURL: c.User.AvatarURL,
-				URL: c.HTMLURL, CreatedAt: c.CreatedAt,
-				Path: c.Path, Line: c.Line,
-			})
-		}
-	}
-
-	// Fetch review bodies (top-level review comments)
-	reviewsURL := fmt.Sprintf("/repos/%s/pulls/%d/reviews", repo, prNumber)
-	logger.Tracef("fetching reviews: GET %s", reviewsURL)
-	resp, err = client.R(ctx).Get(reviewsURL)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", reviewsURL, err)
-	}
-	if resp.IsOK() {
-		var reviews []restReview
-		if err := resp.Into(&reviews); err != nil {
-			return nil, fmt.Errorf("parse reviews: %w", err)
-		}
-		for _, r := range reviews {
-			if r.Body == "" {
-				continue
-			}
-			comments = append(comments, PRComment{
-				ID: r.ID, Body: r.Body, Author: r.User.Login, AvatarURL: r.User.AvatarURL,
-				URL: r.HTMLURL, CreatedAt: r.CreatedAt,
-			})
-		}
-	}
-
-	logger.Debugf("fetched %d PR comments for #%d", len(comments), prNumber)
-	return comments, nil
 }
 
 func ParsePRJSON(data []byte) (*PRInfo, error) {
