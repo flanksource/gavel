@@ -8,11 +8,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/commons/logger"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -28,7 +31,47 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		uiServer.StreamFrom(updates)
 	}
 
+	// When --lint is set, run linters in parallel with tests
+	var lintResults []*linters.LinterResult
+	var lintErr error
+	var wg sync.WaitGroup
+	if opts.Lint {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workDir := opts.WorkDir
+			if workDir == "" {
+				workDir, _ = os.Getwd()
+			}
+			lintResults, lintErr = executeLinters(LintOptions{
+				WorkDir: workDir,
+				Linters: "*",
+				Timeout: "5m",
+			})
+		}()
+	}
+
 	result, err := testrunner.Run(opts)
+
+	// Wait for lint to finish
+	wg.Wait()
+
+	if lintErr != nil {
+		logger.Warnf("Linting failed: %v", lintErr)
+	}
+
+	// Count lint violations
+	var lintViolations int
+	for _, lr := range lintResults {
+		if lr.Skipped {
+			continue
+		}
+		lintViolations += len(lr.Violations)
+	}
+	if lintViolations > 0 {
+		exitCode = 1
+	}
+
 	if err != nil {
 		return result, err
 	}
@@ -43,6 +86,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			<-sig
 			return nil, nil
 		}
+	}
+
+	if opts.Lint {
+		return struct {
+			Tests any                    `json:"tests"`
+			Lint  []*linters.LinterResult `json:"lint"`
+		}{result, lintResults}, nil
 	}
 	return result, nil
 }
