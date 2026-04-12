@@ -185,6 +185,7 @@ func (r *RunnerV2) executeLinter(ctx context.Context, linterName string, linter 
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	return &LinterResult{
 		Linter:     linterName,
+		WorkDir:    r.workDir,
 		Success:    success && !timedOut,
 		TimedOut:   timedOut,
 		Duration:   duration,
@@ -234,6 +235,7 @@ func (r *RunnerV2) loadCachedResult(linterName string, debounce time.Duration, t
 
 	return &LinterResult{
 		Linter:       linterName,
+		WorkDir:      r.workDir,
 		Success:      true,
 		Duration:     time.Since(start),
 		Violations:   violations,

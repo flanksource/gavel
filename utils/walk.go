@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
-func findGitRoot(dir string) string {
+func FindGitRoot(dir string) string {
 	dir, _ = filepath.Abs(dir)
 	for {
 		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
@@ -24,7 +25,7 @@ func findGitRoot(dir string) string {
 	}
 }
 
-func loadIgnorePatterns(path string, domain []string) []gitignore.Pattern {
+func LoadIgnorePatterns(path string, domain []string) []gitignore.Pattern {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -48,7 +49,7 @@ func loadIgnorePatterns(path string, domain []string) []gitignore.Pattern {
 // never be skipped even if gitignored (e.g. ".todos", ".codex").
 func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
 	root, _ = filepath.Abs(root)
-	gitRoot := findGitRoot(root)
+	gitRoot := FindGitRoot(root)
 	if gitRoot == "" {
 		return filepath.WalkDir(root, fn)
 	}
@@ -59,22 +60,16 @@ func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
 	}
 
 	var patterns []gitignore.Pattern
-
-	// Load .git/info/exclude
-	patterns = append(patterns, loadIgnorePatterns(filepath.Join(gitRoot, ".git", "info", "exclude"), nil)...)
-
-	// Load .gitignore files from git root down to walk root
+	patterns = append(patterns, LoadIgnorePatterns(filepath.Join(gitRoot, ".git", "info", "exclude"), nil)...)
 	rel, _ := filepath.Rel(gitRoot, root)
-	parts := strings.Split(filepath.ToSlash(rel), "/")
+	patterns = append(patterns, LoadIgnorePatterns(filepath.Join(gitRoot, ".gitignore"), nil)...)
 	if rel != "." {
-		patterns = append(patterns, loadIgnorePatterns(filepath.Join(gitRoot, ".gitignore"), nil)...)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
 		for i := range parts {
-			dir := filepath.Join(gitRoot, filepath.Join(parts[:i+1]...))
+			d := filepath.Join(gitRoot, filepath.Join(parts[:i+1]...))
 			domain := parts[:i+1]
-			patterns = append(patterns, loadIgnorePatterns(filepath.Join(dir, ".gitignore"), domain)...)
+			patterns = append(patterns, LoadIgnorePatterns(filepath.Join(d, ".gitignore"), domain)...)
 		}
-	} else {
-		patterns = append(patterns, loadIgnorePatterns(filepath.Join(gitRoot, ".gitignore"), nil)...)
 	}
 
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -90,7 +85,7 @@ func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
 		if d.IsDir() && path != root {
 			dirRel, _ := filepath.Rel(gitRoot, path)
 			domain := strings.Split(filepath.ToSlash(dirRel), "/")
-			patterns = append(patterns, loadIgnorePatterns(filepath.Join(path, ".gitignore"), domain)...)
+			patterns = append(patterns, LoadIgnorePatterns(filepath.Join(path, ".gitignore"), domain)...)
 		}
 
 		// Check if this entry or any ancestor is in the allowList
@@ -112,4 +107,36 @@ func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
 
 		return fn(path, d, err)
 	})
+}
+
+// FilterGitIgnored returns the subset of absolute paths that are not matched
+// by .gitignore patterns. Uses go-git's ReadPatterns to recursively load all
+// .gitignore files. If no git root is found, all paths are returned.
+func FilterGitIgnored(paths []string, dir string) []string {
+	dir, _ = filepath.Abs(dir)
+	gitRoot := FindGitRoot(dir)
+	if gitRoot == "" {
+		return paths
+	}
+
+	fs := osfs.New(gitRoot)
+	patterns, err := gitignore.ReadPatterns(fs, nil)
+	if err != nil || len(patterns) == 0 {
+		return paths
+	}
+
+	matcher := gitignore.NewMatcher(patterns)
+	var result []string
+	for _, p := range paths {
+		rel, err := filepath.Rel(gitRoot, p)
+		if err != nil {
+			result = append(result, p)
+			continue
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if !matcher.Match(parts, false) {
+			result = append(result, p)
+		}
+	}
+	return result
 }
