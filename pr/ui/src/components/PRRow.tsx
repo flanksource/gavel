@@ -4,6 +4,7 @@ import { reviewColor, checkSummaryText, timeAgo } from '../utils';
 interface Props {
   pr: PRItem;
   selected: boolean;
+  unread?: boolean;
   onClick: () => void;
 }
 
@@ -27,23 +28,28 @@ function borderColor(pr: PRItem, selected: boolean): string {
   return 'border-transparent';
 }
 
-export function PRRow({ pr, selected, onClick }: Props) {
+export function PRRow({ pr, selected, unread, onClick }: Props) {
   const hasConflict = !pr.isDraft && pr.mergeable === 'CONFLICTING';
   const status = prStatusIcon(pr);
 
   return (
     <div
       class={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected)} ${
-        selected ? 'bg-blue-50' : 'hover:bg-gray-50'
+        selected ? 'bg-blue-50' : unread ? 'hover:bg-gray-50' : 'hover:bg-gray-50'
       }`}
       onClick={onClick}
     >
       <div class="flex items-center gap-2">
+        <span
+          class={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${unread ? 'bg-blue-600' : 'bg-transparent'}`}
+          title={unread ? 'Unread — updated since last view' : ''}
+          aria-label={unread ? 'unread' : ''}
+        />
         <span class={`text-sm ${status.color}`} title={status.title}>
           {status.icon}
         </span>
         <span class="text-xs text-gray-400">#{pr.number}</span>
-        <span class="text-sm font-medium text-gray-800 truncate flex-1">{pr.title}</span>
+        <span class={`text-sm truncate flex-1 ${unread ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>{pr.title}</span>
         {hasConflict && (
           <span class="text-xs text-red-500" title="Merge conflicts">
             <iconify-icon icon="codicon:git-merge" class="text-red-500" />

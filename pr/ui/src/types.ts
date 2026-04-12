@@ -60,6 +60,10 @@ export interface Snapshot {
   error?: string;
   config: SearchConfig;
   rateLimit?: RateLimit;
+  // Sparse map keyed by `${repo}#${number}`. A PR is unread iff its key
+  // appears here. Absent key = read. Server omits the field entirely when
+  // every PR is read.
+  unread?: Record<string, boolean>;
 }
 
 // Detail API types
@@ -133,5 +137,53 @@ export interface PRDetail {
   pr?: PRInfo;
   runs?: Record<string, WorkflowRun>;
   comments?: PRComment[];
+  error?: string;
+}
+
+// Activity API types
+
+export type ActivityKind = 'rest' | 'graphql' | 'search';
+
+export interface ActivityEntry {
+  timestamp: string;
+  method: string;
+  url: string;
+  kind: ActivityKind;
+  statusCode: number;
+  durationNs: number;
+  sizeBytes: number;
+  fromCache: boolean;
+  error?: string;
+}
+
+export interface ActivityKindStats {
+  total: number;
+  cacheHits: number;
+  errors: number;
+  totalBytes: number;
+  totalNs: number;
+}
+
+export interface ActivityStats {
+  total: number;
+  cacheHits: number;
+  errors: number;
+  totalBytes: number;
+  totalNs: number;
+  byKind: Record<string, ActivityKindStats>;
+}
+
+export interface ActivitySnapshot {
+  entries: ActivityEntry[];
+  stats: ActivityStats;
+}
+
+export interface CacheStatus {
+  enabled: boolean;
+  driver: string;
+  dsnSource: string;
+  dsnMasked: string;
+  retentionSec: number;
+  counts: Record<string, number>;
   error?: string;
 }
