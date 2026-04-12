@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/activity"
 )
 
 const prSearchQuery = `query($query: String!, $first: Int!) {
@@ -273,8 +275,18 @@ func buildSearchQuery(opts Options, searchOpts PRSearchOptions) (string, error) 
 }
 
 func buildSearchQueryForRepo(repo string, searchOpts PRSearchOptions) string {
+	return buildSearchQueryForRepos([]string{repo}, searchOpts)
+}
+
+// buildSearchQueryForRepos emits a single search expression with one
+// `repo:<owner>/<name>` qualifier per supplied repo. GitHub search accepts
+// multiple repo qualifiers in a single query; this lets callers coalesce
+// what would otherwise be N separate GraphQL requests.
+func buildSearchQueryForRepos(repos []string, searchOpts PRSearchOptions) string {
 	parts := buildSearchQueryBase(searchOpts)
-	parts = append(parts, "repo:"+repo)
+	for _, r := range repos {
+		parts = append(parts, "repo:"+r)
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -309,14 +321,30 @@ func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, *Rate
 	return items, rl, nil
 }
 
+// searchMultipleRepos collapses multi-repo searches into a single GraphQL
+// call by combining multiple `repo:owner/name` qualifiers into one query string.
+// GitHub's search API accepts any number of repo qualifiers; to stay within
+// practical URL/query length limits we chunk into batches of maxReposPerQuery.
+// Per-repo result limit is enforced client-side since `first:` is shared.
 func searchMultipleRepos(token string, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
+	const maxReposPerQuery = 20
 	var all PRSearchResults
 	var lastRL *RateLimit
-	for _, repo := range searchOpts.Repos {
-		queryString := buildSearchQueryForRepo(repo, searchOpts)
-		items, rl, err := executeSearch(token, queryString, searchOpts)
+
+	chunks := chunkRepos(searchOpts.Repos, maxReposPerQuery)
+	for _, chunk := range chunks {
+		queryString := buildSearchQueryForRepos(chunk, searchOpts)
+		// Scale the first: limit so a chunk of N repos can return up to N×baseLimit.
+		chunkOpts := searchOpts
+		baseLimit := chunkOpts.Limit
+		if baseLimit <= 0 {
+			baseLimit = 50
+		}
+		chunkOpts.Limit = min(100, baseLimit*len(chunk))
+
+		items, rl, err := executeSearch(token, queryString, chunkOpts)
 		if err != nil {
-			logger.Warnf("failed to search %s: %v", repo, err)
+			logger.Warnf("failed to search repos %v: %v", chunk, err)
 			continue
 		}
 		all = append(all, items...)
@@ -325,6 +353,18 @@ func searchMultipleRepos(token string, searchOpts PRSearchOptions) (PRSearchResu
 		}
 	}
 	return all, lastRL, nil
+}
+
+func chunkRepos(repos []string, size int) [][]string {
+	if size <= 0 || len(repos) <= size {
+		return [][]string{repos}
+	}
+	var chunks [][]string
+	for i := 0; i < len(repos); i += size {
+		end := min(i+size, len(repos))
+		chunks = append(chunks, repos[i:end])
+	}
+	return chunks
 }
 
 func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSearchResults, *RateLimit, error) {
@@ -350,20 +390,38 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 	client := newClient(token)
 
 	logger.Tracef("searching PRs via GraphQL: %s", queryString)
+	start := time.Now()
 	resp, err := client.R(ctx).
 		Header("Content-Type", "application/json").
 		Post("https://api.github.com/graphql", body)
 	if err != nil {
+		activity.Shared().Record(activity.Entry{
+			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
+			Duration: time.Since(start), Error: err.Error(),
+		})
 		return nil, nil, fmt.Errorf("GraphQL request: %w", err)
 	}
 	rl := ParseRateLimit(resp.Header)
 	if !resp.IsOK() {
 		respBody, _ := resp.AsString()
+		activity.Shared().Record(activity.Entry{
+			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
+			StatusCode: resp.StatusCode, Duration: time.Since(start),
+			SizeBytes: len(respBody),
+			Error:     fmt.Sprintf("status %d", resp.StatusCode),
+		})
 		return nil, rl, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
 	}
 
+	respBody, _ := resp.AsString()
+	activity.Shared().Record(activity.Entry{
+		Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
+		StatusCode: resp.StatusCode, Duration: time.Since(start),
+		SizeBytes: len(respBody),
+	})
+
 	var result searchResponse
-	if err := resp.Into(&result); err != nil {
+	if err := json.Unmarshal([]byte(respBody), &result); err != nil {
 		return nil, rl, fmt.Errorf("parse search response: %w", err)
 	}
 	if len(result.Errors) > 0 {
@@ -435,6 +493,9 @@ func computeCheckSummary(node searchPRNode) *CheckSummary {
 }
 
 func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
+	// Multiple failed checks across different PRs frequently point at the
+	// same workflow run. Memoize so each run is fetched at most once per call.
+	runCache := make(map[int64]*WorkflowRun)
 	for i := range items {
 		if items[i].CheckStatus == nil {
 			continue
@@ -448,13 +509,21 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 			if err != nil {
 				continue
 			}
-			run, err := FetchRunJobs(opts, runID)
-			if err != nil {
-				logger.Warnf("failed to fetch run %d: %v", runID, err)
-				continue
+			run, ok := runCache[runID]
+			if !ok {
+				run, err = FetchRunJobs(opts, runID)
+				if err != nil {
+					logger.Warnf("failed to fetch run %d: %v", runID, err)
+					runCache[runID] = nil
+					continue
+				}
+				if fetchLogs {
+					FetchAndAttachLogs(opts, run, 20)
+				}
+				runCache[runID] = run
 			}
-			if fetchLogs {
-				FetchAndAttachLogs(opts, run, 20)
+			if run == nil {
+				continue
 			}
 			for _, job := range run.Jobs {
 				if !strings.EqualFold(job.Conclusion, "failure") {

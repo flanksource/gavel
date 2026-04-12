@@ -23,6 +23,10 @@ type PRInfo struct {
 	Mergeable         string       `json:"mergeable"`
 	URL               string       `json:"url"`
 	StatusCheckRollup StatusChecks `json:"statusCheckRollup"`
+	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
+	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
+	Comments      []PRComment `json:"comments,omitempty"`
+	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
 }
 
 type PRAuthor struct {

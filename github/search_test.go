@@ -94,6 +94,64 @@ func TestBuildSearchQueryForRepo(t *testing.T) {
 	assert.Equal(t, "is:pr author:@me is:open updated:>2026-03-31 repo:flanksource/duty", result)
 }
 
+func TestBuildSearchQueryForRepos(t *testing.T) {
+	// Multiple repos collapse into a single query string with N repo: qualifiers.
+	// This is what lets searchMultipleRepos avoid N+1 GraphQL calls.
+	result := buildSearchQueryForRepos(
+		[]string{"flanksource/gavel", "flanksource/duty", "flanksource/config-db"},
+		PRSearchOptions{Author: "@me", State: "open"},
+	)
+	assert.Equal(t,
+		"is:pr author:@me is:open repo:flanksource/gavel repo:flanksource/duty repo:flanksource/config-db",
+		result)
+}
+
+func TestChunkRepos(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []string
+		size   int
+		expect [][]string
+	}{
+		{
+			name:   "fits in one chunk",
+			input:  []string{"a/1", "a/2", "a/3"},
+			size:   20,
+			expect: [][]string{{"a/1", "a/2", "a/3"}},
+		},
+		{
+			name:  "splits evenly",
+			input: []string{"a/1", "a/2", "a/3", "a/4"},
+			size:  2,
+			expect: [][]string{
+				{"a/1", "a/2"},
+				{"a/3", "a/4"},
+			},
+		},
+		{
+			name:  "uneven tail",
+			input: []string{"a/1", "a/2", "a/3", "a/4", "a/5"},
+			size:  2,
+			expect: [][]string{
+				{"a/1", "a/2"},
+				{"a/3", "a/4"},
+				{"a/5"},
+			},
+		},
+		{
+			name:   "zero size returns single chunk",
+			input:  []string{"a/1", "a/2"},
+			size:   0,
+			expect: [][]string{{"a/1", "a/2"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expect, chunkRepos(tc.input, tc.size))
+		})
+	}
+}
+
 func TestPRListItemPretty(t *testing.T) {
 	tests := []struct {
 		name           string
