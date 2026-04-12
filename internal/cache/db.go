@@ -7,6 +7,7 @@ import (
 
 	commonsLogger "github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/models"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -18,66 +19,72 @@ type DB struct {
 	writeMu sync.Mutex // Protects write operations
 }
 
-// NewDB creates a new synchronized GORM database wrapper
+// NewDB creates a new synchronized GORM database wrapper and, for sqlite,
+// auto-migrates the lint-violation models. Callers that own a different
+// schema (e.g. github/cache) should use NewDBRaw to skip that migration.
 func NewDB(driverName, dataSourceName string) (*DB, error) {
+	db, err := NewDBRaw(driverName, dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+	if driverName == "sqlite" {
+		if err := db.Migrate(); err != nil {
+			return nil, fmt.Errorf("failed to run migrations: %w", err)
+		}
+	}
+	return db, nil
+}
+
+// NewDBRaw opens the underlying database without running any migrations.
+// Use this when the caller owns its own schema (the github cache does) and
+// does not want lint-violation tables auto-created alongside its data.
+func NewDBRaw(driverName, dataSourceName string) (*DB, error) {
+	logMode := logger.Silent
+	if commonsLogger.IsLevelEnabled(3) {
+		logMode = logger.Info // SQL query logging at -vvv
+	}
+	config := &gorm.Config{Logger: logger.Default.LogMode(logMode)}
+
 	var gormDB *gorm.DB
 	var err error
-
-	if driverName == "sqlite" {
-		// Configure GORM with SQLite
-		// Enable SQL logging if verbosity level is 3 or higher (-vvv)
-		logMode := logger.Silent
-		if commonsLogger.IsLevelEnabled(3) {
-			logMode = logger.Info // Enable SQL query logging for high verbosity
-		}
-
-		config := &gorm.Config{
-			Logger: logger.Default.LogMode(logMode),
-		}
-
+	switch driverName {
+	case "sqlite":
 		gormDB, err = gorm.Open(sqlite.Open(dataSourceName), config)
 		if err != nil {
 			return nil, err
 		}
-
-		// Get underlying sql.DB to configure SQLite pragmas
-		sqlDB, err := gormDB.DB()
+		if err := configureSQLitePragmas(gormDB); err != nil {
+			return nil, err
+		}
+	case "postgres":
+		gormDB, err = gorm.Open(postgres.Open(dataSourceName), config)
 		if err != nil {
 			return nil, err
 		}
-
-		// Configure SQLite for better concurrency
-		// Enable WAL mode for better concurrent access
-		if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
-			return nil, err
-		}
-
-		// Set busy timeout to 5 seconds (5000ms)
-		if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
-			return nil, err
-		}
-
-		// Enable foreign keys
-		if _, err := sqlDB.Exec("PRAGMA foreign_keys=ON"); err != nil {
-			return nil, err
-		}
-
-		// Set synchronous to NORMAL for better performance
-		if _, err := sqlDB.Exec("PRAGMA synchronous=NORMAL"); err != nil {
-			return nil, err
-		}
-	} else {
+	default:
 		return nil, fmt.Errorf("unsupported database driver: %s", driverName)
 	}
 
-	db := &DB{conn: gormDB}
+	return &DB{conn: gormDB}, nil
+}
 
-	// Automatically run migrations for all models
-	if err := db.Migrate(); err != nil {
-		return nil, fmt.Errorf("failed to run migrations: %w", err)
+func configureSQLitePragmas(gormDB *gorm.DB) error {
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return err
 	}
-
-	return db, nil
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA synchronous=NORMAL",
+	}
+	for _, p := range pragmas {
+		if _, err := sqlDB.Exec(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GormDB returns the underlying GORM database instance

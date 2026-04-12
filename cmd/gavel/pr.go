@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	statusFollow    bool
-	statusInterval  time.Duration
-	statusTailLogs  int
-	statusRepo      string
-	statusSyncTodos string
-	statusOpts      clicky.FormatOptions
+	statusFollow     bool
+	statusInterval   time.Duration
+	statusFetchLogs  bool
+	statusTailLogs   int
+	statusRepo       string
+	statusSyncTodos  string
+	statusOpts       clicky.FormatOptions
 )
 
 var prCmd = &cobra.Command{
@@ -63,6 +64,7 @@ func runPRStatus(cmd *cobra.Command, args []string) error {
 		PRNumber: prNumber,
 		Interval: statusInterval,
 		Follow:   statusFollow,
+		Logs:     statusFetchLogs,
 		TailLogs: statusTailLogs,
 	}
 
@@ -135,7 +137,8 @@ func init() {
 	prStatusCmd.Flags().StringVarP(&statusRepo, "repo", "R", "", "GitHub repository (owner/repo)")
 	prStatusCmd.Flags().BoolVar(&statusFollow, "follow", false, "Keep watching until all checks complete")
 	prStatusCmd.Flags().DurationVar(&statusInterval, "interval", 30*time.Second, "Poll interval")
-	prStatusCmd.Flags().IntVar(&statusTailLogs, "tail-logs", 100, "Number of failed log lines to show per step")
+	prStatusCmd.Flags().BoolVar(&statusFetchLogs, "logs", false, "Fetch and include failed job logs (uses extra GitHub API quota)")
+	prStatusCmd.Flags().IntVar(&statusTailLogs, "tail-logs", 100, "Number of failed log lines to show per step (only applies with --logs)")
 	prStatusCmd.Flags().StringVar(&statusSyncTodos, "sync-todos", "", "Sync TODO files for failed jobs to directory")
 	prStatusCmd.Flag("sync-todos").NoOptDefVal = ".todos"
 	formatters.BindPFlags(prStatusCmd.Flags(), &statusOpts)

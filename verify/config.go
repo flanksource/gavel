@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
 )
@@ -19,8 +21,37 @@ type VerifyConfig struct {
 	Checks ChecksConfig `yaml:"checks" json:"checks"`
 }
 
+type LintIgnoreRule struct {
+	Rule   string `yaml:"rule,omitempty" json:"rule,omitempty"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	File   string `yaml:"file,omitempty" json:"file,omitempty"`
+}
+
+func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
+	if r.Source != "" && r.Source != v.Source {
+		return false
+	}
+	if r.Rule != "" {
+		if v.Rule == nil || v.Rule.Method != r.Rule {
+			return false
+		}
+	}
+	if r.File != "" {
+		matched, _ := doublestar.Match(r.File, v.File)
+		if !matched {
+			return false
+		}
+	}
+	return r.Rule != "" || r.Source != ""
+}
+
+type LintConfig struct {
+	Ignore []LintIgnoreRule `yaml:"ignore,omitempty" json:"ignore,omitempty"`
+}
+
 type GavelConfig struct {
 	Verify VerifyConfig `yaml:"verify" json:"verify"`
+	Lint   LintConfig   `yaml:"lint,omitempty" json:"lint,omitempty"`
 }
 
 func DefaultVerifyConfig() VerifyConfig {
@@ -30,7 +61,12 @@ func DefaultVerifyConfig() VerifyConfig {
 }
 
 func LoadConfig(cwd string) (VerifyConfig, error) {
-	cfg := DefaultVerifyConfig()
+	gc, err := LoadGavelConfig(cwd)
+	return gc.Verify, err
+}
+
+func LoadGavelConfig(cwd string) (GavelConfig, error) {
+	cfg := GavelConfig{Verify: DefaultVerifyConfig()}
 
 	home, err := os.UserHomeDir()
 	if err == nil {
@@ -50,7 +86,16 @@ func LoadConfig(cwd string) (VerifyConfig, error) {
 	return cfg, nil
 }
 
-func mergeFromFile(base VerifyConfig, path string) VerifyConfig {
+func SaveGavelConfig(dir string, cfg GavelConfig) error {
+	path := filepath.Join(dir, ".gavel.yaml")
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func mergeFromFile(base GavelConfig, path string) GavelConfig {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return base
@@ -59,7 +104,9 @@ func mergeFromFile(base VerifyConfig, path string) VerifyConfig {
 	if err := yaml.Unmarshal(data, &gc); err != nil {
 		return base
 	}
-	return MergeVerifyConfig(base, gc.Verify)
+	base.Verify = MergeVerifyConfig(base.Verify, gc.Verify)
+	base.Lint = MergeLintConfig(base.Lint, gc.Lint)
+	return base
 }
 
 func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
@@ -74,6 +121,13 @@ func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
 	}
 	if len(override.Checks.DisabledCategories) > 0 {
 		base.Checks.DisabledCategories = append(base.Checks.DisabledCategories, override.Checks.DisabledCategories...)
+	}
+	return base
+}
+
+func MergeLintConfig(base, override LintConfig) LintConfig {
+	if len(override.Ignore) > 0 {
+		base.Ignore = append(base.Ignore, override.Ignore...)
 	}
 	return base
 }

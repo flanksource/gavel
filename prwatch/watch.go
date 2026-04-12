@@ -2,7 +2,6 @@ package prwatch
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"strings"
 	"time"
@@ -16,12 +15,12 @@ type WatchOptions struct {
 	PRNumber int
 	Interval time.Duration
 	Follow   bool
+	Logs     bool // fetch failing job log tails (extra API quota)
 	TailLogs int
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
 	logger.Debugf("starting watch (pr=%d, interval=%s, follow=%t)", opts.PRNumber, opts.Interval, opts.Follow)
-	cachedRuns := make(map[int64]*github.WorkflowRun)
 
 	for {
 		pr, err := github.FetchPR(opts.Options, opts.PRNumber)
@@ -35,21 +34,12 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			continue
 		}
 
-		runs := fetchRuns(opts, pr, cachedRuns)
-		maps.Copy(cachedRuns, runs)
+		// The persistent github cache short-circuits already-completed runs,
+		// so a per-iteration in-memory map is no longer needed.
+		runs := fetchRuns(opts, pr)
 
-		comments, err := github.FetchPRComments(opts.Options, pr.Number)
-		if err != nil {
-			logger.Warnf("failed to fetch PR comments: %v", err)
-		}
-
-		threads, err := github.FetchReviewThreads(opts.Options, pr.Number)
-		if err != nil {
-			logger.Warnf("failed to fetch review threads: %v", err)
-		}
-		comments = mergeThreadState(comments, threads)
-		comments = extractNitpicks(comments)
-		comments = filterActionableComments(comments)
+		// Comments and review threads arrive with the PR in a single GraphQL request.
+		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
 
 		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
 
@@ -73,7 +63,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 	}
 }
 
-func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.WorkflowRun) map[int64]*github.WorkflowRun {
+func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowRun {
 	runs := make(map[int64]*github.WorkflowRun)
 	seen := make(map[int64]bool)
 
@@ -84,12 +74,8 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.Wo
 		}
 		seen[runID] = true
 
-		if existing, ok := cached[runID]; ok && existing.Status == "completed" {
-			logger.Tracef("run %d already completed, using cache", runID)
-			runs[runID] = existing
-			continue
-		}
-
+		// FetchRunJobs short-circuits via the persistent github cache when
+		// the run is already completed — no need for a per-iteration map.
 		run, err := github.FetchRunJobs(opts.Options, runID)
 		if err != nil {
 			logger.Warnf("failed to fetch run %d: %v", runID, err)
@@ -97,7 +83,9 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo, cached map[int64]*github.Wo
 		}
 
 		if run.Conclusion == "failure" {
-			github.FetchAndAttachLogs(opts.Options, run, opts.TailLogs)
+			if opts.Logs {
+				github.FetchAndAttachLogs(opts.Options, run, opts.TailLogs)
+			}
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}
