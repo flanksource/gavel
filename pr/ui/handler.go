@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -56,6 +57,10 @@ type snapshot struct {
 	Error       string                 `json:"error,omitempty"`
 	Config      SearchConfig           `json:"config"`
 	RateLimit   *github.RateLimit      `json:"rateLimit,omitempty"`
+	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
+	// newer than the recorded SeenAt (or that have never been seen). PRs
+	// marked as read are omitted to keep the map sparse on the wire.
+	Unread map[string]bool `json:"unread,omitempty"`
 }
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
@@ -155,7 +160,40 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/activity", s.handleActivity)
+	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
+	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
+	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
+	mux.HandleFunc("/favicon.svg", handleFavicon)
+	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
+	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
+	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
+	mux.HandleFunc("/api/prs/seen", s.handleSeen)
 	return mux
+}
+
+func handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, faviconSVG)
+}
+
+func handleLogo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, logoSVG)
+}
+
+func handleMenubarIcon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(menubarPNG)
+}
+
+func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(menubarUnreadPNG)
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +211,8 @@ func pageHTML() string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PR Dashboard</title>
+    <title>gavel · PR Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
     <style>
@@ -193,7 +232,10 @@ func pageHTML() string {
 </html>`
 }
 
-func (s *Server) snapshot() snapshot {
+// snapshotLocked builds a snapshot using the already-held RLock. It does
+// NOT compute the unread map — that requires a database round-trip and is
+// populated by withUnread() outside the lock.
+func (s *Server) snapshotLocked() snapshot {
 	snap := snapshot{
 		PRs:         s.prs,
 		FetchedAt:   s.fetchedAt,
@@ -208,10 +250,90 @@ func (s *Server) snapshot() snapshot {
 	return snap
 }
 
+// withUnread attaches the unread map to a snapshot. Runs the cache lookup
+// with no server lock held so a slow postgres round-trip never blocks the
+// poller or other handlers. Errors are logged and the snap is returned
+// without an unread map, so a cache outage degrades to "everything unread"
+// rather than failing the request.
+func (s *Server) withUnread(snap snapshot) snapshot {
+	if len(snap.PRs) == 0 {
+		return snap
+	}
+	snap.Unread = s.UnreadMap(snap.PRs)
+	return snap
+}
+
+// UnreadMap computes which PRs in the given slice are unread. A PR is
+// unread iff its UpdatedAt is newer than the recorded SeenAt, or no SeenPR
+// row exists. Only unread keys are present in the returned map (sparse).
+// Safe to call with no server lock held.
+func (s *Server) UnreadMap(prs github.PRSearchResults) map[string]bool {
+	if len(prs) == 0 {
+		return nil
+	}
+	store := cache.Shared()
+	keys := make([]cache.SeenKey, len(prs))
+	for i, pr := range prs {
+		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
+	}
+	seenMap, err := store.LoadSeenMap(keys)
+	if err != nil {
+		logger.Warnf("load seen map: %v", err)
+		seenMap = nil
+	}
+	out := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		seenAt, ok := seenMap[cache.SeenKey{Repo: pr.Repo, Number: pr.Number}]
+		if !ok || pr.UpdatedAt.After(seenAt) {
+			out[prKey(pr)] = true
+		}
+	}
+	return out
+}
+
+// UnreadCount returns the number of PRs in the current server state that
+// are unread. Used by the menubar title.
+func (s *Server) UnreadCount() int {
+	s.mu.RLock()
+	prs := s.prs
+	s.mu.RUnlock()
+	return len(s.UnreadMap(prs))
+}
+
+// MarkSeen delegates to the shared cache store and triggers a snapshot
+// push so the UI and menubar update without waiting for the next poll.
+func (s *Server) MarkSeen(repo string, number int) error {
+	if err := cache.Shared().MarkSeen(repo, number); err != nil {
+		return err
+	}
+	s.notify()
+	return nil
+}
+
+// MarkAllSeen marks every PR currently in the server state as read.
+func (s *Server) MarkAllSeen() error {
+	s.mu.RLock()
+	prs := s.prs
+	s.mu.RUnlock()
+	if len(prs) == 0 {
+		return nil
+	}
+	keys := make([]cache.SeenKey, len(prs))
+	for i, pr := range prs {
+		keys[i] = cache.SeenKey{Repo: pr.Repo, Number: pr.Number}
+	}
+	if err := cache.Shared().MarkManySeen(keys); err != nil {
+		return err
+	}
+	s.notify()
+	return nil
+}
+
 func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
-	data := s.snapshot()
+	data := s.snapshotLocked()
 	s.mu.RUnlock()
+	data = s.withUnread(data)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
@@ -229,8 +351,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	s.mu.RLock()
-	initial := s.snapshot()
+	initial := s.snapshotLocked()
 	s.mu.RUnlock()
+	initial = s.withUnread(initial)
 	if b, err := json.Marshal(initial); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
@@ -248,13 +371,47 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.mu.RLock()
-		data := s.snapshot()
+		data := s.snapshotLocked()
 		s.mu.RUnlock()
+		data = s.withUnread(data)
 
 		b, _ := json.Marshal(data)
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
 	}
+}
+
+func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Repo   string `json:"repo"`
+		Number int    `json:"number"`
+		All    bool   `json:"all"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.All {
+		if err := s.MarkAllSeen(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if body.Repo == "" || body.Number == 0 {
+			http.Error(w, "repo and number are required", http.StatusBadRequest)
+			return
+		}
+		if err := s.MarkSeen(body.Repo, body.Number); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"status":"ok"}`)
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -446,19 +603,8 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	result.Runs = runs
 
-	// Fetch comments
-	comments, err := github.FetchPRComments(opts, prNumber)
-	if err != nil {
-		logger.Warnf("failed to fetch comments for %s#%d: %v", repo, prNumber, err)
-	}
-	threads, err := github.FetchReviewThreads(opts, prNumber)
-	if err != nil {
-		logger.Warnf("failed to fetch review threads for %s#%d: %v", repo, prNumber, err)
-	}
-	if len(comments) > 0 || len(threads) > 0 {
-		comments = prwatch.MergeAndFilter(comments, threads)
-	}
-	result.Comments = comments
+	// Comments and review threads are populated by the merged FetchPR query above.
+	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
 
 	json.NewEncoder(w).Encode(result) //nolint:errcheck
 	if canFlush {

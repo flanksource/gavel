@@ -1,15 +1,16 @@
 import type { PRItem } from '../types';
 import { PRRow } from './PRRow';
-import { groupByRepo } from '../utils';
+import { groupByRepo, prKey } from '../utils';
 import { Avatar } from './Avatar';
 
 interface Props {
   prs: PRItem[];
   selected: PRItem | null;
   onSelect: (pr: PRItem) => void;
+  unread?: Record<string, boolean>;
 }
 
-export function PRList({ prs, selected, onSelect }: Props) {
+export function PRList({ prs, selected, onSelect, unread }: Props) {
   if (prs.length === 0) {
     return (
       <div class="p-6 text-center text-gray-400">
@@ -44,9 +45,10 @@ export function PRList({ prs, selected, onSelect }: Props) {
           </div>
           {group.items.map(pr => (
             <PRRow
-              key={`${pr.repo}#${pr.number}`}
+              key={prKey(pr)}
               pr={pr}
               selected={selected?.repo === pr.repo && selected?.number === pr.number}
+              unread={!!unread?.[prKey(pr)]}
               onClick={() => onSelect(pr)}
             />
           ))}

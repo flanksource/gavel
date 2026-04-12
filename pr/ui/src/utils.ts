@@ -1,5 +1,10 @@
 import type { PRItem, CheckSummary } from './types';
 
+// prKey mirrors the Go-side poller.prKey() so the unread map keys match.
+export function prKey(pr: { repo: string; number: number }): string {
+  return `${pr.repo}#${pr.number}`;
+}
+
 export function stateIcon(state: string, isDraft: boolean): string {
   if (isDraft) return '○';
   switch (state) {

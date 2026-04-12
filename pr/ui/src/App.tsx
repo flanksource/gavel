@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'preact/hooks';
+import { useState, useEffect, useMemo, useCallback } from 'preact/hooks';
 import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
@@ -7,12 +7,16 @@ import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane } from './components/SplitPane';
 import { RepoSelector } from './components/RepoSelector';
 import { SearchControls } from './components/SearchControls';
-import { computeCounts, collectRepos, collectAuthors, filterPRs } from './utils';
+import { ActivityView } from './components/ActivityView';
+import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+
+type Tab = 'prs' | 'activity';
 
 const defaultConfig: SearchConfig = { repos: [], author: '@me' };
 
 export function App() {
   const [prs, setPrs] = useState<PRItem[]>([]);
+  const [unread, setUnread] = useState<Record<string, boolean>>({});
   const [fetchedAt, setFetchedAt] = useState('');
   const [nextFetchIn, setNextFetchIn] = useState(60);
   const [error, setError] = useState<string | undefined>();
@@ -23,6 +27,7 @@ export function App() {
   const [config, setConfig] = useState<SearchConfig>(defaultConfig);
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
+  const [activeTab, setActiveTab] = useState<Tab>('prs');
   const [, tick] = useState(0);
 
   useEffect(() => {
@@ -43,6 +48,7 @@ export function App() {
 
   function applySnapshot(snap: Snapshot) {
     setPrs(snap.prs || []);
+    setUnread(snap.unread || {});
     setFetchedAt(snap.fetchedAt);
     setNextFetchIn(snap.nextFetchIn);
     setError(snap.error);
@@ -50,6 +56,24 @@ export function App() {
     if (snap.rateLimit) setRateLimit(snap.rateLimit);
     if (snap.config) setConfig(snap.config);
   }
+
+  // markSeen clears the unread flag for a PR locally (optimistic update) and
+  // POSTs to the server so the state is persisted and the menubar updates.
+  // Safe to call repeatedly — the server handler is idempotent.
+  const markSeen = useCallback((pr: PRItem) => {
+    const key = prKey(pr);
+    setUnread(prev => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    fetch('/api/prs/seen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: pr.repo, number: pr.number }),
+    }).catch(() => {});
+  }, []);
 
   function handleRefresh() {
     fetch('/api/prs/refresh', { method: 'POST' }).catch(() => {});
@@ -73,6 +97,7 @@ export function App() {
     setSelected(pr);
     setDetail(null);
     setDetailLoading(true);
+    markSeen(pr);
     fetch(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`)
       .then(r => r.json())
       .then((d: PRDetail) => { setDetail(d); setDetailLoading(false); })
@@ -91,19 +116,23 @@ export function App() {
     <div class="bg-gray-100 h-screen flex flex-col">
       <div class="border-b bg-white px-6 py-3">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <h1 class="text-xl font-bold text-gray-900 shrink-0">
-              <iconify-icon icon="codicon:git-pull-request" class="mr-1.5 text-blue-600" />
-              PR Dashboard
+          <div class="flex items-center gap-3 flex-wrap">
+            <h1 class="shrink-0 flex items-center">
+              <img src="/brand/gavel-logo.svg" alt="gavel" class="h-7" />
             </h1>
-            <RepoSelector
-              repos={config.repos || []}
-              allOrg={config.all}
-              org={config.org}
-              onChange={(repos) => updateConfig({ repos })}
-            />
-            <SearchControls config={config} onChange={updateConfig} />
-            <FilterBar filters={filters} onChange={setFilters} counts={counts} repos={repos} authors={authors} />
+            <TabBar active={activeTab} onChange={setActiveTab} />
+            {activeTab === 'prs' && (
+              <>
+                <RepoSelector
+                  repos={config.repos || []}
+                  allOrg={config.all}
+                  org={config.org}
+                  onChange={(repos) => updateConfig({ repos })}
+                />
+                <SearchControls config={config} onChange={updateConfig} />
+                <FilterBar filters={filters} onChange={setFilters} counts={counts} repos={repos} authors={authors} />
+              </>
+            )}
           </div>
           <Summary
             prs={prs}
@@ -118,21 +147,50 @@ export function App() {
         </div>
       </div>
 
-      <SplitPane
-        left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} />}
-        right={
-          selected ? (
-            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
-          ) : (
-            <div class="flex items-center justify-center h-full text-gray-400 text-sm">
-              <div class="text-center">
-                <iconify-icon icon="codicon:git-pull-request" class="text-4xl mb-2" />
-                <p>Select a PR to view details</p>
+      {activeTab === 'prs' ? (
+        <SplitPane
+          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} />}
+          right={
+            selected ? (
+              <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
+            ) : (
+              <div class="flex items-center justify-center h-full text-gray-400 text-sm">
+                <div class="text-center">
+                  <iconify-icon icon="codicon:git-pull-request" class="text-4xl mb-2" />
+                  <p>Select a PR to view details</p>
+                </div>
               </div>
-            </div>
-          )
-        }
-      />
+            )
+          }
+        />
+      ) : (
+        <ActivityView />
+      )}
+    </div>
+  );
+}
+
+function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+  const tabs: { id: Tab; label: string; icon: string }[] = [
+    { id: 'prs', label: 'PRs', icon: 'codicon:git-pull-request' },
+    { id: 'activity', label: 'Activity', icon: 'codicon:pulse' },
+  ];
+  return (
+    <div class="flex gap-1 border-b border-transparent">
+      {tabs.map(t => (
+        <button
+          key={t.id}
+          onClick={() => onChange(t.id)}
+          class={`px-3 py-1.5 text-sm rounded-md transition ${
+            active === t.id
+              ? 'bg-blue-50 text-blue-700 font-medium'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <iconify-icon icon={t.icon} class="mr-1" />
+          {t.label}
+        </button>
+      ))}
     </div>
   );
 }
