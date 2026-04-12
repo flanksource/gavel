@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
@@ -53,6 +54,7 @@ type TestOrchestrator struct {
 	RunOptions
 	registry *Registry
 	streamer *TestStreamer
+	selector *selectorContext
 }
 
 // RunOptions configures test execution behavior.
@@ -70,6 +72,10 @@ type RunOptions struct {
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	Lint          bool                  `json:"lint,omitempty" flag:"lint"`                                   // Run linters in parallel with tests
+	Cache         bool                  `json:"cache,omitempty" flag:"cache"`                                 // Skip packages whose content fingerprint matches the last passing run
+	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
+	Since         string                `json:"since,omitempty" flag:"since"`                                 // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 }
 
@@ -103,7 +109,22 @@ func (opts RunOptions) Pretty() api.Text {
 	if opts.DryRun {
 		text = text.NewLine().Append("DryRun: ", "text-muted").Append(icons.Check, "text-green-500")
 	}
+	if opts.Cache {
+		text = text.Space().Append("Cache: ", "text-muted").Append(icons.Check, "text-green-500")
+	}
+	if opts.Changed {
+		text = text.Space().Append("Changed: ", "text-muted").Append(icons.Check, "text-green-500")
+	}
+	if opts.Since != "" {
+		text = text.Space().Append("Since: ", "text-muted").Append(opts.Since, "text-blue-500")
+	}
 	return text
+}
+
+// hasChangeSelector reports whether any flag in opts narrows execution to a
+// subset of packages via the change graph.
+func (opts RunOptions) hasChangeSelector() bool {
+	return opts.Changed || opts.Since != ""
 }
 
 func (r RunOptions) Help() string {
@@ -275,6 +296,45 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		return nil, fmt.Errorf("no test packages found")
 	}
 
+	// Narrow via change graph and/or run cache. Both selectors share a
+	// single lazily-loaded graph/hasher instance via selectorContext.
+	if o.hasChangeSelector() || o.Cache {
+		var err error
+		o.selector, err = newSelectorContext(o.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("initialize selector: %w", err)
+		}
+	}
+
+	if o.hasChangeSelector() && o.selector != nil {
+		diff := diffOptionsFromRunOptions(o.RunOptions)
+		for fw, pkgs := range packagesByFramework {
+			kept, err := o.selector.filterByChangeGraph(pkgs, diff)
+			if err != nil {
+				return nil, fmt.Errorf("change-graph filter for %s: %w", fw, err)
+			}
+			if len(kept) != len(pkgs) {
+				logger.Infof("[%s] change-graph: %d → %d packages", fw, len(pkgs), len(kept))
+			}
+			packagesByFramework[fw] = kept
+		}
+	}
+
+	cachedByFramework := map[Framework][]cacheHit{}
+	if o.Cache && o.selector != nil {
+		for fw, pkgs := range packagesByFramework {
+			need, hits, err := o.selector.filterByRunCache(fw, pkgs)
+			if err != nil {
+				return nil, fmt.Errorf("run-cache filter for %s: %w", fw, err)
+			}
+			if len(hits) > 0 {
+				logger.Infof("[%s] run-cache: %d hits, %d to run", fw, len(hits), len(need))
+			}
+			packagesByFramework[fw] = need
+			cachedByFramework[fw] = hits
+		}
+	}
+
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
 		return o.displayDryRun(packagesByFramework, extraArgs), nil
@@ -343,6 +403,18 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		allResults = append(allResults, result.testResults...)
 	}
 
+	// Fold cached hits into the final results and stream them to the UI so
+	// the user sees them alongside freshly-run packages.
+	for fw, hits := range cachedByFramework {
+		for _, hit := range hits {
+			suite := cachedSuiteResults(hit)
+			allResults = append(allResults, suite...)
+			if o.streamer != nil {
+				o.streamer.CompletePackage(hit.PkgPath, fw, suite)
+			}
+		}
+	}
+
 	allResults.Sort()
 
 	return allResults, nil
@@ -372,7 +444,9 @@ func (o *TestOrchestrator) runPackageTest(
 	// Execute the test process in the orchestrator
 	process := testRun.Process.WithTask(t)
 	t.SetName(fmt.Sprintf("%s %s", framework, pkgPath))
+	runStart := time.Now()
 	result := process.Run().Result()
+	runDuration := time.Since(runStart)
 
 	// Always attempt to parse test results first, even if there was an execution error
 	// This handles cases like `go test -json` which outputs valid JSON even when tests fail
@@ -423,6 +497,12 @@ func (o *TestOrchestrator) runPackageTest(
 		t.Failed()
 	} else {
 		t.Success()
+		// Persist the passing outcome to the run cache so the next
+		// invocation with --cache can skip it. No-op when --cache is off
+		// (selector is nil).
+		if o.selector != nil {
+			o.selector.recordSuccess(framework, pkgPath, testResults, runDuration)
+		}
 	}
 
 	return packageResult{

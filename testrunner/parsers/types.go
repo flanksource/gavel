@@ -43,6 +43,7 @@ type Test struct {
 	Failed      bool             `json:"failed,omitempty"`
 	Passed      bool             `json:"passed,omitempty"`
 	Pending     bool             `json:"pending,omitempty"`
+	Cached      bool             `json:"cached,omitempty"` // True when this result came from gavel's run-cache, not a fresh run
 	Stdout      string           `json:"stdout,omitempty"`
 	Stderr      string           `json:"stderr,omitempty"`
 	Children    Tests            `json:"children,omitempty"`
