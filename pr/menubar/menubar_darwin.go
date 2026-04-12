@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/caseymrm/menuet"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
 )
@@ -42,7 +43,10 @@ func (m *MenuBar) Run() {
 	app.Name = "Gavel PRs"
 	app.Label = "com.flanksource.gavel.prs"
 	app.SetMenuState(&menuet.MenuState{
-		Title: "PR: ...",
+		Title: "...",
+		// Start without the unread dot; updateTitle() will flip it on the
+		// first poll subscription tick.
+		Image: m.iconURL(false),
 	})
 	app.Children = m.menuItems
 
@@ -50,6 +54,23 @@ func (m *MenuBar) Run() {
 
 	app.RunApplication()
 	close(m.done)
+}
+
+// iconURL returns the menubar icon URL served by the running UI server.
+// menuet's NSImage loader only recognises "http"-prefixed names as remote
+// resources; bare file paths are treated as bundled resource names and
+// fail for un-bundled CLIs, so we serve the PNG over the local HTTP server.
+// When hasUnread is true, returns a variant with a red dot overlay in the
+// corner. Returns an empty string when no dashboard URL is available, which
+// makes menuet render title-only (no image).
+func (m *MenuBar) iconURL(hasUnread bool) string {
+	if m.DashboardURL == "" {
+		return ""
+	}
+	if hasUnread {
+		return m.DashboardURL + "/brand/menubar-unread.png"
+	}
+	return m.DashboardURL + "/brand/menubar.png"
 }
 
 func (m *MenuBar) Done() <-chan struct{} {
@@ -75,20 +96,24 @@ func (m *MenuBar) updateTitle() {
 			failed++
 		}
 	}
+	unreadCount := len(m.srv.UnreadMap(prs))
 
 	var title string
-	if m.srv.IsPaused() {
-		title = "PR: ⏸"
-	} else if failed > 0 {
-		title = fmt.Sprintf("PR: %d/%d", failed, len(prs))
-	} else if len(prs) > 0 {
-		title = "PR: ✓"
-	} else {
-		title = "PR: 0"
+	switch {
+	case m.srv.IsPaused():
+		title = "⏸"
+	case failed > 0:
+		title = fmt.Sprintf("✗ %d/%d", failed, len(prs))
+	case unreadCount > 0:
+		title = fmt.Sprintf("• %d", unreadCount)
+	default:
+		// Everything read and nothing failing — icon alone.
+		title = ""
 	}
 
 	menuet.App().SetMenuState(&menuet.MenuState{
 		Title: title,
+		Image: m.iconURL(unreadCount > 0),
 	})
 }
 
@@ -96,11 +121,16 @@ func (m *MenuBar) menuItems() []menuet.MenuItem {
 	m.mu.RLock()
 	prs := m.prs
 	m.mu.RUnlock()
+	unread := m.srv.UnreadMap(prs)
 
 	var items []menuet.MenuItem
 
+	header := fmt.Sprintf("%d Pull Requests", len(prs))
+	if n := len(unread); n > 0 {
+		header = fmt.Sprintf("%d Pull Requests · %d unread", len(prs), n)
+	}
 	items = append(items, menuet.MenuItem{
-		Text:    fmt.Sprintf("%d Pull Requests", len(prs)),
+		Text:     header,
 		FontSize: 12,
 	})
 	items = append(items, menuet.MenuItem{Type: menuet.Separator})
@@ -115,14 +145,23 @@ func (m *MenuBar) menuItems() []menuet.MenuItem {
 		}
 		for _, pr := range g.items {
 			icon := statePrefix(pr)
-			title := fmt.Sprintf("%s #%d %s", icon, pr.Number, pr.Title)
+			key := fmt.Sprintf("%s#%d", pr.Repo, pr.Number)
+			marker := "  "
+			if unread[key] {
+				marker = "• "
+			}
+			title := fmt.Sprintf("%s%s #%d %s", marker, icon, pr.Number, pr.Title)
 			if len(title) > 60 {
 				title = title[:57] + "..."
 			}
 			url := pr.URL
+			repo, number := pr.Repo, pr.Number
 			items = append(items, menuet.MenuItem{
 				Text: title,
 				Clicked: func() {
+					if err := m.srv.MarkSeen(repo, number); err != nil {
+						logger.Warnf("mark seen %s#%d: %v", repo, number, err)
+					}
 					openURL(url)
 				},
 			})
@@ -130,6 +169,17 @@ func (m *MenuBar) menuItems() []menuet.MenuItem {
 	}
 
 	items = append(items, menuet.MenuItem{Type: menuet.Separator})
+	if len(unread) > 0 {
+		items = append(items, menuet.MenuItem{
+			Text: "Mark all as read",
+			Clicked: func() {
+				if err := m.srv.MarkAllSeen(); err != nil {
+					logger.Warnf("mark all seen: %v", err)
+				}
+				m.updateTitle()
+			},
+		})
+	}
 	if m.DashboardURL != "" {
 		dashURL := m.DashboardURL
 		items = append(items, menuet.MenuItem{

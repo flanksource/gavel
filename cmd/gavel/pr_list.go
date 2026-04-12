@@ -31,6 +31,7 @@ type PRListOptions struct {
 	Org      string        `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
 	Limit    int           `flag:"limit" help:"Maximum PRs to return" default:"50"`
 	Status   bool          `flag:"status" help:"Show GitHub Actions check status counts"`
+	Logs     bool          `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
 	URL      bool          `flag:"url" help:"Show PR URL instead of number"`
 	UI       bool   `flag:"ui" help:"Open PR dashboard in browser with live updates"`
 	MenuBar  bool   `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
@@ -98,6 +99,7 @@ func buildPRSearchOpts(opts PRListOptions) (github.Options, github.PRSearchOptio
 		Limit:      opts.Limit,
 		Status:     opts.Status,
 		Verbose:    clicky.Flags.LevelCount > 0,
+		FetchLogs:  opts.Logs,
 		ShowURL:    opts.URL,
 		ShowAuthor: author != "@me",
 	}

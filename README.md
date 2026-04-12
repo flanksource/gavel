@@ -1,3 +1,7 @@
+<p align="left">
+  <img src="assets/brand/gavel-logo.svg" alt="gavel" height="48"/>
+</p>
+
 # Gavel
 
 A CLI toolkit for git analysis, AI-powered code review, and markdown-based test fixtures.
