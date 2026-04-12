@@ -102,3 +102,64 @@ func TestFilterIgnoredViolations(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterIgnoredViolations_AbsolutePaths(t *testing.T) {
+	mkViolation := func(source, rule, file string) models.Violation {
+		v := models.Violation{Source: source, File: file}
+		if rule != "" {
+			v.Rule = &models.Rule{Method: rule}
+		}
+		return v
+	}
+
+	tests := []struct {
+		name         string
+		workDir      string
+		violations   []models.Violation
+		rules        []verify.LintIgnoreRule
+		wantKept     int
+		wantFiltered int
+	}{
+		{
+			name:    "absolute violation path matched by relative ignore rule",
+			workDir: "/project",
+			violations: []models.Violation{
+				mkViolation("markdownlint", "MD034/no-bare-urls", "/project/cmd/hx/fixtures/hx.md"),
+				mkViolation("markdownlint", "MD034/no-bare-urls", "/project/docs/other.md"),
+			},
+			rules:        []verify.LintIgnoreRule{{Rule: "MD034/no-bare-urls", Source: "markdownlint", File: "cmd/hx/fixtures/hx.md"}},
+			wantKept:     1,
+			wantFiltered: 1,
+		},
+		{
+			name:    "absolute path with glob pattern",
+			workDir: "/project",
+			violations: []models.Violation{
+				mkViolation("golangci-lint", "errcheck", "/project/pkg/sub/deep.go"),
+				mkViolation("golangci-lint", "errcheck", "/project/cmd/main.go"),
+			},
+			rules:        []verify.LintIgnoreRule{{Rule: "errcheck", File: "pkg/**/*.go"}},
+			wantKept:     1,
+			wantFiltered: 1,
+		},
+		{
+			name:    "relative paths still work",
+			workDir: "/project",
+			violations: []models.Violation{
+				mkViolation("markdownlint", "MD034/no-bare-urls", "cmd/hx/fixtures/hx.md"),
+			},
+			rules:        []verify.LintIgnoreRule{{Rule: "MD034/no-bare-urls", File: "cmd/hx/fixtures/hx.md"}},
+			wantKept:     0,
+			wantFiltered: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &LinterResult{WorkDir: tt.workDir, Violations: tt.violations}
+			filtered := FilterIgnoredViolations([]*LinterResult{result}, tt.rules)
+			assert.Equal(t, tt.wantFiltered, filtered)
+			assert.Len(t, result.Violations, tt.wantKept)
+		})
+	}
+}
