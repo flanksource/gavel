@@ -396,7 +396,7 @@ function CommentView({ comment }: { comment: PRComment }) {
 }
 
 function extractTitle(body: string): string {
-  const clean = body.replace(/<[^>]+>/g, '').trim();
+  const clean = body.replace(/[<>]/g, '').trim();
   for (const line of clean.split('\n').slice(0, 15)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('_') || trimmed.startsWith('> [!')) continue;
