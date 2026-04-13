@@ -6,10 +6,14 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
+    - cmd: npm ci
+      dir: testrunner/ui
+    - cmd: npm run build
+      dir: testrunner/ui
 
 builds:
   - id: gavel
-    main: ./cmd/gavel/main.go
+    main: ./cmd/gavel
     binary: gavel
     env:
       - CGO_ENABLED=0
