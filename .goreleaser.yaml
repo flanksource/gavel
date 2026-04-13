@@ -6,10 +6,8 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
-    - cmd: npm ci
-      dir: testrunner/ui
-    - cmd: npm run build
-      dir: testrunner/ui
+    - sh -c "cd testrunner/ui && npm ci"
+    - sh -c "cd testrunner/ui && npm run build"
 
 builds:
   - id: gavel
