@@ -109,11 +109,11 @@ func TestRecorder_ConcurrentRecord(t *testing.T) {
 
 func TestScrubURL(t *testing.T) {
 	tests := map[string]string{
-		"":                                            "",
-		"https://api.github.com/repos/x/y":            "https://api.github.com/repos/x/y",
-		"https://api.github.com/x?access_token=abc":   "https://api.github.com/x?access_token=REDACTED",
-		"https://api.github.com/x?token=abc&page=2":   "https://api.github.com/x?page=2&token=REDACTED",
-		"https://api.github.com/x?client_secret=zzz":  "https://api.github.com/x?client_secret=REDACTED",
+		"":                                 "",
+		"https://api.github.com/repos/x/y": "https://api.github.com/repos/x/y",
+		"https://api.github.com/x?access_token=abc":  "https://api.github.com/x?access_token=REDACTED",
+		"https://api.github.com/x?token=abc&page=2":  "https://api.github.com/x?page=2&token=REDACTED",
+		"https://api.github.com/x?client_secret=zzz": "https://api.github.com/x?client_secret=REDACTED",
 	}
 	for in, want := range tests {
 		assert.Equal(t, want, scrubURL(in), "input=%q", in)

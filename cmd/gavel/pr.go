@@ -14,13 +14,13 @@ import (
 )
 
 var (
-	statusFollow     bool
-	statusInterval   time.Duration
-	statusFetchLogs  bool
-	statusTailLogs   int
-	statusRepo       string
-	statusSyncTodos  string
-	statusOpts       clicky.FormatOptions
+	statusFollow    bool
+	statusInterval  time.Duration
+	statusFetchLogs bool
+	statusTailLogs  int
+	statusRepo      string
+	statusSyncTodos string
+	statusOpts      clicky.FormatOptions
 )
 
 var prCmd = &cobra.Command{

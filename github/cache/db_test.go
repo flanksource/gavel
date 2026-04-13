@@ -9,10 +9,10 @@ import (
 
 func TestMaskDSN(t *testing.T) {
 	tests := map[string]string{
-		"":                                         "",
-		"postgres://api.github.com/db":             "postgres://api.github.com/db",
-		"postgres://user:secret@host:5432/db":      "postgres://user:REDACTED@host:5432/db",
-		"postgres://user@host/db":                  "postgres://user@host/db",
+		"":                                    "",
+		"postgres://api.github.com/db":        "postgres://api.github.com/db",
+		"postgres://user:secret@host:5432/db": "postgres://user:REDACTED@host:5432/db",
+		"postgres://user@host/db":             "postgres://user@host/db",
 		"host=localhost user=u password=s dbname=d": "host=localhost user=u password=REDACTED dbname=d",
 		"password=topsecret":                        "password=REDACTED",
 	}
