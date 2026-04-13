@@ -1,0 +1,45 @@
+name: Gavel Action (self-test)
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  self-test:
+    name: gavel test -lint via composite action
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Build gavel from source
+        run: |
+          task build
+          install_dir="$HOME/.local/bin"
+          mkdir -p "$install_dir"
+          cp gavel "$install_dir/gavel"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Run gavel action
+        uses: ./
+        with:
+          args: test --lint
+          version: source
+          comment-header: gavel-self-test
+          fail-on-error: "true"
