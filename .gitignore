@@ -63,6 +63,7 @@ __debug*
 .gingko/
 specs/
 *.png
+!pr/ui/brand/*.png
 hack/
 *.cast
 .playwright-mcp/
