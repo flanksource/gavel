@@ -1,0 +1,207 @@
+name: Gavel
+description: Run gavel test/lint, upload JSON + HTML artifacts, and post a sticky PR comment with the markdown summary.
+author: Flanksource
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  args:
+    description: Arguments passed to gavel (e.g. "test --lint" or "lint").
+    required: false
+    default: "test --lint"
+  working-directory:
+    description: Working directory in which gavel is executed.
+    required: false
+    default: "."
+  version:
+    description: |
+      Gavel release to install. Use a semver tag (e.g. "v1.2.3"), "latest"
+      to resolve the most recent release, or "source" to skip the release
+      download path and rely on a gavel binary the caller has already put on PATH.
+    required: false
+    default: "latest"
+  json-file:
+    description: Path (relative to working-directory) for the JSON artifact.
+    required: false
+    default: "gavel-results.json"
+  html-file:
+    description: Path (relative to working-directory) for the HTML artifact.
+    required: false
+    default: "gavel-results.html"
+  summary-file:
+    description: Path (relative to working-directory) for the markdown summary posted as a PR comment.
+    required: false
+    default: "gavel-summary.md"
+  artifact-name:
+    description: Name of the uploaded artifact bundle.
+    required: false
+    default: "gavel-results"
+  comment:
+    description: Post / update a sticky PR comment with the markdown summary.
+    required: false
+    default: "true"
+  comment-header:
+    description: |
+      Unique marker that identifies the sticky comment across runs.
+      Each distinct header keeps its own sticky comment on a PR.
+    required: false
+    default: "gavel"
+  github-token:
+    description: Token used to post the PR comment. Defaults to the workflow's GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+  fail-on-error:
+    description: Fail the action when gavel exits non-zero. Artifacts and the PR comment are still posted either way.
+    required: false
+    default: "true"
+
+outputs:
+  exit-code:
+    description: Exit code from the gavel invocation.
+    value: ${{ steps.run.outputs.exit_code }}
+  json-path:
+    description: Absolute path to the JSON artifact.
+    value: ${{ steps.run.outputs.json_path }}
+  html-path:
+    description: Absolute path to the HTML artifact.
+    value: ${{ steps.run.outputs.html_path }}
+  summary-path:
+    description: Absolute path to the markdown summary.
+    value: ${{ steps.run.outputs.summary_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install gavel
+      shell: bash
+      env:
+        GAVEL_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        if [ "$GAVEL_VERSION" = "source" ]; then
+          if ! command -v gavel >/dev/null 2>&1; then
+            echo "version=source but no gavel binary on PATH" >&2
+            exit 1
+          fi
+          echo "Using pre-installed gavel: $(gavel version 2>/dev/null || echo unknown)"
+          exit 0
+        fi
+        if command -v gavel >/dev/null 2>&1; then
+          echo "gavel already on PATH: $(gavel version 2>/dev/null || echo unknown)"
+          exit 0
+        fi
+        case "$RUNNER_OS" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *) echo "unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "unsupported runner arch: $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        tag="$GAVEL_VERSION"
+        if [ "$tag" = "latest" ]; then
+          tag="$(gh api repos/flanksource/gavel/releases/latest --jq .tag_name)"
+        fi
+        asset="gavel_${os}_${arch}"
+        url="https://github.com/flanksource/gavel/releases/download/${tag}/${asset}"
+        echo "Downloading $url"
+        install_dir="$HOME/.local/bin"
+        mkdir -p "$install_dir"
+        curl -fsSL "$url" -o "$install_dir/gavel"
+        chmod +x "$install_dir/gavel"
+        echo "$install_dir" >> "$GITHUB_PATH"
+        "$install_dir/gavel" version || true
+
+    - name: Run gavel
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GAVEL_ARGS: ${{ inputs.args }}
+        JSON_FILE: ${{ inputs.json-file }}
+        HTML_FILE: ${{ inputs.html-file }}
+        SUMMARY_FILE: ${{ inputs.summary-file }}
+      run: |
+        set +e
+        # shellcheck disable=SC2086
+        gavel $GAVEL_ARGS \
+          --format "json=${JSON_FILE},html=${HTML_FILE},markdown=${SUMMARY_FILE}"
+        code=$?
+        set -e
+        {
+          echo "exit_code=$code"
+          echo "json_path=$(pwd)/${JSON_FILE}"
+          echo "html_path=$(pwd)/${HTML_FILE}"
+          echo "summary_path=$(pwd)/${SUMMARY_FILE}"
+        } >> "$GITHUB_OUTPUT"
+        echo "gavel exited with $code"
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.working-directory }}/${{ inputs.json-file }}
+          ${{ inputs.working-directory }}/${{ inputs.html-file }}
+          ${{ inputs.working-directory }}/${{ inputs.summary-file }}
+        if-no-files-found: warn
+
+    - name: Write job summary
+      if: always() && hashFiles(format('{0}/{1}', inputs.working-directory, inputs.summary-file)) != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SUMMARY_FILE: ${{ inputs.summary-file }}
+      run: |
+        {
+          echo "## Gavel results"
+          echo
+          cat "$SUMMARY_FILE"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Post / update sticky PR comment
+      if: >-
+        always() &&
+        inputs.comment == 'true' &&
+        github.event_name == 'pull_request' &&
+        hashFiles(format('{0}/{1}', inputs.working-directory, inputs.summary-file)) != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEADER: ${{ inputs.comment-header }}
+        SUMMARY_FILE: ${{ inputs.summary-file }}
+      run: |
+        set -euo pipefail
+        marker="<!-- sticky-comment:${HEADER} -->"
+        body_file="$(mktemp)"
+        {
+          printf '%s\n\n' "$marker"
+          cat "$SUMMARY_FILE"
+        } > "$body_file"
+        existing_id="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+          --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | head -n1)"
+        if [ -n "$existing_id" ]; then
+          gh api --method PATCH "repos/${REPO}/issues/comments/${existing_id}" \
+            -F body=@"$body_file" >/dev/null
+          echo "Updated sticky comment $existing_id"
+        else
+          gh api --method POST "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -F body=@"$body_file" >/dev/null
+          echo "Created sticky comment"
+        fi
+
+    - name: Propagate gavel exit code
+      if: always() && inputs.fail-on-error == 'true' && steps.run.outputs.exit_code != '0'
+      shell: bash
+      run: |
+        echo "gavel exited with ${{ steps.run.outputs.exit_code }}" >&2
+        exit ${{ steps.run.outputs.exit_code }}
