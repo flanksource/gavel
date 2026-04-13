@@ -10,13 +10,13 @@ import (
 )
 
 type Poller struct {
-	srv        *Server
-	searchFn   func(since time.Time) (github.PRSearchResults, *github.RateLimit, error)
-	interval   time.Duration
+	srv         *Server
+	searchFn    func(since time.Time) (github.PRSearchResults, *github.RateLimit, error)
+	interval    time.Duration
 	fullRefresh time.Duration
-	known      map[string]github.PRListItem
-	lastFetch  time.Time
-	lastFull   time.Time
+	known       map[string]github.PRListItem
+	lastFetch   time.Time
+	lastFull    time.Time
 }
 
 func NewPoller(srv *Server, searchFn func(since time.Time) (github.PRSearchResults, *github.RateLimit, error), interval time.Duration) *Poller {

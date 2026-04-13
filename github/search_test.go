@@ -316,7 +316,7 @@ func TestPRListItemWithCheckStatus(t *testing.T) {
 	item := PRListItem{
 		Number: 42, Title: "feat: widget", Author: "dev",
 		Repo: "flanksource/gavel", Source: "feat/widget", Target: "main",
-		State: "OPEN",
+		State:       "OPEN",
 		CheckStatus: &CheckSummary{Passed: 3, Failed: 1},
 	}
 	output := item.Pretty().String()

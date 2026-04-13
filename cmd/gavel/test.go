@@ -17,9 +17,9 @@ import (
 	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner"
-	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/verify"
 )
 
 var uiServer *testui.Server
@@ -106,7 +106,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 
 	if opts.Lint {
 		return struct {
-			Tests any                    `json:"tests"`
+			Tests any                     `json:"tests"`
 			Lint  []*linters.LinterResult `json:"lint"`
 		}{result, lintResults}, nil
 	}

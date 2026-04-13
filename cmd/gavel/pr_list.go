@@ -22,20 +22,20 @@ import (
 )
 
 type PRListOptions struct {
-	Author   string        `flag:"author" help:"GitHub username (default: @me)"`
-	Since    string        `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
-	State    string        `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
-	All      bool          `flag:"all" help:"List PRs across all repos in the org"`
-	Any      bool          `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
-	Bots     bool          `flag:"bots" help:"Include bot-authored PRs" default:"false"`
-	Org      string        `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
-	Limit    int           `flag:"limit" help:"Maximum PRs to return" default:"50"`
-	Status   bool          `flag:"status" help:"Show GitHub Actions check status counts"`
-	Logs     bool          `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
-	URL      bool          `flag:"url" help:"Show PR URL instead of number"`
-	UI       bool   `flag:"ui" help:"Open PR dashboard in browser with live updates"`
-	MenuBar  bool   `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
-	Interval string `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
+	Author   string   `flag:"author" help:"GitHub username (default: @me)"`
+	Since    string   `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
+	State    string   `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
+	All      bool     `flag:"all" help:"List PRs across all repos in the org"`
+	Any      bool     `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
+	Bots     bool     `flag:"bots" help:"Include bot-authored PRs" default:"false"`
+	Org      string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
+	Limit    int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
+	Status   bool     `flag:"status" help:"Show GitHub Actions check status counts"`
+	Logs     bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
+	URL      bool     `flag:"url" help:"Show PR URL instead of number"`
+	UI       bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
+	MenuBar  bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
+	Interval string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
 	Repos    []string `args:"true"`
 }
 

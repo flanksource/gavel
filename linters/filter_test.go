@@ -18,10 +18,10 @@ func TestFilterIgnoredViolations(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		violations []models.Violation
-		rules      []verify.LintIgnoreRule
-		wantKept   int
+		name         string
+		violations   []models.Violation
+		rules        []verify.LintIgnoreRule
+		wantKept     int
 		wantFiltered int
 	}{
 		{

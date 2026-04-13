@@ -90,17 +90,17 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
 }`
 
 type FailedCheck struct {
-	Name       string   `json:"name"`
-	DetailsURL string   `json:"detailsUrl,omitempty"`
+	Name        string   `json:"name"`
+	DetailsURL  string   `json:"detailsUrl,omitempty"`
 	FailedSteps []string `json:"failedSteps,omitempty"`
-	LogTail    string   `json:"logTail,omitempty"`
+	LogTail     string   `json:"logTail,omitempty"`
 }
 
 type CheckSummary struct {
-	Passed  int           `json:"passed"`
-	Failed  int           `json:"failed"`
-	Running int           `json:"running"`
-	Pending int           `json:"pending"`
+	Passed   int           `json:"passed"`
+	Failed   int           `json:"failed"`
+	Running  int           `json:"running"`
+	Pending  int           `json:"pending"`
 	Failures []FailedCheck `json:"failures,omitempty"`
 }
 
@@ -151,16 +151,16 @@ func isActionsNoise(line string) bool {
 }
 
 type PRSearchOptions struct {
-	Author  string
-	Since   time.Time
-	State   string
-	All     bool
-	Org     string
-	Repos   []string // explicit list of owner/repo to search
-	Limit   int
-	Status    bool // include GitHub Actions check status counts
-	Verbose   bool // with --status, enrich failed checks with failing step names
-	FetchLogs bool // with --status -v, also fetch failing job log tails (extra API quota)
+	Author     string
+	Since      time.Time
+	State      string
+	All        bool
+	Org        string
+	Repos      []string // explicit list of owner/repo to search
+	Limit      int
+	Status     bool // include GitHub Actions check status counts
+	Verbose    bool // with --status, enrich failed checks with failing step names
+	FetchLogs  bool // with --status -v, also fetch failing job log tails (extra API quota)
 	ShowURL    bool // show PR URL instead of #number
 	ShowAuthor bool // show author name (when not filtered to @me)
 }

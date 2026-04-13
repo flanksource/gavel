@@ -128,13 +128,13 @@ func retention() time.Duration {
 // PR UI's /api/activity/cache endpoint so operators can confirm whether
 // caching is actually active and see how much is being stored.
 type Status struct {
-	Enabled      bool              `json:"enabled"`
-	Driver       string            `json:"driver"`
-	DSNSource    string            `json:"dsnSource"`    // env var name, blank if disabled
-	DSNMasked    string            `json:"dsnMasked"`    // DSN with credentials redacted
-	RetentionSec int64             `json:"retentionSec"` // http_cache_entries prune horizon
-	Counts       map[string]int64  `json:"counts"`       // rows per table
-	Error        string            `json:"error,omitempty"`
+	Enabled      bool             `json:"enabled"`
+	Driver       string           `json:"driver"`
+	DSNSource    string           `json:"dsnSource"`    // env var name, blank if disabled
+	DSNMasked    string           `json:"dsnMasked"`    // DSN with credentials redacted
+	RetentionSec int64            `json:"retentionSec"` // http_cache_entries prune horizon
+	Counts       map[string]int64 `json:"counts"`       // rows per table
+	Error        string           `json:"error,omitempty"`
 }
 
 // Status returns a point-in-time snapshot of cache config and row counts.
