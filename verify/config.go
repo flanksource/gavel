@@ -49,9 +49,21 @@ type LintConfig struct {
 	Ignore []LintIgnoreRule `yaml:"ignore,omitempty" json:"ignore,omitempty"`
 }
 
+type CommitHook struct {
+	Name  string   `yaml:"name" json:"name"`
+	Run   string   `yaml:"run" json:"run"`
+	Files []string `yaml:"files,omitempty" json:"files,omitempty"`
+}
+
+type CommitConfig struct {
+	Model string       `yaml:"model,omitempty" json:"model,omitempty"`
+	Hooks []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+}
+
 type GavelConfig struct {
 	Verify VerifyConfig `yaml:"verify" json:"verify"`
 	Lint   LintConfig   `yaml:"lint,omitempty" json:"lint,omitempty"`
+	Commit CommitConfig `yaml:"commit,omitempty" json:"commit,omitempty"`
 }
 
 func DefaultVerifyConfig() VerifyConfig {
@@ -106,6 +118,7 @@ func mergeFromFile(base GavelConfig, path string) GavelConfig {
 	}
 	base.Verify = MergeVerifyConfig(base.Verify, gc.Verify)
 	base.Lint = MergeLintConfig(base.Lint, gc.Lint)
+	base.Commit = MergeCommitConfig(base.Commit, gc.Commit)
 	return base
 }
 
@@ -128,6 +141,16 @@ func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
 func MergeLintConfig(base, override LintConfig) LintConfig {
 	if len(override.Ignore) > 0 {
 		base.Ignore = append(base.Ignore, override.Ignore...)
+	}
+	return base
+}
+
+func MergeCommitConfig(base, override CommitConfig) CommitConfig {
+	if override.Model != "" {
+		base.Model = override.Model
+	}
+	if len(override.Hooks) > 0 {
+		base.Hooks = append(base.Hooks, override.Hooks...)
 	}
 	return base
 }

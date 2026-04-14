@@ -14,8 +14,8 @@ import (
 
 	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/task"
-	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
+	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git/kubernetes"
 )
 
@@ -135,7 +135,7 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 
 	if options.AI {
 
-		agent, err := llm.NewLLMAgent(ai.DefaultConfig())
+		agent, err := gavelai.NewAgent(ai.DefaultConfig())
 		defer func() {
 			logger.Infof("AI Costs: %s", agent.GetCosts().Pretty().ANSI())
 		}()

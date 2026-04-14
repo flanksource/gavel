@@ -72,3 +72,4 @@ out.*
 .jscpd.json
 .container-sandbox.yaml
 testrunner/ui/dist/
+.tmp/
