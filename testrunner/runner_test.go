@@ -157,7 +157,7 @@ func TestDiscoverFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found := discoverFixtures(tmpDir)
+	found := discoverFixtures(tmpDir, nil)
 
 	if len(found) != 2 {
 		t.Fatalf("expected 2 fixture files, got %d: %v", len(found), found)
@@ -177,6 +177,77 @@ func TestDiscoverFixtures(t *testing.T) {
 	if foundMap["readme.md"] {
 		t.Error("readme.md should not be discovered")
 	}
+}
+
+func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Layout:
+	//   fixtures/root.md              (top-level fixture dir)
+	//   sub/fixtures/sub.md           (nested fixture dir under sub/)
+	//   sub/fixture-inline.md         (fixture-prefixed file nested under sub/)
+	//   other/fixtures/other.md       (sibling fixture dir, should be excluded when path=sub)
+	mustWrite := func(rel, body string) {
+		full := filepath.Join(tmpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("fixtures/root.md", "# root")
+	mustWrite("sub/fixtures/sub.md", "# sub")
+	mustWrite("sub/fixture-inline.md", "# inline")
+	mustWrite("other/fixtures/other.md", "# other")
+
+	bases := func(paths []string) map[string]bool {
+		m := make(map[string]bool)
+		for _, p := range paths {
+			m[filepath.Base(p)] = true
+		}
+		return m
+	}
+
+	t.Run("subdir path excludes siblings", func(t *testing.T) {
+		got := bases(discoverFixtures(tmpDir, []string{"sub"}))
+		if !got["sub.md"] {
+			t.Error("expected sub/fixtures/sub.md to be discovered")
+		}
+		if !got["fixture-inline.md"] {
+			t.Error("expected sub/fixture-inline.md to be discovered")
+		}
+		if got["other.md"] {
+			t.Error("other/fixtures/other.md should NOT be discovered for path=sub")
+		}
+		if got["root.md"] {
+			t.Error("fixtures/root.md should NOT be discovered for path=sub")
+		}
+	})
+
+	t.Run("absolute starting path", func(t *testing.T) {
+		got := bases(discoverFixtures(tmpDir, []string{filepath.Join(tmpDir, "sub")}))
+		if !got["sub.md"] || got["other.md"] {
+			t.Errorf("absolute path filter wrong: %v", got)
+		}
+	})
+
+	t.Run("multiple starting paths union", func(t *testing.T) {
+		got := bases(discoverFixtures(tmpDir, []string{"sub", "other"}))
+		if !got["sub.md"] || !got["other.md"] {
+			t.Errorf("expected union of sub and other fixtures, got %v", got)
+		}
+		if got["root.md"] {
+			t.Error("root.md should not leak in when neither path is workdir root")
+		}
+	})
+
+	t.Run("empty starting paths falls back to workdir", func(t *testing.T) {
+		got := bases(discoverFixtures(tmpDir, nil))
+		if !got["root.md"] {
+			t.Error("expected fixtures/root.md under no-arg discovery")
+		}
+	})
 }
 
 func TestFixtureNodeToTests(t *testing.T) {

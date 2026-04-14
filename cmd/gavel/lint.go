@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -38,6 +40,7 @@ type LintOptions struct {
 	WorkDir   string   `flag:"work-dir" help:"Working directory"`
 	Changed   bool     `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since     string   `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
+	UI        bool     `flag:"ui" help:"Launch browser UI to view violations"`
 	Files     []string `args:"true"`
 }
 
@@ -84,9 +87,16 @@ func runLint(opts LintOptions) (any, error) {
 		opts.WorkDir, _ = os.Getwd()
 	}
 
+	if opts.UI {
+		uiServer = startTestUI()
+	}
+
 	groups := groupFilesByGitRoot(opts)
 	opts.WorkDir = groups[0].gitRoot
 	opts.Files = groups[0].files
+	if uiServer != nil {
+		uiServer.SetGitRoot(opts.WorkDir)
+	}
 	logger.Infof("Running linters %s", opts.Pretty().ANSI())
 
 	var allResults []*linters.LinterResult
@@ -108,6 +118,25 @@ func runLint(opts LintOptions) (any, error) {
 
 	if filtered := linters.FilterIgnoredViolations(allResults, gavelCfg.Lint.Ignore); filtered > 0 {
 		logger.Infof("Filtered %d ignored violations", filtered)
+	}
+
+	if uiServer != nil {
+		uiServer.SetLintResults(allResults)
+		uiServer.MarkDone()
+		var violations int
+		for _, lr := range allResults {
+			if lr.Skipped {
+				continue
+			}
+			violations += len(lr.Violations)
+		}
+		if violations > 0 {
+			exitCode = 1
+		}
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		return nil, nil
 	}
 
 	if opts.Triage {

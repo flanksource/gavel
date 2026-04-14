@@ -2,6 +2,7 @@ package parsers
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -504,6 +505,38 @@ func TestGoTestJSONParseBenchmarkWithTests(t *testing.T) {
 	}
 }
 
+func TestGoTestJSONParseBenchmarkCount(t *testing.T) {
+	// -count=3 produces three result lines for the same benchmark; Samples should accumulate.
+	lines := []string{
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"start","Package":"github.com/example/pkg"}`,
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"run","Package":"github.com/example/pkg","Test":"BenchmarkBar"}`,
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"output","Package":"github.com/example/pkg","Test":"BenchmarkBar","Output":"BenchmarkBar-8   200000   5000 ns/op\n"}`,
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"output","Package":"github.com/example/pkg","Test":"BenchmarkBar","Output":"BenchmarkBar-8   200000   5100 ns/op\n"}`,
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"output","Package":"github.com/example/pkg","Test":"BenchmarkBar","Output":"BenchmarkBar-8   200000   4900 ns/op\n"}`,
+		`{"Time":"2026-04-06T16:03:17.126+03:00","Action":"pass","Package":"github.com/example/pkg","Test":"BenchmarkBar","Elapsed":1.5}`,
+		`{"Time":"2026-04-06T16:03:24.844+03:00","Action":"pass","Package":"github.com/example/pkg","Elapsed":2.0}`,
+	}
+	parser := NewGoTestJSON("")
+	results, err := parser.Parse(strings.NewReader(strings.Join(lines, "\n")))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	br := results[0].Benchmark
+	if br == nil {
+		t.Fatal("expected benchmark data")
+	}
+	want := []float64{5000, 5100, 4900}
+	if !reflect.DeepEqual(br.Samples, want) {
+		t.Errorf("Samples = %v, want %v", br.Samples, want)
+	}
+	if br.NsPerOp != 4900 {
+		t.Errorf("NsPerOp = %v, want 4900 (last)", br.NsPerOp)
+	}
+}
+
 func TestParseBenchmarkLine(t *testing.T) {
 	tests := map[string]struct {
 		input      string
@@ -556,7 +589,7 @@ func TestParseBenchmarkLine(t *testing.T) {
 			if gotResult == nil {
 				t.Fatal("expected non-nil result")
 			}
-			if *gotResult != *tc.wantResult {
+			if !reflect.DeepEqual(gotResult, tc.wantResult) {
 				t.Errorf("result:\n  expected %+v\n  got      %+v", *tc.wantResult, *gotResult)
 			}
 		})

@@ -1,13 +1,23 @@
-import type { Test, FixtureContext, GinkgoContext, GoTestContext } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult } from '../types';
 import { statusIcon, statusColor, formatDuration, sum, frameworkIcon } from '../utils';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 
-interface Props {
-  test: Test | null;
+export interface IgnoreRequest {
+  source?: string;
+  rule?: string;
+  file?: string;
 }
 
-export function DetailPanel({ test: t }: Props) {
+interface Props {
+  test: Test | null;
+  onRerun?: (t: Test) => void;
+  rerunBusy?: boolean;
+  onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
+  ignoreBusy?: boolean;
+}
+
+export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy }: Props) {
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -23,14 +33,30 @@ export function DetailPanel({ test: t }: Props) {
   const s = hasChildren ? sum(t) : null;
   const fw = t.framework;
   const fwIcon = frameworkIcon(fw);
+  const isLint = t.kind === 'lint-root' || t.kind === 'linter'
+    || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule';
+  const canRerun = !!onRerun && !isLint;
 
   return (
     <div class="p-5 space-y-4">
       {/* Header */}
       <div class="flex items-start gap-2">
         <iconify-icon icon={statusIcon(t)} class={`${statusColor(t)} text-2xl shrink-0 mt-0.5`} />
-        <div class="min-w-0">
-          <h2 class="text-lg font-bold text-gray-900 break-words">{t.name}</h2>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-start justify-between gap-2">
+            <h2 class="text-lg font-bold text-gray-900 break-words">{t.name}</h2>
+            {canRerun && (
+              <button
+                class="shrink-0 text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                onClick={() => onRerun!(t)}
+                disabled={rerunBusy}
+                title="Rerun this test or subtree"
+              >
+                <iconify-icon icon="codicon:refresh" />
+                {rerunBusy ? 'Running...' : 'Rerun'}
+              </button>
+            )}
+          </div>
           <div class="flex items-center gap-2 mt-1 flex-wrap">
             {fwIcon && (
               <span class="inline-flex items-center gap-1 text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600">
@@ -52,6 +78,15 @@ export function DetailPanel({ test: t }: Props) {
           </div>
         </div>
       </div>
+
+      {t.kind === 'violation' && t.violation && <ViolationDetail v={t.violation} />}
+      {t.kind === 'linter' && t.linter && <LinterDetail lr={t.linter} />}
+      {t.kind === 'lint-file' && (
+        <FileViolationsDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
+      )}
+      {t.kind === 'lint-rule' && (
+        <RuleViolationsDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
+      )}
 
       {/* Summary for containers */}
       {s && s.total > 0 && (
@@ -247,6 +282,272 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
     <div class="text-center">
       <div class={`text-lg font-bold ${color}`}>{value}</div>
       <div class="text-xs text-gray-500">{label}</div>
+    </div>
+  );
+}
+
+function ViolationDetail({ v }: { v: Violation }) {
+  const sevColor = v.severity === 'error' ? 'bg-red-100 text-red-800'
+    : v.severity === 'warning' ? 'bg-yellow-100 text-yellow-800'
+    : 'bg-blue-100 text-blue-800';
+  return (
+    <>
+      <Section title="Severity">
+        <span class={`inline-block text-xs font-semibold uppercase rounded px-2 py-0.5 ${sevColor}`}>
+          {v.severity || 'info'}
+        </span>
+      </Section>
+      {v.file && (
+        <Section title="Location">
+          <span class="text-sm font-mono text-gray-700">
+            {v.file}{v.line ? `:${v.line}` : ''}{v.column ? `:${v.column}` : ''}
+          </span>
+        </Section>
+      )}
+      {v.rule?.method && (
+        <Section title="Rule">
+          <span class="text-sm font-mono text-gray-700">{v.rule.method}</span>
+          {v.rule.description && <div class="text-xs text-gray-500 mt-0.5">{v.rule.description}</div>}
+        </Section>
+      )}
+      {v.message && (
+        <Section title="Message">
+          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3">{v.message}</pre>
+        </Section>
+      )}
+      {v.code && (
+        <Section title="Code">
+          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 overflow-x-auto">{v.code}</pre>
+        </Section>
+      )}
+    </>
+  );
+}
+
+function LinterDetail({ lr }: { lr: LinterResult }) {
+  return (
+    <>
+      <Section title="Status">
+        <div class="flex gap-3 text-sm">
+          <span class={lr.success ? 'text-green-600' : 'text-red-600'}>
+            {lr.skipped ? 'skipped' : lr.timed_out ? 'timed out' : lr.success ? 'success' : 'failed'}
+          </span>
+          <span class="text-gray-500">{(lr.violations || []).length} violations</span>
+          {lr.file_count !== undefined && <span class="text-gray-500">{lr.file_count} files</span>}
+          {lr.rule_count !== undefined && <span class="text-gray-500">{lr.rule_count} rules</span>}
+        </div>
+      </Section>
+      {lr.error && (
+        <Section title="Error">
+          <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3">{lr.error}</pre>
+        </Section>
+      )}
+      {lr.raw_output && (
+        <Section title="Raw output">
+          <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto">{lr.raw_output}</pre>
+        </Section>
+      )}
+    </>
+  );
+}
+
+interface LintDetailProps {
+  t: Test;
+  onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
+  ignoreBusy?: boolean;
+}
+
+function IgnoreButton({
+  label,
+  title,
+  req,
+  onIgnore,
+  disabled,
+  variant,
+}: {
+  label: string;
+  title: string;
+  req: IgnoreRequest;
+  onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
+  disabled?: boolean;
+  variant?: 'primary' | 'subtle';
+}) {
+  if (!onIgnore) return null;
+  const base = 'text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1';
+  const cls = variant === 'subtle'
+    ? `${base} border-gray-200 text-gray-500 hover:bg-gray-50`
+    : `${base} border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100`;
+  return (
+    <button
+      class={cls}
+      title={title}
+      disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); void onIgnore(req); }}
+    >
+      <iconify-icon icon="codicon:eye-closed" class="text-xs" />
+      {label}
+    </button>
+  );
+}
+
+function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
+  const linter = t.linterName || '';
+  const file = t.file || '';
+  const vs = t.violations || [];
+  return (
+    <>
+      <Section title="File">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-mono text-gray-700">{file}</span>
+          <span class="text-xs text-gray-400">({vs.length} violations)</span>
+        </div>
+      </Section>
+      <Section title="Actions">
+        <div class="flex flex-wrap gap-1.5">
+          <IgnoreButton
+            label={`Ignore all ${linter} in this file`}
+            title="Add {source, file} to .gavel.yaml"
+            req={{ source: linter, file }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy}
+          />
+          <IgnoreButton
+            label={`Disable ${linter} entirely`}
+            title="Add {source} to .gavel.yaml"
+            req={{ source: linter }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy}
+            variant="subtle"
+          />
+        </div>
+      </Section>
+      <Section title="Violations">
+        <div class="space-y-2">
+          {vs.map((v, i) => (
+            <ViolationRow
+              key={i}
+              v={v}
+              linter={linter}
+              file={file}
+              onIgnore={onIgnore}
+              ignoreBusy={ignoreBusy}
+            />
+          ))}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
+  const linter = t.linterName || '';
+  const file = t.file || '';
+  const rule = t.ruleName || '';
+  const vs = t.violations || [];
+  return (
+    <>
+      <Section title="Rule">
+        <span class="text-sm font-mono text-gray-700">{rule}</span>
+        <span class="text-xs text-gray-400 ml-2">({vs.length} violations)</span>
+      </Section>
+      {file && (
+        <Section title="File">
+          <span class="text-sm font-mono text-gray-700">{file}</span>
+        </Section>
+      )}
+      <Section title="Actions">
+        <div class="flex flex-wrap gap-1.5">
+          <IgnoreButton
+            label={`Ignore ${rule} in this file`}
+            title="Add {source, rule, file} to .gavel.yaml"
+            req={{ source: linter, rule, file }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy}
+          />
+          <IgnoreButton
+            label={`Ignore rule ${rule} everywhere`}
+            title="Add {source, rule} to .gavel.yaml"
+            req={{ source: linter, rule }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy}
+          />
+          <IgnoreButton
+            label={`Disable ${linter} entirely`}
+            title="Add {source} to .gavel.yaml"
+            req={{ source: linter }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy}
+            variant="subtle"
+          />
+        </div>
+      </Section>
+      <Section title="Violations">
+        <div class="space-y-2">
+          {vs.map((v, i) => (
+            <ViolationRow
+              key={i}
+              v={v}
+              linter={linter}
+              file={v.file || file}
+              onIgnore={onIgnore}
+              ignoreBusy={ignoreBusy}
+              showFile={!file}
+            />
+          ))}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+function ViolationRow({
+  v, linter, file, onIgnore, ignoreBusy, showFile,
+}: {
+  v: Violation;
+  linter: string;
+  file: string;
+  onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
+  ignoreBusy?: boolean;
+  showFile?: boolean;
+}) {
+  const sev = v.severity || 'error';
+  const sevColor = sev === 'error' ? 'text-red-600'
+    : sev === 'warning' ? 'text-yellow-600' : 'text-blue-500';
+  const sevIcon = sev === 'error' ? 'codicon:error'
+    : sev === 'warning' ? 'codicon:warning' : 'codicon:info';
+  const rule = v.rule?.method || '';
+  return (
+    <div class="border border-gray-200 rounded p-2 bg-white">
+      <div class="flex items-start gap-2">
+        <iconify-icon icon={sevIcon} class={`${sevColor} text-base shrink-0 mt-0.5`} />
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500 font-mono">
+            {showFile && v.file && <span>{v.file}</span>}
+            <span>
+              :{v.line || 0}{v.column ? `:${v.column}` : ''}
+            </span>
+            {rule && <span class="text-gray-700">[{rule}]</span>}
+          </div>
+          {v.message && (
+            <div class="text-sm text-gray-800 whitespace-pre-wrap mt-0.5">{v.message}</div>
+          )}
+          {v.code && (
+            <pre class="text-xs font-mono bg-gray-50 rounded p-2 mt-1 overflow-x-auto">{v.code}</pre>
+          )}
+          {rule && (
+            <div class="mt-1.5">
+              <IgnoreButton
+                label="Ignore this violation"
+                title="Add {source, rule, file} to .gavel.yaml"
+                req={{ source: linter, rule, file }}
+                onIgnore={onIgnore}
+                disabled={ignoreBusy}
+                variant="subtle"
+              />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

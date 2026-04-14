@@ -69,11 +69,12 @@ type GinkgoContext struct {
 }
 
 type BenchmarkResult struct {
-	Iterations  int     `json:"iterations,omitempty"`
-	NsPerOp     float64 `json:"ns_per_op,omitempty"`
-	BytesPerOp  int64   `json:"bytes_per_op,omitempty"`
-	AllocsPerOp int64   `json:"allocs_per_op,omitempty"`
-	MBPerSec    float64 `json:"mb_per_sec,omitempty"`
+	Iterations  int       `json:"iterations,omitempty"`
+	NsPerOp     float64   `json:"ns_per_op,omitempty"`
+	BytesPerOp  int64     `json:"bytes_per_op,omitempty"`
+	AllocsPerOp int64     `json:"allocs_per_op,omitempty"`
+	MBPerSec    float64   `json:"mb_per_sec,omitempty"`
+	Samples     []float64 `json:"samples,omitempty"` // ns/op across -count=N runs; NsPerOp is the last/mean
 }
 
 func (b BenchmarkResult) Pretty() string {
