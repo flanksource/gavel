@@ -53,6 +53,8 @@ tasks:
 
   test:
     desc: Run tests
+    deps:
+      - build
     cmds:
       - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
     env:
