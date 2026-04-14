@@ -441,6 +441,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/flanksource/clicky v1.21.2 h1:9AUegiEe7/yPi+2csMHRbamnoHCrJdpNB5XwYHjOPYA=
 github.com/flanksource/clicky v1.21.2/go.mod h1:0kdw18BwGjlGiW2aZhY0K1LWW04z+WipzNgvguwKt9A=
+github.com/flanksource/clicky v1.21.3 h1:+yOP5EUD7z6jezZH5hWVu8FyFZks4jXsiZHJAU5G1a8=
+github.com/flanksource/clicky v1.21.3/go.mod h1:0kdw18BwGjlGiW2aZhY0K1LWW04z+WipzNgvguwKt9A=
 github.com/flanksource/commons v1.49.0 h1:DYVTAHcv9l29pi2gz+Hw45qxU0KDVouGaz4G3xugH9s=
 github.com/flanksource/commons v1.49.0/go.mod h1:fkFXl28yADGx4XAsczF9e7XUvG3sqhWMf6c2pdmfo6s=
 github.com/flanksource/commons-db v0.1.5 h1:q5Hf/B8vaRMmXtdF3cvXbncUF8FxiorKLMzQOIxVmxk=
