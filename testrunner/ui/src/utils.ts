@@ -119,25 +119,30 @@ export function filterTests(
 }
 
 function filterNode(t: Test, statusFilter: Set<string>, frameworkFilter: Set<string>): Test | null {
-  if (matchesLeaf(t, statusFilter, frameworkFilter)) return t;
+  const hasChildren = !!t.children && t.children.length > 0;
 
-  if (!t.children || t.children.length === 0) return null;
+  if (hasChildren) {
+    const filtered = t.children!.map(c => filterNode(c, statusFilter, frameworkFilter)).filter(Boolean) as Test[];
+    if (filtered.length === 0) return null;
+    return { ...t, children: filtered, summary: undefined };
+  }
 
-  const filtered = t.children.map(c => filterNode(c, statusFilter, frameworkFilter)).filter(Boolean) as Test[];
-  if (filtered.length === 0) return null;
-  return { ...t, children: filtered };
+  return matchesLeaf(t, statusFilter, frameworkFilter) ? t : null;
 }
 
 function matchesLeaf(t: Test, statusFilter: Set<string>, frameworkFilter: Set<string>): boolean {
   const s = testStatus(t);
-  if (statusFilter.size > 0 && s && !statusFilter.has(s)) return false;
-  if (frameworkFilter.size > 0 && t.framework && !frameworkFilter.has(t.framework)) return false;
-  return s !== null;
+  if (s === null) return false;
+  if (statusFilter.size > 0 && !statusFilter.has(s)) return false;
+  if (frameworkFilter.size > 0) {
+    if (!t.framework || !frameworkFilter.has(t.framework)) return false;
+  }
+  return true;
 }
 
 export function humanizeName(name: string, framework?: string): string {
   if (framework !== 'go test') return name;
-  // Handle subtests: TestFoo/some_subtest -> Foo / some subtest
+  if (name.endsWith('/')) return name;
   const parts = name.split('/');
   return parts.map((p, i) => {
     if (i === 0) {

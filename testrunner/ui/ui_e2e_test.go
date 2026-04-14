@@ -170,38 +170,70 @@ func sampleTests() []parsers.Test {
 	}
 }
 
+var (
+	suiteSrv         *testui.Server
+	suiteURL         string
+	suiteSrvCleanup  func()
+	suiteAllocCtx    context.Context
+	suiteAllocCancel context.CancelFunc
+	suiteBrowserCtx  context.Context
+	suiteBrowserDone context.CancelFunc
+)
+
+var _ = BeforeSuite(func() {
+	suiteSrv = testui.NewServer()
+	suiteURL, suiteSrvCleanup = startServer(suiteSrv)
+
+	tmpDir, err := os.MkdirTemp("", "testui-chrome-*")
+	Expect(err).ToNot(HaveOccurred())
+	DeferCleanup(os.RemoveAll, tmpDir)
+
+	suiteAllocCtx, suiteAllocCancel = chromedp.NewExecAllocator(context.Background(),
+		append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", true),
+			chromedp.Flag("disable-gpu", true),
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("disable-dev-shm-usage", true),
+			chromedp.WindowSize(1440, 900),
+			chromedp.UserDataDir(tmpDir),
+		)...,
+	)
+	// Warm up the browser so the first tab is ready.
+	suiteBrowserCtx, suiteBrowserDone = chromedp.NewContext(suiteAllocCtx)
+	Expect(chromedp.Run(suiteBrowserCtx)).To(Succeed())
+})
+
+var _ = AfterSuite(func() {
+	if suiteBrowserDone != nil {
+		suiteBrowserDone()
+	}
+	if suiteAllocCancel != nil {
+		suiteAllocCancel()
+	}
+	if suiteSrvCleanup != nil {
+		suiteSrvCleanup()
+	}
+})
+
 var _ = Describe("Test UI E2E", func() {
 	var (
-		srv     *testui.Server
-		url     string
-		cleanup func()
-		ctx     context.Context
-		cancel  context.CancelFunc
+		srv    *testui.Server
+		url    string
+		ctx    context.Context
+		cancel context.CancelFunc
 	)
 
 	BeforeEach(func() {
-		srv = testui.NewServer()
-		url, cleanup = startServer(srv)
+		srv = suiteSrv
+		url = suiteURL
 		srv.SetResults(sampleTests())
 
-		tmpDir := GinkgoT().TempDir()
-		allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(),
-			append(chromedp.DefaultExecAllocatorOptions[:],
-				chromedp.Flag("headless", true),
-				chromedp.Flag("disable-gpu", true),
-				chromedp.Flag("no-sandbox", true),
-				chromedp.Flag("disable-dev-shm-usage", true),
-				chromedp.WindowSize(1440, 900),
-				chromedp.UserDataDir(tmpDir),
-			)...,
-		)
-		ctx, cancel = chromedp.NewContext(allocCtx)
-		_ = allocCancel
+		// New tab per test, sharing the suite-wide browser process.
+		ctx, cancel = chromedp.NewContext(suiteBrowserCtx)
 	})
 
 	AfterEach(func() {
 		cancel()
-		cleanup()
 	})
 
 	It("serves the HTML page", func() {
@@ -257,7 +289,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
 			// Click on the failed test
-			chromedp.Click(`//span[contains(text(), "TestBuildFailed")]`, chromedp.BySearch),
+			chromedp.Click(`//span[contains(text(), "Build Failed")]`, chromedp.BySearch),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
 		)
@@ -284,7 +316,7 @@ var _ = Describe("Test UI E2E", func() {
 		err := chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
-			chromedp.Click(`//span[contains(text(), "TestRegistry/DetectsGoTest")]`, chromedp.BySearch),
+			chromedp.Click(`//span[contains(text(), "Registry / DetectsGoTest")]`, chromedp.BySearch),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
 		)
@@ -344,11 +376,15 @@ var _ = Describe("Test UI E2E", func() {
 		updates := make(chan []parsers.Test, 4)
 		streamSrv.StreamFrom(updates)
 
+		// Use a fresh tab for the streaming server so we don't disturb the shared one.
+		streamCtx, streamCancel := chromedp.NewContext(suiteBrowserCtx)
+		defer streamCancel()
+
 		// Send pending first
 		updates <- []parsers.Test{{Name: "pkg/", Pending: true}}
 
 		var text1 string
-		err := chromedp.Run(ctx,
+		err := chromedp.Run(streamCtx,
 			chromedp.Navigate(streamURL),
 			chromedp.Sleep(3*time.Second),
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
@@ -365,12 +401,12 @@ var _ = Describe("Test UI E2E", func() {
 		close(updates)
 
 		var text2 string
-		err = chromedp.Run(ctx,
+		err = chromedp.Run(streamCtx,
 			chromedp.Sleep(3*time.Second),
 			chromedp.Text(`body`, &text2, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(text2).To(ContainSubstring("TestFoo"))
+		Expect(text2).To(ContainSubstring("Foo"))
 		Expect(text2).To(ContainSubstring("Test run complete"))
 	})
 
@@ -428,7 +464,7 @@ var _ = Describe("Test UI E2E", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		// After collapse, individual tests should not be visible
-		Expect(strings.Contains(collapsed, "TestParser")).To(BeFalse())
+		Expect(strings.Contains(collapsed, "Build Failed")).To(BeFalse())
 
 		err = chromedp.Run(ctx,
 			// Click expand
@@ -437,7 +473,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Text(`body`, &expanded, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(expanded).To(ContainSubstring("TestParser"))
+		Expect(expanded).To(ContainSubstring("Build Failed"))
 	})
 
 	It("shows passed Go test detail with stdout and file location", func() {
@@ -445,7 +481,7 @@ var _ = Describe("Test UI E2E", func() {
 		err := chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
-			chromedp.Click(`//span[contains(text(), "TestParser")]`, chromedp.BySearch),
+			chromedp.Click(`//span[contains(text(), "Parser")]`, chromedp.BySearch),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
 		)
@@ -467,7 +503,7 @@ var _ = Describe("Test UI E2E", func() {
 		err := chromedp.Run(ctx,
 			chromedp.Navigate(url),
 			chromedp.Sleep(2*time.Second),
-			chromedp.Click(`//span[contains(text(), "TestRegistry/DetectsGinkgo")]`, chromedp.BySearch),
+			chromedp.Click(`//span[contains(text(), "Registry / DetectsGinkgo")]`, chromedp.BySearch),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
 		)
@@ -486,7 +522,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Text(`body`, &text1, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(text1).To(ContainSubstring("TestParser"))
+		Expect(text1).To(ContainSubstring("Parser"))
 
 		// Reload the page
 		var text2 string
@@ -497,7 +533,7 @@ var _ = Describe("Test UI E2E", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(text2).To(ContainSubstring("testrunner/"))
-		Expect(text2).To(ContainSubstring("TestParser"))
+		Expect(text2).To(ContainSubstring("Parser"))
 		Expect(text2).To(ContainSubstring("filters.md"))
 		Expect(text2).To(ContainSubstring("Test run complete"))
 	})

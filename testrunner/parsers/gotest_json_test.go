@@ -195,14 +195,15 @@ func TestTruncateFailure(t *testing.T) {
 	}
 }
 
-func TestGoTestJSONParseFiltersGinkgoBootstrap(t *testing.T) {
-	// Simulate go test output that includes both a Ginkgo bootstrap test and a real test
+func TestGoTestJSONParseTagsGinkgoBootstrap(t *testing.T) {
+	// Bootstrap wrapper tests are no longer dropped at parse time — they carry
+	// the suite's overall pass/fail and are deduped later in runner.go when a
+	// real Ginkgo report exists for the same package.
 	input := `{"Time":"2025-01-01T12:00:00Z","Action":"run","Package":"./foo","Test":"TestFixtures"}
 {"Time":"2025-01-01T12:00:00Z","Action":"pass","Package":"./foo","Test":"TestFixtures","Elapsed":0.001}
 {"Time":"2025-01-01T12:00:00Z","Action":"run","Package":"./foo","Test":"TestRealTest"}
 {"Time":"2025-01-01T12:00:00Z","Action":"pass","Package":"./foo","Test":"TestRealTest","Elapsed":0.1}`
 
-	// Create parser with a location map that marks TestFixtures as a Ginkgo bootstrap
 	parser := &GoTestJSON{
 		LocationMap: map[string]TestLocation{
 			"TestFixtures": {File: "fixtures_suite_test.go", Line: 10, IsGinkgoBootstrap: true},
@@ -215,21 +216,97 @@ func TestGoTestJSONParseFiltersGinkgoBootstrap(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should only have 1 result - TestRealTest (TestFixtures should be filtered)
-	if len(results) != 1 {
-		t.Errorf("expected 1 test (bootstrap filtered), got %d", len(results))
-		for _, r := range results {
-			t.Logf("  - %s", r.Name)
-		}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 tests (both kept), got %d", len(results))
 	}
 
-	if len(results) > 0 && results[0].Name != "TestRealTest" {
-		t.Errorf("expected TestRealTest, got %s", results[0].Name)
+	byName := map[string]Test{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+
+	bootstrap, ok := byName["TestFixtures"]
+	if !ok {
+		t.Fatalf("TestFixtures missing from results")
+	}
+	if !bootstrap.IsGinkgoBootstrap {
+		t.Errorf("expected TestFixtures.IsGinkgoBootstrap=true")
+	}
+	if !bootstrap.Passed {
+		t.Errorf("expected TestFixtures to be Passed")
+	}
+
+	real, ok := byName["TestRealTest"]
+	if !ok {
+		t.Fatalf("TestRealTest missing from results")
+	}
+	if real.IsGinkgoBootstrap {
+		t.Errorf("expected TestRealTest.IsGinkgoBootstrap=false")
+	}
+}
+
+// TestGoTestJSONParseGinkgoWrapperSurfaces reproduces the user-reported case:
+// a Ginkgo suite run under `go test -json` (no Ginkgo JSON report file). The
+// wrapper test must be kept with its pass, duration, and the package-level
+// log output from before the first test `run` event folded into Stdout.
+func TestGoTestJSONParseGinkgoWrapperSurfaces(t *testing.T) {
+	input := `{"Time":"2026-04-13T15:26:52.67734+03:00","Action":"start","Package":"github.com/flanksource/config-db/scrapers/kubernetes"}
+{"Time":"2026-04-13T15:26:52.798361+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Output":"15:26:52.797 INF Loaded 7 config rules\n"}
+{"Time":"2026-04-13T15:26:52.916903+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Output":"15:26:52.915 INF Loaded 0 change rules\n"}
+{"Time":"2026-04-13T15:26:52.92208+03:00","Action":"run","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes"}
+{"Time":"2026-04-13T15:26:52.922263+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Output":"=== RUN   TestKubernetes\n"}
+{"Time":"2026-04-13T15:26:52.930163+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Output":"Running Suite: Kubernetes Suite - /tmp/config-db/scrapers/kubernetes\n"}
+{"Time":"2026-04-13T15:26:52.930227+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Output":"Will run 34 of 34 specs\n"}
+{"Time":"2026-04-13T15:26:52.932094+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Output":"Ran 34 of 34 Specs in 0.002 seconds\n"}
+{"Time":"2026-04-13T15:26:52.932106+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Output":"--- PASS: TestKubernetes (0.01s)\n"}
+{"Time":"2026-04-13T15:26:52.932109+03:00","Action":"pass","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Test":"TestKubernetes","Elapsed":0.01}
+{"Time":"2026-04-13T15:26:52.932114+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Output":"PASS\n"}
+{"Time":"2026-04-13T15:26:52.940024+03:00","Action":"output","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Output":"ok  \tgithub.com/flanksource/config-db/scrapers/kubernetes\t0.262s\n"}
+{"Time":"2026-04-13T15:26:52.944847+03:00","Action":"pass","Package":"github.com/flanksource/config-db/scrapers/kubernetes","Elapsed":0.268}`
+
+	parser := &GoTestJSON{
+		LocationMap: map[string]TestLocation{
+			"TestKubernetes": {File: "kubernetes_suite_test.go", Line: 15, IsGinkgoBootstrap: true},
+		},
+	}
+
+	results, err := parser.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(results))
+	}
+	got := results[0]
+	if got.Name != "TestKubernetes" {
+		t.Errorf("expected TestKubernetes, got %s", got.Name)
+	}
+	if !got.IsGinkgoBootstrap {
+		t.Errorf("expected IsGinkgoBootstrap=true")
+	}
+	if !got.Passed {
+		t.Errorf("expected Passed=true")
+	}
+	if got.Duration == 0 {
+		t.Errorf("expected non-zero duration")
+	}
+	// Package-level log lines folded into stdout
+	if !strings.Contains(got.Stdout, "Loaded 7 config rules") {
+		t.Errorf("expected package-level log in Stdout, got: %q", got.Stdout)
+	}
+	if !strings.Contains(got.Stdout, "Ran 34 of 34 Specs") {
+		t.Errorf("expected ginkgo summary in Stdout, got: %q", got.Stdout)
+	}
+	if !strings.Contains(got.Stdout, "ok") {
+		t.Errorf("expected trailing ok line in Stdout, got: %q", got.Stdout)
 	}
 }
 
 func TestGoTestJSONParseBenchmarkNoTests(t *testing.T) {
-	// Real output from `go test -bench -json` with no regular tests
+	// Real output from `go test -bench -json` with no regular tests.
+	// No benchmark lines and no per-test events → emit a single wrapper
+	// entry carrying the package output so it isn't silently dropped.
 	input := `{"Time":"2026-04-06T16:03:17.126328+03:00","Action":"start","Package":"github.com/flanksource/duty/bench"}
 {"Time":"2026-04-06T16:03:24.234715+03:00","Action":"output","Package":"github.com/flanksource/duty/bench","Output":"testing: warning: no tests to run\n"}
 {"Time":"2026-04-06T16:03:24.234809+03:00","Action":"output","Package":"github.com/flanksource/duty/bench","Output":"PASS\n"}
@@ -242,12 +319,71 @@ func TestGoTestJSONParseBenchmarkNoTests(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// No benchmark result lines → no tests should be created; package-level pass is benign
-	if len(results) != 0 {
-		t.Errorf("expected 0 results for benchmark-only pass with no benchmark lines, got %d", len(results))
-		for _, r := range results {
-			t.Logf("  - %s (passed=%v)", r.Name, r.Passed)
-		}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 wrapper result, got %d", len(results))
+	}
+	got := results[0]
+	if got.Name != "No tests to run" {
+		t.Errorf("expected name 'No tests to run', got %q", got.Name)
+	}
+	if !got.Skipped {
+		t.Errorf("expected Skipped=true")
+	}
+	if got.Failed {
+		t.Errorf("expected Failed=false")
+	}
+	if got.Benchmark != nil {
+		t.Errorf("expected Benchmark=nil, got %+v", got.Benchmark)
+	}
+	if !strings.Contains(got.Stdout, "no tests to run") {
+		t.Errorf("expected captured 'no tests to run' in Stdout, got: %q", got.Stdout)
+	}
+}
+
+// TestGoTestJSONParseBenchmarkCachedNoBenchmarks uses the user-reported real
+// input where a cached bench package emits ANSI-colored logger lines for
+// setup/teardown but no benchmark results. The wrapper entry must surface
+// those logs with ANSI escapes stripped.
+func TestGoTestJSONParseBenchmarkCachedNoBenchmarks(t *testing.T) {
+	input := `{"Time":"2026-04-13T16:00:09.230905+03:00","Action":"start","Package":"github.com/flanksource/config-db/bench"}
+{"Time":"2026-04-13T16:00:09.230959+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"\u001b[2m15:26:41.056\u001b[0m \u001b[92mINF\u001b[0m Loaded 7 config rules\n"}
+{"Time":"2026-04-13T16:00:09.230969+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"\u001b[2m15:26:41.118\u001b[0m \u001b[92mINF\u001b[0m Loaded 0 change rules\n"}
+{"Time":"2026-04-13T16:00:09.230978+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"testing: warning: no tests to run\n"}
+{"Time":"2026-04-13T16:00:09.230987+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"PASS\n"}
+{"Time":"2026-04-13T16:00:09.230988+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"\u001b[2m15:26:46.240\u001b[0m \u001b[92mINF\u001b[0m begin shutdown\n"}
+{"Time":"2026-04-13T16:00:09.230995+03:00","Action":"output","Package":"github.com/flanksource/config-db/bench","Output":"ok  \tgithub.com/flanksource/config-db/bench\t(cached) [no tests to run]\n"}
+{"Time":"2026-04-13T16:00:09.230997+03:00","Action":"pass","Package":"github.com/flanksource/config-db/bench","Elapsed":0}`
+
+	parser := NewGoTestJSON("")
+	results, err := parser.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 wrapper result, got %d", len(results))
+	}
+	got := results[0]
+	if got.Name != "No tests to run" {
+		t.Errorf("expected name 'No tests to run', got %q", got.Name)
+	}
+	if got.Package != "github.com/flanksource/config-db/bench" {
+		t.Errorf("unexpected package: %q", got.Package)
+	}
+	if !got.Skipped {
+		t.Errorf("expected Skipped=true")
+	}
+	if got.Benchmark != nil {
+		t.Errorf("expected Benchmark=nil")
+	}
+	if !strings.Contains(got.Stdout, "Loaded 7 config rules") {
+		t.Errorf("expected setup log in Stdout, got: %q", got.Stdout)
+	}
+	if !strings.Contains(got.Stdout, "begin shutdown") {
+		t.Errorf("expected shutdown log in Stdout, got: %q", got.Stdout)
+	}
+	if strings.Contains(got.Stdout, "\x1b[") {
+		t.Errorf("expected ANSI escapes stripped from Stdout, got: %q", got.Stdout)
 	}
 }
 
