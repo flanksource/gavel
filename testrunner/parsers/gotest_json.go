@@ -229,6 +229,13 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 						if name, br := parseBenchmarkLine(outputLine); br != nil {
 							benchmarksFound = true
 							testKey := pkg + "::" + name
+							if existing, ok := tests[testKey]; ok && existing.Benchmark != nil {
+								existing.Benchmark.Samples = append(existing.Benchmark.Samples, br.NsPerOp)
+								existing.Benchmark.Iterations = br.Iterations
+								existing.Benchmark.NsPerOp = br.NsPerOp
+								continue
+							}
+							br.Samples = []float64{br.NsPerOp}
 							tests[testKey] = &Test{
 								Name:      name,
 								Package:   pkg,
@@ -288,9 +295,15 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 			// Parse benchmark result lines from test-level output
 			if name, br := parseBenchmarkLine(trimmed); br != nil {
 				benchKey := event.Package + "::" + name
-				if t, exists := tests[benchKey]; exists {
+				if t, exists := tests[benchKey]; exists && t.Benchmark != nil {
+					t.Benchmark.Samples = append(t.Benchmark.Samples, br.NsPerOp)
+					t.Benchmark.Iterations = br.Iterations
+					t.Benchmark.NsPerOp = br.NsPerOp
+				} else if exists {
+					br.Samples = []float64{br.NsPerOp}
 					t.Benchmark = br
 				} else {
+					br.Samples = []float64{br.NsPerOp}
 					tests[benchKey] = &Test{
 						Name:      name,
 						Package:   event.Package,

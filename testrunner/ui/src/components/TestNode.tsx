@@ -8,6 +8,8 @@ interface Props {
   expandAll: boolean | null;
   selected: Test | null;
   onSelect: (t: Test) => void;
+  onRerun?: (t: Test) => void;
+  rerunBusy?: boolean;
 }
 
 function resolveFramework(t: Test): string | undefined {
@@ -19,7 +21,7 @@ function resolveFramework(t: Test): string | undefined {
   return undefined;
 }
 
-export function TestNode({ test: t, depth, expandAll, selected, onSelect }: Props) {
+export function TestNode({ test: t, depth, expandAll, selected, onSelect, onRerun, rerunBusy }: Props) {
   const hasChildren = (t.children?.length ?? 0) > 0;
   const failed = hasFailed(t);
   const defaultOpen = failed || depth < 1;
@@ -87,10 +89,21 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect }: Prop
             {s.pending > 0 && <Badge count={s.pending} color="bg-blue-400" />}
           </span>
         )}
+
+        {onRerun && t.kind !== 'violation' && t.kind !== 'lint-root' && t.kind !== 'linter' && t.kind !== 'lint-file' && t.kind !== 'lint-rule' && (
+          <button
+            class="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
+            onClick={(e) => { e.stopPropagation(); onRerun(t); }}
+            disabled={rerunBusy}
+            title="Rerun"
+          >
+            <iconify-icon icon="codicon:refresh" class="text-sm" />
+          </button>
+        )}
       </div>
 
       {open && hasChildren && t.children!.map((child, i) => (
-        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} />
+        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} rerunBusy={rerunBusy} />
       ))}
     </div>
   );

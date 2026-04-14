@@ -111,6 +111,7 @@ type RunOptions struct {
 	Cache         bool                  `json:"cache,omitempty" flag:"cache"`                                 // Skip packages whose content fingerprint matches the last passing run
 	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
 	Since         string                `json:"since,omitempty" flag:"since"`                                 // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
+	Bench         string                `json:"bench,omitempty" flag:"bench"`                                 // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 }
 
@@ -233,7 +234,7 @@ func Run(opts RunOptions) (any, error) {
 	// Discover and run fixture tests (results returned, not printed).
 	// Fixture failures are captured in the tree, not returned as errors,
 	// so that AddNamedCommand still prints the results.
-	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir, streamer)
+	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir, opts.StartingPaths, streamer)
 	if fixtureTree != nil {
 		for _, child := range fixtureTree.Children {
 			tree = append(tree, fixtureNodeToTests(child)...)
@@ -412,11 +413,15 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			pkgPath := pkgPath
 			fw := fw
 			runner := runner
-			fwExtraArgs := fwExtraArgs
+			pkgExtraArgs := fwExtraArgs
+
+			if fw == parsers.GoTest {
+				pkgExtraArgs = o.augmentBenchArgs(runner, pkgPath, pkgExtraArgs)
+			}
 
 			taskName := fmt.Sprintf("%s %s", fw, pkgPath)
 			group.Add(taskName, func(ctx commonsCtx.Context, t *task.Task) (packageResult, error) {
-				result, err := o.runPackageTest(ctx, pkgPath, fw, runner, t, fwExtraArgs)
+				result, err := o.runPackageTest(ctx, pkgPath, fw, runner, t, pkgExtraArgs)
 				if o.streamer != nil {
 					o.streamer.CompletePackage(pkgPath, fw, result.testResults)
 				}
@@ -549,6 +554,57 @@ func (o *TestOrchestrator) runPackageTest(
 		framework:   framework,
 		testResults: testResults,
 	}, nil
+}
+
+// augmentBenchArgs decides whether benchmarks should run for a specific Go test package
+// and returns the adjusted extraArgs with `-bench=<pattern>` (and `-run=^$` when the
+// package has no regular Test* funcs) appended. It is a no-op when:
+//   - any of the incoming extraArgs already contain `-bench` (user override)
+//   - bench is neither requested via RunOptions.Bench nor auto-enabled for this package
+func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, extraArgs []string) []string {
+	for _, a := range extraArgs {
+		if a == "-bench" || strings.HasPrefix(a, "-bench=") {
+			return extraArgs
+		}
+	}
+
+	gt, ok := r.(*runners.GoTest)
+	if !ok {
+		return extraArgs
+	}
+
+	pattern := strings.TrimSpace(o.Bench)
+	switch pattern {
+	case "", "false":
+		// Auto-enable only when the package has benchmarks but no runnable tests.
+		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasGoTests(pkgPath) {
+			pattern = "."
+		} else {
+			return extraArgs
+		}
+	case "true":
+		pattern = "."
+	}
+
+	if !gt.PackageHasBenchmarks(pkgPath) {
+		return extraArgs
+	}
+
+	args := append([]string{}, extraArgs...)
+	args = append(args, "-bench="+pattern)
+	if !gt.PackageHasGoTests(pkgPath) {
+		hasRun := false
+		for _, a := range extraArgs {
+			if a == "-run" || strings.HasPrefix(a, "-run=") {
+				hasRun = true
+				break
+			}
+		}
+		if !hasRun {
+			args = append(args, "-run=^$")
+		}
+	}
+	return args
 }
 
 // discoverPackagesInPaths discovers packages only within the specified starting paths.
@@ -691,7 +747,11 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 
 		logger.Infof("[%s] Packages (%d):", framework, len(packages))
 		for _, pkg := range packages {
-			testRun, err := runner.BuildCommand(pkg, extraArgs...)
+			pkgExtraArgs := extraArgs
+			if framework == parsers.GoTest {
+				pkgExtraArgs = o.augmentBenchArgs(runner, pkg, pkgExtraArgs)
+			}
+			testRun, err := runner.BuildCommand(pkg, pkgExtraArgs...)
 			if err != nil {
 				logger.Errorf("  ❌ %s: %v", pkg, err)
 				continue
@@ -708,13 +768,33 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 // Deprecated: use TestOrchestrator directly.
 type Runner = TestOrchestrator
 
-func discoverFixtures(workDir string) []string {
-	patterns := []string{
-		filepath.Join(workDir, "fixtures", "**", "*.md"),
-		filepath.Join(workDir, "fixture*.md"),
-		filepath.Join(workDir, "fixture-*.md"),
+func discoverFixtures(workDir string, startingPaths []string) []string {
+	if len(startingPaths) == 0 {
+		return globFixtures([]string{
+			filepath.Join(workDir, "fixtures", "**", "*.md"),
+			filepath.Join(workDir, "fixture*.md"),
+			filepath.Join(workDir, "fixture-*.md"),
+		})
 	}
 
+	var patterns []string
+	for _, p := range startingPaths {
+		root := p
+		if !filepath.IsAbs(root) {
+			root = filepath.Join(workDir, root)
+		}
+		patterns = append(patterns,
+			filepath.Join(root, "fixtures", "**", "*.md"),
+			filepath.Join(root, "**", "fixture*.md"),
+			filepath.Join(root, "**", "fixture-*.md"),
+			filepath.Join(root, "fixture*.md"),
+			filepath.Join(root, "fixture-*.md"),
+		)
+	}
+	return globFixtures(patterns)
+}
+
+func globFixtures(patterns []string) []string {
 	var found []string
 	for _, pattern := range patterns {
 		matches, err := doublestar.FilepathGlob(pattern)
@@ -726,8 +806,8 @@ func discoverFixtures(workDir string) []string {
 	return lo.Uniq(found)
 }
 
-func runDiscoveredFixtures(workDir string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
-	fixtureFiles := discoverFixtures(workDir)
+func runDiscoveredFixtures(workDir string, startingPaths []string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
+	fixtureFiles := discoverFixtures(workDir, startingPaths)
 	if len(fixtureFiles) == 0 {
 		return nil, nil
 	}

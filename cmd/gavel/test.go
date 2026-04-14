@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,11 +34,21 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		opts.WorkDir = wd
 	}
 
+	var updates chan []parsers.Test
 	if opts.UI {
 		uiServer = startTestUI()
-		updates := make(chan []parsers.Test, 16)
+		updates = make(chan []parsers.Test, 16)
 		opts.Updates = updates
 		uiServer.StreamFrom(updates)
+		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
+			rerunOpts := opts
+			rerunOpts.Lint = false
+			rerunOpts.Updates = updates
+			rerunOpts.StartingPaths = req.PackagePaths
+			rerunOpts.ExtraArgs = buildRerunArgs(req)
+			_, err := testrunner.Run(rerunOpts)
+			return err
+		})
 	}
 
 	// When --lint is set, run linters in parallel with tests
@@ -63,6 +74,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 					logger.Warnf("Failed to load .gavel.yaml: %v", err)
 				}
 				linters.FilterIgnoredViolations(lintResults, gavelCfg.Lint.Ignore)
+			}
+			if uiServer != nil {
+				uiServer.SetLintResults(lintResults)
 			}
 		}()
 	}
@@ -145,6 +159,25 @@ func openBrowser(url string) {
 	}
 	args = append(args, url)
 	_ = exec.Command(cmd, args...).Start()
+}
+
+// buildRerunArgs translates a UI rerun request into framework-specific flags.
+// Empty TestName means rerun the whole package(s).
+func buildRerunArgs(req testui.RerunRequest) []string {
+	if req.TestName == "" {
+		return nil
+	}
+	switch parsers.Framework(req.Framework) {
+	case parsers.GoTest:
+		return []string{"-run", "^" + req.TestName + "$"}
+	case parsers.Ginkgo:
+		focus := req.TestName
+		if len(req.Suite) > 0 {
+			focus = strings.Join(req.Suite, " ") + " " + req.TestName
+		}
+		return []string{"--focus", focus}
+	}
+	return nil
 }
 
 func init() {

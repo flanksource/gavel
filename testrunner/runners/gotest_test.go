@@ -267,3 +267,87 @@ func TestExample(t *testing.T) {}
 		t.Errorf("expected to find gotest_pkg, got %v", packages)
 	}
 }
+
+func TestGoTestBenchmarkDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runner := NewGoTest(tmpDir)
+
+	t.Run("empty package has no tests or benches", func(t *testing.T) {
+		if runner.PackageHasBenchmarks(".") {
+			t.Error("empty package should not report benchmarks")
+		}
+		if runner.PackageHasGoTests(".") {
+			t.Error("empty package should not report tests")
+		}
+	})
+
+	t.Run("bench-only with TestMain", func(t *testing.T) {
+		write("main_test.go", `package t
+
+import "testing"
+
+func TestMain(m *testing.M) { m.Run() }
+`)
+		write("bench_test.go", `package t
+
+import "testing"
+
+func BenchmarkFoo(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+	}
+}
+`)
+		if !runner.PackageHasBenchmarks(".") {
+			t.Error("expected benchmarks to be detected")
+		}
+		if runner.PackageHasGoTests(".") {
+			t.Error("TestMain alone must not count as runnable tests")
+		}
+	})
+
+	t.Run("mixed tests and benches", func(t *testing.T) {
+		write("real_test.go", `package t
+
+import "testing"
+
+func TestReal(t *testing.T) {}
+`)
+		if !runner.PackageHasBenchmarks(".") {
+			t.Error("expected benchmarks to still be detected")
+		}
+		if !runner.PackageHasGoTests(".") {
+			t.Error("expected real Test* func to count")
+		}
+	})
+
+	t.Run("ginkgo file with benchmark import is ignored", func(t *testing.T) {
+		ginkgoDir := filepath.Join(tmpDir, "ginkgo_bench")
+		if err := os.MkdirAll(ginkgoDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ginkgoDir, "bench_test.go"), []byte(`package ginkgo_bench
+
+import (
+	"testing"
+	. "github.com/onsi/ginkgo/v2"
+)
+
+var _ = Describe("x", func() {})
+
+func BenchmarkIgnored(b *testing.B) {}
+`), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if runner.PackageHasBenchmarks("./ginkgo_bench") {
+			t.Error("Ginkgo-tagged file should be ignored for bench detection")
+		}
+	})
+}
