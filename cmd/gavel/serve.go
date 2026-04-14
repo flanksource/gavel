@@ -22,7 +22,7 @@ func (o ServeOptions) Help() string {
 
 Developers add this as a git remote and push to trigger linting and tests:
 
-  gavel serve --port 2222
+  gavel ssh serve --port 2222
 
 Then from any project:
 
@@ -34,7 +34,7 @@ Repos are cached for fast incremental pushes.`
 }
 
 func init() {
-	clicky.AddNamedCommand("serve", rootCmd, ServeOptions{}, runServe)
+	clicky.AddNamedCommand("serve", sshCmd, ServeOptions{}, runServe)
 }
 
 func runServe(opts ServeOptions) (any, error) {
