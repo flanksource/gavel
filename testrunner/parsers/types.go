@@ -29,27 +29,32 @@ func (f Framework) String() string {
 
 // Test represents a single test failure.
 type Test struct {
-	Name        string           `json:"name,omitempty"`
-	Package     string           `json:"package,omitempty"`
-	PackagePath string           `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
-	Command     string           `json:"command,omitempty"`      // Command used to run this test
-	Suite       []string         `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
-	Message     string           `json:"message,omitempty"`
-	File        string           `json:"file,omitempty"`
-	Line        int              `json:"line,omitempty"`
-	Framework   Framework        `json:"framework,omitempty"`
-	Duration    time.Duration    `json:"duration,omitempty"`
-	Skipped     bool             `json:"skipped,omitempty"`
-	Failed      bool             `json:"failed,omitempty"`
-	Passed      bool             `json:"passed,omitempty"`
-	Pending     bool             `json:"pending,omitempty"`
-	Cached      bool             `json:"cached,omitempty"` // True when this result came from gavel's run-cache, not a fresh run
-	Stdout      string           `json:"stdout,omitempty"`
-	Stderr      string           `json:"stderr,omitempty"`
-	Children    Tests            `json:"children,omitempty"`
-	Summary     *TestSummary     `json:"summary,omitempty"`
-	Context     any              `json:"context,omitempty"`
-	Benchmark   *BenchmarkResult `json:"benchmark,omitempty"`
+	Name        string        `json:"name,omitempty"`
+	Package     string        `json:"package,omitempty"`
+	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
+	Command     string        `json:"command,omitempty"`      // Command used to run this test
+	Suite       []string      `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
+	Message     string        `json:"message,omitempty"`
+	File        string        `json:"file,omitempty"`
+	Line        int           `json:"line,omitempty"`
+	Framework   Framework     `json:"framework,omitempty"`
+	Duration    time.Duration `json:"duration,omitempty"`
+	Skipped     bool          `json:"skipped,omitempty"`
+	Failed      bool          `json:"failed,omitempty"`
+	Passed      bool          `json:"passed,omitempty"`
+	Pending     bool          `json:"pending,omitempty"`
+	Cached      bool          `json:"cached,omitempty"` // True when this result came from gavel's run-cache, not a fresh run
+	// IsGinkgoBootstrap marks a Go test function whose body only invokes ginkgo's RunSpecs.
+	// These wrappers still carry pass/fail/duration for the whole suite when a Ginkgo
+	// JSON report file is unavailable, but are deduped against real specs from the
+	// Ginkgo parser at merge time in runner.go.
+	IsGinkgoBootstrap bool             `json:"is_ginkgo_bootstrap,omitempty"`
+	Stdout            string           `json:"stdout,omitempty"`
+	Stderr            string           `json:"stderr,omitempty"`
+	Children          Tests            `json:"children,omitempty"`
+	Summary           *TestSummary     `json:"summary,omitempty"`
+	Context           any              `json:"context,omitempty"`
+	Benchmark         *BenchmarkResult `json:"benchmark,omitempty"`
 }
 
 type GoTestContext struct {
@@ -455,22 +460,23 @@ func (f TestFilter) Matches(t Test) bool {
 
 func (tr Test) Filter(filter TestFilter) Test {
 	out := Test{
-		Name:        tr.Name,
-		Package:     tr.Package,
-		PackagePath: tr.PackagePath,
-		Command:     tr.Command,
-		Suite:       tr.Suite,
-		Message:     tr.Message,
-		File:        tr.File,
-		Line:        tr.Line,
-		Duration:    tr.Duration,
-		Failed:      tr.Failed,
-		Skipped:     tr.Skipped,
-		Passed:      tr.Passed,
-		Stdout:      tr.Stdout,
-		Stderr:      tr.Stderr,
-		Framework:   tr.Framework,
-		Benchmark:   tr.Benchmark,
+		Name:              tr.Name,
+		Package:           tr.Package,
+		PackagePath:       tr.PackagePath,
+		Command:           tr.Command,
+		Suite:             tr.Suite,
+		Message:           tr.Message,
+		File:              tr.File,
+		Line:              tr.Line,
+		Duration:          tr.Duration,
+		Failed:            tr.Failed,
+		Skipped:           tr.Skipped,
+		Passed:            tr.Passed,
+		Stdout:            tr.Stdout,
+		Stderr:            tr.Stderr,
+		Framework:         tr.Framework,
+		Benchmark:         tr.Benchmark,
+		IsGinkgoBootstrap: tr.IsGinkgoBootstrap,
 		// Set summary before filtering to maintain summary even if child tests are filtered out
 		Summary: lo.ToPtr(tr.Sum()),
 	}

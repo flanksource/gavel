@@ -28,6 +28,41 @@ func stripExitStatus(s string) string {
 	return strings.TrimSpace(exitStatusRe.ReplaceAllString(s, ""))
 }
 
+// dedupeGinkgoBootstraps removes GoTest wrapper tests (the TestXxx function that
+// calls ginkgo.RunSpecs) from the final results when the same package was also
+// run through the Ginkgo runner and produced at least one real spec. Packages
+// that have no Ginkgo coverage keep the wrapper so the UI still shows a
+// pass/fail signal for the whole suite.
+func dedupeGinkgoBootstraps(results parsers.TestSuiteResults) {
+	ginkgoPackages := make(map[string]bool)
+	for _, tr := range results {
+		if tr.Framework != parsers.Ginkgo {
+			continue
+		}
+		for _, t := range tr.Tests {
+			if t.PackagePath != "" {
+				ginkgoPackages[t.PackagePath] = true
+			}
+		}
+	}
+	if len(ginkgoPackages) == 0 {
+		return
+	}
+	for i := range results {
+		if results[i].Framework != parsers.GoTest {
+			continue
+		}
+		kept := results[i].Tests[:0]
+		for _, t := range results[i].Tests {
+			if t.IsGinkgoBootstrap && ginkgoPackages[t.PackagePath] {
+				continue
+			}
+			kept = append(kept, t)
+		}
+		results[i].Tests = kept
+	}
+}
+
 // OutputMode controls when stdout/stderr are displayed in test output.
 type OutputMode string
 
@@ -415,6 +450,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		}
 	}
 
+	dedupeGinkgoBootstraps(allResults)
 	allResults.Sort()
 
 	return allResults, nil

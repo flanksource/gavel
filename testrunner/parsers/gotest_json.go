@@ -23,6 +23,10 @@ var benchmarkResultRe = regexp.MustCompile(
 		`(?:\s+(\d+)\s+allocs/op)?`,
 )
 
+// ansiRe strips SGR color/style escape sequences (e.g. those emitted by the
+// commons logger) so captured package output renders cleanly in the UI.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
 // GoTestJSON parses go test -json output format (shared by go test and Ginkgo with --gojson-report).
 type GoTestJSON struct {
 	LocationMap map[string]TestLocation
@@ -177,6 +181,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 	testOutputs := make(map[string]*strings.Builder)
 	buildErrors := make(map[string]*strings.Builder)
 	packageOutputs := make(map[string]*strings.Builder)
+	packagesWithTests := make(map[string]bool)
 	scanner := bufio.NewScanner(output)
 
 	for scanner.Scan() {
@@ -218,9 +223,11 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 				packageOutputs[pkg].WriteString(event.Output)
 			case "pass":
 				// Package-level pass — check for benchmark results in collected output
+				benchmarksFound := false
 				if builder, exists := packageOutputs[pkg]; exists {
 					for _, outputLine := range strings.Split(builder.String(), "\n") {
 						if name, br := parseBenchmarkLine(outputLine); br != nil {
+							benchmarksFound = true
 							testKey := pkg + "::" + name
 							tests[testKey] = &Test{
 								Name:      name,
@@ -231,6 +238,25 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 								Benchmark: br,
 							}
 						}
+					}
+				}
+				// Nothing ran in this package: no per-test events and no
+				// benchmark lines. Surface a wrapper entry so the captured
+				// setup/teardown logs aren't silently lost.
+				if !benchmarksFound && !packagesWithTests[pkg] {
+					if builder, exists := packageOutputs[pkg]; exists && strings.TrimSpace(builder.String()) != "" {
+						testKey := pkg + "::package-output"
+						tests[testKey] = &Test{
+							Name:      "No tests to run",
+							Package:   pkg,
+							Framework: GoTest,
+							Skipped:   true,
+							Message:   "[no tests to run]",
+						}
+						cleaned := ansiRe.ReplaceAllString(builder.String(), "")
+						b := &strings.Builder{}
+						b.WriteString(cleaned)
+						testOutputs[testKey] = b
 					}
 				}
 			case "skip":
@@ -246,6 +272,7 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 			continue
 		}
 
+		packagesWithTests[event.Package] = true
 		testKey := event.Package + "::" + event.Test
 
 		// Collect output for each test (skip header/footer lines)
@@ -336,14 +363,27 @@ func (p *GoTestJSON) Parse(output io.Reader) ([]Test, error) {
 		return nil, err
 	}
 
-	// Convert map to slice and attach individual test output and locations
+	// Convert map to slice and attach individual test output and locations.
+	// Ginkgo bootstrap tests (functions whose body calls RunSpecs) are kept here
+	// and tagged via IsGinkgoBootstrap; dedupe against real Ginkgo specs happens
+	// in runner.parseTestResults where both sources are known.
 	results := make([]Test, 0, len(tests))
 	for testKey, test := range tests {
-		// Skip Ginkgo bootstrap tests (tests that only call RunSpecs)
 		if p.isGinkgoBootstrap(test.Name) {
-			continue
+			test.IsGinkgoBootstrap = true
+			// Fold package-level output (log lines emitted before any test
+			// `run` event, plus the trailing `ok pkg 0.xs` summary) into the
+			// wrapper test's stdout so it actually surfaces in the UI.
+			if pkgOut, exists := packageOutputs[test.Package]; exists {
+				if existing, ok := testOutputs[testKey]; ok {
+					merged := existing.String() + pkgOut.String()
+					testOutputs[testKey] = &strings.Builder{}
+					testOutputs[testKey].WriteString(merged)
+				} else {
+					testOutputs[testKey] = pkgOut
+				}
+			}
 		}
-		// Set test-specific stdout from collected output events
 		if output, exists := testOutputs[testKey]; exists {
 			test.Stdout = strings.TrimSpace(output.String())
 		}
