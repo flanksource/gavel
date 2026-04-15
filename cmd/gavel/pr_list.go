@@ -251,8 +251,7 @@ func runPRUI(opts PRListOptions) error {
 	if opts.MenuBar {
 		mb := menubar.New(srv)
 		mb.DashboardURL = dashboardURL
-		mb.Run() // blocks on main thread (macOS Cocoa)
-		return nil
+		return mb.Run()
 	}
 
 	sig := make(chan os.Signal, 1)
