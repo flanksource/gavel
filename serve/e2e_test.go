@@ -3,7 +3,6 @@ package serve
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"net"
@@ -14,6 +13,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 var _ = Describe("SSH Git Serve E2E", func() {
@@ -30,14 +30,14 @@ var _ = Describe("SSH Git Serve E2E", func() {
 		clientRepo = GinkgoT().TempDir()
 		artifactsDir = GinkgoT().TempDir()
 
-		// Generate ephemeral SSH key
+		// Generate ephemeral SSH key in OpenSSH format — the OpenSSH client
+		// (used by `git push` via GIT_SSH_COMMAND) rejects PKCS#8 PEM blocks.
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		Expect(err).NotTo(HaveOccurred())
-		privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+		pemBlock, err := gossh.MarshalPrivateKey(priv, "")
 		Expect(err).NotTo(HaveOccurred())
-		pemBlock := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
 		sshKeyPath := filepath.Join(GinkgoT().TempDir(), "id_ed25519")
-		Expect(os.WriteFile(sshKeyPath, pemBlock, 0o600)).To(Succeed())
+		Expect(os.WriteFile(sshKeyPath, pem.EncodeToMemory(pemBlock), 0o600)).To(Succeed())
 
 		// Custom hook that records worktree contents instead of running gavel
 		hookWriter := func(bareRepo, _ string) error {
