@@ -138,55 +138,6 @@ func TestRunnerNoTests(t *testing.T) {
 func TestDiscoverFixtures(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create fixtures/ subdirectory with a .md file
-	fixturesDir := filepath.Join(tmpDir, "fixtures")
-	if err := os.MkdirAll(fixturesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fixturesDir, "test.md"), []byte("# Test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create fixture*.md in root
-	if err := os.WriteFile(filepath.Join(tmpDir, "fixture-cli.md"), []byte("# CLI"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a non-matching file
-	if err := os.WriteFile(filepath.Join(tmpDir, "readme.md"), []byte("# Readme"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	found := discoverFixtures(tmpDir, nil)
-
-	if len(found) != 2 {
-		t.Fatalf("expected 2 fixture files, got %d: %v", len(found), found)
-	}
-
-	// Verify expected files are found
-	foundMap := make(map[string]bool)
-	for _, f := range found {
-		foundMap[filepath.Base(f)] = true
-	}
-	if !foundMap["test.md"] {
-		t.Error("expected fixtures/test.md to be discovered")
-	}
-	if !foundMap["fixture-cli.md"] {
-		t.Error("expected fixture-cli.md to be discovered")
-	}
-	if foundMap["readme.md"] {
-		t.Error("readme.md should not be discovered")
-	}
-}
-
-func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Layout:
-	//   fixtures/root.md              (top-level fixture dir)
-	//   sub/fixtures/sub.md           (nested fixture dir under sub/)
-	//   sub/fixture-inline.md         (fixture-prefixed file nested under sub/)
-	//   other/fixtures/other.md       (sibling fixture dir, should be excluded when path=sub)
 	mustWrite := func(rel, body string) {
 		full := filepath.Join(tmpDir, rel)
 		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
@@ -196,11 +147,63 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustWrite("fixtures/root.md", "# root")
-	mustWrite("sub/fixtures/sub.md", "# sub")
-	mustWrite("sub/fixture-inline.md", "# inline")
-	mustWrite("other/fixtures/other.md", "# other")
+	mustWrite("cli.fixture.md", "# cli")
+	mustWrite("sub/nested.fixture.md", "# nested")
+	mustWrite("fixtures/old.md", "# old style, should be ignored")
+	mustWrite("readme.md", "# readme")
 
+	found := discoverFixtures(tmpDir, nil, []string{"**/*.fixture.md"})
+
+	foundMap := make(map[string]bool)
+	for _, f := range found {
+		foundMap[filepath.Base(f)] = true
+	}
+
+	if !foundMap["cli.fixture.md"] {
+		t.Error("expected cli.fixture.md to be discovered")
+	}
+	if !foundMap["nested.fixture.md"] {
+		t.Error("expected sub/nested.fixture.md to be discovered")
+	}
+	if foundMap["old.md"] {
+		t.Error("fixtures/old.md should NOT be discovered under new glob")
+	}
+	if foundMap["readme.md"] {
+		t.Error("readme.md should NOT be discovered")
+	}
+}
+
+func TestDiscoverFixturesEmptyGlobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "x.fixture.md"), []byte("# x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoverFixtures(tmpDir, nil, nil); len(got) != 0 {
+		t.Errorf("expected no discovery with empty globs, got %v", got)
+	}
+}
+
+func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Layout:
+	//   root.fixture.md                (top-level fixture)
+	//   sub/sub.fixture.md             (fixture under sub/)
+	//   other/other.fixture.md         (sibling fixture, excluded when path=sub)
+	mustWrite := func(rel, body string) {
+		full := filepath.Join(tmpDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("root.fixture.md", "# root")
+	mustWrite("sub/sub.fixture.md", "# sub")
+	mustWrite("other/other.fixture.md", "# other")
+
+	globs := []string{"**/*.fixture.md"}
 	bases := func(paths []string) map[string]bool {
 		m := make(map[string]bool)
 		for _, p := range paths {
@@ -210,42 +213,73 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 	}
 
 	t.Run("subdir path excludes siblings", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{"sub"}))
-		if !got["sub.md"] {
-			t.Error("expected sub/fixtures/sub.md to be discovered")
+		got := bases(discoverFixtures(tmpDir, []string{"sub"}, globs))
+		if !got["sub.fixture.md"] {
+			t.Error("expected sub/sub.fixture.md to be discovered")
 		}
-		if !got["fixture-inline.md"] {
-			t.Error("expected sub/fixture-inline.md to be discovered")
+		if got["other.fixture.md"] {
+			t.Error("other/other.fixture.md should NOT be discovered for path=sub")
 		}
-		if got["other.md"] {
-			t.Error("other/fixtures/other.md should NOT be discovered for path=sub")
-		}
-		if got["root.md"] {
-			t.Error("fixtures/root.md should NOT be discovered for path=sub")
+		if got["root.fixture.md"] {
+			t.Error("root.fixture.md should NOT be discovered for path=sub")
 		}
 	})
 
 	t.Run("absolute starting path", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{filepath.Join(tmpDir, "sub")}))
-		if !got["sub.md"] || got["other.md"] {
+		got := bases(discoverFixtures(tmpDir, []string{filepath.Join(tmpDir, "sub")}, globs))
+		if !got["sub.fixture.md"] || got["other.fixture.md"] {
 			t.Errorf("absolute path filter wrong: %v", got)
 		}
 	})
 
 	t.Run("multiple starting paths union", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, []string{"sub", "other"}))
-		if !got["sub.md"] || !got["other.md"] {
+		got := bases(discoverFixtures(tmpDir, []string{"sub", "other"}, globs))
+		if !got["sub.fixture.md"] || !got["other.fixture.md"] {
 			t.Errorf("expected union of sub and other fixtures, got %v", got)
-		}
-		if got["root.md"] {
-			t.Error("root.md should not leak in when neither path is workdir root")
 		}
 	})
 
 	t.Run("empty starting paths falls back to workdir", func(t *testing.T) {
-		got := bases(discoverFixtures(tmpDir, nil))
-		if !got["root.md"] {
-			t.Error("expected fixtures/root.md under no-arg discovery")
+		got := bases(discoverFixtures(tmpDir, nil, globs))
+		if !got["root.fixture.md"] {
+			t.Error("expected root.fixture.md under no-arg discovery")
+		}
+	})
+}
+
+func TestResolveFixtureGlobs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	t.Run("disabled by default", func(t *testing.T) {
+		if got := resolveFixtureGlobs(RunOptions{WorkDir: tmpDir}); got != nil {
+			t.Errorf("expected nil (disabled), got %v", got)
+		}
+	})
+
+	t.Run("flag enables default glob", func(t *testing.T) {
+		got := resolveFixtureGlobs(RunOptions{WorkDir: tmpDir, Fixtures: true})
+		if len(got) != 1 || got[0] != "**/*.fixture.md" {
+			t.Errorf("expected [**/*.fixture.md], got %v", got)
+		}
+	})
+
+	t.Run("flag-supplied globs win", func(t *testing.T) {
+		custom := []string{"tests/**/*.md"}
+		got := resolveFixtureGlobs(RunOptions{WorkDir: tmpDir, Fixtures: true, FixtureFiles: custom})
+		if len(got) != 1 || got[0] != "tests/**/*.md" {
+			t.Errorf("expected flag globs, got %v", got)
+		}
+	})
+
+	t.Run("config enables and supplies globs", func(t *testing.T) {
+		cfgDir := t.TempDir()
+		cfgYAML := "fixtures:\n  enabled: true\n  files:\n    - specs/*.fixture.md\n"
+		if err := os.WriteFile(filepath.Join(cfgDir, ".gavel.yaml"), []byte(cfgYAML), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got := resolveFixtureGlobs(RunOptions{WorkDir: cfgDir})
+		if len(got) != 1 || got[0] != "specs/*.fixture.md" {
+			t.Errorf("expected [specs/*.fixture.md] from config, got %v", got)
 		}
 	})
 }

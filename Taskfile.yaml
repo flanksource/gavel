@@ -58,6 +58,34 @@ tasks:
     generates:
       - ./{{.BINARY_NAME}}
 
+  build:linux-amd64:
+    desc: Build the linux-amd64 binary
+    deps:
+      - test-ui
+      - pr-ui
+    vars:
+      VERSION:
+        sh: git describe --tags --always 2>/dev/null || echo "dev"
+      COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      DATE:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
+      OUTPUT: .bin/{{.BINARY_NAME}}-linux-amd64
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: 0
+    cmds:
+      - mkdir -p .bin
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
+    sources:
+      - ./**/*.go
+      - go.mod
+      - go.sum
+    generates:
+      - ./{{.OUTPUT}}
+
   install:
     desc: Install the binary to $GOPATH/bin
     deps:
