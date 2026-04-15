@@ -32,6 +32,7 @@ export interface PRItem {
   ahead?: number;
   behind?: number;
   checkStatus?: CheckSummary;
+  route_path?: string;
 }
 
 export interface SearchConfig {
