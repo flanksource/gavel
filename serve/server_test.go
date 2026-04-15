@@ -58,7 +58,7 @@ var _ = Describe("writePostReceiveHook", func() {
 var _ = Describe("renderHookScript", func() {
 	It("runs gavel test when no ssh.cmd is set in the pushed repo", func() {
 		script := renderHookScript("/repos/bare", "/bin/gavel")
-		Expect(script).To(ContainSubstring(`/bin/gavel test --lint --ui --no-progress --cwd "$WORKDIR"`))
+		Expect(script).To(ContainSubstring(`/bin/gavel test --lint --ui --addr 0.0.0.0 --no-progress --cwd "$WORKDIR"`))
 	})
 
 	It("extracts ssh.cmd from $WORKDIR/.gavel.yaml via yq", func() {

@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"strconv"
 )
 
 // openListener always takes the standalone path on non-Unix platforms: no
@@ -16,7 +17,11 @@ func openListener(opts UIServeOptions) (net.Listener, error) {
 	if opts.ListenerFD > 0 {
 		return nil, fmt.Errorf("--listener-fd is not supported on this platform")
 	}
-	addr := fmt.Sprintf("localhost:%d", opts.Port)
+	host := opts.Addr
+	if host == "" {
+		host = "localhost"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(opts.Port))
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("bind %s: %w", addr, err)

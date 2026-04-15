@@ -30,6 +30,7 @@ var (
 	benchCompareHeadLabel string
 	benchCompareThreshold float64
 	benchCompareUI        bool
+	benchCompareUIAddr    string
 	benchCompareOpts      clicky.FormatOptions
 )
 
@@ -154,7 +155,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 	}
 
 	if benchCompareUI {
-		srv, _ := startTestUI()
+		srv, _ := startTestUI(benchCompareUIAddr)
 		if srv != nil {
 			srv.SetBenchComparison(&cmp)
 			waitForInterrupt()
@@ -196,6 +197,7 @@ func init() {
 	benchCompareCmd.Flags().StringVar(&benchCompareHeadLabel, "head-label", "head", "Display label for the head run")
 	benchCompareCmd.Flags().Float64Var(&benchCompareThreshold, "threshold", bench.DefaultThreshold, "Regression threshold in percent")
 	benchCompareCmd.Flags().BoolVar(&benchCompareUI, "ui", false, "Launch browser UI with the comparison preloaded")
+	benchCompareCmd.Flags().StringVar(&benchCompareUIAddr, "addr", "localhost", "Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.")
 	formatters.BindPFlags(benchCompareCmd.Flags(), &benchCompareOpts)
 
 	benchCmd.AddCommand(benchRunCmd, benchCompareCmd)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -33,7 +34,11 @@ func openListener(opts UIServeOptions) (net.Listener, error) {
 		_ = f.Close()
 		return l, nil
 	}
-	addr := fmt.Sprintf("localhost:%d", opts.Port)
+	host := opts.Addr
+	if host == "" {
+		host = "localhost"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(opts.Port))
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("bind %s: %w", addr, err)

@@ -108,6 +108,7 @@ type RunOptions struct {
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	Addr          string                `json:"addr,omitempty" flag:"addr" default:"localhost"`               // Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.
 	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
 	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // When set with --ui, fork a detached UI server that serves the completed run until auto-stop (hard) or idle-timeout elapses. 0 = block on SIGINT (today's behavior). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
 	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI server; resets on every HTTP request. Only meaningful with --auto-stop.
