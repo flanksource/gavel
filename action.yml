@@ -73,6 +73,9 @@ outputs:
   summary-path:
     description: Absolute path to the markdown summary.
     value: ${{ steps.run.outputs.summary_path }}
+  log-path:
+    description: Absolute path to the captured gavel stderr log (gavel.log). Always present, even when gavel crashes before writing JSON/HTML.
+    value: ${{ steps.run.outputs.log_path }}
 
 runs:
   using: composite
@@ -130,27 +133,72 @@ runs:
         JSON_FILE: ${{ inputs.json-file }}
         HTML_FILE: ${{ inputs.html-file }}
         SUMMARY_FILE: ${{ inputs.summary-file }}
+        GAVEL_LOG_FILE: gavel.log
       run: |
         set +e
+        # Wipe any stale outputs from a previous run so the crash-time
+        # stub logic below knows whether gavel actually wrote the files
+        # this invocation.
+        rm -f "${JSON_FILE}" "${HTML_FILE}" "${SUMMARY_FILE}" "${GAVEL_LOG_FILE}"
+
+        # --no-progress --no-color are appended explicitly so the step
+        # log is deterministic regardless of clicky's env auto-detection.
+        # Stderr is tee'd to gavel.log so we have a forensic trail even
+        # if gavel crashes before writing JSON/HTML.
         # shellcheck disable=SC2086
         gavel $GAVEL_ARGS \
-          --format "json=${JSON_FILE},html=${HTML_FILE}"
+          --no-progress --no-color \
+          --format "json=${JSON_FILE},html=${HTML_FILE}" \
+          2> >(tee "${GAVEL_LOG_FILE}" >&2)
         code=$?
         set -e
-        # Build the compact PR-comment summary from the JSON file. `gavel
-        # summary` filters passing tests, caps failures, and truncates long
-        # stderr/stdout so the output fits GitHub's comment + step-summary
-        # limits. The full HTML report remains in the artifact for drilldown.
-        if [ -f "${JSON_FILE}" ]; then
-          gavel summary --input "${JSON_FILE}" --output "${SUMMARY_FILE}"
-        else
-          echo "gavel did not produce ${JSON_FILE}; skipping compact summary generation" >&2
+
+        # Guarantee JSON and HTML artifacts on every run, even crashes.
+        # If gavel exited before serialising its outputs, write tiny
+        # stubs that carry the exit code and the tail of gavel.log so
+        # the upload step always has something useful to bundle.
+        if [ ! -f "${JSON_FILE}" ]; then
+          log_tail="$(tail -n 200 "${GAVEL_LOG_FILE}" 2>/dev/null | sed 's/"/\\"/g' | tr '\n' ' ')"
+          printf '{"error":"gavel exited %s before writing results","exit_code":%s,"log_tail":"%s"}\n' \
+            "$code" "$code" "$log_tail" > "${JSON_FILE}"
+          echo "gavel did not write ${JSON_FILE}; wrote placeholder stub with exit code $code" >&2
         fi
+        if [ ! -f "${HTML_FILE}" ]; then
+          {
+            echo '<!doctype html><html><head><meta charset="utf-8"><title>gavel results unavailable</title></head><body>'
+            echo "<h1>Gavel exited ${code} before writing results</h1>"
+            echo '<h2>Last 200 lines of gavel.log</h2><pre>'
+            tail -n 200 "${GAVEL_LOG_FILE}" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+            echo '</pre></body></html>'
+          } > "${HTML_FILE}"
+          echo "gavel did not write ${HTML_FILE}; wrote placeholder stub" >&2
+        fi
+
+        # Build the compact PR-comment summary from the JSON file. The
+        # stub JSON above is valid enough for `gavel summary` to parse
+        # (it contains an "error" field but no tests), so this step
+        # runs unconditionally.
+        gavel summary --input "${JSON_FILE}" --output "${SUMMARY_FILE}" \
+          || echo "gavel summary failed; step summary / PR comment will show the raw stub" >&2
+
+        # If the summary step still didn't produce anything, emit a
+        # minimal markdown fallback so the downstream step-summary and
+        # sticky-comment steps have content.
+        if [ ! -s "${SUMMARY_FILE}" ]; then
+          {
+            echo "## Gavel summary (unavailable)"
+            echo ""
+            echo "Gavel exited with code ${code} before producing a parsable result."
+            echo "See the \`${{ inputs.artifact-name }}\` artifact for \`gavel.log\`."
+          } > "${SUMMARY_FILE}"
+        fi
+
         {
           echo "exit_code=$code"
           echo "json_path=$(pwd)/${JSON_FILE}"
           echo "html_path=$(pwd)/${HTML_FILE}"
           echo "summary_path=$(pwd)/${SUMMARY_FILE}"
+          echo "log_path=$(pwd)/${GAVEL_LOG_FILE}"
         } >> "$GITHUB_OUTPUT"
         echo "gavel exited with $code"
 
@@ -163,6 +211,7 @@ runs:
           ${{ inputs.working-directory }}/${{ inputs.json-file }}
           ${{ inputs.working-directory }}/${{ inputs.html-file }}
           ${{ inputs.working-directory }}/${{ inputs.summary-file }}
+          ${{ inputs.working-directory }}/gavel.log
         if-no-files-found: warn
 
     - name: Write job summary

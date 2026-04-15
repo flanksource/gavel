@@ -38,6 +38,13 @@ var defaultCompactBudget = compactSummaryBudget{
 type gavelResultJSON struct {
 	Tests []parsers.Test          `json:"tests"`
 	Lint  []*linters.LinterResult `json:"lint"`
+	// Error / ExitCode / LogTail are populated by the composite action
+	// when gavel crashes before writing results. Stub files carry these
+	// fields so `gavel summary` can emit a useful crash marker instead
+	// of an empty table.
+	Error    string `json:"error,omitempty"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	LogTail  string `json:"log_tail,omitempty"`
 }
 
 // UnmarshalJSON accepts both shapes gavel emits:
@@ -94,6 +101,14 @@ type sourceCounts struct {
 }
 
 func buildCompactSummary(data gavelResultJSON, budget compactSummaryBudget) string {
+	// Crash-stub short-circuit: if gavel never produced any test or lint
+	// results AND the stub carries an error field, emit a crash marker
+	// block instead of an empty counts table. The composite action
+	// writes these stubs when gavel dies before serialising results.
+	if len(data.Tests) == 0 && len(data.Lint) == 0 && data.Error != "" {
+		return renderCrashSummary(data, budget)
+	}
+
 	sources := make(map[string]*sourceCounts)
 	var failures []parsers.Test
 	for _, root := range data.Tests {
@@ -122,6 +137,30 @@ func buildCompactSummary(data gavelResultJSON, budget compactSummaryBudget) stri
 	writeTotals(&b, sources)
 	writeFailingTests(&b, failures, budget)
 	writeFailingLinters(&b, failingLinters, budget)
+	return b.String()
+}
+
+// renderCrashSummary emits a PR-comment-ready markdown block for gavel
+// crash stubs produced by the composite action. Includes the reported
+// error, exit code, and a truncated tail of the captured gavel.log so
+// the reader can see *why* the run died without having to download the
+// artifact.
+func renderCrashSummary(data gavelResultJSON, budget compactSummaryBudget) string {
+	var b strings.Builder
+	b.WriteString("## Gavel crashed before producing results\n\n")
+	if data.ExitCode != nil {
+		fmt.Fprintf(&b, "**Exit code:** %d  \n", *data.ExitCode)
+	}
+	fmt.Fprintf(&b, "**Error:** %s\n\n", data.Error)
+	if data.LogTail != "" {
+		b.WriteString("### Last lines of gavel.log\n\n```\n")
+		b.WriteString(truncateBlock(data.LogTail, budget.maxLinesPerFailure, budget.maxCharsPerLine))
+		if !strings.HasSuffix(data.LogTail, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("```\n\n")
+	}
+	b.WriteString("_Full `gavel.log`, JSON stub, and HTML stub are in the workflow artifact._\n")
 	return b.String()
 }
 
