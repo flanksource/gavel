@@ -154,7 +154,7 @@ func runBenchCompare(cmd *cobra.Command, args []string) error {
 	}
 
 	if benchCompareUI {
-		srv := startTestUI()
+		srv, _ := startTestUI()
 		if srv != nil {
 			srv.SetBenchComparison(&cmp)
 			waitForInterrupt()

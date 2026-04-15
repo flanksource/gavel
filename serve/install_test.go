@@ -30,11 +30,24 @@ var _ = Describe("renderUnit", func() {
 			"WorkingDirectory=/var/lib/gavel",
 			"ExecStart=/usr/local/bin/gavel ssh serve --host 0.0.0.0 --port 2222 --host-key /var/lib/gavel/ssh_host_key --repo-dir /var/lib/gavel/repos",
 			"Restart=on-failure",
-			"ReadWritePaths=/var/lib/gavel",
 			"WantedBy=multi-user.target",
 		}
 		for _, fragment := range expectedFragments {
 			Expect(unit).To(ContainSubstring(fragment))
+		}
+
+		// Hardening directives must be absent: they break gavel's subprocess
+		// workload (go build, go test, $HOME module cache, real /tmp).
+		forbidden := []string{
+			"NoNewPrivileges",
+			"ProtectSystem",
+			"ProtectHome",
+			"ReadWritePaths",
+			"PrivateTmp",
+		}
+		for _, line := range forbidden {
+			Expect(unit).NotTo(ContainSubstring(line),
+				"unit must not contain %s — it blocks go subprocesses", line)
 		}
 	})
 

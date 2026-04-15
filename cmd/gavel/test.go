@@ -23,9 +23,15 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
-var uiServer *testui.Server
+var (
+	uiServer   *testui.Server
+	uiListener net.Listener
+)
 
 func runTests(opts testrunner.RunOptions) (any, error) {
+	opts.AutoStop = testDurationFlags.AutoStop
+	opts.IdleTimeout = testDurationFlags.IdleTimeout
+
 	if opts.WorkDir == "" {
 		wd, err := getWorkingDir()
 		if err != nil {
@@ -36,7 +42,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 
 	var updates chan []parsers.Test
 	if opts.UI {
-		uiServer = startTestUI()
+		uiServer, uiListener = startTestUI()
 		updates = make(chan []parsers.Test, 16)
 		opts.Updates = updates
 		uiServer.StreamFrom(updates)
@@ -111,6 +117,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			exitCode = 1
 		}
 		if uiServer != nil {
+			if opts.AutoStop > 0 || opts.IdleTimeout > 0 {
+				if err := handoffDetachedUI(uiListener, tests, lintResults, opts.AutoStop, opts.IdleTimeout); err != nil {
+					logger.Warnf("Detached UI handoff failed: %v", err)
+				}
+				return nil, nil
+			}
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
@@ -127,12 +139,16 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	return result, nil
 }
 
-func startTestUI() *testui.Server {
+// startTestUI binds an ephemeral TCP listener and starts serving the testui
+// on it. Returns the server and the listener so the caller can later
+// hand the listener off to a detached child process (fork path in
+// handoffDetachedUI) instead of tearing the connection down and rebinding.
+func startTestUI() (*testui.Server, net.Listener) {
 	srv := testui.NewServer()
 	listener, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		fmt.Printf("Failed to start test UI server: %v\n", err)
-		return nil
+		return nil, nil
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	url := fmt.Sprintf("http://localhost:%d", port)
@@ -142,7 +158,7 @@ func startTestUI() *testui.Server {
 	time.Sleep(100 * time.Millisecond)
 	fmt.Printf("Test UI at %s\n", url)
 	openBrowser(url)
-	return srv
+	return srv, listener
 }
 
 func openBrowser(url string) {
@@ -180,7 +196,19 @@ func buildRerunArgs(req testui.RerunRequest) []string {
 	return nil
 }
 
+// testDurationFlags holds duration flags registered imperatively on `gavel
+// test` because clicky cannot bind time.Duration fields via struct tags.
+// runTests reads these back into the RunOptions it receives.
+var testDurationFlags struct {
+	AutoStop    time.Duration
+	IdleTimeout time.Duration
+}
+
 func init() {
 	testCmd := clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
 	testCmd.Flags().SetInterspersed(false)
+	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
+		"With --ui, fork a detached UI server that serves the completed run until this hard wall-clock deadline fires (0 = block on SIGINT).")
+	testCmd.Flags().DurationVar(&testDurationFlags.IdleTimeout, "idle-timeout", 0,
+		"With --ui --auto-stop, exit the detached UI server after this long with no HTTP requests.")
 }

@@ -60,6 +60,19 @@ type CommitConfig struct {
 	Hooks []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 }
 
+// HookStep is a single shell command rendered into the SSH post-receive hook.
+// Used by top-level Pre/Post in GavelConfig.
+type HookStep struct {
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	Run  string `yaml:"run" json:"run"`
+}
+
+// SSHConfig overrides the main command run by the SSH post-receive hook.
+// When Cmd is empty, the hook falls back to `gavel test --lint`.
+type SSHConfig struct {
+	Cmd string `yaml:"cmd,omitempty" json:"cmd,omitempty"`
+}
+
 // DefaultFixturesGlob is the default glob pattern used to discover fixture files.
 const DefaultFixturesGlob = "**/*.fixture.md"
 
@@ -81,6 +94,9 @@ type GavelConfig struct {
 	Lint     LintConfig     `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Commit   CommitConfig   `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Fixtures FixturesConfig `yaml:"fixtures,omitempty" json:"fixtures,omitempty"`
+	SSH      SSHConfig      `yaml:"ssh,omitempty" json:"ssh,omitempty"`
+	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty"`
+	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
 }
 
 func DefaultVerifyConfig() VerifyConfig {
@@ -137,6 +153,19 @@ func mergeFromFile(base GavelConfig, path string) GavelConfig {
 	base.Lint = MergeLintConfig(base.Lint, gc.Lint)
 	base.Commit = MergeCommitConfig(base.Commit, gc.Commit)
 	base.Fixtures = MergeFixturesConfig(base.Fixtures, gc.Fixtures)
+	base.SSH = MergeSSHConfig(base.SSH, gc.SSH)
+	base.Pre = append(base.Pre, gc.Pre...)
+	base.Post = append(base.Post, gc.Post...)
+	return base
+}
+
+// MergeSSHConfig merges override onto base. Cmd is last-write-wins; an empty
+// override preserves the base value so a repo config can inherit the home
+// default.
+func MergeSSHConfig(base, override SSHConfig) SSHConfig {
+	if override.Cmd != "" {
+		base.Cmd = override.Cmd
+	}
 	return base
 }
 
