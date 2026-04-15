@@ -23,10 +23,24 @@ tasks:
     generates:
       - testrunner/ui/dist/testui.js
 
+  pr-ui:
+    desc: Build the PR review UI frontend bundle (Preact + Vite)
+    dir: pr/ui
+    cmds:
+      - npm ci
+      - npm run build
+    sources:
+      - pr/ui/src/**/*
+      - pr/ui/package.json
+      - pr/ui/vite.config.ts
+    generates:
+      - pr/ui/dist/prui.js
+
   build:
     desc: Build the binary
     deps:
       - test-ui
+      - pr-ui
     vars:
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
