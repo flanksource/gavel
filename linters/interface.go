@@ -355,32 +355,88 @@ func readFileLine(path string, lineNum int) string {
 	return ""
 }
 
-// RunLinter executes a single linter and returns the result.
-func RunLinter(linter Linter, opts RunOptions) LinterResult {
+func runningCommandLabel(linter Linter) string {
+	if dryRunner, ok := linter.(DryRunner); ok {
+		cmd, args := dryRunner.DryRunCommand()
+		cmd = strings.TrimSpace(cmd)
+		switch {
+		case cmd == "" && len(args) == 0:
+			return linter.Name()
+		case cmd == "":
+			return strings.Join(args, " ")
+		case len(args) == 0:
+			return cmd
+		default:
+			return cmd + " " + strings.Join(args, " ")
+		}
+	}
+	return linter.Name()
+}
+
+// RunLinterWithTask executes a single linter using the provided clicky task.
+// The task name is set to the full command while the linter is running and
+// updated to the compact completion label once finished.
+func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, opts RunOptions) *LinterResult {
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = models.DefaultLinterTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if mixin, ok := linter.(OptionsMixin); ok {
+		mixin.SetOptions(opts)
+	}
+	if task != nil {
+		task.SetName(runningCommandLabel(linter))
+		task.SetDescription("")
+	}
+
 	start := time.Now()
-
-	task := clicky.StartTask[[]models.Violation](fmt.Sprintf("Running %s", linter.Name()), func(_ commonsContext.Context, t *clicky.Task) ([]models.Violation, error) {
-		return linter.Run(commonsContext.NewContext(ctx), t)
-	})
-	violations, _ := task.GetResult()
-
+	violations, err := linter.Run(commonsContext.NewContext(ctx), task)
 	timedOut := ctx.Err() == context.DeadlineExceeded
-	return LinterResult{
+	statusErr := err
+	if timedOut && statusErr == nil {
+		statusErr = ctx.Err()
+	}
+
+	if task != nil {
+		ApplyLinterTaskStatus(task, linter.Name(), err == nil && !timedOut, violations, statusErr)
+	}
+
+	result := &LinterResult{
 		Linter:     linter.Name(),
 		WorkDir:    opts.WorkDir,
-		Success:    task.IsOk() && !timedOut,
+		Success:    err == nil && !timedOut,
 		TimedOut:   timedOut,
 		Duration:   time.Since(start),
 		Violations: violations,
-		Error:      formatErr(task.Error()),
+		Error:      formatErr(statusErr),
 	}
+
+	if metadata, ok := linter.(MetadataProvider); ok {
+		result.FileCount = metadata.GetFileCount()
+		result.RuleCount = metadata.GetRuleCount()
+	}
+
+	return result
+}
+
+// RunLinter executes a single linter and returns the result.
+func RunLinter(linter Linter, opts RunOptions) LinterResult {
+	task := clicky.StartTask[*LinterResult](fmt.Sprintf("Running %s", linter.Name()), func(_ commonsContext.Context, t *clicky.Task) (*LinterResult, error) {
+		return RunLinterWithTask(context.Background(), t, linter, opts), nil
+	})
+	result, _ := task.GetResult()
+	if result == nil {
+		return LinterResult{
+			Linter:  linter.Name(),
+			WorkDir: opts.WorkDir,
+			Success: false,
+			Error:   formatErr(task.Error()),
+		}
+	}
+	return *result
 }
 
 func formatErr(err error) string {
