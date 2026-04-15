@@ -1,9 +1,0 @@
-verify:
-  model: claude
-
-pre:
-  - name: deps
-    run: make tidy
-
-ssh:
-  cmd: make all
