@@ -36,8 +36,8 @@ var defaultCompactBudget = compactSummaryBudget{
 // summary command can read any gavel test result file without depending on
 // the internal testrunner types.
 type gavelResultJSON struct {
-	Tests []parsers.Test           `json:"tests"`
-	Lint  []*linters.LinterResult  `json:"lint"`
+	Tests []parsers.Test          `json:"tests"`
+	Lint  []*linters.LinterResult `json:"lint"`
 }
 
 // UnmarshalJSON accepts both shapes gavel emits:
@@ -126,20 +126,24 @@ func buildCompactSummary(data gavelResultJSON, budget compactSummaryBudget) stri
 }
 
 func walkTests(t parsers.Test, sources map[string]*sourceCounts, failures *[]parsers.Test) {
-	source := t.Package
-	if source == "" && t.Command != "" {
-		source = t.Command
+	// Recurse first so leaves are always processed, regardless of any
+	// status flags set on parent group nodes.
+	for _, child := range t.Children {
+		walkTests(child, sources, failures)
 	}
-	// Folder/group nodes don't carry results — recurse only.
-	if t.IsFolder() {
-		for _, child := range t.Children {
-			walkTests(child, sources, failures)
-		}
+	// Only leaf nodes contribute to counts and failure details. A node with
+	// children is a group/folder rollup whose status mirrors its children;
+	// counting it would double-count, and surfacing it as a failure detail
+	// produces noisy "./" / "linters/" / "testdata/" entries in the summary.
+	if len(t.Children) > 0 {
 		return
 	}
-	if source == "" {
-		source = "(unknown)"
+	// IsFolder() returns true when no status flag is set — a pure organizational
+	// node with nothing to report. Skip it.
+	if t.IsFolder() {
+		return
 	}
+	source := sourceKey(t)
 	sc := ensureSource(sources, source)
 	sc.duration += t.Duration
 	switch {
@@ -151,9 +155,32 @@ func walkTests(t parsers.Test, sources map[string]*sourceCounts, failures *[]par
 	case t.Passed:
 		sc.passed++
 	}
-	for _, child := range t.Children {
-		walkTests(child, sources, failures)
+}
+
+// sourceKey picks the best attribution label for a leaf test result. Ginkgo
+// specs often have an empty Package but carry the suite info in the Suite
+// slice; go tests carry Package. Fall back to File dir, then "(unknown)".
+func sourceKey(t parsers.Test) string {
+	if t.Package != "" {
+		return t.Package
 	}
+	if t.PackagePath != "" {
+		return t.PackagePath
+	}
+	if t.Command != "" {
+		return t.Command
+	}
+	if len(t.Suite) > 0 {
+		return t.Suite[0]
+	}
+	if t.File != "" {
+		// Use the directory portion as a proxy when the parser didn't set Package.
+		if idx := strings.LastIndex(t.File, "/"); idx > 0 {
+			return t.File[:idx]
+		}
+		return t.File
+	}
+	return "(unknown)"
 }
 
 func ensureSource(sources map[string]*sourceCounts, name string) *sourceCounts {

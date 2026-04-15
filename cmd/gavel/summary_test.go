@@ -157,10 +157,55 @@ func TestBuildCompactSummary(t *testing.T) {
 	}
 }
 
+func TestBuildCompactSummarySkipsGroupNodes(t *testing.T) {
+	// A ginkgo-style tree where the parent group is marked Failed because its
+	// child is. The walker must count only the leaf failure, not the parent
+	// rollup — otherwise the summary shows noisy "./" / "linters/" entries
+	// from folder rollups that mirror leaf state.
+	input := gavelResultJSON{
+		Tests: []parsers.Test{
+			{
+				Package: "pkg/a",
+				Name:    "linters/",
+				Failed:  true, // rollup flag
+				Children: parsers.Tests{
+					{
+						Package: "pkg/a",
+						Name:    "jscpd/",
+						Failed:  true, // nested rollup
+						Children: parsers.Tests{
+							{Package: "pkg/a", Name: "real leaf test", Failed: true, Message: "boom"},
+						},
+					},
+				},
+			},
+		},
+	}
+	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
+	// Counts: exactly 1 failure in pkg/a (the leaf).
+	if !strings.Contains(out, "| pkg/a | 0 | 1 | 0 |") {
+		t.Errorf("expected exactly 1 failure for pkg/a, got:\n%s", out)
+	}
+	// Failing tests section must contain the leaf, NOT the rollup names.
+	section := out
+	if idx := strings.Index(out, "Failing tests"); idx >= 0 {
+		section = out[idx:]
+	}
+	if !strings.Contains(section, "real leaf test") {
+		t.Errorf("expected real leaf in failing tests, got:\n%s", out)
+	}
+	if strings.Contains(section, "linters/") {
+		t.Errorf("rollup group 'linters/' must not appear in failing tests, got:\n%s", out)
+	}
+	if strings.Contains(section, "jscpd/") {
+		t.Errorf("rollup group 'jscpd/' must not appear in failing tests, got:\n%s", out)
+	}
+}
+
 func TestBuildCompactSummaryRespectsFailureCap(t *testing.T) {
-	var tests parsers.Tests
+	var leaves parsers.Tests
 	for i := 0; i < 12; i++ {
-		tests = append(tests, parsers.Test{
+		leaves = append(leaves, parsers.Test{
 			Package: "pkg/a",
 			Name:    "TestFail",
 			Suite:   []string{"Group"},
@@ -168,8 +213,9 @@ func TestBuildCompactSummaryRespectsFailureCap(t *testing.T) {
 			Message: "boom",
 		})
 	}
+	// Wrap in a group parent so we also exercise the "skip group, count leaves" path.
 	input := gavelResultJSON{
-		Tests: []parsers.Test{{Package: "pkg/a", Children: tests}},
+		Tests: []parsers.Test{{Package: "pkg/a", Children: leaves}},
 	}
 	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 3, maxLinesPerFailure: 5, maxCharsPerLine: 200})
 	// Exactly 3 failure blocks (each starts with "####") in the Failing tests section.
