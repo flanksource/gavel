@@ -36,7 +36,7 @@ func (m *MenuBar) SetPRs(prs github.PRSearchResults) {
 	m.mu.Unlock()
 }
 
-func (m *MenuBar) Run() {
+func (m *MenuBar) Run() error {
 	runtime.LockOSThread()
 
 	app := menuet.App()
@@ -54,6 +54,7 @@ func (m *MenuBar) Run() {
 
 	app.RunApplication()
 	close(m.done)
+	return nil
 }
 
 // iconURL returns the menubar icon URL served by the running UI server.
