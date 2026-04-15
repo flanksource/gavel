@@ -93,6 +93,24 @@ tasks:
     cmds:
       - mv "./{{.BINARY_NAME}}" "$GOPATH/bin/"
 
+  deploy:
+    desc: |
+      Cross-compile gavel for linux-amd64 and install it on a remote host.
+      Pass the target as a positional arg: `task deploy -- user@host`.
+      Reinstalls the systemd unit via `gavel ssh install --force`, which
+      reloads and restarts the service.
+    deps:
+      - build:linux-amd64
+    vars:
+      BINARY_LOCAL: .bin/{{.BINARY_NAME}}-linux-amd64
+      TARGET: "{{.CLI_ARGS}}"
+    preconditions:
+      - sh: test -n "{{.TARGET}}"
+        msg: "usage: task deploy -- user@host"
+    cmds:
+      - scp {{.BINARY_LOCAL}} {{.TARGET}}:gavel
+      - ssh -t {{.TARGET}} 'sudo install -m 0755 -o root -g root ~/gavel /usr/local/bin/gavel && sudo /usr/local/bin/gavel ssh install --force && rm -f ~/gavel'
+
   test:
     desc: Run tests
     deps:

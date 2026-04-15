@@ -3,6 +3,7 @@ package serve
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,24 +32,70 @@ var _ = Describe("cleanRepoPath", func() {
 })
 
 var _ = Describe("writePostReceiveHook", func() {
-	It("creates an executable hook script", func() {
-		tmpDir, err := os.MkdirTemp("", "gavel-test-*")
-		Expect(err).NotTo(HaveOccurred())
-		defer os.RemoveAll(tmpDir)
+	It("creates an executable hook script with the default command", func() {
+		tmpDir := GinkgoT().TempDir()
 
-		err = writePostReceiveHook(tmpDir, "/usr/local/bin/gavel")
+		err := writePostReceiveHook(tmpDir, "/usr/local/bin/gavel")
 		Expect(err).NotTo(HaveOccurred())
 
 		hookPath := filepath.Join(tmpDir, "hooks", "post-receive")
 		info, err := os.Stat(hookPath)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(info.Mode().Perm() & 0o111).NotTo(BeZero()) // executable
+		Expect(info.Mode().Perm() & 0o111).NotTo(BeZero())
 
 		content, err := os.ReadFile(hookPath)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(content)).To(ContainSubstring("#!/bin/bash"))
-		Expect(string(content)).To(ContainSubstring("gavel test --lint"))
-		Expect(string(content)).To(ContainSubstring("/usr/local/bin/gavel"))
+		Expect(string(content)).To(ContainSubstring("/usr/local/bin/gavel test --lint"))
+		Expect(string(content)).To(ContainSubstring(`--cwd "$WORKDIR"`))
+	})
+})
+
+var _ = Describe("renderHookScript", func() {
+	It("injects pre-hooks before the main command", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
+			Pre: []HookStep{{Name: "deps", Run: "make deps"}},
+		})
+		preIdx := strings.Index(script, "make deps")
+		mainIdx := strings.Index(script, "/bin/gavel test --lint")
+		Expect(preIdx).NotTo(Equal(-1))
+		Expect(mainIdx).NotTo(Equal(-1))
+		Expect(preIdx).To(BeNumerically("<", mainIdx))
+		Expect(script).To(ContainSubstring(" pre: deps"))
+	})
+
+	It("replaces the main command when ssh.cmd is set to a non-gavel command", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
+			Cmd: "make ci",
+		})
+		Expect(script).To(ContainSubstring(`(cd "$WORKDIR" && make ci)`))
+		Expect(script).NotTo(ContainSubstring("/bin/gavel test --lint"))
+	})
+
+	It("rewrites a gavel-prefixed ssh.cmd to the real binary path", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
+			Cmd: "gavel test --ui",
+		})
+		Expect(script).To(ContainSubstring(`/bin/gavel test --ui --cwd "$WORKDIR" --no-progress`))
+	})
+
+	It("runs post-hooks even when the main command fails", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
+			Post: []HookStep{{Name: "notify", Run: "echo done"}},
+		})
+		// post-hooks must come after MAIN_EXIT is captured and wrap in
+		// `set +e` so a failing notifier doesn't mask the real failure.
+		mainExit := strings.Index(script, "MAIN_EXIT=$?")
+		postRun := strings.Index(script, "echo done")
+		failExit := strings.Index(script, "exit $MAIN_EXIT")
+		Expect(mainExit).NotTo(Equal(-1))
+		Expect(postRun).NotTo(Equal(-1))
+		Expect(failExit).NotTo(Equal(-1))
+		Expect(mainExit).To(BeNumerically("<", postRun))
+		Expect(postRun).To(BeNumerically("<", failExit))
+		// post-hooks isolated from `set -e`.
+		postSetPlus := strings.Index(script[postRun-120:postRun], "set +e")
+		Expect(postSetPlus).NotTo(Equal(-1))
 	})
 })
 

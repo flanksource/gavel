@@ -198,3 +198,107 @@ func TestMergeLintConfig(t *testing.T) {
 	assert.Equal(t, "errcheck", merged.Ignore[0].Rule)
 	assert.Equal(t, "unused", merged.Ignore[1].Rule)
 }
+
+func TestLoadGavelConfig_WithPushHooksAndSSH(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`verify:
+  model: claude
+pre:
+  - name: deps
+    run: make deps
+  - run: echo warming
+post:
+  - name: notify
+    run: slack post "$RESULT"
+ssh:
+  cmd: make ci
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Pre, 2)
+	assert.Equal(t, "deps", cfg.Pre[0].Name)
+	assert.Equal(t, "make deps", cfg.Pre[0].Run)
+	assert.Equal(t, "", cfg.Pre[1].Name)
+	assert.Equal(t, "echo warming", cfg.Pre[1].Run)
+
+	require.Len(t, cfg.Post, 1)
+	assert.Equal(t, "notify", cfg.Post[0].Name)
+	assert.Equal(t, `slack post "$RESULT"`, cfg.Post[0].Run)
+
+	assert.Equal(t, "make ci", cfg.SSH.Cmd)
+}
+
+func TestMergeSSHConfig(t *testing.T) {
+	t.Run("override replaces cmd", func(t *testing.T) {
+		merged := MergeSSHConfig(SSHConfig{Cmd: "make old"}, SSHConfig{Cmd: "make new"})
+		assert.Equal(t, "make new", merged.Cmd)
+	})
+	t.Run("empty override keeps base", func(t *testing.T) {
+		merged := MergeSSHConfig(SSHConfig{Cmd: "make old"}, SSHConfig{})
+		assert.Equal(t, "make old", merged.Cmd)
+	})
+}
+
+// TestLoadGavelConfig_RepoRoot asserts that the .gavel.yaml committed at the
+// repo root parses into the current schema. It doubles as a smoke test that
+// every checked-in config key has a Go field and as dogfooding so a typo in
+// .gavel.yaml fails CI instead of silently breaking the SSH push flow.
+func TestLoadGavelConfig_RepoRoot(t *testing.T) {
+	// Locate the repo root from this test file (verify/config_test.go).
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	repoRoot := filepath.Dir(wd) // parent of verify/
+	path := filepath.Join(repoRoot, ".gavel.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("no .gavel.yaml at %s: %v", path, err)
+	}
+
+	cfg, err := LoadGavelConfig(repoRoot)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, cfg.Pre, "expected at least one top-level pre hook")
+	assert.Equal(t, "deps", cfg.Pre[0].Name)
+	assert.NotEmpty(t, cfg.Pre[0].Run)
+	assert.NotEmpty(t, cfg.SSH.Cmd, "expected ssh.cmd to be set")
+}
+
+func TestMergePrePostHooks_Append(t *testing.T) {
+	// Pre/Post hooks from multiple config sources accumulate in declaration
+	// order (home → repo → cwd), so a user's personal hooks don't get
+	// silently wiped by a repo config and vice versa.
+	home := t.TempDir()
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+
+	t.Setenv("HOME", home)
+
+	homeCfg := []byte(`pre:
+  - name: home-pre
+    run: echo home
+post:
+  - name: home-post
+    run: echo done-home
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), homeCfg, 0o644))
+
+	repoCfg := []byte(`pre:
+  - name: repo-pre
+    run: make deps
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), repoCfg, 0o644))
+
+	cfg, err := LoadGavelConfig(repo)
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Pre, 2)
+	assert.Equal(t, "home-pre", cfg.Pre[0].Name)
+	assert.Equal(t, "repo-pre", cfg.Pre[1].Name)
+
+	require.Len(t, cfg.Post, 1)
+	assert.Equal(t, "home-post", cfg.Post[0].Name)
+}

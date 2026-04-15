@@ -108,6 +108,8 @@ type RunOptions struct {
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // When set with --ui, fork a detached UI server that serves the completed run until auto-stop (hard) or idle-timeout elapses. 0 = block on SIGINT (today's behavior). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
+	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI server; resets on every HTTP request. Only meaningful with --auto-stop.
 	Lint          bool                  `json:"lint,omitempty" flag:"lint"`                                   // Run linters in parallel with tests
 	Cache         bool                  `json:"cache,omitempty" flag:"cache"`                                 // Skip packages whose content fingerprint matches the last passing run
 	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main

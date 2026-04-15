@@ -88,7 +88,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if opts.UI {
-		uiServer = startTestUI()
+		uiServer, uiListener = startTestUI()
 	}
 
 	groups := groupFilesByGitRoot(opts)

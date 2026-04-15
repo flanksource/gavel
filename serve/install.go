@@ -159,6 +159,12 @@ func ensureDataDir(path, owner string) error {
 	return nil
 }
 
+// unitTemplate intentionally omits systemd hardening directives
+// (NoNewPrivileges, ProtectSystem, ProtectHome, ReadWritePaths, PrivateTmp).
+// Gavel's post-receive hook spawns go build / go test subprocesses that
+// need a real /tmp and read/write access to $HOME/go/pkg/mod and
+// $HOME/.cache/go-build. User-level isolation via the dedicated `gavel`
+// system user is still in place.
 const unitTemplate = `[Unit]
 Description=Gavel SSH git-push backend
 After=network.target
@@ -172,11 +178,6 @@ WorkingDirectory={{.DataDir}}
 ExecStart={{.BinaryPath}} ssh serve --host {{.Host}} --port {{.Port}} --host-key {{.DataDir}}/ssh_host_key --repo-dir {{.DataDir}}/repos
 Restart=on-failure
 RestartSec=5s
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths={{.DataDir}}
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
