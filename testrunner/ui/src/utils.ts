@@ -9,15 +9,100 @@ interface FlatViolation {
   linter: string;
   linterResult: LinterResult;
   v: Violation;
-  file: string;
+  file?: string;
 }
 
-export function relPath(file: string | undefined, workDir: string | undefined): string {
-  if (!file) return '(no file)';
-  if (!workDir) return file;
-  const prefix = workDir.endsWith('/') ? workDir : workDir + '/';
-  if (file.startsWith(prefix)) return file.slice(prefix.length);
-  return file;
+interface RuleBucket {
+  file?: string;
+  violations: Violation[];
+}
+
+interface LinterBucket {
+  files: Map<string, Violation[]>;
+  noFileRules: Map<string, RuleBucket>;
+}
+
+interface FileTreeNode {
+  name: string;
+  path?: string;
+  children: Map<string, FileTreeNode>;
+  files: Map<string, Map<string, Map<string, Violation[]>>>;
+}
+
+export function relPath(file: string | undefined, workDir: string | undefined): string | undefined {
+  if (!file) return undefined;
+  const normalizedFile = normalizeLintPath(file);
+  if (!workDir) return normalizedFile;
+  const prefix = normalizeLintPath(workDir).replace(/\/?$/, '/');
+  if (normalizedFile.startsWith(prefix)) return normalizedFile.slice(prefix.length);
+  return normalizedFile;
+}
+
+function normalizeLintPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function ruleKeyFor(v: Violation): string {
+  return v.rule?.method || '(no rule)';
+}
+
+function ruleBuckets(violations: Violation[]): Map<string, RuleBucket> {
+  const buckets = new Map<string, RuleBucket>();
+  for (const v of violations) {
+    const key = ruleKeyFor(v);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { file: v.file, violations: [] };
+      buckets.set(key, bucket);
+    }
+    bucket.violations.push(v);
+  }
+  return buckets;
+}
+
+function collapsedPathSegments(path: string): string[] {
+  const parts = normalizeLintPath(path).split('/').filter(Boolean);
+  if (parts.length >= 3 && parts[0] === '.shell' && parts[1] === 'checkout') {
+    return [`${parts[0]}/${parts[1]}/${parts[2]}`, ...parts.slice(3)];
+  }
+  return parts;
+}
+
+function fileTreeRoot(): FileTreeNode {
+  return { name: '', children: new Map(), files: new Map() };
+}
+
+function insertFileNode(root: FileTreeNode, file: string, linter: string, violation: Violation): void {
+  const segments = collapsedPathSegments(file);
+  if (segments.length === 0) return;
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    let child = current.children.get(segment);
+    if (!child) {
+      child = { name: segment, path: current.path ? `${current.path}/${segment}` : segment, children: new Map(), files: new Map() };
+      current.children.set(segment, child);
+    }
+    current = child;
+  }
+
+  const basename = segments[segments.length - 1];
+  let linters = current.files.get(basename);
+  if (!linters) {
+    linters = new Map();
+    current.files.set(basename, linters);
+  }
+  let rules = linters.get(linter);
+  if (!rules) {
+    rules = new Map();
+    linters.set(linter, rules);
+  }
+  const key = ruleKeyFor(violation);
+  let arr = rules.get(key);
+  if (!arr) {
+    arr = [];
+    rules.set(key, arr);
+  }
+  arr.push(violation);
 }
 
 function worstSeverity(vs: Violation[] | undefined): Severity {
@@ -57,10 +142,10 @@ function folderNode(name: string, kind: Test['kind'], children: Test[]): Test {
   };
 }
 
-function fileLeafNode(file: string, linterName: string, violations: Violation[]): Test {
+function fileLeafNode(name: string, file: string, linterName: string, violations: Violation[]): Test {
   const sev = worstSeverity(violations);
   return {
-    name: `${file} (${violations.length})`,
+    name: `${name} (${violations.length})`,
     framework: 'lint',
     kind: 'lint-file',
     file,
@@ -92,82 +177,141 @@ function ruleLeafNode(rule: string, linterName: string, file: string, violations
   };
 }
 
+function linterNode(
+  linterName: string,
+  linterResult: LinterResult | undefined,
+  children: Test[],
+  noFileViolations?: Violation[],
+): Test {
+  const total = children.reduce((n, child) => n + lintViolationCount(child), 0) + (noFileViolations?.length || 0);
+  const node = folderNode(`${linterName} (${total})`, 'linter', children);
+  node.linter = linterResult;
+  node.linterName = linterName;
+  if (noFileViolations && noFileViolations.length > 0) {
+    node.noFileViolations = noFileViolations.slice().sort((a, b) => (a.line || 0) - (b.line || 0));
+  }
+  return node;
+}
+
+function lintViolationCount(t: Test): number {
+  if (t.violations) return t.violations.length;
+  return (t.children || []).reduce((n, child) => n + lintViolationCount(child), 0);
+}
+
+function buildFileTree(root: FileTreeNode, linterMeta: Map<string, LinterResult>): Test[] {
+  const folderNames = Array.from(root.children.keys()).sort();
+  const fileNames = Array.from(root.files.keys()).sort();
+  const children: Test[] = [];
+
+  for (const folderName of folderNames) {
+    const folder = root.children.get(folderName)!;
+    children.push(buildFolderNode(folder, linterMeta));
+  }
+
+  for (const fileName of fileNames) {
+    const linters = root.files.get(fileName)!;
+    const linterNames = Array.from(linters.keys()).sort();
+    const fullPath = root.path ? `${root.path}/${fileName}` : fileName;
+    const linterNodes = linterNames.map(linterName => {
+      const rules = linters.get(linterName)!;
+      const ruleNames = Array.from(rules.keys()).sort();
+      const ruleLeaves = ruleNames.map(ruleName => ruleLeafNode(ruleName, linterName, fullPath, rules.get(ruleName)!));
+      const node = linterNode(linterName, linterMeta.get(linterName), ruleLeaves);
+      node.file = fullPath;
+      return node;
+    });
+    const fileTotal = linterNodes.reduce((n, node) => n + lintViolationCount(node), 0);
+    const fileNode = folderNode(`${fileName} (${fileTotal})`, 'lint-file', linterNodes);
+    fileNode.file = fullPath;
+    children.push(fileNode);
+  }
+
+  return children;
+}
+
+function buildFolderNode(folder: FileTreeNode, linterMeta: Map<string, LinterResult>): Test {
+  const children = buildFileTree(folder, linterMeta);
+  return folderNode(`${folder.name} (${children.reduce((n, child) => n + lintViolationCount(child), 0)})`, 'lint-folder', children);
+}
+
 export function groupLintByLinterFile(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
   const flat = flattenLint(lint, filters);
-  const byLinter = new Map<string, Map<string, Violation[]>>();
+  const byLinter = new Map<string, LinterBucket>();
   const linterMeta = new Map<string, LinterResult>();
   for (const f of flat) {
     linterMeta.set(f.linter, f.linterResult);
-    let files = byLinter.get(f.linter);
-    if (!files) {
-      files = new Map();
-      byLinter.set(f.linter, files);
+    let bucket = byLinter.get(f.linter);
+    if (!bucket) {
+      bucket = { files: new Map(), noFileRules: new Map() };
+      byLinter.set(f.linter, bucket);
     }
-    let arr = files.get(f.file);
+    if (!f.file) {
+      const key = ruleKeyFor(f.v);
+      let rule = bucket.noFileRules.get(key);
+      if (!rule) {
+        rule = { violations: [] };
+        bucket.noFileRules.set(key, rule);
+      }
+      rule.violations.push(f.v);
+      continue;
+    }
+    let arr = bucket.files.get(f.file);
     if (!arr) {
       arr = [];
-      files.set(f.file, arr);
+      bucket.files.set(f.file, arr);
     }
     arr.push(f.v);
   }
 
   const linterNames = Array.from(byLinter.keys()).sort();
   return linterNames.map(linter => {
-    const files = byLinter.get(linter)!;
-    const fileNames = Array.from(files.keys()).sort();
-    const fileLeaves = fileNames.map(file => fileLeafNode(file, linter, files.get(file)!));
-    const total = fileLeaves.reduce((n, f) => n + (f.violations?.length || 0), 0);
-    const node = folderNode(`${linter} (${total})`, 'linter', fileLeaves);
-    node.linter = linterMeta.get(linter);
-    node.linterName = linter;
-    return node;
+    const bucket = byLinter.get(linter)!;
+    const fileNames = Array.from(bucket.files.keys()).sort();
+    const fileLeaves = fileNames.map(file => {
+      const basename = collapsedPathSegments(file).slice(-1)[0] || file;
+      return fileLeafNode(basename, file, linter, bucket.files.get(file)!);
+    });
+    const noFileViolations = Array.from(bucket.noFileRules.values()).flatMap(rule => rule.violations);
+    return linterNode(linter, linterMeta.get(linter), fileLeaves, noFileViolations);
   });
 }
 
 export function groupLintByFileLinterRule(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
   const flat = flattenLint(lint, filters);
-  const byFile = new Map<string, Map<string, Map<string, Violation[]>>>();
+  const root = fileTreeRoot();
+  const byNoFileLinter = new Map<string, Map<string, RuleBucket>>();
+  const linterMeta = new Map<string, LinterResult>();
   for (const f of flat) {
-    let linters = byFile.get(f.file);
-    if (!linters) {
-      linters = new Map();
-      byFile.set(f.file, linters);
+    linterMeta.set(f.linter, f.linterResult);
+    if (!f.file) {
+      let rules = byNoFileLinter.get(f.linter);
+      if (!rules) {
+        rules = new Map();
+        byNoFileLinter.set(f.linter, rules);
+      }
+      const key = ruleKeyFor(f.v);
+      let bucket = rules.get(key);
+      if (!bucket) {
+        bucket = { violations: [] };
+        rules.set(key, bucket);
+      }
+      bucket.violations.push(f.v);
+      continue;
     }
-    let rules = linters.get(f.linter);
-    if (!rules) {
-      rules = new Map();
-      linters.set(f.linter, rules);
-    }
-    const ruleKey = f.v.rule?.method || '(no rule)';
-    let arr = rules.get(ruleKey);
-    if (!arr) {
-      arr = [];
-      rules.set(ruleKey, arr);
-    }
-    arr.push(f.v);
+    insertFileNode(root, f.file, f.linter, f.v);
   }
 
-  const fileNames = Array.from(byFile.keys()).sort();
-  return fileNames.map(file => {
-    const linters = byFile.get(file)!;
-    const linterNames = Array.from(linters.keys()).sort();
-    const linterNodes = linterNames.map(linter => {
-      const rules = linters.get(linter)!;
-      const ruleNames = Array.from(rules.keys()).sort();
-      const ruleLeaves = ruleNames.map(rule => ruleLeafNode(rule, linter, file, rules.get(rule)!));
-      const total = ruleLeaves.reduce((n, r) => n + (r.violations?.length || 0), 0);
-      const node = folderNode(`${linter} (${total})`, 'linter', ruleLeaves);
-      node.linterName = linter;
-      node.file = file;
-      return node;
-    });
-    const total = linterNodes.reduce((n, l) => {
-      return n + (l.children || []).reduce((m, r) => m + (r.violations?.length || 0), 0);
-    }, 0);
-    const node = folderNode(`${file} (${total})`, 'lint-root', linterNodes);
-    node.file = file;
+  const fileTreeNodes = buildFileTree(root, linterMeta);
+  const noFileLinterNodes = Array.from(byNoFileLinter.keys()).sort().map(linterName => {
+    const rules = byNoFileLinter.get(linterName)!;
+    const ruleNames = Array.from(rules.keys()).sort();
+    const ruleLeaves = ruleNames.map(ruleName => ruleLeafNode(ruleName, linterName, '', rules.get(ruleName)!.violations));
+    const node = linterNode(linterName, linterMeta.get(linterName), ruleLeaves);
+    node.file = undefined;
     return node;
   });
+
+  return [...fileTreeNodes, ...noFileLinterNodes];
 }
 
 export function collectLintLinters(lint: LinterResult[] | undefined): string[] {
@@ -215,6 +359,9 @@ export function totalLintViolations(lint: LinterResult[] | undefined): number {
 }
 
 export function statusIcon(t: Test): string {
+  if (t.kind === 'lint-folder') {
+    return 'codicon:folder';
+  }
   if (t.kind === 'lint-file') {
     return 'codicon:file';
   }
@@ -242,8 +389,17 @@ export function statusIcon(t: Test): string {
 }
 
 export function statusColor(t: Test): string {
+  if (t.kind === 'lint-folder') {
+    return 'text-gray-500';
+  }
   if (t.kind === 'lint-file' || t.kind === 'lint-rule') {
     const sev = worstSeverity(t.violations);
+    if (t.children && t.children.length > 0) {
+      const s = sum(t);
+      if (s.failed > 0) return 'text-red-600';
+      if (s.passed > 0) return 'text-green-600';
+      return 'text-gray-500';
+    }
     if (sev === 'error') return 'text-red-600';
     if (sev === 'warning') return 'text-yellow-600';
     return 'text-blue-500';
@@ -280,6 +436,7 @@ export function frameworkIcon(framework?: string): string | null {
     case 'ginkgo': return 'devicon:go';
     case 'fixture': return 'vscode-icons:file-type-markdown';
     case 'lint': return 'codicon:lightbulb';
+    case 'task': return 'codicon:tools';
     default: return null;
   }
 }
@@ -316,6 +473,47 @@ export function sum(t: Test): { total: number; passed: number; failed: number; s
   return r;
 }
 
+export function sumNonTaskTests(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number } {
+  if (t.framework === 'task') {
+    if (!t.children || t.children.length === 0) {
+      return { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+    }
+    const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+    for (const c of t.children) {
+      const s = sumNonTaskTests(c);
+      r.total += s.total;
+      r.passed += s.passed;
+      r.failed += s.failed;
+      r.skipped += s.skipped;
+      r.pending += s.pending;
+    }
+    return r;
+  }
+
+  if (t.summary) {
+    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0 };
+  }
+  if (!t.children || t.children.length === 0) {
+    return {
+      total: (t.passed || t.failed || t.skipped || t.pending) ? 1 : 0,
+      passed: t.passed ? 1 : 0,
+      failed: t.failed ? 1 : 0,
+      skipped: t.skipped ? 1 : 0,
+      pending: t.pending ? 1 : 0,
+    };
+  }
+  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+  for (const c of t.children) {
+    const s = sumNonTaskTests(c);
+    r.total += s.total;
+    r.passed += s.passed;
+    r.failed += s.failed;
+    r.skipped += s.skipped;
+    r.pending += s.pending;
+  }
+  return r;
+}
+
 export function isFolder(t: Test): boolean {
   return !t.passed && !t.failed && !t.skipped && !t.pending;
 }
@@ -333,7 +531,7 @@ export function hasPending(t: Test): boolean {
 export function collectFrameworks(tests: Test[]): string[] {
   const set = new Set<string>();
   function walk(t: Test) {
-    if (t.framework) set.add(t.framework);
+    if (t.framework && t.framework !== 'task') set.add(t.framework);
     (t.children || []).forEach(walk);
   }
   tests.forEach(walk);

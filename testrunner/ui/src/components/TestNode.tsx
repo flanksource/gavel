@@ -90,7 +90,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           </span>
         )}
 
-        {onRerun && t.kind !== 'violation' && t.kind !== 'lint-root' && t.kind !== 'linter' && t.kind !== 'lint-file' && t.kind !== 'lint-rule' && (
+        {onRerun && t.framework !== 'task' && t.kind !== 'violation' && t.kind !== 'lint-root' && t.kind !== 'lint-folder' && t.kind !== 'linter' && t.kind !== 'lint-file' && t.kind !== 'lint-rule' && (
           <button
             class="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
             onClick={(e) => { e.stopPropagation(); onRerun(t); }}

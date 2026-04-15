@@ -36,6 +36,26 @@ func TestCompactCounts(t *testing.T) {
 	}
 }
 
+func TestFormatRunningCommand(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		args []string
+		want string
+	}{
+		{name: "command and args", cmd: "go", args: []string{"test", "-json", "./pkg/foo"}, want: "go test -json ./pkg/foo"},
+		{name: "command only", cmd: "golangci-lint", want: "golangci-lint"},
+		{name: "args only", args: []string{"eslint", "--format=json", "."}, want: "eslint --format=json ."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatRunningCommand(tc.cmd, tc.args); got != tc.want {
+				t.Errorf("formatRunningCommand(%q, %v) = %q, want %q", tc.cmd, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFirstNonBlankLine(t *testing.T) {
 	cases := []struct {
 		name string

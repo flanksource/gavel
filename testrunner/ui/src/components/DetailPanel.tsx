@@ -17,6 +17,16 @@ interface Props {
   ignoreBusy?: boolean;
 }
 
+function taskMeta(t: Test): { duration?: string; status?: string; type?: string } | null {
+  if (t.framework !== 'task' || !t.context || typeof t.context !== 'object') return null;
+  const ctx = t.context as Record<string, any>;
+  return {
+    duration: typeof ctx.duration === 'string' ? ctx.duration : undefined,
+    status: typeof ctx.status === 'string' ? ctx.status : undefined,
+    type: typeof ctx.type === 'string' ? ctx.type : undefined,
+  };
+}
+
 export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy }: Props) {
   if (!t) {
     return (
@@ -33,9 +43,10 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
   const s = hasChildren ? sum(t) : null;
   const fw = t.framework;
   const fwIcon = frameworkIcon(fw);
-  const isLint = t.kind === 'lint-root' || t.kind === 'linter'
+  const task = taskMeta(t);
+  const isLint = t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter'
     || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule';
-  const canRerun = !!onRerun && !isLint;
+  const canRerun = !!onRerun && !isLint && t.framework !== 'task';
 
   return (
     <div class="p-5 space-y-4">
@@ -69,6 +80,11 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
                 <iconify-icon icon="codicon:clock" class="mr-0.5" />
                 {formatDuration(t.duration)}
               </span>
+            ) : task?.duration ? (
+              <span class="text-xs text-gray-500">
+                <iconify-icon icon="codicon:clock" class="mr-0.5" />
+                {task.duration}
+              </span>
             ) : null}
             {t.file && (
               <span class="text-xs text-gray-500 font-mono">
@@ -80,7 +96,7 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
       </div>
 
       {t.kind === 'violation' && t.violation && <ViolationDetail v={t.violation} />}
-      {t.kind === 'linter' && t.linter && <LinterDetail lr={t.linter} />}
+      {t.kind === 'linter' && <LinterDetail t={t} />}
       {t.kind === 'lint-file' && (
         <FileViolationsDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       )}
@@ -127,6 +143,15 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
           <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
             <span class="text-gray-400">$ </span>{t.command}
           </pre>
+        </Section>
+      )}
+
+      {task && (task.status || task.type) && (
+        <Section title="Task">
+          <div class="flex gap-4 text-sm text-gray-700">
+            {task.type && <span>type: <span class="font-mono">{task.type}</span></span>}
+            {task.status && <span>status: <span class="font-mono">{task.status}</span></span>}
+          </div>
         </Section>
       )}
 
@@ -324,27 +349,73 @@ function ViolationDetail({ v }: { v: Violation }) {
   );
 }
 
-function LinterDetail({ lr }: { lr: LinterResult }) {
+function groupViolationsByRule(violations: Violation[]): Array<{ rule: string; violations: Violation[] }> {
+  const grouped = new Map<string, Violation[]>();
+  for (const v of violations) {
+    const key = v.rule?.method || '(no rule)';
+    let bucket = grouped.get(key);
+    if (!bucket) {
+      bucket = [];
+      grouped.set(key, bucket);
+    }
+    bucket.push(v);
+  }
+  return Array.from(grouped.keys()).sort().map(rule => ({
+    rule,
+    violations: grouped.get(rule)!.slice().sort((a, b) => (a.line || 0) - (b.line || 0)),
+  }));
+}
+
+function LinterDetail({ t }: { t: Test }) {
+  const lr = t.linter;
+  const noFileViolations = t.noFileViolations || [];
   return (
     <>
-      <Section title="Status">
-        <div class="flex gap-3 text-sm">
-          <span class={lr.success ? 'text-green-600' : 'text-red-600'}>
-            {lr.skipped ? 'skipped' : lr.timed_out ? 'timed out' : lr.success ? 'success' : 'failed'}
-          </span>
-          <span class="text-gray-500">{(lr.violations || []).length} violations</span>
-          {lr.file_count !== undefined && <span class="text-gray-500">{lr.file_count} files</span>}
-          {lr.rule_count !== undefined && <span class="text-gray-500">{lr.rule_count} rules</span>}
-        </div>
-      </Section>
-      {lr.error && (
-        <Section title="Error">
-          <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3">{lr.error}</pre>
-        </Section>
+      {lr && (
+        <>
+          <Section title="Status">
+            <div class="flex gap-3 text-sm">
+              <span class={lr.success ? 'text-green-600' : 'text-red-600'}>
+                {lr.skipped ? 'skipped' : lr.timed_out ? 'timed out' : lr.success ? 'success' : 'failed'}
+              </span>
+              <span class="text-gray-500">{(lr.violations || []).length} violations</span>
+              {lr.file_count !== undefined && <span class="text-gray-500">{lr.file_count} files</span>}
+              {lr.rule_count !== undefined && <span class="text-gray-500">{lr.rule_count} rules</span>}
+            </div>
+          </Section>
+          {lr.error && (
+            <Section title="Error">
+              <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3">{lr.error}</pre>
+            </Section>
+          )}
+          {lr.raw_output && (
+            <Section title="Raw output">
+              <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto">{lr.raw_output}</pre>
+            </Section>
+          )}
+        </>
       )}
-      {lr.raw_output && (
-        <Section title="Raw output">
-          <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto">{lr.raw_output}</pre>
+      {noFileViolations.length > 0 && (
+        <Section title="Violations Without File">
+          <div class="space-y-3">
+            {groupViolationsByRule(noFileViolations).map(({ rule, violations }) => (
+              <div key={rule} class="border border-gray-200 rounded p-3 bg-gray-50">
+                <div class="text-sm font-mono text-gray-700 mb-2">
+                  {rule} <span class="text-xs text-gray-400">({violations.length})</span>
+                </div>
+                <div class="space-y-2">
+                  {violations.map((v, i) => (
+                    <ViolationRow
+                      key={i}
+                      v={v}
+                      linter={t.linterName || ''}
+                      file=""
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </Section>
       )}
     </>
@@ -399,42 +470,46 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       <Section title="File">
         <div class="flex items-center gap-2">
           <span class="text-sm font-mono text-gray-700">{file}</span>
-          <span class="text-xs text-gray-400">({vs.length} violations)</span>
+          {vs.length > 0 && <span class="text-xs text-gray-400">({vs.length} violations)</span>}
         </div>
       </Section>
-      <Section title="Actions">
-        <div class="flex flex-wrap gap-1.5">
-          <IgnoreButton
-            label={`Ignore all ${linter} in this file`}
-            title="Add {source, file} to .gavel.yaml"
-            req={{ source: linter, file }}
-            onIgnore={onIgnore}
-            disabled={ignoreBusy}
-          />
-          <IgnoreButton
-            label={`Disable ${linter} entirely`}
-            title="Add {source} to .gavel.yaml"
-            req={{ source: linter }}
-            onIgnore={onIgnore}
-            disabled={ignoreBusy}
-            variant="subtle"
-          />
-        </div>
-      </Section>
-      <Section title="Violations">
-        <div class="space-y-2">
-          {vs.map((v, i) => (
-            <ViolationRow
-              key={i}
-              v={v}
-              linter={linter}
-              file={file}
-              onIgnore={onIgnore}
-              ignoreBusy={ignoreBusy}
-            />
-          ))}
-        </div>
-      </Section>
+      {vs.length > 0 && (
+        <>
+          <Section title="Actions">
+            <div class="flex flex-wrap gap-1.5">
+              <IgnoreButton
+                label={`Ignore all ${linter} in this file`}
+                title="Add {source, file} to .gavel.yaml"
+                req={{ source: linter, file }}
+                onIgnore={onIgnore}
+                disabled={ignoreBusy}
+              />
+              <IgnoreButton
+                label={`Disable ${linter} entirely`}
+                title="Add {source} to .gavel.yaml"
+                req={{ source: linter }}
+                onIgnore={onIgnore}
+                disabled={ignoreBusy}
+                variant="subtle"
+              />
+            </div>
+          </Section>
+          <Section title="Violations">
+            <div class="space-y-2">
+              {vs.map((v, i) => (
+                <ViolationRow
+                  key={i}
+                  v={v}
+                  linter={linter}
+                  file={file}
+                  onIgnore={onIgnore}
+                  ignoreBusy={ignoreBusy}
+                />
+              ))}
+            </div>
+          </Section>
+        </>
+      )}
     </>
   );
 }
@@ -457,13 +532,15 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       )}
       <Section title="Actions">
         <div class="flex flex-wrap gap-1.5">
-          <IgnoreButton
-            label={`Ignore ${rule} in this file`}
-            title="Add {source, rule, file} to .gavel.yaml"
-            req={{ source: linter, rule, file }}
-            onIgnore={onIgnore}
-            disabled={ignoreBusy}
-          />
+          {file && (
+            <IgnoreButton
+              label={`Ignore ${rule} in this file`}
+              title="Add {source, rule, file} to .gavel.yaml"
+              req={{ source: linter, rule, file }}
+              onIgnore={onIgnore}
+              disabled={ignoreBusy}
+            />
+          )}
           <IgnoreButton
             label={`Ignore rule ${rule} everywhere`}
             title="Add {source, rule} to .gavel.yaml"
@@ -534,7 +611,7 @@ function ViolationRow({
           {v.code && (
             <pre class="text-xs font-mono bg-gray-50 rounded p-2 mt-1 overflow-x-auto">{v.code}</pre>
           )}
-          {rule && (
+          {rule && file && (
             <div class="mt-1.5">
               <IgnoreButton
                 label="Ignore this violation"

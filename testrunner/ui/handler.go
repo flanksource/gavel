@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -99,7 +101,7 @@ func (s *Server) notify() {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handlePage)
+	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/tests", s.handleJSON)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
@@ -120,13 +122,33 @@ func (s *Server) handleBenchJSON(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(cmp) //nolint:errcheck
 }
 
-func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
+	req, ok := parseRouteRequest(r)
+	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if req.IsExport {
+		s.handleExport(w, r, req)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, pageHTML())
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeRequest) {
+	s.mu.RLock()
+	report, err := s.buildExportReport(req)
+	s.mu.RUnlock()
+	if err != nil {
+		if err == errRouteNodeNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeExportResponse(w, r, report, req.Format)
 }
 
 func pageHTML() string {
@@ -164,7 +186,90 @@ type snapshot struct {
 }
 
 func (s *Server) snapshot() snapshot {
-	return snapshot{Tests: s.tests, Lint: s.lint, LintRun: s.lintRun, Bench: s.benchCmp, Done: s.done}
+	tests := s.tests
+	taskTests := virtualTaskTests()
+	if len(taskTests) > 0 {
+		merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
+		merged = append(merged, taskTests...)
+		merged = append(merged, s.tests...)
+		tests = merged
+	}
+	return snapshot{Tests: tests, Lint: s.lint, LintRun: s.lintRun, Bench: s.benchCmp, Done: s.done && tasksDone()}
+}
+
+func virtualTaskTests() []parsers.Test {
+	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	if len(snapshots) == 0 {
+		return nil
+	}
+
+	childrenByGroup := make(map[string][]parsers.Test)
+	groupOrder := make([]string, 0, 2)
+	groups := make(map[string]clickytask.TaskSnapshot)
+
+	for _, snap := range snapshots {
+		if snap.Type == "group" {
+			groups[snap.ID] = snap
+			groupOrder = append(groupOrder, snap.ID)
+			continue
+		}
+		if snap.Group == "" {
+			continue
+		}
+		childrenByGroup[snap.Group] = append(childrenByGroup[snap.Group], taskSnapshotToTest(snap))
+	}
+
+	var out []parsers.Test
+	for _, id := range groupOrder {
+		group, ok := groups[id]
+		if !ok {
+			continue
+		}
+		test := taskSnapshotToTest(group)
+		test.Children = childrenByGroup[id]
+		out = append(out, test)
+	}
+	return out
+}
+
+func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
+	t := parsers.Test{
+		Name:      snap.Name,
+		Framework: parsers.Framework("task"),
+	}
+	if snap.Type == "task" {
+		t.Command = snap.Name
+	}
+	if snap.Message != "" {
+		t.Message = snap.Message
+	} else if snap.Error != "" {
+		t.Message = snap.Error
+	}
+	if len(snap.Logs) > 0 {
+		lines := make([]string, 0, len(snap.Logs))
+		for _, entry := range snap.Logs {
+			lines = append(lines, entry.Message)
+		}
+		t.Stderr = strings.Join(lines, "\n")
+	}
+	t.Context = map[string]any{
+		"duration": snap.Duration,
+		"status":   snap.Status,
+		"type":     snap.Type,
+	}
+
+	switch snap.Status {
+	case "running", "pending":
+		t.Pending = true
+	case "success", "PASS":
+		t.Passed = true
+	case "failed", "FAIL", "ERR", "warning":
+		t.Failed = true
+	default:
+		t.Skipped = true
+	}
+
+	return t
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -182,12 +287,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	initial := s.snapshot()
 	s.mu.RUnlock()
+	lastPayload := ""
 	if b, err := json.Marshal(initial); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
+		lastPayload = string(b)
 	}
 
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -203,8 +310,12 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		s.mu.RUnlock()
 
 		b, _ := json.Marshal(data)
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
+		payload := string(b)
+		if payload != lastPayload {
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			flusher.Flush()
+			lastPayload = payload
+		}
 
 		if data.Done {
 			fmt.Fprintf(w, "event: done\ndata: {}\n\n")
@@ -212,4 +323,23 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func tasksDone() bool {
+	snapshots := clickytask.SnapshotAll(TestTaskGroupName, LintTaskGroupName)
+	if len(snapshots) == 0 {
+		return true
+	}
+
+	for _, snap := range snapshots {
+		if snap.Type != "group" {
+			continue
+		}
+		switch snap.Status {
+		case "running", "pending":
+			return false
+		}
+	}
+
+	return true
 }
