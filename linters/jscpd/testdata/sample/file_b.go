@@ -1,5 +1,7 @@
 package sample
 
+import "strings"
+
 func FilterItems(items []string) []string {
 	var result []string
 	for _, item := range items {

@@ -1,6 +1,8 @@
 package sample
 
-func TestProcessItems(items []string) []string {
+import "strings"
+
+func ProcessItemsFixture(items []string) []string {
 	var result []string
 	for _, item := range items {
 		if item == "" {
