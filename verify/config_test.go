@@ -141,6 +141,51 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	assert.Equal(t, cfg.Lint.Ignore, loaded.Lint.Ignore)
 }
 
+func TestLoadGavelConfig_WithFixtures(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`fixtures:
+  enabled: true
+  files:
+    - "specs/*.fixture.md"
+    - "tests/**/*.fixture.md"
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	assert.True(t, cfg.Fixtures.Enabled)
+	assert.Equal(t, []string{"specs/*.fixture.md", "tests/**/*.fixture.md"}, cfg.Fixtures.Files)
+}
+
+func TestFixturesConfig_ResolvedFiles_Default(t *testing.T) {
+	empty := FixturesConfig{}
+	assert.Equal(t, []string{DefaultFixturesGlob}, empty.ResolvedFiles())
+
+	custom := FixturesConfig{Files: []string{"a.md", "b.md"}}
+	assert.Equal(t, []string{"a.md", "b.md"}, custom.ResolvedFiles())
+}
+
+func TestMergeFixturesConfig(t *testing.T) {
+	t.Run("override enables", func(t *testing.T) {
+		merged := MergeFixturesConfig(FixturesConfig{}, FixturesConfig{Enabled: true})
+		assert.True(t, merged.Enabled)
+	})
+	t.Run("override files replace base", func(t *testing.T) {
+		base := FixturesConfig{Files: []string{"old.md"}}
+		override := FixturesConfig{Files: []string{"new.md"}}
+		merged := MergeFixturesConfig(base, override)
+		assert.Equal(t, []string{"new.md"}, merged.Files)
+	})
+	t.Run("override empty keeps base files", func(t *testing.T) {
+		base := FixturesConfig{Enabled: true, Files: []string{"base.md"}}
+		merged := MergeFixturesConfig(base, FixturesConfig{})
+		assert.Equal(t, []string{"base.md"}, merged.Files)
+		assert.True(t, merged.Enabled)
+	})
+}
+
 func TestMergeLintConfig(t *testing.T) {
 	base := LintConfig{
 		Ignore: []LintIgnoreRule{{Rule: "errcheck"}},

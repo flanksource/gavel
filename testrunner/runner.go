@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
 )
 
@@ -112,6 +113,8 @@ type RunOptions struct {
 	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
 	Since         string                `json:"since,omitempty" flag:"since"`                                 // Only run packages affected by the diff since <ref> (merge-base(HEAD,ref)..HEAD) plus the working tree
 	Bench         string                `json:"bench,omitempty" flag:"bench"`                                 // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
+	Fixtures      bool                  `json:"fixtures,omitempty" flag:"fixtures"`                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
+	FixtureFiles  []string              `json:"fixture_files,omitempty" flag:"fixture-files"`                 // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 }
 
@@ -153,6 +156,12 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if opts.Since != "" {
 		text = text.Space().Append("Since: ", "text-muted").Append(opts.Since, "text-blue-500")
+	}
+	if opts.Fixtures {
+		text = text.Space().Append("Fixtures: ", "text-muted").Append(icons.Check, "text-green-500")
+	}
+	if len(opts.FixtureFiles) > 0 {
+		text = text.Space().Append("FixtureFiles: ", "text-muted").Append(clicky.CompactList(opts.FixtureFiles), "text-blue-500")
 	}
 	return text
 }
@@ -231,13 +240,18 @@ func Run(opts RunOptions) (any, error) {
 	// Build hierarchical tree from flat test results
 	tree := parsers.BuildTestTree(tests)
 
-	// Discover and run fixture tests (results returned, not printed).
-	// Fixture failures are captured in the tree, not returned as errors,
-	// so that AddNamedCommand still prints the results.
-	fixtureTree, _ := runDiscoveredFixtures(opts.WorkDir, opts.StartingPaths, streamer)
-	if fixtureTree != nil {
-		for _, child := range fixtureTree.Children {
-			tree = append(tree, fixtureNodeToTests(child)...)
+	// Discover and run fixture tests, gated on the --fixtures flag or
+	// fixtures.enabled in .gavel.yaml. Fixture failures are captured in the
+	// tree, not returned as errors, so AddNamedCommand still prints results.
+	if globs := resolveFixtureGlobs(opts); globs != nil {
+		fixtureTree, err := runDiscoveredFixtures(opts.WorkDir, opts.StartingPaths, globs, streamer)
+		if err != nil {
+			logger.Warnf("fixture discovery failed: %v", err)
+		}
+		if fixtureTree != nil {
+			for _, child := range fixtureTree.Children {
+				tree = append(tree, fixtureNodeToTests(child)...)
+			}
 		}
 	}
 
@@ -790,28 +804,48 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 // Deprecated: use TestOrchestrator directly.
 type Runner = TestOrchestrator
 
-func discoverFixtures(workDir string, startingPaths []string) []string {
-	if len(startingPaths) == 0 {
-		return globFixtures([]string{
-			filepath.Join(workDir, "fixtures", "**", "*.md"),
-			filepath.Join(workDir, "fixture*.md"),
-			filepath.Join(workDir, "fixture-*.md"),
-		})
+// resolveFixtureGlobs decides whether fixtures should run and with which globs.
+// Returns nil when fixtures are disabled (neither the --fixtures flag nor
+// .gavel.yaml fixtures.enabled is set). Flag-supplied globs take precedence
+// over config; config takes precedence over the default glob.
+func resolveFixtureGlobs(opts RunOptions) []string {
+	cfg, err := verify.LoadGavelConfig(opts.WorkDir)
+	if err != nil {
+		logger.Warnf("failed to load .gavel.yaml for fixture config: %v", err)
+	}
+	if !opts.Fixtures && !cfg.Fixtures.Enabled {
+		return nil
+	}
+	if len(opts.FixtureFiles) > 0 {
+		return opts.FixtureFiles
+	}
+	return cfg.Fixtures.ResolvedFiles()
+}
+
+// discoverFixtures resolves each glob against every starting path (or workDir
+// when no paths are given) and returns the union of matching files.
+// Absolute globs are used as-is; relative globs are joined with the path root.
+func discoverFixtures(workDir string, startingPaths []string, globs []string) []string {
+	if len(globs) == 0 {
+		return nil
+	}
+	roots := startingPaths
+	if len(roots) == 0 {
+		roots = []string{workDir}
 	}
 
 	var patterns []string
-	for _, p := range startingPaths {
-		root := p
+	for _, root := range roots {
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(workDir, root)
 		}
-		patterns = append(patterns,
-			filepath.Join(root, "fixtures", "**", "*.md"),
-			filepath.Join(root, "**", "fixture*.md"),
-			filepath.Join(root, "**", "fixture-*.md"),
-			filepath.Join(root, "fixture*.md"),
-			filepath.Join(root, "fixture-*.md"),
-		)
+		for _, g := range globs {
+			if filepath.IsAbs(g) {
+				patterns = append(patterns, g)
+			} else {
+				patterns = append(patterns, filepath.Join(root, g))
+			}
+		}
 	}
 	return globFixtures(patterns)
 }
@@ -828,8 +862,8 @@ func globFixtures(patterns []string) []string {
 	return lo.Uniq(found)
 }
 
-func runDiscoveredFixtures(workDir string, startingPaths []string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
-	fixtureFiles := discoverFixtures(workDir, startingPaths)
+func runDiscoveredFixtures(workDir string, startingPaths []string, globs []string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
+	fixtureFiles := discoverFixtures(workDir, startingPaths, globs)
 	if len(fixtureFiles) == 0 {
 		return nil, nil
 	}

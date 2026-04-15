@@ -60,10 +60,27 @@ type CommitConfig struct {
 	Hooks []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 }
 
+// DefaultFixturesGlob is the default glob pattern used to discover fixture files.
+const DefaultFixturesGlob = "**/*.fixture.md"
+
+type FixturesConfig struct {
+	Enabled bool     `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Files   []string `yaml:"files,omitempty" json:"files,omitempty"`
+}
+
+// ResolvedFiles returns the configured globs, falling back to the default when none are set.
+func (f FixturesConfig) ResolvedFiles() []string {
+	if len(f.Files) > 0 {
+		return f.Files
+	}
+	return []string{DefaultFixturesGlob}
+}
+
 type GavelConfig struct {
-	Verify VerifyConfig `yaml:"verify" json:"verify"`
-	Lint   LintConfig   `yaml:"lint,omitempty" json:"lint,omitempty"`
-	Commit CommitConfig `yaml:"commit,omitempty" json:"commit,omitempty"`
+	Verify   VerifyConfig   `yaml:"verify" json:"verify"`
+	Lint     LintConfig     `yaml:"lint,omitempty" json:"lint,omitempty"`
+	Commit   CommitConfig   `yaml:"commit,omitempty" json:"commit,omitempty"`
+	Fixtures FixturesConfig `yaml:"fixtures,omitempty" json:"fixtures,omitempty"`
 }
 
 func DefaultVerifyConfig() VerifyConfig {
@@ -119,6 +136,7 @@ func mergeFromFile(base GavelConfig, path string) GavelConfig {
 	base.Verify = MergeVerifyConfig(base.Verify, gc.Verify)
 	base.Lint = MergeLintConfig(base.Lint, gc.Lint)
 	base.Commit = MergeCommitConfig(base.Commit, gc.Commit)
+	base.Fixtures = MergeFixturesConfig(base.Fixtures, gc.Fixtures)
 	return base
 }
 
@@ -151,6 +169,19 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	if len(override.Hooks) > 0 {
 		base.Hooks = append(base.Hooks, override.Hooks...)
+	}
+	return base
+}
+
+// MergeFixturesConfig merges override onto base. Enabled is true if either side
+// sets it; Files from the override replace base so a repo-level config can
+// override a home-level default without accumulating globs.
+func MergeFixturesConfig(base, override FixturesConfig) FixturesConfig {
+	if override.Enabled {
+		base.Enabled = true
+	}
+	if len(override.Files) > 0 {
+		base.Files = override.Files
 	}
 	return base
 }
