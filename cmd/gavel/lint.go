@@ -46,6 +46,7 @@ type LintOptions struct {
 	Changed   bool     `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since     string   `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
 	UI        bool     `flag:"ui" help:"Launch browser UI to view violations"`
+	Addr      string   `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
 	DryRun    bool     `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
 	Files     []string `args:"true"`
 }
@@ -107,7 +108,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if opts.UI {
-		uiServer, uiListener = startTestUI()
+		uiServer, uiListener = startTestUI(opts.Addr)
 	}
 
 	groups := groupFilesByGitRoot(opts)

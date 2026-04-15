@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -33,6 +34,7 @@ import (
 // time.Duration as a field type.
 type UIServeOptions struct {
 	Port        int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
+	Addr        string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
 	ListenerFD  int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --auto-stop)."`
 	ResultsFile string        `flag:"results-file" help:"Path to a JSON snapshot to load at startup. Written by the parent before fork."`
 	AutoStop    time.Duration `json:"-"`
@@ -106,7 +108,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	srv.MarkDone()
 
 	addr := listener.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://localhost:%d", addr.Port)
+	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(addr.Port)))
 
 	if opts.URLFile != "" {
 		if err := writeURLFile(opts.URLFile, url); err != nil {
@@ -203,6 +205,46 @@ func loadResults(srv *testui.Server, path string) error {
 		srv.SetBenchComparison(payload.Bench)
 	}
 	return nil
+}
+
+// announceHost picks the hostname to print in the "UI at ..." banner given
+// the user's --addr choice. When the user bound to a wildcard (0.0.0.0 or ::)
+// it walks net.InterfaceAddrs() and returns the first non-loopback IPv4 so
+// the printed URL is reachable from another host. Falls back to "localhost"
+// if no external interface is found (e.g. sandboxed CI).
+func announceHost(requested string) string {
+	switch requested {
+	case "", "localhost", "127.0.0.1", "::1":
+		return "localhost"
+	case "0.0.0.0", "::":
+		if ip := firstNonLoopbackIPv4(); ip != "" {
+			return ip
+		}
+		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; printing localhost", requested)
+		return "localhost"
+	default:
+		return requested
+	}
+}
+
+func firstNonLoopbackIPv4() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		logger.Warnf("net.InterfaceAddrs failed: %v", err)
+		return ""
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() || ipnet.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		v4 := ipnet.IP.To4()
+		if v4 == nil {
+			continue
+		}
+		return v4.String()
+	}
+	return ""
 }
 
 // writeURLFile writes url to path atomically (write to tempfile in same dir,

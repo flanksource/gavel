@@ -197,3 +197,43 @@ func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
 		t.Fatal("runUIServe did not auto-stop within 3s")
 	}
 }
+
+func TestAnnounceHost(t *testing.T) {
+	external := firstNonLoopbackIPv4()
+
+	cases := []struct {
+		name      string
+		requested string
+		want      string
+	}{
+		{"empty", "", "localhost"},
+		{"localhost", "localhost", "localhost"},
+		{"loopback v4", "127.0.0.1", "localhost"},
+		{"loopback v6", "::1", "localhost"},
+		{"explicit ip", "192.168.42.7", "192.168.42.7"},
+		{"explicit hostname", "buildhost.lan", "buildhost.lan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, announceHost(tc.requested))
+		})
+	}
+
+	t.Run("wildcard 0.0.0.0", func(t *testing.T) {
+		got := announceHost("0.0.0.0")
+		if external == "" {
+			assert.Equal(t, "localhost", got, "no non-loopback iface; expect fallback")
+		} else {
+			assert.Equal(t, external, got, "expected first non-loopback ipv4")
+		}
+	})
+
+	t.Run("wildcard ::", func(t *testing.T) {
+		got := announceHost("::")
+		if external == "" {
+			assert.Equal(t, "localhost", got)
+		} else {
+			assert.Equal(t, external, got)
+		}
+	})
+}

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -91,7 +92,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		uiUpdates         chan []parsers.Test
 	)
 	if opts.UI {
-		uiServer, uiListener = startTestUI()
+		uiServer, uiListener = startTestUI(opts.Addr)
 		testrunnerUpdates = make(chan []parsers.Test, 16)
 		uiUpdates = make(chan []parsers.Test, 16)
 		opts.Updates = testrunnerUpdates
@@ -350,15 +351,18 @@ func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
 // on it. Returns the server and the listener so the caller can later
 // hand the listener off to a detached child process (fork path in
 // handoffDetachedUI) instead of tearing the connection down and rebinding.
-func startTestUI() (*testui.Server, net.Listener) {
+func startTestUI(addr string) (*testui.Server, net.Listener) {
 	srv := testui.NewServer()
-	listener, err := net.Listen("tcp", "localhost:0")
+	if addr == "" {
+		addr = "localhost"
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {
 		fmt.Printf("Failed to start test UI server: %v\n", err)
 		return nil, nil
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("http://localhost:%d", port)
+	bound := listener.Addr().(*net.TCPAddr)
+	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(addr), strconv.Itoa(bound.Port)))
 
 	go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
