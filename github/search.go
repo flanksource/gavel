@@ -274,10 +274,6 @@ func buildSearchQuery(opts Options, searchOpts PRSearchOptions) (string, error) 
 	return strings.Join(parts, " "), nil
 }
 
-func buildSearchQueryForRepo(repo string, searchOpts PRSearchOptions) string {
-	return buildSearchQueryForRepos([]string{repo}, searchOpts)
-}
-
 // buildSearchQueryForRepos emits a single search expression with one
 // `repo:<owner>/<name>` qualifier per supplied repo. GitHub search accepts
 // multiple repo qualifiers in a single query; this lets callers coalesce

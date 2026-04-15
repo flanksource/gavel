@@ -88,7 +88,7 @@ func TestBuildSearchQuery(t *testing.T) {
 
 func TestBuildSearchQueryForRepo(t *testing.T) {
 	since := time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)
-	result := buildSearchQueryForRepo("flanksource/duty", PRSearchOptions{
+	result := buildSearchQueryForRepos([]string{"flanksource/duty"}, PRSearchOptions{
 		Author: "@me", Since: since, State: "open",
 	})
 	assert.Equal(t, "is:pr author:@me is:open updated:>2026-03-31 repo:flanksource/duty", result)

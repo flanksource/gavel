@@ -187,13 +187,17 @@ func handleLogo(w http.ResponseWriter, r *http.Request) {
 func handleMenubarIcon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Write(menubarPNG)
+	if _, err := w.Write(menubarPNG); err != nil {
+		logger.Debugf("write menubar icon: %v", err)
+	}
 }
 
 func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Write(menubarUnreadPNG)
+	if _, err := w.Write(menubarUnreadPNG); err != nil {
+		logger.Debugf("write menubar unread icon: %v", err)
+	}
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
