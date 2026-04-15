@@ -175,15 +175,15 @@ func triageAction(vt violationType, workDir string) ([]verify.LintIgnoreRule, er
 
 func formatViolationDetail(vt violationType, workDir string) string {
 	var s strings.Builder
-	s.WriteString(fmt.Sprintf("Source:     %s\n", vt.Source))
+	fmt.Fprintf(&s, "Source:     %s\n", vt.Source)
 	if vt.Rule != "" {
-		s.WriteString(fmt.Sprintf("Rule:       %s\n", vt.Rule))
+		fmt.Fprintf(&s, "Rule:       %s\n", vt.Rule)
 	}
-	s.WriteString(fmt.Sprintf("Violations: %d\n", vt.Count))
-	s.WriteString(fmt.Sprintf("Files:      %d\n", len(vt.Files)))
+	fmt.Fprintf(&s, "Violations: %d\n", vt.Count)
+	fmt.Fprintf(&s, "Files:      %d\n", len(vt.Files))
 
 	if vt.Example != "" {
-		s.WriteString(fmt.Sprintf("\nExample: %s\n", vt.Example))
+		fmt.Fprintf(&s, "\nExample: %s\n", vt.Example)
 	}
 
 	relFiles := relPaths(vt.Files, workDir)
@@ -191,10 +191,10 @@ func formatViolationDetail(vt violationType, workDir string) string {
 	limit := 15
 	for i, f := range relFiles {
 		if i >= limit {
-			s.WriteString(fmt.Sprintf("  ... and %d more\n", len(relFiles)-limit))
+			fmt.Fprintf(&s, "  ... and %d more\n", len(relFiles)-limit)
 			break
 		}
-		s.WriteString(fmt.Sprintf("  %s\n", f))
+		fmt.Fprintf(&s, "  %s\n", f)
 	}
 
 	return s.String()
