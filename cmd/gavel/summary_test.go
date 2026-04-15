@@ -236,6 +236,58 @@ func TestBuildCompactSummaryRespectsFailureCap(t *testing.T) {
 	}
 }
 
+func TestBuildCompactSummaryRendersCrashStub(t *testing.T) {
+	exitCode := 139
+	input := gavelResultJSON{
+		Error:    "gavel exited 139 before writing results",
+		ExitCode: &exitCode,
+		LogTail:  "panic: runtime error: invalid memory address\ngoroutine 1 [running]:\nmain.main()\n\t/src/cmd/gavel/main.go:72 +0x1a",
+	}
+	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
+
+	// Crash heading surfaces the error + exit code.
+	if !strings.Contains(out, "Gavel crashed before producing results") {
+		t.Errorf("expected crash heading, got:\n%s", out)
+	}
+	if !strings.Contains(out, "139") {
+		t.Errorf("expected exit code in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "gavel exited 139 before writing results") {
+		t.Errorf("expected error message in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "panic: runtime error") {
+		t.Errorf("expected log tail in output, got:\n%s", out)
+	}
+	// Should NOT emit the normal counts table (it would be empty and
+	// misleading next to a crash notice).
+	if strings.Contains(out, "**Totals:**") {
+		t.Errorf("crash stub must not render empty counts totals, got:\n%s", out)
+	}
+	if strings.Contains(out, "| Source |") {
+		t.Errorf("crash stub must not render empty counts table, got:\n%s", out)
+	}
+}
+
+func TestBuildCompactSummaryPrefersRealResultsOverCrashField(t *testing.T) {
+	// If gavel produced real results AND the JSON happens to also carry
+	// an error field (e.g. partial-run reporting), the real results win.
+	input := gavelResultJSON{
+		Tests: []parsers.Test{
+			{Package: "pkg/x", Children: parsers.Tests{
+				{Package: "pkg/x", Name: "TestOne", Passed: true},
+			}},
+		},
+		Error: "partial error that should be ignored",
+	}
+	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
+	if !strings.Contains(out, "pkg/x") {
+		t.Errorf("expected normal results to render, got:\n%s", out)
+	}
+	if strings.Contains(out, "Gavel crashed") {
+		t.Errorf("normal results must not fall through to crash path, got:\n%s", out)
+	}
+}
+
 func TestRunSummaryReadsJSONFile(t *testing.T) {
 	tmp := t.TempDir()
 	inputPath := filepath.Join(tmp, "gavel-results.json")
