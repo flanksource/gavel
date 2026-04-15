@@ -263,7 +263,7 @@ func (r *Runner) cacheViolations(linterName string, violations []models.Violatio
 // budget. Errors are NOT passed to task.Errorf — that writes buffered
 // child lines that render as indented sub-lines under the task, which
 // the step-log compact format does not want.
-func (r *Runner) updateTaskStatus(task *clicky.Task, linterName string, success bool, violations []models.Violation, err error) {
+func ApplyLinterTaskStatus(task *clicky.Task, linterName string, success bool, violations []models.Violation, err error) {
 	if success {
 		if len(violations) > 0 {
 			task.SetName(buildLinterLabel(linterName, len(violations), true, firstViolationSnippet(violations), ""))
@@ -280,6 +280,10 @@ func (r *Runner) updateTaskStatus(task *clicky.Task, linterName string, success 
 		task.SetName(buildLinterLabel(linterName, len(violations), false, firstViolationSnippet(violations), errMsg))
 		task.Failed()
 	}
+}
+
+func (r *Runner) updateTaskStatus(task *clicky.Task, linterName string, success bool, violations []models.Violation, err error) {
+	ApplyLinterTaskStatus(task, linterName, success, violations, err)
 }
 
 // firstViolationSnippet returns a compact "file:line rule: message" for

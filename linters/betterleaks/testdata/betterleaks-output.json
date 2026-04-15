@@ -1,0 +1,32 @@
+[
+  {
+    "RuleID": "aws-access-token",
+    "Description": "AWS Access Key",
+    "File": "config/prod.env",
+    "StartLine": 12,
+    "EndLine": 12,
+    "StartColumn": 20,
+    "EndColumn": 40,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "Entropy": 3.9,
+    "Fingerprint": "config/prod.env:aws-access-token:12",
+    "Commit": "",
+    "Tags": ["aws", "key"]
+  },
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Generic API Key",
+    "File": "src/client.go",
+    "StartLine": 47,
+    "EndLine": 47,
+    "StartColumn": 15,
+    "EndColumn": 55,
+    "Match": "api_key=abcd1234efgh5678ijkl9012mnop3456",
+    "Secret": "abcd1234efgh5678ijkl9012mnop3456",
+    "Entropy": 4.1,
+    "Fingerprint": "src/client.go:generic-api-key:47",
+    "Commit": "",
+    "Tags": ["api"]
+  }
+]

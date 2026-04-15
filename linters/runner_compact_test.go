@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/clicky"
+	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -204,5 +206,28 @@ func TestJoinLabelLinter(t *testing.T) {
 				t.Errorf("exceeded budget %d: %q (%d)", tc.budget, got, runeLenLinter(got))
 			}
 		})
+	}
+}
+
+type dryRunLinter struct{}
+
+func (d dryRunLinter) Name() string { return "dummy" }
+func (d dryRunLinter) Run(_ commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
+	return nil, nil
+}
+func (d dryRunLinter) DefaultIncludes() []string                   { return nil }
+func (d dryRunLinter) DefaultExcludes() []string                   { return nil }
+func (d dryRunLinter) SupportsJSON() bool                          { return false }
+func (d dryRunLinter) JSONArgs() []string                          { return nil }
+func (d dryRunLinter) SupportsFix() bool                           { return false }
+func (d dryRunLinter) FixArgs() []string                           { return nil }
+func (d dryRunLinter) ValidateConfig(_ *models.LinterConfig) error { return nil }
+func (d dryRunLinter) DryRunCommand() (string, []string) {
+	return "eslint", []string{"--format=json", "."}
+}
+
+func TestRunningCommandLabel(t *testing.T) {
+	if got := runningCommandLabel(dryRunLinter{}); got != "eslint --format=json ." {
+		t.Errorf("runningCommandLabel(dryRunLinter) = %q, want %q", got, "eslint --format=json .")
 	}
 }

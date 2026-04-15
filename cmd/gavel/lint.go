@@ -13,8 +13,11 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	clickytask "github.com/flanksource/clicky/task"
+	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/linters/betterleaks"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
@@ -24,6 +27,7 @@ import (
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -67,12 +71,13 @@ func (o LintOptions) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd.
+Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd, betterleaks.
 
 Examples:
   gavel lint
   gavel lint jscpd
   gavel lint jscpd eslint
+  gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint
   gavel lint --linters=golangci-lint,ruff
   gavel lint --fix
@@ -88,6 +93,7 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+	clicky.ClearGlobalTasks()
 
 	if opts.DryRun {
 		groups := groupFilesByGitRoot(opts)
@@ -200,6 +206,9 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 		timeout = models.DefaultLinterTimeout
 	}
 
+	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
+	secretsCfg := gavelCfg.Secrets
+
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
 	registry.Register(ruff.NewRuff(opts.WorkDir))
@@ -208,27 +217,38 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
 	registry.Register(vale.NewVale(opts.WorkDir))
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
+	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
 
-	// Check if any positional args are linter names
+	// Check if any positional args are linter names. `secrets` is an alias
+	// for `betterleaks` so users can type `gavel lint secrets`.
 	var linterFilter []string
 	var actualFiles []string
 	for _, f := range opts.Files {
-		if registry.Has(f) {
-			linterFilter = append(linterFilter, f)
+		name := f
+		if name == "secrets" {
+			name = "betterleaks"
+		}
+		if registry.Has(name) {
+			linterFilter = append(linterFilter, name)
 		} else {
 			actualFiles = append(actualFiles, f)
 		}
 	}
 	opts.Files = actualFiles
 
+	explicit := false
 	requestedLinters := registry.List()
 	if len(linterFilter) > 0 {
 		requestedLinters = linterFilter
+		explicit = true
 	} else if opts.Linters != "*" {
 		requestedLinters = strings.Split(opts.Linters, ",")
+		explicit = true
 	}
 
+	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
 	var allResults []*linters.LinterResult
+	var lintTasks []clickytask.TypedTask[*linters.LinterResult]
 	for _, name := range requestedLinters {
 		linter, ok := registry.Get(strings.TrimSpace(name))
 		if !ok {
@@ -249,6 +269,31 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 				Error:   "not found on PATH",
 			})
 			continue
+		}
+
+		// Config-file-driven linters only run by default when a config is
+		// actually present. Passing the linter name explicitly overrides
+		// the "needs config" gate, but `secrets.disabled: true` in
+		// .gavel.yaml always wins.
+		if linter.Name() == "betterleaks" {
+			if secretsCfg.Disabled {
+				logger.V(2).Infof("Skipping betterleaks: disabled via .gavel.yaml")
+				allResults = append(allResults, &linters.LinterResult{
+					Linter:  linter.Name(),
+					Skipped: true,
+					Error:   "disabled via .gavel.yaml",
+				})
+				continue
+			}
+			if !explicit && len(betterleaks.DiscoverConfigs(opts.WorkDir)) == 0 {
+				logger.V(2).Infof("Skipping betterleaks: no .betterleaks.toml / .gitleaks.toml found")
+				allResults = append(allResults, &linters.LinterResult{
+					Linter:  linter.Name(),
+					Skipped: true,
+					Error:   "no betterleaks/gitleaks config found",
+				})
+				continue
+			}
 		}
 
 		runOpts := linters.RunOptions{
@@ -275,10 +320,21 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 		if mixin, ok := linter.(linters.OptionsMixin); ok {
 			mixin.SetOptions(runOpts)
 		}
+		lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
+			result := linters.RunLinterWithTask(ctx, t, linter, runOpts)
+			result.WorkDir = opts.WorkDir
+			return result, nil
+		}))
+	}
 
-		result := linters.RunLinter(linter, runOpts)
-		result.WorkDir = opts.WorkDir
-		allResults = append(allResults, &result)
+	for _, task := range lintTasks {
+		result, err := task.GetResult()
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			allResults = append(allResults, result)
+		}
 	}
 
 	return allResults, nil
@@ -380,6 +436,9 @@ func displayLintDryRun(opts LintOptions) {
 		timeout = models.DefaultLinterTimeout
 	}
 
+	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
+	secretsCfg := gavelCfg.Secrets
+
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
 	registry.Register(ruff.NewRuff(opts.WorkDir))
@@ -388,12 +447,18 @@ func displayLintDryRun(opts LintOptions) {
 	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
 	registry.Register(vale.NewVale(opts.WorkDir))
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
+	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
 
+	explicit := false
 	var linterFilter []string
 	var actualFiles []string
 	for _, f := range opts.Files {
-		if registry.Has(f) {
-			linterFilter = append(linterFilter, f)
+		name := f
+		if name == "secrets" {
+			name = "betterleaks"
+		}
+		if registry.Has(name) {
+			linterFilter = append(linterFilter, name)
 		} else {
 			actualFiles = append(actualFiles, f)
 		}
@@ -403,8 +468,10 @@ func displayLintDryRun(opts LintOptions) {
 	requestedLinters := registry.List()
 	if len(linterFilter) > 0 {
 		requestedLinters = linterFilter
+		explicit = true
 	} else if opts.Linters != "*" {
 		requestedLinters = strings.Split(opts.Linters, ",")
+		explicit = true
 	}
 
 	for _, name := range requestedLinters {
@@ -421,6 +488,16 @@ func displayLintDryRun(opts LintOptions) {
 		if _, err := exec.LookPath(linter.Name()); err != nil {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "not found on PATH")
 			continue
+		}
+		if linter.Name() == "betterleaks" {
+			if secretsCfg.Disabled {
+				testrunner.PrintDryRunSkipped("lint", linter.Name(), "disabled via .gavel.yaml")
+				continue
+			}
+			if !explicit && len(betterleaks.DiscoverConfigs(opts.WorkDir)) == 0 {
+				testrunner.PrintDryRunSkipped("lint", linter.Name(), "no betterleaks/gitleaks config found")
+				continue
+			}
 		}
 
 		runOpts := linters.RunOptions{
