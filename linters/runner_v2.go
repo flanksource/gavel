@@ -179,7 +179,7 @@ func (r *RunnerV2) executeLinter(ctx context.Context, linterName string, linter 
 
 	// Update task status
 	if t != nil {
-		r.updateTaskStatus(t, linterName, success, len(violations), err)
+		r.updateTaskStatus(t, linterName, success, violations, err)
 	}
 
 	timedOut := ctx.Err() == context.DeadlineExceeded
@@ -264,21 +264,24 @@ func (r *RunnerV2) cacheViolations(linterName string, violations []models.Violat
 	}
 }
 
-// updateTaskStatus updates the task status
-func (r *RunnerV2) updateTaskStatus(t *task.Task, linterName string, success bool, violationCount int, err error) {
+// updateTaskStatus updates the task status. See updateTaskStatus in
+// runner.go for the design rationale (single-line compact label, no
+// buffered child logs).
+func (r *RunnerV2) updateTaskStatus(t *task.Task, linterName string, success bool, violations []models.Violation, err error) {
 	if success {
-		if violationCount > 0 {
-			t.SetName(fmt.Sprintf("%s (%d violations)", linterName, violationCount))
+		if len(violations) > 0 {
+			t.SetName(buildLinterLabel(linterName, len(violations), true, firstViolationSnippet(violations), ""))
 			t.Warning()
 		} else {
 			t.SetName(linterName)
 			t.Success()
 		}
 	} else {
-		t.SetName(fmt.Sprintf("%s (failed)", linterName))
+		errMsg := ""
 		if err != nil {
-			t.Errorf("Error: %v", err)
+			errMsg = err.Error()
 		}
+		t.SetName(buildLinterLabel(linterName, len(violations), false, firstViolationSnippet(violations), errMsg))
 		t.Failed()
 	}
 }

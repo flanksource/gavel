@@ -487,6 +487,14 @@ func (f FixtureResult) String() string {
 }
 
 func (f FixtureResult) Pretty() api.Text {
+	// In CI / --no-progress mode, emit a single compact line per fixture.
+	// Passing fixtures are skipped entirely (they're already counted in
+	// the parent Stats rollup); failing fixtures show only the error or
+	// first line of stderr/stdout so the whole block fits on one line.
+	if clicky.Flags.NoProgress {
+		return f.compactLine()
+	}
+
 	t := f.Status.Pretty().Append(" ").Add(f.Test.Pretty())
 
 	if f.Duration > 0 {
@@ -534,6 +542,58 @@ func (f FixtureResult) Pretty() api.Text {
 	}
 
 	return t
+}
+
+// compactLine renders a fixture result as a single one-line summary
+// suitable for a CI step log. Passing fixtures get a short
+// `✓ PASS <name> (duration)` line; failing fixtures add the first
+// non-blank line of the error, stderr, stdout, or CEL expression.
+// Neither case emits the `$ bash -c …` / `▶ stdout` sub-blocks that
+// saturate the step log in the verbose render path.
+func (f FixtureResult) compactLine() api.Text {
+	isFailed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
+
+	// Prefix: status icon + word + fixture name (e.g. `✓ PASS MyTest`).
+	t := f.Status.Pretty().Append(" ").Add(f.Test.Pretty())
+	if f.Duration > 0 {
+		t = t.Space().Append(fmt.Sprintf("(%s)", f.Duration), "text-muted")
+	}
+	if !isFailed {
+		// Passing/skipped fixtures: return the header only, no details.
+		return t
+	}
+
+	// Failing: append the best available failure snippet. Strip ANSI and
+	// pick the first non-blank line so the whole render fits on one line.
+	detail := fixtureFailureSnippet(f)
+	if detail != "" {
+		t = t.Space().Append(detail, "text-red-600")
+	}
+	return t
+}
+
+// fixtureFailureSnippet returns the first non-blank, ANSI-free line of
+// the best available failure source: explicit Error, then Stderr,
+// Stdout, CELExpression.
+func fixtureFailureSnippet(f FixtureResult) string {
+	for _, body := range []string{f.Error, f.Stderr, f.Stdout, f.CELExpression} {
+		line := firstNonBlankFixtureLine(body)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func firstNonBlankFixtureLine(s string) string {
+	s = stripFixtureANSI(s)
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }
 
 // Out returns the combined stderr and stdout output
