@@ -16,13 +16,13 @@ import (
 )
 
 var (
-	benchRunCount    int
-	benchRunTimeout  string
+	benchRunCount     int
+	benchRunTimeout   string
 	benchRunBenchtime string
-	benchRunOut      string
-	benchRunPattern  string
-	benchRunMem      bool
-	benchRunExtra    []string
+	benchRunOut       string
+	benchRunPattern   string
+	benchRunMem       bool
+	benchRunExtra     []string
 
 	benchCompareBase      string
 	benchCompareHead      string

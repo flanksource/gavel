@@ -13,14 +13,14 @@ import (
 )
 
 type Server struct {
-	mu      sync.RWMutex
-	tests   []parsers.Test
-	lint    []*linters.LinterResult
-	lintRun bool
+	mu       sync.RWMutex
+	tests    []parsers.Test
+	lint     []*linters.LinterResult
+	lintRun  bool
 	benchCmp *bench.BenchComparison
-	done    bool
-	updated chan struct{}
-	gitRoot string
+	done     bool
+	updated  chan struct{}
+	gitRoot  string
 
 	rerunMu sync.Mutex
 	rerunFn RerunFunc
@@ -156,11 +156,11 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 }
 
 type snapshot struct {
-	Tests   []parsers.Test           `json:"tests"`
-	Lint    []*linters.LinterResult  `json:"lint,omitempty"`
-	LintRun bool                     `json:"lint_run,omitempty"`
-	Bench   *bench.BenchComparison   `json:"bench,omitempty"`
-	Done    bool                     `json:"done"`
+	Tests   []parsers.Test          `json:"tests"`
+	Lint    []*linters.LinterResult `json:"lint,omitempty"`
+	LintRun bool                    `json:"lint_run,omitempty"`
+	Bench   *bench.BenchComparison  `json:"bench,omitempty"`
+	Done    bool                    `json:"done"`
 }
 
 func (s *Server) snapshot() snapshot {
