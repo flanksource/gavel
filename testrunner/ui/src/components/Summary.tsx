@@ -1,5 +1,5 @@
 import type { Test } from '../types';
-import { sum } from '../utils';
+import { sumNonTaskTests } from '../utils';
 import { ProgressBar } from './ProgressBar';
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
 export function Summary({ tests, startTime, endTime, done }: Props) {
   const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
   for (const t of tests) {
-    const s = sum(t);
+    const s = sumNonTaskTests(t);
     totals.total += s.total;
     totals.passed += s.passed;
     totals.failed += s.failed;

@@ -8,9 +8,16 @@ import { LintFilterBar, type LintGrouping, type LintFilters } from './components
 import { LintView } from './components/LintView';
 import { BenchView } from './components/BenchView';
 import { SplitPane } from './components/SplitPane';
-import { sum, collectFrameworks, filterTests, totalLintViolations } from './utils';
-
-type TabKey = 'tests' | 'lint' | 'bench';
+import { copyCurrentViewForAgent, downloadCurrentView } from './export';
+import {
+  sumNonTaskTests,
+  collectFrameworks,
+  filterTests,
+  totalLintViolations,
+  groupLintByLinterFile,
+  groupLintByFileLinterRule,
+} from './utils';
+import { annotateRoutePaths, buildExportRoute, buildRoute, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
 
 function applySnapshot(
   snap: Snapshot,
@@ -39,7 +46,25 @@ function applySnapshot(
   }
 }
 
+function currentRouteState(
+  tab: TabKey,
+  selectedPath: string,
+  filters: Filters,
+  lintGrouping: LintGrouping,
+  lintFilters: LintFilters,
+): RouteState {
+  return { tab, selectedPath, filters, lintGrouping, lintFilters };
+}
+
 export function App() {
+  const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location) : {
+    tab: 'tests' as TabKey,
+    selectedPath: '',
+    filters: { status: new Set<string>(), framework: new Set<string>() },
+    lintGrouping: 'linter-file' as LintGrouping,
+    lintFilters: { severity: new Set(), linter: new Set() },
+  };
+
   const [tests, setTests] = useState<Test[]>([]);
   const [lint, setLint] = useState<LinterResult[] | undefined>(undefined);
   const [lintRun, setLintRun] = useState(false);
@@ -47,18 +72,61 @@ export function App() {
   const [done, setDone] = useState(false);
   const [status, setStatus] = useState('Loading...');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
-  const [selected, setSelected] = useState<Test | null>(null);
-  const [filters, setFilters] = useState<Filters>({ status: new Set(), framework: new Set() });
-  const [activeTab, setActiveTab] = useState<TabKey>('tests');
-  const [tabUserSet, setTabUserSet] = useState(false);
-  const [lintGrouping, setLintGrouping] = useState<LintGrouping>('linter-file');
-  const [lintFilters, setLintFilters] = useState<LintFilters>({ severity: new Set(), linter: new Set() });
+  const [filters, setFilters] = useState<Filters>(initialRoute.filters);
+  const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab);
+  const [lintGrouping, setLintGrouping] = useState<LintGrouping>(initialRoute.lintGrouping);
+  const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
+  const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [ignoreBusy, setIgnoreBusy] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
+  const [copyError, setCopyError] = useState('');
   const startTime = useRef<number | null>(null);
   const endTime = useRef<number | null>(null);
   const [, tick] = useState(0);
   const doneRef = useRef(false);
+  const copyResetTimer = useRef<number | null>(null);
+
+  const routeState = useMemo(
+    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters),
+    [activeTab, selectedPath, filters, lintGrouping, lintFilters],
+  );
+
+  const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
+    setActiveTab(next.tab);
+    setSelectedPath(next.selectedPath);
+    setFilters(next.filters);
+    setLintGrouping(next.lintGrouping);
+    setLintFilters(next.lintFilters);
+    const url = buildRoute(next);
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (url !== current) {
+      if (mode === 'replace') window.history.replaceState({}, '', url);
+      else window.history.pushState({}, '', url);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = parseRoute(window.location);
+      setActiveTab(next.tab);
+      setSelectedPath(next.selectedPath);
+      setFilters(next.filters);
+      setLintGrouping(next.lintGrouping);
+      setLintFilters(next.lintFilters);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/tests')
@@ -98,7 +166,7 @@ export function App() {
   const totals = useMemo(() => {
     const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
     for (const test of tests) {
-      const s = sum(test);
+      const s = sumNonTaskTests(test);
       t.total += s.total;
       t.passed += s.passed;
       t.failed += s.failed;
@@ -109,23 +177,81 @@ export function App() {
   }, [tests]);
 
   const frameworks = useMemo(() => collectFrameworks(tests), [tests]);
-  const filtered = useMemo(() => filterTests(tests, filters.status, filters.framework), [tests, filters]);
+  const filteredTests = useMemo(
+    () => annotateRoutePaths(filterTests(tests, filters.status, filters.framework)),
+    [tests, filters],
+  );
+  const lintTree = useMemo(() => {
+    const tree = lintGrouping === 'linter-file'
+      ? groupLintByLinterFile(lint, lintFilters)
+      : groupLintByFileLinterRule(lint, lintFilters);
+    return annotateRoutePaths(tree);
+  }, [lint, lintGrouping, lintFilters]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
 
-  useEffect(() => {
-    if (tabUserSet) return;
-    if (bench && tests.length === 0) { setActiveTab('bench'); return; }
-    if (lintRun && tests.length === 0 && lintTotal > 0) setActiveTab('lint');
-  }, [lintRun, tests.length, lintTotal, bench, tabUserSet]);
+  const selected = useMemo(() => {
+    if (!selectedPath) return null;
+    if (activeTab === 'tests') return findNodeByRoutePath(filteredTests, selectedPath);
+    if (activeTab === 'lint') return findNodeByRoutePath(lintTree, selectedPath);
+    return null;
+  }, [activeTab, filteredTests, lintTree, selectedPath]);
 
-  const onTabChange = useCallback((t: TabKey) => {
-    setTabUserSet(true);
-    setActiveTab(t);
-    setSelected(null);
-  }, []);
+  useEffect(() => {
+    if (!selectedPath) return;
+    const ready = activeTab === 'tests'
+      ? (tests.length > 0 || done)
+      : activeTab === 'lint'
+        ? (lintRun || done || !!lint)
+        : true;
+    if (!ready || selected) return;
+    commitRoute({ ...routeState, selectedPath: '' }, 'replace');
+  }, [selectedPath, selected, activeTab, tests.length, done, lintRun, lint, routeState, commitRoute]);
+
+  const onTabChange = useCallback((tab: TabKey) => {
+    commitRoute({
+      ...routeState,
+      tab,
+      selectedPath: '',
+    });
+  }, [routeState, commitRoute]);
+
+  const onSelect = useCallback((test: Test) => {
+    const nextPath = test.route_path === selectedPath ? '' : (test.route_path || '');
+    commitRoute({
+      ...routeState,
+      selectedPath: nextPath,
+    });
+  }, [routeState, selectedPath, commitRoute]);
+
+  const onTestFiltersChange = useCallback((nextFilters: Filters) => {
+    commitRoute({
+      ...routeState,
+      tab: 'tests',
+      filters: nextFilters,
+      selectedPath: '',
+    });
+  }, [routeState, commitRoute]);
+
+  const onLintGroupingChange = useCallback((grouping: LintGrouping) => {
+    commitRoute({
+      ...routeState,
+      tab: 'lint',
+      lintGrouping: grouping,
+      selectedPath: '',
+    });
+  }, [routeState, commitRoute]);
+
+  const onLintFiltersChange = useCallback((nextFilters: LintFilters) => {
+    commitRoute({
+      ...routeState,
+      tab: 'lint',
+      lintFilters: nextFilters,
+      selectedPath: '',
+    });
+  }, [routeState, commitRoute]);
 
   const onRerun = useCallback(async (t: Test) => {
-    if (t.kind === 'violation' || t.kind === 'lint-root' || t.kind === 'linter' || t.kind === 'lint-file' || t.kind === 'lint-rule') return;
+    if (t.kind === 'violation' || t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter' || t.kind === 'lint-file' || t.kind === 'lint-rule' || t.framework === 'task') return;
     if (rerunBusy) return;
     const collectPaths = (n: Test, out: Set<string>) => {
       if (n.package_path) out.add(n.package_path);
@@ -179,20 +305,60 @@ export function App() {
         setStatus(`Ignore failed: ${text.trim()}`);
       } else {
         setStatus('Ignore rule saved to .gavel.yaml');
-        setSelected(null);
+        commitRoute({ ...routeState, selectedPath: '' }, 'replace');
       }
     } catch (e: any) {
       setStatus(`Ignore error: ${e?.message || e}`);
     } finally {
       setIgnoreBusy(false);
     }
-  }, [ignoreBusy]);
+  }, [ignoreBusy, routeState, commitRoute]);
 
   const showLintTab = lintRun;
   const showBenchTab = !!bench;
   const showTabs = showLintTab || showBenchTab;
   const benchRegressions = bench?.deltas?.filter(d => d.significant && d.delta_pct > bench.threshold).length || 0;
   const hasContent = tests.length > 0 || (lintRun && lintTotal > 0) || showBenchTab;
+  const canExportCurrentView = (activeTab === 'tests' && tests.length > 0)
+    || (activeTab === 'lint' && lintRun)
+    || (activeTab === 'bench' && !!bench);
+  const jsonExportURL = useMemo(() => buildExportRoute(routeState, 'json'), [routeState]);
+  const markdownExportURL = useMemo(() => buildExportRoute(routeState, 'md'), [routeState]);
+
+  const resetCopyFeedback = useCallback((nextState: 'copied' | 'error', error: string = '') => {
+    setCopyState(nextState);
+    setCopyError(error);
+    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(() => {
+      setCopyState('idle');
+      setCopyError('');
+      copyResetTimer.current = null;
+    }, nextState === 'copied' ? 2000 : 3000);
+  }, []);
+
+  const onDownloadJSON = useCallback(() => {
+    downloadCurrentView(routeState, 'json');
+  }, [routeState]);
+
+  const onDownloadMarkdown = useCallback(() => {
+    downloadCurrentView(routeState, 'md');
+  }, [routeState]);
+
+  const onCopyForAgent = useCallback(async () => {
+    if (copyState === 'copying') return;
+    setCopyState('copying');
+    setCopyError('');
+    if (copyResetTimer.current) {
+      window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = null;
+    }
+    try {
+      await copyCurrentViewForAgent(routeState);
+      resetCopyFeedback('copied');
+    } catch (e: any) {
+      resetCopyFeedback('error', e?.message || 'Copy failed');
+    }
+  }, [copyState, routeState, resetCopyFeedback]);
 
   return (
     <div class="bg-gray-100 h-screen flex flex-col">
@@ -220,6 +386,40 @@ export function App() {
                 >
                   <iconify-icon icon="codicon:collapse-all" class="mr-0.5" />
                   Collapse
+                </button>
+              </div>
+            )}
+            {canExportCurrentView && (
+              <div class="flex gap-1">
+                <button
+                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+                  onClick={onDownloadJSON}
+                  title={jsonExportURL}
+                >
+                  <iconify-icon icon="codicon:json" class="mr-0.5" />
+                  JSON
+                </button>
+                <button
+                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+                  onClick={onDownloadMarkdown}
+                  title={markdownExportURL}
+                >
+                  <iconify-icon icon="codicon:markdown" class="mr-0.5" />
+                  Markdown
+                </button>
+                <button
+                  class={`text-xs px-2 py-1 rounded border transition-colors ${
+                    copyState === 'error'
+                      ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
+                      : copyState === 'copied'
+                        ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  onClick={onCopyForAgent}
+                  title={copyError || markdownExportURL}
+                >
+                  <iconify-icon icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'} class="mr-0.5" />
+                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
                 </button>
               </div>
             )}
@@ -263,7 +463,7 @@ export function App() {
 
         {activeTab === 'tests' && tests.length > 0 && (
           <div class="mt-2">
-            <FilterBar filters={filters} onChange={setFilters} counts={totals} frameworks={frameworks} />
+            <FilterBar filters={filters} onChange={onTestFiltersChange} counts={totals} frameworks={frameworks} />
           </div>
         )}
         {activeTab === 'lint' && lintRun && (
@@ -271,9 +471,9 @@ export function App() {
             <LintFilterBar
               lint={lint}
               grouping={lintGrouping}
-              onGroupingChange={setLintGrouping}
+              onGroupingChange={onLintGroupingChange}
               filters={lintFilters}
-              onFiltersChange={setLintFilters}
+              onFiltersChange={onLintFiltersChange}
             />
           </div>
         )}
@@ -285,8 +485,8 @@ export function App() {
           <>
             {activeTab === 'tests' && (
               <>
-                {filtered.map((t, i) => (
-                  <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={setSelected} onRerun={onRerun} rerunBusy={rerunBusy} />
+                {filteredTests.map((t, i) => (
+                  <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} rerunBusy={rerunBusy} />
                 ))}
                 {tests.length === 0 && !done && (
                   <div class="p-8 text-center text-gray-400">
@@ -294,7 +494,7 @@ export function App() {
                     <p class="mt-2">Waiting for test results...</p>
                   </div>
                 )}
-                {filtered.length === 0 && tests.length > 0 && (
+                {filteredTests.length === 0 && tests.length > 0 && (
                   <div class="p-8 text-center text-gray-400 text-sm">
                     No tests match the current filters
                   </div>
@@ -304,11 +504,10 @@ export function App() {
             {activeTab === 'lint' && (
               <LintView
                 lint={lint}
-                grouping={lintGrouping}
-                filters={lintFilters}
+                tree={lintTree}
                 expandAll={expandAll}
                 selected={selected}
-                onSelect={setSelected}
+                onSelect={onSelect}
               />
             )}
             {activeTab === 'bench' && <BenchView bench={bench} />}

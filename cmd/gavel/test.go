@@ -41,6 +41,7 @@ var (
 func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.AutoStop = testDurationFlags.AutoStop
 	opts.IdleTimeout = testDurationFlags.IdleTimeout
+	clicky.ClearGlobalTasks()
 
 	if opts.WorkDir == "" {
 		wd, err := getWorkingDir()
@@ -96,6 +97,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		opts.Updates = testrunnerUpdates
 		uiServer.StreamFrom(uiUpdates)
 		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
+			clicky.ClearGlobalTasks()
 			rerunOpts := opts
 			rerunOpts.Lint = false
 			rerunOpts.Updates = testrunnerUpdates

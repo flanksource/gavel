@@ -20,12 +20,14 @@ export interface Test {
   context?: GoTestContext | GinkgoContext | FixtureContext;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
-  kind?: 'lint-root' | 'linter' | 'violation' | 'lint-file' | 'lint-rule';
+  kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule';
   violation?: Violation;
   violations?: Violation[];
+  noFileViolations?: Violation[];
   linter?: LinterResult;
   linterName?: string;
   ruleName?: string;
+  route_path?: string;
 }
 
 export type Severity = 'error' | 'warning' | 'info';

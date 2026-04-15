@@ -512,7 +512,7 @@ func (o *TestOrchestrator) runPackageTest(
 	process := testRun.Process.WithTask(t)
 	// Keep the RUNNING-state label short; it may be rendered if the
 	// task group dumps dirty tasks before the package finishes.
-	t.SetName(fmt.Sprintf("%s %s", shortFrameworkName(framework), pkgPath))
+	t.SetName(formatRunningCommand(testRun.Process.Cmd, testRun.Process.Args))
 	runStart := time.Now()
 	result := process.Run().Result()
 	runDuration := time.Since(runStart)

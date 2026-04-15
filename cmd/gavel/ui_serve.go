@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -76,6 +77,7 @@ func init() {
 type snapshotPayload struct {
 	Tests []parsers.Test          `json:"tests"`
 	Lint  []*linters.LinterResult `json:"lint,omitempty"`
+	Bench *bench.BenchComparison  `json:"bench,omitempty"`
 }
 
 func runUIServe(opts UIServeOptions) (any, error) {
@@ -196,6 +198,9 @@ func loadResults(srv *testui.Server, path string) error {
 	srv.SetResults(payload.Tests)
 	if len(payload.Lint) > 0 {
 		srv.SetLintResults(payload.Lint)
+	}
+	if payload.Bench != nil {
+		srv.SetBenchComparison(payload.Bench)
 	}
 	return nil
 }

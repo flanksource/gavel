@@ -35,6 +35,17 @@ func renderText(t api.Text) string {
 	return t.ANSI()
 }
 
+func formatRunningCommand(cmd string, args []string) string {
+	cmd = strings.TrimSpace(cmd)
+	if len(args) == 0 {
+		return cmd
+	}
+	if cmd == "" {
+		return strings.Join(args, " ")
+	}
+	return cmd + " " + strings.Join(args, " ")
+}
+
 // formatPackageLabel builds the compact task name for a finished test
 // package. The name fits in `maxTaskLabel` characters; clicky will add
 // its own status icon + duration when it renders, landing the final line

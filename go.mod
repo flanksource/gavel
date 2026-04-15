@@ -3,7 +3,7 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/clicky v1.21.3
+	github.com/flanksource/clicky v1.21.4
 	github.com/flanksource/commons v1.49.0
 	github.com/flanksource/commons-db v0.1.5
 	github.com/flanksource/gomplate/v3 v3.24.75
@@ -27,6 +27,7 @@ require (
 	github.com/go-git/go-git/v5 v5.16.5
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/cel-go v0.27.0
+	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
@@ -171,7 +172,6 @@ require (
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
-	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf // indirect
 	github.com/hairyhenderson/yaml v0.0.0-20220618171115-2d35fca545ce // indirect
 	github.com/henvic/httpretty v0.1.4 // indirect
 	github.com/hirochachacha/go-smb2 v1.1.0 // indirect
