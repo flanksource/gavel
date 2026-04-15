@@ -160,3 +160,119 @@ func TestGinkgoParserType(t *testing.T) {
 		t.Errorf("expected parser name 'ginkgo json', got %s", parser.Name())
 	}
 }
+
+func TestHasGinkgoImports(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		expected bool
+	}{
+		{
+			name: "dot import v2",
+			content: `package p
+import . "github.com/onsi/ginkgo/v2"
+`,
+			expected: true,
+		},
+		{
+			name: "named import v2",
+			content: `package p
+import "github.com/onsi/ginkgo/v2"
+`,
+			expected: true,
+		},
+		{
+			name: "v1 dot import",
+			content: `package p
+import . "github.com/onsi/ginkgo"
+`,
+			expected: true,
+		},
+		{
+			name: "sub-package of v2",
+			content: `package p
+import "github.com/onsi/ginkgo/v2/reporters"
+`,
+			expected: true,
+		},
+		{
+			name: "alias import",
+			content: `package p
+import gk "github.com/onsi/ginkgo/v2"
+var _ = gk.Describe
+`,
+			expected: true,
+		},
+		{
+			name: "no ginkgo",
+			content: `package p
+import "testing"
+
+func TestX(t *testing.T) {}
+`,
+			expected: false,
+		},
+		{
+			name: "ginkgo only in a raw-string literal (regression)",
+			content: "package p\n" +
+				"\nimport \"testing\"\n\n" +
+				"func TestGinkgoImportDetection(t *testing.T) {\n" +
+				"\tfixture := `package main\n" +
+				"import . \"github.com/onsi/ginkgo/v2\"\n" +
+				"var _ = Describe(\"x\", func() {})\n" +
+				"`\n" +
+				"\t_ = fixture\n" +
+				"}\n",
+			expected: false,
+		},
+		{
+			name: "ginkgo only in a double-quoted string literal",
+			content: `package p
+import "testing"
+
+func TestX(t *testing.T) {
+	_ = "github.com/onsi/ginkgo/v2"
+}
+`,
+			expected: false,
+		},
+		{
+			name: "ginkgo only in a line comment",
+			content: `package p
+// we used to import "github.com/onsi/ginkgo/v2" here
+import "testing"
+
+func TestX(t *testing.T) {}
+`,
+			expected: false,
+		},
+		{
+			name: "unrelated onsi package",
+			content: `package p
+import "github.com/onsi/gomega"
+`,
+			expected: false,
+		},
+		{
+			name:     "parse error fails closed",
+			content:  `this is not valid go`,
+			expected: false,
+		},
+	}
+
+	runner := NewGinkgo("/tmp")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "sample_test.go")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			got := runner.hasGinkgoImports(path)
+			if got != tc.expected {
+				t.Errorf("hasGinkgoImports(%q) = %v, want %v\ncontent:\n%s",
+					tc.name, got, tc.expected, tc.content)
+			}
+		})
+	}
+}
