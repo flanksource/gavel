@@ -12,10 +12,10 @@ import (
 // BenchRun is the result of running one benchmark one or more times.
 // One BenchRun per benchmark name, with per-iteration samples from go test -bench=. -count=N.
 type BenchRun struct {
-	Name        string    `json:"name"`                   // e.g. "BenchmarkRLS/10k_rows"
-	Package     string    `json:"package"`                // e.g. "github.com/flanksource/duty/bench"
-	Samples     []float64 `json:"samples"`                // ns/op per -count iteration
-	Iterations  int       `json:"iterations,omitempty"`   // b.N from the final run
+	Name        string    `json:"name"`                 // e.g. "BenchmarkRLS/10k_rows"
+	Package     string    `json:"package"`              // e.g. "github.com/flanksource/duty/bench"
+	Samples     []float64 `json:"samples"`              // ns/op per -count iteration
+	Iterations  int       `json:"iterations,omitempty"` // b.N from the final run
 	BytesPerOp  int64     `json:"bytes_per_op,omitempty"`
 	AllocsPerOp int64     `json:"allocs_per_op,omitempty"`
 	MBPerSec    float64   `json:"mb_per_sec,omitempty"`
@@ -31,7 +31,7 @@ type BenchDelta struct {
 	HeadStddev  float64 `json:"head_stddev,omitempty" pretty:"label=±head%"`
 	DeltaPct    float64 `json:"delta_pct" pretty:"label=Δ%"`
 	PValue      float64 `json:"p_value,omitempty" pretty:"label=p"`
-	Samples     int     `json:"samples,omitempty" pretty:"label=n"`      // min(len(base.Samples), len(head.Samples))
+	Samples     int     `json:"samples,omitempty" pretty:"label=n"` // min(len(base.Samples), len(head.Samples))
 	Significant bool    `json:"significant,omitempty" pretty:"label=sig"`
 	OnlyIn      string  `json:"only_in,omitempty" pretty:"label=OnlyIn"` // "base" or "head" if missing on one side
 }

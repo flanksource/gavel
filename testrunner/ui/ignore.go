@@ -68,4 +68,3 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: len(cfg.Lint.Ignore), Filtered: filtered})
 }
-
