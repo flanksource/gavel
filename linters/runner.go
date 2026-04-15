@@ -3,6 +3,8 @@ package linters
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -177,7 +179,7 @@ func (r *Runner) RunWithIntelligentDebounce(ctx context.Context, linterName stri
 		r.cacheViolations(linterName, violations)
 	}
 
-	r.updateTaskStatus(task.Task, linterName, task.IsOk(), len(violations), task.Error())
+	r.updateTaskStatus(task.Task, linterName, task.IsOk(), violations, task.Error())
 
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	result := &LinterResult{
@@ -255,23 +257,142 @@ func (r *Runner) cacheViolations(linterName string, violations []models.Violatio
 	}
 }
 
-// updateTaskStatus updates the task manager status
-func (r *Runner) updateTaskStatus(task *clicky.Task, linterName string, success bool, violationCount int, err error) {
+// updateTaskStatus updates the task manager status. The task name is the
+// sole output line for this linter in the CI step log, so it carries
+// status and (on problems) a short reason snippet within the 80-char
+// budget. Errors are NOT passed to task.Errorf — that writes buffered
+// child lines that render as indented sub-lines under the task, which
+// the step-log compact format does not want.
+func (r *Runner) updateTaskStatus(task *clicky.Task, linterName string, success bool, violations []models.Violation, err error) {
 	if success {
-		if violationCount > 0 {
-			task.SetName(fmt.Sprintf("%s (%d violations)", linterName, violationCount))
+		if len(violations) > 0 {
+			task.SetName(buildLinterLabel(linterName, len(violations), true, firstViolationSnippet(violations), ""))
 			task.Warning()
 		} else {
 			task.SetName(linterName)
 			task.Success()
 		}
 	} else {
-		task.SetName(fmt.Sprintf("%s (failed)", linterName))
+		errMsg := ""
 		if err != nil {
-			task.Errorf("Error: %v", err)
+			errMsg = err.Error()
 		}
+		task.SetName(buildLinterLabel(linterName, len(violations), false, firstViolationSnippet(violations), errMsg))
 		task.Failed()
 	}
+}
+
+// firstViolationSnippet returns a compact "file:line rule: message" for
+// the first violation in the slice, or "" if there are none.
+func firstViolationSnippet(violations []models.Violation) string {
+	if len(violations) == 0 {
+		return ""
+	}
+	v := violations[0]
+	loc := v.File
+	if v.Line > 0 {
+		loc = fmt.Sprintf("%s:%d", v.File, v.Line)
+	}
+	rule := v.Source
+	msg := ""
+	if v.Message != nil {
+		msg = *v.Message
+	}
+	switch {
+	case loc != "" && rule != "" && msg != "":
+		return fmt.Sprintf("%s %s: %s", loc, rule, msg)
+	case loc != "" && msg != "":
+		return fmt.Sprintf("%s: %s", loc, msg)
+	case loc != "":
+		return loc
+	case msg != "":
+		return msg
+	default:
+		return ""
+	}
+}
+
+// buildLinterLabel assembles the compact one-line task name for a linter
+// result. Total length is kept within labelBudget characters; the
+// trailing details portion is right-truncated with an ellipsis.
+func buildLinterLabel(linterName string, violationCount int, success bool, firstViolationLine, errorMessage string) string {
+	var prefix, details string
+	switch {
+	case !success:
+		prefix = fmt.Sprintf("%s (failed)", linterName)
+		if errorMessage != "" {
+			details = "err: " + firstNonBlankLineLinter(errorMessage)
+		} else if firstViolationLine != "" {
+			details = firstViolationLine
+		}
+	case violationCount > 0:
+		prefix = fmt.Sprintf("%s (%d)", linterName, violationCount)
+		details = firstViolationLine
+	default:
+		prefix = linterName
+	}
+	return joinLabelLinter(prefix, details, labelBudget)
+}
+
+const labelBudget = 68
+
+// joinLabelLinter joins prefix + details with two spaces, right-
+// truncating details with `…` so the total length stays within budget.
+// If the prefix alone exceeds the budget, it is right-truncated too.
+func joinLabelLinter(prefix, details string, budget int) string {
+	prefix = stripANSILinter(prefix)
+	details = stripANSILinter(strings.TrimSpace(details))
+	if runeLenLinter(prefix) > budget {
+		return truncateRunesLinter(prefix, budget)
+	}
+	if details == "" {
+		return prefix
+	}
+	const sep = "  "
+	remaining := budget - runeLenLinter(prefix) - len(sep)
+	if remaining <= 1 {
+		return prefix
+	}
+	return prefix + sep + truncateRunesLinter(details, remaining)
+}
+
+var ansiReLinter = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSILinter(s string) string {
+	return ansiReLinter.ReplaceAllString(s, "")
+}
+
+func firstNonBlankLineLinter(s string) string {
+	s = stripANSILinter(s)
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+func truncateRunesLinter(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if runeLenLinter(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return "…"
+	}
+	runes := []rune(s)
+	return string(runes[:n-1]) + "…"
+}
+
+func runeLenLinter(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
 }
 
 // hasArg checks if args contains a specific argument or argument prefix

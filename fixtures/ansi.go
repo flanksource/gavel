@@ -12,7 +12,14 @@ import (
 var (
 	colorCodeRegex   = regexp.MustCompile(`\x1b\[(3[0-7]|38;[25];|4[0-7]|48;[25];)`)
 	cursorUpdateCode = regexp.MustCompile(`\x1b\[([0-9]*[ABCDHJ]|[0-9]*K|2J|\?25[hl])`)
+	anyANSIEscape    = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 )
+
+// stripFixtureANSI removes every ANSI SGR escape sequence from s. Used
+// when measuring fixture output lengths for the compact CI one-liner.
+func stripFixtureANSI(s string) string {
+	return anyANSIEscape.ReplaceAllString(s, "")
+}
 
 func hasAnyANSI(s string) bool {
 	return strings.Contains(s, "\x1b[")

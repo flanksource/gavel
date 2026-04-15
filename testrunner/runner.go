@@ -193,7 +193,7 @@ func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
-	logger.Infof("Running tests  %s", opts.Pretty().ANSI())
+	logger.Infof("Running tests  %s", renderText(opts.Pretty()))
 
 	var streamer *TestStreamer
 	if opts.Updates != nil {
@@ -295,7 +295,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	for _, fw := range frameworks {
 		runner, ok := o.registry.Get(fw)
 		if !ok {
-			return nil, fmt.Errorf("no runner registered for framework %s, registry = %s", fw, o.registry.Pretty().ANSI())
+			return nil, fmt.Errorf("no runner registered for framework %s, registry = %s", fw, renderText(o.registry.Pretty()))
 		}
 
 		var packages []string
@@ -472,7 +472,16 @@ func (o *TestOrchestrator) runPackageTest(
 	// Build the test command (without executing)
 	testRun, err := runner.BuildCommand(pkgPath, extraArgs...)
 	if err != nil {
-		t.Errorf("Failed to build command: %v", err)
+		// Fold the build-command error into the compact task label so
+		// the single CI line carries the reason. Avoid t.Errorf which
+		// renders as indented child lines under the task.
+		buildFail := parsers.Test{
+			Failed:  true,
+			Name:    fmt.Sprintf("%s Build", framework),
+			Message: err.Error(),
+		}
+		t.SetName(formatPackageLabel(framework, pkgPath, parsers.TestSummary{Failed: 1, Total: 1}, &buildFail))
+		t.SetDescription("")
 		t.Failed()
 		return packageResult{
 			packagePath: pkgPath,
@@ -484,7 +493,9 @@ func (o *TestOrchestrator) runPackageTest(
 	testRun.Process.SucceedOnNonZero = true
 	// Execute the test process in the orchestrator
 	process := testRun.Process.WithTask(t)
-	t.SetName(fmt.Sprintf("%s %s", framework, pkgPath))
+	// Keep the RUNNING-state label short; it may be rendered if the
+	// task group dumps dirty tasks before the package finishes.
+	t.SetName(fmt.Sprintf("%s %s", shortFrameworkName(framework), pkgPath))
 	runStart := time.Now()
 	result := process.Run().Result()
 	runDuration := time.Since(runStart)
@@ -502,25 +513,29 @@ func (o *TestOrchestrator) runPackageTest(
 			message = strings.TrimSpace(result.Output())
 		}
 
+		fallback := parsers.Test{
+			Failed:  true,
+			Name:    fmt.Sprintf("%s Execution", framework),
+			Message: message,
+			Stderr:  result.Stderr,
+			Stdout:  result.Stdout,
+		}
 		testResults = parsers.TestSuiteResults{{
 			Command:   process.Cmd,
 			Framework: testRun.Framework,
 			Stderr:    result.Stderr,
 			Stdout:    result.Stdout,
 			ExitCode:  result.ExitCode,
-			Tests: parsers.Tests{{
-				Failed:  true,
-				Name:    fmt.Sprintf("%s Execution", framework),
-				Message: message,
-			}},
+			Tests:     parsers.Tests{fallback},
 		}}
 
-		if parseErr != nil {
-			t.Errorf("Failed to parse results: %v", parseErr)
-		}
-		if result.Error != nil {
-			t.Errorf("Execution error: %v", result.Error)
-		}
+		// Fold the parse/execution failure reason into the compact task
+		// label so the single line in the CI step log is self-explanatory.
+		// Don't use t.Errorf here — it buffers indented child lines that
+		// clobber the one-line-per-task budget the user asked for.
+		failSum := parsers.TestSummary{Failed: 1, Total: 1, Duration: runDuration}
+		t.SetName(formatPackageLabel(framework, pkgPath, failSum, &fallback))
+		t.SetDescription("")
 		t.Failed()
 
 		return packageResult{
@@ -530,10 +545,17 @@ func (o *TestOrchestrator) runPackageTest(
 		}, nil
 	}
 
-	// Update task status based on results
+	// Update task status based on results. Build a compact, no-ANSI label
+	// that fits in the one-line-per-task CI budget. On failure the label
+	// carries the first failing leaf's stderr/stdout/message snippet so
+	// the line is self-explanatory in the GitHub step log.
 	sum := testResults.All().Sum()
-	t.SetName(clicky.Text("").Append(framework, "text-muted font-medium").Space().Append(pkgPath, "text-blue-500").ANSI())
-	t.SetDescription(sum.Pretty().ANSI())
+	var firstFail *parsers.Test
+	if sum.Failed > 0 {
+		firstFail = firstFailingLeaf(testResults)
+	}
+	t.SetName(formatPackageLabel(framework, pkgPath, sum, firstFail))
+	t.SetDescription("")
 
 	if sum.Failed > 0 {
 		t.Failed()
@@ -756,7 +778,7 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 				logger.Errorf("  ❌ %s: %v", pkg, err)
 				continue
 			}
-			logger.Infof("  %s", testRun.Pretty().ANSI())
+			logger.Infof("  %s", renderText(testRun.Pretty()))
 		}
 		logger.Infof("")
 	}
