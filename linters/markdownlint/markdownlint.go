@@ -118,30 +118,32 @@ func (m *Markdownlint) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// Run executes markdownlint and returns violations
-func (m *Markdownlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+// buildArgs assembles the argv (without the command name) that Run would use.
+func (m *Markdownlint) buildArgs() []string {
 	var args []string
-
-	// Add configured args
 	if m.Config != nil {
 		args = append(args, m.Config.Args...)
 	}
-
-	// Add JSON format if requested and not already present
 	if m.ForceJSON && !m.hasJSONArg(args) {
 		args = append(args, "--json")
 	}
-
-	// Add extra args
 	args = append(args, m.ExtraArgs...)
-
-	// Add files or default to markdown files in current directory
 	if len(m.Files) > 0 {
 		args = append(args, m.Files...)
 	} else if !m.hasPathArg(args) {
-		// Markdownlint needs explicit file patterns
 		args = append(args, "**/*.md")
 	}
+	return args
+}
+
+// DryRunCommand reports the command markdownlint would execute.
+func (m *Markdownlint) DryRunCommand() (string, []string) {
+	return "markdownlint", m.buildArgs()
+}
+
+// Run executes markdownlint and returns violations
+func (m *Markdownlint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	args := m.buildArgs()
 
 	// Execute command (markdownlint-cli2 is the modern version)
 	cmdName := "markdownlint"

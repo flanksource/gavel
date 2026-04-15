@@ -79,7 +79,8 @@ func Install(opts InstallOptions) error {
 		logger.Infof("[dry-run] would ensure system user %q", opts.User)
 		logger.Infof("[dry-run] would ensure data dir %s (owned by %s)", opts.DataDir, opts.User)
 		logger.Infof("[dry-run] would write unit file %s", opts.UnitPath)
-		logger.Infof("[dry-run] would run: systemctl daemon-reload && systemctl enable --now %s", defaultUnitName)
+		logger.Infof("[dry-run] would run: systemctl daemon-reload && systemctl enable %s && systemctl restart %s",
+			defaultUnitName, defaultUnitName)
 		fmt.Println("---")
 		fmt.Println(unit)
 		fmt.Println("---")
@@ -101,7 +102,15 @@ func Install(opts InstallOptions) error {
 	if err := systemctl("daemon-reload"); err != nil {
 		return err
 	}
-	if err := systemctl("enable", "--now", defaultUnitName); err != nil {
+	if err := systemctl("enable", defaultUnitName); err != nil {
+		return err
+	}
+	// Always restart: `enable --now` is a no-op when the service is
+	// already active, which leaves a freshly-deployed binary / unit
+	// running the OLD process. `restart` starts an inactive service
+	// and cycles an active one, so it's the right primitive for both
+	// first-time installs and `--force` redeploys.
+	if err := systemctl("restart", defaultUnitName); err != nil {
 		return err
 	}
 

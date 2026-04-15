@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -41,6 +42,7 @@ type LintOptions struct {
 	Changed   bool     `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since     string   `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
 	UI        bool     `flag:"ui" help:"Launch browser UI to view violations"`
+	DryRun    bool     `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
 	Files     []string `args:"true"`
 }
 
@@ -85,6 +87,17 @@ func init() {
 func runLint(opts LintOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
+	}
+
+	if opts.DryRun {
+		groups := groupFilesByGitRoot(opts)
+		for _, g := range groups {
+			groupOpts := opts
+			groupOpts.WorkDir = g.gitRoot
+			groupOpts.Files = g.files
+			displayLintDryRun(groupOpts)
+		}
+		return nil, nil
 	}
 
 	if opts.UI {
@@ -348,6 +361,97 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 		result = append(result, lintGroup{gitRoot: root, files: groups[root]})
 	}
 	return result
+}
+
+// displayLintDryRun mirrors the filter logic in executeLinters and prints
+// the shell command each selected linter would run, without executing
+// anything. Linters that are registered but filtered out (no matching files
+// or not on PATH) are printed with a skipped reason so users see the full
+// picture.
+func displayLintDryRun(opts LintOptions) {
+	logger.Infof("🔍 Dry-run mode: showing what would be executed")
+	logger.Infof("")
+
+	if opts.WorkDir == "" {
+		opts.WorkDir, _ = os.Getwd()
+	}
+	timeout, err := time.ParseDuration(opts.Timeout)
+	if err != nil {
+		timeout = models.DefaultLinterTimeout
+	}
+
+	registry := linters.NewRegistry()
+	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
+	registry.Register(ruff.NewRuff(opts.WorkDir))
+	registry.Register(eslint.NewESLint(opts.WorkDir))
+	registry.Register(pyright.NewPyright(opts.WorkDir))
+	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
+	registry.Register(vale.NewVale(opts.WorkDir))
+	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
+
+	var linterFilter []string
+	var actualFiles []string
+	for _, f := range opts.Files {
+		if registry.Has(f) {
+			linterFilter = append(linterFilter, f)
+		} else {
+			actualFiles = append(actualFiles, f)
+		}
+	}
+	opts.Files = actualFiles
+
+	requestedLinters := registry.List()
+	if len(linterFilter) > 0 {
+		requestedLinters = linterFilter
+	} else if opts.Linters != "*" {
+		requestedLinters = strings.Split(opts.Linters, ",")
+	}
+
+	for _, name := range requestedLinters {
+		linter, ok := registry.Get(strings.TrimSpace(name))
+		if !ok {
+			testrunner.PrintDryRunSkipped("lint", strings.TrimSpace(name), "unknown linter")
+			continue
+		}
+
+		if !hasMatchingFiles(opts.WorkDir, linter.DefaultIncludes()) {
+			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no matching files")
+			continue
+		}
+		if _, err := exec.LookPath(linter.Name()); err != nil {
+			testrunner.PrintDryRunSkipped("lint", linter.Name(), "not found on PATH")
+			continue
+		}
+
+		runOpts := linters.RunOptions{
+			WorkDir:   opts.WorkDir,
+			Files:     opts.Files,
+			Ignores:   opts.Ignore,
+			Fix:       opts.Fix,
+			NoCache:   opts.NoCache,
+			Timeout:   timeout,
+			ForceJSON: true,
+		}
+		if linter.Name() == "golangci-lint" {
+			if ref := lintBaseRef(opts); ref != "" {
+				// Dry-run deliberately does not invoke `git merge-base` —
+				// show the literal ref as a placeholder so users see the
+				// intent without side effects.
+				runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
+			}
+		}
+		if mixin, ok := linter.(linters.OptionsMixin); ok {
+			mixin.SetOptions(runOpts)
+		}
+
+		dr, ok := linter.(linters.DryRunner)
+		if !ok {
+			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no DryRunCommand support")
+			continue
+		}
+		cmdName, args := dr.DryRunCommand()
+		testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, opts.WorkDir)
+	}
 }
 
 // hasMatchingFiles checks if any files in workDir match at least one of the glob patterns.

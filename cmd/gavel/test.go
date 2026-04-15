@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -21,11 +23,19 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
+	"github.com/spf13/cobra"
 )
 
 var (
 	uiServer   *testui.Server
 	uiListener net.Listener
+
+	// hookTestsMu protects hookTests, which is the slice of pseudo-tests
+	// rendered from pre/post hook state. The stream-forward goroutine
+	// prepends it to every testrunner update so hooks stay visible once
+	// real tests start streaming.
+	hookTestsMu sync.Mutex
+	hookTests   []parsers.Test
 )
 
 func runTests(opts testrunner.RunOptions) (any, error) {
@@ -40,21 +50,81 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		opts.WorkDir = wd
 	}
 
-	var updates chan []parsers.Test
+	// Dynamic default for --skip-hooks: when the user didn't pass the flag,
+	// skip hooks unless $CI is set. This keeps local `gavel test` snappy and
+	// auto-enables pre/post hooks in CI / SSH-push contexts.
+	if testCmd != nil && !testCmd.Flags().Changed("skip-hooks") {
+		opts.SkipHooks = os.Getenv("CI") == ""
+	}
+
+	// Load .gavel.yaml once at the top — previously the lint path loaded it
+	// lazily, but the push-hook support needs Pre/Post from the same config
+	// before tests run.
+	gavelCfg, cfgErr := verify.LoadGavelConfig(opts.WorkDir)
+	if cfgErr != nil {
+		logger.Warnf("Failed to load .gavel.yaml: %v", cfgErr)
+	}
+
+	// Dry-run: print hooks and delegate to testrunner (which has its own
+	// dry-run early-return), then exit without starting the UI, lint, or
+	// push-hook execution.
+	if opts.DryRun {
+		if !opts.SkipHooks {
+			printDryRunHooks(opts.WorkDir, gavelCfg.Pre, "pre-hook")
+		}
+		if _, err := testrunner.Run(opts); err != nil {
+			return nil, err
+		}
+		if !opts.SkipHooks {
+			printDryRunHooks(opts.WorkDir, gavelCfg.Post, "post-hook")
+		}
+		return nil, nil
+	}
+
+	// Start the UI BEFORE running pre-hooks so their status/output renders
+	// live instead of streaming past a pusher who only sees the UI URL at
+	// the end. The stream adapter (below) forwards testrunner updates to
+	// the UI while keeping hook pseudo-tests pinned at the top.
+	var (
+		testrunnerUpdates chan []parsers.Test
+		uiUpdates         chan []parsers.Test
+	)
 	if opts.UI {
 		uiServer, uiListener = startTestUI()
-		updates = make(chan []parsers.Test, 16)
-		opts.Updates = updates
-		uiServer.StreamFrom(updates)
+		testrunnerUpdates = make(chan []parsers.Test, 16)
+		uiUpdates = make(chan []parsers.Test, 16)
+		opts.Updates = testrunnerUpdates
+		uiServer.StreamFrom(uiUpdates)
 		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
 			rerunOpts := opts
 			rerunOpts.Lint = false
-			rerunOpts.Updates = updates
+			rerunOpts.Updates = testrunnerUpdates
 			rerunOpts.StartingPaths = req.PackagePaths
 			rerunOpts.ExtraArgs = buildRerunArgs(req)
 			_, err := testrunner.Run(rerunOpts)
 			return err
 		})
+
+		// Adapter: every time the testrunner sends an update, prepend the
+		// current hook snapshot so hooks stay visible in the UI even after
+		// real tests start streaming. Closes uiUpdates when the source
+		// closes so StreamFrom's done-flip still fires.
+		go func() {
+			for batch := range testrunnerUpdates {
+				uiUpdates <- mergeHooksWithTests(batch)
+			}
+			close(uiUpdates)
+		}()
+	}
+
+	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
+		if err := runPushHooksReportingUI(opts.WorkDir, gavelCfg.Pre, "pre"); err != nil {
+			if opts.UI {
+				// Flush final hook state to the UI before bailing.
+				publishHookSnapshotToUI()
+			}
+			return nil, err
+		}
 	}
 
 	// When --lint is set, run linters in parallel with tests
@@ -75,10 +145,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				Timeout: "5m",
 			})
 			if lintErr == nil {
-				gavelCfg, err := verify.LoadGavelConfig(workDir)
-				if err != nil {
-					logger.Warnf("Failed to load .gavel.yaml: %v", err)
-				}
 				linters.FilterIgnoredViolations(lintResults, gavelCfg.Lint.Ignore)
 			}
 			if uiServer != nil {
@@ -88,6 +154,14 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	}
 
 	result, err := testrunner.Run(opts)
+
+	// Post-hooks run after tests, regardless of pass/fail. A failing post
+	// hook does NOT mask the main exit code — it's logged as a warning.
+	if !opts.SkipHooks && len(gavelCfg.Post) > 0 {
+		if postErr := runPushHooksReportingUI(opts.WorkDir, gavelCfg.Post, "post"); postErr != nil {
+			logger.Warnf("%v", postErr)
+		}
+	}
 
 	// Wait for lint to finish
 	wg.Wait()
@@ -137,6 +211,137 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}{result, lintResults}, nil
 	}
 	return result, nil
+}
+
+// printDryRunHooks renders each hook as a `sh -c` invocation using the
+// shared dry-run format. Empty Run fields are skipped, matching
+// runPushHooksReportingUI's behavior.
+func printDryRunHooks(workDir string, hooks []verify.HookStep, label string) {
+	for _, step := range hooks {
+		if step.Run == "" {
+			continue
+		}
+		name := step.Name
+		if name == "" {
+			name = label
+		}
+		testrunner.PrintDryRunCommand(label, name, "sh", []string{"-c", step.Run}, workDir)
+	}
+}
+
+// runPushHooksReportingUI runs verify's hook list while also publishing
+// each step to the testui (when active) as a pseudo-test: pending while
+// running, passed or failed on completion. When the UI is not active,
+// it falls back to the plain verify.RunPushHooks path so non-UI push
+// output is unchanged.
+//
+// The pseudo-tests live in the package-level `hookTests` slice and are
+// merged into every testrunner stream update by the adapter goroutine in
+// runTests, so they stay visible once real tests start appearing.
+func runPushHooksReportingUI(workDir string, hooks []verify.HookStep, phase string) error {
+	if uiServer == nil {
+		// Non-UI path: keep the old streaming-to-stderr behavior unchanged.
+		return verify.RunPushHooks(workDir, hooks, phase)
+	}
+
+	for _, step := range hooks {
+		if step.Run == "" {
+			continue
+		}
+		name := step.Name
+		if name == "" {
+			name = phase
+		}
+		logger.Infof("===== %s: %s =====", phase, name)
+
+		idx := appendRunningHookTest(phase, name, step.Run)
+		publishHookSnapshotToUI()
+
+		start := time.Now()
+		// Capture stdout/stderr into a buffer for the UI AND tee to the
+		// user's stderr so a non-UI observer (e.g. ssh push output) still
+		// sees it streaming in real time.
+		var buf bytes.Buffer
+		cmd := exec.Command("sh", "-c", step.Run)
+		cmd.Dir = workDir
+		cmd.Stdout = io.MultiWriter(&buf, os.Stderr)
+		cmd.Stderr = io.MultiWriter(&buf, os.Stderr)
+		runErr := cmd.Run()
+		finishHookTest(idx, time.Since(start), buf.String(), runErr)
+		publishHookSnapshotToUI()
+
+		if runErr != nil {
+			return fmt.Errorf("%s hook %q failed: %w", phase, name, runErr)
+		}
+	}
+	return nil
+}
+
+// appendRunningHookTest adds a hook pseudo-test to the hookTests slice in
+// the "running" (Pending) state and returns its index so the caller can
+// flip it to passed/failed when the command completes.
+func appendRunningHookTest(phase, name, run string) int {
+	hookTestsMu.Lock()
+	defer hookTestsMu.Unlock()
+	hookTests = append(hookTests, parsers.Test{
+		Name:      name,
+		Package:   "hook:" + phase,
+		Framework: parsers.Framework("hook"),
+		Command:   run,
+		Pending:   true,
+	})
+	return len(hookTests) - 1
+}
+
+// finishHookTest flips the hook at idx from Pending to Passed or Failed,
+// records its duration and captured output.
+func finishHookTest(idx int, dur time.Duration, output string, runErr error) {
+	hookTestsMu.Lock()
+	defer hookTestsMu.Unlock()
+	if idx < 0 || idx >= len(hookTests) {
+		return
+	}
+	t := &hookTests[idx]
+	t.Pending = false
+	t.Duration = dur
+	t.Stdout = output
+	if runErr != nil {
+		t.Failed = true
+		t.Message = runErr.Error()
+	} else {
+		t.Passed = true
+	}
+}
+
+// publishHookSnapshotToUI flushes the current hookTests slice to the UI
+// directly via SetResults. This is used before testrunner.Run starts
+// streaming (when no real tests have arrived yet) and as a last-ditch
+// flush on hook failure.
+func publishHookSnapshotToUI() {
+	if uiServer == nil {
+		return
+	}
+	hookTestsMu.Lock()
+	snapshot := make([]parsers.Test, len(hookTests))
+	copy(snapshot, hookTests)
+	hookTestsMu.Unlock()
+	uiServer.SetResults(snapshot)
+}
+
+// mergeHooksWithTests returns a new slice that puts the current hook
+// snapshot before the given testrunner batch. Called by the adapter
+// goroutine for every testrunner update so hooks stay visible after real
+// tests start streaming.
+func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
+	hookTestsMu.Lock()
+	defer hookTestsMu.Unlock()
+	if len(hookTests) == 0 {
+		return batch
+	}
+	merged := make([]parsers.Test, 0, len(hookTests)+len(batch))
+	merged = append(merged, hookTests...)
+	merged = append(merged, batch...)
+	return merged
 }
 
 // startTestUI binds an ephemeral TCP listener and starts serving the testui
@@ -204,8 +409,13 @@ var testDurationFlags struct {
 	IdleTimeout time.Duration
 }
 
+// testCmd is the cobra command for `gavel test`. Kept as a package var so
+// runTests can query `testCmd.Flags().Changed("skip-hooks")` to distinguish
+// an explicit --skip-hooks=... from the unset default.
+var testCmd *cobra.Command
+
 func init() {
-	testCmd := clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
+	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
 	testCmd.Flags().SetInterspersed(false)
 	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
 		"With --ui, fork a detached UI server that serves the completed run until this hard wall-clock deadline fires (0 = block on SIGINT).")
