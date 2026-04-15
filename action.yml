@@ -30,7 +30,11 @@ inputs:
     required: false
     default: "gavel-results.html"
   summary-file:
-    description: Path (relative to working-directory) for the markdown summary posted as a PR comment.
+    description: |
+      Path (relative to working-directory) for the compact markdown summary
+      posted to PR comments and $GITHUB_STEP_SUMMARY. Generated from the JSON
+      output by `gavel summary` so it stays within GitHub's 64 KB comment and
+      1 MiB step-summary caps.
     required: false
     default: "gavel-summary.md"
   artifact-name:
@@ -130,9 +134,18 @@ runs:
         set +e
         # shellcheck disable=SC2086
         gavel $GAVEL_ARGS \
-          --format "json=${JSON_FILE},html=${HTML_FILE},markdown=${SUMMARY_FILE}"
+          --format "json=${JSON_FILE},html=${HTML_FILE}"
         code=$?
         set -e
+        # Build the compact PR-comment summary from the JSON file. `gavel
+        # summary` filters passing tests, caps failures, and truncates long
+        # stderr/stdout so the output fits GitHub's comment + step-summary
+        # limits. The full HTML report remains in the artifact for drilldown.
+        if [ -f "${JSON_FILE}" ]; then
+          gavel summary --input "${JSON_FILE}" --output "${SUMMARY_FILE}"
+        else
+          echo "gavel did not produce ${JSON_FILE}; skipping compact summary generation" >&2
+        fi
         {
           echo "exit_code=$code"
           echo "json_path=$(pwd)/${JSON_FILE}"
