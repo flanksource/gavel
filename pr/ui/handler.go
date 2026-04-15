@@ -151,7 +151,7 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handlePage)
+	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
@@ -200,13 +200,35 @@ func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" && r.URL.RawQuery == "" {
+		http.Redirect(w, r, "/prs", http.StatusFound)
+		return
+	}
+	req, ok := parseRouteRequest(r)
+	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if req.IsExport {
+		s.handleExport(w, r, req)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, pageHTML())
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeRequest) {
+	report, err := s.buildExportReport(req)
+	if err != nil {
+		if err == errRouteNodeNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeExportResponse(w, r, report, req.Format)
 }
 
 func pageHTML() string {
@@ -570,26 +592,33 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	flusher, canFlush := w.(http.Flusher)
+
+	result := s.fetchPRDetail(repo, prNumber)
+	json.NewEncoder(w).Encode(result) //nolint:errcheck
+	if canFlush {
+		flusher.Flush()
+	}
+}
+
+// fetchPRDetail loads full PR metadata, workflow runs, and comments from
+// GitHub. Returns a prDetail with Error set on failure rather than an error
+// value so callers (handleDetail, export) can embed it directly.
+func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	opts := s.ghOpts
 	opts.Repo = repo
 
-	w.Header().Set("Content-Type", "application/json")
-
-	flusher, canFlush := w.(http.Flusher)
-	_ = canFlush
-
 	result := prDetail{}
 
-	pr, err := github.FetchPR(opts, prNumber)
+	pr, err := github.FetchPR(opts, number)
 	if err != nil {
-		logger.Warnf("failed to fetch PR %s#%d: %v", repo, prNumber, err)
+		logger.Warnf("failed to fetch PR %s#%d: %v", repo, number, err)
 		result.Error = err.Error()
-		json.NewEncoder(w).Encode(result) //nolint:errcheck
-		return
+		return result
 	}
 	result.PR = pr
 
-	// Fetch workflow runs
 	runs := make(map[int64]*github.WorkflowRun)
 	seen := make(map[int64]bool)
 	for _, check := range pr.StatusCheckRollup {
@@ -606,14 +635,22 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		runs[runID] = run
 	}
 	result.Runs = runs
-
-	// Comments and review threads are populated by the merged FetchPR query above.
 	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
+	return result
+}
 
-	json.NewEncoder(w).Encode(result) //nolint:errcheck
-	if canFlush {
-		flusher.Flush()
+// populatePRDetail fills a PRViewNode's detail fields using the same fetch
+// logic that powers /api/prs/detail. Returns a non-nil error only when the
+// PR metadata fetch itself fails (in which case the node is left unchanged).
+func (s *Server) populatePRDetail(node *PRViewNode) error {
+	detail := s.fetchPRDetail(node.Repo, node.Number)
+	if detail.Error != "" {
+		return fmt.Errorf("%s", detail.Error)
 	}
+	node.PR = detail.PR
+	node.Runs = detail.Runs
+	node.Comments = detail.Comments
+	return nil
 }
 
 type jobLogsResponse struct {

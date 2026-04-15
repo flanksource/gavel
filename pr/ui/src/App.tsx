@@ -1,21 +1,33 @@
-import { useState, useEffect, useMemo, useCallback } from 'preact/hooks';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'preact/hooks';
 import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
-import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
+import { FilterBar, type Filters } from './components/FilterBar';
 import { SplitPane } from './components/SplitPane';
 import { RepoSelector } from './components/RepoSelector';
 import { SearchControls } from './components/SearchControls';
 import { ActivityView } from './components/ActivityView';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+import {
+  annotateRoutePaths,
+  buildRoute,
+  findPRByRoutePath,
+  parseRoute,
+  type RouteState,
+} from './routes';
+import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 
 type Tab = 'prs' | 'activity';
 
 const defaultConfig: SearchConfig = { repos: [], author: '@me' };
 
 export function App() {
-  const [prs, setPrs] = useState<PRItem[]>([]);
+  const initialRoute: RouteState = typeof window !== 'undefined'
+    ? parseRoute(window.location)
+    : { selectedPath: '', filters: { state: new Set(), checks: new Set(), repos: new Set(), authors: new Set() } };
+
+  const [rawPrs, setRawPrs] = useState<PRItem[]>([]);
   const [unread, setUnread] = useState<Record<string, boolean>>({});
   const [fetchedAt, setFetchedAt] = useState('');
   const [nextFetchIn, setNextFetchIn] = useState(60);
@@ -23,12 +35,44 @@ export function App() {
   const [selected, setSelected] = useState<PRItem | null>(null);
   const [detail, setDetail] = useState<PRDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [filters, setFilters] = useState<Filters>(emptyFilters());
+  const [filters, setFilters] = useState<Filters>(initialRoute.filters);
+  const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
   const [config, setConfig] = useState<SearchConfig>(defaultConfig);
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>('prs');
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
+  const [copyError, setCopyError] = useState('');
+  const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
+
+  const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
+
+  const routeState: RouteState = useMemo(
+    () => ({ selectedPath, filters }),
+    [selectedPath, filters],
+  );
+
+  const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
+    setSelectedPath(next.selectedPath);
+    setFilters(next.filters);
+    const url = buildRoute(next);
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (url !== current) {
+      if (mode === 'replace') window.history.replaceState({}, '', url);
+      else window.history.pushState({}, '', url);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = parseRoute(window.location);
+      setSelectedPath(next.selectedPath);
+      setFilters(next.filters);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   useEffect(() => {
     fetch('/api/prs')
@@ -47,7 +91,7 @@ export function App() {
   }, []);
 
   function applySnapshot(snap: Snapshot) {
-    setPrs(snap.prs || []);
+    setRawPrs(snap.prs || []);
     setUnread(snap.unread || {});
     setFetchedAt(snap.fetchedAt);
     setNextFetchIn(snap.nextFetchIn);
@@ -57,9 +101,20 @@ export function App() {
     if (snap.config) setConfig(snap.config);
   }
 
-  // markSeen clears the unread flag for a PR locally (optimistic update) and
-  // POSTs to the server so the state is persisted and the menubar updates.
-  // Safe to call repeatedly — the server handler is idempotent.
+  // When PRs arrive (or the URL selection changes), reconcile `selected` with
+  // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
+  useEffect(() => {
+    if (!selectedPath) {
+      if (selected) { setSelected(null); setDetail(null); }
+      return;
+    }
+    if (selected && selected.route_path === selectedPath) return;
+    const target = findPRByRoutePath(prs, selectedPath);
+    if (target) {
+      loadPR(target);
+    }
+  }, [selectedPath, prs]);
+
   const markSeen = useCallback((pr: PRItem) => {
     const key = prKey(pr);
     setUnread(prev => {
@@ -74,6 +129,26 @@ export function App() {
       body: JSON.stringify({ repo: pr.repo, number: pr.number }),
     }).catch(() => {});
   }, []);
+
+  function loadPR(pr: PRItem) {
+    setSelected(pr);
+    setDetail(null);
+    setDetailLoading(true);
+    markSeen(pr);
+    fetch(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`)
+      .then(r => r.json())
+      .then((d: PRDetail) => { setDetail(d); setDetailLoading(false); })
+      .catch(err => { setDetail({ error: String(err) }); setDetailLoading(false); });
+  }
+
+  function handleSelect(pr: PRItem) {
+    commitRoute({ ...routeState, selectedPath: pr.route_path || `${pr.repo}/${pr.number}` });
+    loadPR(pr);
+  }
+
+  function handleFiltersChange(next: Filters) {
+    commitRoute({ ...routeState, filters: next });
+  }
 
   function handleRefresh() {
     fetch('/api/prs/refresh', { method: 'POST' }).catch(() => {});
@@ -93,19 +168,33 @@ export function App() {
     }).catch(() => {});
   }
 
-  function handleSelect(pr: PRItem) {
-    setSelected(pr);
-    setDetail(null);
-    setDetailLoading(true);
-    markSeen(pr);
-    fetch(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`)
-      .then(r => r.json())
-      .then((d: PRDetail) => { setDetail(d); setDetailLoading(false); })
-      .catch(err => { setDetail({ error: String(err) }); setDetailLoading(false); });
-  }
+  const resetCopyFeedback = useCallback((kind: 'copied' | 'error', message?: string) => {
+    setCopyState(kind);
+    setCopyError(message || '');
+    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(() => {
+      setCopyState('idle');
+      setCopyError('');
+      copyResetTimer.current = null;
+    }, 2500);
+  }, []);
+
+  const onDownloadJSON = useCallback(() => downloadCurrentView(routeState, 'json'), [routeState]);
+  const onDownloadMarkdown = useCallback(() => downloadCurrentView(routeState, 'md'), [routeState]);
+  const onCopyForAgent = useCallback(async () => {
+    if (copyState === 'copying') return;
+    setCopyState('copying');
+    setCopyError('');
+    try {
+      await copyCurrentViewForAgent(routeState);
+      resetCopyFeedback('copied');
+    } catch (e: any) {
+      resetCopyFeedback('error', e?.message || 'Copy failed');
+    }
+  }, [copyState, routeState, resetCopyFeedback]);
 
   const counts = useMemo(() => computeCounts(prs), [prs]);
-  const repos = useMemo(() => collectRepos(prs), [prs]);
+  const reposList = useMemo(() => collectRepos(prs), [prs]);
   const authors = useMemo(() => collectAuthors(prs), [prs]);
   const filtered = useMemo(
     () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors),
@@ -130,7 +219,14 @@ export function App() {
                   onChange={(repos) => updateConfig({ repos })}
                 />
                 <SearchControls config={config} onChange={updateConfig} />
-                <FilterBar filters={filters} onChange={setFilters} counts={counts} repos={repos} authors={authors} />
+                <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
+                <ExportButtons
+                  onJSON={onDownloadJSON}
+                  onMarkdown={onDownloadMarkdown}
+                  onCopy={onCopyForAgent}
+                  copyState={copyState}
+                  copyError={copyError}
+                />
               </>
             )}
           </div>
@@ -191,6 +287,52 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
           {t.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
+  onJSON: () => void;
+  onMarkdown: () => void;
+  onCopy: () => void;
+  copyState: 'idle' | 'copying' | 'copied' | 'error';
+  copyError: string;
+}) {
+  return (
+    <div class="flex items-center gap-1">
+      <button
+        class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        onClick={onJSON}
+        title="Download current view as JSON"
+      >
+        <iconify-icon icon="codicon:json" class="mr-0.5" />
+        JSON
+      </button>
+      <button
+        class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        onClick={onMarkdown}
+        title="Download current view as Markdown"
+      >
+        <iconify-icon icon="codicon:markdown" class="mr-0.5" />
+        Markdown
+      </button>
+      <button
+        class={`text-xs px-2 py-1 rounded border transition-colors ${
+          copyState === 'copied'
+            ? 'border-green-300 bg-green-50 text-green-700'
+            : copyState === 'error'
+              ? 'border-red-300 bg-red-50 text-red-700'
+              : 'border-gray-300 text-gray-600 hover:bg-gray-200'
+        }`}
+        onClick={onCopy}
+        title={copyError || 'Copy Markdown export for agent'}
+      >
+        <iconify-icon
+          icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'}
+          class="mr-0.5"
+        />
+        {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
+      </button>
     </div>
   );
 }
