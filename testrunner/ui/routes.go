@@ -573,7 +573,7 @@ func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFil
 		for _, file := range fileNames {
 			violations := bucket.Files[file]
 			total += len(violations)
-			children = append(children, lintFileNode(lintFileLabel(file), file, linterName, violations))
+			children = append(children, lintFileNode(file, file, linterName, violations))
 		}
 		for _, rule := range sortedKeys(bucket.NoFileRules) {
 			violations := bucket.NoFileRules[rule].Violations
@@ -852,14 +852,6 @@ func lintRuleName(violation models.Violation) string {
 	return "(no rule)"
 }
 
-func lintFileLabel(file string) string {
-	segments := collapsedLintSegments(file)
-	if len(segments) == 0 {
-		return file
-	}
-	return segments[len(segments)-1]
-}
-
 func collapsedLintSegments(path string) []string {
 	parts := strings.Split(normalizeLintPath(path), "/")
 	filtered := make([]string, 0, len(parts))
@@ -984,12 +976,13 @@ func slugify(input string) string {
 
 func relLintPath(file, workDir string) string {
 	if file == "" {
-		return "(no file)"
+		return ""
 	}
+	file = normalizeLintPath(file)
 	if workDir == "" {
 		return file
 	}
-	prefix := workDir
+	prefix := normalizeLintPath(workDir)
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}

@@ -130,7 +130,7 @@ function flattenLint(lint: LinterResult[] | undefined, filters: LintFilters): Fl
 }
 
 function folderNode(name: string, kind: Test['kind'], children: Test[]): Test {
-  const failed = children.some(c => c.failed || (c.children?.length || 0) > 0);
+  const failed = children.some(hasFailed);
   return {
     name,
     framework: 'lint',
@@ -268,8 +268,7 @@ export function groupLintByLinterFile(lint: LinterResult[] | undefined, filters:
     const bucket = byLinter.get(linter)!;
     const fileNames = Array.from(bucket.files.keys()).sort();
     const fileLeaves = fileNames.map(file => {
-      const basename = collapsedPathSegments(file).slice(-1)[0] || file;
-      return fileLeafNode(basename, file, linter, bucket.files.get(file)!);
+      return fileLeafNode(file, file, linter, bucket.files.get(file)!);
     });
     const noFileViolations = Array.from(bucket.noFileRules.values()).flatMap(rule => rule.violations);
     return linterNode(linter, linterMeta.get(linter), fileLeaves, noFileViolations);

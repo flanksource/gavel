@@ -97,6 +97,21 @@ type GavelConfig struct {
 	SSH      SSHConfig      `yaml:"ssh,omitempty" json:"ssh,omitempty"`
 	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty"`
 	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
+	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+}
+
+// SecretsConfig turns the betterleaks linter on/off and optionally points at
+// extra betterleaks/gitleaks TOML configs beyond the ones gavel discovers
+// from the home dir, git root, and cwd. Rule authoring lives in those TOML
+// files, not here — gavel only orchestrates discovery + merge.
+type SecretsConfig struct {
+	// Disabled turns off the betterleaks linter even when the binary is on
+	// PATH. Defaults to false (enabled).
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	// Configs is an optional list of additional .betterleaks.toml /
+	// .gitleaks.toml paths to merge in (relative paths resolve against the
+	// .gavel.yaml's directory).
+	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty"`
 }
 
 func DefaultVerifyConfig() VerifyConfig {
@@ -156,6 +171,27 @@ func mergeFromFile(base GavelConfig, path string) GavelConfig {
 	base.SSH = MergeSSHConfig(base.SSH, gc.SSH)
 	base.Pre = append(base.Pre, gc.Pre...)
 	base.Post = append(base.Post, gc.Post...)
+	base.Secrets = MergeSecretsConfig(base.Secrets, gc.Secrets)
+	return base
+}
+
+// MergeSecretsConfig merges override onto base. Disabled is OR (any layer
+// disabling wins). Configs are appended and deduped so each TOML path only
+// appears once even when multiple .gavel.yaml files reference it.
+func MergeSecretsConfig(base, override SecretsConfig) SecretsConfig {
+	if override.Disabled {
+		base.Disabled = true
+	}
+	seen := make(map[string]struct{}, len(base.Configs)+len(override.Configs))
+	var merged []string
+	for _, p := range append(base.Configs, override.Configs...) {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		merged = append(merged, p)
+	}
+	base.Configs = merged
 	return base
 }
 

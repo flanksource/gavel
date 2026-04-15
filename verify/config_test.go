@@ -302,3 +302,23 @@ post:
 	require.Len(t, cfg.Post, 1)
 	assert.Equal(t, "home-post", cfg.Post[0].Name)
 }
+
+func TestMergeSecretsConfig(t *testing.T) {
+	t.Run("zero + zero", func(t *testing.T) {
+		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{})
+		assert.False(t, out.Disabled)
+		assert.Empty(t, out.Configs)
+	})
+
+	t.Run("disabled propagates", func(t *testing.T) {
+		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{Disabled: true})
+		assert.True(t, out.Disabled)
+	})
+
+	t.Run("configs append and dedupe", func(t *testing.T) {
+		base := SecretsConfig{Configs: []string{"/a.toml", "/b.toml"}}
+		override := SecretsConfig{Configs: []string{"/b.toml", "/c.toml"}}
+		out := MergeSecretsConfig(base, override)
+		assert.Equal(t, []string{"/a.toml", "/b.toml", "/c.toml"}, out.Configs)
+	})
+}
