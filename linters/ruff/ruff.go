@@ -113,35 +113,35 @@ func (r *Ruff) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// Run executes ruff and returns violations
-func (r *Ruff) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+// buildArgs assembles the argv (without the command name) that Run would use.
+func (r *Ruff) buildArgs() []string {
 	args := []string{"check"}
-
-	// Add configured args
 	if r.Config != nil {
 		args = append(args, r.Config.Args...)
 	}
-
-	// Add JSON format if requested and not already present
 	if r.ForceJSON && !r.hasFormatArg(args, "--output-format") {
 		args = append(args, "--output-format=json")
 	}
-
-	// Add fix flag if requested
 	if r.Fix && r.SupportsFix() && !r.hasArg(args, "--fix") {
-		fixArgs := r.FixArgs()
-		args = append(args, fixArgs...)
+		args = append(args, r.FixArgs()...)
 	}
-
-	// Add extra args
 	args = append(args, r.ExtraArgs...)
-
-	// Add files or default to current directory
 	if len(r.Files) > 0 {
 		args = append(args, r.Files...)
 	} else if !r.hasPathArg(args) {
 		args = append(args, ".")
 	}
+	return args
+}
+
+// DryRunCommand reports the command ruff would execute.
+func (r *Ruff) DryRunCommand() (string, []string) {
+	return "ruff", r.buildArgs()
+}
+
+// Run executes ruff and returns violations
+func (r *Ruff) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	args := r.buildArgs()
 
 	// Execute command
 	cmd := exec.CommandContext(ctx, "ruff", args...)

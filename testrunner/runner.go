@@ -108,6 +108,7 @@ type RunOptions struct {
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
+	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
 	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // When set with --ui, fork a detached UI server that serves the completed run until auto-stop (hard) or idle-timeout elapses. 0 = block on SIGINT (today's behavior). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
 	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI server; resets on every HTTP request. Only meaningful with --auto-stop.
 	Lint          bool                  `json:"lint,omitempty" flag:"lint"`                                   // Run linters in parallel with tests
@@ -783,7 +784,6 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 			continue
 		}
 
-		logger.Infof("[%s] Packages (%d):", framework, len(packages))
 		for _, pkg := range packages {
 			pkgExtraArgs := extraArgs
 			if framework == parsers.GoTest {
@@ -791,15 +791,59 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 			}
 			testRun, err := runner.BuildCommand(pkg, pkgExtraArgs...)
 			if err != nil {
-				logger.Errorf("  ❌ %s: %v", pkg, err)
+				logger.Errorf("[test:%s] %s: build failed: %v", framework, pkg, err)
 				continue
 			}
-			logger.Infof("  %s", renderText(testRun.Pretty()))
+			PrintDryRunCommand(
+				fmt.Sprintf("test:%s", framework),
+				pkg,
+				testRun.Process.Cmd,
+				testRun.Process.Args,
+				testRun.Process.Cwd,
+			)
 		}
-		logger.Infof("")
 	}
 
 	return nil
+}
+
+// PrintDryRunCommand renders a single dry-run command line in the shared
+// format used by gavel test and gavel lint. It is exported so the lint
+// command (in package main) can render test and lint previews identically.
+//
+//	[label] title
+//	  $ cmd arg1 arg2
+//	  cwd: /working/dir
+func PrintDryRunCommand(label, title, cmd string, args []string, cwd string) {
+	logger.Infof("[%s] %s", label, title)
+	logger.Infof("  $ %s", shellJoin(append([]string{cmd}, args...)))
+	if cwd != "" {
+		logger.Infof("  cwd: %s", cwd)
+	}
+	logger.Infof("")
+}
+
+// PrintDryRunSkipped renders a "would be skipped" line in dry-run output.
+func PrintDryRunSkipped(label, title, reason string) {
+	logger.Infof("[%s] %s  (skipped: %s)", label, title, reason)
+}
+
+func shellJoin(tokens []string) string {
+	parts := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		parts = append(parts, shellQuote(t))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n\"'\\$`*?[]{}()&;|<>#~!") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Runner is an alias for TestOrchestrator for backwards compatibility during migration.

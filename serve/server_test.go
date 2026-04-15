@@ -51,51 +51,48 @@ var _ = Describe("writePostReceiveHook", func() {
 	})
 })
 
+// The rendered script no longer templates pre/main/post. Pre/post hooks
+// live in the pushed repo's .gavel.yaml and are executed by `gavel test`
+// itself (gated on $CI / --skip-hooks). See cmd/gavel/test_hooks_test.go
+// for that coverage.
 var _ = Describe("renderHookScript", func() {
-	It("injects pre-hooks before the main command", func() {
-		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
-			Pre: []HookStep{{Name: "deps", Run: "make deps"}},
-		})
-		preIdx := strings.Index(script, "make deps")
-		mainIdx := strings.Index(script, "/bin/gavel test --lint")
-		Expect(preIdx).NotTo(Equal(-1))
-		Expect(mainIdx).NotTo(Equal(-1))
-		Expect(preIdx).To(BeNumerically("<", mainIdx))
-		Expect(script).To(ContainSubstring(" pre: deps"))
+	It("runs gavel test when no ssh.cmd is set in the pushed repo", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		Expect(script).To(ContainSubstring(`/bin/gavel test --lint --no-progress --cwd "$WORKDIR"`))
 	})
 
-	It("replaces the main command when ssh.cmd is set to a non-gavel command", func() {
-		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
-			Cmd: "make ci",
-		})
-		Expect(script).To(ContainSubstring(`(cd "$WORKDIR" && make ci)`))
-		Expect(script).NotTo(ContainSubstring("/bin/gavel test --lint"))
+	It("extracts ssh.cmd from $WORKDIR/.gavel.yaml via yq", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		Expect(script).To(ContainSubstring(`yq -r '.ssh.cmd // ""' "$WORKDIR/.gavel.yaml"`))
 	})
 
-	It("rewrites a gavel-prefixed ssh.cmd to the real binary path", func() {
-		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
-			Cmd: "gavel test --ui",
-		})
-		Expect(script).To(ContainSubstring(`/bin/gavel test --ui --cwd "$WORKDIR" --no-progress`))
+	It("fails loud if yq is not on $PATH", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		Expect(script).To(ContainSubstring(`command -v yq`))
+		Expect(script).To(ContainSubstring(`yq not found`))
 	})
 
-	It("runs post-hooks even when the main command fails", func() {
-		script := renderHookScript("/repos/bare", "/bin/gavel", HookSpec{
-			Post: []HookStep{{Name: "notify", Run: "echo done"}},
-		})
-		// post-hooks must come after MAIN_EXIT is captured and wrap in
-		// `set +e` so a failing notifier doesn't mask the real failure.
-		mainExit := strings.Index(script, "MAIN_EXIT=$?")
-		postRun := strings.Index(script, "echo done")
-		failExit := strings.Index(script, "exit $MAIN_EXIT")
-		Expect(mainExit).NotTo(Equal(-1))
-		Expect(postRun).NotTo(Equal(-1))
-		Expect(failExit).NotTo(Equal(-1))
-		Expect(mainExit).To(BeNumerically("<", postRun))
-		Expect(postRun).To(BeNumerically("<", failExit))
-		// post-hooks isolated from `set -e`.
-		postSetPlus := strings.Index(script[postRun-120:postRun], "set +e")
-		Expect(postSetPlus).NotTo(Equal(-1))
+	It("evals ssh.cmd in place of gavel test when set", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		Expect(script).To(ContainSubstring(`if [ -n "$SSH_CMD" ]; then`))
+		Expect(script).To(ContainSubstring(`(cd "$WORKDIR" && eval "$SSH_CMD")`))
+	})
+
+	It("exports CI=1 so gavel test picks up hooks automatically", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		// CI=1 must come before EITHER branch runs so both gavel test and
+		// ssh.cmd-override paths see it.
+		ciIdx := strings.Index(script, "export CI=1")
+		branchIdx := strings.Index(script, `if [ -n "$SSH_CMD" ]; then`)
+		Expect(ciIdx).NotTo(Equal(-1))
+		Expect(branchIdx).NotTo(Equal(-1))
+		Expect(ciIdx).To(BeNumerically("<", branchIdx))
+	})
+
+	It("propagates the main command's non-zero exit via FAILED", func() {
+		script := renderHookScript("/repos/bare", "/bin/gavel")
+		Expect(script).To(ContainSubstring(`if [ $EXIT -ne 0 ]; then`))
+		Expect(script).To(ContainSubstring(`exit $EXIT`))
 	})
 })
 

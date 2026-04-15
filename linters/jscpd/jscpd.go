@@ -87,14 +87,10 @@ func (j *JSCPD) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
-	tempDir, err := os.MkdirTemp("", "jscpd-report-*")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	args := []string{"--reporters", "json", "--output", tempDir, "--gitignore"}
+// buildArgs assembles the argv (without the command name) using the given
+// output directory for the JSON report.
+func (j *JSCPD) buildArgs(outputDir string) []string {
+	args := []string{"--reporters", "json", "--output", outputDir, "--gitignore"}
 
 	excludes := j.buildExcludes()
 	if len(excludes) > 0 {
@@ -111,6 +107,23 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 	} else {
 		args = append(args, ".")
 	}
+	return args
+}
+
+// DryRunCommand reports the command jscpd would execute. The temporary report
+// directory is reported as a placeholder rather than actually created.
+func (j *JSCPD) DryRunCommand() (string, []string) {
+	return "jscpd", j.buildArgs("<jscpd-report-tmpdir>")
+}
+
+func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	tempDir, err := os.MkdirTemp("", "jscpd-report-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	args := j.buildArgs(tempDir)
 
 	cmd := exec.CommandContext(ctx, "jscpd", args...)
 	cmd.Dir = j.WorkDir
@@ -142,7 +155,7 @@ func (j *JSCPD) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Vio
 		return nil, fmt.Errorf("failed to read jscpd report: %w", err)
 	}
 
-	violations, err := j.parseViolations(reportData, excludes)
+	violations, err := j.parseViolations(reportData, j.buildExcludes())
 	if err != nil {
 		return nil, err
 	}

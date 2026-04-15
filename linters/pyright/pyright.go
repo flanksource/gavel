@@ -118,29 +118,32 @@ func (p *Pyright) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// Run executes pyright and returns violations
-func (p *Pyright) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+// buildArgs assembles the argv (without the command name) that Run would use.
+func (p *Pyright) buildArgs() []string {
 	var args []string
-
-	// Add configured args
 	if p.Config != nil {
 		args = append(args, p.Config.Args...)
 	}
-
-	// Add JSON format if requested and not already present
 	if p.ForceJSON && !p.hasJSONArg(args) {
 		args = append(args, "--outputjson")
 	}
-
-	// Add extra args
 	args = append(args, p.ExtraArgs...)
-
-	// Add files or default to current directory
 	if len(p.Files) > 0 {
 		args = append(args, p.Files...)
 	} else if !p.hasPathArg(args) {
 		args = append(args, ".")
 	}
+	return args
+}
+
+// DryRunCommand reports the command pyright would execute.
+func (p *Pyright) DryRunCommand() (string, []string) {
+	return "pyright", p.buildArgs()
+}
+
+// Run executes pyright and returns violations
+func (p *Pyright) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	args := p.buildArgs()
 
 	// Execute command
 	cmd := exec.CommandContext(ctx, "pyright", args...)

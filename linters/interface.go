@@ -51,6 +51,13 @@ type OptionsMixin interface {
 	SetOptions(opts RunOptions)
 }
 
+// DryRunner is implemented by linters that can report the exact argv they
+// would execute without running it. Returned args do not include the command
+// name itself.
+type DryRunner interface {
+	DryRunCommand() (cmd string, args []string)
+}
+
 // MetadataProvider provides file and rule count information from linters
 type MetadataProvider interface {
 	GetFileCount() int

@@ -119,30 +119,32 @@ func (e *ESLint) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// Run executes eslint and returns violations
-func (e *ESLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+// buildArgs assembles the argv (without the command name) that Run would use.
+func (e *ESLint) buildArgs() []string {
 	var args []string
-
-	// Add configured args
 	if e.Config != nil {
 		args = append(args, e.Config.Args...)
 	}
-
-	// Add JSON format if requested and not already present
 	if e.ForceJSON && !e.hasFormatArg(args) {
 		args = append(args, "--format=json")
 	}
-
-	// Add extra args
 	args = append(args, e.ExtraArgs...)
-
-	// Add files or default to current directory
 	if len(e.Files) > 0 {
 		args = append(args, e.Files...)
 	} else if !e.hasPathArg(args) {
-		// ESLint needs explicit file patterns, not just "."
 		args = append(args, ".")
 	}
+	return args
+}
+
+// DryRunCommand reports the command eslint would execute.
+func (e *ESLint) DryRunCommand() (string, []string) {
+	return "eslint", e.buildArgs()
+}
+
+// Run executes eslint and returns violations
+func (e *ESLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	args := e.buildArgs()
 
 	// Execute command
 	cmd := exec.CommandContext(ctx, "eslint", args...)

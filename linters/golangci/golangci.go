@@ -112,29 +112,36 @@ func (g *GolangciLint) ValidateConfig(config *models.LinterConfig) error {
 	return nil
 }
 
-// Run executes golangci-lint and returns violations
-func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+// buildArgs assembles the argv (without the command name) that Run would use.
+func (g *GolangciLint) buildArgs() []string {
 	args := []string{"run"}
 
-	// Add configured args
 	if g.Config != nil {
 		args = append(args, g.Config.Args...)
 	}
 
-	// Add JSON format if requested and not already present
 	if g.ForceJSON && !g.hasFormatArg(args, "--output.json") {
 		args = append(args, "--output.json.path=stdout", "--output.text.path=stderr")
 	}
 
-	// Add extra args
 	args = append(args, g.ExtraArgs...)
 
-	// Add files or default to current directory
 	if len(g.Files) > 0 {
 		args = append(args, g.Files...)
 	} else if !g.hasPathArg(args) {
 		args = append(args, ".")
 	}
+	return args
+}
+
+// DryRunCommand reports the command golangci-lint would execute.
+func (g *GolangciLint) DryRunCommand() (string, []string) {
+	return "golangci-lint", g.buildArgs()
+}
+
+// Run executes golangci-lint and returns violations
+func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
+	args := g.buildArgs()
 
 	// Execute command — capture stdout (JSON) separately from stderr (text)
 	cmd := exec.CommandContext(ctx, "golangci-lint", args...)
