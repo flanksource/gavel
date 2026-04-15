@@ -10,9 +10,9 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestWalk(t *testing.T) {
+func TestUtils(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Walk Suite")
+	RunSpecs(t, "Utils Suite")
 }
 
 func setupGitRepo(root string) {

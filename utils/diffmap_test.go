@@ -1,16 +1,9 @@
 package utils
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestDiffMap(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "DiffMap Suite")
-}
 
 var _ = Describe("SHA256 Compacting", func() {
 	Describe("compactSHA256", func() {
