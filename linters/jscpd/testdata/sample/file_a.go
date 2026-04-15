@@ -1,5 +1,7 @@
 package sample
 
+import "strings"
+
 func ProcessItems(items []string) []string {
 	var result []string
 	for _, item := range items {
