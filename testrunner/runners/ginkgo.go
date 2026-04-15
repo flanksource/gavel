@@ -2,9 +2,12 @@ package runners
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,18 +166,32 @@ func (r *Ginkgo) dirHasGinkgoTests(dir string) bool {
 	return false
 }
 
-// hasGinkgoImports checks if a file imports ginkgo.
+// hasGinkgoImports checks if a Go test file imports ginkgo. Uses the AST
+// so that string literals mentioning the ginkgo import path (e.g. inside
+// gavel's own detection tests) do not false-positive. Fails closed:
+// parse errors return false so gavel won't run a non-ginkgo package
+// through the ginkgo runner.
 func (r *Ginkgo) hasGinkgoImports(path string) bool {
-	content, err := os.ReadFile(path)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 	if err != nil {
 		return false
 	}
-
-	text := string(content)
-	return strings.Contains(text, `"github.com/onsi/ginkgo`) ||
-		strings.Contains(text, `"github.com/onsi/ginkgo/v2`) ||
-		strings.Contains(text, ". \"github.com/onsi/ginkgo") ||
-		strings.Contains(text, ". \"github.com/onsi/ginkgo/v2")
+	for _, imp := range file.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		if importPath == "github.com/onsi/ginkgo" ||
+			importPath == "github.com/onsi/ginkgo/v2" ||
+			strings.HasPrefix(importPath, "github.com/onsi/ginkgo/v2/") {
+			return true
+		}
+	}
+	return false
 }
 
 // getRelativePath returns the relative path from workDir to the target directory.
