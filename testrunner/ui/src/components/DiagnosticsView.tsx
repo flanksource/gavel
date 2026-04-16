@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ProcessNode } from '../types';
-import { countProcesses, formatBytes, processLabel } from '../utils';
+import { countProcesses, formatBytes, processLabel, processStateColor, processStateIcon } from '../utils';
 
 interface Props {
   root?: ProcessNode;
@@ -89,7 +89,12 @@ function DiagnosticsTreeNode({ node, depth, selectedPid, expandAll, onSelect }: 
         </span>
         <span class="text-xs text-gray-400 shrink-0">pid {node.pid}</span>
         <span class="flex-1" />
-        {node.status && <span class="text-xs text-gray-400 shrink-0">{node.status}</span>}
+        {node.status && (
+          <span class={`inline-flex items-center gap-1 text-xs shrink-0 ${processStateColor(node.status)}`}>
+            <iconify-icon icon={processStateIcon(node.status)} />
+            {node.status}
+          </span>
+        )}
         <span class="text-xs text-gray-400 shrink-0">{cpu.toFixed(1)}%</span>
         <span class="text-xs text-gray-400 shrink-0">{formatBytes(node.rss)}</span>
       </div>

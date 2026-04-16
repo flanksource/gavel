@@ -1,7 +1,8 @@
-import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta } from '../types';
 import { statusIcon, statusColor, formatDuration, sum, frameworkIcon } from '../utils';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
+import { ProgressBar } from './ProgressBar';
 
 export interface IgnoreRequest {
   source?: string;
@@ -15,6 +16,7 @@ interface Props {
   rerunBusy?: boolean;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
+  runMeta?: RunMeta;
 }
 
 function taskMeta(t: Test): { duration?: string; status?: string; type?: string } | null {
@@ -27,7 +29,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy }: Props) {
+export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy, runMeta }: Props) {
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -49,7 +51,7 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
   const canRerun = !!onRerun && !isLint && t.framework !== 'task';
 
   return (
-    <div class="p-5 space-y-4">
+    <div class="h-full overflow-y-auto p-5 space-y-4">
       {/* Header */}
       <div class="flex items-start gap-2">
         <iconify-icon icon={statusIcon(t)} class={`${statusColor(t)} text-2xl shrink-0 mt-0.5`} />
@@ -104,13 +106,41 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy 
         <RuleViolationsDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       )}
 
+      {runMeta && (
+        <Section title="Run">
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <MetaCard
+              label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
+              value={runMeta.started_at ? new Date(runMeta.started_at).toLocaleString() : 'Unavailable'}
+            />
+            <MetaCard
+              label="Finished"
+              value={runMeta.finished_at ? new Date(runMeta.finished_at).toLocaleString() : 'In progress'}
+            />
+          </div>
+        </Section>
+      )}
+
       {/* Summary for containers */}
       {s && s.total > 0 && (
-        <div class="flex gap-4 text-sm border rounded-lg p-3 bg-gray-50">
-          <Stat label="Total" value={s.total} color="text-gray-700" />
-          <Stat label="Passed" value={s.passed} color="text-green-600" />
-          <Stat label="Failed" value={s.failed} color="text-red-600" />
-          {s.skipped > 0 && <Stat label="Skipped" value={s.skipped} color="text-yellow-600" />}
+        <div class="space-y-3 border rounded-lg p-3 bg-gray-50">
+          <div class="flex gap-4 text-sm">
+            <Stat label="Total" value={s.total} color="text-gray-700" />
+            <Stat label="Passed" value={s.passed} color="text-green-600" />
+            <Stat label="Failed" value={s.failed} color="text-red-600" />
+            {s.skipped > 0 && <Stat label="Skipped" value={s.skipped} color="text-yellow-600" />}
+            {s.pending > 0 && <Stat label="Pending" value={s.pending} color="text-blue-600" />}
+          </div>
+          <ProgressBar
+            segments={[
+              { count: s.passed, color: 'bg-green-500', label: 'passed' },
+              { count: s.skipped, color: 'bg-yellow-400', label: 'skipped' },
+              { count: s.failed, color: 'bg-red-500', label: 'failed' },
+              { count: s.pending, color: 'bg-blue-300', label: 'pending' },
+            ]}
+            total={s.total}
+            height="h-2.5"
+          />
         </div>
       )}
 
@@ -307,6 +337,15 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
     <div class="text-center">
       <div class={`text-lg font-bold ${color}`}>{value}</div>
       <div class="text-xs text-gray-500">{label}</div>
+    </div>
+  );
+}
+
+function MetaCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+      <div class="text-xs uppercase tracking-wide text-gray-500">{label}</div>
+      <div class="mt-1 text-sm font-medium text-gray-800">{value}</div>
     </div>
   );
 }

@@ -12,6 +12,7 @@ type TestStreamer struct {
 	pendingPkgs    []parsers.Test
 	fixtureTests   []parsers.Test
 	updates        chan<- []parsers.Test
+	closed         bool
 }
 
 func NewTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
@@ -23,13 +24,19 @@ func NewTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
 func (s *TestStreamer) SetPackageOutline(pkgs []parsers.Test) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.pendingPkgs = pkgs
-	s.buildAndSend()
+	s.buildAndSendLocked()
 }
 
 func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framework, results parsers.TestSuiteResults) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 
 	// Remove matching pending package
 	filtered := s.pendingPkgs[:0:0]
@@ -45,32 +52,38 @@ func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framewo
 		s.completedTests = append(s.completedTests, tr.Tests...)
 	}
 
-	s.buildAndSend()
+	s.buildAndSendLocked()
 }
 
 func (s *TestStreamer) SetFixtureOutline(tests []parsers.Test) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.fixtureTests = tests
-	s.buildAndSend()
+	s.buildAndSendLocked()
 }
 
 func (s *TestStreamer) UpdateFixtures(tests []parsers.Test) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.fixtureTests = tests
-	s.buildAndSend()
+	s.buildAndSendLocked()
 }
 
-func (s *TestStreamer) buildAndSend() {
+func (s *TestStreamer) buildAndSendLocked() {
 	tree := parsers.BuildTestTree(s.completedTests)
 	tree = append(tree, s.pendingPkgs...)
 	tree = append(tree, s.fixtureTests...)
-	s.send(tree)
+	s.sendLocked(tree)
 }
 
-func (s *TestStreamer) send(tree []parsers.Test) {
-	if s.updates == nil {
+func (s *TestStreamer) sendLocked(tree []parsers.Test) {
+	if s.updates == nil || s.closed {
 		return
 	}
 	select {
@@ -81,11 +94,12 @@ func (s *TestStreamer) send(tree []parsers.Test) {
 }
 
 func (s *TestStreamer) Done() {
-	if s.updates == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updates == nil || s.closed {
 		return
 	}
-	s.mu.Lock()
-	s.buildAndSend()
-	s.mu.Unlock()
+	s.buildAndSendLocked()
+	s.closed = true
 	close(s.updates)
 }

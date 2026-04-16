@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
-import type { Test, Snapshot, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails } from './types';
+import type { Test, Snapshot, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
@@ -33,22 +33,34 @@ function applySnapshot(
   setLintRun: (r: boolean) => void,
   setBench: (b: BenchComparison | undefined) => void,
   setDiagnosticsAvailable: (v: boolean) => void,
+  setRunMeta: (r: RunMeta | undefined) => void,
   setDone: (d: boolean) => void,
   setStatus: (s: string) => void,
 ) {
-  if (!startTime.current) startTime.current = Date.now();
+  if (snap.run?.started_at) {
+    const started = Date.parse(snap.run.started_at);
+    if (!Number.isNaN(started)) startTime.current = started;
+  } else if (!startTime.current) {
+    startTime.current = Date.now();
+  }
+  if (snap.run?.finished_at) {
+    const finished = Date.parse(snap.run.finished_at);
+    if (!Number.isNaN(finished)) endTime.current = finished;
+  } else if (!snap.done) {
+    endTime.current = null;
+  }
   setTests(snap.tests || []);
   setLint(snap.lint);
   setLintRun(!!snap.lint_run);
   setBench(snap.bench);
   setDiagnosticsAvailable(!!snap.diagnostics_available);
+  setRunMeta(snap.run);
   if (snap.done) {
-    endTime.current = Date.now();
     doneRef.current = true;
     setDone(true);
-    setStatus('Test run complete');
+    setStatus(snap.run?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
   } else {
-    setStatus('Running tests...');
+    setStatus(snap.run?.kind === 'rerun' ? `Running rerun #${snap.run.sequence || 1}...` : 'Running tests...');
   }
 }
 
@@ -81,9 +93,9 @@ export function App() {
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location) : {
     tab: 'tests' as TabKey,
     selectedPath: '',
-    filters: { status: new Set<string>(), framework: new Set<string>() },
+    filters: { status: new Map(), framework: new Map() },
     lintGrouping: 'linter-file' as LintGrouping,
-    lintFilters: { severity: new Set(), linter: new Set() },
+    lintFilters: { severity: new Map(), linter: new Map() },
   };
 
   const [tests, setTests] = useState<Test[]>([]);
@@ -92,6 +104,7 @@ export function App() {
   const [bench, setBench] = useState<BenchComparison | undefined>(undefined);
   const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | undefined>(undefined);
+  const [runMeta, setRunMeta] = useState<RunMeta | undefined>(undefined);
   const [done, setDone] = useState(false);
   const [status, setStatus] = useState('Loading...');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
@@ -105,6 +118,7 @@ export function App() {
   const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [copyError, setCopyError] = useState('');
+  const [streamToken, setStreamToken] = useState(0);
   const startTime = useRef<number | null>(null);
   const endTime = useRef<number | null>(null);
   const [, tick] = useState(0);
@@ -153,18 +167,20 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/tests')
-      .then(r => r.json())
-      .then((snap: Snapshot) => {
-        applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDone, setStatus);
-      })
-      .catch(() => {});
+    if (streamToken === 0) {
+      fetch('/api/tests')
+        .then(r => r.json())
+        .then((snap: Snapshot) => {
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setRunMeta, setDone, setStatus);
+        })
+        .catch(() => {});
+    }
 
     const es = new EventSource('/api/tests/stream');
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDone, setStatus);
+      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setRunMeta, setDone, setStatus);
       if (snap.done) es.close();
     });
 
@@ -185,7 +201,7 @@ export function App() {
     }, 1000);
 
     return () => { es.close(); clearInterval(timer); };
-  }, []);
+  }, [streamToken]);
 
   const fetchDiagnostics = useCallback(async () => {
     const res = await fetch('/api/diagnostics');
@@ -343,7 +359,11 @@ export function App() {
     setRerunBusy(true);
     setStatus(`Rerunning ${t.name}...`);
     doneRef.current = false;
+    startTime.current = null;
+    endTime.current = null;
     setDone(false);
+    setTests([]);
+    setStreamToken(n => n + 1);
     try {
       const res = await fetch('/api/rerun', {
         method: 'POST',
@@ -539,7 +559,7 @@ export function App() {
             )}
             <span class="text-sm text-gray-400">{status}</span>
           </div>
-          <Summary tests={tests} startTime={startTime.current} endTime={endTime.current} done={done} />
+          <Summary tests={tests} startTime={startTime.current} endTime={endTime.current} done={done} runMeta={runMeta} />
         </div>
 
         {showTabs && (
@@ -646,8 +666,8 @@ export function App() {
           </>
         }
         right={activeTab === 'diagnostics'
-          ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} />
-          : <DetailPanel test={selected} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />}
+          ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
+          : <DetailPanel test={selected} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
       />
     </div>
   );

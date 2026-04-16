@@ -1,21 +1,22 @@
 package runners
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/utils"
 )
 
 var (
-	goTestFuncRe  = regexp.MustCompile(`(?m)^func\s+Test[A-Z_]\w*\s*\(`)
-	goBenchFuncRe = regexp.MustCompile(`(?m)^func\s+Benchmark[A-Z_]\w*\s*\(`)
+	goTestFuncRe      = regexp.MustCompile(`(?m)^func\s+Test[A-Z_]\w*\s*\(`)
+	goBenchFuncRe     = regexp.MustCompile(`(?m)^func\s+Benchmark[A-Z_]\w*\s*\(`)
+	errGoTestDetected = errors.New("go test detected")
 )
 
 // GoTest implements the test runner for go test.
@@ -44,11 +45,25 @@ func (r *GoTest) Parser() parsers.ResultParser {
 
 // Detect checks if go test is used (looks for *_test.go files).
 func (r *GoTest) Detect(workDir string) (bool, error) {
-	matches, err := doublestar.Glob(os.DirFS(workDir), "**/*_test.go")
-	if err != nil {
-		return false, err
+	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), "_test.go") {
+			return errGoTestDetected
+		}
+		return nil
+	})
+	if err == nil {
+		return false, nil
 	}
-	return len(matches) > 0, nil
+	if errors.Is(err, errGoTestDetected) {
+		return true, nil
+	}
+	return false, err
 }
 
 // hasGinkgoImports checks if a test file imports Ginkgo

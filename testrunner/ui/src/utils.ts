@@ -1,8 +1,10 @@
 import type { Test, LinterResult, Violation, Severity, ProcessNode } from './types';
+import type { FilterState } from './filterState';
+import { matchesFilterState } from './filterState';
 
 export interface LintFilters {
-  severity: Set<Severity>;
-  linter: Set<string>;
+  severity: FilterState<Severity>;
+  linter: FilterState<string>;
 }
 
 interface FlatViolation {
@@ -118,10 +120,10 @@ function worstSeverity(vs: Violation[] | undefined): Severity {
 function flattenLint(lint: LinterResult[] | undefined, filters: LintFilters): FlatViolation[] {
   const out: FlatViolation[] = [];
   for (const lr of lint || []) {
-    if (filters.linter.size > 0 && !filters.linter.has(lr.linter)) continue;
+    if (!matchesFilterState(lr.linter, filters.linter)) continue;
     for (const v of lr.violations || []) {
       const sev = (v.severity || 'error') as Severity;
-      if (filters.severity.size > 0 && !filters.severity.has(sev)) continue;
+      if (!matchesFilterState(sev, filters.severity)) continue;
       const file = relPath(v.file, lr.work_dir);
       out.push({ linter: lr.linter, linterResult: lr, v: { ...v, file }, file });
     }
@@ -323,11 +325,11 @@ export function collectLintLinters(lint: LinterResult[] | undefined): string[] {
 
 export function countLintBySeverity(
   lint: LinterResult[] | undefined,
-  linterFilter: Set<string>,
+  linterFilter: FilterState<string>,
 ): Record<Severity, number> {
   const counts: Record<Severity, number> = { error: 0, warning: 0, info: 0 };
   for (const lr of lint || []) {
-    if (linterFilter.size > 0 && !linterFilter.has(lr.linter)) continue;
+    if (!matchesFilterState(lr.linter, linterFilter)) continue;
     for (const v of lr.violations || []) {
       const sev = (v.severity || 'error') as Severity;
       counts[sev] = (counts[sev] || 0) + 1;
@@ -338,13 +340,13 @@ export function countLintBySeverity(
 
 export function countLintByLinter(
   lint: LinterResult[] | undefined,
-  severityFilter: Set<Severity>,
+  severityFilter: FilterState<Severity>,
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const lr of lint || []) {
     for (const v of lr.violations || []) {
       const sev = (v.severity || 'error') as Severity;
-      if (severityFilter.size > 0 && !severityFilter.has(sev)) continue;
+      if (!matchesFilterState(sev, severityFilter)) continue;
       counts[lr.linter] = (counts[lr.linter] || 0) + 1;
     }
   }
@@ -548,14 +550,14 @@ export function testStatus(t: Test): string | null {
 
 export function filterTests(
   tests: Test[],
-  statusFilter: Set<string>,
-  frameworkFilter: Set<string>,
+  statusFilter: FilterState<string>,
+  frameworkFilter: FilterState<string>,
 ): Test[] {
   if (statusFilter.size === 0 && frameworkFilter.size === 0) return tests;
   return tests.map(t => filterNode(t, statusFilter, frameworkFilter)).filter(Boolean) as Test[];
 }
 
-function filterNode(t: Test, statusFilter: Set<string>, frameworkFilter: Set<string>): Test | null {
+function filterNode(t: Test, statusFilter: FilterState<string>, frameworkFilter: FilterState<string>): Test | null {
   const hasChildren = !!t.children && t.children.length > 0;
 
   if (hasChildren) {
@@ -567,14 +569,10 @@ function filterNode(t: Test, statusFilter: Set<string>, frameworkFilter: Set<str
   return matchesLeaf(t, statusFilter, frameworkFilter) ? t : null;
 }
 
-function matchesLeaf(t: Test, statusFilter: Set<string>, frameworkFilter: Set<string>): boolean {
+function matchesLeaf(t: Test, statusFilter: FilterState<string>, frameworkFilter: FilterState<string>): boolean {
   const s = testStatus(t);
   if (s === null) return false;
-  if (statusFilter.size > 0 && !statusFilter.has(s)) return false;
-  if (frameworkFilter.size > 0) {
-    if (!t.framework || !frameworkFilter.has(t.framework)) return false;
-  }
-  return true;
+  return matchesFilterState(s, statusFilter) && matchesFilterState(t.framework, frameworkFilter);
 }
 
 export function humanizeName(name: string, framework?: string): string {
@@ -613,6 +611,26 @@ export function findProcessByPID(node: ProcessNode | undefined, pid: number): Pr
     if (found) return found;
   }
   return null;
+}
+
+export function processStateIcon(status?: string): string {
+  const value = (status || '').toLowerCase();
+  if (value.includes('run')) return 'codicon:play-circle';
+  if (value.includes('sleep') || value.includes('idle')) return 'codicon:clock';
+  if (value.includes('stop') || value.includes('halt')) return 'codicon:debug-pause';
+  if (value.includes('zombie') || value.includes('dead')) return 'codicon:error';
+  if (value.includes('wait') || value.includes('block')) return 'codicon:debug-step-over';
+  return 'codicon:circle-filled';
+}
+
+export function processStateColor(status?: string): string {
+  const value = (status || '').toLowerCase();
+  if (value.includes('run')) return 'text-green-600';
+  if (value.includes('sleep') || value.includes('idle')) return 'text-amber-500';
+  if (value.includes('stop') || value.includes('halt')) return 'text-orange-600';
+  if (value.includes('zombie') || value.includes('dead')) return 'text-red-600';
+  if (value.includes('wait') || value.includes('block')) return 'text-blue-600';
+  return 'text-gray-400';
 }
 
 export function formatBytes(value?: number): string {
