@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -232,15 +231,6 @@ func isExportPath(path string) bool {
 }
 
 func resultsPageHTML(backTo, prefix string) string {
-	var backBar string
-	if backTo != "" {
-		backBar = fmt.Sprintf(`<div style="background:#1f2937;color:#fff;padding:6px 16px;display:flex;align-items:center;gap:8px;font-size:14px">
-      <a href="%s" style="color:#93c5fd;text-decoration:none;display:flex;align-items:center;gap:4px">
-        <iconify-icon icon="codicon:arrow-left"></iconify-icon> Back to PR
-      </a>
-    </div>`, html.EscapeString(backTo))
-	}
-
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -252,11 +242,10 @@ func resultsPageHTML(backTo, prefix string) string {
     <script>window.__gavelBackTo = %s; window.__gavelBasePath = %s;</script>
 </head>
 <body>
-    %s
     <div id="root"></div>
     <script>%s</script>
 </body>
-</html>`, jsonString(backTo), jsonString(prefix), backBar, testui.BundleJS())
+</html>`, jsonString(backTo), jsonString(prefix), testui.BundleJS())
 }
 
 func jsonString(s string) string {
