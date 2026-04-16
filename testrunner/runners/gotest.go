@@ -45,7 +45,10 @@ func (r *GoTest) Parser() parsers.ResultParser {
 
 // Detect checks if go test is used (looks for *_test.go files).
 func (r *GoTest) Detect(workDir string) (bool, error) {
-	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+	if utils.FindNearestGoModRoot(workDir) == "" {
+		return false, nil
+	}
+	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -190,6 +193,9 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 // DiscoverPackages returns packages with go test files (excluding Ginkgo-only packages).
 // When recursive is false, only the given directory is checked.
 func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
+	if utils.FindNearestGoModRoot(workDir) == "" {
+		return nil, nil
+	}
 	if !recursive {
 		if r.packageHasNonGinkgoTests(workDir) {
 			return []string{r.getRelativePath(workDir)}, nil
@@ -200,7 +206,7 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 	var packages []string
 	seen := make(map[string]bool)
 
-	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

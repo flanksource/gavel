@@ -11,6 +11,41 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+func writeGoTestPackage(t *testing.T, repoRoot, pkgDir, modulePath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module "+modulePath+"\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	fullPkgDir := filepath.Join(repoRoot, pkgDir)
+	if err := os.MkdirAll(fullPkgDir, 0o755); err != nil {
+		t.Fatalf("create package dir: %v", err)
+	}
+	testFile := filepath.Join(fullPkgDir, "sample_test.go")
+	content := `package sample
+
+import "testing"
+
+func TestPass(t *testing.T) {}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+}
+
+func collectPackagePaths(tests []parsers.Test, seen map[string]bool) {
+	for _, test := range tests {
+		if test.PackagePath != "" {
+			seen[test.PackagePath] = true
+		}
+		if len(test.Children) > 0 {
+			collectPackagePaths(test.Children, seen)
+		}
+	}
+}
+
 func TestGroupPathsByGitRoot(t *testing.T) {
 	// Create two fake git repos in temp dirs
 	repoA := t.TempDir()
@@ -21,7 +56,10 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 	os.MkdirAll(filepath.Join(repoB, "cmd"), 0755)
 
 	t.Run("single repo stays unchanged", func(t *testing.T) {
-		groups := groupPathsByGitRoot(repoA, []string{"./pkg"})
+		groups, err := groupPathsByGitRoot(repoA, []string{"./pkg"})
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
 		if len(groups) != 1 {
 			t.Fatalf("expected 1 group, got %d", len(groups))
 		}
@@ -35,7 +73,10 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 
 	t.Run("cross-repo subdir paths are split", func(t *testing.T) {
 		// Simulate: cwd=repoA, paths=["./pkg", "<repoB>/cmd"]
-		groups := groupPathsByGitRoot(repoA, []string{"./pkg", filepath.Join(repoB, "cmd")})
+		groups, err := groupPathsByGitRoot(repoA, []string{"./pkg", filepath.Join(repoB, "cmd")})
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
 		if len(groups) != 2 {
 			t.Fatalf("expected 2 groups, got %d: %+v", len(groups), groups)
 		}
@@ -65,7 +106,10 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 	t.Run("cross-repo root path produces empty paths", func(t *testing.T) {
 		// When the path IS the git root (e.g. "../otherrepo"), the runner
 		// should get empty paths so it discovers from the root.
-		groups := groupPathsByGitRoot(repoA, []string{repoB})
+		groups, err := groupPathsByGitRoot(repoA, []string{repoB})
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
 		if len(groups) != 1 {
 			t.Fatalf("expected 1 group, got %d: %+v", len(groups), groups)
 		}
@@ -88,7 +132,10 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 		os.MkdirAll(filepath.Join(rA, "src"), 0755)
 		os.MkdirAll(filepath.Join(rB, "lib"), 0755)
 
-		groups := groupPathsByGitRoot(rA, []string{"./src", "../repoB/lib"})
+		groups, err := groupPathsByGitRoot(rA, []string{"./src", "../repoB/lib"})
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
 		if len(groups) != 2 {
 			t.Fatalf("expected 2 groups, got %d: %+v", len(groups), groups)
 		}
@@ -112,7 +159,10 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 	})
 
 	t.Run("empty paths returns single group with workdir", func(t *testing.T) {
-		groups := groupPathsByGitRoot(repoA, nil)
+		groups, err := groupPathsByGitRoot(repoA, nil)
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
 		if len(groups) != 1 {
 			t.Fatalf("expected 1 group, got %d", len(groups))
 		}
@@ -121,6 +171,72 @@ func TestGroupPathsByGitRoot(t *testing.T) {
 		}
 		if len(groups[0].paths) != 0 {
 			t.Errorf("expected empty paths, got %v", groups[0].paths)
+		}
+	})
+
+	t.Run("nested go module path gets its own workdir", func(t *testing.T) {
+		repo := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatalf("create repo git dir: %v", err)
+		}
+		nestedModule := filepath.Join(repo, "submodule")
+		if err := os.MkdirAll(filepath.Join(nestedModule, "pkg"), 0o755); err != nil {
+			t.Fatalf("create nested module dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(nestedModule, "go.mod"), []byte("module example.com/sub\n"), 0o644); err != nil {
+			t.Fatalf("write nested go.mod: %v", err)
+		}
+
+		groups, err := groupPathsByGitRoot(repo, []string{"./submodule/pkg"})
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d: %+v", len(groups), groups)
+		}
+		if groups[0].workDir != nestedModule {
+			t.Fatalf("expected workDir=%s, got %s", nestedModule, groups[0].workDir)
+		}
+		if len(groups[0].paths) != 1 || groups[0].paths[0] != "./pkg" {
+			t.Fatalf("expected paths=[./pkg], got %v", groups[0].paths)
+		}
+	})
+
+	t.Run("discover from root adds nested go modules as separate groups", func(t *testing.T) {
+		repo := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatalf("create repo git dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n"), 0o644); err != nil {
+			t.Fatalf("write root go.mod: %v", err)
+		}
+		nestedModule := filepath.Join(repo, "submodule")
+		if err := os.MkdirAll(filepath.Join(nestedModule, "pkg"), 0o755); err != nil {
+			t.Fatalf("create nested module dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(nestedModule, "go.mod"), []byte("module example.com/sub\n"), 0o644); err != nil {
+			t.Fatalf("write nested go.mod: %v", err)
+		}
+		nestedRepo := filepath.Join(repo, "subrepo")
+		if err := os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o755); err != nil {
+			t.Fatalf("create nested repo git dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(nestedRepo, "go.mod"), []byte("module example.com/subrepo\n"), 0o644); err != nil {
+			t.Fatalf("write nested repo go.mod: %v", err)
+		}
+
+		groups, err := groupPathsByGitRoot(repo, nil)
+		if err != nil {
+			t.Fatalf("groupPathsByGitRoot returned error: %v", err)
+		}
+		if len(groups) != 2 {
+			t.Fatalf("expected 2 groups (root + nested module), got %d: %+v", len(groups), groups)
+		}
+		if groups[0].workDir != repo || len(groups[0].paths) != 0 {
+			t.Fatalf("expected root discover group first, got %+v", groups[0])
+		}
+		if groups[1].workDir != nestedModule || len(groups[1].paths) != 0 {
+			t.Fatalf("expected nested module discover group second, got %+v", groups[1])
 		}
 	})
 }
@@ -237,6 +353,41 @@ func TestPass(t *testing.T) {
 			}
 		}
 		t.Logf("Run completed with %d total tests, %d passed, %d failed", totalTests, totalPassed, totalFailed)
+	}
+}
+
+func TestRunMultiRootKeepsSharedUpdatesOpenUntilAllRootsComplete(t *testing.T) {
+	parent := t.TempDir()
+	repoA := filepath.Join(parent, "repoA")
+	repoB := filepath.Join(parent, "repoB")
+	writeGoTestPackage(t, repoA, "pkg1", "example.com/repoA")
+	writeGoTestPackage(t, repoB, "pkg2", "example.com/repoB")
+
+	updates := make(chan []parsers.Test, 32)
+	_, err := Run(RunOptions{
+		WorkDir:       parent,
+		StartingPaths: []string{filepath.Join(repoA, "pkg1"), filepath.Join(repoB, "pkg2")},
+		Updates:       updates,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	seenPackages := make(map[string]bool)
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case batch, ok := <-updates:
+			if !ok {
+				if !seenPackages["./pkg1"] || !seenPackages["./pkg2"] {
+					t.Fatalf("expected streamed updates for both multiroot packages, saw %v", seenPackages)
+				}
+				return
+			}
+			collectPackagePaths(batch, seenPackages)
+		case <-timeout:
+			t.Fatal("timed out waiting for multiroot updates channel to close")
+		}
 	}
 }
 

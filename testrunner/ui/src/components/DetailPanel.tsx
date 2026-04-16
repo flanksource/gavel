@@ -1,5 +1,5 @@
 import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta } from '../types';
-import { statusIcon, statusColor, formatDuration, sum, frameworkIcon } from '../utils';
+import { statusIcon, statusColor, formatDuration, sum, frameworkIcon, relPath } from '../utils';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
@@ -8,10 +8,12 @@ export interface IgnoreRequest {
   source?: string;
   rule?: string;
   file?: string;
+  work_dir?: string;
 }
 
 interface Props {
   test: Test | null;
+  lint?: LinterResult[];
   onRerun?: (t: Test) => void;
   rerunBusy?: boolean;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
@@ -29,7 +31,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy, runMeta }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignoreBusy, runMeta }: Props) {
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -48,7 +50,7 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy,
   const task = taskMeta(t);
   const isLint = t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter'
     || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule';
-  const canRerun = !!onRerun && !isLint && t.framework !== 'task';
+  const canRerun = !!onRerun && t.kind !== 'violation' && t.framework !== 'task';
 
   return (
     <div class="h-full overflow-y-auto p-5 space-y-4">
@@ -99,6 +101,9 @@ export function DetailPanel({ test: t, onRerun, rerunBusy, onIgnore, ignoreBusy,
 
       {t.kind === 'violation' && t.violation && <ViolationDetail v={t.violation} />}
       {t.kind === 'linter' && <LinterDetail t={t} />}
+      {t.kind === 'lint-folder' && (
+        <FolderLintDetail t={t} lint={lint} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
+      )}
       {t.kind === 'lint-file' && (
         <FileViolationsDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       )}
@@ -461,6 +466,87 @@ function LinterDetail({ t }: { t: Test }) {
   );
 }
 
+function folderPattern(path: string | undefined): string {
+  if (!path) return '**';
+  const trimmed = path.replace(/\/+$/, '');
+  return trimmed ? `${trimmed}/**` : '**';
+}
+
+function collectFolderLintStats(folder: Test, lint: LinterResult[] | undefined): Array<{ linter: string; count: number; workDir?: string }> {
+  const targetPath = folder.target_path || '';
+  const counts = new Map<string, { linter: string; count: number; workDir?: string }>();
+  for (const lr of lint || []) {
+    if (folder.work_dir && lr.work_dir && lr.work_dir !== folder.work_dir) continue;
+    for (const violation of lr.violations || []) {
+      const rawFile = relPath(violation.file, lr.work_dir);
+      if (!rawFile) continue;
+      const matches = targetPath === '' ? true : rawFile === targetPath || rawFile.startsWith(`${targetPath}/`);
+      if (!matches) continue;
+      const current = counts.get(lr.linter);
+      if (current) {
+        current.count += 1;
+      } else {
+        counts.set(lr.linter, { linter: lr.linter, count: 1, workDir: lr.work_dir });
+      }
+    }
+  }
+  return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.linter.localeCompare(b.linter));
+}
+
+function FolderLintDetail({ t, lint, onIgnore, ignoreBusy }: LintDetailProps & { lint?: LinterResult[] }) {
+  const folderDisplay = t.file || t.name;
+  const pattern = folderPattern(t.target_path);
+  const linters = collectFolderLintStats(t, lint);
+  const workDir = t.work_dir || (linters.length === 1 ? linters[0].workDir : '');
+  return (
+    <>
+      <Section title="Folder">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-mono text-gray-700">{folderDisplay}</span>
+          {t.target_path !== undefined && (
+            <span class="text-xs text-gray-400">{pattern}</span>
+          )}
+        </div>
+      </Section>
+      <Section title="Actions">
+        <div class="flex flex-wrap gap-1.5">
+          <IgnoreButton
+            label="Ignore everything in this folder"
+            title="Add {file} to .gavel.yaml"
+            req={{ file: pattern, work_dir: workDir }}
+            onIgnore={onIgnore}
+            disabled={ignoreBusy || !workDir}
+          />
+          {linters.map(({ linter, count }) => (
+            <IgnoreButton
+              key={linter}
+              label={`Ignore ${linter} in this folder`}
+              title="Add {source, file} to .gavel.yaml"
+              req={{ source: linter, file: pattern, work_dir: workDir }}
+              onIgnore={onIgnore}
+              disabled={ignoreBusy || !workDir}
+              variant="subtle"
+            />
+          ))}
+        </div>
+      </Section>
+      <Section title="Linters">
+        <div class="space-y-1">
+          {linters.map(({ linter, count }) => (
+            <div key={linter} class="flex items-center justify-between text-sm text-gray-700">
+              <span class="font-mono">{linter}</span>
+              <span class="text-xs text-gray-400">{count} violations</span>
+            </div>
+          ))}
+          {linters.length === 0 && (
+            <div class="text-sm text-gray-400">No violations found under this folder.</div>
+          )}
+        </div>
+      </Section>
+    </>
+  );
+}
+
 interface LintDetailProps {
   t: Test;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
@@ -503,6 +589,8 @@ function IgnoreButton({
 function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
   const linter = t.linterName || '';
   const file = t.file || '';
+  const targetPath = t.target_path || file;
+  const workDir = t.work_dir || '';
   const vs = t.violations || [];
   return (
     <>
@@ -519,14 +607,14 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
               <IgnoreButton
                 label={`Ignore all ${linter} in this file`}
                 title="Add {source, file} to .gavel.yaml"
-                req={{ source: linter, file }}
+                req={{ source: linter, file: targetPath, work_dir: workDir }}
                 onIgnore={onIgnore}
                 disabled={ignoreBusy}
               />
               <IgnoreButton
                 label={`Disable ${linter} entirely`}
                 title="Add {source} to .gavel.yaml"
-                req={{ source: linter }}
+                req={{ source: linter, work_dir: workDir }}
                 onIgnore={onIgnore}
                 disabled={ignoreBusy}
                 variant="subtle"
@@ -540,7 +628,8 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
                   key={i}
                   v={v}
                   linter={linter}
-                  file={file}
+                  file={targetPath}
+                  workDir={workDir}
                   onIgnore={onIgnore}
                   ignoreBusy={ignoreBusy}
                 />
@@ -556,7 +645,9 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
 function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
   const linter = t.linterName || '';
   const file = t.file || '';
+  const targetPath = t.target_path || file;
   const rule = t.ruleName || '';
+  const workDir = t.work_dir || '';
   const vs = t.violations || [];
   return (
     <>
@@ -575,7 +666,7 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
             <IgnoreButton
               label={`Ignore ${rule} in this file`}
               title="Add {source, rule, file} to .gavel.yaml"
-              req={{ source: linter, rule, file }}
+              req={{ source: linter, rule, file: targetPath, work_dir: workDir }}
               onIgnore={onIgnore}
               disabled={ignoreBusy}
             />
@@ -583,14 +674,14 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
           <IgnoreButton
             label={`Ignore rule ${rule} everywhere`}
             title="Add {source, rule} to .gavel.yaml"
-            req={{ source: linter, rule }}
+            req={{ source: linter, rule, work_dir: workDir }}
             onIgnore={onIgnore}
             disabled={ignoreBusy}
           />
           <IgnoreButton
             label={`Disable ${linter} entirely`}
             title="Add {source} to .gavel.yaml"
-            req={{ source: linter }}
+            req={{ source: linter, work_dir: workDir }}
             onIgnore={onIgnore}
             disabled={ignoreBusy}
             variant="subtle"
@@ -604,7 +695,8 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
               key={i}
               v={v}
               linter={linter}
-              file={v.file || file}
+              file={v.raw_file || targetPath}
+              workDir={workDir}
               onIgnore={onIgnore}
               ignoreBusy={ignoreBusy}
               showFile={!file}
@@ -617,11 +709,12 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
 }
 
 function ViolationRow({
-  v, linter, file, onIgnore, ignoreBusy, showFile,
+  v, linter, file, workDir, onIgnore, ignoreBusy, showFile,
 }: {
   v: Violation;
   linter: string;
   file: string;
+  workDir: string;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
   showFile?: boolean;
@@ -655,7 +748,7 @@ function ViolationRow({
               <IgnoreButton
                 label="Ignore this violation"
                 title="Add {source, rule, file} to .gavel.yaml"
-                req={{ source: linter, rule, file }}
+                req={{ source: linter, rule, file, work_dir: workDir }}
                 onIgnore={onIgnore}
                 disabled={ignoreBusy}
                 variant="subtle"

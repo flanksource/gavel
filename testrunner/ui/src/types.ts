@@ -2,6 +2,7 @@ export interface Test {
   name: string;
   package?: string;
   package_path?: string;
+  work_dir?: string;
   command?: string;
   suite?: string[];
   message?: string;
@@ -27,6 +28,7 @@ export interface Test {
   linter?: LinterResult;
   linterName?: string;
   ruleName?: string;
+  target_path?: string;
   route_path?: string;
 }
 
@@ -34,6 +36,7 @@ export type Severity = 'error' | 'warning' | 'info';
 
 export interface Violation {
   file?: string;
+  raw_file?: string;
   line?: number;
   column?: number;
   message?: string;

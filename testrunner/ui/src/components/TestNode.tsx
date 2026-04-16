@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import type { Test } from '../types';
-import { statusIcon, statusColor, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName } from '../utils';
+import { statusIcon, statusColor, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName, isLintNode, lintNodeCount, lintBadgeColor } from '../utils';
 
 interface Props {
   test: Test;
@@ -39,10 +39,12 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
   const s = hasChildren ? sum(t) : null;
   const fw = resolveFramework(t);
   const fwIcon = frameworkIcon(fw);
+  const isLint = isLintNode(t);
+  const lintCount = isLint ? lintNodeCount(t) : 0;
 
   const rowBg = isSelected
     ? 'bg-blue-50 border-l-2 border-blue-500'
-    : t.failed ? 'bg-red-50/50' : 'hover:bg-gray-50';
+    : isLint ? 'hover:bg-gray-50' : t.failed ? 'bg-red-50/50' : 'hover:bg-gray-50';
 
   return (
     <div>
@@ -64,13 +66,13 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           <span class="w-3 shrink-0" />
         )}
 
-        <iconify-icon icon={statusIcon(t)} class={`${statusColor(t)} text-base shrink-0`} />
+        <iconify-icon icon={statusIcon(t)} class={`${isLint ? 'text-gray-500' : statusColor(t)} text-base shrink-0`} />
 
-        {fwIcon && (
+        {fwIcon && !isLint && (
           <iconify-icon icon={fwIcon} class="text-sm shrink-0 opacity-60" />
         )}
 
-        <span class={`truncate ${t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
+        <span class={`truncate ${isLint ? 'text-gray-800' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
           {humanizeName(t.name, fw)}
         </span>
 
@@ -81,7 +83,13 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           return dur > 0 ? <span class="text-xs text-gray-400 shrink-0">{formatDuration(dur)}</span> : null;
         })()}
 
-        {s && s.total > 0 && (
+        {isLint && lintCount > 0 && (
+          <span class="flex items-center gap-1 shrink-0">
+            <Badge count={lintCount} color={lintBadgeColor(t)} />
+          </span>
+        )}
+
+        {!isLint && s && s.total > 0 && (
           <span class="flex items-center gap-1 shrink-0">
             {s.passed > 0 && <Badge count={s.passed} color="bg-green-500" />}
             {s.failed > 0 && <Badge count={s.failed} color="bg-red-500" />}
@@ -90,7 +98,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           </span>
         )}
 
-        {onRerun && t.framework !== 'task' && t.kind !== 'violation' && t.kind !== 'lint-root' && t.kind !== 'lint-folder' && t.kind !== 'linter' && t.kind !== 'lint-file' && t.kind !== 'lint-rule' && (
+        {onRerun && t.framework !== 'task' && t.kind !== 'violation' && (
           <button
             class="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
             onClick={(e) => { e.stopPropagation(); onRerun(t); }}

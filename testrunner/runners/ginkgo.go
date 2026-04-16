@@ -42,9 +42,12 @@ func (r *Ginkgo) Parser() parsers.ResultParser {
 
 // Detect checks if Ginkgo is used (looks for ginkgo imports in test files).
 func (r *Ginkgo) Detect(workDir string) (bool, error) {
+	if utils.FindNearestGoModRoot(workDir) == "" {
+		return false, nil
+	}
 	var found bool
 
-	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || found {
 			return err
 		}
@@ -64,6 +67,9 @@ func (r *Ginkgo) Detect(workDir string) (bool, error) {
 // DiscoverPackages returns packages with Ginkgo tests.
 // When recursive is false, only the given directory is checked.
 func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
+	if utils.FindNearestGoModRoot(workDir) == "" {
+		return nil, nil
+	}
 	if !recursive {
 		if r.dirHasGinkgoTests(workDir) {
 			return []string{r.getRelativePath(workDir)}, nil
@@ -74,7 +80,7 @@ func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, err
 	var packages []string
 	seen := make(map[string]bool)
 
-	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

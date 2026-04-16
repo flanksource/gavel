@@ -2,9 +2,11 @@ package testrunner
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -203,22 +205,21 @@ type packageResult struct {
 	err         error
 }
 
-// testGroup holds a set of starting paths that share the same git root.
+// testGroup holds a set of starting paths that share the same execution root.
 type testGroup struct {
 	workDir string
 	paths   []string
 }
 
-// groupPathsByGitRoot partitions startingPaths by their git root so each
-// group can be run with the correct WorkDir. Paths within the same git root
-// as workDir keep their original (possibly relative) form. Paths in a
-// different git root are rebased to be relative to that root (e.g. "./lib").
-//
-// When startingPaths is empty a single group with the original workDir and
-// no paths is returned (the runner discovers packages itself).
-func groupPathsByGitRoot(workDir string, startingPaths []string) []testGroup {
+// groupPathsByGitRoot partitions starting paths by execution root. Git roots
+// still split runs, and nested Go modules get their own WorkDir rooted at the
+// nearest containing go.mod. When a group discovers from its root (paths
+// empty), nested descendant modules become additional groups.
+func groupPathsByGitRoot(workDir string, startingPaths []string) ([]testGroup, error) {
+	workDir, _ = filepath.Abs(workDir)
+
 	if len(startingPaths) == 0 {
-		return []testGroup{{workDir: workDir}}
+		return expandNestedModuleGroups([]testGroup{{workDir: workDir}})
 	}
 
 	workDirRoot := utils.FindGitRoot(workDir)
@@ -236,35 +237,127 @@ func groupPathsByGitRoot(workDir string, startingPaths []string) []testGroup {
 		}
 		abs, _ = filepath.Abs(abs)
 
-		gitRoot := utils.FindGitRoot(abs)
-		if gitRoot == "" {
-			gitRoot = workDirRoot
+		groupRoot := executionRootForPath(workDirRoot, abs)
+		if _, ok := groups[groupRoot]; !ok {
+			order = append(order, groupRoot)
 		}
 
-		if _, ok := groups[gitRoot]; !ok {
-			order = append(order, gitRoot)
+		rel, err := filepath.Rel(groupRoot, abs)
+		if err != nil {
+			groups[groupRoot] = append(groups[groupRoot], p)
+			continue
 		}
-
-		if gitRoot == workDirRoot {
-			groups[gitRoot] = append(groups[gitRoot], p)
-		} else {
-			rel, err := filepath.Rel(gitRoot, abs)
-			if err != nil {
-				groups[gitRoot] = append(groups[gitRoot], p)
-			} else if rel == "." {
-				// Path IS the git root — leave paths empty so the runner
-				// discovers from the root without a path filter.
-			} else {
-				groups[gitRoot] = append(groups[gitRoot], "./"+filepath.ToSlash(rel))
-			}
+		if rel == "." {
+			// Path IS the execution root — leave paths empty so the runner
+			// discovers from the root without a path filter.
+			continue
 		}
+		groups[groupRoot] = append(groups[groupRoot], "./"+filepath.ToSlash(rel))
 	}
 
 	result := make([]testGroup, 0, len(order))
 	for _, root := range order {
 		result = append(result, testGroup{workDir: root, paths: groups[root]})
 	}
-	return result
+	return expandNestedModuleGroups(result)
+}
+
+func executionRootForPath(workDirRoot, abs string) string {
+	groupRoot := workDirRoot
+	if gitRoot := utils.FindGitRoot(abs); gitRoot != "" {
+		groupRoot = gitRoot
+	}
+	if moduleRoot := findNearestGoModRoot(abs); moduleRoot != "" && isWithin(moduleRoot, groupRoot) {
+		groupRoot = moduleRoot
+	}
+	return groupRoot
+}
+
+func expandNestedModuleGroups(groups []testGroup) ([]testGroup, error) {
+	result := append([]testGroup(nil), groups...)
+	seen := make(map[string]struct{}, len(result))
+	for _, g := range result {
+		seen[g.workDir] = struct{}{}
+	}
+
+	for i := 0; i < len(result); i++ {
+		if len(result[i].paths) > 0 {
+			continue
+		}
+		modules, err := findNestedGoModuleRoots(result[i].workDir)
+		if err != nil {
+			return nil, err
+		}
+		for _, moduleRoot := range modules {
+			if _, ok := seen[moduleRoot]; ok {
+				continue
+			}
+			seen[moduleRoot] = struct{}{}
+			result = append(result, testGroup{workDir: moduleRoot})
+		}
+	}
+
+	return result, nil
+}
+
+func findNestedGoModuleRoots(root string) ([]string, error) {
+	root, _ = filepath.Abs(root)
+	var modules []string
+
+	err := utils.WalkGitIgnored(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() || path == root {
+			return nil
+		}
+
+		if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && info.IsDir() {
+			return fs.SkipDir
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+			modules = append(modules, path)
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(modules)
+	return lo.Uniq(modules), nil
+}
+
+func findNearestGoModRoot(dir string) string {
+	dir, _ = filepath.Abs(dir)
+	for {
+		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func isWithin(path, root string) bool {
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func Run(opts RunOptions) (any, error) {
@@ -272,9 +365,12 @@ func Run(opts RunOptions) (any, error) {
 		opts.WorkDir, _ = os.Getwd()
 	}
 
-	// Split starting paths by git root so each group runs with the correct
-	// WorkDir. When all paths share the same root this is a no-op.
-	groups := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
+	// Split starting paths by execution root so each group runs with the
+	// correct WorkDir. Nested Go modules get their own groups.
+	groups, err := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
+	if err != nil {
+		return nil, err
+	}
 	if len(groups) > 1 {
 		return runMultiRoot(opts, groups)
 	}
@@ -292,12 +388,16 @@ func Run(opts RunOptions) (any, error) {
 // runMultiRoot handles the case where starting paths span multiple git roots
 // by running a separate orchestration per root and merging the results.
 func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
+	if base.Updates != nil {
+		defer close(base.Updates)
+	}
+
 	var allTree []parsers.Test
 	for _, g := range groups {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
-		result, err := runSingleRoot(opts)
+		result, err := runSingleRootWithUpdateOwnership(opts, false)
 		if err != nil {
 			return nil, err
 		}
@@ -309,11 +409,19 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 }
 
 func runSingleRoot(opts RunOptions) (any, error) {
+	return runSingleRootWithUpdateOwnership(opts, true)
+}
+
+func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, error) {
 	logger.Infof("Running tests  %s", renderText(opts.Pretty()))
 
 	var streamer *TestStreamer
 	if opts.Updates != nil {
-		streamer = NewTestStreamer(opts.Updates)
+		if closeUpdates {
+			streamer = NewTestStreamer(opts.Updates)
+		} else {
+			streamer = NewSharedTestStreamer(opts.Updates)
+		}
 		defer streamer.Done()
 	}
 
@@ -362,7 +470,19 @@ func runSingleRoot(opts RunOptions) (any, error) {
 		}
 	}
 
+	tree = annotateTestsWorkDir(tree, opts.WorkDir)
+
 	return tree, nil
+}
+
+func annotateTestsWorkDir(tests []parsers.Test, workDir string) []parsers.Test {
+	for i := range tests {
+		tests[i].WorkDir = workDir
+		if len(tests[i].Children) > 0 {
+			tests[i].Children = annotateTestsWorkDir(tests[i].Children, workDir)
+		}
+	}
+	return tests
 }
 
 // Run executes tests and optionally syncs failures to TODOs.
