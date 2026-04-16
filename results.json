@@ -1,0 +1,212 @@
+{
+  "metadata": {
+    "version": "wip-compile-1-g475e13b",
+    "started": "2026-04-16T13:43:31.421114Z",
+    "ended": "2026-04-16T13:45:32.261347Z",
+    "kind": "initial",
+    "sequence": 1,
+    "args": {
+      "addr": "localhost",
+      "auto_stop": "",
+      "bench": "",
+      "cache": false,
+      "changed": false,
+      "diagnostics": false,
+      "dry_run": false,
+      "extra_args": null,
+      "fixture_files": null,
+      "fixtures": false,
+      "idle_timeout": "",
+      "lint": false,
+      "nodes": 0,
+      "recursive": true,
+      "show_passed": false,
+      "show_stderr": "OnFailure",
+      "show_stdout": "OnFailure",
+      "since": "",
+      "skip_hooks": true,
+      "starting_paths": null,
+      "sync_todos": false,
+      "todo_template": "",
+      "todos_dir": ".todos",
+      "ui": false,
+      "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel"
+    }
+  },
+  "git": {
+    "repo": "gavel",
+    "root": "/Users/moshe/go/src/github.com/flanksource/gavel",
+    "sha": "475e13b548d192d23c92ffc9b90e57b12f7df518"
+  },
+  "status": {
+    "running": false
+  },
+  "tests": [
+    {
+      "name": "cmd/",
+      "package_path": "cmd",
+      "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+      "failed": true,
+      "children": [
+        {
+          "name": "gavel/",
+          "package_path": "cmd/gavel",
+          "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+          "failed": true,
+          "children": [
+            {
+              "name": "test_fork_unix_test.go",
+              "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+              "file": "cmd/gavel/test_fork_unix_test.go",
+              "failed": true,
+              "children": [
+                {
+                  "name": "TestWriteSnapshotJSON_ReadByLoadResults",
+                  "package": "github.com/flanksource/gavel/cmd/gavel",
+                  "package_path": "./cmd/gavel",
+                  "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+                  "command": "go test -json ./cmd/gavel",
+                  "line": 84,
+                  "framework": "go test",
+                  "failed": true,
+                  "stdout": "test_fork_unix_test.go:117: \n        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/cmd/gavel/test_fork_unix_test.go:117\n        \tError:      \t\"[map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[framework:go test name:TestA passed:true] map[failed:true framework:go test message:boom name:TestB]]\" should have 2 item(s), but has 4\n        \tTest:       \tTestWriteSnapshotJSON_ReadByLoadResults"
+                }
+              ]
+            },
+            {
+              "name": "ui_serve_test.go",
+              "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+              "file": "cmd/gavel/ui_serve_test.go",
+              "failed": true,
+              "children": [
+                {
+                  "name": "TestLoadResults_PopulatesServer",
+                  "package": "github.com/flanksource/gavel/cmd/gavel",
+                  "package_path": "./cmd/gavel",
+                  "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+                  "command": "go test -json ./cmd/gavel",
+                  "line": 48,
+                  "framework": "go test",
+                  "failed": true,
+                  "stdout": "ui_serve_test.go:71: \n        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/cmd/gavel/ui_serve_test.go:71\n        \tError:      \t\"[map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[framework:go test name:TestA package:pkg/a passed:true] map[failed:true framework:go test message:boom name:TestB package:pkg/b]]\" should have 2 item(s), but has 4\n        \tTest:       \tTestLoadResults_PopulatesServer"
+                },
+                {
+                  "name": "TestRunUIServe_ReplaysSnapshotAndExits",
+                  "package": "github.com/flanksource/gavel/cmd/gavel",
+                  "package_path": "./cmd/gavel",
+                  "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+                  "command": "go test -json ./cmd/gavel",
+                  "line": 149,
+                  "framework": "go test",
+                  "duration": 210000000,
+                  "failed": true,
+                  "stdout": "UI at http://localhost:65314\n    ui_serve_test.go:197: \n        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/cmd/gavel/ui_serve_test.go:197\n        \tError:      \t\"[map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[children:[map[command:jscpd context:map[duration:298.606ms status:success type:task] framework:task name:jscpd passed:true]] context:map[duration: status:success type:group] framework:task name:Running linters passed:true] map[framework:go test name:TestA package:pkg/a passed:true] map[failed:true framework:go test message:boom name:TestB package:pkg/b]]\" should have 2 item(s), but has 4\n        \tTest:       \tTestRunUIServe_ReplaysSnapshotAndExits\n    ui_serve_test.go:200: \n        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/cmd/gavel/ui_serve_test.go:200\n        \tError:      \tNot equal: \n        \t            \texpected: false\n        \t            \tactual  : true\n        \tTest:       \tTestRunUIServe_ReplaysSnapshotAndExits\n        \tMessages:   \tserver should be marked complete after snapshot load"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "testrunner/",
+      "package_path": "testrunner",
+      "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+      "failed": true,
+      "children": [
+        {
+          "name": "registry_test.go",
+          "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+          "file": "testrunner/registry_test.go",
+          "failed": true,
+          "children": [
+            {
+              "name": "TestRegistryDetectAll",
+              "package": "github.com/flanksource/gavel/testrunner",
+              "package_path": "./testrunner",
+              "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+              "command": "go test -json ./testrunner",
+              "line": 37,
+              "framework": "go test",
+              "failed": true,
+              "stdout": "registry_test.go:53: expected at least one framework to be detected\n    registry_test.go:64: expected GoTest to be detected"
+            }
+          ]
+        },
+        {
+          "name": "ui/",
+          "package_path": "testrunner/ui",
+          "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+          "failed": true,
+          "children": [
+            {
+              "name": "ui_e2e_test.go",
+              "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+              "file": "testrunner/ui/ui_e2e_test.go",
+              "failed": true,
+              "children": [
+                {
+                  "name": "Test UI E2E",
+                  "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+                  "suite": [
+                    "Test UI E2E"
+                  ],
+                  "failed": true,
+                  "children": [
+                    {
+                      "name": "shows diagnostics tab and captures a stack trace",
+                      "package": "ui",
+                      "package_path": "./testrunner/ui",
+                      "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+                      "command": "go run github.com/onsi/ginkgo/v2/ginkgo --json-report=.ginkgo/ginkgo-report-.-testrunner-ui-1776347082975655000.json --show-node-events=false ./testrunner/ui",
+                      "suite": [
+                        "Test UI E2E"
+                      ],
+                      "message": "Expected\n    \u003cstring\u003e: Diagnostics\n    Expand\n    Collapse\n    Collected stack trace for pid 4242\n    9 tests\n    |\n    4 passed\n    |\n    4 failed\n    |\n    1 skipped\n    |\n    3.1s\n    PASS RATE\n    44%\n    FAILURES\n    44%\n    PENDING\n    0%\n    Tests\n    4\n    Diagnostics\n    2\n    gavel\n    pid 4242\n    running\n    11.2%\n    64 MB\n    go\n    pid 5151\n    sleep\n    3.4%\n    22 MB\n    gavel\n    pid 4242\n    running\n    COMMAND\n    gavel test --ui ./testrunner/ui\n    METRICS\n    CPU\n    11.2%\n    RSS\n    64 MB\n    VIRTUAL MEMORY\n    320 MB\n    OPEN FILES\n    14\n    STACK\n    ready\n    1/1/1, 2:20:54 AM\n    1 / 1 goroutines\n    Refresh\n    Hide runtime-only\n    running\n    1\n    g1\n    running\n    1f\n    1u\n    main.first()\n    main.first\nto contain substring\n    \u003cstring\u003e: goroutine 1 [running]:",
+                      "line": 301,
+                      "framework": "ginkgo",
+                      "duration": 3263586583,
+                      "failed": true,
+                      "context": {
+                        "suite_description": "Test UI E2E",
+                        "suite_path": "/Users/moshe/go/src/github.com/flanksource/gavel/testrunner/ui",
+                        "failure_location": "/Users/moshe/go/src/github.com/flanksource/gavel/testrunner/ui/ui_e2e_test.go:318"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "verify/",
+      "package_path": "verify",
+      "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+      "failed": true,
+      "children": [
+        {
+          "name": "config_test.go",
+          "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+          "file": "verify/config_test.go",
+          "failed": true,
+          "children": [
+            {
+              "name": "TestLoadGavelConfig_RepoRoot",
+              "package": "github.com/flanksource/gavel/verify",
+              "package_path": "./verify",
+              "work_dir": "/Users/moshe/go/src/github.com/flanksource/gavel",
+              "command": "go test -json ./verify",
+              "line": 279,
+              "framework": "go test",
+              "failed": true,
+              "stdout": "config_test.go:292: \n        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/verify/config_test.go:292\n        \tError:      \tShould NOT be empty, but was []\n        \tTest:       \tTestLoadGavelConfig_RepoRoot\n        \tMessages:   \texpected at least one top-level pre hook"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
