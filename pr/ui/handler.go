@@ -169,6 +169,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
+	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }
 
@@ -573,10 +574,11 @@ func (s *Server) refreshRepoCache() {
 }
 
 type prDetail struct {
-	PR       *github.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
-	Error    string                        `json:"error,omitempty"`
+	PR           *github.PRInfo                `json:"pr,omitempty"`
+	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	Comments     []github.PRComment            `json:"comments,omitempty"`
+	GavelResults *GavelResultsSummary          `json:"gavelResults,omitempty"`
+	Error        string                        `json:"error,omitempty"`
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
@@ -592,14 +594,113 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	flusher, canFlush := w.(http.Flusher)
+	// Stream progressive detail via SSE so the UI can render sections
+	// as they arrive rather than waiting for all GitHub round-trips.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Fallback: non-streaming response
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.fetchPRDetail(repo, prNumber)) //nolint:errcheck
+		return
+	}
 
-	result := s.fetchPRDetail(repo, prNumber)
-	json.NewEncoder(w).Encode(result) //nolint:errcheck
-	if canFlush {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	emit := func(event string, data any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 		flusher.Flush()
 	}
+
+	opts := s.ghOpts
+	opts.Repo = repo
+
+	// Phase 1: PR metadata + comments (single GraphQL call)
+	pr, err := github.FetchPR(opts, prNumber)
+	if err != nil {
+		logger.Warnf("failed to fetch PR %s#%d: %v", repo, prNumber, err)
+		emit("error", map[string]string{"error": err.Error()})
+		emit("done", nil)
+		return
+	}
+	comments := prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
+	emit("pr", map[string]any{"pr": pr, "comments": comments})
+
+	// Phase 2: Workflow runs + gavel results in parallel
+	type runResult struct {
+		id  int64
+		run *github.WorkflowRun
+	}
+
+	// Collect unique run IDs
+	var runIDs []int64
+	seen := make(map[int64]bool)
+	for _, check := range pr.StatusCheckRollup {
+		runID, err := github.ExtractRunID(check.DetailsURL)
+		if err != nil || seen[runID] {
+			continue
+		}
+		seen[runID] = true
+		runIDs = append(runIDs, runID)
+	}
+
+	// Start gavel results fetch in parallel
+	type gavelResult struct {
+		summary *GavelResultsSummary
+	}
+	gavelCh := make(chan gavelResult, 1)
+	allComments := append(pr.Comments, pr.ReviewThreads...)
+	artifactID, artifactURL, hasArtifact := github.FindGavelArtifact(allComments)
+	if hasArtifact {
+		go func() {
+			jsonBytes, err := github.DownloadArtifact(opts, artifactID)
+			if err != nil {
+				logger.Warnf("artifact %d download failed: %v", artifactID, err)
+				gavelCh <- gavelResult{&GavelResultsSummary{
+					ArtifactID:  artifactID,
+					ArtifactURL: artifactURL,
+					Error:       err.Error(),
+				}}
+			} else {
+				gavelCh <- gavelResult{computeGavelSummary(jsonBytes, artifactID, artifactURL)}
+			}
+		}()
+	}
+
+	// Fetch workflow runs in parallel
+	runCh := make(chan runResult, len(runIDs))
+	for _, id := range runIDs {
+		go func(runID int64) {
+			run, err := github.FetchRunJobs(opts, runID)
+			if err != nil {
+				logger.Warnf("failed to fetch run %d: %v", runID, err)
+				runCh <- runResult{runID, nil}
+				return
+			}
+			runCh <- runResult{runID, run}
+		}(id)
+	}
+
+	runs := make(map[int64]*github.WorkflowRun, len(runIDs))
+	for range runIDs {
+		rr := <-runCh
+		if rr.run != nil {
+			runs[rr.id] = rr.run
+		}
+	}
+	if len(runs) > 0 {
+		emit("runs", map[string]any{"runs": runs})
+	}
+
+	// Wait for gavel results
+	if hasArtifact {
+		gr := <-gavelCh
+		emit("gavel", map[string]any{"gavelResults": gr.summary})
+	}
+
+	emit("done", nil)
 }
 
 // fetchPRDetail loads full PR metadata, workflow runs, and comments from
@@ -636,6 +737,25 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	}
 	result.Runs = runs
 	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
+
+	// Scan all comments (including general issue comments, not just review
+	// threads) for a gavel sticky comment with an artifact link.
+	allComments := append(pr.Comments, pr.ReviewThreads...)
+	if artifactID, artifactURL, found := github.FindGavelArtifact(allComments); found {
+		jsonBytes, err := github.DownloadArtifact(opts, artifactID)
+		if err != nil {
+			logger.Warnf("artifact %d download failed: %v", artifactID, err)
+			result.GavelResults = &GavelResultsSummary{
+				ArtifactID:  artifactID,
+				ArtifactURL: artifactURL,
+				Error:       err.Error(),
+			}
+		} else {
+			summary := computeGavelSummary(jsonBytes, artifactID, artifactURL)
+			result.GavelResults = summary
+		}
+	}
+
 	return result
 }
 

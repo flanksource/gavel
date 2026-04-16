@@ -2,6 +2,7 @@ import type { Test } from './types';
 import type { Filters } from './components/FilterBar';
 import type { LintFilters, LintGrouping } from './components/LintFilterBar';
 import { decodeFilterState, encodeFilterState } from './filterState';
+import { basePath } from './config';
 
 export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
 
@@ -21,7 +22,11 @@ function splitCSV(value: string | null): string[] {
 }
 
 export function parseRoute(location: Location): RouteState {
-  const trimmed = location.pathname.replace(/^\/+|\/+$/g, '');
+  let pathname = location.pathname;
+  if (basePath && pathname.startsWith(basePath)) {
+    pathname = pathname.slice(basePath.length);
+  }
+  const trimmed = pathname.replace(/^\/+|\/+$/g, '');
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
   let tab: TabKey = 'tests';
   let selectedPath = '';
@@ -62,7 +67,7 @@ export function buildRoute(state: RouteState): string {
   }
 
   const query = params.toString();
-  return `/${segments.join('/')}${query ? `?${query}` : ''}`;
+  return `${basePath}/${segments.join('/')}${query ? `?${query}` : ''}`;
 }
 
 export function buildExportRoute(state: RouteState, format: ExportFormat): string {
