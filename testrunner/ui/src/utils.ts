@@ -12,6 +12,8 @@ interface FlatViolation {
   linterResult: LinterResult;
   v: Violation;
   file?: string;
+  rawFile?: string;
+  workDir?: string;
 }
 
 interface RuleBucket {
@@ -19,14 +21,21 @@ interface RuleBucket {
   violations: Violation[];
 }
 
+interface FileBucket {
+  rawFile?: string;
+  workDir?: string;
+  violations: Violation[];
+}
+
 interface LinterBucket {
-  files: Map<string, Violation[]>;
+  files: Map<string, FileBucket>;
   noFileRules: Map<string, RuleBucket>;
 }
 
 interface FileTreeNode {
   name: string;
   path?: string;
+  rawPath?: string;
   children: Map<string, FileTreeNode>;
   files: Map<string, Map<string, Map<string, Violation[]>>>;
 }
@@ -71,17 +80,29 @@ function collapsedPathSegments(path: string): string[] {
 }
 
 function fileTreeRoot(): FileTreeNode {
-  return { name: '', children: new Map(), files: new Map() };
+  return { name: '', rawPath: '', children: new Map(), files: new Map() };
 }
 
-function insertFileNode(root: FileTreeNode, file: string, linter: string, violation: Violation): void {
+function insertFileNode(root: FileTreeNode, file: string, rawFile: string, linter: string, violation: Violation): void {
   const segments = collapsedPathSegments(file);
-  if (segments.length === 0) return;
+  const rawSegments = collapsedPathSegments(rawFile);
+  if (segments.length === 0 || rawSegments.length === 0) return;
   let current = root;
-  for (const segment of segments.slice(0, -1)) {
+  const folderSegments = segments.slice(0, -1);
+  const rawFolderSegments = rawSegments.slice(0, -1);
+  const rawOffset = folderSegments.length - rawFolderSegments.length;
+  for (let i = 0; i < folderSegments.length; i += 1) {
+    const segment = folderSegments[i];
     let child = current.children.get(segment);
     if (!child) {
-      child = { name: segment, path: current.path ? `${current.path}/${segment}` : segment, children: new Map(), files: new Map() };
+      const rawCount = Math.max(0, Math.min(rawFolderSegments.length, i + 1 - rawOffset));
+      child = {
+        name: segment,
+        path: current.path ? `${current.path}/${segment}` : segment,
+        rawPath: rawCount > 0 ? rawFolderSegments.slice(0, rawCount).join('/') : '',
+        children: new Map(),
+        files: new Map(),
+      };
       current.children.set(segment, child);
     }
     current = child;
@@ -119,16 +140,43 @@ function worstSeverity(vs: Violation[] | undefined): Severity {
 
 function flattenLint(lint: LinterResult[] | undefined, filters: LintFilters): FlatViolation[] {
   const out: FlatViolation[] = [];
+  const workDirs = new Set<string>();
+  for (const lr of lint || []) {
+    if (!matchesFilterState(lr.linter, filters.linter)) continue;
+    if (lr.work_dir) workDirs.add(normalizeLintPath(lr.work_dir));
+  }
+  const multiRoot = workDirs.size > 1;
   for (const lr of lint || []) {
     if (!matchesFilterState(lr.linter, filters.linter)) continue;
     for (const v of lr.violations || []) {
       const sev = (v.severity || 'error') as Severity;
       if (!matchesFilterState(sev, filters.severity)) continue;
-      const file = relPath(v.file, lr.work_dir);
-      out.push({ linter: lr.linter, linterResult: lr, v: { ...v, file }, file });
+      const rawFile = relPath(v.file, lr.work_dir);
+      const file = decorateLintFile(rawFile, lr.work_dir, multiRoot);
+      out.push({
+        linter: lr.linter,
+        linterResult: lr,
+        v: { ...v, raw_file: rawFile, file },
+        file,
+        rawFile,
+        workDir: lr.work_dir,
+      });
     }
   }
   return out;
+}
+
+export function decorateLintFile(file: string | undefined, workDir: string | undefined, multiRoot: boolean): string | undefined {
+  if (!file) return file;
+  if (!multiRoot || !workDir) return file;
+  return `${workDirLabel(workDir)}/${file}`;
+}
+
+export function workDirLabel(workDir: string): string {
+  const parts = normalizeLintPath(workDir).split('/').filter(Boolean);
+  if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+  if (parts.length === 1) return parts[0];
+  return normalizeLintPath(workDir);
 }
 
 function folderNode(name: string, kind: Test['kind'], children: Test[]): Test {
@@ -144,13 +192,15 @@ function folderNode(name: string, kind: Test['kind'], children: Test[]): Test {
   };
 }
 
-function fileLeafNode(name: string, file: string, linterName: string, violations: Violation[]): Test {
+function fileLeafNode(name: string, file: string, rawFile: string, linterName: string, violations: Violation[], workDir?: string): Test {
   const sev = worstSeverity(violations);
   return {
-    name: `${name} (${violations.length})`,
+    name,
     framework: 'lint',
     kind: 'lint-file',
     file,
+    target_path: rawFile,
+    work_dir: workDir,
     linterName,
     violations: violations
       .slice()
@@ -161,13 +211,15 @@ function fileLeafNode(name: string, file: string, linterName: string, violations
   };
 }
 
-function ruleLeafNode(rule: string, linterName: string, file: string, violations: Violation[]): Test {
+function ruleLeafNode(rule: string, linterName: string, file: string, rawFile: string, violations: Violation[], workDir?: string): Test {
   const sev = worstSeverity(violations);
   return {
-    name: `${rule} (${violations.length})`,
+    name: rule,
     framework: 'lint',
     kind: 'lint-rule',
     file,
+    target_path: rawFile,
+    work_dir: workDir,
     linterName,
     ruleName: rule,
     violations: violations
@@ -186,7 +238,7 @@ function linterNode(
   noFileViolations?: Violation[],
 ): Test {
   const total = children.reduce((n, child) => n + lintViolationCount(child), 0) + (noFileViolations?.length || 0);
-  const node = folderNode(`${linterName} (${total})`, 'linter', children);
+  const node = folderNode(linterName, 'linter', children);
   node.linter = linterResult;
   node.linterName = linterName;
   if (noFileViolations && noFileViolations.length > 0) {
@@ -217,14 +269,19 @@ function buildFileTree(root: FileTreeNode, linterMeta: Map<string, LinterResult>
     const linterNodes = linterNames.map(linterName => {
       const rules = linters.get(linterName)!;
       const ruleNames = Array.from(rules.keys()).sort();
-      const ruleLeaves = ruleNames.map(ruleName => ruleLeafNode(ruleName, linterName, fullPath, rules.get(ruleName)!));
+      const ruleLeaves = ruleNames.map(ruleName => {
+        const violations = rules.get(ruleName)!;
+        const rawFile = violations[0]?.raw_file || fullPath;
+        return ruleLeafNode(ruleName, linterName, fullPath, rawFile, violations);
+      });
       const node = linterNode(linterName, linterMeta.get(linterName), ruleLeaves);
       node.file = fullPath;
+      node.target_path = ruleLeaves[0]?.target_path;
       return node;
     });
-    const fileTotal = linterNodes.reduce((n, node) => n + lintViolationCount(node), 0);
-    const fileNode = folderNode(`${fileName} (${fileTotal})`, 'lint-file', linterNodes);
+    const fileNode = folderNode(fileName, 'lint-file', linterNodes);
     fileNode.file = fullPath;
+    fileNode.target_path = linterNodes[0]?.target_path;
     children.push(fileNode);
   }
 
@@ -233,7 +290,10 @@ function buildFileTree(root: FileTreeNode, linterMeta: Map<string, LinterResult>
 
 function buildFolderNode(folder: FileTreeNode, linterMeta: Map<string, LinterResult>): Test {
   const children = buildFileTree(folder, linterMeta);
-  return folderNode(`${folder.name} (${children.reduce((n, child) => n + lintViolationCount(child), 0)})`, 'lint-folder', children);
+  const node = folderNode(folder.name, 'lint-folder', children);
+  node.file = folder.path;
+  node.target_path = folder.rawPath;
+  return node;
 }
 
 export function groupLintByLinterFile(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
@@ -257,21 +317,24 @@ export function groupLintByLinterFile(lint: LinterResult[] | undefined, filters:
       rule.violations.push(f.v);
       continue;
     }
-    let arr = bucket.files.get(f.file);
-    if (!arr) {
-      arr = [];
-      bucket.files.set(f.file, arr);
+    let fileBucket = bucket.files.get(f.file);
+    if (!fileBucket) {
+      fileBucket = { rawFile: f.rawFile, workDir: f.workDir, violations: [] };
+      bucket.files.set(f.file, fileBucket);
     }
-    arr.push(f.v);
+    fileBucket.violations.push(f.v);
   }
 
   const linterNames = Array.from(byLinter.keys()).sort();
   return linterNames.map(linter => {
     const bucket = byLinter.get(linter)!;
-    const fileNames = Array.from(bucket.files.keys()).sort();
-    const fileLeaves = fileNames.map(file => {
-      return fileLeafNode(file, file, linter, bucket.files.get(file)!);
-    });
+    const root = fileTreeRoot();
+    for (const [file, fileBucket] of bucket.files.entries()) {
+      for (const violation of fileBucket.violations) {
+        insertFileNode(root, file, fileBucket.rawFile || file, linter, violation);
+      }
+    }
+    const fileLeaves = buildLinterFileTree(root, linter, bucket);
     const noFileViolations = Array.from(bucket.noFileRules.values()).flatMap(rule => rule.violations);
     return linterNode(linter, linterMeta.get(linter), fileLeaves, noFileViolations);
   });
@@ -299,20 +362,64 @@ export function groupLintByFileLinterRule(lint: LinterResult[] | undefined, filt
       bucket.violations.push(f.v);
       continue;
     }
-    insertFileNode(root, f.file, f.linter, f.v);
+    insertFileNode(root, f.file, f.rawFile || f.file, f.linter, f.v);
   }
 
   const fileTreeNodes = buildFileTree(root, linterMeta);
   const noFileLinterNodes = Array.from(byNoFileLinter.keys()).sort().map(linterName => {
     const rules = byNoFileLinter.get(linterName)!;
     const ruleNames = Array.from(rules.keys()).sort();
-    const ruleLeaves = ruleNames.map(ruleName => ruleLeafNode(ruleName, linterName, '', rules.get(ruleName)!.violations));
+    const ruleLeaves = ruleNames.map(ruleName => {
+      const violations = rules.get(ruleName)!.violations;
+      return ruleLeafNode(ruleName, linterName, '', violations[0]?.raw_file || '', violations, linterMeta.get(linterName)?.work_dir);
+    });
     const node = linterNode(linterName, linterMeta.get(linterName), ruleLeaves);
     node.file = undefined;
     return node;
   });
 
   return [...fileTreeNodes, ...noFileLinterNodes];
+}
+
+function buildLinterFileTree(root: FileTreeNode, linterName: string, bucket: LinterBucket): Test[] {
+  const folderNames = Array.from(root.children.keys()).sort();
+  const fileNames = Array.from(root.files.keys()).sort();
+  const children: Test[] = [];
+
+  for (const folderName of folderNames) {
+    const folder = root.children.get(folderName)!;
+    children.push(buildLinterFolderNode(folder, linterName, bucket));
+  }
+
+  for (const fileName of fileNames) {
+    const linters = root.files.get(fileName);
+    const violations = linters?.get(linterName);
+    if (!violations) continue;
+    const fullPath = root.path ? `${root.path}/${fileName}` : fileName;
+    const fileViolations = Array.from(violations.values()).flatMap(group => group);
+    const rawFile = bucket.files.get(fullPath)?.rawFile || fileViolations[0]?.raw_file || fullPath;
+    children.push(fileLeafNode(fileName, fullPath, rawFile, linterName, fileViolations, bucket.files.get(fullPath)?.workDir));
+  }
+
+  return children;
+}
+
+function buildLinterFolderNode(folder: FileTreeNode, linterName: string, bucket: LinterBucket): Test {
+  const children = buildLinterFileTree(folder, linterName, bucket);
+  const node = folderNode(folder.name, 'lint-folder', children);
+  node.file = folder.path;
+  node.target_path = folder.rawPath;
+  node.work_dir = uniqueWorkDir(children);
+  return node;
+}
+
+function uniqueWorkDir(children: Test[]): string | undefined {
+  const dirs = new Set<string>();
+  for (const child of children) {
+    if (child.work_dir) dirs.add(child.work_dir);
+  }
+  if (dirs.size === 1) return Array.from(dirs)[0];
+  return undefined;
 }
 
 export function collectLintLinters(lint: LinterResult[] | undefined): string[] {
@@ -359,13 +466,68 @@ export function totalLintViolations(lint: LinterResult[] | undefined): number {
   return n;
 }
 
+export function isLintNode(t: Test): boolean {
+  return t.kind === 'lint-root'
+    || t.kind === 'lint-folder'
+    || t.kind === 'linter'
+    || t.kind === 'violation'
+    || t.kind === 'lint-file'
+    || t.kind === 'lint-rule';
+}
+
+export function lintBadgeColor(t: Test): string {
+  const sev = lintNodeSeverity(t);
+  if (sev === 'error') return 'bg-red-500';
+  if (sev === 'warning') return 'bg-amber-500';
+  return 'bg-blue-500';
+}
+
+function lintNodeSeverity(t: Test): Severity {
+  if (t.kind === 'violation') {
+    return (t.violation?.severity || 'error') as Severity;
+  }
+  if (t.violations && t.violations.length > 0) {
+    return worstSeverity(t.violations);
+  }
+  if (t.noFileViolations && t.noFileViolations.length > 0) {
+    const own = worstSeverity(t.noFileViolations);
+    if (own === 'error') return own;
+    const child = worstSeverityInChildren(t.children);
+    return severityRank(child) > severityRank(own) ? child : own;
+  }
+  return worstSeverityInChildren(t.children);
+}
+
+function worstSeverityInChildren(children: Test[] | undefined): Severity {
+  let worst: Severity = 'info';
+  for (const child of children || []) {
+    const sev = lintNodeSeverity(child);
+    if (sev === 'error') return 'error';
+    if (sev === 'warning') worst = 'warning';
+  }
+  return worst;
+}
+
+function severityRank(sev: Severity): number {
+  if (sev === 'error') return 3;
+  if (sev === 'warning') return 2;
+  return 1;
+}
+
+export function lintNodeCount(t: Test): number {
+  if (t.kind === 'violation') return 0;
+  if (t.violations) return t.violations.length;
+  return (t.noFileViolations?.length || 0) + (t.children || []).reduce((n, child) => n + lintNodeCount(child), 0);
+}
+
 export function statusIcon(t: Test): string {
   if (t.kind === 'lint-folder') {
     return 'codicon:folder';
   }
   if (t.kind === 'lint-file') {
-    return 'codicon:file';
+    return fileTypeIcon(t.file || t.name);
   }
+  if (t.kind === 'linter') return lintToolIcon(t.linterName || t.linter?.linter);
   if (t.kind === 'lint-rule') {
     return 'codicon:symbol-ruler';
   }
@@ -393,17 +555,8 @@ export function statusColor(t: Test): string {
   if (t.kind === 'lint-folder') {
     return 'text-gray-500';
   }
-  if (t.kind === 'lint-file' || t.kind === 'lint-rule') {
-    const sev = worstSeverity(t.violations);
-    if (t.children && t.children.length > 0) {
-      const s = sum(t);
-      if (s.failed > 0) return 'text-red-600';
-      if (s.passed > 0) return 'text-green-600';
-      return 'text-gray-500';
-    }
-    if (sev === 'error') return 'text-red-600';
-    if (sev === 'warning') return 'text-yellow-600';
-    return 'text-blue-500';
+  if (t.kind === 'lint-file' || t.kind === 'linter' || t.kind === 'lint-rule') {
+    return 'text-gray-500';
   }
   if (t.kind === 'violation') {
     const sev = t.violation?.severity;
@@ -440,6 +593,35 @@ export function frameworkIcon(framework?: string): string | null {
     case 'task': return 'codicon:tools';
     default: return null;
   }
+}
+
+export function fileTypeIcon(file?: string): string {
+  const normalized = (file || '').toLowerCase();
+  if (normalized.endsWith('.go')) return 'devicon:go';
+  if (normalized.endsWith('.ts')) return 'devicon:typescript';
+  if (normalized.endsWith('.tsx')) return 'devicon:typescript';
+  if (normalized.endsWith('.js')) return 'devicon:javascript';
+  if (normalized.endsWith('.jsx')) return 'devicon:javascript';
+  if (normalized.endsWith('.json')) return 'devicon:json';
+  if (normalized.endsWith('.yml') || normalized.endsWith('.yaml')) return 'devicon:yaml';
+  if (normalized.endsWith('.md')) return 'devicon:markdown';
+  if (normalized.endsWith('.py')) return 'devicon:python';
+  if (normalized.endsWith('.sh')) return 'devicon:bash';
+  if (normalized.endsWith('.html')) return 'devicon:html5';
+  if (normalized.endsWith('.css')) return 'devicon:css3';
+  if (normalized.endsWith('.xml')) return 'devicon:xml';
+  return 'vscode-icons:default-file';
+}
+
+export function lintToolIcon(linter?: string): string {
+  const value = (linter || '').toLowerCase();
+  if (value.includes('eslint')) return 'devicon:eslint';
+  if (value.includes('markdownlint')) return 'devicon:markdown';
+  if (value.includes('golangci') || value.includes('gosec') || value.includes('govet') || value.includes('gofmt') || value.includes('betterleaks')) return 'devicon:go';
+  if (value.includes('pyright') || value.includes('ruff')) return 'devicon:python';
+  if (value.includes('vale')) return 'devicon:markdown';
+  if (value.includes('jscpd')) return 'devicon:javascript';
+  return 'codicon:tools';
 }
 
 export function formatDuration(ns: number): string {

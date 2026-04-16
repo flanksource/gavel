@@ -32,8 +32,9 @@ type Test struct {
 	Name        string        `json:"name,omitempty"`
 	Package     string        `json:"package,omitempty"`
 	PackagePath string        `json:"package_path,omitempty"` // Relative path to the package (e.g., "./pkg/testrunner")
-	Command     string        `json:"command,omitempty"`      // Command used to run this test
-	Suite       []string      `json:"suite,omitempty"`        // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
+	WorkDir     string        `json:"work_dir,omitempty"`
+	Command     string        `json:"command,omitempty"` // Command used to run this test
+	Suite       []string      `json:"suite,omitempty"`   // Hierarchical suite path (e.g., ["Outer Describe", "Inner Context"])
 	Message     string        `json:"message,omitempty"`
 	File        string        `json:"file,omitempty"`
 	Line        int           `json:"line,omitempty"`

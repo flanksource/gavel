@@ -8,9 +8,13 @@ import (
 // RerunRequest is the payload accepted by POST /api/rerun.
 type RerunRequest struct {
 	PackagePaths []string `json:"package_paths,omitempty"`
+	WorkDir      string   `json:"work_dir,omitempty"`
 	TestName     string   `json:"test_name,omitempty"`
 	Suite        []string `json:"suite,omitempty"`
 	Framework    string   `json:"framework,omitempty"`
+	Lint         bool     `json:"lint,omitempty"`
+	LintFiles    []string `json:"lint_files,omitempty"`
+	LintLinters  []string `json:"lint_linters,omitempty"`
 }
 
 // RerunFunc is invoked to rerun the tests described by req.

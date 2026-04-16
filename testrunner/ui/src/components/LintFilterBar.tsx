@@ -1,5 +1,5 @@
 import type { LinterResult, Severity } from '../types';
-import { countLintBySeverity, countLintByLinter, collectLintLinters } from '../utils';
+import { countLintBySeverity, countLintByLinter, collectLintLinters, lintToolIcon } from '../utils';
 import type { FilterMode, FilterState } from '../filterState';
 import { cycleFilterState } from '../filterState';
 
@@ -12,8 +12,6 @@ export interface LintFilters {
 
 interface Props {
   lint: LinterResult[] | undefined;
-  grouping: LintGrouping;
-  onGroupingChange: (g: LintGrouping) => void;
   filters: LintFilters;
   onFiltersChange: (f: LintFilters) => void;
 }
@@ -24,7 +22,7 @@ const SEVERITY_DEFS: { key: Severity; label: string; badge: string; activeBg: st
   { key: 'info', label: 'Info', badge: 'bg-blue-400', activeBg: 'bg-blue-50', activeBorder: 'border-blue-300', icon: 'codicon:info' },
 ];
 
-export function LintFilterBar({ lint, grouping, onGroupingChange, filters, onFiltersChange }: Props) {
+export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
   const severityCounts = countLintBySeverity(lint, filters.linter);
   const linterCounts = countLintByLinter(lint, filters.severity);
   const linters = collectLintLinters(lint);
@@ -32,28 +30,10 @@ export function LintFilterBar({ lint, grouping, onGroupingChange, filters, onFil
 
   return (
     <div class="flex items-center gap-1.5 flex-wrap">
-      <div class="inline-flex rounded-full border border-gray-200 overflow-hidden">
-        <button
-          class={`text-xs px-2 py-0.5 transition-colors ${
-            grouping === 'linter-file' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-500 hover:bg-gray-50'
-          }`}
-          onClick={() => onGroupingChange('linter-file')}
-          title="Group by linter, then file"
-        >
-          <iconify-icon icon="codicon:list-tree" class="mr-1" />
-          Linter → File
-        </button>
-        <button
-          class={`text-xs px-2 py-0.5 border-l border-gray-200 transition-colors ${
-            grouping === 'file-linter-rule' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-500 hover:bg-gray-50'
-          }`}
-          onClick={() => onGroupingChange('file-linter-rule')}
-          title="Group by file, then linter, then rule"
-        >
-          <iconify-icon icon="codicon:files" class="mr-1" />
-          File → Linter → Rule
-        </button>
-      </div>
+      <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
+        <iconify-icon icon="codicon:list-tree" />
+        Linter → Folder → File
+      </span>
 
       <span class="text-gray-300 mx-0.5">|</span>
 
@@ -93,6 +73,7 @@ export function LintFilterBar({ lint, grouping, onGroupingChange, filters, onFil
               >
                 <StateMarker mode={mode} />
                 <span class="text-[10px] text-gray-500">{count}</span>
+                <iconify-icon icon={lintToolIcon(linter)} class="text-sm" />
                 {linter}
               </button>
             );

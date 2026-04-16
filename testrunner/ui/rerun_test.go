@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -185,11 +187,113 @@ func TestRerunConcurrentReturns409(t *testing.T) {
 	wg.Wait()
 }
 
+func TestLintIgnoreUsesRequestWorkDirForCrossRepoResults(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	repoA := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoA, ".git"), 0o755); err != nil {
+		t.Fatalf("create repoA .git: %v", err)
+	}
+	moduleA := filepath.Join(repoA, "submodule")
+	if err := os.MkdirAll(moduleA, 0o755); err != nil {
+		t.Fatalf("create repoA submodule dir: %v", err)
+	}
+
+	repoB := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoB, ".git"), 0o755); err != nil {
+		t.Fatalf("create repoB .git: %v", err)
+	}
+	moduleB := filepath.Join(repoB, "submodule")
+	if err := os.MkdirAll(moduleB, 0o755); err != nil {
+		t.Fatalf("create repoB submodule dir: %v", err)
+	}
+
+	msg := "unused var"
+	srv.SetLintResults([]*linters.LinterResult{
+		{
+			Linter:  "golangci-lint",
+			WorkDir: moduleA,
+			Success: false,
+			Violations: []models.Violation{{
+				File: "foo.go", Line: 12, Severity: models.SeverityError, Source: "golangci-lint", Message: &msg,
+			}},
+		},
+		{
+			Linter:  "golangci-lint",
+			WorkDir: moduleB,
+			Success: false,
+			Violations: []models.Violation{{
+				File: "foo.go", Line: 12, Severity: models.SeverityError, Source: "golangci-lint", Message: &msg,
+			}},
+		},
+	})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{
+		Source:  "golangci-lint",
+		File:    "foo.go",
+		WorkDir: moduleB,
+	})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoB, ".gavel.yaml"))
+	if err != nil {
+		t.Fatalf("read repoB .gavel.yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "source: golangci-lint") {
+		t.Fatalf("expected ignore rule to be written to repoB, got:\n%s", string(data))
+	}
+
+	if _, err := os.Stat(filepath.Join(repoA, ".gavel.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect repoA .gavel.yaml to be written, stat err=%v", err)
+	}
+}
+
+func TestLintIgnoreAllowsFileOnlyFolderRule(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo .git: %v", err)
+	}
+
+	msg := "unused var"
+	srv.SetLintResults([]*linters.LinterResult{{
+		Linter:  "betterleaks",
+		WorkDir: repo,
+		Success: false,
+		Violations: []models.Violation{{
+			File: "certs/fixtures/literal.yml", Line: 3, Severity: models.SeverityError, Source: "betterleaks", Message: &msg,
+		}},
+	}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{
+		File:    "certs/fixtures/**",
+		WorkDir: repo,
+	})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(repo, ".gavel.yaml"))
+	if err != nil {
+		t.Fatalf("read .gavel.yaml: %v", err)
+	}
+	if !strings.Contains(string(data), "file: certs/fixtures/**") {
+		t.Fatalf("expected file-only ignore rule, got:\n%s", string(data))
+	}
+}
+
 func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	clicky.ClearGlobalTasks()
 	t.Cleanup(clicky.ClearGlobalTasks)
 
-	_, handler := newTestServer(t)
+	srv, handler := newTestServer(t)
+	srv.BeginRun("initial")
+	srv.MarkDone()
 	release := make(chan struct{})
 	group := clicky.StartGroup[string](testui.TestTaskGroupName, clickytask.WithConcurrency(1))
 	task := group.Add("dummy", func(ctx commonsContext.Context, t *clickytask.Task) (string, error) {
@@ -205,10 +309,14 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 
 	var snap struct {
 		Tests []parsers.Test `json:"tests"`
+		Done  bool           `json:"done"`
 	}
 	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if snap.Done {
+		t.Fatalf("snapshot should stay open while virtual tasks are still running")
 	}
 
 	if len(snap.Tests) == 0 {
@@ -245,6 +353,14 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	release <- struct{}{}
 	if _, err := task.GetResult(); err != nil {
 		t.Fatalf("task get result: %v", err)
+	}
+
+	resp = doRequest(t, handler, http.MethodGet, "/api/tests", nil)
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode after completion: %v", err)
+	}
+	if !snap.Done {
+		t.Fatalf("snapshot should be done after virtual tasks complete")
 	}
 }
 

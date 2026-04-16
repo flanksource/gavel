@@ -12,12 +12,22 @@ type TestStreamer struct {
 	pendingPkgs    []parsers.Test
 	fixtureTests   []parsers.Test
 	updates        chan<- []parsers.Test
+	closeUpdates   bool
 	closed         bool
 }
 
 func NewTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
+	return newTestStreamer(updates, true)
+}
+
+func NewSharedTestStreamer(updates chan<- []parsers.Test) *TestStreamer {
+	return newTestStreamer(updates, false)
+}
+
+func newTestStreamer(updates chan<- []parsers.Test, closeUpdates bool) *TestStreamer {
 	return &TestStreamer{
-		updates: updates,
+		updates:      updates,
+		closeUpdates: closeUpdates,
 	}
 }
 
@@ -101,5 +111,7 @@ func (s *TestStreamer) Done() {
 	}
 	s.buildAndSendLocked()
 	s.closed = true
-	close(s.updates)
+	if s.closeUpdates {
+		close(s.updates)
+	}
 }

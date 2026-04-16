@@ -17,9 +17,10 @@ import {
   filterTests,
   totalLintViolations,
   groupLintByLinterFile,
-  groupLintByFileLinterRule,
   countProcesses,
   findProcessByPID,
+  isLintNode,
+  relPath,
 } from './utils';
 import { annotateRoutePaths, buildExportRoute, buildRoute, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
 
@@ -244,11 +245,8 @@ export function App() {
     [tests, filters],
   );
   const lintTree = useMemo(() => {
-    const tree = lintGrouping === 'linter-file'
-      ? groupLintByLinterFile(lint, lintFilters)
-      : groupLintByFileLinterRule(lint, lintFilters);
-    return annotateRoutePaths(tree);
-  }, [lint, lintGrouping, lintFilters]);
+    return annotateRoutePaths(groupLintByLinterFile(lint, lintFilters));
+  }, [lint, lintFilters]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
   const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);
 
@@ -322,15 +320,6 @@ export function App() {
     });
   }, [routeState, commitRoute]);
 
-  const onLintGroupingChange = useCallback((grouping: LintGrouping) => {
-    commitRoute({
-      ...routeState,
-      tab: 'lint',
-      lintGrouping: grouping,
-      selectedPath: '',
-    });
-  }, [routeState, commitRoute]);
-
   const onLintFiltersChange = useCallback((nextFilters: LintFilters) => {
     commitRoute({
       ...routeState,
@@ -341,17 +330,105 @@ export function App() {
   }, [routeState, commitRoute]);
 
   const onRerun = useCallback(async (t: Test) => {
-    if (t.kind === 'violation' || t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter' || t.kind === 'lint-file' || t.kind === 'lint-rule' || t.framework === 'task') return;
+    if (t.kind === 'violation' || t.framework === 'task') return;
     if (rerunBusy) return;
-    const collectPaths = (n: Test, out: Set<string>) => {
+
+    const buildLintRerunBody = (node: Test) => {
+      const workDirs = new Set<string>();
+      const linters = new Set<string>();
+      const files = new Set<string>();
+
+      const addLintMatches = (targetPath: string | undefined, source?: string) => {
+        for (const lr of lint || []) {
+          if (node.work_dir && lr.work_dir && lr.work_dir !== node.work_dir) continue;
+          let matched = false;
+          for (const violation of lr.violations || []) {
+            const rawFile = relPath(violation.file, lr.work_dir);
+            if (!rawFile) continue;
+            const fileMatch = !targetPath || targetPath === '' || rawFile === targetPath || rawFile.startsWith(`${targetPath}/`);
+            if (!fileMatch) continue;
+            matched = true;
+            files.add(rawFile);
+          }
+          if (matched) {
+            if (lr.work_dir) workDirs.add(lr.work_dir);
+            if (!source || lr.linter === source) linters.add(lr.linter);
+          }
+        }
+      };
+
+      if (node.kind === 'linter') {
+        if (node.linterName) linters.add(node.linterName);
+        const collectWorkDirs = (n: Test) => {
+          if (n.work_dir) workDirs.add(n.work_dir);
+          (n.children || []).forEach(collectWorkDirs);
+        };
+        collectWorkDirs(node);
+      } else if (node.kind === 'lint-rule') {
+        if (node.linterName) linters.add(node.linterName);
+        addLintMatches(node.target_path, node.linterName);
+      } else if (node.kind === 'lint-file' || node.kind === 'lint-folder') {
+        addLintMatches(node.target_path);
+      }
+
+      if (node.work_dir) workDirs.add(node.work_dir);
+      return {
+        lint: true,
+        work_dir: workDirs.size === 1 ? Array.from(workDirs)[0] : '',
+        lint_linters: Array.from(linters),
+        lint_files: Array.from(files),
+      };
+    };
+
+    if (isLintNode(t)) {
+      const body = buildLintRerunBody(t);
+      if (!body.work_dir) {
+        setStatus('Rerun across multiple lint roots is not supported');
+        return;
+      }
+      setRerunBusy(true);
+      setStatus(`Rerunning ${t.name}...`);
+      doneRef.current = false;
+      endTime.current = null;
+      setDone(false);
+      try {
+        const res = await fetch('/api/rerun', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 409) {
+          setStatus('Another rerun is in progress');
+        } else if (!res.ok) {
+          const text = await res.text();
+          setStatus(`Rerun failed: ${text.trim()}`);
+        } else {
+          setStatus('Rerun complete');
+        }
+      } catch (e: any) {
+        setStatus(`Rerun error: ${e?.message || e}`);
+      } finally {
+        setRerunBusy(false);
+      }
+      return;
+    }
+
+    const collectPaths = (n: Test, out: Set<string>, workDirs: Set<string>) => {
       if (n.package_path) out.add(n.package_path);
-      (n.children || []).forEach(c => collectPaths(c, out));
+      if (n.work_dir) workDirs.add(n.work_dir);
+      (n.children || []).forEach(c => collectPaths(c, out, workDirs));
     };
     const paths = new Set<string>();
-    collectPaths(t, paths);
+    const workDirs = new Set<string>();
+    collectPaths(t, paths, workDirs);
+    if (workDirs.size > 1) {
+      setStatus('Rerun across multiple module roots is not supported');
+      return;
+    }
     const isLeaf = !t.children || t.children.length === 0;
     const body = {
       package_paths: Array.from(paths),
+      work_dir: workDirs.size === 1 ? Array.from(workDirs)[0] : '',
       test_name: isLeaf ? t.name : '',
       suite: t.suite || [],
       framework: t.framework || '',
@@ -383,7 +460,7 @@ export function App() {
     } finally {
       setRerunBusy(false);
     }
-  }, [rerunBusy]);
+  }, [rerunBusy, lint]);
 
   const onIgnore = useCallback(async (req: IgnoreRequest) => {
     if (ignoreBusy) return;
@@ -614,8 +691,6 @@ export function App() {
           <div class="mt-2">
             <LintFilterBar
               lint={lint}
-              grouping={lintGrouping}
-              onGroupingChange={onLintGroupingChange}
               filters={lintFilters}
               onFiltersChange={onLintFiltersChange}
             />
@@ -667,7 +742,7 @@ export function App() {
         }
         right={activeTab === 'diagnostics'
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
+          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
       />
     </div>
   );

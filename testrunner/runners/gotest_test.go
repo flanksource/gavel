@@ -9,8 +9,16 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+func writeGoMod(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatalf("failed to create go.mod: %v", err)
+	}
+}
+
 func TestGoTestDetect(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
 
 	// No test files yet
 	runner := NewGoTest(tmpDir)
@@ -39,6 +47,7 @@ func TestGoTestDetect(t *testing.T) {
 
 func TestGoTestDetectSkipsGitIgnoredFiles(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
 
 	if err := os.Mkdir(filepath.Join(tmpDir, ".git"), 0755); err != nil {
 		t.Fatalf("failed to create .git directory: %v", err)
@@ -77,8 +86,89 @@ func TestGoTestDetectSkipsGitIgnoredFiles(t *testing.T) {
 	}
 }
 
+func TestGoTestDetectSkipsNestedProjectRoots(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
+
+	if err := os.Mkdir(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+
+	nestedModule := filepath.Join(tmpDir, "nested-module")
+	if err := os.MkdirAll(filepath.Join(nestedModule, "pkg"), 0o755); err != nil {
+		t.Fatalf("failed to create nested module: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedModule, "go.mod"), []byte("module example.com/nested\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedModule, "pkg", "nested_test.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested module test: %v", err)
+	}
+
+	nestedRepo := filepath.Join(tmpDir, "nested-repo")
+	if err := os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create nested repo .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(nestedRepo, "pkg"), 0o755); err != nil {
+		t.Fatalf("failed to create nested repo package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedRepo, "pkg", "nested_test.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested repo test: %v", err)
+	}
+
+	runner := NewGoTest(tmpDir)
+	found, err := runner.Detect(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected nested module and repo tests to be ignored from the parent root")
+	}
+
+	found, err = runner.Detect(nestedModule)
+	if err != nil {
+		t.Fatalf("unexpected error detecting nested module directly: %v", err)
+	}
+	if !found {
+		t.Error("expected nested module tests to be detected when starting inside that module")
+	}
+
+	found, err = runner.Detect(nestedRepo)
+	if err != nil {
+		t.Fatalf("unexpected error detecting nested repo directly: %v", err)
+	}
+	if !found {
+		t.Error("expected nested repo tests to be detected when starting inside that repo")
+	}
+}
+
+func TestGoTestSkipsWhenNoGoModFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "example_test.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	runner := NewGoTest(tmpDir)
+	found, err := runner.Detect(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Fatal("expected go test detection to be skipped without a go.mod")
+	}
+
+	packages, err := runner.DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error discovering packages: %v", err)
+	}
+	if len(packages) != 0 {
+		t.Fatalf("expected no go test packages without a go.mod, got %v", packages)
+	}
+}
+
 func TestGoTestDiscoverPackages(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
 
 	// Create test structure
 	pkgA := filepath.Join(tmpDir, "pkg", "a")
@@ -113,6 +203,7 @@ func TestGoTestDiscoverPackages(t *testing.T) {
 
 func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
 
 	// Create test file in root and in a subdirectory
 	if err := os.WriteFile(filepath.Join(tmpDir, "root_test.go"), []byte("package root\n"), 0644); err != nil {
@@ -147,6 +238,71 @@ func TestGoTestDiscoverPackagesNonRecursive(t *testing.T) {
 	}
 	if len(packages) != 2 {
 		t.Fatalf("expected 2 packages, got %d: %v", len(packages), packages)
+	}
+}
+
+func TestGoTestDiscoverPackagesSkipsNestedProjectRoots(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
+
+	if err := os.Mkdir(filepath.Join(tmpDir, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create root .git: %v", err)
+	}
+
+	rootPkg := filepath.Join(tmpDir, "rootpkg")
+	if err := os.MkdirAll(rootPkg, 0o755); err != nil {
+		t.Fatalf("failed to create root package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPkg, "root_test.go"), []byte("package rootpkg\n"), 0o644); err != nil {
+		t.Fatalf("failed to create root test file: %v", err)
+	}
+
+	nestedModule := filepath.Join(tmpDir, "nested-module")
+	if err := os.MkdirAll(filepath.Join(nestedModule, "pkg"), 0o755); err != nil {
+		t.Fatalf("failed to create nested module package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedModule, "go.mod"), []byte("module example.com/nested\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedModule, "pkg", "nested_test.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested module test file: %v", err)
+	}
+
+	nestedRepo := filepath.Join(tmpDir, "nested-repo")
+	if err := os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create nested repo .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(nestedRepo, "pkg"), 0o755); err != nil {
+		t.Fatalf("failed to create nested repo package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedRepo, "pkg", "nested_test.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("failed to create nested repo test file: %v", err)
+	}
+
+	runner := NewGoTest(tmpDir)
+
+	packages, err := runner.DiscoverPackages(tmpDir, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(packages) != 1 || packages[0] != "./rootpkg" {
+		t.Fatalf("expected only root package, got %v", packages)
+	}
+
+	modulePackages, err := runner.DiscoverPackages(nestedModule, true)
+	if err != nil {
+		t.Fatalf("unexpected error discovering nested module directly: %v", err)
+	}
+	if len(modulePackages) != 1 || modulePackages[0] != "./nested-module/pkg" {
+		t.Fatalf("expected nested module package when starting inside it, got %v", modulePackages)
+	}
+
+	repoPackages, err := runner.DiscoverPackages(nestedRepo, true)
+	if err != nil {
+		t.Fatalf("unexpected error discovering nested repo directly: %v", err)
+	}
+	if len(repoPackages) != 1 || repoPackages[0] != "./nested-repo/pkg" {
+		t.Fatalf("expected nested repo package when starting inside it, got %v", repoPackages)
 	}
 }
 
@@ -259,6 +415,7 @@ func TestRegular(t *testing.T) {
 
 func TestGoTestDiscoverPackagesExcludesGinkgoOnly(t *testing.T) {
 	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
 
 	// Create a Ginkgo-only package
 	ginkgoPkg := filepath.Join(tmpDir, "ginkgo_pkg")

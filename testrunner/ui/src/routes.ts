@@ -32,8 +32,6 @@ export function parseRoute(location: Location): RouteState {
   }
 
   const params = new URLSearchParams(location.search);
-  const grouping = params.get('grouping');
-
   return {
     tab,
     selectedPath,
@@ -41,7 +39,7 @@ export function parseRoute(location: Location): RouteState {
       status: decodeFilterState(splitCSV(params.get('status'))),
       framework: decodeFilterState(splitCSV(params.get('framework'))),
     },
-    lintGrouping: grouping === 'file-linter-rule' ? 'file-linter-rule' : 'linter-file',
+    lintGrouping: 'linter-file',
     lintFilters: {
       severity: decodeFilterState(splitCSV(params.get('severity')) as any[]),
       linter: decodeFilterState(splitCSV(params.get('linter'))),
@@ -59,7 +57,6 @@ export function buildRoute(state: RouteState): string {
     if (state.filters.framework.size > 0) params.set('framework', encodeFilterState(state.filters.framework).join(','));
   }
   if (state.tab === 'lint') {
-    if (state.lintGrouping !== 'linter-file') params.set('grouping', state.lintGrouping);
     if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }

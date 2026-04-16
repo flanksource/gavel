@@ -63,7 +63,6 @@ func (s *Server) BeginRun(kind string) {
 		Kind:      kind,
 		StartedAt: time.Now().UTC(),
 	}
-	s.tests = nil
 	s.done = false
 	s.notify()
 }
@@ -108,6 +107,12 @@ func (s *Server) SetGitRoot(root string) {
 	s.mu.Lock()
 	s.gitRoot = root
 	s.mu.Unlock()
+}
+
+func (s *Server) GitRoot() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gitRoot
 }
 
 // MarkDone flips the snapshot to done without requiring a test stream.
@@ -393,9 +398,6 @@ func tasksDone() bool {
 	}
 
 	for _, snap := range snapshots {
-		if snap.Type != "group" {
-			continue
-		}
 		switch snap.Status {
 		case "running", "pending":
 			return false

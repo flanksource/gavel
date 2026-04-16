@@ -4,16 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
 type IgnoreRequest struct {
-	Source string `json:"source,omitempty"`
-	Rule   string `json:"rule,omitempty"`
-	File   string `json:"file,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Rule    string `json:"rule,omitempty"`
+	File    string `json:"file,omitempty"`
+	WorkDir string `json:"work_dir,omitempty"`
 }
 
 type IgnoreResponse struct {
@@ -32,14 +35,14 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Rule == "" && req.Source == "" {
-		http.Error(w, "at least one of rule or source is required", http.StatusBadRequest)
+	if req.Rule == "" && req.Source == "" && req.File == "" {
+		http.Error(w, "at least one of rule, source, or file is required", http.StatusBadRequest)
 		return
 	}
 
-	s.mu.RLock()
-	root := s.gitRoot
-	s.mu.RUnlock()
+	s.mu.Lock()
+	root := s.resolveGitRootLocked(req.WorkDir)
+	s.mu.Unlock()
 	if root == "" {
 		http.Error(w, "git root not configured", http.StatusInternalServerError)
 		return
@@ -67,4 +70,38 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: len(cfg.Lint.Ignore), Filtered: filtered})
+}
+
+func (s *Server) resolveGitRootLocked(workDir string) string {
+	if workDir != "" {
+		root := utils.FindGitRoot(workDir)
+		if root == "" {
+			root = workDir
+		}
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		return root
+	}
+
+	if s.gitRoot != "" {
+		return s.gitRoot
+	}
+
+	for _, result := range s.lint {
+		if result == nil || result.WorkDir == "" {
+			continue
+		}
+		root := utils.FindGitRoot(result.WorkDir)
+		if root == "" {
+			root = result.WorkDir
+		}
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		s.gitRoot = root
+		return root
+	}
+
+	return ""
 }
