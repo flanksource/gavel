@@ -23,6 +23,7 @@ import {
   relPath,
 } from './utils';
 import { annotateRoutePaths, buildExportRoute, buildRoute, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
+import { apiUrl } from './config';
 
 function applySnapshot(
   snap: Snapshot,
@@ -176,7 +177,7 @@ export function App() {
 
   useEffect(() => {
     if (streamToken === 0) {
-      fetch('/api/tests')
+      fetch(apiUrl('/api/tests'))
         .then(r => r.json())
         .then((snap: Snapshot) => {
           applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
@@ -184,7 +185,7 @@ export function App() {
         .catch(() => {});
     }
 
-    const es = new EventSource('/api/tests/stream');
+    const es = new EventSource(apiUrl('/api/tests/stream'));
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
@@ -212,7 +213,7 @@ export function App() {
   }, [streamToken]);
 
   const fetchDiagnostics = useCallback(async () => {
-    const res = await fetch('/api/diagnostics');
+    const res = await fetch(apiUrl('/api/diagnostics'));
     if (!res.ok) throw new Error(`Diagnostics request failed (${res.status})`);
     const next: DiagnosticsSnapshot = await res.json();
     setDiagnostics(next);
@@ -399,7 +400,7 @@ export function App() {
       endTime.current = null;
       setDone(false);
       try {
-        const res = await fetch('/api/rerun', {
+        const res = await fetch(apiUrl('/api/rerun'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -449,7 +450,7 @@ export function App() {
     setTests([]);
     setStreamToken(n => n + 1);
     try {
-      const res = await fetch('/api/rerun', {
+      const res = await fetch(apiUrl('/api/rerun'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -473,7 +474,7 @@ export function App() {
     if (ignoreBusy) return;
     setIgnoreBusy(true);
     try {
-      const res = await fetch('/api/lint/ignore', {
+      const res = await fetch(apiUrl('/api/lint/ignore'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -497,7 +498,7 @@ export function App() {
     setStackBusyPID(pid);
     setStatus(`Collecting stack trace for pid ${pid}...`);
     try {
-      const res = await fetch('/api/diagnostics/collect', {
+      const res = await fetch(apiUrl('/api/diagnostics/collect'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pid }),
@@ -572,8 +573,18 @@ export function App() {
     }
   }, [copyState, routeState, resetCopyFeedback]);
 
+  const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
+
   return (
     <div class="bg-gray-100 h-screen flex flex-col">
+      {backTo && (
+        <div class="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
+          <a href={backTo} class="text-blue-300 hover:text-white flex items-center gap-1 no-underline">
+            <iconify-icon icon="codicon:arrow-left" />
+            Back to PR
+          </a>
+        </div>
+      )}
       <div class="border-b bg-white px-6 py-3">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">

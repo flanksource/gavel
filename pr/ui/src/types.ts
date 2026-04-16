@@ -134,11 +134,29 @@ export interface PRComment {
   severity?: string;
 }
 
+export interface GavelResultsSummary {
+  artifactId: number;
+  artifactUrl: string;
+  testsPassed: number;
+  testsFailed: number;
+  testsSkipped: number;
+  testsTotal: number;
+  lintViolations: number;
+  lintLinters: number;
+  hasBench: boolean;
+  benchRegressions?: number;
+  error?: string;
+}
+
 export interface PRDetail {
   pr?: PRInfo;
   runs?: Record<string, WorkflowRun>;
   comments?: PRComment[];
+  gavelResults?: GavelResultsSummary;
   error?: string;
+  // Progressive loading state (set by frontend, not backend)
+  runsLoading?: boolean;
+  gavelLoading?: boolean;
 }
 
 // Activity API types

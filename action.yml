@@ -120,7 +120,7 @@ runs:
 
         # shellcheck disable=SC2086
         gavel $GAVEL_ARGS \
-          --no-progress --no-color \
+          --no-progress --no-color --show-passed \
           --format "json=${JSON_FILE}" \
           2> >(tee "${GAVEL_LOG_FILE}" >&2)
         code=$?

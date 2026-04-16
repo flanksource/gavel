@@ -130,15 +130,67 @@ export function App() {
     }).catch(() => {});
   }, []);
 
+  const detailESRef = useRef<EventSource | null>(null);
+
   function loadPR(pr: PRItem) {
     setSelected(pr);
     setDetail(null);
     setDetailLoading(true);
     markSeen(pr);
-    fetch(`/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`)
-      .then(r => r.json())
-      .then((d: PRDetail) => { setDetail(d); setDetailLoading(false); })
-      .catch(err => { setDetail({ error: String(err) }); setDetailLoading(false); });
+
+    // Close any previous detail stream
+    if (detailESRef.current) {
+      detailESRef.current.close();
+      detailESRef.current = null;
+    }
+
+    const url = `/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`;
+    const es = new EventSource(url);
+    detailESRef.current = es;
+
+    es.addEventListener('pr', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      setDetail(prev => ({
+        ...prev,
+        pr: data.pr,
+        comments: data.comments,
+        runsLoading: true,
+        gavelLoading: true,
+      }));
+      setDetailLoading(false);
+    });
+
+    es.addEventListener('runs', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      setDetail(prev => prev ? { ...prev, runs: data.runs, runsLoading: false } : prev);
+    });
+
+    es.addEventListener('gavel', (e: MessageEvent) => {
+      const data = JSON.parse(e.data);
+      setDetail(prev => prev ? { ...prev, gavelResults: data.gavelResults, gavelLoading: false } : prev);
+    });
+
+    es.addEventListener('error', (e: MessageEvent) => {
+      if (e.data) {
+        const data = JSON.parse(e.data);
+        setDetail({ error: data.error });
+      }
+      setDetailLoading(false);
+    });
+
+    es.addEventListener('done', () => {
+      setDetail(prev => prev ? { ...prev, runsLoading: false, gavelLoading: false } : prev);
+      es.close();
+      detailESRef.current = null;
+    });
+
+    es.onerror = () => {
+      if (!detailESRef.current) return; // already closed normally
+      setDetail(prev => prev ?? { error: 'Connection lost' });
+      setDetailLoading(false);
+      es.close();
+      detailESRef.current = null;
+    };
   }
 
   function handleSelect(pr: PRItem) {

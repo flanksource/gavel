@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'preact/hooks';
-import type { PRItem, PRDetail, WorkflowRun, Job, PRComment } from '../types';
+import type { PRItem, PRDetail, WorkflowRun, Job, PRComment, GavelResultsSummary } from '../types';
 import { stateColor, reviewColor, timeAgo, statusIcon, statusColor, severityIcon } from '../utils';
 import { Markdown } from './Markdown';
 import { LogViewer } from './LogViewer';
@@ -30,13 +30,25 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
         </div>
       )}
 
-      {detail?.runs && Object.keys(detail.runs).length > 0 && (
+      {detail?.runs && Object.keys(detail.runs).length > 0 ? (
         <Section title="Workflows">
           {Object.values(detail.runs).map(run => (
             <WorkflowRunView key={run.databaseId} run={run} repo={pr.repo} />
           ))}
         </Section>
-      )}
+      ) : detail?.runsLoading ? (
+        <Section title="Workflows">
+          <SectionLoader label="Loading workflows..." />
+        </Section>
+      ) : null}
+
+      {detail?.gavelResults ? (
+        <GavelResultsSection results={detail.gavelResults} pr={pr} />
+      ) : detail?.gavelLoading ? (
+        <Section title="Gavel Results">
+          <SectionLoader label="Downloading results..." />
+        </Section>
+      ) : null}
 
       {detail?.comments && detail.comments.length > 0 && (
         <CommentsSection comments={detail.comments} />
@@ -515,6 +527,86 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
       {filtered.length === 0 && (
         <div class="text-xs text-gray-400 py-2">No comments match filters</div>
       )}
+    </Section>
+  );
+}
+
+function SectionLoader({ label }: { label: string }) {
+  return (
+    <div class="flex items-center gap-2 text-xs text-gray-400 py-2">
+      <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
+      {label}
+    </div>
+  );
+}
+
+function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr: PRItem }) {
+  if (results.error) {
+    return (
+      <Section title="Gavel Results">
+        <div class="text-xs text-gray-400 py-1">
+          <iconify-icon icon="codicon:warning" class="text-yellow-500 mr-1" />
+          {results.error}
+        </div>
+      </Section>
+    );
+  }
+
+  const backTo = `${window.location.pathname}${window.location.search}`;
+  const basePath = `/results/${pr.repo}/${results.artifactId}`;
+
+  const rows: { tab: string; icon: string; color: string; label: string }[] = [];
+
+  if (results.testsTotal > 0) {
+    const parts: string[] = [];
+    if (results.testsPassed > 0) parts.push(`${results.testsPassed} passed`);
+    if (results.testsFailed > 0) parts.push(`${results.testsFailed} failed`);
+    if (results.testsSkipped > 0) parts.push(`${results.testsSkipped} skipped`);
+    rows.push({
+      tab: 'tests',
+      icon: results.testsFailed > 0 ? 'codicon:error' : 'codicon:pass',
+      color: results.testsFailed > 0 ? 'text-red-600' : 'text-green-600',
+      label: `Tests: ${parts.join(', ')}`,
+    });
+  }
+
+  if (results.lintLinters > 0) {
+    rows.push({
+      tab: 'lint',
+      icon: results.lintViolations > 0 ? 'codicon:warning' : 'codicon:pass',
+      color: results.lintViolations > 0 ? 'text-yellow-600' : 'text-green-600',
+      label: results.lintViolations > 0
+        ? `Lint: ${results.lintViolations} violation${results.lintViolations !== 1 ? 's' : ''} from ${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''}`
+        : `Lint: ${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''} clean`,
+    });
+  }
+
+  if (results.hasBench) {
+    rows.push({
+      tab: 'bench',
+      icon: (results.benchRegressions ?? 0) > 0 ? 'codicon:warning' : 'codicon:graph',
+      color: (results.benchRegressions ?? 0) > 0 ? 'text-red-600' : 'text-blue-600',
+      label: (results.benchRegressions ?? 0) > 0
+        ? `Bench: ${results.benchRegressions} regression${results.benchRegressions !== 1 ? 's' : ''}`
+        : 'Bench: no regressions',
+    });
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <Section title="Gavel Results">
+      {rows.map(row => (
+        <a
+          key={row.tab}
+          href={`${basePath}/${row.tab}?backTo=${encodeURIComponent(backTo)}`}
+          class="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-gray-50 text-sm group transition-colors"
+        >
+          <iconify-icon icon={row.icon} class={row.color} />
+          <span class="text-gray-700 flex-1">{row.label}</span>
+          <iconify-icon icon="codicon:chevron-right" class="text-gray-300 group-hover:text-gray-500 text-xs" />
+        </a>
+      ))}
     </Section>
   );
 }
