@@ -10,7 +10,7 @@ import (
 
 // openListener always takes the standalone path on non-Unix platforms: no
 // socket inheritance, no lockfile. The fork handoff in `gavel test --ui
-// --auto-stop` is Unix-only; non-Unix builds fall back to the foreground
+// --detach` is Unix-only; non-Unix builds fall back to the foreground
 // SIGINT-block behavior and never spawn a child, so the inherited-FD branch
 // is unreachable from within the same binary.
 func openListener(opts UIServeOptions) (net.Listener, error) {

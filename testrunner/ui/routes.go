@@ -337,7 +337,7 @@ func (s *Server) buildExportReport(req routeRequest) (*exportReport, error) {
 	snap := s.snapshot()
 	report := &exportReport{
 		Tab:  req.Tab,
-		Done: snap.Done,
+		Done: !snap.Status.Running,
 		Path: strings.Join(req.NodePath, "/"),
 	}
 

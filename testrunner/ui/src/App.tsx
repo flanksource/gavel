@@ -34,34 +34,41 @@ function applySnapshot(
   setLintRun: (r: boolean) => void,
   setBench: (b: BenchComparison | undefined) => void,
   setDiagnosticsAvailable: (v: boolean) => void,
+  setDiagnostics: (d: DiagnosticsSnapshot | undefined) => void,
   setRunMeta: (r: RunMeta | undefined) => void,
   setDone: (d: boolean) => void,
   setStatus: (s: string) => void,
 ) {
-  if (snap.run?.started_at) {
-    const started = Date.parse(snap.run.started_at);
+  const meta = snap.metadata;
+  const status = snap.status || { running: false };
+
+  if (meta?.started) {
+    const started = Date.parse(meta.started);
     if (!Number.isNaN(started)) startTime.current = started;
   } else if (!startTime.current) {
     startTime.current = Date.now();
   }
-  if (snap.run?.finished_at) {
-    const finished = Date.parse(snap.run.finished_at);
+  if (meta?.ended) {
+    const finished = Date.parse(meta.ended);
     if (!Number.isNaN(finished)) endTime.current = finished;
-  } else if (!snap.done) {
+  } else if (status.running) {
     endTime.current = null;
   }
   setTests(snap.tests || []);
   setLint(snap.lint);
-  setLintRun(!!snap.lint_run);
+  setLintRun(!!status.lint_run);
   setBench(snap.bench);
-  setDiagnosticsAvailable(!!snap.diagnostics_available);
-  setRunMeta(snap.run);
-  if (snap.done) {
+  setDiagnosticsAvailable(!!status.diagnostics_available);
+  setDiagnostics(snap.diagnostics);
+  setRunMeta(meta);
+  if (!status.running) {
     doneRef.current = true;
     setDone(true);
-    setStatus(snap.run?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
+    setStatus(meta?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
   } else {
-    setStatus(snap.run?.kind === 'rerun' ? `Running rerun #${snap.run.sequence || 1}...` : 'Running tests...');
+    setDone(false);
+    doneRef.current = false;
+    setStatus(meta?.kind === 'rerun' ? `Running rerun #${meta.sequence || 1}...` : 'Running tests...');
   }
 }
 
@@ -172,7 +179,7 @@ export function App() {
       fetch('/api/tests')
         .then(r => r.json())
         .then((snap: Snapshot) => {
-          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setRunMeta, setDone, setStatus);
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
         })
         .catch(() => {});
     }
@@ -181,8 +188,8 @@ export function App() {
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setRunMeta, setDone, setStatus);
-      if (snap.done) es.close();
+      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
+      if (!snap.status?.running) es.close();
     });
 
     es.addEventListener('done', () => {

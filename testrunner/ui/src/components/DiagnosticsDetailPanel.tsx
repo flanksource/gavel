@@ -69,8 +69,8 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
       {runMeta && (
         <Section title="Run">
           <div class="grid grid-cols-2 gap-2 text-sm">
-            <Metric label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'} value={runMeta.started_at ? new Date(runMeta.started_at).toLocaleString() : 'Unavailable'} />
-            <Metric label="Finished" value={runMeta.finished_at ? new Date(runMeta.finished_at).toLocaleString() : 'In progress'} />
+            <Metric label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'} value={runMeta.started ? new Date(runMeta.started).toLocaleString() : 'Unavailable'} />
+            <Metric label="Finished" value={runMeta.ended ? new Date(runMeta.ended).toLocaleString() : 'In progress'} />
           </div>
         </Section>
       )}

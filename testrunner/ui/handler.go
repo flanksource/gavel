@@ -15,16 +15,18 @@ import (
 )
 
 type Server struct {
-	mu       sync.RWMutex
-	tests    []parsers.Test
-	lint     []*linters.LinterResult
-	lintRun  bool
-	benchCmp *bench.BenchComparison
-	done     bool
-	run      *RunMetadata
-	updated  chan struct{}
-	gitRoot  string
-	diag     *DiagnosticsManager
+	mu                  sync.RWMutex
+	tests               []parsers.Test
+	lint                []*linters.LinterResult
+	lintRun             bool
+	benchCmp            *bench.BenchComparison
+	done                bool
+	metadata            *SnapshotMetadata
+	git                 *SnapshotGit
+	embeddedDiagnostics *DiagnosticsSnapshot
+	updated             chan struct{}
+	gitRoot             string
+	diag                *DiagnosticsManager
 
 	rerunMu sync.Mutex
 	rerunFn RerunFunc
@@ -36,42 +38,85 @@ func NewServer() *Server {
 	}
 }
 
-type RunMetadata struct {
-	Sequence   int       `json:"sequence,omitempty"`
-	Kind       string    `json:"kind,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
-}
-
-func cloneRunMetadata(run *RunMetadata) *RunMetadata {
-	if run == nil {
-		return nil
-	}
-	cloned := *run
-	return &cloned
-}
-
 func (s *Server) BeginRun(kind string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := 1
-	if s.run != nil && s.run.Sequence > 0 {
-		next = s.run.Sequence + 1
+	if s.metadata != nil && s.metadata.Sequence > 0 {
+		next = s.metadata.Sequence + 1
 	}
-	s.run = &RunMetadata{
-		Sequence:  next,
-		Kind:      kind,
-		StartedAt: time.Now().UTC(),
-	}
+	meta := s.ensureMetadataLocked()
+	meta.Sequence = next
+	meta.Kind = kind
+	meta.Started = time.Now().UTC()
+	meta.Ended = time.Time{}
 	s.done = false
 	s.notify()
 }
 
 func (s *Server) finishRunLocked() {
-	if s.run == nil || !s.run.FinishedAt.IsZero() {
+	if s.metadata == nil || !s.metadata.Ended.IsZero() {
 		return
 	}
-	s.run.FinishedAt = time.Now().UTC()
+	s.metadata.Ended = time.Now().UTC()
+}
+
+func (s *Server) ensureMetadataLocked() *SnapshotMetadata {
+	if s.metadata == nil {
+		s.metadata = &SnapshotMetadata{}
+	}
+	return s.metadata
+}
+
+func (s *Server) SetVersion(version string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureMetadataLocked().Version = version
+}
+
+func (s *Server) SetRunArgs(args map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if args == nil {
+		s.ensureMetadataLocked().Args = nil
+		return
+	}
+	cloned := make(map[string]any, len(args))
+	for k, v := range args {
+		cloned[k] = v
+	}
+	s.ensureMetadataLocked().Args = cloned
+}
+
+func (s *Server) SetGitInfo(git *SnapshotGit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.git = cloneSnapshotGit(git)
+	if git != nil {
+		s.gitRoot = git.Root
+	}
+}
+
+func (s *Server) SetEmbeddedDiagnostics(snapshot *DiagnosticsSnapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot)
+}
+
+func (s *Server) LoadSnapshot(snapshot Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tests = snapshot.Tests
+	s.lint = snapshot.Lint
+	s.lintRun = snapshot.Status.LintRun
+	s.benchCmp = snapshot.Bench
+	s.metadata = cloneSnapshotMetadata(snapshot.Metadata)
+	s.git = cloneSnapshotGit(snapshot.Git)
+	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
+	s.done = !snapshot.Status.Running
+	if snapshot.Git != nil && snapshot.Git.Root != "" {
+		s.gitRoot = snapshot.Git.Root
+	}
 }
 
 func (s *Server) SetResults(tests []parsers.Test) {
@@ -233,17 +278,7 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
 }
 
-type snapshot struct {
-	Tests                []parsers.Test          `json:"tests"`
-	Lint                 []*linters.LinterResult `json:"lint,omitempty"`
-	LintRun              bool                    `json:"lint_run,omitempty"`
-	Bench                *bench.BenchComparison  `json:"bench,omitempty"`
-	DiagnosticsAvailable bool                    `json:"diagnostics_available,omitempty"`
-	Run                  *RunMetadata            `json:"run,omitempty"`
-	Done                 bool                    `json:"done"`
-}
-
-func (s *Server) snapshot() snapshot {
+func (s *Server) snapshot() Snapshot {
 	tests := s.tests
 	taskTests := virtualTaskTests()
 	if len(taskTests) > 0 {
@@ -252,14 +287,18 @@ func (s *Server) snapshot() snapshot {
 		merged = append(merged, s.tests...)
 		tests = merged
 	}
-	return snapshot{
-		Tests:                tests,
-		Lint:                 s.lint,
-		LintRun:              s.lintRun,
-		Bench:                s.benchCmp,
-		DiagnosticsAvailable: s.diag != nil,
-		Run:                  cloneRunMetadata(s.run),
-		Done:                 s.done && tasksDone(),
+	return Snapshot{
+		Metadata: cloneSnapshotMetadata(s.metadata),
+		Git:      cloneSnapshotGit(s.git),
+		Status: SnapshotStatus{
+			Running:              !(s.done && tasksDone()),
+			LintRun:              s.lintRun,
+			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
+		},
+		Tests:       tests,
+		Lint:        s.lint,
+		Bench:       s.benchCmp,
+		Diagnostics: cloneDiagnosticsSnapshot(s.embeddedDiagnostics),
 	}
 }
 
@@ -383,7 +422,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			lastPayload = payload
 		}
 
-		if data.Done {
+		if !data.Status.Running {
 			fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 			flusher.Flush()
 			return
@@ -430,6 +469,14 @@ func (s *Server) diagnosticsManager() *DiagnosticsManager {
 func (s *Server) handleDiagnosticsJSON(w http.ResponseWriter, _ *http.Request) {
 	manager := s.diagnosticsManager()
 	if manager == nil {
+		s.mu.RLock()
+		embedded := cloneDiagnosticsSnapshot(s.embeddedDiagnostics)
+		s.mu.RUnlock()
+		if embedded != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(embedded) //nolint:errcheck
+			return
+		}
 		http.Error(w, "diagnostics unavailable", http.StatusNotFound)
 		return
 	}

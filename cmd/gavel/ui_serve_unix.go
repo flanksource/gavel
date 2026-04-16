@@ -19,7 +19,7 @@ import (
 const lockfileEnv = "GAVEL_UI_LOCKFILE"
 
 // openListener either adopts an inherited TCP socket from fd 3 (when spawned
-// by `gavel test --ui --auto-stop`) or binds a fresh listener on --port.
+// by `gavel test --ui --detach`) or binds a fresh listener on --port.
 //
 // Fail LOUD if either path fails: the parent has already printed this URL to
 // the user, so silently picking a different port would result in a dead URL.
