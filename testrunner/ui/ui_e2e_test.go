@@ -385,7 +385,7 @@ var _ = Describe("Test UI E2E", func() {
 			chromedp.Text(`body`, &body, chromedp.ByQuery),
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(body).To(ContainSubstring(`"done":true`))
+		Expect(body).To(ContainSubstring(`"running":false`))
 		Expect(body).To(ContainSubstring(`"testrunner/"`))
 	})
 

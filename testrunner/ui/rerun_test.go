@@ -60,15 +60,12 @@ func TestSnapshotIncludesLint(t *testing.T) {
 		}},
 	}})
 
-	var snap struct {
-		Lint    []*linters.LinterResult `json:"lint"`
-		LintRun bool                    `json:"lint_run"`
-	}
+	var snap testui.Snapshot
 	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !snap.LintRun {
+	if !snap.Status.LintRun {
 		t.Errorf("lint_run = false, want true")
 	}
 	if len(snap.Lint) != 1 || len(snap.Lint[0].Violations) != 1 {
@@ -81,29 +78,24 @@ func TestSnapshotIncludesRunMetadata(t *testing.T) {
 	srv.BeginRun("rerun")
 	srv.MarkDone()
 
-	var snap struct {
-		Run struct {
-			Sequence   int    `json:"sequence"`
-			Kind       string `json:"kind"`
-			StartedAt  string `json:"started_at"`
-			FinishedAt string `json:"finished_at"`
-		} `json:"run"`
-		Done bool `json:"done"`
-	}
+	var snap testui.Snapshot
 	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if snap.Run.Sequence != 1 {
-		t.Fatalf("sequence = %d, want 1", snap.Run.Sequence)
+	if snap.Metadata == nil {
+		t.Fatalf("metadata missing")
 	}
-	if snap.Run.Kind != "rerun" {
-		t.Fatalf("kind = %q, want rerun", snap.Run.Kind)
+	if snap.Metadata.Sequence != 1 {
+		t.Fatalf("sequence = %d, want 1", snap.Metadata.Sequence)
 	}
-	if snap.Run.StartedAt == "" || snap.Run.FinishedAt == "" {
-		t.Fatalf("run timestamps missing: %+v", snap.Run)
+	if snap.Metadata.Kind != "rerun" {
+		t.Fatalf("kind = %q, want rerun", snap.Metadata.Kind)
 	}
-	if !snap.Done {
+	if snap.Metadata.Started.IsZero() || snap.Metadata.Ended.IsZero() {
+		t.Fatalf("run timestamps missing: %+v", snap.Metadata)
+	}
+	if snap.Status.Running {
 		t.Fatalf("snapshot should be done")
 	}
 }
@@ -307,15 +299,12 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	var snap struct {
-		Tests []parsers.Test `json:"tests"`
-		Done  bool           `json:"done"`
-	}
+	var snap testui.Snapshot
 	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if snap.Done {
+	if !snap.Status.Running {
 		t.Fatalf("snapshot should stay open while virtual tasks are still running")
 	}
 
@@ -359,7 +348,7 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode after completion: %v", err)
 	}
-	if !snap.Done {
+	if snap.Status.Running {
 		t.Fatalf("snapshot should be done after virtual tasks complete")
 	}
 }

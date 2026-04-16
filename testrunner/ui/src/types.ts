@@ -70,20 +70,34 @@ export interface TestSummary {
 }
 
 export interface Snapshot {
+  metadata?: RunMeta;
+  git?: SnapshotGit;
+  status: SnapshotStatus;
   tests: Test[];
   lint?: LinterResult[];
-  lint_run?: boolean;
   bench?: BenchComparison;
-  diagnostics_available?: boolean;
-  run?: RunMeta;
-  done: boolean;
+  diagnostics?: DiagnosticsSnapshot;
 }
 
 export interface RunMeta {
+  version?: string;
   sequence: number;
   kind?: 'initial' | 'rerun' | string;
-  started_at?: string;
-  finished_at?: string;
+  started?: string;
+  ended?: string;
+  args?: Record<string, unknown>;
+}
+
+export interface SnapshotGit {
+  repo?: string;
+  root?: string;
+  sha?: string;
+}
+
+export interface SnapshotStatus {
+  running: boolean;
+  lint_run?: boolean;
+  diagnostics_available?: boolean;
 }
 
 export interface DiagnosticsSnapshot {

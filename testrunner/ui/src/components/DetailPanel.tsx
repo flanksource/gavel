@@ -116,11 +116,11 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
           <div class="grid grid-cols-2 gap-3 text-sm">
             <MetaCard
               label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
-              value={runMeta.started_at ? new Date(runMeta.started_at).toLocaleString() : 'Unavailable'}
+              value={runMeta.started ? new Date(runMeta.started).toLocaleString() : 'Unavailable'}
             />
             <MetaCard
               label="Finished"
-              value={runMeta.finished_at ? new Date(runMeta.finished_at).toLocaleString() : 'In progress'}
+              value={runMeta.ended ? new Date(runMeta.ended).toLocaleString() : 'In progress'}
             />
           </div>
         </Section>

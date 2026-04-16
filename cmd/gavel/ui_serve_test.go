@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,8 @@ import (
 // writeSnapshot writes a minimal JSON payload that runUIServe can load.
 func writeSnapshot(t *testing.T, dir string) string {
 	t.Helper()
-	payload := snapshotPayload{
+	payload := testui.Snapshot{
+		Status: testui.SnapshotStatus{Running: false},
 		Tests: []parsers.Test{
 			{Name: "TestA", Package: "pkg/a", Passed: true, Framework: parsers.GoTest},
 			{Name: "TestB", Package: "pkg/b", Failed: true, Framework: parsers.GoTest, Message: "boom"},
@@ -44,6 +46,9 @@ func freePort(t *testing.T) int {
 }
 
 func TestLoadResults_PopulatesServer(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
 	// loadResults is the replay path used by both standalone and
 	// detached-child modes: read a JSON file written by the fork parent,
 	// rehydrate a fresh testui.Server, and serve it to the /api/tests
@@ -64,6 +69,60 @@ func TestLoadResults_PopulatesServer(t *testing.T) {
 	tests, ok := got["tests"].([]any)
 	require.True(t, ok, "tests field missing from snapshot: %s", rw.body)
 	require.Len(t, tests, 2)
+}
+
+func TestLoadResults_MergesMultipleSnapshots(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.json")
+	second := filepath.Join(dir, "second.json")
+
+	firstPayload := testui.Snapshot{
+		Metadata: &testui.SnapshotMetadata{Version: "v1", Sequence: 1},
+		Git:      &testui.SnapshotGit{Repo: "repo", Root: "/tmp/repo", SHA: "111"},
+		Status:   testui.SnapshotStatus{Running: false, LintRun: true},
+		Tests:    []parsers.Test{{Name: "TestA", Passed: true, Framework: parsers.GoTest}},
+	}
+	secondPayload := testui.Snapshot{
+		Metadata: &testui.SnapshotMetadata{Version: "v2", Sequence: 2},
+		Git:      &testui.SnapshotGit{SHA: "222"},
+		Status:   testui.SnapshotStatus{Running: false, DiagnosticsAvailable: true},
+		Tests:    []parsers.Test{{Name: "TestB", Failed: true, Framework: parsers.GoTest}},
+		Diagnostics: &testui.DiagnosticsSnapshot{
+			Root: &testui.ProcessNode{PID: 42, Name: "gavel"},
+		},
+	}
+
+	data, err := json.Marshal(firstPayload)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(first, data, 0o600))
+	data, err = json.Marshal(secondPayload)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(second, data, 0o600))
+
+	srv := testui.NewServer()
+	require.NoError(t, loadResults(srv, first, second))
+
+	handler := srv.Handler()
+	req, _ := http.NewRequest("GET", "/api/tests", nil)
+	rw := &recordingResponse{header: http.Header{}}
+	handler.ServeHTTP(rw, req)
+
+	var got testui.Snapshot
+	require.NoError(t, json.Unmarshal(rw.body, &got))
+	require.Len(t, got.Tests, 2)
+	require.NotNil(t, got.Metadata)
+	assert.Equal(t, "v2", got.Metadata.Version)
+	assert.Equal(t, 2, got.Metadata.Sequence)
+	require.NotNil(t, got.Git)
+	assert.Equal(t, "/tmp/repo", got.Git.Root)
+	assert.Equal(t, "222", got.Git.SHA)
+	assert.True(t, got.Status.LintRun)
+	assert.True(t, got.Status.DiagnosticsAvailable)
+	require.NotNil(t, got.Diagnostics)
+	assert.Equal(t, 42, got.Diagnostics.Root.PID)
 }
 
 // recordingResponse is a minimal http.ResponseWriter for in-process tests
@@ -142,6 +201,9 @@ func TestWriteURLFile_Atomic(t *testing.T) {
 }
 
 func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
 	// Full integration: drive runUIServe with a snapshot, short idle, hit the
 	// endpoint once, and verify the handler returned the loaded tests and
 	// the function exited cleanly within the expected window.
@@ -151,11 +213,11 @@ func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
 
 	port := freePort(t)
 	opts := UIServeOptions{
-		Port:        port,
-		ResultsFile: snapshot,
-		AutoStop:    5 * time.Second,
-		IdleTimeout: 200 * time.Millisecond,
-		URLFile:     urlFile,
+		Port:         port,
+		ResultsFiles: []string{snapshot},
+		AutoStop:     5 * time.Second,
+		IdleTimeout:  200 * time.Millisecond,
+		URLFile:      urlFile,
 	}
 
 	done := make(chan error, 1)
@@ -187,7 +249,9 @@ func TestRunUIServe_ReplaysSnapshotAndExits(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &snap))
 	tests, _ := snap["tests"].([]any)
 	assert.Len(t, tests, 2)
-	assert.Equal(t, true, snap["done"], "server should be marked done after snapshot load")
+	status, ok := snap["status"].(map[string]any)
+	require.True(t, ok, "server should expose status")
+	assert.Equal(t, false, status["running"], "server should be marked complete after snapshot load")
 
 	// Don't poke the server again — let the idle timer fire.
 	select {

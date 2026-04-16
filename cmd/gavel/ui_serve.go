@@ -12,9 +12,6 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/testrunner/bench"
-	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
@@ -22,9 +19,9 @@ import (
 //
 // Two modes:
 //
-//   - Standalone: user invokes `gavel ui serve --results-file=snapshot.json`
+//   - Standalone: user invokes `gavel ui serve snapshot.json`
 //     to replay a previously captured run. Binds --port (or picks ephemeral).
-//   - Detached child: spawned by `gavel test --ui --auto-stop`, which passes
+//   - Detached child: spawned by `gavel test --ui --detach`, which passes
 //     --listener-fd=3 and GAVEL_UI_LOCKFILE=<path>. The child adopts the
 //     inherited socket so the port is guaranteed to match what the parent
 //     already announced to the user.
@@ -33,13 +30,13 @@ import (
 // than via struct tags because clicky's flag binder does not recognize
 // time.Duration as a field type.
 type UIServeOptions struct {
-	Port        int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
-	Addr        string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
-	ListenerFD  int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --auto-stop)."`
-	ResultsFile string        `flag:"results-file" help:"Path to a JSON snapshot to load at startup. Written by the parent before fork."`
-	AutoStop    time.Duration `json:"-"`
-	IdleTimeout time.Duration `json:"-"`
-	URLFile     string        `flag:"url-file" help:"Write the bound URL to this path atomically so shell scripts can read it back."`
+	Port         int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
+	Addr         string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	ListenerFD   int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --detach)."`
+	ResultsFiles []string      `json:"-" args:"true"`
+	AutoStop     time.Duration `json:"-"`
+	IdleTimeout  time.Duration `json:"-"`
+	URLFile      string        `flag:"url-file" help:"Write the bound URL to this path atomically so shell scripts can read it back."`
 }
 
 // uiServeDurations holds the duration flags attached imperatively to the
@@ -55,7 +52,8 @@ func (o UIServeOptions) Help() string {
 
 Standalone replay of a JSON snapshot:
 
-  gavel ui serve --results-file=run.json --auto-stop=10m
+  gavel ui serve run.json --auto-stop=10m
+  gavel ui serve run-1.json run-2.json --auto-stop=10m
 
 The server prints its URL on the first line of stdout so a wrapping script can
 ` + "`head -n1`" + ` it, and exits when either --auto-stop (hard wall clock from
@@ -71,15 +69,6 @@ func init() {
 		"Hard wall-clock deadline from process start. 0 disables.")
 	serveCmd.Flags().DurationVar(&uiServeDurations.IdleTimeout, "idle-timeout", 5*time.Minute,
 		"Exit after this long with no HTTP requests. 0 disables.")
-}
-
-// snapshotPayload is the on-disk shape written by the fork parent and read by
-// the detached child. Kept minimal so the parent doesn't have to import the
-// full ui snapshot type.
-type snapshotPayload struct {
-	Tests []parsers.Test          `json:"tests"`
-	Lint  []*linters.LinterResult `json:"lint,omitempty"`
-	Bench *bench.BenchComparison  `json:"bench,omitempty"`
 }
 
 func runUIServe(opts UIServeOptions) (any, error) {
@@ -99,13 +88,14 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	}
 
 	srv := testui.NewServer()
-	if opts.ResultsFile != "" {
-		if err := loadResults(srv, opts.ResultsFile); err != nil {
+	if len(opts.ResultsFiles) > 0 {
+		if err := loadResults(srv, opts.ResultsFiles...); err != nil {
 			listener.Close() //nolint:errcheck
-			return nil, fmt.Errorf("load results %s: %w", opts.ResultsFile, err)
+			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
 		}
+	} else {
+		srv.MarkDone()
 	}
-	srv.MarkDone()
 
 	addr := listener.Addr().(*net.TCPAddr)
 	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(addr.Port)))
@@ -188,23 +178,101 @@ func withIdleTimer(next http.Handler, idleCh chan<- struct{}) http.Handler {
 	})
 }
 
-func loadResults(srv *testui.Server, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
+func loadResults(srv *testui.Server, paths ...string) error {
+	if len(paths) == 0 {
+		srv.MarkDone()
+		return nil
 	}
-	var payload snapshotPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return fmt.Errorf("parse snapshot: %w", err)
+
+	var merged testui.Snapshot
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var payload testui.Snapshot
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return fmt.Errorf("parse snapshot %s: %w", path, err)
+		}
+		merged = mergeSnapshots(merged, payload)
 	}
-	srv.SetResults(payload.Tests)
-	if len(payload.Lint) > 0 {
-		srv.SetLintResults(payload.Lint)
-	}
-	if payload.Bench != nil {
-		srv.SetBenchComparison(payload.Bench)
-	}
+	srv.LoadSnapshot(merged)
 	return nil
+}
+
+func mergeSnapshots(dst, src testui.Snapshot) testui.Snapshot {
+	dst.Tests = append(dst.Tests, src.Tests...)
+	dst.Lint = append(dst.Lint, src.Lint...)
+	if src.Bench != nil {
+		dst.Bench = src.Bench
+	}
+	if src.Diagnostics != nil {
+		dst.Diagnostics = src.Diagnostics
+	}
+	dst.Status.Running = dst.Status.Running || src.Status.Running
+	dst.Status.LintRun = dst.Status.LintRun || src.Status.LintRun
+	dst.Status.DiagnosticsAvailable = dst.Status.DiagnosticsAvailable || src.Status.DiagnosticsAvailable || src.Diagnostics != nil
+	dst.Metadata = mergeSnapshotMetadata(dst.Metadata, src.Metadata)
+	dst.Git = mergeSnapshotGit(dst.Git, src.Git)
+	return dst
+}
+
+func mergeSnapshotMetadata(dst, src *testui.SnapshotMetadata) *testui.SnapshotMetadata {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		cloned := *src
+		if src.Args != nil {
+			cloned.Args = make(map[string]any, len(src.Args))
+			for k, v := range src.Args {
+				cloned.Args[k] = v
+			}
+		}
+		return &cloned
+	}
+	if src.Version != "" {
+		dst.Version = src.Version
+	}
+	if !src.Started.IsZero() && (dst.Started.IsZero() || src.Started.Before(dst.Started)) {
+		dst.Started = src.Started
+	}
+	if !src.Ended.IsZero() && (dst.Ended.IsZero() || src.Ended.After(dst.Ended)) {
+		dst.Ended = src.Ended
+	}
+	if src.Kind != "" {
+		dst.Kind = src.Kind
+	}
+	if src.Sequence > dst.Sequence {
+		dst.Sequence = src.Sequence
+	}
+	if src.Args != nil {
+		dst.Args = make(map[string]any, len(src.Args))
+		for k, v := range src.Args {
+			dst.Args[k] = v
+		}
+	}
+	return dst
+}
+
+func mergeSnapshotGit(dst, src *testui.SnapshotGit) *testui.SnapshotGit {
+	if src == nil {
+		return dst
+	}
+	if dst == nil {
+		cloned := *src
+		return &cloned
+	}
+	if src.Repo != "" {
+		dst.Repo = src.Repo
+	}
+	if src.Root != "" {
+		dst.Root = src.Root
+	}
+	if src.SHA != "" {
+		dst.SHA = src.SHA
+	}
+	return dst
 }
 
 // announceHost picks the hostname to print in the "UI at ..." banner given

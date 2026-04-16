@@ -14,14 +14,12 @@ func TestSnapshotIncludesDiagnosticsAvailability(t *testing.T) {
 	srv, handler := newTestServer(t)
 	srv.SetDiagnosticsManager(testui.NewDiagnosticsManager(4242, newFakeDiagnosticsCollector()))
 
-	var snap struct {
-		DiagnosticsAvailable bool `json:"diagnostics_available"`
-	}
+	var snap testui.Snapshot
 	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !snap.DiagnosticsAvailable {
+	if !snap.Status.DiagnosticsAvailable {
 		t.Fatalf("diagnostics_available = false, want true")
 	}
 }
@@ -43,6 +41,40 @@ func TestDiagnosticsEndpointReturnsProcessTree(t *testing.T) {
 	}
 	if len(snap.Root.Children) != 1 || snap.Root.Children[0].PID != 5151 {
 		t.Fatalf("children = %#v, want child pid 5151", snap.Root.Children)
+	}
+}
+
+func TestDiagnosticsEndpointFallsBackToEmbeddedSnapshot(t *testing.T) {
+	srv, handler := newTestServer(t)
+	srv.LoadSnapshot(testui.Snapshot{
+		Status: testui.SnapshotStatus{Running: false},
+		Diagnostics: &testui.DiagnosticsSnapshot{
+			Root: &testui.ProcessNode{PID: 9001, Name: "gavel"},
+		},
+	})
+
+	var overview testui.Snapshot
+	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
+	if err := json.NewDecoder(resp.Body).Decode(&overview); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if !overview.Status.DiagnosticsAvailable {
+		t.Fatalf("diagnostics_available = false, want true")
+	}
+	if overview.Diagnostics == nil || overview.Diagnostics.Root == nil || overview.Diagnostics.Root.PID != 9001 {
+		t.Fatalf("embedded diagnostics missing from snapshot: %#v", overview.Diagnostics)
+	}
+
+	var snap testui.DiagnosticsSnapshot
+	resp = doRequest(t, handler, http.MethodGet, "/api/diagnostics", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode embedded diagnostics: %v", err)
+	}
+	if snap.Root == nil || snap.Root.PID != 9001 {
+		t.Fatalf("root = %#v, want pid 9001", snap.Root)
 	}
 }
 
