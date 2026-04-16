@@ -71,7 +71,50 @@ export interface Snapshot {
   lint?: LinterResult[];
   lint_run?: boolean;
   bench?: BenchComparison;
+  diagnostics_available?: boolean;
   done: boolean;
+}
+
+export interface DiagnosticsSnapshot {
+  root?: ProcessNode;
+  generated_at?: string;
+}
+
+export interface ProcessNode {
+  pid: number;
+  ppid?: number;
+  name?: string;
+  command?: string;
+  status?: string;
+  cpu_percent?: number;
+  rss?: number;
+  vms?: number;
+  open_files?: number;
+  is_root?: boolean;
+  children?: ProcessNode[];
+  stack_capture?: StackCapture;
+}
+
+export interface ProcessDetails {
+  pid: number;
+  ppid?: number;
+  name?: string;
+  command?: string;
+  status?: string;
+  cpu_percent?: number;
+  rss?: number;
+  vms?: number;
+  open_files?: number;
+  is_root?: boolean;
+  stack_capture?: StackCapture;
+}
+
+export interface StackCapture {
+  status: 'ready' | 'unsupported' | 'error';
+  supported: boolean;
+  text?: string;
+  error?: string;
+  collected_at?: string;
 }
 
 export interface BenchDelta {
