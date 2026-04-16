@@ -20,6 +20,7 @@ func handoffDetachedUI(
 	_ net.Listener,
 	_ []parsers.Test,
 	_ []*linters.LinterResult,
+	_ string,
 	_ time.Duration,
 	_ time.Duration,
 ) error {

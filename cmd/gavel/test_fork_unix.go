@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/linters"
-	"github.com/flanksource/gavel/testrunner/parsers"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,8 +38,7 @@ import (
 // returns normally so the test exit code is still the real signal.
 func handoffDetachedUI(
 	listener net.Listener,
-	tests []parsers.Test,
-	lint []*linters.LinterResult,
+	snapshot testui.Snapshot,
 	autoStop time.Duration,
 	idleTimeout time.Duration,
 ) error {
@@ -63,7 +61,7 @@ func handoffDetachedUI(
 	lockPath := filepath.Join(baseDir, fmt.Sprintf("port-%d.lock", port))
 	logPath := filepath.Join(baseDir, fmt.Sprintf("serve-%d.log", port))
 
-	if err := writeSnapshotJSON(resultsPath, tests, lint); err != nil {
+	if err := writeSnapshotJSON(resultsPath, snapshot); err != nil {
 		return fmt.Errorf("write snapshot: %w", err)
 	}
 
@@ -96,9 +94,9 @@ func handoffDetachedUI(
 
 	cmd := exec.Command(self, "ui", "serve",
 		fmt.Sprintf("--listener-fd=%d", childListenerFD),
-		fmt.Sprintf("--results-file=%s", resultsPath),
 		fmt.Sprintf("--auto-stop=%s", durationOrDefault(autoStop, 30*time.Minute)),
 		fmt.Sprintf("--idle-timeout=%s", durationOrDefault(idleTimeout, 5*time.Minute)),
+		resultsPath,
 	)
 	cmd.ExtraFiles = []*os.File{listenerFile}
 	cmd.Stdout = logFile
@@ -132,7 +130,7 @@ func handoffDetachedUI(
 	}
 
 	logger.V(1).Infof("Detached UI child pid=%d serving %s", childPID, url)
-	fmt.Printf("UI (detached): %s\n", url)
+	fmt.Fprintf(os.Stderr, "UI (detached): %s\n", url)
 	return nil
 }
 
@@ -143,9 +141,8 @@ func durationOrDefault(d, fallback time.Duration) time.Duration {
 	return d
 }
 
-func writeSnapshotJSON(path string, tests []parsers.Test, lint []*linters.LinterResult) error {
-	payload := snapshotPayload{Tests: tests, Lint: lint}
-	data, err := json.Marshal(payload)
+func writeSnapshotJSON(path string, snapshot testui.Snapshot) error {
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}

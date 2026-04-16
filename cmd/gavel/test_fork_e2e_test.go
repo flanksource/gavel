@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/testrunner/parsers"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +52,8 @@ func TestDetachedUI_InheritedListener_E2E(t *testing.T) {
 
 	workDir := t.TempDir()
 	resultsPath := filepath.Join(workDir, "results.json")
-	payload := snapshotPayload{
+	payload := testui.Snapshot{
+		Status: testui.SnapshotStatus{Running: false},
 		Tests: []parsers.Test{
 			{Name: "TestReplayed", Passed: true, Framework: parsers.GoTest},
 		},
@@ -81,10 +83,10 @@ func TestDetachedUI_InheritedListener_E2E(t *testing.T) {
 	// slightly-longer hard deadline (5s) so a bug can't wedge the suite.
 	cmd := exec.CommandContext(ctx, binPath, "ui", "serve",
 		"--listener-fd=3",
-		"--results-file="+resultsPath,
 		"--auto-stop=5s",
 		"--idle-timeout=500ms",
 		"--url-file="+urlFile,
+		resultsPath,
 	)
 	cmd.ExtraFiles = []*os.File{listenerFile}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

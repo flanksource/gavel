@@ -51,6 +51,8 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		opts.WorkDir = wd
 	}
+	runStarted := time.Now().UTC()
+	gitInfo := snapshotGitInfo(opts.WorkDir)
 
 	// Dynamic default for --skip-hooks: when the user didn't pass the flag,
 	// skip hooks unless $CI is set. This keeps local `gavel test` snappy and
@@ -93,6 +95,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
+			uiServer.SetVersion(version)
+			uiServer.SetRunArgs(snapshotArgs(opts))
+			uiServer.SetGitInfo(gitInfo)
 			uiServer.EnableDiagnostics(os.Getpid())
 		}
 		attachUIUpdates = func() chan []parsers.Test {
@@ -112,6 +117,19 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
 			clicky.ClearGlobalTasks()
 			uiServer.BeginRun("rerun")
+			if req.Lint {
+				results, err := executeLintRerun(LintOptions{
+					WorkDir: opts.WorkDir,
+					Linters: "*",
+					Timeout: "5m",
+				}, req)
+				if err != nil {
+					return err
+				}
+				uiServer.SetLintResults(results)
+				uiServer.MarkDone()
+				return nil
+			}
 			rerunOpts := prepareRerunOptions(opts, req, attachUIUpdates())
 			_, err := testrunner.Run(rerunOpts)
 			return err
@@ -192,8 +210,11 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			exitCode = 1
 		}
 		if uiServer != nil {
-			if opts.AutoStop > 0 || opts.IdleTimeout > 0 {
-				if err := handoffDetachedUI(uiListener, tests, lintResults, opts.AutoStop, opts.IdleTimeout); err != nil {
+			if testDurationFlags.Detach {
+				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+				clicky.CancelAllGlobalTasks()
+				clicky.WaitForGlobalCompletionSilent()
+				if err := handoffDetachedUI(uiListener, snapshot, opts.AutoStop, opts.IdleTimeout); err != nil {
 					logger.Warnf("Detached UI handoff failed: %v", err)
 				}
 				return nil, nil
@@ -203,13 +224,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			<-sig
 			return nil, nil
 		}
-	}
-
-	if opts.Lint {
-		return struct {
-			Tests any                     `json:"tests"`
-			Lint  []*linters.LinterResult `json:"lint"`
-		}{result, lintResults}, nil
+		return buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid())), nil
 	}
 	return result, nil
 }
@@ -409,6 +424,9 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	rerunOpts := base
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
+	if req.WorkDir != "" {
+		rerunOpts.WorkDir = req.WorkDir
+	}
 	rerunOpts.StartingPaths = req.PackagePaths
 	rerunOpts.ExtraArgs = buildRerunArgs(req)
 	if len(req.PackagePaths) > 0 {
@@ -423,6 +441,7 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 var testDurationFlags struct {
 	AutoStop    time.Duration
 	IdleTimeout time.Duration
+	Detach      bool
 }
 
 // testCmd is the cobra command for `gavel test`. Kept as a package var so
@@ -433,8 +452,10 @@ var testCmd *cobra.Command
 func init() {
 	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
 	testCmd.Flags().SetInterspersed(false)
+	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
+		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
 	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
-		"With --ui, fork a detached UI server that serves the completed run until this hard wall-clock deadline fires (0 = block on SIGINT).")
+		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
 	testCmd.Flags().DurationVar(&testDurationFlags.IdleTimeout, "idle-timeout", 0,
-		"With --ui --auto-stop, exit the detached UI server after this long with no HTTP requests.")
+		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
 }

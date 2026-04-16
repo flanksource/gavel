@@ -11,11 +11,31 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
+type walkStopFn func(root, path string, d fs.DirEntry) (bool, error)
+
 func FindGitRoot(dir string) string {
 	dir, _ = filepath.Abs(dir)
 	for {
 		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
 			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func FindNearestGoModRoot(dir string) string {
+	dir, _ = filepath.Abs(dir)
+	gitRoot := FindGitRoot(dir)
+	for {
+		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
+			return dir
+		}
+		if gitRoot != "" && dir == gitRoot {
+			return ""
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -48,10 +68,38 @@ func LoadIgnorePatterns(path string, domain []string) []gitignore.Pattern {
 // matched by .gitignore patterns. The allowList contains entry names that should
 // never be skipped even if gitignored (e.g. ".todos", ".codex").
 func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
+	return walkGitIgnored(root, fn, nil, allowList...)
+}
+
+// WalkGitIgnoredBounded walks a directory tree like WalkGitIgnored but stops
+// descending into nested project roots. Only descendant directories are treated
+// as boundaries; the starting root itself is always traversed.
+func WalkGitIgnoredBounded(root string, fn fs.WalkDirFunc, allowList ...string) error {
+	return walkGitIgnored(root, fn, stopAtNestedProjectRoot, allowList...)
+}
+
+func walkGitIgnored(root string, fn fs.WalkDirFunc, stop walkStopFn, allowList ...string) error {
 	root, _ = filepath.Abs(root)
 	gitRoot := FindGitRoot(root)
 	if gitRoot == "" {
-		return filepath.WalkDir(root, fn)
+		return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return fn(path, d, err)
+			}
+			if d.Name() == ".git" && d.IsDir() {
+				return fs.SkipDir
+			}
+			if stop != nil {
+				skip, err := stop(root, path, d)
+				if err != nil {
+					return fn(path, d, err)
+				}
+				if skip {
+					return fs.SkipDir
+				}
+			}
+			return fn(path, d, err)
+		})
 	}
 
 	allowed := make(map[string]bool, len(allowList))
@@ -105,8 +153,38 @@ func WalkGitIgnored(root string, fn fs.WalkDirFunc, allowList ...string) error {
 			return nil
 		}
 
+		if stop != nil {
+			skip, err := stop(root, path, d)
+			if err != nil {
+				return fn(path, d, err)
+			}
+			if skip {
+				return fs.SkipDir
+			}
+		}
+
 		return fn(path, d, err)
 	})
+}
+
+func stopAtNestedProjectRoot(root, path string, d fs.DirEntry) (bool, error) {
+	if !d.IsDir() || path == root {
+		return false, nil
+	}
+
+	if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && info.IsDir() {
+		return true, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+		return true, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	return false, nil
 }
 
 // FilterGitIgnored returns the subset of absolute paths that are not matched

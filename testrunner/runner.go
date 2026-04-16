@@ -112,9 +112,10 @@ type RunOptions struct {
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
 	Addr          string                `json:"addr,omitempty" flag:"addr" default:"localhost"`               // Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.
+	Diagnostics   bool                  `json:"diagnostics,omitempty" flag:"diagnostics"`                     // Capture a final diagnostics snapshot and embed it in JSON results / detached UI handoff artifacts.
 	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
-	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // When set with --ui, fork a detached UI server that serves the completed run until auto-stop (hard) or idle-timeout elapses. 0 = block on SIGINT (today's behavior). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
-	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI server; resets on every HTTP request. Only meaningful with --auto-stop.
+	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
+	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI child; resets on every HTTP request. 0 = use default (5m). Only meaningful with --detach.
 	Lint          bool                  `json:"lint,omitempty" flag:"lint"`                                   // Run linters in parallel with tests
 	Cache         bool                  `json:"cache,omitempty" flag:"cache"`                                 // Skip packages whose content fingerprint matches the last passing run
 	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
@@ -166,6 +167,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if opts.Fixtures {
 		text = text.Space().Append("Fixtures: ", "text-muted").Append(icons.Check, "text-green-500")
+	}
+	if opts.Diagnostics {
+		text = text.Space().Append("Diagnostics: ", "text-muted").Append(icons.Check, "text-green-500")
 	}
 	if len(opts.FixtureFiles) > 0 {
 		text = text.Space().Append("FixtureFiles: ", "text-muted").Append(clicky.CompactList(opts.FixtureFiles), "text-blue-500")

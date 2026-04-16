@@ -34,6 +34,21 @@ func collectPaths(root string, allowList ...string) ([]string, error) {
 	return paths, err
 }
 
+func collectBoundedPaths(root string, allowList ...string) ([]string, error) {
+	var paths []string
+	err := WalkGitIgnoredBounded(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		if rel != "." {
+			paths = append(paths, filepath.ToSlash(rel))
+		}
+		return nil
+	}, allowList...)
+	return paths, err
+}
+
 var _ = Describe("WalkGitIgnored", func() {
 	var root string
 
@@ -122,6 +137,72 @@ var _ = Describe("WalkGitIgnored", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(paths).To(ContainElement("main.go"))
 		Expect(paths).NotTo(ContainElement(".git"))
+	})
+})
+
+var _ = Describe("WalkGitIgnoredBounded", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	It("still traverses the starting root when it contains go.mod and .git", func() {
+		Expect(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/root\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "pkg", "pkg_test.go"), nil, 0o644)).To(Succeed())
+
+		paths, err := collectBoundedPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("go.mod"))
+		Expect(paths).To(ContainElement("pkg"))
+		Expect(paths).To(ContainElement("pkg/pkg_test.go"))
+	})
+
+	It("skips nested module subtrees", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "visible"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "visible", "keep_test.go"), nil, 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "nested-module", "pkg"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested-module", "go.mod"), []byte("module example.com/nested\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested-module", "pkg", "skip_test.go"), nil, 0o644)).To(Succeed())
+
+		paths, err := collectBoundedPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("visible"))
+		Expect(paths).To(ContainElement("visible/keep_test.go"))
+		Expect(paths).NotTo(ContainElement("nested-module"))
+		Expect(paths).NotTo(ContainElement("nested-module/pkg"))
+		Expect(paths).NotTo(ContainElement("nested-module/pkg/skip_test.go"))
+	})
+
+	It("skips nested git repo subtrees", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "visible"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "visible", "keep_test.go"), nil, 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "nested-repo", ".git"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "nested-repo", "pkg"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested-repo", "pkg", "skip_test.go"), nil, 0o644)).To(Succeed())
+
+		paths, err := collectBoundedPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("visible"))
+		Expect(paths).To(ContainElement("visible/keep_test.go"))
+		Expect(paths).NotTo(ContainElement("nested-repo"))
+		Expect(paths).NotTo(ContainElement("nested-repo/pkg"))
+		Expect(paths).NotTo(ContainElement("nested-repo/pkg/skip_test.go"))
+	})
+
+	It("skips descendant directories that contain both go.mod and .git", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "nested-both", ".git"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "nested-both", "pkg"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested-both", "go.mod"), []byte("module example.com/both\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "nested-both", "pkg", "skip_test.go"), nil, 0o644)).To(Succeed())
+
+		paths, err := collectBoundedPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).NotTo(ContainElement("nested-both"))
+		Expect(paths).NotTo(ContainElement("nested-both/pkg"))
+		Expect(paths).NotTo(ContainElement("nested-both/pkg/skip_test.go"))
 	})
 })
 
