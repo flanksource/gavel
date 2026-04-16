@@ -113,6 +113,9 @@ func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.
 	}
 
 	reportPath := b.reportPath()
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create betterleaks report dir: %w", err)
+	}
 	_ = os.Remove(reportPath)
 
 	args := b.buildArgs(tomlPath, reportPath)

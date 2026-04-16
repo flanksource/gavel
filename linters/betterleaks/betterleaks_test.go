@@ -1,10 +1,12 @@
 package betterleaks
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 	"github.com/hairyhenderson/toml"
 	"github.com/stretchr/testify/require"
@@ -98,6 +100,56 @@ func TestResolveConfigSinglePassthrough(t *testing.T) {
 	require.Equal(t, cfg, path, "single config passed through unchanged")
 	_, statErr := os.Stat(filepath.Join(tmp, ".tmp", "betterleaks.toml"))
 	require.True(t, os.IsNotExist(statErr), ".tmp/betterleaks.toml must not be created for single config")
+}
+
+func TestRunCreatesReportDirForSingleConfig(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".betterleaks.toml"), []byte(`title = "solo"`+"\n"), 0o644))
+
+	binDir := t.TempDir()
+	fakeBetterleaks := filepath.Join(binDir, "betterleaks")
+	script := `#!/bin/sh
+report=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--report-path" ]; then
+    shift
+    report="$1"
+    break
+  fi
+  shift
+done
+
+if [ -z "$report" ]; then
+  echo "missing --report-path" >&2
+  exit 1
+fi
+
+report_dir=${report%/*}
+if [ "$report_dir" = "$report" ]; then
+  report_dir=.
+fi
+if [ ! -d "$report_dir" ]; then
+  echo "report dir missing: $report_dir" >&2
+  exit 1
+fi
+
+printf '[]' >"$report"
+`
+	require.NoError(t, os.WriteFile(fakeBetterleaks, []byte(script), 0o755))
+	t.Setenv("PATH", binDir)
+
+	b := NewBetterleaks(workDir)
+	violations, err := b.Run(commonsContext.NewContext(context.Background()), nil)
+	require.NoError(t, err)
+	require.Empty(t, violations)
+
+	reportPath := filepath.Join(workDir, ".tmp", "betterleaks-report.json")
+	data, err := os.ReadFile(reportPath)
+	require.NoError(t, err)
+	require.JSONEq(t, "[]", string(data))
 }
 
 func TestResolveConfigMergesMultiple(t *testing.T) {

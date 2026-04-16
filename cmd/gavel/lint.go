@@ -109,6 +109,20 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
+		if uiServer != nil {
+			uiServer.BeginRun("initial")
+			uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
+				clicky.ClearGlobalTasks()
+				uiServer.BeginRun("rerun")
+				results, err := executeLintRerun(opts, req)
+				if err != nil {
+					return err
+				}
+				uiServer.SetLintResults(results)
+				uiServer.MarkDone()
+				return nil
+			})
+		}
 	}
 
 	groups := groupFilesByGitRoot(opts)
@@ -195,6 +209,60 @@ func runLint(opts LintOptions) (any, error) {
 	return allResults, nil
 }
 
+func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.LinterResult, error) {
+	workDir := base.WorkDir
+	if req.WorkDir != "" {
+		workDir = req.WorkDir
+	}
+
+	rerunOpts := LintOptions{
+		WorkDir: workDir,
+		Linters: "*",
+		Timeout: base.Timeout,
+		Files:   append([]string(nil), req.LintFiles...),
+	}
+	if rerunOpts.Timeout == "" {
+		rerunOpts.Timeout = "5m"
+	}
+	if len(req.LintLinters) > 0 {
+		rerunOpts.Linters = strings.Join(req.LintLinters, ",")
+	}
+
+	results, err := executeLinters(rerunOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, cfgErr := verify.LoadGavelConfig(workDir)
+	if cfgErr != nil {
+		logger.Warnf("Failed to load .gavel.yaml: %v", cfgErr)
+		return results, nil
+	}
+	linters.FilterIgnoredViolations(results, cfg.Lint.Ignore)
+	return results, nil
+}
+
+func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, cliExplicit bool, explicitEnabled bool, hasDirectConfig bool) (bool, string) {
+	if linterName == "golangci-lint" && utils.FindNearestGoModRoot(workDir) == "" {
+		return false, "no go.mod found"
+	}
+	if linterName == "jscpd" && !cliExplicit && !cfg.Lint.IsLinterEnabled("jscpd", false) {
+		return false, "disabled by default; set lint.linters.jscpd.enabled: true"
+	}
+	if linterName == "betterleaks" {
+		if cfg.Secrets.Disabled {
+			return false, "disabled via .gavel.yaml"
+		}
+	}
+	if !cliExplicit && !explicitEnabled && linterRequiresDirectConfig(linterName) && !hasDirectConfig {
+		if linterName == "betterleaks" {
+			return false, "no betterleaks/gitleaks config found in work dir"
+		}
+		return false, fmt.Sprintf("no %s config found in work dir", linterName)
+	}
+	return true, ""
+}
+
 // executeLinters runs all applicable linters and returns their results.
 // Reusable by both the lint command and the test --lint flag.
 func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
@@ -208,7 +276,6 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 	}
 
 	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
-	secretsCfg := gavelCfg.Secrets
 
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
@@ -257,8 +324,15 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 			continue
 		}
 
-		if !hasMatchingFiles(opts.WorkDir, linter.DefaultIncludes()) {
-			logger.V(2).Infof("Skipping %s: no matching files", linter.Name())
+		if ok, reason := shouldSelectLinter(opts.WorkDir, gavelCfg, linter, explicit); !ok {
+			logger.V(2).Infof("Skipping %s: %s", linter.Name(), reason)
+			if linter.Name() == "betterleaks" {
+				allResults = append(allResults, &linters.LinterResult{
+					Linter:  linter.Name(),
+					Skipped: true,
+					Error:   reason,
+				})
+			}
 			continue
 		}
 
@@ -270,31 +344,6 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 				Error:   "not found on PATH",
 			})
 			continue
-		}
-
-		// Config-file-driven linters only run by default when a config is
-		// actually present. Passing the linter name explicitly overrides
-		// the "needs config" gate, but `secrets.disabled: true` in
-		// .gavel.yaml always wins.
-		if linter.Name() == "betterleaks" {
-			if secretsCfg.Disabled {
-				logger.V(2).Infof("Skipping betterleaks: disabled via .gavel.yaml")
-				allResults = append(allResults, &linters.LinterResult{
-					Linter:  linter.Name(),
-					Skipped: true,
-					Error:   "disabled via .gavel.yaml",
-				})
-				continue
-			}
-			if !explicit && len(betterleaks.DiscoverConfigs(opts.WorkDir)) == 0 {
-				logger.V(2).Infof("Skipping betterleaks: no .betterleaks.toml / .gitleaks.toml found")
-				allResults = append(allResults, &linters.LinterResult{
-					Linter:  linter.Name(),
-					Skipped: true,
-					Error:   "no betterleaks/gitleaks config found",
-				})
-				continue
-			}
 		}
 
 		runOpts := linters.RunOptions{
@@ -377,11 +426,7 @@ type lintGroup struct {
 
 func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 	if len(opts.Files) == 0 {
-		gitRoot := utils.FindGitRoot(opts.WorkDir)
-		if gitRoot == "" {
-			gitRoot = opts.WorkDir
-		}
-		return []lintGroup{{gitRoot: gitRoot}}
+		return []lintGroup{{gitRoot: opts.WorkDir}}
 	}
 
 	groups := make(map[string][]string)
@@ -438,8 +483,6 @@ func displayLintDryRun(opts LintOptions) {
 	}
 
 	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
-	secretsCfg := gavelCfg.Secrets
-
 	registry := linters.NewRegistry()
 	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
 	registry.Register(ruff.NewRuff(opts.WorkDir))
@@ -482,23 +525,13 @@ func displayLintDryRun(opts LintOptions) {
 			continue
 		}
 
-		if !hasMatchingFiles(opts.WorkDir, linter.DefaultIncludes()) {
-			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no matching files")
+		if ok, reason := shouldSelectLinter(opts.WorkDir, gavelCfg, linter, explicit); !ok {
+			testrunner.PrintDryRunSkipped("lint", linter.Name(), reason)
 			continue
 		}
 		if _, err := exec.LookPath(linter.Name()); err != nil {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "not found on PATH")
 			continue
-		}
-		if linter.Name() == "betterleaks" {
-			if secretsCfg.Disabled {
-				testrunner.PrintDryRunSkipped("lint", linter.Name(), "disabled via .gavel.yaml")
-				continue
-			}
-			if !explicit && len(betterleaks.DiscoverConfigs(opts.WorkDir)) == 0 {
-				testrunner.PrintDryRunSkipped("lint", linter.Name(), "no betterleaks/gitleaks config found")
-				continue
-			}
 		}
 
 		runOpts := linters.RunOptions{
