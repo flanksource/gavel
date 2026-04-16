@@ -41,6 +41,8 @@ func (e *ESLint) Name() string {
 // DefaultIncludes returns default file patterns this linter should process
 func (e *ESLint) DefaultIncludes() []string {
 	return []string{
+		"eslint.*",
+		"**/eslint.*",
 		"**/*.js",
 		"**/*.jsx",
 		"**/*.ts",
