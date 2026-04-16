@@ -15,6 +15,7 @@ func TestPrepareRerunOptionsDisablesRecursiveDiscovery(t *testing.T) {
 
 	got := prepareRerunOptions(base, testui.RerunRequest{
 		PackagePaths: []string{"./git"},
+		WorkDir:      "/tmp/submodule",
 		Framework:    "ginkgo",
 	}, nil)
 
@@ -26,5 +27,8 @@ func TestPrepareRerunOptionsDisablesRecursiveDiscovery(t *testing.T) {
 	}
 	if len(got.StartingPaths) != 1 || got.StartingPaths[0] != "./git" {
 		t.Fatalf("unexpected rerun package paths: %#v", got.StartingPaths)
+	}
+	if got.WorkDir != "/tmp/submodule" {
+		t.Fatalf("unexpected rerun workdir: %q", got.WorkDir)
 	}
 }

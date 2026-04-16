@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -81,6 +82,9 @@ func TestWaitForHandoff_DeadlineExpires(t *testing.T) {
 }
 
 func TestWriteSnapshotJSON_ReadByLoadResults(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
 	// The fork parent writes the snapshot and the child's loadResults reads
 	// it — they must agree on the JSON shape. This test pins that contract.
 	dir := t.TempDir()
@@ -91,10 +95,16 @@ func TestWriteSnapshotJSON_ReadByLoadResults(t *testing.T) {
 		{Name: "TestB", Failed: true, Framework: parsers.GoTest, Message: "boom"},
 	}
 	lint := []*linters.LinterResult{{Linter: "golangci-lint"}}
-	require.NoError(t, writeSnapshotJSON(path, tests, lint))
+	require.NoError(t, writeSnapshotJSON(path, testui.Snapshot{
+		Git:    &testui.SnapshotGit{Root: "/tmp/repo", Repo: "repo"},
+		Status: testui.SnapshotStatus{Running: false, LintRun: true},
+		Tests:  tests,
+		Lint:   lint,
+	}))
 
 	srv := testui.NewServer()
 	require.NoError(t, loadResults(srv, path))
+	require.Equal(t, "/tmp/repo", srv.GitRoot())
 
 	handler := srv.Handler()
 	req, _ := http.NewRequest("GET", "/api/tests", nil)
