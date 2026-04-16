@@ -14,13 +14,15 @@ import (
 )
 
 type CommitOptions struct {
-	Stage   string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
-	Message string `flag:"message" short:"m" help:"Explicit commit message (skips LLM)"`
-	Model   string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
-	DryRun  bool   `flag:"dry-run" help:"Print the generated message without committing"`
-	Force   bool   `flag:"force" help:"Skip pre-commit hooks"`
-	NoCache bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	WorkDir string `flag:"work-dir" help:"Working directory"`
+	Stage     string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
+	CommitAll bool   `flag:"commit-all" short:"A" help:"Split the selected change set into multiple AI-planned commits"`
+	Max       int    `flag:"max" help:"Maximum number of commit groups (0 = unlimited)" default:"0"`
+	Message   string `flag:"message" short:"m" help:"Explicit commit message (skips LLM)"`
+	Model     string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
+	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
+	Force     bool   `flag:"force" help:"Skip pre-commit hooks"`
+	NoCache   bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
+	WorkDir   string `flag:"work-dir" help:"Working directory"`
 }
 
 func (o CommitOptions) Help() string {
@@ -32,6 +34,8 @@ to skip hooks.
 
 Examples:
   gavel commit                          # LLM-generated message, staged changes
+  gavel commit -A                       # split staged changes into multiple commits
+  gavel commit -A --max=5               # split into at most 5 commits
   gavel commit -m "chore: bump dep"     # explicit message, skip LLM
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --force                  # skip hooks`
@@ -60,14 +64,16 @@ func runCommit(opts CommitOptions) (any, error) {
 	}
 
 	result, err := commitpkg.Run(context.Background(), commitpkg.Options{
-		WorkDir: workDir,
-		Stage:   opts.Stage,
-		DryRun:  opts.DryRun,
-		Force:   opts.Force,
-		NoCache: opts.NoCache,
-		Model:   opts.Model,
-		Message: opts.Message,
-		Config:  cfg.Commit,
+		WorkDir:   workDir,
+		Stage:     opts.Stage,
+		CommitAll: opts.CommitAll,
+		Max:       opts.Max,
+		DryRun:    opts.DryRun,
+		Force:     opts.Force,
+		NoCache:   opts.NoCache,
+		Model:     opts.Model,
+		Message:   opts.Message,
+		Config:    cfg.Commit,
 	})
 
 	if err != nil {

@@ -42,11 +42,27 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
 			return false
 		}
 	}
-	return r.Rule != "" || r.Source != ""
+	return r.Rule != "" || r.Source != "" || r.File != ""
 }
 
 type LintConfig struct {
-	Ignore []LintIgnoreRule `yaml:"ignore,omitempty" json:"ignore,omitempty"`
+	Ignore  []LintIgnoreRule            `yaml:"ignore,omitempty" json:"ignore,omitempty"`
+	Linters map[string]LintLinterConfig `yaml:"linters,omitempty" json:"linters,omitempty"`
+}
+
+type LintLinterConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+func (c LintConfig) IsLinterEnabled(name string, defaultEnabled bool) bool {
+	if c.Linters == nil {
+		return defaultEnabled
+	}
+	cfg, ok := c.Linters[name]
+	if !ok || cfg.Enabled == nil {
+		return defaultEnabled
+	}
+	return *cfg.Enabled
 }
 
 type CommitHook struct {
@@ -224,6 +240,18 @@ func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
 func MergeLintConfig(base, override LintConfig) LintConfig {
 	if len(override.Ignore) > 0 {
 		base.Ignore = append(base.Ignore, override.Ignore...)
+	}
+	if len(override.Linters) > 0 {
+		if base.Linters == nil {
+			base.Linters = make(map[string]LintLinterConfig, len(override.Linters))
+		}
+		for name, cfg := range override.Linters {
+			merged := base.Linters[name]
+			if cfg.Enabled != nil {
+				merged.Enabled = cfg.Enabled
+			}
+			base.Linters[name] = merged
+		}
 	}
 	return base
 }

@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: write # required when comment=true so the action can post/update the sticky PR comment
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,6 +57,8 @@ jobs:
           comment-header: gavel
           fail-on-error: "true"
 ```
+
+If you disable PR commenting (`comment: "false"`), `contents: read` is sufficient. Keep `pull-requests: write` when the action should post or update the sticky PR comment.
 
 ### Inputs
 
@@ -338,6 +340,7 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 
 ```bash
 gavel commit                          # LLM-generated message, staged changes
+gavel commit -A                       # split staged changes into multiple commits
 gavel commit -m "chore: bump dep"     # explicit message, skip LLM
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
@@ -346,6 +349,7 @@ gavel commit --force                  # skip hooks
 | Flag | Description |
 |------|-------------|
 | `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
+| `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
 | `-m` / `--message` | Explicit commit message (skips LLM) |
 | `--model` | Override LLM model from `.gavel.yaml` `commit.model` |
 | `--dry-run` | Print the generated message without committing |
@@ -575,13 +579,13 @@ gavel summary --input results.json --output summary.md
 Run a standalone UI server for replaying a previously captured test run.
 
 ```bash
-gavel ui serve --results-file=run.json
-gavel ui serve --results-file=run.json --auto-stop=10m --idle-timeout=5m
+gavel ui serve run.json
+gavel ui serve run.json other-run.json --auto-stop=10m --idle-timeout=5m
 ```
 
-| Flag | Description |
+| Argument / Flag | Description |
 |------|-------------|
-| `--results-file` | Path to a JSON snapshot to load at startup |
+| `run.json [other-run.json ...]` | One or more JSON snapshots to load and merge in order |
 | `--port` | Bind this port (0 = pick ephemeral) |
 | `--addr` | Interface to bind (default: `localhost`) |
 | `--auto-stop` | Hard wall-clock deadline from process start (default: `30m`) |
@@ -646,6 +650,9 @@ lint:
       source: golangci-lint
     - source: eslint                  # ignore all eslint violations in vendor
       file: "vendor/**"
+  linters:
+    jscpd:
+      enabled: true                   # opt in to jscpd duplicate detection
 
 commit:
   model: claude                      # LLM model for gavel commit

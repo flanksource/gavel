@@ -78,10 +78,10 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 			match: false,
 		},
 		{
-			name:  "empty rule and source invalid",
+			name:  "file only matches",
 			rule:  LintIgnoreRule{File: "pkg/foo.go"},
 			v:     models.Violation{File: "pkg/foo.go"},
-			match: false,
+			match: true,
 		},
 	}
 
@@ -187,16 +187,44 @@ func TestMergeFixturesConfig(t *testing.T) {
 }
 
 func TestMergeLintConfig(t *testing.T) {
+	enabledFalse := false
+	enabledTrue := true
 	base := LintConfig{
 		Ignore: []LintIgnoreRule{{Rule: "errcheck"}},
+		Linters: map[string]LintLinterConfig{
+			"jscpd": {Enabled: &enabledFalse},
+		},
 	}
 	override := LintConfig{
 		Ignore: []LintIgnoreRule{{Rule: "unused", Source: "ruff"}},
+		Linters: map[string]LintLinterConfig{
+			"jscpd": {Enabled: &enabledTrue},
+		},
 	}
 	merged := MergeLintConfig(base, override)
 	assert.Len(t, merged.Ignore, 2)
 	assert.Equal(t, "errcheck", merged.Ignore[0].Rule)
 	assert.Equal(t, "unused", merged.Ignore[1].Rule)
+	if assert.Contains(t, merged.Linters, "jscpd") {
+		assert.NotNil(t, merged.Linters["jscpd"].Enabled)
+		assert.True(t, *merged.Linters["jscpd"].Enabled)
+	}
+}
+
+func TestLoadGavelConfig_WithLintLinterEnablement(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`lint:
+  linters:
+    jscpd:
+      enabled: true
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	assert.True(t, cfg.Lint.IsLinterEnabled("jscpd", false))
 }
 
 func TestLoadGavelConfig_WithPushHooksAndSSH(t *testing.T) {
