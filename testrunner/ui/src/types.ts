@@ -72,7 +72,15 @@ export interface Snapshot {
   lint_run?: boolean;
   bench?: BenchComparison;
   diagnostics_available?: boolean;
+  run?: RunMeta;
   done: boolean;
+}
+
+export interface RunMeta {
+  sequence: number;
+  kind?: 'initial' | 'rerun' | string;
+  started_at?: string;
+  finished_at?: string;
 }
 
 export interface DiagnosticsSnapshot {

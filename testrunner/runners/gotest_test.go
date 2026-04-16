@@ -37,6 +37,46 @@ func TestGoTestDetect(t *testing.T) {
 	}
 }
 
+func TestGoTestDetectSkipsGitIgnoredFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := os.Mkdir(filepath.Join(tmpDir, ".git"), 0755); err != nil {
+		t.Fatalf("failed to create .git directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("ignored/\n"), 0644); err != nil {
+		t.Fatalf("failed to create .gitignore: %v", err)
+	}
+
+	ignoredDir := filepath.Join(tmpDir, "ignored")
+	if err := os.MkdirAll(ignoredDir, 0755); err != nil {
+		t.Fatalf("failed to create ignored directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ignoredDir, "ignored_test.go"), []byte("package ignored\n"), 0644); err != nil {
+		t.Fatalf("failed to create ignored test file: %v", err)
+	}
+
+	runner := NewGoTest(tmpDir)
+	found, err := runner.Detect(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if found {
+		t.Error("expected gitignored test files to be skipped")
+	}
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "visible_test.go"), []byte("package visible\n"), 0644); err != nil {
+		t.Fatalf("failed to create visible test file: %v", err)
+	}
+
+	found, err = runner.Detect(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !found {
+		t.Error("expected visible test file to be detected")
+	}
+}
+
 func TestGoTestDiscoverPackages(t *testing.T) {
 	tmpDir := t.TempDir()
 

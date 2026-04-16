@@ -11,6 +11,120 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
+func TestGroupPathsByGitRoot(t *testing.T) {
+	// Create two fake git repos in temp dirs
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+	os.MkdirAll(filepath.Join(repoA, ".git"), 0755)
+	os.MkdirAll(filepath.Join(repoB, ".git"), 0755)
+	os.MkdirAll(filepath.Join(repoA, "pkg"), 0755)
+	os.MkdirAll(filepath.Join(repoB, "cmd"), 0755)
+
+	t.Run("single repo stays unchanged", func(t *testing.T) {
+		groups := groupPathsByGitRoot(repoA, []string{"./pkg"})
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(groups))
+		}
+		if groups[0].workDir != repoA {
+			t.Errorf("expected workDir=%s, got %s", repoA, groups[0].workDir)
+		}
+		if len(groups[0].paths) != 1 || groups[0].paths[0] != "./pkg" {
+			t.Errorf("expected paths=[./pkg], got %v", groups[0].paths)
+		}
+	})
+
+	t.Run("cross-repo subdir paths are split", func(t *testing.T) {
+		// Simulate: cwd=repoA, paths=["./pkg", "<repoB>/cmd"]
+		groups := groupPathsByGitRoot(repoA, []string{"./pkg", filepath.Join(repoB, "cmd")})
+		if len(groups) != 2 {
+			t.Fatalf("expected 2 groups, got %d: %+v", len(groups), groups)
+		}
+
+		byRoot := make(map[string]testGroup)
+		for _, g := range groups {
+			byRoot[g.workDir] = g
+		}
+
+		groupA, ok := byRoot[repoA]
+		if !ok {
+			t.Fatalf("expected group for repoA=%s", repoA)
+		}
+		if len(groupA.paths) != 1 || groupA.paths[0] != "./pkg" {
+			t.Errorf("repoA paths: expected [./pkg], got %v", groupA.paths)
+		}
+
+		groupB, ok := byRoot[repoB]
+		if !ok {
+			t.Fatalf("expected group for repoB=%s", repoB)
+		}
+		if len(groupB.paths) != 1 || groupB.paths[0] != "./cmd" {
+			t.Errorf("repoB paths: expected [./cmd], got %v", groupB.paths)
+		}
+	})
+
+	t.Run("cross-repo root path produces empty paths", func(t *testing.T) {
+		// When the path IS the git root (e.g. "../otherrepo"), the runner
+		// should get empty paths so it discovers from the root.
+		groups := groupPathsByGitRoot(repoA, []string{repoB})
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d: %+v", len(groups), groups)
+		}
+		if groups[0].workDir != repoB {
+			t.Errorf("expected workDir=%s, got %s", repoB, groups[0].workDir)
+		}
+		if len(groups[0].paths) != 0 {
+			t.Errorf("expected empty paths (discover from root), got %v", groups[0].paths)
+		}
+	})
+
+	t.Run("relative cross-repo path", func(t *testing.T) {
+		// Simulate: cwd=repoA, paths=["../otherrepo/cmd"] where otherrepo is repoB
+		// We need to actually use a relative path, so put both repos under a shared parent
+		parent := t.TempDir()
+		rA := filepath.Join(parent, "repoA")
+		rB := filepath.Join(parent, "repoB")
+		os.MkdirAll(filepath.Join(rA, ".git"), 0755)
+		os.MkdirAll(filepath.Join(rB, ".git"), 0755)
+		os.MkdirAll(filepath.Join(rA, "src"), 0755)
+		os.MkdirAll(filepath.Join(rB, "lib"), 0755)
+
+		groups := groupPathsByGitRoot(rA, []string{"./src", "../repoB/lib"})
+		if len(groups) != 2 {
+			t.Fatalf("expected 2 groups, got %d: %+v", len(groups), groups)
+		}
+
+		byRoot := make(map[string]testGroup)
+		for _, g := range groups {
+			byRoot[g.workDir] = g
+		}
+
+		if g, ok := byRoot[rA]; !ok {
+			t.Error("missing group for rA")
+		} else if len(g.paths) != 1 || g.paths[0] != "./src" {
+			t.Errorf("rA paths: expected [./src], got %v", g.paths)
+		}
+
+		if g, ok := byRoot[rB]; !ok {
+			t.Error("missing group for rB")
+		} else if len(g.paths) != 1 || g.paths[0] != "./lib" {
+			t.Errorf("rB paths: expected [./lib], got %v", g.paths)
+		}
+	})
+
+	t.Run("empty paths returns single group with workdir", func(t *testing.T) {
+		groups := groupPathsByGitRoot(repoA, nil)
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(groups))
+		}
+		if groups[0].workDir != repoA {
+			t.Errorf("expected workDir=%s, got %s", repoA, groups[0].workDir)
+		}
+		if len(groups[0].paths) != 0 {
+			t.Errorf("expected empty paths, got %v", groups[0].paths)
+		}
+	})
+}
+
 func TestStripExitStatus(t *testing.T) {
 	tests := []struct {
 		name     string

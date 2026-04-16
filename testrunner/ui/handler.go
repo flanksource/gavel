@@ -21,6 +21,7 @@ type Server struct {
 	lintRun  bool
 	benchCmp *bench.BenchComparison
 	done     bool
+	run      *RunMetadata
 	updated  chan struct{}
 	gitRoot  string
 	diag     *DiagnosticsManager
@@ -33,6 +34,45 @@ func NewServer() *Server {
 	return &Server{
 		updated: make(chan struct{}, 1),
 	}
+}
+
+type RunMetadata struct {
+	Sequence   int       `json:"sequence,omitempty"`
+	Kind       string    `json:"kind,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
+}
+
+func cloneRunMetadata(run *RunMetadata) *RunMetadata {
+	if run == nil {
+		return nil
+	}
+	cloned := *run
+	return &cloned
+}
+
+func (s *Server) BeginRun(kind string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := 1
+	if s.run != nil && s.run.Sequence > 0 {
+		next = s.run.Sequence + 1
+	}
+	s.run = &RunMetadata{
+		Sequence:  next,
+		Kind:      kind,
+		StartedAt: time.Now().UTC(),
+	}
+	s.tests = nil
+	s.done = false
+	s.notify()
+}
+
+func (s *Server) finishRunLocked() {
+	if s.run == nil || !s.run.FinishedAt.IsZero() {
+		return
+	}
+	s.run.FinishedAt = time.Now().UTC()
 }
 
 func (s *Server) SetResults(tests []parsers.Test) {
@@ -57,6 +97,7 @@ func (s *Server) SetBenchComparison(cmp *bench.BenchComparison) {
 	s.mu.Lock()
 	s.benchCmp = cmp
 	s.done = true
+	s.finishRunLocked()
 	s.mu.Unlock()
 	s.notify()
 }
@@ -74,6 +115,7 @@ func (s *Server) SetGitRoot(root string) {
 func (s *Server) MarkDone() {
 	s.mu.Lock()
 	s.done = true
+	s.finishRunLocked()
 	s.mu.Unlock()
 	s.notify()
 }
@@ -83,11 +125,13 @@ func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
 		for tests := range ch {
 			s.mu.Lock()
 			s.tests = tests
+			s.done = false
 			s.mu.Unlock()
 			s.notify()
 		}
 		s.mu.Lock()
 		s.done = true
+		s.finishRunLocked()
 		s.mu.Unlock()
 		s.notify()
 	}()
@@ -190,6 +234,7 @@ type snapshot struct {
 	LintRun              bool                    `json:"lint_run,omitempty"`
 	Bench                *bench.BenchComparison  `json:"bench,omitempty"`
 	DiagnosticsAvailable bool                    `json:"diagnostics_available,omitempty"`
+	Run                  *RunMetadata            `json:"run,omitempty"`
 	Done                 bool                    `json:"done"`
 }
 
@@ -208,6 +253,7 @@ func (s *Server) snapshot() snapshot {
 		LintRun:              s.lintRun,
 		Bench:                s.benchCmp,
 		DiagnosticsAvailable: s.diag != nil,
+		Run:                  cloneRunMetadata(s.run),
 		Done:                 s.done && tasksDone(),
 	}
 }

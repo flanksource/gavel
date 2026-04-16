@@ -74,6 +74,38 @@ func TestSnapshotIncludesLint(t *testing.T) {
 	}
 }
 
+func TestSnapshotIncludesRunMetadata(t *testing.T) {
+	srv, handler := newTestServer(t)
+	srv.BeginRun("rerun")
+	srv.MarkDone()
+
+	var snap struct {
+		Run struct {
+			Sequence   int    `json:"sequence"`
+			Kind       string `json:"kind"`
+			StartedAt  string `json:"started_at"`
+			FinishedAt string `json:"finished_at"`
+		} `json:"run"`
+		Done bool `json:"done"`
+	}
+	resp := doRequest(t, handler, http.MethodGet, "/api/tests", nil)
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if snap.Run.Sequence != 1 {
+		t.Fatalf("sequence = %d, want 1", snap.Run.Sequence)
+	}
+	if snap.Run.Kind != "rerun" {
+		t.Fatalf("kind = %q, want rerun", snap.Run.Kind)
+	}
+	if snap.Run.StartedAt == "" || snap.Run.FinishedAt == "" {
+		t.Fatalf("run timestamps missing: %+v", snap.Run)
+	}
+	if !snap.Done {
+		t.Fatalf("snapshot should be done")
+	}
+}
+
 func TestRerunRequiresPOST(t *testing.T) {
 	_, handler := newTestServer(t)
 	resp := doRequest(t, handler, http.MethodGet, "/api/rerun", nil)

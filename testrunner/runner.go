@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
 )
@@ -202,10 +203,112 @@ type packageResult struct {
 	err         error
 }
 
+// testGroup holds a set of starting paths that share the same git root.
+type testGroup struct {
+	workDir string
+	paths   []string
+}
+
+// groupPathsByGitRoot partitions startingPaths by their git root so each
+// group can be run with the correct WorkDir. Paths within the same git root
+// as workDir keep their original (possibly relative) form. Paths in a
+// different git root are rebased to be relative to that root (e.g. "./lib").
+//
+// When startingPaths is empty a single group with the original workDir and
+// no paths is returned (the runner discovers packages itself).
+func groupPathsByGitRoot(workDir string, startingPaths []string) []testGroup {
+	if len(startingPaths) == 0 {
+		return []testGroup{{workDir: workDir}}
+	}
+
+	workDirRoot := utils.FindGitRoot(workDir)
+	if workDirRoot == "" {
+		workDirRoot = workDir
+	}
+
+	groups := make(map[string][]string)
+	var order []string
+
+	for _, p := range startingPaths {
+		abs := p
+		if !filepath.IsAbs(p) {
+			abs = filepath.Join(workDir, p)
+		}
+		abs, _ = filepath.Abs(abs)
+
+		gitRoot := utils.FindGitRoot(abs)
+		if gitRoot == "" {
+			gitRoot = workDirRoot
+		}
+
+		if _, ok := groups[gitRoot]; !ok {
+			order = append(order, gitRoot)
+		}
+
+		if gitRoot == workDirRoot {
+			groups[gitRoot] = append(groups[gitRoot], p)
+		} else {
+			rel, err := filepath.Rel(gitRoot, abs)
+			if err != nil {
+				groups[gitRoot] = append(groups[gitRoot], p)
+			} else if rel == "." {
+				// Path IS the git root — leave paths empty so the runner
+				// discovers from the root without a path filter.
+			} else {
+				groups[gitRoot] = append(groups[gitRoot], "./"+filepath.ToSlash(rel))
+			}
+		}
+	}
+
+	result := make([]testGroup, 0, len(order))
+	for _, root := range order {
+		result = append(result, testGroup{workDir: root, paths: groups[root]})
+	}
+	return result
+}
+
 func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+
+	// Split starting paths by git root so each group runs with the correct
+	// WorkDir. When all paths share the same root this is a no-op.
+	groups := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
+	if len(groups) > 1 {
+		return runMultiRoot(opts, groups)
+	}
+
+	// Single-root fast path: update WorkDir/StartingPaths from the (possibly
+	// rebased) group so the rest of the function sees normalised values.
+	if len(groups) == 1 {
+		opts.WorkDir = groups[0].workDir
+		opts.StartingPaths = groups[0].paths
+	}
+
+	return runSingleRoot(opts)
+}
+
+// runMultiRoot handles the case where starting paths span multiple git roots
+// by running a separate orchestration per root and merging the results.
+func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
+	var allTree []parsers.Test
+	for _, g := range groups {
+		opts := base
+		opts.WorkDir = g.workDir
+		opts.StartingPaths = g.paths
+		result, err := runSingleRoot(opts)
+		if err != nil {
+			return nil, err
+		}
+		if tests, ok := result.([]parsers.Test); ok {
+			allTree = append(allTree, tests...)
+		}
+	}
+	return allTree, nil
+}
+
+func runSingleRoot(opts RunOptions) (any, error) {
 	logger.Infof("Running tests  %s", renderText(opts.Pretty()))
 
 	var streamer *TestStreamer

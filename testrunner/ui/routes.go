@@ -471,23 +471,23 @@ func filterTestNodes(nodes []*ViewNode, filters testRouteFilters) []*ViewNode {
 	if len(filters.Status) == 0 && len(filters.Framework) == 0 {
 		return nodes
 	}
-	statusSet := toSet(filters.Status)
-	frameworkSet := toSet(filters.Framework)
+	statusInclude, statusExclude := splitFilterModes(filters.Status)
+	frameworkInclude, frameworkExclude := splitFilterModes(filters.Framework)
 	var out []*ViewNode
 	for _, node := range nodes {
-		if filtered := filterTestNode(node, statusSet, frameworkSet); filtered != nil {
+		if filtered := filterTestNode(node, statusInclude, statusExclude, frameworkInclude, frameworkExclude); filtered != nil {
 			out = append(out, filtered)
 		}
 	}
 	return out
 }
 
-func filterTestNode(node *ViewNode, statusSet, frameworkSet map[string]bool) *ViewNode {
+func filterTestNode(node *ViewNode, statusInclude, statusExclude, frameworkInclude, frameworkExclude map[string]bool) *ViewNode {
 	if len(node.Children) > 0 {
 		cloned := *node
 		cloned.Children = nil
 		for _, child := range node.Children {
-			if filtered := filterTestNode(child, statusSet, frameworkSet); filtered != nil {
+			if filtered := filterTestNode(child, statusInclude, statusExclude, frameworkInclude, frameworkExclude); filtered != nil {
 				cloned.Children = append(cloned.Children, filtered)
 			}
 		}
@@ -496,10 +496,10 @@ func filterTestNode(node *ViewNode, statusSet, frameworkSet map[string]bool) *Vi
 		}
 		return &cloned
 	}
-	if len(statusSet) > 0 && !statusSet[node.Status] {
+	if !matchesFilterMode(node.Status, statusInclude, statusExclude) {
 		return nil
 	}
-	if len(frameworkSet) > 0 && !frameworkSet[node.Framework] {
+	if !matchesFilterMode(node.Framework, frameworkInclude, frameworkExclude) {
 		return nil
 	}
 	cloned := *node
@@ -531,14 +531,16 @@ type lintFileTreeNode struct {
 }
 
 func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFilters) []*ViewNode {
+	linterInclude, linterExclude := splitFilterModes(filters.Linter)
+	severityInclude, severityExclude := splitFilterModes(filters.Severity)
 	byLinter := map[string]*lintLinterBucket{}
 	meta := map[string]*linters.LinterResult{}
 	for _, result := range results {
-		if len(filters.Linter) > 0 && !contains(filters.Linter, result.Linter) {
+		if !matchesFilterMode(result.Linter, linterInclude, linterExclude) {
 			continue
 		}
 		for _, violation := range result.Violations {
-			if len(filters.Severity) > 0 && !contains(filters.Severity, string(violation.Severity)) {
+			if !matchesFilterMode(string(violation.Severity), severityInclude, severityExclude) {
 				continue
 			}
 			bucket, ok := byLinter[result.Linter]
@@ -597,15 +599,17 @@ func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFil
 }
 
 func buildLintByFileLinterRule(results []*linters.LinterResult, filters lintRouteFilters) []*ViewNode {
+	linterInclude, linterExclude := splitFilterModes(filters.Linter)
+	severityInclude, severityExclude := splitFilterModes(filters.Severity)
 	root := newLintFileTreeNode("", "")
 	byNoFileLinter := map[string]map[string]*lintRuleBucket{}
 	meta := map[string]*linters.LinterResult{}
 	for _, result := range results {
-		if len(filters.Linter) > 0 && !contains(filters.Linter, result.Linter) {
+		if !matchesFilterMode(result.Linter, linterInclude, linterExclude) {
 			continue
 		}
 		for _, violation := range result.Violations {
-			if len(filters.Severity) > 0 && !contains(filters.Severity, string(violation.Severity)) {
+			if !matchesFilterMode(string(violation.Severity), severityInclude, severityExclude) {
 				continue
 			}
 			file := relLintPath(violation.File, result.WorkDir)
@@ -1028,19 +1032,33 @@ func sortedKeys[T any](m map[string]T) []string {
 	return keys
 }
 
-func contains(values []string, target string) bool {
+func splitFilterModes(values []string) (include map[string]bool, exclude map[string]bool) {
 	for _, value := range values {
-		if value == target {
-			return true
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
 		}
+		if strings.HasPrefix(value, "!") {
+			if exclude == nil {
+				exclude = make(map[string]bool)
+			}
+			exclude[strings.TrimPrefix(value, "!")] = true
+			continue
+		}
+		if include == nil {
+			include = make(map[string]bool)
+		}
+		include[value] = true
 	}
-	return false
+	return include, exclude
 }
 
-func toSet(values []string) map[string]bool {
-	set := make(map[string]bool, len(values))
-	for _, value := range values {
-		set[value] = true
+func matchesFilterMode(value string, include, exclude map[string]bool) bool {
+	if value != "" && exclude[value] {
+		return false
 	}
-	return set
+	if len(include) == 0 {
+		return true
+	}
+	return include[value]
 }

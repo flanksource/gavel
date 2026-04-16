@@ -88,39 +88,34 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	// the end. The stream adapter (below) forwards testrunner updates to
 	// the UI while keeping hook pseudo-tests pinned at the top.
 	var (
-		testrunnerUpdates chan []parsers.Test
-		uiUpdates         chan []parsers.Test
+		attachUIUpdates func() chan []parsers.Test
 	)
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
 			uiServer.EnableDiagnostics(os.Getpid())
 		}
-		testrunnerUpdates = make(chan []parsers.Test, 16)
-		uiUpdates = make(chan []parsers.Test, 16)
-		opts.Updates = testrunnerUpdates
-		uiServer.StreamFrom(uiUpdates)
+		attachUIUpdates = func() chan []parsers.Test {
+			testrunnerUpdates := make(chan []parsers.Test, 16)
+			uiUpdates := make(chan []parsers.Test, 16)
+			uiServer.StreamFrom(uiUpdates)
+			go func() {
+				for batch := range testrunnerUpdates {
+					uiUpdates <- mergeHooksWithTests(batch)
+				}
+				close(uiUpdates)
+			}()
+			return testrunnerUpdates
+		}
+		uiServer.BeginRun("initial")
+		opts.Updates = attachUIUpdates()
 		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
 			clicky.ClearGlobalTasks()
-			rerunOpts := opts
-			rerunOpts.Lint = false
-			rerunOpts.Updates = testrunnerUpdates
-			rerunOpts.StartingPaths = req.PackagePaths
-			rerunOpts.ExtraArgs = buildRerunArgs(req)
+			uiServer.BeginRun("rerun")
+			rerunOpts := prepareRerunOptions(opts, req, attachUIUpdates())
 			_, err := testrunner.Run(rerunOpts)
 			return err
 		})
-
-		// Adapter: every time the testrunner sends an update, prepend the
-		// current hook snapshot so hooks stay visible in the UI even after
-		// real tests start streaming. Closes uiUpdates when the source
-		// closes so StreamFrom's done-flip still fires.
-		go func() {
-			for batch := range testrunnerUpdates {
-				uiUpdates <- mergeHooksWithTests(batch)
-			}
-			close(uiUpdates)
-		}()
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
@@ -408,6 +403,18 @@ func buildRerunArgs(req testui.RerunRequest) []string {
 		return []string{"--focus", focus}
 	}
 	return nil
+}
+
+func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, updates chan []parsers.Test) testrunner.RunOptions {
+	rerunOpts := base
+	rerunOpts.Lint = false
+	rerunOpts.Updates = updates
+	rerunOpts.StartingPaths = req.PackagePaths
+	rerunOpts.ExtraArgs = buildRerunArgs(req)
+	if len(req.PackagePaths) > 0 {
+		rerunOpts.Recursive = false
+	}
+	return rerunOpts
 }
 
 // testDurationFlags holds duration flags registered imperatively on `gavel

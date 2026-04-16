@@ -1,6 +1,7 @@
 import type { Test } from './types';
 import type { Filters } from './components/FilterBar';
 import type { LintFilters, LintGrouping } from './components/LintFilterBar';
+import { decodeFilterState, encodeFilterState } from './filterState';
 
 export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
 
@@ -37,13 +38,13 @@ export function parseRoute(location: Location): RouteState {
     tab,
     selectedPath,
     filters: {
-      status: new Set(splitCSV(params.get('status'))),
-      framework: new Set(splitCSV(params.get('framework'))),
+      status: decodeFilterState(splitCSV(params.get('status'))),
+      framework: decodeFilterState(splitCSV(params.get('framework'))),
     },
     lintGrouping: grouping === 'file-linter-rule' ? 'file-linter-rule' : 'linter-file',
     lintFilters: {
-      severity: new Set(splitCSV(params.get('severity')) as any[]),
-      linter: new Set(splitCSV(params.get('linter'))),
+      severity: decodeFilterState(splitCSV(params.get('severity')) as any[]),
+      linter: decodeFilterState(splitCSV(params.get('linter'))),
     },
   };
 }
@@ -54,13 +55,13 @@ export function buildRoute(state: RouteState): string {
 
   const params = new URLSearchParams();
   if (state.tab === 'tests') {
-    if (state.filters.status.size > 0) params.set('status', Array.from(state.filters.status).join(','));
-    if (state.filters.framework.size > 0) params.set('framework', Array.from(state.filters.framework).join(','));
+    if (state.filters.status.size > 0) params.set('status', encodeFilterState(state.filters.status).join(','));
+    if (state.filters.framework.size > 0) params.set('framework', encodeFilterState(state.filters.framework).join(','));
   }
   if (state.tab === 'lint') {
     if (state.lintGrouping !== 'linter-file') params.set('grouping', state.lintGrouping);
-    if (state.lintFilters.severity.size > 0) params.set('severity', Array.from(state.lintFilters.severity).join(','));
-    if (state.lintFilters.linter.size > 0) params.set('linter', Array.from(state.lintFilters.linter).join(','));
+    if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
+    if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }
 
   const query = params.toString();
