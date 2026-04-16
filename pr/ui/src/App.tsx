@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'preact/hooks';
-import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit } from './types';
+import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -42,6 +42,7 @@ export function App() {
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>('prs');
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
+  const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
@@ -99,6 +100,7 @@ export function App() {
     setPaused(snap.paused);
     if (snap.rateLimit) setRateLimit(snap.rateLimit);
     if (snap.config) setConfig(snap.config);
+    if (snap.syncStatus) setSyncStatus(snap.syncStatus);
   }
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
@@ -297,7 +299,7 @@ export function App() {
 
       {activeTab === 'prs' ? (
         <SplitPane
-          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} />}
+          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} />}
           right={
             selected ? (
               <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />

@@ -1,10 +1,12 @@
-import type { PRItem } from '../types';
+import type { PRItem, PRSyncStatus } from '../types';
 import { reviewColor, checkSummaryText, timeAgo } from '../utils';
+import { SyncIndicator } from './SyncIndicator';
 
 interface Props {
   pr: PRItem;
   selected: boolean;
   unread?: boolean;
+  syncStatus?: PRSyncStatus;
   onClick: () => void;
 }
 
@@ -28,7 +30,7 @@ function borderColor(pr: PRItem, selected: boolean): string {
   return 'border-transparent';
 }
 
-export function PRRow({ pr, selected, unread, onClick }: Props) {
+export function PRRow({ pr, selected, unread, syncStatus, onClick }: Props) {
   const hasConflict = !pr.isDraft && pr.mergeable === 'CONFLICTING';
   const status = prStatusIcon(pr);
 
@@ -45,6 +47,7 @@ export function PRRow({ pr, selected, unread, onClick }: Props) {
           title={unread ? 'Unread — updated since last view' : ''}
           aria-label={unread ? 'unread' : ''}
         />
+        {syncStatus && <SyncIndicator status={syncStatus} />}
         <span class={`text-sm ${status.color}`} title={status.title}>
           {status.icon}
         </span>

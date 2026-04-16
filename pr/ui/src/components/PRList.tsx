@@ -1,4 +1,4 @@
-import type { PRItem } from '../types';
+import type { PRItem, PRSyncStatus } from '../types';
 import { PRRow } from './PRRow';
 import { groupByRepo, prKey } from '../utils';
 import { Avatar } from './Avatar';
@@ -8,9 +8,10 @@ interface Props {
   selected: PRItem | null;
   onSelect: (pr: PRItem) => void;
   unread?: Record<string, boolean>;
+  syncStatus?: Record<string, PRSyncStatus>;
 }
 
-export function PRList({ prs, selected, onSelect, unread }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus }: Props) {
   if (prs.length === 0) {
     return (
       <div class="p-6 text-center text-gray-400">
@@ -49,6 +50,7 @@ export function PRList({ prs, selected, onSelect, unread }: Props) {
               pr={pr}
               selected={selected?.repo === pr.repo && selected?.number === pr.number}
               unread={!!unread?.[prKey(pr)]}
+              syncStatus={syncStatus?.[prKey(pr)]}
               onClick={() => onSelect(pr)}
             />
           ))}

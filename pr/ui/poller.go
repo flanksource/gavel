@@ -79,6 +79,7 @@ func (p *Poller) fetchFull() {
 	p.lastFetch = time.Now()
 	p.lastFull = time.Now()
 	p.srv.SetResults(p.knownAsList(), false)
+	p.srv.notifyDetailSyncer()
 }
 
 func (p *Poller) fetchIncremental() {
@@ -98,6 +99,7 @@ func (p *Poller) fetchIncremental() {
 	}
 	p.lastFetch = time.Now()
 	p.srv.SetResults(p.knownAsList(), true)
+	p.srv.notifyDetailSyncer()
 }
 
 func (p *Poller) knownAsList() github.PRSearchResults {

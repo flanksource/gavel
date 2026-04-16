@@ -65,6 +65,18 @@ export interface Snapshot {
   // appears here. Absent key = read. Server omits the field entirely when
   // every PR is read.
   unread?: Record<string, boolean>;
+  syncStatus?: Record<string, PRSyncStatus>;
+}
+
+// Sync status types
+
+export type SyncState = 'queued' | 'syncing' | 'up-to-date' | 'out-of-date' | 'error';
+
+export interface PRSyncStatus {
+  state: SyncState;
+  lastSynced?: string;
+  error?: string;
+  phase?: string;
 }
 
 // Detail API types

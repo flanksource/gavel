@@ -43,6 +43,9 @@ type Server struct {
 	ghOpts      github.Options
 	config      SearchConfig
 
+	detailCache  *DetailCache
+	detailSyncer *DetailSyncer
+
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
 	repoCacheAt  time.Time
@@ -60,16 +63,32 @@ type snapshot struct {
 	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
 	// newer than the recorded SeenAt (or that have never been seen). PRs
 	// marked as read are omitted to keep the map sparse on the wire.
-	Unread map[string]bool `json:"unread,omitempty"`
+	Unread     map[string]bool         `json:"unread,omitempty"`
+	SyncStatus map[string]PRSyncStatus `json:"syncStatus,omitempty"`
 }
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
 	return &Server{
-		interval:  interval,
-		ghOpts:    ghOpts,
-		config:    config,
-		updated:   make(chan struct{}, 1),
-		refreshCh: make(chan struct{}, 1),
+		interval:    interval,
+		ghOpts:      ghOpts,
+		config:      config,
+		updated:     make(chan struct{}, 1),
+		refreshCh:   make(chan struct{}, 1),
+		detailCache: NewDetailCache(),
+	}
+}
+
+func (s *Server) DetailCache() *DetailCache {
+	return s.detailCache
+}
+
+func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
+	s.detailSyncer = ds
+}
+
+func (s *Server) notifyDetailSyncer() {
+	if s.detailSyncer != nil {
+		s.detailSyncer.Notify()
 	}
 }
 
@@ -356,11 +375,21 @@ func (s *Server) MarkAllSeen() error {
 	return nil
 }
 
+// withSyncStatus attaches per-PR sync statuses to a snapshot.
+func (s *Server) withSyncStatus(snap snapshot) snapshot {
+	if s.detailCache == nil {
+		return snap
+	}
+	snap.SyncStatus = s.detailCache.AllStatuses()
+	return snap
+}
+
 func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	data := s.snapshotLocked()
 	s.mu.RUnlock()
 	data = s.withUnread(data)
+	data = s.withSyncStatus(data)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data) //nolint:errcheck
@@ -381,6 +410,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	initial := s.snapshotLocked()
 	s.mu.RUnlock()
 	initial = s.withUnread(initial)
+	initial = s.withSyncStatus(initial)
 	if b, err := json.Marshal(initial); err == nil {
 		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
@@ -401,6 +431,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		data := s.snapshotLocked()
 		s.mu.RUnlock()
 		data = s.withUnread(data)
+		data = s.withSyncStatus(data)
 
 		b, _ := json.Marshal(data)
 		fmt.Fprintf(w, "data: %s\n\n", b)
@@ -614,6 +645,30 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
+	// Serve from detail cache if available
+	cacheKey := SyncStatusKey(repo, prNumber)
+	if entry, ok := s.detailCache.Get(cacheKey); ok {
+		d := entry.Detail
+		if d.PR != nil {
+			emit("pr", map[string]any{"pr": d.PR, "comments": d.Comments})
+		}
+		if len(d.Runs) > 0 {
+			emit("runs", map[string]any{"runs": d.Runs})
+		}
+		if d.GavelResults != nil {
+			emit("gavel", map[string]any{"gavelResults": d.GavelResults})
+		}
+		emit("done", nil)
+
+		// Trigger background re-sync if stale
+		if s.detailCache.IsStale(cacheKey, s.prUpdatedAt(repo, prNumber)) {
+			if s.detailSyncer != nil {
+				s.detailSyncer.Notify()
+			}
+		}
+		return
+	}
+
 	opts := s.ghOpts
 	opts.Repo = repo
 
@@ -695,12 +750,21 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wait for gavel results
+	var gavelSummary *GavelResultsSummary
 	if hasArtifact {
 		gr := <-gavelCh
-		emit("gavel", map[string]any{"gavelResults": gr.summary})
+		gavelSummary = gr.summary
+		emit("gavel", map[string]any{"gavelResults": gavelSummary})
 	}
 
 	emit("done", nil)
+
+	// Cache the result for future requests
+	detail := prDetail{PR: pr, Runs: runs, Comments: comments, GavelResults: gavelSummary}
+	prUpdated := s.prUpdatedAt(repo, prNumber)
+	s.detailCache.Put(cacheKey, detail, prUpdated)
+	s.detailCache.SetStatus(cacheKey, PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()})
+	s.notify()
 }
 
 // fetchPRDetail loads full PR metadata, workflow runs, and comments from
@@ -771,6 +835,18 @@ func (s *Server) populatePRDetail(node *PRViewNode) error {
 	node.Runs = detail.Runs
 	node.Comments = detail.Comments
 	return nil
+}
+
+// prUpdatedAt returns the UpdatedAt for a PR in the current server state.
+func (s *Server) prUpdatedAt(repo string, number int) time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, pr := range s.prs {
+		if pr.Repo == repo && pr.Number == number {
+			return pr.UpdatedAt
+		}
+	}
+	return time.Time{}
 }
 
 type jobLogsResponse struct {

@@ -233,6 +233,10 @@ func runPRUI(opts PRListOptions) error {
 	defer cancel()
 	poller.Start(ctx)
 
+	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)
+	srv.SetDetailSyncer(syncer)
+	syncer.Start(ctx)
+
 	var dashboardURL string
 	if opts.UI {
 		addr := "localhost:9092"
