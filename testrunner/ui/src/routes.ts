@@ -2,7 +2,7 @@ import type { Test } from './types';
 import type { Filters } from './components/FilterBar';
 import type { LintFilters, LintGrouping } from './components/LintFilterBar';
 
-export type TabKey = 'tests' | 'lint' | 'bench';
+export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
 
 export interface RouteState {
   tab: TabKey;
@@ -25,7 +25,7 @@ export function parseRoute(location: Location): RouteState {
   let tab: TabKey = 'tests';
   let selectedPath = '';
 
-  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench') {
+  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench' || segments[0] === 'diagnostics') {
     tab = segments[0];
     selectedPath = segments.slice(1).join('/');
   }

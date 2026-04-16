@@ -227,6 +227,7 @@ var _ = Describe("Test UI E2E", func() {
 		srv = suiteSrv
 		url = suiteURL
 		srv.SetResults(sampleTests())
+		srv.SetDiagnosticsManager(nil)
 
 		// New tab per test, sharing the suite-wide browser process.
 		ctx, cancel = chromedp.NewContext(suiteBrowserCtx)
@@ -295,6 +296,26 @@ var _ = Describe("Test UI E2E", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(detailText).To(ContainSubstring("expected 3 but got 5"))
+	})
+
+	It("shows diagnostics tab and captures a stack trace", func() {
+		srv.SetDiagnosticsManager(testui.NewDiagnosticsManager(4242, newFakeDiagnosticsCollector()))
+
+		var detailText string
+		err := chromedp.Run(ctx,
+			chromedp.Navigate(url),
+			chromedp.Sleep(2*time.Second),
+			chromedp.Click(`//button[contains(text(), "Diagnostics")]`, chromedp.BySearch),
+			chromedp.Sleep(500*time.Millisecond),
+			chromedp.Click(`//button[contains(text(), "Collect stack trace")]`, chromedp.BySearch),
+			chromedp.Sleep(500*time.Millisecond),
+			chromedp.Text(`body`, &detailText, chromedp.ByQuery),
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(detailText).To(ContainSubstring("Diagnostics"))
+		Expect(detailText).To(ContainSubstring("gavel test --ui ./testrunner/ui"))
+		Expect(detailText).To(ContainSubstring("pid 4242"))
+		Expect(detailText).To(ContainSubstring("goroutine 1 [running]:"))
 	})
 
 	It("shows fixture context in detail panel", func() {

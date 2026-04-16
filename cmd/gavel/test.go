@@ -93,6 +93,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	)
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
+		if uiServer != nil {
+			uiServer.EnableDiagnostics(os.Getpid())
+		}
 		testrunnerUpdates = make(chan []parsers.Test, 16)
 		uiUpdates = make(chan []parsers.Test, 16)
 		opts.Updates = testrunnerUpdates

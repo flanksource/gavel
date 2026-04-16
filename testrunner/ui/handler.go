@@ -23,6 +23,7 @@ type Server struct {
 	done     bool
 	updated  chan struct{}
 	gitRoot  string
+	diag     *DiagnosticsManager
 
 	rerunMu sync.Mutex
 	rerunFn RerunFunc
@@ -104,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleRoute)
 	mux.HandleFunc("/api/tests", s.handleJSON)
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
+	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
+	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
@@ -129,6 +132,10 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.IsExport {
+		if req.Tab == viewTabDiagnostics {
+			http.NotFound(w, r)
+			return
+		}
 		s.handleExport(w, r, req)
 		return
 	}
@@ -178,11 +185,12 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 }
 
 type snapshot struct {
-	Tests   []parsers.Test          `json:"tests"`
-	Lint    []*linters.LinterResult `json:"lint,omitempty"`
-	LintRun bool                    `json:"lint_run,omitempty"`
-	Bench   *bench.BenchComparison  `json:"bench,omitempty"`
-	Done    bool                    `json:"done"`
+	Tests                []parsers.Test          `json:"tests"`
+	Lint                 []*linters.LinterResult `json:"lint,omitempty"`
+	LintRun              bool                    `json:"lint_run,omitempty"`
+	Bench                *bench.BenchComparison  `json:"bench,omitempty"`
+	DiagnosticsAvailable bool                    `json:"diagnostics_available,omitempty"`
+	Done                 bool                    `json:"done"`
 }
 
 func (s *Server) snapshot() snapshot {
@@ -194,7 +202,14 @@ func (s *Server) snapshot() snapshot {
 		merged = append(merged, s.tests...)
 		tests = merged
 	}
-	return snapshot{Tests: tests, Lint: s.lint, LintRun: s.lintRun, Bench: s.benchCmp, Done: s.done && tasksDone()}
+	return snapshot{
+		Tests:                tests,
+		Lint:                 s.lint,
+		LintRun:              s.lintRun,
+		Bench:                s.benchCmp,
+		DiagnosticsAvailable: s.diag != nil,
+		Done:                 s.done && tasksDone(),
+	}
 }
 
 func virtualTaskTests() []parsers.Test {
@@ -342,4 +357,74 @@ func tasksDone() bool {
 	}
 
 	return true
+}
+
+func (s *Server) EnableDiagnostics(rootPID int) {
+	s.mu.Lock()
+	s.diag = NewDiagnosticsManager(rootPID, nil)
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) SetDiagnosticsManager(manager *DiagnosticsManager) {
+	s.mu.Lock()
+	s.diag = manager
+	s.mu.Unlock()
+	s.notify()
+}
+
+func (s *Server) diagnosticsManager() *DiagnosticsManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.diag
+}
+
+func (s *Server) handleDiagnosticsJSON(w http.ResponseWriter, _ *http.Request) {
+	manager := s.diagnosticsManager()
+	if manager == nil {
+		http.Error(w, "diagnostics unavailable", http.StatusNotFound)
+		return
+	}
+	snapshot, err := manager.Snapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snapshot) //nolint:errcheck
+}
+
+func (s *Server) handleDiagnosticsCollect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	manager := s.diagnosticsManager()
+	if manager == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req StackCaptureRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.PID == 0 {
+		http.Error(w, "pid is required", http.StatusBadRequest)
+		return
+	}
+
+	details, err := manager.CollectStack(req.PID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notify()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(details) //nolint:errcheck
 }
