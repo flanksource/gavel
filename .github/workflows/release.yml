@@ -55,11 +55,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { goos: linux,   goarch: amd64, runner: ubuntu-latest,    archive: tar.gz, os_name: Linux,   arch_name: x86_64 }
-          - { goos: linux,   goarch: arm64, runner: ubuntu-24.04-arm, archive: tar.gz, os_name: Linux,   arch_name: arm64  }
-          - { goos: darwin,  goarch: amd64, runner: macos-13,         archive: tar.gz, os_name: Darwin,  arch_name: x86_64 }
-          - { goos: darwin,  goarch: arm64, runner: macos-latest,     archive: tar.gz, os_name: Darwin,  arch_name: arm64  }
-          - { goos: windows, goarch: amd64, runner: ubuntu-latest,    archive: zip,    os_name: Windows, arch_name: x86_64 }
+          - { goos: linux,  goarch: amd64, runner: ubuntu-latest,    os_name: Linux,  arch_name: x86_64 }
+          - { goos: linux,  goarch: arm64, runner: ubuntu-24.04-arm, os_name: Linux,  arch_name: arm64  }
+          - { goos: darwin, goarch: amd64, runner: ubuntu-24.04-arm, os_name: Darwin, arch_name: x86_64 }
+          - { goos: darwin, goarch: arm64, runner: ubuntu-24.04-arm, os_name: Darwin, arch_name: arm64  }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,30 +98,19 @@ jobs:
           TAG: ${{ needs.tag.outputs.tag }}
         run: |
           mkdir -p dist
-          bin_name=gavel
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            bin_name=gavel.exe
-          fi
           build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go build -trimpath \
             -ldflags "-s -w -X main.version=${TAG} -X main.commit=${{ github.sha }} -X main.date=${build_date}" \
-            -o "dist/${bin_name}" \
+            -o dist/gavel \
             ./cmd/gavel
 
       - name: Archive binary
         id: archive
-        env:
-          TAG: ${{ needs.tag.outputs.tag }}
         run: |
           cd dist
           archive_name="gavel_${{ matrix.os_name }}_${{ matrix.arch_name }}"
-          if [ "${{ matrix.archive }}" = "zip" ]; then
-            zip "${archive_name}.zip" gavel.exe
-            echo "path=dist/${archive_name}.zip" >> "$GITHUB_OUTPUT"
-          else
-            tar -czf "${archive_name}.tar.gz" gavel
-            echo "path=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
-          fi
+          tar -czf "${archive_name}.tar.gz" gavel
+          echo "path=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -259,7 +247,7 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: |
-          sha256sum gavel_* > checksums.txt
+          sha256sum gavel_*.tar.gz > checksums.txt
           cat checksums.txt
 
       - name: Create release
@@ -271,4 +259,4 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "Gavel $TAG" \
             --generate-notes \
-            dist/gavel_*.tar.gz dist/gavel_*.zip dist/checksums.txt
+            dist/gavel_*.tar.gz dist/checksums.txt
