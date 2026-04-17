@@ -171,16 +171,6 @@ tasks:
     cmds:
       - docker run --rm {{.BINARY_NAME}}:latest --help
 
-  release:
-    desc: Create a new release
-    cmds:
-      - goreleaser release --clean
-
-  release:snapshot:
-    desc: Create a snapshot release
-    cmds:
-      - goreleaser release --snapshot --clean
-
   ci:
     desc: Run CI pipeline locally
     cmds:

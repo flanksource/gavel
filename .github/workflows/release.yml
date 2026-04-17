@@ -4,25 +4,16 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
-    inputs:
-      dry-run:
-        description: "Run in dry-run mode (no actual release)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
 
 permissions:
   contents: write
   packages: write
-  issues: write
-  pull-requests: write
   id-token: write
 
 env:
   GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/gavel
 
 jobs:
   tag:
@@ -40,6 +31,7 @@ jobs:
           tools: |
             svu
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - id: tag
         run: |
           next=$(svu patch)
@@ -54,55 +46,229 @@ jobs:
           echo "tag=$next" >> "$GITHUB_OUTPUT"
           echo "created=true" >> "$GITHUB_OUTPUT"
 
-  goreleaser:
-    name: GoReleaser
+  build-binaries:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: tag
     if: needs.tag.outputs.created == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64, runner: ubuntu-latest,    archive: tar.gz, os_name: Linux,   arch_name: x86_64 }
+          - { goos: linux,   goarch: arm64, runner: ubuntu-24.04-arm, archive: tar.gz, os_name: Linux,   arch_name: arm64  }
+          - { goos: darwin,  goarch: amd64, runner: macos-13,         archive: tar.gz, os_name: Darwin,  arch_name: x86_64 }
+          - { goos: darwin,  goarch: arm64, runner: macos-latest,     archive: tar.gz, os_name: Darwin,  arch_name: arm64  }
+          - { goos: windows, goarch: amd64, runner: ubuntu-latest,    archive: zip,    os_name: Windows, arch_name: x86_64 }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: ${{ needs.tag.outputs.tag }}
+          fetch-depth: 0
 
-      - name: Fetch tags
-        run: git fetch --force --tags
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            testrunner/ui/package-lock.json
+            pr/ui/package-lock.json
 
-      - name: Install dependencies
+      - name: Build testrunner UI
         run: |
-          go mod download
-          go mod tidy
+          cd testrunner/ui
+          npm ci
+          npm run build
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Build PR UI
+        run: |
+          cd pr/ui
+          npm ci
+          npm run build
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          mkdir -p dist
+          bin_name=gavel
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            bin_name=gavel.exe
+          fi
+          build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${TAG} -X main.commit=${{ github.sha }} -X main.date=${build_date}" \
+            -o "dist/${bin_name}" \
+            ./cmd/gavel
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Archive binary
+        id: archive
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          cd dist
+          archive_name="gavel_${{ matrix.os_name }}_${{ matrix.arch_name }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            zip "${archive_name}.zip" gavel.exe
+            echo "path=dist/${archive_name}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${archive_name}.tar.gz" gavel
+            echo "path=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ steps.archive.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+  build-docker:
+    name: Build image ${{ matrix.platform }}
+    needs: [tag, build-binaries]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, runner: ubuntu-latest,    goarch: amd64, pair: linux-amd64 }
+          - { platform: linux/arm64, runner: ubuntu-24.04-arm, goarch: arm64, pair: linux-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+
+      - name: Download linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-${{ matrix.goarch }}
+          path: .
+
+      - name: Extract binary
+        run: |
+          tar -xzf "gavel_Linux_$( [ "${{ matrix.goarch }}" = "amd64" ] && echo x86_64 || echo arm64 ).tar.gz"
+          chmod +x gavel
+          ls -l gavel
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          version: '~> v2'
-          args: release --clean
+          images: ${{ env.REGISTRY_IMAGE }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.pair }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-docker:
+    name: Merge multi-arch manifest
+    needs: [tag, build-docker]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=${{ needs.tag.outputs.tag }}
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ needs.tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.tag.outputs.tag }}
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # shellcheck disable=SC2046 # word-splitting is required to pass -t tags and digest refs as separate args
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect "${{ env.REGISTRY_IMAGE }}:${{ needs.tag.outputs.tag }}"
+
+  release:
+    name: Create GitHub release
+    needs: [tag, build-binaries]
+    if: needs.tag.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum gavel_* > checksums.txt
+          cat checksums.txt
+
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_OWNER: ${{ github.repository_owner }}
+          TAG: ${{ needs.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Gavel $TAG" \
+            --generate-notes \
+            dist/gavel_*.tar.gz dist/gavel_*.zip dist/checksums.txt
