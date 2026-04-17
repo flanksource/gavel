@@ -61,7 +61,7 @@ function applySnapshot(
   setLintRun(!!status.lint_run);
   setBench(snap.bench);
   setDiagnosticsAvailable(!!status.diagnostics_available);
-  setDiagnostics(snap.diagnostics);
+  if (snap.diagnostics) setDiagnostics(snap.diagnostics);
   setRunMeta(meta);
   if (!status.running) {
     doneRef.current = true;
@@ -222,10 +222,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!diagnosticsAvailable) {
-      setDiagnostics(undefined);
-      return;
-    }
+    if (!diagnosticsAvailable) return;
 
     fetchDiagnostics().catch(() => {});
     const timer = window.setInterval(() => {

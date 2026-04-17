@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -79,6 +80,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		if _, err := testrunner.Run(opts); err != nil {
 			return nil, err
+		}
+		if opts.Lint {
+			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
+				if err := displayLintDryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if !opts.SkipHooks {
 			printDryRunHooks(opts.WorkDir, gavelCfg.Post, "post-hook")
@@ -160,10 +168,14 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			if workDir == "" {
 				workDir, _ = os.Getwd()
 			}
-			lintResults, lintErr = executeLinters(LintOptions{
-				WorkDir: workDir,
-				Timeout: "5m",
-			})
+			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
+				results, err := executeLinters(LintOptions{WorkDir: dir, Timeout: "5m"})
+				if err != nil {
+					lintErr = err
+					break
+				}
+				lintResults = append(lintResults, results...)
+			}
 			if lintErr == nil {
 				linters.FilterIgnoredViolations(lintResults, gavelCfg.Lint.Ignore)
 			}
@@ -260,6 +272,31 @@ func printDryRunHooks(workDir string, hooks []verify.HookStep, label string) {
 		}
 		testrunner.PrintDryRunCommand(label, name, "sh", []string{"-c", step.Run}, workDir)
 	}
+}
+
+// lintWorkDirs resolves StartingPaths into WorkDir values for the lint
+// codepath. Each directory path becomes its own WorkDir so linter config
+// discovery happens relative to that directory (not the git root).
+// When no paths are given, the fallback WorkDir is returned.
+func lintWorkDirs(fallback string, startingPaths []string) []string {
+	if len(startingPaths) == 0 {
+		return []string{fallback}
+	}
+	var dirs []string
+	for _, p := range startingPaths {
+		abs := p
+		if !filepath.IsAbs(p) {
+			abs = filepath.Join(fallback, p)
+		}
+		abs, _ = filepath.Abs(abs)
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			dirs = append(dirs, abs)
+		}
+	}
+	if len(dirs) == 0 {
+		return []string{fallback}
+	}
+	return dirs
 }
 
 // runPushHooksReportingUI runs verify's hook list while also publishing

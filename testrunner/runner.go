@@ -619,7 +619,8 @@ func escapeRegexNames(names []string) []string {
 
 func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []string, extraArgs []string) (parsers.TestSuiteResults, error) {
 	if len(frameworks) == 0 {
-		return nil, fmt.Errorf("no frameworks provided for test execution")
+		logger.Infof("No test frameworks detected")
+		return nil, nil
 	}
 	// Validate that starting paths exist
 	if len(startingPaths) > 0 {
@@ -676,9 +677,11 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 	if len(allPackages) == 0 {
 		if len(startingPaths) > 0 {
-			return nil, fmt.Errorf("no test packages found in starting paths %v", startingPaths)
+			logger.Infof("No test packages found in starting paths %v", startingPaths)
+		} else {
+			logger.Infof("No test packages found")
 		}
-		return nil, fmt.Errorf("no test packages found")
+		return nil, nil
 	}
 
 	// Narrow via change graph and/or run cache. Both selectors share a
