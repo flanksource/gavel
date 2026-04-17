@@ -2,7 +2,9 @@ package testui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 )
 
 // RerunRequest is the payload accepted by POST /api/rerun.
@@ -18,8 +20,9 @@ type RerunRequest struct {
 }
 
 // RerunFunc is invoked to rerun the tests described by req.
+// The output buffer receives live process stdout/stderr for streaming to the UI.
 // It runs synchronously; the handler returns once it completes.
-type RerunFunc func(req RerunRequest) error
+type RerunFunc func(req RerunRequest, output *RerunOutputBuffer) error
 
 // SetRerunFunc installs the rerun callback. Call this before serving traffic.
 func (s *Server) SetRerunFunc(fn RerunFunc) {
@@ -48,9 +51,40 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.rerunMu.Unlock()
 
-	if err := s.rerunFn(req); err != nil {
+	command := rerunCommandLabel(req)
+	buf := NewRerunOutputBuffer(command)
+	s.mu.Lock()
+	s.rerunOutput = buf
+	s.mu.Unlock()
+
+	err := s.rerunFn(req, buf)
+	buf.Finish(err == nil)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func rerunCommandLabel(req RerunRequest) string {
+	if req.Lint {
+		parts := []string{"lint"}
+		if len(req.LintLinters) > 0 {
+			parts = append(parts, strings.Join(req.LintLinters, ","))
+		}
+		if len(req.LintFiles) > 0 {
+			parts = append(parts, fmt.Sprintf("(%d files)", len(req.LintFiles)))
+		}
+		return strings.Join(parts, " ")
+	}
+	parts := []string{"test"}
+	if req.Framework != "" {
+		parts = append(parts, req.Framework)
+	}
+	if req.TestName != "" {
+		parts = append(parts, req.TestName)
+	} else if len(req.PackagePaths) > 0 {
+		parts = append(parts, strings.Join(req.PackagePaths, " "))
+	}
+	return strings.Join(parts, " ")
 }

@@ -2,6 +2,7 @@ package testrunner
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,6 +125,7 @@ type RunOptions struct {
 	Fixtures      bool                  `json:"fixtures,omitempty" flag:"fixtures"`                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
 	FixtureFiles  []string              `json:"fixture_files,omitempty" flag:"fixture-files"`                 // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
+	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -736,6 +738,9 @@ func (o *TestOrchestrator) runPackageTest(
 	}
 
 	testRun.Process.SucceedOnNonZero = true
+	if o.OutputTee != nil {
+		testRun.Process.Stream(o.OutputTee, o.OutputTee)
+	}
 	// Execute the test process in the orchestrator
 	process := testRun.Process.WithTask(t)
 	// Keep the RUNNING-state label short; it may be rendered if the

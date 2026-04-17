@@ -118,7 +118,7 @@ func TestRerunWithoutHandlerReturns501(t *testing.T) {
 
 func TestRerunBadJSON(t *testing.T) {
 	srv, handler := newTestServer(t)
-	srv.SetRerunFunc(func(testui.RerunRequest) error { return nil })
+	srv.SetRerunFunc(func(testui.RerunRequest, *testui.RerunOutputBuffer) error { return nil })
 
 	resp := doRequest(t, handler, http.MethodPost, "/api/rerun", strings.NewReader(`not json`))
 	if resp.Code != http.StatusBadRequest {
@@ -129,7 +129,7 @@ func TestRerunBadJSON(t *testing.T) {
 func TestRerunSuccessAndPayload(t *testing.T) {
 	srv, handler := newTestServer(t)
 	var got testui.RerunRequest
-	srv.SetRerunFunc(func(req testui.RerunRequest) error {
+	srv.SetRerunFunc(func(req testui.RerunRequest, _ *testui.RerunOutputBuffer) error {
 		got = req
 		return nil
 	})
@@ -154,7 +154,7 @@ func TestRerunConcurrentReturns409(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var firstStarted atomic.Bool
-	srv.SetRerunFunc(func(testui.RerunRequest) error {
+	srv.SetRerunFunc(func(testui.RerunRequest, *testui.RerunOutputBuffer) error {
 		if firstStarted.CompareAndSwap(false, true) {
 			close(started)
 			<-release

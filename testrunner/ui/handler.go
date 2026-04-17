@@ -28,8 +28,9 @@ type Server struct {
 	gitRoot             string
 	diag                *DiagnosticsManager
 
-	rerunMu sync.Mutex
-	rerunFn RerunFunc
+	rerunMu     sync.Mutex
+	rerunFn     RerunFunc
+	rerunOutput *RerunOutputBuffer
 }
 
 func NewServer() *Server {
@@ -202,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
 	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
+	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
@@ -314,6 +316,9 @@ func virtualTaskTests() []parsers.Test {
 
 	for _, snap := range snapshots {
 		if snap.Type == "group" {
+			if snap.Status != "running" && snap.Status != "pending" {
+				continue
+			}
 			groups[snap.ID] = snap
 			groupOrder = append(groupOrder, snap.ID)
 			continue

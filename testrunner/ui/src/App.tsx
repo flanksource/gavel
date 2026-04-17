@@ -9,6 +9,7 @@ import { FilterBar, type Filters } from './components/FilterBar';
 import { LintFilterBar, type LintGrouping, type LintFilters } from './components/LintFilterBar';
 import { LintView } from './components/LintView';
 import { BenchView } from './components/BenchView';
+import { RerunDialog } from './components/RerunDialog';
 import { SplitPane } from './components/SplitPane';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import {
@@ -123,6 +124,7 @@ export function App() {
   const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
   const [rerunBusy, setRerunBusy] = useState(false);
+  const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [ignoreBusy, setIgnoreBusy] = useState(false);
   const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
@@ -395,6 +397,7 @@ export function App() {
         return;
       }
       setRerunBusy(true);
+      setRerunDialogOpen(true);
       setStatus(`Rerunning ${t.name}...`);
       doneRef.current = false;
       endTime.current = null;
@@ -442,6 +445,7 @@ export function App() {
       framework: t.framework || '',
     };
     setRerunBusy(true);
+    setRerunDialogOpen(true);
     setStatus(`Rerunning ${t.name}...`);
     doneRef.current = false;
     startTime.current = null;
@@ -762,6 +766,7 @@ export function App() {
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
           : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
       />
+      <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>
   );
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -34,21 +35,22 @@ import (
 )
 
 type LintOptions struct {
-	Linters   string   `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
-	Ignore    []string `flag:"ignore" help:"Glob patterns to exclude from linting"`
-	Triage    bool     `flag:"triage" help:"Interactive mode to select violation types to ignore"`
-	Fix       bool     `flag:"fix" help:"Enable auto-fixing"`
-	NoCache   bool     `flag:"no-cache" help:"Disable caching/debounce"`
-	Timeout   string   `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
-	SyncTodos string   `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
-	GroupBy   string   `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
-	WorkDir   string   `flag:"work-dir" help:"Working directory"`
-	Changed   bool     `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
-	Since     string   `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
-	UI        bool     `flag:"ui" help:"Launch browser UI to view violations"`
-	Addr      string   `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
-	DryRun    bool     `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
-	Files     []string `args:"true"`
+	Linters   string    `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
+	Ignore    []string  `flag:"ignore" help:"Glob patterns to exclude from linting"`
+	Triage    bool      `flag:"triage" help:"Interactive mode to select violation types to ignore"`
+	Fix       bool      `flag:"fix" help:"Enable auto-fixing"`
+	NoCache   bool      `flag:"no-cache" help:"Disable caching/debounce"`
+	Timeout   string    `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
+	SyncTodos string    `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
+	GroupBy   string    `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
+	WorkDir   string    `flag:"work-dir" help:"Working directory"`
+	Changed   bool      `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
+	Since     string    `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
+	UI        bool      `flag:"ui" help:"Launch browser UI to view violations"`
+	Addr      string    `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	DryRun    bool      `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
+	Files     []string  `args:"true"`
+	OutputTee io.Writer `json:"-"`
 }
 
 func (o LintOptions) Pretty() api.Text {
@@ -111,10 +113,12 @@ func runLint(opts LintOptions) (any, error) {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
 			uiServer.BeginRun("initial")
-			uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
+			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 				clicky.ClearGlobalTasks()
 				uiServer.BeginRun("rerun")
-				results, err := executeLintRerun(opts, req)
+				rerunOpts := opts
+				rerunOpts.OutputTee = output.StdoutWriter()
+				results, err := executeLintRerun(rerunOpts, req)
 				if err != nil {
 					return err
 				}
@@ -216,10 +220,11 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 	}
 
 	rerunOpts := LintOptions{
-		WorkDir: workDir,
-		Linters: "*",
-		Timeout: base.Timeout,
-		Files:   append([]string(nil), req.LintFiles...),
+		WorkDir:   workDir,
+		Linters:   "*",
+		Timeout:   base.Timeout,
+		Files:     append([]string(nil), req.LintFiles...),
+		OutputTee: base.OutputTee,
 	}
 	if rerunOpts.Timeout == "" {
 		rerunOpts.Timeout = "5m"
@@ -354,6 +359,7 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 			NoCache:   opts.NoCache,
 			Timeout:   timeout,
 			ForceJSON: true,
+			OutputTee: opts.OutputTee,
 		}
 
 		if linter.Name() == "golangci-lint" {

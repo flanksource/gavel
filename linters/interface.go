@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -92,6 +93,17 @@ type RunOptions struct {
 	Timeout    time.Duration
 	Ignores    []string
 	ExtraArgs  []string
+	OutputTee  io.Writer
+}
+
+// WrapWriter returns w wrapped with OutputTee via io.MultiWriter when OutputTee
+// is set, otherwise returns w unchanged. Linters use this to tee process output
+// to the rerun streaming buffer.
+func (o RunOptions) WrapWriter(w io.Writer) io.Writer {
+	if o.OutputTee == nil {
+		return w
+	}
+	return io.MultiWriter(w, o.OutputTee)
 }
 
 // Registry manages available linters
@@ -390,6 +402,10 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	if task != nil {
 		task.SetName(runningCommandLabel(linter))
 		task.SetDescription("")
+	}
+
+	if opts.OutputTee != nil {
+		fmt.Fprintf(opts.OutputTee, "▶ %s\n", runningCommandLabel(linter))
 	}
 
 	start := time.Now()

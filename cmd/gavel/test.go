@@ -114,14 +114,15 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		uiServer.BeginRun("initial")
 		opts.Updates = attachUIUpdates()
-		uiServer.SetRerunFunc(func(req testui.RerunRequest) error {
+		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			uiServer.BeginRun("rerun")
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
-					WorkDir: opts.WorkDir,
-					Linters: "*",
-					Timeout: "5m",
+					WorkDir:   opts.WorkDir,
+					Linters:   "*",
+					Timeout:   "5m",
+					OutputTee: output.StdoutWriter(),
 				}, req)
 				if err != nil {
 					return err
@@ -131,6 +132,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				return nil
 			}
 			rerunOpts := prepareRerunOptions(opts, req, attachUIUpdates())
+			rerunOpts.OutputTee = output.StdoutWriter()
 			_, err := testrunner.Run(rerunOpts)
 			return err
 		})

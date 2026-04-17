@@ -150,8 +150,8 @@ func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]mod
 	logger.Infof("Executing: golangci-lint %s", strings.Join(args, " "))
 
 	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = g.WrapWriter(&stdout)
+	cmd.Stderr = g.WrapWriter(&stderr)
 
 	err := cmd.Run()
 
