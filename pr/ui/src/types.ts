@@ -144,6 +144,7 @@ export interface PRComment {
   isResolved?: boolean;
   isOutdated?: boolean;
   severity?: string;
+  botType?: string;
 }
 
 export interface GavelResultsSummary {

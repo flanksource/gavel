@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'preact/hooks';
-import type { PRItem, PRDetail, WorkflowRun, Job, PRComment, GavelResultsSummary } from '../types';
-import { stateColor, reviewColor, timeAgo, statusIcon, statusColor, severityIcon } from '../utils';
+import { useState, useMemo, useRef } from 'preact/hooks';
+import type { PRItem, PRDetail, PRComment, GavelResultsSummary } from '../types';
+import { stateColor, reviewColor, timeAgo, severityIcon } from '../utils';
 import { Markdown } from './Markdown';
-import { LogViewer } from './LogViewer';
 import { Avatar } from './Avatar';
+import { WorkflowRunView } from './WorkflowView';
+import { BotCommentBody, BotBadge } from './BotComment';
 
 interface Props {
   pr: PRItem;
@@ -16,7 +17,7 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
     <div class="p-4 bg-white h-full overflow-y-auto">
       <PRHeader pr={pr} detail={detail} />
 
-      {loading && (
+      {loading && !detail && (
         <div class="flex items-center gap-2 text-sm text-gray-400 mt-4">
           <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
           Loading details...
@@ -30,28 +31,22 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
         </div>
       )}
 
-      {detail?.runs && Object.keys(detail.runs).length > 0 ? (
+      {detail?.runs && Object.keys(detail.runs).length > 0 && (
         <Section title="Workflows">
           {Object.values(detail.runs).map(run => (
             <WorkflowRunView key={run.databaseId} run={run} repo={pr.repo} />
           ))}
         </Section>
-      ) : detail?.runsLoading ? (
-        <Section title="Workflows">
-          <SectionLoader label="Loading workflows..." />
-        </Section>
-      ) : null}
+      )}
 
-      {detail?.gavelResults ? (
+      {detail?.gavelResults && (
         <GavelResultsSection results={detail.gavelResults} pr={pr} />
-      ) : detail?.gavelLoading ? (
-        <Section title="Gavel Results">
-          <SectionLoader label="Downloading results..." />
-        </Section>
-      ) : null}
+      )}
+
+      {detail?.comments && <DeploymentsSection comments={detail.comments} />}
 
       {detail?.comments && detail.comments.length > 0 && (
-        <CommentsSection comments={detail.comments} />
+        <CommentsSection comments={detail.comments.filter(c => !isDeploymentComment(c))} />
       )}
 
       <div class="pt-3 mt-3 border-t border-gray-100">
@@ -143,216 +138,6 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
   );
 }
 
-interface JobLogsResponse {
-  jobId: number;
-  logs?: string;
-  steps?: { number: number; logs?: string }[];
-  error?: string;
-}
-
-async function fetchJobLogs(repo: string, runId: number, jobId: number, tail = 100): Promise<JobLogsResponse> {
-  const url = `/api/prs/job-logs?repo=${encodeURIComponent(repo)}&runId=${runId}&jobId=${jobId}&tail=${tail}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`job-logs ${r.status}`);
-  return r.json();
-}
-
-function IndeterminateProgress() {
-  return (
-    <div class="ml-4 mt-1 mb-1">
-      <div class="flex items-center gap-1.5 text-[10px] text-blue-600 mb-0.5">
-        <iconify-icon icon="svg-spinners:ring-resize" />
-        <span>Fetching logs from GitHub…</span>
-      </div>
-      <div class="h-1 w-full max-w-xs bg-blue-100 rounded overflow-hidden relative">
-        <div class="gavel-progress-bar absolute inset-y-0 w-1/3 bg-blue-500 rounded" />
-      </div>
-    </div>
-  );
-}
-
-function runSummary(run: WorkflowRun): string {
-  const jobs = run.jobs || [];
-  if (jobs.length === 0) return '';
-  const failed = jobs.filter(j => j.conclusion?.toLowerCase() === 'failure').length;
-  if (failed > 0) return `${jobs.length} jobs, ${failed} failing`;
-  return `${jobs.length} jobs`;
-}
-
-function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string }) {
-  const isFailure = run.conclusion?.toLowerCase() === 'failure';
-  const [expanded, setExpanded] = useState(isFailure);
-  const summary = runSummary(run);
-
-  return (
-    <div class="mb-3">
-      <div
-        class="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <iconify-icon
-          icon={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          class="text-gray-400 text-[10px]"
-        />
-        <span class={statusColor(run.status, run.conclusion)}>
-          {statusIcon(run.status, run.conclusion)}
-        </span>
-        <span>{run.name}</span>
-        {summary && <span class="text-gray-400 text-xs font-normal">· {summary}</span>}
-        {run.url && (
-          <a
-            href={run.url}
-            target="_blank"
-            rel="noopener"
-            class="text-gray-400 hover:text-blue-500"
-            onClick={e => e.stopPropagation()}
-          >
-            <iconify-icon icon="codicon:link-external" class="text-xs" />
-          </a>
-        )}
-      </div>
-      {expanded && run.jobs && run.jobs.map(job => (
-        <JobView key={job.databaseId} job={job} repo={repo} runId={run.databaseId} />
-      ))}
-    </div>
-  );
-}
-
-function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }) {
-  const failed = job.conclusion?.toLowerCase() === 'failure';
-  const duration = formatDuration(job.startedAt, job.completedAt);
-
-  // Per-job log cache. The API returns all step logs + job-level logs in one call, so
-  // we fetch once and let each step row toggle its own view independently.
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [stepLogs, setStepLogs] = useState<Map<number, string>>(new Map());
-  const [jobLogs, setJobLogs] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
-  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
-  const [expandedJobFallback, setExpandedJobFallback] = useState(false);
-
-  async function ensureLogs() {
-    if (loaded || loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetchJobLogs(repo, runId, job.databaseId);
-      if (resp.error) {
-        setError(resp.error);
-      } else {
-        const m = new Map<number, string>();
-        for (const s of resp.steps || []) {
-          if (s.logs) m.set(s.number, s.logs);
-        }
-        setStepLogs(m);
-        setJobLogs(resp.logs || '');
-      }
-      setLoaded(true);
-    } catch (e) {
-      setError(String(e));
-      setLoaded(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function toggleStep(stepNum: number) {
-    await ensureLogs();
-    setExpandedSteps(prev => {
-      const next = new Set(prev);
-      if (next.has(stepNum)) next.delete(stepNum);
-      else next.add(stepNum);
-      return next;
-    });
-  }
-
-  async function toggleJobFallback() {
-    await ensureLogs();
-    setExpandedJobFallback(v => !v);
-  }
-
-  const hasSteps = failed && job.steps && job.steps.some(s => s.conclusion?.toLowerCase() === 'failure');
-
-  return (
-    <div class="ml-4 mt-1">
-      <div
-        class={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1' : ''}`}
-        onClick={failed && !hasSteps ? toggleJobFallback : undefined}
-      >
-        <span class={statusColor(job.status, job.conclusion)}>
-          {statusIcon(job.status, job.conclusion)}
-        </span>
-        <span class={failed ? 'text-red-700 font-medium' : 'text-gray-700'}>{job.name}</span>
-        {duration && <span class="text-gray-400">{duration}</span>}
-        {job.url && (
-          <a
-            href={job.url}
-            target="_blank"
-            rel="noopener"
-            class="text-gray-400 hover:text-blue-500"
-            onClick={e => e.stopPropagation()}
-          >
-            <iconify-icon icon="codicon:link-external" class="text-[10px]" />
-          </a>
-        )}
-      </div>
-      {failed && !hasSteps && expandedJobFallback && loading && !loaded && <IndeterminateProgress />}
-      {failed && job.steps && job.steps.map(step => {
-        const stepFailed = step.conclusion?.toLowerCase() === 'failure';
-        if (!stepFailed) return null;
-        const isOpen = expandedSteps.has(step.number);
-        // GitHub's log parser matches step logs by the `##[group]` section header,
-        // which doesn't always equal the step name. Fall back to the job-level tail
-        // so the user still sees something when parsing misses a step.
-        const logs = stepLogs.get(step.number) || jobLogs;
-        const isFallback = !stepLogs.get(step.number) && !!jobLogs;
-        return (
-          <div key={step.number} class="ml-4 mt-0.5 text-xs">
-            <div
-              class="cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 inline-flex items-center gap-1"
-              onClick={() => toggleStep(step.number)}
-            >
-              <iconify-icon
-                icon={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-                class="text-gray-400 text-[9px]"
-              />
-              <span class={statusColor(step.status, step.conclusion)}>
-                {statusIcon(step.status, step.conclusion)}
-              </span>
-              <span class="text-red-600">{step.name}</span>
-            </div>
-            {isOpen && loading && !loaded && <IndeterminateProgress />}
-            {isOpen && loaded && logs && (
-              <>
-                {isFallback && (
-                  <div class="ml-4 mt-0.5 text-[10px] text-gray-400 italic">Showing job log tail (step-level logs unavailable)</div>
-                )}
-                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-gray-50'} borderClass={isFallback ? 'border-red-100' : 'border-gray-100'} />
-              </>
-            )}
-            {isOpen && loaded && !logs && !error && (
-              <div class="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this step.</div>
-            )}
-            {isOpen && error && (
-              <div class="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
-            )}
-          </div>
-        );
-      })}
-      {failed && !hasSteps && expandedJobFallback && loaded && jobLogs && (
-        <LogViewer logs={jobLogs} bgClass="bg-red-50" borderClass="border-red-100" />
-      )}
-      {failed && !hasSteps && expandedJobFallback && loaded && !jobLogs && !error && (
-        <div class="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this job.</div>
-      )}
-      {failed && !hasSteps && expandedJobFallback && error && (
-        <div class="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
-      )}
-    </div>
-  );
-}
-
 function CommentView({ comment }: { comment: PRComment }) {
   const [expanded, setExpanded] = useState(false);
   const resolved = comment.isResolved || comment.isOutdated;
@@ -387,6 +172,7 @@ function CommentView({ comment }: { comment: PRComment }) {
             title={comment.author}
           />
           @{comment.author}
+          {comment.botType && <BotBadge botType={comment.botType} />}
         </span>
         <iconify-icon
           icon={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
@@ -400,7 +186,9 @@ function CommentView({ comment }: { comment: PRComment }) {
               {comment.path}{comment.line ? `:${comment.line}` : ''}
             </div>
           )}
-          <Markdown text={comment.body} class="text-xs text-gray-700" />
+          {comment.botType
+            ? <BotCommentBody comment={comment} />
+            : <Markdown text={comment.body} class="text-xs text-gray-700" />}
         </div>
       )}
     </div>
@@ -420,15 +208,112 @@ function extractTitle(body: string): string {
   return clean.split('\n')[0] || '';
 }
 
-function formatDuration(start?: string, end?: string): string {
-  if (!start) return '';
-  const s = new Date(start);
-  const e = end ? new Date(end) : new Date();
-  const ms = e.getTime() - s.getTime();
-  const secs = Math.floor(ms / 1000);
-  if (!end) return `(running ${secs}s...)`;
-  if (secs < 60) return `(${secs}s)`;
-  return `(${Math.floor(secs / 60)}m ${secs % 60}s)`;
+function isDeploymentComment(c: PRComment): boolean {
+  return c.botType === 'vercel' && c.body.startsWith('[vc]:');
+}
+
+interface VercelProject {
+  name: string;
+  previewUrl: string;
+  inspectorUrl: string;
+  status: string; // DEPLOYED, BUILDING, ERROR, CANCELED, QUEUED
+}
+
+// Vercel comments embed a base64 JSON blob: [vc]: #<hash>:<base64json>\n...
+function parseVercelProjects(body: string): VercelProject[] {
+  const m = body.match(/^\[vc\]:\s*#[^:]+:(\S+)/);
+  if (!m) return [];
+  try {
+    const data = JSON.parse(atob(m[1]));
+    return (data.projects || []).map((p: any) => ({
+      name: p.name || '',
+      previewUrl: p.previewUrl?.startsWith('http') ? p.previewUrl : `https://${p.previewUrl}`,
+      inspectorUrl: p.inspectorUrl || '',
+      status: (p.nextCommitStatus || '').toUpperCase(),
+    }));
+  } catch { return []; }
+}
+
+const deployStatusConfig: Record<string, { icon: string; color: string; label: string }> = {
+  DEPLOYED:  { icon: 'codicon:pass',           color: 'text-green-600', label: 'Deployed' },
+  BUILDING:  { icon: 'svg-spinners:ring-resize', color: 'text-yellow-600', label: 'Building' },
+  QUEUED:    { icon: 'codicon:clock',           color: 'text-gray-500',  label: 'Queued' },
+  ERROR:     { icon: 'codicon:error',           color: 'text-red-600',   label: 'Error' },
+  CANCELED:  { icon: 'codicon:circle-slash',    color: 'text-gray-500',  label: 'Canceled' },
+};
+
+function DeploymentRow({ project }: { project: VercelProject }) {
+  const [hover, setHover] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const st = deployStatusConfig[project.status] || deployStatusConfig.QUEUED;
+
+  return (
+    <div class="relative" ref={ref}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+    >
+      <div class="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-gray-50 text-sm transition-colors">
+        <iconify-icon icon={st.icon} class={`${st.color} text-xs`} />
+        <a href={project.previewUrl} target="_blank" rel="noopener"
+          class="text-blue-600 hover:underline font-medium flex-1 truncate"
+        >
+          {project.name}
+        </a>
+        <a href={project.inspectorUrl} target="_blank" rel="noopener"
+          class="text-gray-400 hover:text-gray-600 p-0.5 rounded hover:bg-gray-100 transition-colors"
+          title="Build output"
+          onClick={(e: Event) => e.stopPropagation()}
+        >
+          <iconify-icon icon="codicon:server-process" class="text-xs" />
+        </a>
+      </div>
+      {hover && (
+        <div class="absolute left-0 top-full z-50 mt-0.5 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+          <div class="flex items-center gap-1.5 mb-2">
+            <iconify-icon icon="simple-icons:vercel" class="text-sm" />
+            <span class="font-semibold text-gray-900">{project.name}</span>
+            <span class={`ml-auto inline-flex items-center gap-1 ${st.color}`}>
+              <iconify-icon icon={st.icon} class="text-[10px]" />
+              {st.label}
+            </span>
+          </div>
+          <div class="space-y-1.5 text-gray-600">
+            <div class="flex items-center gap-1.5">
+              <iconify-icon icon="codicon:link-external" class="text-gray-400 text-[10px] shrink-0" />
+              <a href={project.previewUrl} target="_blank" rel="noopener"
+                class="text-blue-600 hover:underline truncate">
+                {project.previewUrl.replace(/^https?:\/\//, '')}
+              </a>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <iconify-icon icon="codicon:server-process" class="text-gray-400 text-[10px] shrink-0" />
+              <a href={project.inspectorUrl} target="_blank" rel="noopener"
+                class="text-blue-600 hover:underline truncate">
+                Build output
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeploymentsSection({ comments }: { comments: PRComment[] }) {
+  const projects = useMemo(() => {
+    for (const c of comments) {
+      if (!isDeploymentComment(c)) continue;
+      const p = parseVercelProjects(c.body);
+      if (p.length > 0) return p;
+    }
+    return [];
+  }, [comments]);
+  if (projects.length === 0) return null;
+
+  return (
+    <Section title="Deployments">
+      {projects.map(p => <DeploymentRow key={p.name} project={p} />)}
+    </Section>
+  );
 }
 
 const SEVERITY_DEFS = [
@@ -528,15 +413,6 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
         <div class="text-xs text-gray-400 py-2">No comments match filters</div>
       )}
     </Section>
-  );
-}
-
-function SectionLoader({ label }: { label: string }) {
-  return (
-    <div class="flex items-center gap-2 text-xs text-gray-400 py-2">
-      <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
-      {label}
-    </div>
   );
 }
 

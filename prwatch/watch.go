@@ -98,6 +98,7 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 // MergeAndFilter combines comments with thread state, extracts nitpick sub-comments, and filters noise.
 func MergeAndFilter(comments []github.PRComment, threads []github.PRComment) []github.PRComment {
 	comments = mergeThreadState(comments, threads)
+	comments = annotateBots(comments)
 	comments = extractNitpicks(comments)
 	return filterActionableComments(comments)
 }
@@ -129,7 +130,7 @@ func extractNitpicks(comments []github.PRComment) []github.PRComment {
 	var result []github.PRComment
 	for _, c := range comments {
 		result = append(result, c)
-		if c.Author == "coderabbitai[bot]" {
+		if c.BotType == "coderabbit" {
 			result = append(result, parseNitpickComments(c)...)
 		}
 	}

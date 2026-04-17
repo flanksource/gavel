@@ -50,6 +50,7 @@ func parseNitpickComments(comment github.PRComment) []github.PRComment {
 			Line:     fb.Line,
 			Body:     fb.Body,
 			Severity: "nitpick",
+			BotType:  "coderabbit",
 		})
 	}
 	return results

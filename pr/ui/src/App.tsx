@@ -135,8 +135,10 @@ export function App() {
   const detailESRef = useRef<EventSource | null>(null);
 
   function loadPR(pr: PRItem) {
+    const isNewPR = !selected || selected.repo !== pr.repo || selected.number !== pr.number;
     setSelected(pr);
-    setDetail(null);
+    // Only clear detail when switching to a different PR; keep stale data during refresh
+    if (isNewPR) setDetail(null);
     setDetailLoading(true);
     markSeen(pr);
 
@@ -152,36 +154,30 @@ export function App() {
 
     es.addEventListener('pr', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      setDetail(prev => ({
-        ...prev,
-        pr: data.pr,
-        comments: data.comments,
-        runsLoading: true,
-        gavelLoading: true,
-      }));
+      setDetail(prev => ({ ...prev, pr: data.pr, comments: data.comments }));
       setDetailLoading(false);
     });
 
     es.addEventListener('runs', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      setDetail(prev => prev ? { ...prev, runs: data.runs, runsLoading: false } : prev);
+      setDetail(prev => prev ? { ...prev, runs: data.runs } : prev);
     });
 
     es.addEventListener('gavel', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      setDetail(prev => prev ? { ...prev, gavelResults: data.gavelResults, gavelLoading: false } : prev);
+      setDetail(prev => prev ? { ...prev, gavelResults: data.gavelResults } : prev);
     });
 
     es.addEventListener('error', (e: MessageEvent) => {
       if (e.data) {
         const data = JSON.parse(e.data);
-        setDetail({ error: data.error });
+        setDetail(prev => prev ?? { error: data.error });
       }
       setDetailLoading(false);
     });
 
     es.addEventListener('done', () => {
-      setDetail(prev => prev ? { ...prev, runsLoading: false, gavelLoading: false } : prev);
+      setDetailLoading(false);
       es.close();
       detailESRef.current = null;
     });
@@ -293,6 +289,7 @@ export function App() {
             rateLimit={rateLimit}
             onRefresh={handleRefresh}
             onPause={handlePause}
+            networkBusy={detailLoading}
           />
         </div>
       </div>

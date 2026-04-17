@@ -11,9 +11,10 @@ interface Props {
   rateLimit?: RateLimit;
   onRefresh: () => void;
   onPause: () => void;
+  networkBusy?: boolean;
 }
 
-export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused, rateLimit, onPause }: Props) {
+export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused, rateLimit, onPause, networkBusy }: Props) {
   const counts = computeCounts(prs);
   const ago = fetchedAt ? timeAgoShort(fetchedAt) : 'never';
   const countdown = fetchedAt
@@ -46,10 +47,10 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused,
         </button>
         <button
           onClick={onRefresh}
-          class="text-gray-400 hover:text-blue-600 transition-colors"
-          title="Refresh now"
+          class={`transition-colors ${networkBusy ? 'text-blue-500' : 'text-gray-400 hover:text-blue-600'}`}
+          title={networkBusy ? 'Loading...' : 'Refresh now'}
         >
-          <iconify-icon icon="codicon:refresh" />
+          <iconify-icon icon={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
         </button>
         {rateLimit && (
           <span

@@ -1,50 +1,73 @@
+import { Marked, Renderer } from 'marked';
+
 interface Props {
   text: string;
   class?: string;
 }
 
+const renderer = new Renderer();
+
+renderer.code = ({ text, lang }: { text: string; lang?: string }) =>
+  `<pre class="bg-gray-50 rounded p-2 text-xs overflow-x-auto border border-gray-100 my-1.5"><code${lang ? ` class="language-${lang}"` : ''}>${text}</code></pre>`;
+
+renderer.codespan = ({ text }: { text: string }) =>
+  `<code class="bg-gray-100 rounded px-1 text-xs">${text}</code>`;
+
+renderer.heading = ({ text, depth }: { text: string; depth: number }) => {
+  const cls = depth <= 1
+    ? 'font-bold text-base mt-2 mb-1'
+    : depth === 2
+      ? 'font-semibold text-sm mt-2 mb-1'
+      : 'font-semibold text-sm mt-2 mb-1';
+  return `<h${depth} class="${cls}">${text}</h${depth}>`;
+};
+
+renderer.link = ({ href, text }: { href: string; text: string }) =>
+  `<a href="${href}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">${text}</a>`;
+
+renderer.blockquote = ({ text }: { text: string }) =>
+  `<blockquote class="border-l-2 border-gray-300 pl-2 text-gray-500 italic my-1">${text}</blockquote>`;
+
+renderer.table = ({ header, body }: { header: string; body: string }) =>
+  `<table class="text-xs border-collapse my-2 w-full"><thead>${header}</thead><tbody>${body}</tbody></table>`;
+
+renderer.tablerow = ({ text }: { text: string }) =>
+  `<tr class="border-b border-gray-100">${text}</tr>`;
+
+renderer.tablecell = ({ text, header }: { text: string; header: boolean }) => {
+  const tag = header ? 'th' : 'td';
+  const cls = header
+    ? 'px-2 py-1 text-left font-medium text-gray-600 bg-gray-50 border border-gray-200'
+    : 'px-2 py-1 border border-gray-100';
+  return `<${tag} class="${cls}">${text}</${tag}>`;
+};
+
+renderer.list = ({ body, ordered }: { body: string; ordered: boolean }) => {
+  const tag = ordered ? 'ol' : 'ul';
+  const cls = ordered ? 'list-decimal ml-4 my-1' : 'list-disc ml-4 my-1';
+  return `<${tag} class="${cls}">${body}</${tag}>`;
+};
+
+renderer.listitem = ({ text }: { text: string }) =>
+  `<li class="my-0.5">${text}</li>`;
+
+renderer.image = ({ href, text }: { href: string; text: string }) =>
+  `<img src="${href}" alt="${text}" class="max-w-full rounded my-1" />`;
+
+renderer.hr = () => '<hr class="border-gray-200 my-2" />';
+
+renderer.paragraph = ({ text }: { text: string }) =>
+  `<p class="mt-1.5">${text}</p>`;
+
+renderer.html = ({ text }: { text: string }) => text;
+
+const marked = new Marked({
+  renderer,
+  gfm: true,
+  breaks: true,
+});
+
 export function Markdown({ text, class: cls }: Props) {
-  const html = renderMarkdown(text);
+  const html = marked.parse(text) as string;
   return <div class={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-function renderMarkdown(md: string): string {
-  let html = escapeHtml(md);
-
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="bg-gray-50 rounded p-2 text-xs overflow-x-auto border border-gray-100"><code>$2</code></pre>');
-
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code class="bg-gray-100 rounded px-1 text-xs">$1</code>');
-
-  // Headers
-  html = html.replace(/^### (.+)$/gm, '<h4 class="font-semibold text-sm mt-2 mb-1">$1</h4>');
-  html = html.replace(/^## (.+)$/gm, '<h3 class="font-semibold text-sm mt-2 mb-1">$1</h3>');
-  html = html.replace(/^# (.+)$/gm, '<h2 class="font-bold text-base mt-2 mb-1">$1</h2>');
-
-  // Bold and italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="text-blue-600 hover:underline">$1</a>');
-
-  // Blockquotes
-  html = html.replace(/^&gt; (.+)$/gm, '<blockquote class="border-l-2 border-gray-300 pl-2 text-gray-500 italic">$1</blockquote>');
-
-  // Unordered lists
-  html = html.replace(/^[*-] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>');
-
-  // Line breaks (double newline = paragraph, single = br)
-  html = html.replace(/\n\n/g, '</p><p class="mt-1.5">');
-  html = html.replace(/\n/g, '<br/>');
-
-  return `<p>${html}</p>`;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
