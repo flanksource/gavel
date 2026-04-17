@@ -1,0 +1,26 @@
+[
+  {
+    "file": "src/App.tsx",
+    "line": 42,
+    "column": 7,
+    "code": 2322,
+    "category": "Error",
+    "message": "Type 'string' is not assignable to type 'number'."
+  },
+  {
+    "file": "/abs/path/src/handler.ts",
+    "line": 10,
+    "column": 3,
+    "code": 6133,
+    "category": "Warning",
+    "message": "'unused' is declared but its value is never read."
+  },
+  {
+    "file": "src/notes.ts",
+    "line": 1,
+    "column": 1,
+    "code": 7053,
+    "category": "Message",
+    "message": "Informational hint from the compiler."
+  }
+]

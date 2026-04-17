@@ -21,6 +21,8 @@ var lintSubcommands = []struct {
 	{"ruff", "ruff", "Run only ruff (Python)"},
 	{"eslint", "eslint", "Run only eslint"},
 	{"pyright", "pyright", "Run only pyright (Python types)"},
+	{"tsc", "tsc", "Run only tsc (TypeScript compile check)"},
+	{"typescript", "tsc", "Alias for tsc"},
 	{"markdownlint", "markdownlint", "Run only markdownlint"},
 	{"vale", "vale", "Run only vale (prose)"},
 	{"jscpd", "jscpd", "Run only jscpd (duplicate-code detector)"},

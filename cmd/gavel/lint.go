@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/ruff"
+	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner"
@@ -316,6 +317,7 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 	registry.Register(ruff.NewRuff(opts.WorkDir))
 	registry.Register(eslint.NewESLint(opts.WorkDir))
 	registry.Register(pyright.NewPyright(opts.WorkDir))
+	registry.Register(tsc.NewTSC(opts.WorkDir))
 	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
 	registry.Register(vale.NewVale(opts.WorkDir))
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
@@ -502,6 +504,7 @@ func displayLintDryRun(opts LintOptions) error {
 	registry.Register(ruff.NewRuff(opts.WorkDir))
 	registry.Register(eslint.NewESLint(opts.WorkDir))
 	registry.Register(pyright.NewPyright(opts.WorkDir))
+	registry.Register(tsc.NewTSC(opts.WorkDir))
 	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
 	registry.Register(vale.NewVale(opts.WorkDir))
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))

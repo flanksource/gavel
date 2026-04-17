@@ -44,6 +44,9 @@ var linterDirectConfigPatterns = map[string][]string{
 		"ruff.toml",
 		"pyproject.toml",
 	},
+	"tsc": {
+		"tsconfig.json",
+	},
 	"vale": {
 		".vale.ini",
 	},
