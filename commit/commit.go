@@ -49,6 +49,7 @@ type Options struct {
 	DryRun    bool
 	Force     bool
 	NoCache   bool
+	Push      bool
 	Model     string
 	Message   string
 	Config    verify.CommitConfig
@@ -77,13 +78,27 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.WorkDir == "" {
 		return nil, errors.New("commit.Run: WorkDir is required")
 	}
+	var (
+		result *Result
+		err    error
+	)
 	if opts.CommitAll {
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
 		}
-		return runCommitAll(ctx, opts)
+		result, err = runCommitAll(ctx, opts)
+	} else {
+		result, err = runSingleCommit(ctx, opts)
 	}
-	return runSingleCommit(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+	if opts.Push {
+		if perr := pushAfterCommit(ctx, opts, result); perr != nil {
+			return result, perr
+		}
+	}
+	return result, nil
 }
 
 func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
