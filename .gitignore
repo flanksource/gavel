@@ -74,3 +74,4 @@ out.*
 testrunner/ui/dist/
 .tmp/
 .claude
+/*.json

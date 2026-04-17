@@ -22,9 +22,6 @@ type Runner interface {
 	// When recursive is true, it walks subdirectories; otherwise only the given directory.
 	DiscoverPackages(workDir string, recursive bool) ([]string, error)
 
-	// PackageHasTests checks if a package has tests for this framework.
-	PackageHasTests(packagePath string) (bool, error)
-
 	// BuildCommand builds the command to run tests for a package.
 	// extraArgs are additional arguments passed to the test runner.
 	BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error)

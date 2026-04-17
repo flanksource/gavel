@@ -43,11 +43,12 @@ func (r *GoTest) Parser() parsers.ResultParser {
 	return r.parser
 }
 
-// Detect checks if go test is used (looks for *_test.go files).
+// Detect checks if go test is used (looks for *_test.go files). We
+// deliberately do NOT gate on go.mod presence — a nested repo without its
+// own module, or a workDir inside a module whose go.mod sits above
+// the nearest .git boundary, still has runnable test files and should be
+// surfaced. `go test` emits a useful error at run time if no module exists.
 func (r *GoTest) Detect(workDir string) (bool, error) {
-	if utils.FindNearestGoModRoot(workDir) == "" {
-		return false, nil
-	}
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -69,21 +70,8 @@ func (r *GoTest) Detect(workDir string) (bool, error) {
 	return false, err
 }
 
-// hasGinkgoImports checks if a test file imports Ginkgo
-func (r *GoTest) hasGinkgoImports(path string) bool {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-
-	text := string(content)
-	return strings.Contains(text, `"github.com/onsi/ginkgo`) ||
-		strings.Contains(text, `"github.com/onsi/ginkgo/v2`) ||
-		strings.Contains(text, `. "github.com/onsi/ginkgo`) ||
-		strings.Contains(text, `. "github.com/onsi/ginkgo/v2`)
-}
-
-// packageHasNonGinkgoTests checks if a package has at least one test file that is not a Ginkgo test
+// packageHasNonGinkgoTests checks if a package has at least one test file
+// that is not a Ginkgo test (using the shared AST-based import check).
 func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) bool {
 	entries, err := os.ReadDir(pkgDir)
 	if err != nil {
@@ -93,7 +81,7 @@ func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) bool {
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
 			path := filepath.Join(pkgDir, entry.Name())
-			if !r.hasGinkgoImports(path) {
+			if !hasGinkgoImports(path) {
 				return true
 			}
 		}
@@ -115,7 +103,7 @@ func (r *GoTest) inspectPackage(pkgDir string) (hasTests bool, hasBench bool) {
 			continue
 		}
 		path := filepath.Join(pkgDir, entry.Name())
-		if r.hasGinkgoImports(path) {
+		if hasGinkgoImports(path) {
 			continue
 		}
 		content, err := os.ReadFile(path)
@@ -174,7 +162,7 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 			continue
 		}
 		path := filepath.Join(pkgDir, entry.Name())
-		if r.hasGinkgoImports(path) {
+		if hasGinkgoImports(path) {
 			continue
 		}
 		content, err := os.ReadFile(path)
@@ -191,11 +179,10 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 }
 
 // DiscoverPackages returns packages with go test files (excluding Ginkgo-only packages).
-// When recursive is false, only the given directory is checked.
+// When recursive is false, only the given directory is checked. No go.mod gate
+// here for the same reason as Detect — `go test` surfaces the error itself if
+// the package is not inside a module.
 func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
-	if utils.FindNearestGoModRoot(workDir) == "" {
-		return nil, nil
-	}
 	if !recursive {
 		if r.packageHasNonGinkgoTests(workDir) {
 			return []string{r.getRelativePath(workDir)}, nil
@@ -240,7 +227,7 @@ func (r *GoTest) PackageHasTests(packagePath string) (bool, error) {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
 			path := filepath.Join(dir, entry.Name())
 			// Return true if this file doesn't import Ginkgo
-			if !r.hasGinkgoImports(path) {
+			if !hasGinkgoImports(path) {
 				return true, nil
 			}
 		}
@@ -268,31 +255,10 @@ func (r *GoTest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 	}, nil
 }
 
-// NormalizeFilePath makes file paths relative to workDir (exposed for orchestrator use).
-func (r *GoTest) NormalizeFilePath(filePath string) string {
-	return r.normalizeFilePath(filePath)
-}
-
 // getRelativePath returns the relative path from workDir to the target directory.
 func (r *GoTest) getRelativePath(dir string) string {
 	if relPath, err := filepath.Rel(r.workDir, dir); err == nil {
 		return "./" + filepath.ToSlash(relPath)
 	}
 	return dir
-}
-
-// normalizeFilePath makes file paths relative to workDir
-func (r *GoTest) normalizeFilePath(filePath string) string {
-	// If path is already relative and not starting with .., return as-is
-	if !filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, "..") {
-		return filePath
-	}
-
-	// Try to make it relative to workDir
-	if relPath, err := filepath.Rel(r.workDir, filePath); err == nil {
-		return relPath
-	}
-
-	// If that fails, return the original path
-	return filePath
 }

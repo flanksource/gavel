@@ -28,23 +28,27 @@ func NewPlaywright(workDir string) *Playwright {
 func (r *Playwright) Name() parsers.Framework      { return parsers.Playwright }
 func (r *Playwright) Parser() parsers.ResultParser { return r.parser }
 
+// playwrightTestSuffixes: Playwright's default tests live in *.spec.*, plus
+// the common *.e2e.* naming for projects that split unit vs e2e.
+var playwrightTestSuffixes = []string{".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs",
+	".e2e.js", ".e2e.ts", ".e2e.tsx"}
+
+// detectPlaywright matches on playwright.config.* or playwright-ct.config.*
+// (component-testing variant), or on the @playwright/test dep paired with
+// at least one spec file — otherwise `playwright test` just exits with
+// "No tests found" and we'd rather gavel surface nothing than a noop.
 func detectPlaywright(dir string, pkg *pkgJSON) bool {
-	if hasConfigFile(dir, []string{"playwright.config"}, nodeConfigExts) {
+	if hasConfigFile(dir, []string{"playwright.config", "playwright-ct.config"}, nodeConfigExts) {
 		return true
 	}
-	return hasNpmDep(pkg, "@playwright/test")
+	if hasNpmDep(pkg, "@playwright/test") && hasTestFile(dir, playwrightTestSuffixes, true) {
+		return true
+	}
+	return false
 }
 
 func (r *Playwright) Detect(workDir string) (bool, error) {
-	pkg, _ := readPackageJSON(workDir)
-	if detectPlaywright(workDir, pkg) {
-		return true, nil
-	}
-	pkgs, err := walkNodePackages(workDir, detectPlaywright)
-	if err != nil {
-		return false, err
-	}
-	return len(pkgs) > 0, nil
+	return anyNodePackage(workDir, detectPlaywright)
 }
 
 func (r *Playwright) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
@@ -56,12 +60,6 @@ func (r *Playwright) DiscoverPackages(workDir string, recursive bool) ([]string,
 		return nil, nil
 	}
 	return walkNodePackages(workDir, detectPlaywright)
-}
-
-func (r *Playwright) PackageHasTests(packagePath string) (bool, error) {
-	dir := filepath.Join(r.workDir, packagePath)
-	pkg, _ := readPackageJSON(dir)
-	return detectPlaywright(dir, pkg), nil
 }
 
 func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
@@ -88,8 +86,4 @@ func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*Tes
 		Process:    process,
 		ReportPath: reportPath,
 	}, nil
-}
-
-func (r *Playwright) NormalizeFilePath(filePath string) string {
-	return normalizeNodeFilePath(r.workDir, filePath)
 }

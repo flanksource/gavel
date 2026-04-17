@@ -27,26 +27,26 @@ func NewVitest(workDir string) *Vitest {
 func (r *Vitest) Name() parsers.Framework      { return parsers.Vitest }
 func (r *Vitest) Parser() parsers.ResultParser { return r.parser }
 
-// detectVitest is true when the directory has a dedicated vitest config, or
-// when vitest is a declared dependency. A bare vite.config.* without a vitest
-// dep is treated as a build config, not a test config.
+// vitestTestSuffixes mirrors Vitest's default testMatch.
+var vitestTestSuffixes = []string{".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".test.mjs", ".test.cjs",
+	".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs"}
+
+// detectVitest is true when the directory has a dedicated vitest config
+// (including vitest.workspace.*) or when vitest is a declared dep AND there
+// is at least one *.test.*/*.spec.* file to run. A bare vite.config.*
+// without a vitest dep is treated as a build config, not a test config.
 func detectVitest(dir string, pkg *pkgJSON) bool {
-	if hasConfigFile(dir, []string{"vitest.config"}, nodeConfigExts) {
+	if hasConfigFile(dir, []string{"vitest.config", "vitest.workspace"}, nodeConfigExts) {
 		return true
 	}
-	return hasNpmDep(pkg, "vitest")
+	if hasNpmDep(pkg, "vitest") && hasTestFile(dir, vitestTestSuffixes, true) {
+		return true
+	}
+	return false
 }
 
 func (r *Vitest) Detect(workDir string) (bool, error) {
-	pkg, _ := readPackageJSON(workDir)
-	if detectVitest(workDir, pkg) {
-		return true, nil
-	}
-	pkgs, err := walkNodePackages(workDir, detectVitest)
-	if err != nil {
-		return false, err
-	}
-	return len(pkgs) > 0, nil
+	return anyNodePackage(workDir, detectVitest)
 }
 
 func (r *Vitest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
@@ -58,12 +58,6 @@ func (r *Vitest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 		return nil, nil
 	}
 	return walkNodePackages(workDir, detectVitest)
-}
-
-func (r *Vitest) PackageHasTests(packagePath string) (bool, error) {
-	dir := filepath.Join(r.workDir, packagePath)
-	pkg, _ := readPackageJSON(dir)
-	return detectVitest(dir, pkg), nil
 }
 
 func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
@@ -88,8 +82,4 @@ func (r *Vitest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		Process:    process,
 		ReportPath: reportPath,
 	}, nil
-}
-
-func (r *Vitest) NormalizeFilePath(filePath string) string {
-	return normalizeNodeFilePath(r.workDir, filePath)
 }

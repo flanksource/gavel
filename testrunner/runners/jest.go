@@ -27,28 +27,36 @@ func NewJest(workDir string) *Jest {
 func (r *Jest) Name() parsers.Framework      { return parsers.Jest }
 func (r *Jest) Parser() parsers.ResultParser { return r.parser }
 
-// detectJest reports whether dir looks like a Jest project root: presence
-// of a jest config file, or a "jest" key in package.json.
+// jestTestSuffixes lists the file-name suffixes Jest's default testMatch
+// catches. A user who customizes testMatch will still detect via config.
+var jestTestSuffixes = []string{".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".test.mjs", ".test.cjs",
+	".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs"}
+
+// detectJest reports whether dir looks like a Jest project root. Two
+// independent signals are enough on their own:
+//
+//  1. a dedicated jest config file (jest.config.*, .jestrc*),
+//  2. a "jest" key in package.json.
+//
+// A dependency-only signal ("jest" in devDependencies) is paired with the
+// presence of at least one *.test.*/*.spec.* file so a package that only
+// declares Jest (no config, no tests yet) doesn't get launched into the
+// runner just to fail with "No tests found".
 func detectJest(dir string, pkg *pkgJSON) bool {
-	if hasConfigFile(dir, []string{"jest.config"}, nodeConfigExts) {
+	if hasConfigFile(dir, []string{"jest.config", ".jestrc"}, nodeConfigExts) {
 		return true
 	}
 	if pkg != nil && pkg.Jest != nil {
+		return true
+	}
+	if hasNpmDep(pkg, "jest") && hasTestFile(dir, jestTestSuffixes, true) {
 		return true
 	}
 	return false
 }
 
 func (r *Jest) Detect(workDir string) (bool, error) {
-	pkg, _ := readPackageJSON(workDir)
-	if detectJest(workDir, pkg) {
-		return true, nil
-	}
-	pkgs, err := walkNodePackages(workDir, detectJest)
-	if err != nil {
-		return false, err
-	}
-	return len(pkgs) > 0, nil
+	return anyNodePackage(workDir, detectJest)
 }
 
 func (r *Jest) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
@@ -60,12 +68,6 @@ func (r *Jest) DiscoverPackages(workDir string, recursive bool) ([]string, error
 		return nil, nil
 	}
 	return walkNodePackages(workDir, detectJest)
-}
-
-func (r *Jest) PackageHasTests(packagePath string) (bool, error) {
-	dir := filepath.Join(r.workDir, packagePath)
-	pkg, _ := readPackageJSON(dir)
-	return detectJest(dir, pkg), nil
 }
 
 func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error) {
@@ -90,10 +92,6 @@ func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, 
 		Process:    process,
 		ReportPath: reportPath,
 	}, nil
-}
-
-func (r *Jest) NormalizeFilePath(filePath string) string {
-	return normalizeNodeFilePath(r.workDir, filePath)
 }
 
 // sanitizePkgPath turns a gavel relative pkg path like "./apps/web" into a

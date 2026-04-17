@@ -9,7 +9,7 @@ import (
 )
 
 func TestGinkgoJSONParserName(t *testing.T) {
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	if parser.Name() != "ginkgo json" {
 		t.Errorf("expected 'ginkgo json', got %s", parser.Name())
 	}
@@ -40,7 +40,7 @@ func TestGinkgoJSONParsePassedTests(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -114,7 +114,7 @@ func TestGinkgoJSONParseFailedTests(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -169,7 +169,7 @@ func TestGinkgoJSONParseSkippedTests(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -240,7 +240,7 @@ func TestGinkgoJSONParseMultipleTests(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -291,7 +291,7 @@ func TestGinkgoJSONParseContainerHierarchy(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -336,7 +336,7 @@ func TestGinkgoJSONParsePackageExtraction(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -362,7 +362,7 @@ func TestGinkgoJSONParseEmptySuite(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)
@@ -398,7 +398,7 @@ func TestGinkgoJSONParseDuration(t *testing.T) {
 		t.Fatalf("failed to marshal test data: %v", err)
 	}
 
-	parser := NewGinkgoJSON()
+	parser := NewGinkgoJSON("")
 	tests, err := parser.Parse(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("failed to parse: %v", err)

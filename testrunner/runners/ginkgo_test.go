@@ -147,7 +147,10 @@ import . "github.com/onsi/ginkgo/v2"
 	}
 }
 
-func TestGinkgoSkipsWhenNoGoModFound(t *testing.T) {
+func TestGinkgoDetectsGinkgoImportsWithoutGoMod(t *testing.T) {
+	// Like GoTest.Detect, ginkgo detection is purely about the file-level
+	// signal (ginkgo import in a _test.go). If the user runs gavel inside a
+	// directory that isn't a module, `ginkgo run` will surface the error.
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "suite_test.go"), []byte(`package main
 
@@ -161,16 +164,16 @@ import . "github.com/onsi/ginkgo/v2"
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if found {
-		t.Fatal("expected ginkgo detection to be skipped without a go.mod")
+	if !found {
+		t.Fatal("expected ginkgo tests to be detected even without a go.mod")
 	}
 
 	packages, err := runner.DiscoverPackages(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unexpected error discovering packages: %v", err)
 	}
-	if len(packages) != 0 {
-		t.Fatalf("expected no ginkgo packages without a go.mod, got %v", packages)
+	if len(packages) != 1 {
+		t.Fatalf("expected 1 ginkgo package, got %v", packages)
 	}
 }
 
@@ -433,7 +436,6 @@ import "github.com/onsi/gomega"
 		},
 	}
 
-	runner := NewGinkgo("/tmp")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
@@ -441,7 +443,7 @@ import "github.com/onsi/gomega"
 			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
 				t.Fatalf("write fixture: %v", err)
 			}
-			got := runner.hasGinkgoImports(path)
+			got := hasGinkgoImports(path)
 			if got != tc.expected {
 				t.Errorf("hasGinkgoImports(%q) = %v, want %v\ncontent:\n%s",
 					tc.name, got, tc.expected, tc.content)

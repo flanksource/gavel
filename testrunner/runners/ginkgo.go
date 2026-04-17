@@ -1,13 +1,11 @@
 package runners
 
 import (
+	"errors"
 	"fmt"
-	"go/parser"
-	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +13,8 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/utils"
 )
+
+var errGinkgoDetected = errors.New("ginkgo detected")
 
 // Ginkgo implements the test runner for Ginkgo with --json-report.
 type Ginkgo struct {
@@ -26,7 +26,7 @@ type Ginkgo struct {
 func NewGinkgo(workDir string) *Ginkgo {
 	return &Ginkgo{
 		workDir: workDir,
-		parser:  parsers.NewGinkgoJSON(),
+		parser:  parsers.NewGinkgoJSON(workDir),
 	}
 }
 
@@ -41,35 +41,31 @@ func (r *Ginkgo) Parser() parsers.ResultParser {
 }
 
 // Detect checks if Ginkgo is used (looks for ginkgo imports in test files).
+// Like GoTest.Detect we do not gate on go.mod; we bail out early via a
+// sentinel error on the first hit so we don't keep walking.
 func (r *Ginkgo) Detect(workDir string) (bool, error) {
-	if utils.FindNearestGoModRoot(workDir) == "" {
-		return false, nil
-	}
-	var found bool
-
 	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || found {
+		if err != nil {
 			return err
 		}
-
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
-			if r.hasGinkgoImports(path) {
-				found = true
-			}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && hasGinkgoImports(path) {
+			return errGinkgoDetected
 		}
-
 		return nil
 	})
-
-	return found, err
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, errGinkgoDetected) {
+		return true, nil
+	}
+	return false, err
 }
 
 // DiscoverPackages returns packages with Ginkgo tests.
-// When recursive is false, only the given directory is checked.
+// When recursive is false, only the given directory is checked. No go.mod
+// gate (same reasoning as Detect).
 func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, error) {
-	if utils.FindNearestGoModRoot(workDir) == "" {
-		return nil, nil
-	}
 	if !recursive {
 		if r.dirHasGinkgoTests(workDir) {
 			return []string{r.getRelativePath(workDir)}, nil
@@ -86,7 +82,7 @@ func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, err
 		}
 
 		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
-			if r.hasGinkgoImports(path) {
+			if hasGinkgoImports(path) {
 				pkgDir := filepath.Dir(path)
 				if !seen[pkgDir] {
 					seen[pkgDir] = true
@@ -113,7 +109,7 @@ func (r *Ginkgo) PackageHasTests(packagePath string) (bool, error) {
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
 			path := filepath.Join(dir, entry.Name())
-			if r.hasGinkgoImports(path) {
+			if hasGinkgoImports(path) {
 				return true, nil
 			}
 		}
@@ -152,11 +148,6 @@ func (r *Ginkgo) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 	}, nil
 }
 
-// NormalizeFilePath makes file paths relative to workDir (exposed for orchestrator use).
-func (r *Ginkgo) NormalizeFilePath(filePath string) string {
-	return r.normalizeFilePath(filePath)
-}
-
 func (r *Ginkgo) dirHasGinkgoTests(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -164,37 +155,9 @@ func (r *Ginkgo) dirHasGinkgoTests(dir string) bool {
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
-			if r.hasGinkgoImports(filepath.Join(dir, entry.Name())) {
+			if hasGinkgoImports(filepath.Join(dir, entry.Name())) {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-// hasGinkgoImports checks if a Go test file imports ginkgo. Uses the AST
-// so that string literals mentioning the ginkgo import path (e.g. inside
-// gavel's own detection tests) do not false-positive. Fails closed:
-// parse errors return false so gavel won't run a non-ginkgo package
-// through the ginkgo runner.
-func (r *Ginkgo) hasGinkgoImports(path string) bool {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-	if err != nil {
-		return false
-	}
-	for _, imp := range file.Imports {
-		if imp.Path == nil {
-			continue
-		}
-		importPath, err := strconv.Unquote(imp.Path.Value)
-		if err != nil {
-			continue
-		}
-		if importPath == "github.com/onsi/ginkgo" ||
-			importPath == "github.com/onsi/ginkgo/v2" ||
-			strings.HasPrefix(importPath, "github.com/onsi/ginkgo/v2/") {
-			return true
 		}
 	}
 	return false
@@ -206,20 +169,4 @@ func (r *Ginkgo) getRelativePath(dir string) string {
 		return "./" + filepath.ToSlash(relPath)
 	}
 	return dir
-}
-
-// normalizeFilePath makes file paths relative to workDir
-func (r *Ginkgo) normalizeFilePath(filePath string) string {
-	// If path is already relative and not starting with .., return as-is
-	if !filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, "..") {
-		return filePath
-	}
-
-	// Try to make it relative to workDir
-	if relPath, err := filepath.Rel(r.workDir, filePath); err == nil {
-		return relPath
-	}
-
-	// If that fails, return the original path
-	return filePath
 }

@@ -42,6 +42,47 @@ func TestJestDetect(t *testing.T) {
 			t.Fatal("expected detect=true when package.json has jest key")
 		}
 	})
+	t.Run("jest devDep + test file", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"jest":"^29"}}`)
+		if err := os.WriteFile(filepath.Join(tmp, "sum.test.js"), []byte("test('ok',()=>{});"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewJest(tmp)
+		if got, _ := r.Detect(tmp); !got {
+			t.Fatal("expected detect=true when jest dep + test file present")
+		}
+	})
+	t.Run("jest devDep alone does not detect", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"jest":"^29"}}`)
+		r := NewJest(tmp)
+		if got, _ := r.Detect(tmp); got {
+			t.Fatal("expected detect=false when jest is declared but no tests exist")
+		}
+	})
+	t.Run(".jestrc bare rc file", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x"}`)
+		if err := os.WriteFile(filepath.Join(tmp, ".jestrc"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewJest(tmp)
+		if got, _ := r.Detect(tmp); !got {
+			t.Fatal("expected detect=true for bare .jestrc file")
+		}
+	})
+	t.Run(".jestrc.json", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x"}`)
+		if err := os.WriteFile(filepath.Join(tmp, ".jestrc.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewJest(tmp)
+		if got, _ := r.Detect(tmp); !got {
+			t.Fatal("expected detect=true for .jestrc.json")
+		}
+	})
 	t.Run("no config", func(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x"}`)

@@ -22,12 +22,34 @@ func TestVitestDetect(t *testing.T) {
 			t.Fatal("expected detect=true")
 		}
 	})
-	t.Run("vitest in devDependencies", func(t *testing.T) {
+	t.Run("vitest.workspace config", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x"}`)
+		if err := os.WriteFile(filepath.Join(tmp, "vitest.workspace.ts"), []byte("export default [];"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewVitest(tmp)
+		if got, _ := r.Detect(tmp); !got {
+			t.Fatal("expected detect=true for vitest.workspace")
+		}
+	})
+	t.Run("vitest devDep + test file", func(t *testing.T) {
+		tmp := t.TempDir()
+		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"vitest":"^1.0.0"}}`)
+		if err := os.WriteFile(filepath.Join(tmp, "sum.test.ts"), []byte("import {test} from 'vitest';"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewVitest(tmp)
+		if got, _ := r.Detect(tmp); !got {
+			t.Fatal("expected detect=true when vitest dep + test file present")
+		}
+	})
+	t.Run("vitest devDep alone does not detect", func(t *testing.T) {
 		tmp := t.TempDir()
 		writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"vitest":"^1.0.0"}}`)
 		r := NewVitest(tmp)
-		if got, _ := r.Detect(tmp); !got {
-			t.Fatal("expected detect=true")
+		if got, _ := r.Detect(tmp); got {
+			t.Fatal("expected detect=false when vitest is declared but no tests exist")
 		}
 	})
 	t.Run("bare vite.config without vitest dep", func(t *testing.T) {
@@ -46,7 +68,12 @@ func TestVitestDetect(t *testing.T) {
 func TestVitestDiscoverPackages_Monorepo(t *testing.T) {
 	tmp := t.TempDir()
 	writePackageJSON(t, tmp, `{"name":"root"}`)
+	// apps/web declares vitest dep + a test file (the new required pairing).
 	writePackageJSON(t, filepath.Join(tmp, "apps/web"), `{"name":"web","devDependencies":{"vitest":"^1.0.0"}}`)
+	if err := os.WriteFile(filepath.Join(tmp, "apps/web", "sum.test.ts"), []byte("// vitest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// apps/api has a config file and needs no test file to detect.
 	writePackageJSON(t, filepath.Join(tmp, "apps/api"), `{"name":"api"}`)
 	if err := os.WriteFile(filepath.Join(tmp, "apps/api", "vitest.config.ts"), []byte("export default {};"), 0o644); err != nil {
 		t.Fatal(err)
@@ -66,6 +93,9 @@ func TestVitestDiscoverPackages_Monorepo(t *testing.T) {
 func TestVitestBuildCommand(t *testing.T) {
 	tmp := t.TempDir()
 	writePackageJSON(t, tmp, `{"name":"x","devDependencies":{"vitest":"^1.0.0"}}`)
+	if err := os.WriteFile(filepath.Join(tmp, "x.test.ts"), []byte("// vitest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	r := NewVitest(tmp)
 	tr, err := r.BuildCommand(".")
 	if err != nil {

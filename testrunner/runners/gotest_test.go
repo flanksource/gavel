@@ -142,7 +142,11 @@ func TestGoTestDetectSkipsNestedProjectRoots(t *testing.T) {
 	}
 }
 
-func TestGoTestSkipsWhenNoGoModFound(t *testing.T) {
+func TestGoTestDetectsTestFilesWithoutGoMod(t *testing.T) {
+	// Detection is purely about the presence of *_test.go. If the user runs
+	// gavel inside a directory that has Go test files but is not inside a
+	// module, `go test` itself will emit a useful error — gavel's job is
+	// to surface the intent, not pre-validate toolchain state.
 	tmpDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmpDir, "example_test.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
@@ -153,16 +157,16 @@ func TestGoTestSkipsWhenNoGoModFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if found {
-		t.Fatal("expected go test detection to be skipped without a go.mod")
+	if !found {
+		t.Fatal("expected go test file to be detected even without a go.mod")
 	}
 
 	packages, err := runner.DiscoverPackages(tmpDir, true)
 	if err != nil {
 		t.Fatalf("unexpected error discovering packages: %v", err)
 	}
-	if len(packages) != 0 {
-		t.Fatalf("expected no go test packages without a go.mod, got %v", packages)
+	if len(packages) != 1 {
+		t.Fatalf("expected 1 package, got %v", packages)
 	}
 }
 

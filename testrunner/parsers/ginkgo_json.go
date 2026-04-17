@@ -5,17 +5,35 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/task"
 )
 
+// relToWorkDir makes absolute file paths relative to workDir. Pure-local
+// duplicate of the helper in runners — parsers own path normalization now.
+func (p *GinkgoJSON) relToWorkDir(filePath string) string {
+	if filePath == "" || p.workDir == "" {
+		return filePath
+	}
+	if !filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, "..") {
+		return filePath
+	}
+	if rel, err := filepath.Rel(p.workDir, filePath); err == nil {
+		return rel
+	}
+	return filePath
+}
+
 // GinkgoJSON parses Ginkgo --json-report output format.
-type GinkgoJSON struct{}
+type GinkgoJSON struct {
+	workDir string // used to make File paths relative to the project root
+}
 
 // NewGinkgoJSON creates a new Ginkgo JSON parser.
-func NewGinkgoJSON() *GinkgoJSON {
-	return &GinkgoJSON{}
+func NewGinkgoJSON(workDir string) *GinkgoJSON {
+	return &GinkgoJSON{workDir: workDir}
 }
 
 // Name returns the parser name.
@@ -110,7 +128,7 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 	test := Test{
 		Name:      spec.LeafNodeText,
 		Suite:     suiteHierarchy,
-		File:      spec.LeafNodeLocation.FileName,
+		File:      p.relToWorkDir(spec.LeafNodeLocation.FileName),
 		Line:      spec.LeafNodeLocation.LineNumber,
 		Framework: Ginkgo,
 		Duration:  time.Duration(spec.RunTime),
@@ -126,8 +144,8 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		test.Failed = true
 		if spec.Failure != nil {
 			test.Message = spec.Failure.Message
-			failLoc := fmt.Sprintf("%s:%d", spec.Failure.Location.FileName, spec.Failure.Location.LineNumber)
-			testLoc := fmt.Sprintf("%s:%d", spec.LeafNodeLocation.FileName, spec.LeafNodeLocation.LineNumber)
+			failLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.Failure.Location.FileName), spec.Failure.Location.LineNumber)
+			testLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.LeafNodeLocation.FileName), spec.LeafNodeLocation.LineNumber)
 			if failLoc != testLoc {
 				ctx.FailureLocation = failLoc
 			}
