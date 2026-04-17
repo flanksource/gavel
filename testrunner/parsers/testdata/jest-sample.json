@@ -1,0 +1,49 @@
+{
+  "numFailedTestSuites": 1,
+  "numFailedTests": 1,
+  "numPassedTestSuites": 0,
+  "numPassedTests": 1,
+  "numPendingTestSuites": 0,
+  "numPendingTests": 1,
+  "success": false,
+  "testResults": [
+    {
+      "name": "/repo/src/math.test.js",
+      "status": "failed",
+      "startTime": 1700000000000,
+      "endTime": 1700000000123,
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["math", "addition"],
+          "title": "adds 1 + 2",
+          "fullName": "math addition adds 1 + 2",
+          "status": "passed",
+          "failureMessages": [],
+          "location": {"line": 5, "column": 3},
+          "duration": 7
+        },
+        {
+          "ancestorTitles": ["math", "addition"],
+          "title": "fails for string input",
+          "fullName": "math addition fails for string input",
+          "status": "failed",
+          "failureMessages": [
+            "\u001b[31mError: expected 3 but got NaN\u001b[39m\n    at Object.<anonymous> (/repo/src/math.test.js:10:3)"
+          ],
+          "location": {"line": 9, "column": 3},
+          "duration": 12
+        },
+        {
+          "ancestorTitles": ["math"],
+          "title": "division not implemented",
+          "fullName": "math division not implemented",
+          "status": "pending",
+          "failureMessages": [],
+          "location": {"line": 15, "column": 3},
+          "duration": 0
+        }
+      ]
+    }
+  ]
+}

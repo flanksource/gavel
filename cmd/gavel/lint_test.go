@@ -37,7 +37,6 @@ func TestExecuteLintersJSCPDOptIn(t *testing.T) {
 
 		results, err := executeLinters(LintOptions{
 			WorkDir: workDir,
-			Linters: "*",
 			Timeout: "1s",
 		})
 		if err != nil {
@@ -64,7 +63,6 @@ func TestExecuteLintersJSCPDOptIn(t *testing.T) {
 
 		results, err := executeLinters(LintOptions{
 			WorkDir: workDir,
-			Linters: "*",
 			Timeout: "1s",
 		})
 		if err != nil {
@@ -97,7 +95,6 @@ func TestExecuteLintersSelectsESLintForESLintConfigFiles(t *testing.T) {
 
 	results, err := executeLinters(LintOptions{
 		WorkDir: workDir,
-		Linters: "*",
 		Timeout: "1s",
 	})
 	if err != nil {

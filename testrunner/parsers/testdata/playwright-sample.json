@@ -1,0 +1,65 @@
+{
+  "config": {"rootDir": "/repo/e2e"},
+  "suites": [
+    {
+      "title": "home.spec.ts",
+      "file": "/repo/e2e/home.spec.ts",
+      "line": 0,
+      "suites": [
+        {
+          "title": "homepage",
+          "file": "/repo/e2e/home.spec.ts",
+          "line": 3,
+          "specs": [
+            {
+              "title": "renders title",
+              "file": "/repo/e2e/home.spec.ts",
+              "line": 4,
+              "ok": true,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "expectedStatus": "passed",
+                  "results": [
+                    {"status": "passed", "duration": 120}
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "login works",
+              "file": "/repo/e2e/home.spec.ts",
+              "line": 12,
+              "ok": false,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "expectedStatus": "passed",
+                  "results": [
+                    {"status": "failed", "duration": 300, "error": {"message": "\u001b[31mTimed out waiting for selector #login\u001b[39m", "stack": "Error: Timed out\n  at home.spec.ts:15:10"}},
+                    {"status": "failed", "duration": 280, "error": {"message": "Timed out waiting for selector #login", "stack": "Error: Timed out\n  at home.spec.ts:15:10"}}
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "admin only",
+              "file": "/repo/e2e/home.spec.ts",
+              "line": 25,
+              "ok": true,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "expectedStatus": "skipped",
+                  "results": [
+                    {"status": "skipped", "duration": 0}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

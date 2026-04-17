@@ -90,6 +90,7 @@ type PRComment struct {
 	IsResolved bool      `json:"isResolved,omitempty"`
 	IsOutdated bool      `json:"isOutdated,omitempty"`
 	Severity   string    `json:"severity,omitempty"` // "critical", "major", "minor", "nitpick"
+	BotType    string    `json:"botType,omitempty"`  // "coderabbit", "vercel", "copilot", "gavel"
 }
 
 func SeverityIcon(severity string) api.Text {

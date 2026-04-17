@@ -124,6 +124,7 @@ type RunOptions struct {
 	Bench         string                `json:"bench,omitempty" flag:"bench"`                                 // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
 	Fixtures      bool                  `json:"fixtures,omitempty" flag:"fixtures"`                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
 	FixtureFiles  []string              `json:"fixture_files,omitempty" flag:"fixture-files"`                 // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
+	Frameworks    []string              `json:"frameworks,omitempty" flag:"framework"`                        // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 }
@@ -499,6 +500,13 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 		return nil, fmt.Errorf("failed to detect frameworks: %w", err)
 	}
 
+	if len(o.Frameworks) > 0 {
+		frameworks, err = filterFrameworks(frameworks, o.Frameworks)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	results, err := o.detectAndRun(frameworks, o.StartingPaths, o.ExtraArgs)
 	failed := results.Failed()
 	logger.Infof("Test run completed. %d total failures.", len(failed))
@@ -513,6 +521,36 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	}
 
 	return results, nil
+}
+
+// filterFrameworks narrows detected frameworks to the set the user asked for
+// via --framework. Each requested name must resolve to a known framework
+// (parsers.ParseFramework handles aliases and errors on typos). A requested
+// framework that exists but wasn't detected in this workdir is also an error,
+// so `gavel test --framework jest` in a repo without jest fails loudly instead
+// of silently running nothing.
+func filterFrameworks(detected []Framework, requested []string) ([]Framework, error) {
+	detectedSet := make(map[Framework]bool, len(detected))
+	for _, fw := range detected {
+		detectedSet[fw] = true
+	}
+	var kept []Framework
+	seen := make(map[Framework]bool, len(requested))
+	for _, name := range requested {
+		fw, err := parsers.ParseFramework(name)
+		if err != nil {
+			return nil, err
+		}
+		if seen[fw] {
+			continue
+		}
+		seen[fw] = true
+		if !detectedSet[fw] {
+			return nil, fmt.Errorf("framework %q not detected in workdir", fw)
+		}
+		kept = append(kept, fw)
+	}
+	return kept, nil
 }
 
 func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []string, extraArgs []string) (parsers.TestSuiteResults, error) {
@@ -919,14 +957,13 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 	var tests parsers.Tests
 	var err error
 
-	// For Ginkgo, parse from report file
-	if testRun.Framework == parsers.Ginkgo && testRun.ReportPath != "" {
-		tests, err = o.parseGinkgoReportFile(testRun.ReportPath)
+	if testRun.ReportPath != "" {
+		tests, err = o.parseReportFile(testRun)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		// For go test, parse from stdout
+		// Stdout-based parsers (go test).
 		tests, err = testRun.Parser.Parse(strings.NewReader(result.Stdout))
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse test results: %w", err)
@@ -966,15 +1003,19 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 	}}, nil
 }
 
-// parseGinkgoReportFile reads and parses a Ginkgo JSON report file.
-func (o *TestOrchestrator) parseGinkgoReportFile(reportPath string) (parsers.Tests, error) {
+// parseReportFile reads and parses a runner's JSON report file using the
+// TestRun's own Parser. Used by Ginkgo, Jest, Vitest, and Playwright runners
+// that write results to a file rather than stdout.
+func (o *TestOrchestrator) parseReportFile(testRun *runners.TestRun) (parsers.Tests, error) {
+	reportPath := testRun.ReportPath
 	if o.WorkDir != "" && !filepath.IsAbs(reportPath) {
 		reportPath = filepath.Join(o.WorkDir, reportPath)
 	}
+	execName := fmt.Sprintf("%s Execution", testRun.Framework)
 	if _, err := os.Stat(reportPath); err != nil {
 		absPath, _ := filepath.Abs(reportPath)
 		return parsers.Tests{{
-			Name:    "Ginkgo Execution",
+			Name:    execName,
 			Failed:  true,
 			Message: fmt.Sprintf("'%s' not found", absPath),
 		}}, nil
@@ -983,17 +1024,16 @@ func (o *TestOrchestrator) parseGinkgoReportFile(reportPath string) (parsers.Tes
 	reportFile, err := os.Open(reportPath)
 	if err != nil {
 		return parsers.Tests{{
-			Name:    "Ginkgo Execution",
+			Name:    execName,
 			Failed:  true,
-			Message: fmt.Sprintf("Failed to open ginkgo report: %v", err),
+			Message: fmt.Sprintf("Failed to open %s report: %v", testRun.Framework, err),
 		}}, nil
 	}
 	defer reportFile.Close()
 
-	parser := parsers.NewGinkgoJSON()
-	tests, err := parser.Parse(reportFile)
+	tests, err := testRun.Parser.Parse(reportFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse ginkgo report: %w", err)
+		return nil, fmt.Errorf("failed to parse %s report: %w", testRun.Framework, err)
 	}
 
 	return tests, nil

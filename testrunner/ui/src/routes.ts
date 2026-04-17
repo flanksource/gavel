@@ -77,7 +77,7 @@ export function buildExportRoute(state: RouteState, format: ExportFormat): strin
 }
 
 function slugify(value: string): string {
-  const slug = value
+  const slug = (value || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
@@ -85,7 +85,7 @@ function slugify(value: string): string {
 }
 
 function displayLabel(test: Test): string {
-  if (test.framework !== 'go test') return test.name;
+  if (test.framework !== 'go test') return test.name || '';
   if (test.name.endsWith('/')) return test.name;
   const parts = test.name.split('/');
   return parts.map((part, index) => {

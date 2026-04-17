@@ -758,6 +758,7 @@ function matchesLeaf(t: Test, statusFilter: FilterState<string>, frameworkFilter
 }
 
 export function humanizeName(name: string, framework?: string): string {
+  if (!name) return '';
   if (framework !== 'go test') return name;
   if (name.endsWith('/')) return name;
   const parts = name.split('/');

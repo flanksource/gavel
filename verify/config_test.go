@@ -282,8 +282,12 @@ func TestLoadGavelConfig_RepoRoot(t *testing.T) {
 	require.NoError(t, err)
 	repoRoot := filepath.Dir(wd) // parent of verify/
 	path := filepath.Join(repoRoot, ".gavel.yaml")
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		t.Skipf("no .gavel.yaml at %s: %v", path, err)
+	}
+	if info.Size() == 0 {
+		t.Skipf(".gavel.yaml at %s is empty", path)
 	}
 
 	cfg, err := LoadGavelConfig(repoRoot)

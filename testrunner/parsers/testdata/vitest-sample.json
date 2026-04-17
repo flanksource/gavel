@@ -1,0 +1,45 @@
+{
+  "numFailedTestSuites": 1,
+  "numFailedTests": 1,
+  "numPassedTests": 1,
+  "numPendingTests": 1,
+  "success": false,
+  "testResults": [
+    {
+      "name": "/repo/src/sum.test.ts",
+      "status": "failed",
+      "message": "",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["sum"],
+          "title": "adds numbers",
+          "fullName": "sum adds numbers",
+          "status": "passed",
+          "failureMessages": [],
+          "location": {"line": 4, "column": 3},
+          "duration": 3
+        },
+        {
+          "ancestorTitles": ["sum"],
+          "title": "fails on NaN",
+          "fullName": "sum fails on NaN",
+          "status": "failed",
+          "failureMessages": [
+            "\u001b[31mAssertionError: expected NaN to be 3\u001b[39m\n    at /repo/src/sum.test.ts:8:17"
+          ],
+          "location": {"line": 7, "column": 3},
+          "duration": 5
+        },
+        {
+          "ancestorTitles": ["sum"],
+          "title": "handles negatives",
+          "fullName": "sum handles negatives",
+          "status": "skipped",
+          "failureMessages": [],
+          "location": {"line": 12, "column": 3},
+          "duration": 0
+        }
+      ]
+    }
+  ]
+}

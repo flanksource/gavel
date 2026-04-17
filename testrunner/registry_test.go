@@ -37,7 +37,10 @@ func TestRegistryDefaultFactory(t *testing.T) {
 func TestRegistryDetectAll(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create go test files
+	// GoTest.Detect requires a go.mod to confirm this is a Go module
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module example\n"), 0644); err != nil {
+		t.Fatalf("failed to create go.mod: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "example_test.go"), []byte("package main\n"), 0644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}

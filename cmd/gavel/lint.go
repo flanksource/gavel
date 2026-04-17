@@ -35,7 +35,7 @@ import (
 )
 
 type LintOptions struct {
-	Linters   string    `flag:"linters" help:"Comma-separated linter names or * for all" default:"*"`
+	Linters   []string  `flag:"linters" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
 	Ignore    []string  `flag:"ignore" help:"Glob patterns to exclude from linting"`
 	Triage    bool      `flag:"triage" help:"Interactive mode to select violation types to ignore"`
 	Fix       bool      `flag:"fix" help:"Enable auto-fixing"`
@@ -58,8 +58,8 @@ func (o LintOptions) Pretty() api.Text {
 	if o.WorkDir != "" {
 		t = t.Append("WorkDir: ", "text-muted").Append(o.WorkDir, "text-blue-500").Space()
 	}
-	if o.Linters != "*" {
-		t = t.Append("Linters: ", "text-muted").Append(o.Linters, "text-blue-500").Space()
+	if len(o.Linters) > 0 {
+		t = t.Append("Linters: ", "text-muted").Append(strings.Join(o.Linters, ","), "text-blue-500").Space()
 	}
 	if o.Fix {
 		t = t.Append("Fix: on", "text-green-500").Space()
@@ -89,7 +89,8 @@ Examples:
 }
 
 func init() {
-	clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
+	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
+	registerLintLinterSubcommands(lintCmd)
 }
 
 func runLint(opts LintOptions) (any, error) {
@@ -104,7 +105,9 @@ func runLint(opts LintOptions) (any, error) {
 			groupOpts := opts
 			groupOpts.WorkDir = g.gitRoot
 			groupOpts.Files = g.files
-			displayLintDryRun(groupOpts)
+			if err := displayLintDryRun(groupOpts); err != nil {
+				return nil, err
+			}
 		}
 		return nil, nil
 	}
@@ -221,7 +224,6 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 
 	rerunOpts := LintOptions{
 		WorkDir:   workDir,
-		Linters:   "*",
 		Timeout:   base.Timeout,
 		Files:     append([]string(nil), req.LintFiles...),
 		OutputTee: base.OutputTee,
@@ -230,7 +232,7 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 		rerunOpts.Timeout = "5m"
 	}
 	if len(req.LintLinters) > 0 {
-		rerunOpts.Linters = strings.Join(req.LintLinters, ",")
+		rerunOpts.Linters = append([]string(nil), req.LintLinters...)
 	}
 
 	results, err := executeLinters(rerunOpts)
@@ -292,41 +294,20 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
 	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
 
-	// Check if any positional args are linter names. `secrets` is an alias
-	// for `betterleaks` so users can type `gavel lint secrets`.
-	var linterFilter []string
-	var actualFiles []string
-	for _, f := range opts.Files {
-		name := f
-		if name == "secrets" {
-			name = "betterleaks"
-		}
-		if registry.Has(name) {
-			linterFilter = append(linterFilter, name)
-		} else {
-			actualFiles = append(actualFiles, f)
-		}
-	}
-	opts.Files = actualFiles
-
-	explicit := false
-	requestedLinters := registry.List()
-	if len(linterFilter) > 0 {
-		requestedLinters = linterFilter
-		explicit = true
-	} else if opts.Linters != "*" {
-		requestedLinters = strings.Split(opts.Linters, ",")
-		explicit = true
+	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
+	if err != nil {
+		return nil, err
 	}
 
 	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
 	var allResults []*linters.LinterResult
 	var lintTasks []clickytask.TypedTask[*linters.LinterResult]
 	for _, name := range requestedLinters {
-		linter, ok := registry.Get(strings.TrimSpace(name))
+		linter, ok := registry.Get(name)
 		if !ok {
-			logger.Warnf("Unknown linter: %s (available: %s)", name, strings.Join(registry.List(), ", "))
-			continue
+			// resolveRequestedLinters already validated every name; hitting
+			// this path means the registry was mutated mid-flight.
+			return nil, fmt.Errorf("internal: linter %q missing from registry", name)
 		}
 
 		if ok, reason := shouldSelectLinter(opts.WorkDir, gavelCfg, linter, explicit); !ok {
@@ -476,7 +457,7 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 // anything. Linters that are registered but filtered out (no matching files
 // or not on PATH) are printed with a skipped reason so users see the full
 // picture.
-func displayLintDryRun(opts LintOptions) {
+func displayLintDryRun(opts LintOptions) error {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed")
 	logger.Infof("")
 
@@ -499,35 +480,15 @@ func displayLintDryRun(opts LintOptions) {
 	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
 	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
 
-	explicit := false
-	var linterFilter []string
-	var actualFiles []string
-	for _, f := range opts.Files {
-		name := f
-		if name == "secrets" {
-			name = "betterleaks"
-		}
-		if registry.Has(name) {
-			linterFilter = append(linterFilter, name)
-		} else {
-			actualFiles = append(actualFiles, f)
-		}
-	}
-	opts.Files = actualFiles
-
-	requestedLinters := registry.List()
-	if len(linterFilter) > 0 {
-		requestedLinters = linterFilter
-		explicit = true
-	} else if opts.Linters != "*" {
-		requestedLinters = strings.Split(opts.Linters, ",")
-		explicit = true
+	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
+	if err != nil {
+		return err
 	}
 
 	for _, name := range requestedLinters {
-		linter, ok := registry.Get(strings.TrimSpace(name))
+		linter, ok := registry.Get(name)
 		if !ok {
-			testrunner.PrintDryRunSkipped("lint", strings.TrimSpace(name), "unknown linter")
+			testrunner.PrintDryRunSkipped("lint", name, "unknown linter")
 			continue
 		}
 
@@ -569,6 +530,44 @@ func displayLintDryRun(opts LintOptions) {
 		cmdName, args := dr.DryRunCommand()
 		testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, opts.WorkDir)
 	}
+	return nil
+}
+
+// linterAliases maps CLI-friendly aliases onto registered linter names.
+var linterAliases = map[string]string{
+	"secrets":       "betterleaks",
+	"golangci-lint": "golangci-lint",
+	"golangci":      "golangci-lint",
+}
+
+// resolveRequestedLinters validates --linters names against the registry and
+// returns the canonical list in registry order. Empty input returns every
+// registered linter (explicit=false). Any unknown name returns an error with
+// the known list so typos fail loudly instead of running the wrong subset.
+func resolveRequestedLinters(registry *linters.Registry, requested []string) ([]string, bool, error) {
+	if len(requested) == 0 {
+		return registry.List(), false, nil
+	}
+	seen := make(map[string]bool, len(requested))
+	out := make([]string, 0, len(requested))
+	for _, raw := range requested {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if canonical, ok := linterAliases[name]; ok {
+			name = canonical
+		}
+		if !registry.Has(name) {
+			return nil, false, fmt.Errorf("unknown linter %q; known: %s", raw, strings.Join(registry.List(), ", "))
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, true, nil
 }
 
 // hasMatchingFiles checks if any files in workDir match at least one of the glob patterns.

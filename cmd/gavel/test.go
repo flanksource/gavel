@@ -120,7 +120,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
 					WorkDir:   opts.WorkDir,
-					Linters:   "*",
 					Timeout:   "5m",
 					OutputTee: output.StdoutWriter(),
 				}, req)
@@ -162,7 +161,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			}
 			lintResults, lintErr = executeLinters(LintOptions{
 				WorkDir: workDir,
-				Linters: "*",
 				Timeout: "5m",
 			})
 			if lintErr == nil {

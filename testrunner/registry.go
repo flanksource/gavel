@@ -35,11 +35,11 @@ func DefaultRegistry(workDir string) *Registry {
 	reg.RegisterParser(goTestParser)
 
 	// Register runners
-	goTestRunner := runners.NewGoTest(workDir)
-	ginkgoRunner := runners.NewGinkgo(workDir)
-
-	reg.Register(goTestRunner)
-	reg.Register(ginkgoRunner)
+	reg.Register(runners.NewGoTest(workDir))
+	reg.Register(runners.NewGinkgo(workDir))
+	reg.Register(runners.NewJest(workDir))
+	reg.Register(runners.NewVitest(workDir))
+	reg.Register(runners.NewPlaywright(workDir))
 
 	return reg
 }

@@ -18,13 +18,44 @@ import (
 type Framework string
 
 const (
-	GoTest Framework = "go test"
-	Ginkgo Framework = "ginkgo"
+	GoTest     Framework = "go test"
+	Ginkgo     Framework = "ginkgo"
+	Jest       Framework = "jest"
+	Vitest     Framework = "vitest"
+	Playwright Framework = "playwright"
 )
 
 // String returns the string representation of the framework.
 func (f Framework) String() string {
 	return string(f)
+}
+
+// AllFrameworks lists every framework gavel knows how to run. Order is
+// stable so help text and error messages read the same on every invocation.
+var AllFrameworks = []Framework{GoTest, Ginkgo, Jest, Vitest, Playwright}
+
+// ParseFramework resolves a user-supplied name to a known Framework. It
+// accepts the canonical value ("go test", "ginkgo", ...) and the tolerant
+// forms users type at the CLI ("go", "gotest", "go-test"). Returns an error
+// listing known names when the input is unrecognized.
+func ParseFramework(name string) (Framework, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "go", "gotest", "go-test", "go_test", "go test":
+		return GoTest, nil
+	case "ginkgo":
+		return Ginkgo, nil
+	case "jest":
+		return Jest, nil
+	case "vitest":
+		return Vitest, nil
+	case "playwright":
+		return Playwright, nil
+	}
+	known := make([]string, len(AllFrameworks))
+	for i, f := range AllFrameworks {
+		known[i] = string(f)
+	}
+	return "", fmt.Errorf("unknown framework %q; known: %s", name, strings.Join(known, ", "))
 }
 
 // Test represents a single test failure.
@@ -197,6 +228,24 @@ func (t Test) RerunCommand() string {
 		return fmt.Sprintf("go test -run ^%s$ %s", t.Name, pkgPath)
 	case Ginkgo:
 		return fmt.Sprintf(`ginkgo --focus="%s"`, t.Name)
+	case Jest:
+		if t.File != "" {
+			return fmt.Sprintf(`npx jest -t %q %s`, t.FullName(), t.File)
+		}
+		return fmt.Sprintf(`npx jest -t %q`, t.FullName())
+	case Vitest:
+		if t.File != "" {
+			return fmt.Sprintf(`npx vitest run -t %q %s`, t.FullName(), t.File)
+		}
+		return fmt.Sprintf(`npx vitest run -t %q`, t.FullName())
+	case Playwright:
+		if t.File != "" && t.Line > 0 {
+			return fmt.Sprintf(`npx playwright test %s:%d`, t.File, t.Line)
+		}
+		if t.File != "" {
+			return fmt.Sprintf(`npx playwright test %s`, t.File)
+		}
+		return fmt.Sprintf(`npx playwright test -g %q`, t.FullName())
 	default:
 		return ""
 	}

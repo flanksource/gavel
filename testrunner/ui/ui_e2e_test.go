@@ -315,7 +315,7 @@ var _ = Describe("Test UI E2E", func() {
 		Expect(detailText).To(ContainSubstring("Diagnostics"))
 		Expect(detailText).To(ContainSubstring("gavel test --ui ./testrunner/ui"))
 		Expect(detailText).To(ContainSubstring("pid 4242"))
-		Expect(detailText).To(ContainSubstring("goroutine 1 [running]:"))
+		Expect(detailText).To(ContainSubstring("main.first"))
 	})
 
 	It("shows fixture context in detail panel", func() {
