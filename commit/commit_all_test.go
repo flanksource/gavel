@@ -195,10 +195,10 @@ func TestRunCommitAllDryRunPrintsPreview(t *testing.T) {
 	assert.Contains(t, out, "\x1b[")
 	clean := stripANSIForTest(out)
 	assert.Contains(t, clean, "DRY RUN")
-	assert.Contains(t, clean, "commit dry-run/1 of 2")
-	assert.Contains(t, clean, "Files:")
-	assert.Contains(t, clean, "a.txt")
-	assert.Contains(t, clean, "b.txt")
+	assert.Contains(t, clean, "would create 2 commit(s)")
+	assert.Contains(t, clean, "dry-run/1 of 2")
+	assert.Contains(t, clean, "dry-run/2 of 2")
+	assert.NotContains(t, clean, "Files:")
 }
 
 func TestMergeGroupsToMax(t *testing.T) {

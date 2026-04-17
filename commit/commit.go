@@ -309,69 +309,62 @@ func buildAgent(opts Options) (clickyai.Agent, error) {
 	return agent, nil
 }
 
-func commitLabel(commit CommitResult) string {
-	if commit.Label != "" {
-		return commit.Label
-	}
-	if len(commit.Files) == 1 {
-		return commit.Files[0]
-	}
-	return fmt.Sprintf("%d files", len(commit.Files))
-}
-
 func printDryRunPreview(result *Result) {
 	if result == nil || len(result.Commits) == 0 {
 		return
 	}
-	fmt.Fprintln(dryRunOutput, renderDryRunPreview(result).ANSI())
+	fmt.Fprintln(dryRunOutput, result.Pretty().ANSI())
 }
 
-func renderDryRunPreview(result *Result) api.Text {
-	t := clicky.Text("DRY RUN", "font-bold text-yellow-600").
-		Append(" ", "").
-		Append(fmt.Sprintf("would create %d commit(s)", len(result.Commits)), "text-muted").
-		NewLine()
+// Pretty renders the commit result in a `git log`-style colorized form:
+// one header line per commit (short hash or dry-run ref + conventional
+// subject) followed by indented body lines. The default reflection-based
+// struct printer is intentionally bypassed.
+func (r *Result) Pretty() api.Text {
+	if r == nil || len(r.Commits) == 0 {
+		return clicky.Text("")
+	}
 
-	for i, commit := range result.Commits {
+	t := clicky.Text("")
+	if r.DryRun {
+		t = t.Append("DRY RUN", "font-bold text-yellow-600").
+			Append(" ", "").
+			Append(fmt.Sprintf("would create %d commit(s)", len(r.Commits)), "text-muted").
+			NewLine()
+	}
+
+	total := len(r.Commits)
+	for i, commit := range r.Commits {
 		if i > 0 {
 			t = t.NewLine()
 		}
-		t = t.Add(renderDryRunCommit(i, len(result.Commits), commit))
+		t = t.Add(commit.prettyAt(i, total, r.DryRun))
 	}
 	return t
 }
 
-func renderDryRunCommit(index, total int, commit CommitResult) api.Text {
-	parsed := git.NewCommit(commit.Message)
-	ref := fmt.Sprintf("dry-run/%d", index+1)
-	if total > 1 {
-		ref = fmt.Sprintf("%s of %d", ref, total)
+func (c CommitResult) Pretty() api.Text {
+	return c.prettyAt(0, 1, c.Hash == "")
+}
+
+func (c CommitResult) prettyAt(index, total int, dryRun bool) api.Text {
+	parsed := git.NewCommit(c.Message)
+
+	ref := shortHash(c.Hash)
+	if ref == "" {
+		ref = fmt.Sprintf("dry-run/%d", index+1)
+		if dryRun && total > 1 {
+			ref = fmt.Sprintf("%s of %d", ref, total)
+		}
 	}
 
-	t := clicky.Text("").
-		Append("commit ", "text-orange-500").
-		Append(ref, "text-yellow-600").
-		NewLine()
-
-	if commit.Label != "" {
-		t = t.Append("Label: ", "text-muted").Append(commit.Label, "font-bold").NewLine()
-	}
-
-	t = t.Append("    ", "").Add(parsed.PrettySubject()).NewLine()
+	t := clicky.Text(ref, "text-yellow-600").Space().Add(parsed.PrettySubject()).NewLine()
 
 	if parsed.Body != "" {
 		for _, line := range strings.Split(parsed.Body, "\n") {
 			t = t.Append("    ", "").Append(line).NewLine()
 		}
 	}
-
-	if len(commit.Files) > 0 {
-		t = t.Append("    ", "").Append("Files:", "text-muted").NewLine()
-		for _, file := range commit.Files {
-			t = t.Append("      ", "").Append(file, "font-mono text-green-600").NewLine()
-		}
-	}
-
 	return t
 }
 
