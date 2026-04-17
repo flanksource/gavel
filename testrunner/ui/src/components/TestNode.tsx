@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import type { Test } from '../types';
-import { statusIcon, statusColor, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName, isLintNode, lintNodeCount, lintBadgeColor } from '../utils';
+import { statusIcon, statusColor, formatCount, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName, isLintNode, lintNodeCount, lintBadgeColor } from '../utils';
 
 interface Props {
   test: Test;
@@ -119,8 +119,11 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
 
 function Badge({ count, color }: { count: number; color: string }) {
   return (
-    <span class={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${color}`}>
-      {count}
+    <span
+      class={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${color}`}
+      title={String(count)}
+    >
+      {formatCount(count)}
     </span>
   );
 }

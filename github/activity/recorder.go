@@ -22,6 +22,7 @@ const (
 	KindREST    = "rest"
 	KindGraphQL = "graphql"
 	KindSearch  = "search"
+	KindFavicon = "favicon"
 )
 
 // Entry is one recorded HTTP request.

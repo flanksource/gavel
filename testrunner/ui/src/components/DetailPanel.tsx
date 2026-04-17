@@ -454,6 +454,7 @@ function LinterDetail({ t }: { t: Test }) {
                       v={v}
                       linter={t.linterName || ''}
                       file=""
+                      workDir=""
                     />
                   ))}
                 </div>

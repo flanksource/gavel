@@ -28,23 +28,37 @@ renderer.link = ({ href, text }: { href: string; text: string }) =>
 renderer.blockquote = ({ text }: { text: string }) =>
   `<blockquote class="border-l-2 border-gray-300 pl-2 text-gray-500 italic my-1">${text}</blockquote>`;
 
-renderer.table = ({ header, body }: { header: string; body: string }) =>
-  `<table class="text-xs border-collapse my-2 w-full"><thead>${header}</thead><tbody>${body}</tbody></table>`;
-
-renderer.tablerow = ({ text }: { text: string }) =>
-  `<tr class="border-b border-gray-100">${text}</tr>`;
-
-renderer.tablecell = ({ text, header }: { text: string; header: boolean }) => {
-  const tag = header ? 'th' : 'td';
-  const cls = header
-    ? 'px-2 py-1 text-left font-medium text-gray-600 bg-gray-50 border border-gray-200'
-    : 'px-2 py-1 border border-gray-100';
-  return `<${tag} class="${cls}">${text}</${tag}>`;
+renderer.table = function (token) {
+  const head = token.header
+    .map((cell) => this.tablecell({ ...cell, header: true, align: cell.align ?? null }))
+    .join('');
+  const rows = token.rows
+    .map((row) => {
+      const cells = row
+        .map((cell) => this.tablecell({ ...cell, header: false, align: cell.align ?? null }))
+        .join('');
+      return this.tablerow({ text: cells });
+    })
+    .join('');
+  return `<table class="text-xs border-collapse my-2 w-full"><thead>${this.tablerow({ text: head })}</thead><tbody>${rows}</tbody></table>`;
 };
 
-renderer.list = ({ body, ordered }: { body: string; ordered: boolean }) => {
-  const tag = ordered ? 'ol' : 'ul';
-  const cls = ordered ? 'list-decimal ml-4 my-1' : 'list-disc ml-4 my-1';
+renderer.tablerow = ({ text }) =>
+  `<tr class="border-b border-gray-100">${text}</tr>`;
+
+renderer.tablecell = function (token) {
+  const tag = token.header ? 'th' : 'td';
+  const cls = token.header
+    ? 'px-2 py-1 text-left font-medium text-gray-600 bg-gray-50 border border-gray-200'
+    : 'px-2 py-1 border border-gray-100';
+  const inner = this.parser.parseInline(token.tokens);
+  return `<${tag} class="${cls}">${inner}</${tag}>`;
+};
+
+renderer.list = function (token) {
+  const tag = token.ordered ? 'ol' : 'ul';
+  const cls = token.ordered ? 'list-decimal ml-4 my-1' : 'list-disc ml-4 my-1';
+  const body = token.items.map((item) => this.listitem(item)).join('');
   return `<${tag} class="${cls}">${body}</${tag}>`;
 };
 

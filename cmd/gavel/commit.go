@@ -22,6 +22,7 @@ type CommitOptions struct {
 	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force     bool   `flag:"force" help:"Skip pre-commit hooks"`
 	NoCache   bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
+	Push      bool   `flag:"push" short:"p" help:"After committing, push to a matching open PR or open a new PR"`
 	WorkDir   string `flag:"work-dir" help:"Working directory"`
 }
 
@@ -73,6 +74,7 @@ func runCommit(opts CommitOptions) (any, error) {
 		NoCache:   opts.NoCache,
 		Model:     opts.Model,
 		Message:   opts.Message,
+		Push:      opts.Push,
 		Config:    cfg.Commit,
 	})
 

@@ -15,6 +15,7 @@ import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import {
   sumNonTaskTests,
   collectFrameworks,
+  collapseSingleChildChains,
   filterTests,
   totalLintViolations,
   groupLintByLinterFile,
@@ -23,7 +24,7 @@ import {
   isLintNode,
   relPath,
 } from './utils';
-import { annotateRoutePaths, buildExportRoute, buildRoute, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
+import { annotateRoutePaths, buildExportRoute, buildRoute, defaultStatusFilter, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
 import { apiUrl } from './config';
 
 function applySnapshot(
@@ -103,7 +104,7 @@ export function App() {
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location) : {
     tab: 'tests' as TabKey,
     selectedPath: '',
-    filters: { status: new Map(), framework: new Map() },
+    filters: { status: defaultStatusFilter(), framework: new Map() },
     lintGrouping: 'linter-file' as LintGrouping,
     lintFilters: { severity: new Map(), linter: new Map() },
   };
@@ -248,11 +249,11 @@ export function App() {
 
   const frameworks = useMemo(() => collectFrameworks(tests), [tests]);
   const filteredTests = useMemo(
-    () => annotateRoutePaths(filterTests(tests, filters.status, filters.framework)),
+    () => annotateRoutePaths(collapseSingleChildChains(filterTests(tests, filters.status, filters.framework))),
     [tests, filters],
   );
   const lintTree = useMemo(() => {
-    return annotateRoutePaths(groupLintByLinterFile(lint, lintFilters));
+    return annotateRoutePaths(collapseSingleChildChains(groupLintByLinterFile(lint, lintFilters)));
   }, [lint, lintFilters]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
   const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);

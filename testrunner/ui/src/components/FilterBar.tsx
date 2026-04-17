@@ -1,4 +1,4 @@
-import { frameworkIcon } from '../utils';
+import { formatCount, frameworkIcon } from '../utils';
 import type { FilterMode, FilterState } from '../filterState';
 import { cycleFilterState } from '../filterState';
 
@@ -37,8 +37,11 @@ export function FilterBar({ filters, onChange, counts, frameworks }: Props) {
             onClick={() => onChange({ ...filters, status: cycleFilterState(filters.status, sf.key) })}
             title={triStateTitle(sf.label, mode)}
           >
-            <span class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sf.badge}`}>
-              {count}
+            <span
+              class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sf.badge}`}
+              title={String(count)}
+            >
+              {formatCount(count)}
             </span>
             <StateMarker mode={mode} />
             {sf.label}

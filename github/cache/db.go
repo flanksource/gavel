@@ -61,6 +61,7 @@ func Open() (*Store, error) {
 		&JobLogCache{},
 		&WorkflowDefCache{},
 		&SeenPR{},
+		&FaviconCache{},
 	); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate github cache: %w", err)
@@ -172,6 +173,7 @@ func (s *Store) Status() Status {
 		{"job_log_caches", &JobLogCache{}},
 		{"workflow_def_caches", &WorkflowDefCache{}},
 		{"seen_prs", &SeenPR{}},
+		{"favicon_caches", &FaviconCache{}},
 	}
 	for _, t := range tables {
 		var n int64

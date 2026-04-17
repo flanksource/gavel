@@ -20,6 +20,7 @@ export interface PRItem {
   authorAvatarUrl?: string;
   repo: string;
   repoAvatarUrl?: string;
+  repoHomepageUrl?: string;
   source: string;
   target: string;
   state: string;
@@ -174,7 +175,7 @@ export interface PRDetail {
 
 // Activity API types
 
-export type ActivityKind = 'rest' | 'graphql' | 'search';
+export type ActivityKind = 'rest' | 'graphql' | 'search' | 'favicon';
 
 export interface ActivityEntry {
   timestamp: string;

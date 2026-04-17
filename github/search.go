@@ -33,6 +33,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
         updatedAt
         repository {
           nameWithOwner
+          homepageUrl
           owner { avatarUrl }
         }
       }
@@ -58,6 +59,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
         updatedAt
         repository {
           nameWithOwner
+          homepageUrl
           owner { avatarUrl }
         }
         commits(last: 1) {
@@ -193,6 +195,7 @@ type searchPRNode struct {
 	UpdatedAt      time.Time     `json:"updatedAt"`
 	Repository     struct {
 		NameWithOwner string `json:"nameWithOwner"`
+		HomepageURL   string `json:"homepageUrl"`
 		Owner         struct {
 			AvatarURL string `json:"avatarUrl"`
 		} `json:"owner"`
@@ -207,6 +210,7 @@ type PRListItem struct {
 	AuthorAvatarURL string        `json:"authorAvatarUrl,omitempty"`
 	Repo            string        `json:"repo"`
 	RepoAvatarURL   string        `json:"repoAvatarUrl,omitempty"`
+	RepoHomepageURL string        `json:"repoHomepageUrl,omitempty"`
 	Source          string        `json:"source"`
 	Target          string        `json:"target"`
 	State           string        `json:"state"`
@@ -437,6 +441,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 			AuthorAvatarURL: node.Author.AvatarURL,
 			Repo:            node.Repository.NameWithOwner,
 			RepoAvatarURL:   node.Repository.Owner.AvatarURL,
+			RepoHomepageURL: node.Repository.HomepageURL,
 			Source:          node.HeadRefName,
 			Target:          node.BaseRefName,
 			State:           node.State,

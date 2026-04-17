@@ -179,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/repos/favicon", s.handleRepoFavicon)
 	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
@@ -602,6 +603,59 @@ func (s *Server) refreshRepoCache() {
 	s.repoCache = repos
 	s.repoCacheAt = time.Now()
 	s.mu.Unlock()
+}
+
+// handleRepoFavicon serves a cached favicon for a repo homepage. Only homepages
+// that currently appear on one of the tracked PRs are accepted — this prevents
+// the endpoint from being used as an open favicon proxy for arbitrary sites.
+func (s *Server) handleRepoFavicon(w http.ResponseWriter, r *http.Request) {
+	homepage := r.URL.Query().Get("homepage")
+	if homepage == "" {
+		http.Error(w, "homepage param required", http.StatusBadRequest)
+		return
+	}
+
+	if !s.knownHomepage(homepage) {
+		http.Error(w, "unknown homepage", http.StatusNotFound)
+		return
+	}
+
+	store := cache.Shared()
+	data, mime, hit, err := store.GetFavicon(homepage)
+	if err != nil {
+		logger.Warnf("favicon cache read %s: %v", homepage, err)
+	}
+	if !hit {
+		data, mime, err = store.FetchFavicon(r.Context(), homepage)
+		if err != nil {
+			logger.Debugf("favicon fetch %s: %v", homepage, err)
+			http.Error(w, "favicon unavailable", http.StatusNotFound)
+			return
+		}
+	}
+	if len(data) == 0 {
+		// Negative cache hit — site has no usable favicon.
+		http.Error(w, "no favicon", http.StatusNotFound)
+		return
+	}
+	if mime != "" {
+		w.Header().Set("Content-Type", mime)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
+// knownHomepage reports whether any tracked PR declares this homepage URL. It
+// guards the favicon endpoint from being abused as an open proxy.
+func (s *Server) knownHomepage(homepage string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, pr := range s.prs {
+		if pr.RepoHomepageURL == homepage {
+			return true
+		}
+	}
+	return false
 }
 
 type prDetail struct {

@@ -57,7 +57,15 @@ export interface RepoGroup {
   repoOwner: string;
   repoShort: string;
   repoAvatarUrl?: string;
+  repoHomepageUrl?: string;
   items: PRItem[];
+}
+
+export interface OrgGroup {
+  org: string;
+  orgAvatarUrl?: string;
+  repos: RepoGroup[];
+  itemCount: number;
 }
 
 export function groupByRepo(prs: PRItem[]): RepoGroup[] {
@@ -79,9 +87,70 @@ export function groupByRepo(prs: PRItem[]): RepoGroup[] {
       repoOwner: slash >= 0 ? repo.slice(0, slash) : '',
       repoShort: slash >= 0 ? repo.slice(slash + 1) : repo,
       repoAvatarUrl: items.find(p => p.repoAvatarUrl)?.repoAvatarUrl,
+      repoHomepageUrl: items.find(p => p.repoHomepageUrl)?.repoHomepageUrl,
       items,
     };
   });
+}
+
+export function groupByOrg(prs: PRItem[]): OrgGroup[] {
+  const repoGroups = groupByRepo(prs);
+  const order: string[] = [];
+  const byOrg = new Map<string, RepoGroup[]>();
+  for (const rg of repoGroups) {
+    const org = rg.repoOwner || '';
+    if (!byOrg.has(org)) {
+      order.push(org);
+      byOrg.set(org, []);
+    }
+    byOrg.get(org)!.push(rg);
+  }
+  return order.map(org => {
+    const repos = byOrg.get(org)!;
+    return {
+      org,
+      orgAvatarUrl: repos.find(r => r.repoAvatarUrl)?.repoAvatarUrl,
+      repos,
+      itemCount: repos.reduce((n, r) => n + r.items.length, 0),
+    };
+  });
+}
+
+// AVATAR_PALETTE: 16 Tailwind bg/text pairs chosen for WCAG AA contrast
+// at small avatar sizes (20-28px). Add/remove entries carefully — the
+// index is derived by hash and must stay stable.
+export const AVATAR_PALETTE: readonly string[] = [
+  'bg-rose-100 text-rose-700',
+  'bg-pink-100 text-pink-700',
+  'bg-fuchsia-100 text-fuchsia-700',
+  'bg-purple-100 text-purple-700',
+  'bg-violet-100 text-violet-700',
+  'bg-indigo-100 text-indigo-700',
+  'bg-blue-100 text-blue-700',
+  'bg-sky-100 text-sky-700',
+  'bg-cyan-100 text-cyan-700',
+  'bg-teal-100 text-teal-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-green-100 text-green-700',
+  'bg-lime-100 text-lime-800',
+  'bg-amber-100 text-amber-800',
+  'bg-orange-100 text-orange-700',
+  'bg-red-100 text-red-700',
+];
+
+// fnv1a32 is a deterministic 32-bit hash. Used to pick a palette color for
+// a repo name so the same name renders in the same color every session.
+export function fnv1a32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+export function paletteClass(key: string): string {
+  return AVATAR_PALETTE[fnv1a32(key) % AVATAR_PALETTE.length];
 }
 
 export interface PRCounts {

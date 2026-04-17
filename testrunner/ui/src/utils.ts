@@ -631,6 +631,21 @@ export function formatDuration(ns: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// formatCount renders integer counts compactly so large totals don't crowd
+// row layouts. <1000 is shown raw; 1000-999999 uses k with one decimal below
+// 10k; 1000000+ uses M the same way.
+export function formatCount(n: number): string {
+  const abs = Math.abs(n);
+  if (abs < 1000) return String(n);
+  if (abs < 1_000_000) return compactWithUnit(n / 1000, 'k');
+  return compactWithUnit(n / 1_000_000, 'M');
+}
+
+function compactWithUnit(value: number, unit: string): string {
+  const rounded = Math.abs(value) >= 10 ? Math.round(value).toString() : value.toFixed(1).replace(/\.0$/, '');
+  return `${rounded}${unit}`;
+}
+
 export function sum(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number } {
   if (t.summary) {
     return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0 };
@@ -728,6 +743,48 @@ export function testStatus(t: Test): string | null {
   if (t.skipped) return 'skipped';
   if (t.passed) return 'passed';
   return null;
+}
+
+// collapseSingleChildChains compresses any container node that has exactly
+// one child and no status of its own into its child, joining the names with
+// " > ". The child's kind, status flags, duration, violations, and
+// navigation fields are preserved. The transform is recursive so chains of
+// arbitrary depth collapse into a single row.
+export function collapseSingleChildChains(tests: Test[]): Test[] {
+  return tests.map(collapseNode);
+}
+
+function collapseNode(t: Test): Test {
+  const children = t.children ?? [];
+  if (children.length === 0) return t;
+
+  const collapsedChildren = children.map(collapseNode);
+
+  if (collapsedChildren.length === 1 && isCollapsibleContainer(t)) {
+    const child = collapsedChildren[0];
+    return {
+      ...child,
+      name: joinChainNames(t.name, child.name),
+      summary: undefined,
+    };
+  }
+
+  return { ...t, children: collapsedChildren };
+}
+
+function isCollapsibleContainer(t: Test): boolean {
+  if (t.passed || t.failed || t.skipped || t.pending) return false;
+  if (t.kind === 'violation') return false;
+  if (t.violations && t.violations.length > 0) return false;
+  return true;
+}
+
+function joinChainNames(parent: string | undefined, child: string | undefined): string {
+  const p = (parent ?? '').trim();
+  const c = (child ?? '').trim();
+  if (!p) return c;
+  if (!c) return p;
+  return `${p} > ${c}`;
 }
 
 export function filterTests(

@@ -1,5 +1,5 @@
 import type { LinterResult, Severity } from '../types';
-import { countLintBySeverity, countLintByLinter, collectLintLinters, lintToolIcon } from '../utils';
+import { countLintBySeverity, countLintByLinter, collectLintLinters, formatCount, lintToolIcon } from '../utils';
 import type { FilterMode, FilterState } from '../filterState';
 import { cycleFilterState } from '../filterState';
 
@@ -48,8 +48,11 @@ export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
             onClick={() => onFiltersChange({ ...filters, severity: cycleFilterState(filters.severity, sd.key) })}
             title={triStateTitle(sd.label, mode)}
           >
-            <span class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sd.badge}`}>
-              {count}
+            <span
+              class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sd.badge}`}
+              title={String(count)}
+            >
+              {formatCount(count)}
             </span>
             <StateMarker mode={mode} />
             <iconify-icon icon={sd.icon} class="text-sm" />
@@ -72,7 +75,7 @@ export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
                 title={triStateTitle(linter, mode)}
               >
                 <StateMarker mode={mode} />
-                <span class="text-[10px] text-gray-500">{count}</span>
+                <span class="text-[10px] text-gray-500" title={String(count)}>{formatCount(count)}</span>
                 <iconify-icon icon={lintToolIcon(linter)} class="text-sm" />
                 {linter}
               </button>

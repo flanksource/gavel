@@ -327,7 +327,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
   const [showOutdated, setShowOutdated] = useState(false);
   const [severityFilter, setSeverityFilter] = useState<Set<string>>(new Set());
 
-  const severityCounts = useMemo(() => {
+  const severityCounts = useMemo<Record<string, number>>(() => {
     const c: Record<string, number> = {};
     let outdated = 0;
     for (const comment of comments) {
