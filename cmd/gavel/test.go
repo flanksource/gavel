@@ -18,6 +18,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/baseline"
 	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner"
@@ -189,6 +190,15 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		logger.Warnf("Linting failed: %v", lintErr)
 	}
 
+	// Apply baseline filtering to lint results when --baseline is set.
+	if opts.Baseline != "" && len(lintResults) > 0 {
+		baselineSnap, baselineErr := baseline.LoadSnapshot(opts.Baseline)
+		if baselineErr != nil {
+			return nil, fmt.Errorf("--baseline: %w", baselineErr)
+		}
+		baseline.FilterNewViolations(lintResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
+	}
+
 	// Count lint violations
 	var lintViolations int
 	for _, lr := range lintResults {
@@ -205,6 +215,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		return result, err
 	}
 	if tests, ok := result.([]parsers.Test); ok {
+		if opts.Baseline != "" {
+			baselineSnap, baselineErr := baseline.LoadSnapshot(opts.Baseline)
+			if baselineErr != nil {
+				return nil, fmt.Errorf("--baseline: %w", baselineErr)
+			}
+			tests = baseline.FilterNewTestFailures(tests, baseline.ExtractFailedTestKeys(baselineSnap.Tests))
+		}
 		summary := parsers.Tests(tests).Sum()
 		if summary.Failed > 0 {
 			exitCode = 1

@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/testrunner/runners"
@@ -125,6 +126,8 @@ type RunOptions struct {
 	Fixtures      bool                  `json:"fixtures,omitempty" flag:"fixtures"`                           // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
 	FixtureFiles  []string              `json:"fixture_files,omitempty" flag:"fixture-files"`                 // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
 	Frameworks    []string              `json:"frameworks,omitempty" flag:"framework"`                        // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
+	Baseline      string                `json:"baseline,omitempty" flag:"baseline"`                           // Path to previous results JSON; only report NEW failures not in baseline
+	Failed        string                `json:"failed,omitempty" flag:"failed"`                               // Path to previous results JSON; re-run only failed tests
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 }
@@ -553,6 +556,67 @@ func filterFrameworks(detected []Framework, requested []string) ([]Framework, er
 	return kept, nil
 }
 
+// applyFailedFilter loads a previous Snapshot and narrows packagesByFramework
+// to only packages that had failures. It also injects framework-specific
+// --run/--focus args to target specific failed tests.
+func applyFailedFilter(packagesByFramework map[Framework][]string, extraArgs []string, failedPath string) (map[Framework][]string, []string, error) {
+	snapshot, err := baseline.LoadSnapshot(failedPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("--failed: %w", err)
+	}
+	failedPkgs := baseline.ExtractFailedTestPackages(snapshot.Tests)
+	if len(failedPkgs) == 0 {
+		return nil, nil, fmt.Errorf("--failed: no failed tests found in %s", failedPath)
+	}
+
+	filtered := make(map[Framework][]string)
+	var goTestNames, ginkgoTestNames []string
+
+	for fw, pkgs := range packagesByFramework {
+		failedForFW, ok := failedPkgs[parsers.Framework(fw)]
+		if !ok {
+			continue
+		}
+		pkgSet := make(map[string]bool, len(failedForFW))
+		for pkgPath := range failedForFW {
+			pkgSet[pkgPath] = true
+		}
+		for _, pkg := range pkgs {
+			if pkgSet[pkg] {
+				filtered[fw] = append(filtered[fw], pkg)
+			}
+		}
+		for _, names := range failedForFW {
+			switch parsers.Framework(fw) {
+			case parsers.GoTest:
+				goTestNames = append(goTestNames, names...)
+			case parsers.Ginkgo:
+				ginkgoTestNames = append(ginkgoTestNames, names...)
+			}
+		}
+	}
+
+	if len(goTestNames) > 0 {
+		pattern := "^(" + strings.Join(escapeRegexNames(goTestNames), "|") + ")$"
+		extraArgs = append(extraArgs, "-run", pattern)
+	}
+	if len(ginkgoTestNames) > 0 {
+		pattern := strings.Join(ginkgoTestNames, "|")
+		extraArgs = append(extraArgs, "--focus", pattern)
+	}
+
+	logger.Infof("--failed: narrowed to %d frameworks from %s", len(filtered), failedPath)
+	return filtered, extraArgs, nil
+}
+
+func escapeRegexNames(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = regexp.QuoteMeta(n)
+	}
+	return out
+}
+
 func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []string, extraArgs []string) (parsers.TestSuiteResults, error) {
 	if len(frameworks) == 0 {
 		return nil, fmt.Errorf("no frameworks provided for test execution")
@@ -653,6 +717,15 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			}
 			packagesByFramework[fw] = need
 			cachedByFramework[fw] = hits
+		}
+	}
+
+	// Narrow to previously-failed packages/tests when --failed is set.
+	if o.Failed != "" {
+		var err error
+		packagesByFramework, extraArgs, err = applyFailedFilter(packagesByFramework, extraArgs, o.Failed)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -980,18 +1053,10 @@ func (o *TestOrchestrator) parseTestResults(testRun *runners.TestRun, result *ex
 		}
 	}
 
-	// Normalize file paths using runner's method
-	runner, ok := o.registry.Get(testRun.Framework)
-	if ok {
-		switch r := runner.(type) {
-		case interface{ NormalizeFilePath(string) string }:
-			for i := range tests {
-				if tests[i].File != "" {
-					tests[i].File = r.NormalizeFilePath(tests[i].File)
-				}
-			}
-		}
-	}
+	// Parsers own file-path normalization — see parsers.GinkgoJSON.relToWorkDir,
+	// parsers.JestJSON.relPath, parsers.PlaywrightJSON.relPath, and the
+	// location map in parsers.GoTestJSON. Orchestrator just stamps package
+	// context on top; no second-pass normalization here.
 
 	return parsers.TestSuiteResults{{
 		Command:   testRun.Process.Cmd,

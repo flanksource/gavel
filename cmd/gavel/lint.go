@@ -17,6 +17,7 @@ import (
 	clickytask "github.com/flanksource/clicky/task"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/baseline"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/betterleaks"
 	"github.com/flanksource/gavel/linters/eslint"
@@ -49,6 +50,8 @@ type LintOptions struct {
 	UI        bool      `flag:"ui" help:"Launch browser UI to view violations"`
 	Addr      string    `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
 	DryRun    bool      `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
+	Baseline  string    `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
+	Failed    string    `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
 	Files     []string  `args:"true"`
 	OutputTee io.Writer `json:"-"`
 }
@@ -132,6 +135,22 @@ func runLint(opts LintOptions) (any, error) {
 		}
 	}
 
+	if opts.Failed != "" {
+		snapshot, failedErr := baseline.LoadSnapshot(opts.Failed)
+		if failedErr != nil {
+			return nil, fmt.Errorf("--failed: %w", failedErr)
+		}
+		linterNames, files := baseline.ExtractFailedLintTargets(snapshot.Lint)
+		if len(linterNames) == 0 {
+			return nil, fmt.Errorf("--failed: no lint violations found in %s", opts.Failed)
+		}
+		opts.Linters = linterNames
+		if len(files) > 0 {
+			opts.Files = files
+		}
+		logger.Infof("--failed: narrowed to linters=%v files=%d from %s", linterNames, len(files), opts.Failed)
+	}
+
 	groups := groupFilesByGitRoot(opts)
 	opts.WorkDir = groups[0].gitRoot
 	opts.Files = groups[0].files
@@ -159,6 +178,14 @@ func runLint(opts LintOptions) (any, error) {
 
 	if filtered := linters.FilterIgnoredViolations(allResults, gavelCfg.Lint.Ignore); filtered > 0 {
 		logger.Infof("Filtered %d ignored violations", filtered)
+	}
+
+	if opts.Baseline != "" {
+		baselineSnap, baselineErr := baseline.LoadSnapshot(opts.Baseline)
+		if baselineErr != nil {
+			return nil, fmt.Errorf("--baseline: %w", baselineErr)
+		}
+		baseline.FilterNewViolations(allResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
 	}
 
 	if uiServer != nil {
