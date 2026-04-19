@@ -55,10 +55,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { goos: linux,  goarch: amd64, runner: ubuntu-latest,    os_name: Linux,  arch_name: x86_64 }
-          - { goos: linux,  goarch: arm64, runner: ubuntu-24.04-arm, os_name: Linux,  arch_name: arm64  }
-          - { goos: darwin, goarch: amd64, runner: ubuntu-24.04-arm, os_name: Darwin, arch_name: x86_64 }
-          - { goos: darwin, goarch: arm64, runner: ubuntu-24.04-arm, os_name: Darwin, arch_name: arm64  }
+          - { goos: linux,  goarch: amd64, runner: ubuntu-latest    }
+          - { goos: linux,  goarch: arm64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: amd64, runner: ubuntu-24.04-arm }
+          - { goos: darwin, goarch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,7 +108,7 @@ jobs:
         id: archive
         run: |
           cd dist
-          archive_name="gavel_${{ matrix.os_name }}_${{ matrix.arch_name }}"
+          archive_name="gavel_${{ matrix.goos }}_${{ matrix.goarch }}"
           tar -czf "${archive_name}.tar.gz" gavel
           echo "path=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
 
@@ -143,7 +143,7 @@ jobs:
 
       - name: Extract binary
         run: |
-          tar -xzf "gavel_Linux_$( [ "${{ matrix.goarch }}" = "amd64" ] && echo x86_64 || echo arm64 ).tar.gz"
+          tar -xzf "gavel_linux_${{ matrix.goarch }}.tar.gz"
           chmod +x gavel
           ls -l gavel
 
