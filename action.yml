@@ -96,12 +96,16 @@ runs:
         if [ "$tag" = "latest" ]; then
           tag="$(gh api repos/flanksource/gavel/releases/latest --jq .tag_name)"
         fi
-        asset="gavel_${os}_${arch}"
+        asset="gavel_${os}_${arch}.tar.gz"
         url="https://github.com/flanksource/gavel/releases/download/${tag}/${asset}"
         echo "Downloading $url"
         install_dir="$HOME/.local/bin"
         mkdir -p "$install_dir"
-        curl -fsSL "$url" -o "$install_dir/gavel"
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL "$url" -o "$tmp/gavel.tar.gz"
+        tar -xzf "$tmp/gavel.tar.gz" -C "$tmp"
+        mv "$tmp/gavel" "$install_dir/gavel"
         chmod +x "$install_dir/gavel"
         echo "$install_dir" >> "$GITHUB_PATH"
         "$install_dir/gavel" version || true
