@@ -153,18 +153,19 @@ func isActionsNoise(line string) bool {
 }
 
 type PRSearchOptions struct {
-	Author     string
-	Since      time.Time
-	State      string
-	All        bool
-	Org        string
-	Repos      []string // explicit list of owner/repo to search
-	Limit      int
-	Status     bool // include GitHub Actions check status counts
-	Verbose    bool // with --status, enrich failed checks with failing step names
-	FetchLogs  bool // with --status -v, also fetch failing job log tails (extra API quota)
-	ShowURL    bool // show PR URL instead of #number
-	ShowAuthor bool // show author name (when not filtered to @me)
+	Author      string
+	Since       time.Time
+	State       string
+	All         bool
+	Org         string
+	Repos       []string // explicit list of owner/repo to search
+	Limit       int
+	Status      bool     // include GitHub Actions check status counts
+	Verbose     bool     // with --status, enrich failed checks with failing step names
+	FetchLogs   bool     // with --status -v, also fetch failing job log tails (extra API quota)
+	ShowURL     bool     // show PR URL instead of #number
+	ShowAuthor  bool     // show author name (when not filtered to @me)
+	IgnoredOrgs []string // orgs to skip when ResolveDefaultOrg picks a default for --all
 }
 
 type searchResponse struct {
@@ -260,11 +261,15 @@ func buildSearchQuery(opts Options, searchOpts PRSearchOptions) (string, error) 
 	if searchOpts.All {
 		org := searchOpts.Org
 		if org == "" {
-			repo, err := opts.resolveRepo()
+			// Ask GitHub for the user's default org rather than parsing
+			// the local git remote — makes `--all` work from any directory
+			// (CI, tmp checkouts, a fresh daemon bind-mount) and falls
+			// back to the user's own login for solo developers.
+			resolved, err := ResolveDefaultOrg(opts, searchOpts.IgnoredOrgs)
 			if err != nil {
-				return "", fmt.Errorf("cannot determine org (use --org): %w", err)
+				return "", fmt.Errorf("cannot determine default org (use --org): %w", err)
 			}
-			org = strings.SplitN(repo, "/", 2)[0]
+			org = resolved
 		}
 		parts = append(parts, "org:"+org)
 	} else {

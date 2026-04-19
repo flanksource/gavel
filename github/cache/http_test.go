@@ -96,11 +96,15 @@ func TestSharedRespectsDisableEnv(t *testing.T) {
 }
 
 // resetSharedStore clears the package-level singleton so each test gets a
-// fresh Open() pass. sync.Once has no Reset method so we replace the value.
+// fresh Open() pass, and points $HOME at a temp dir so Open's fallback to
+// ~/.config/gavel/db.json can't pick up a real install on the developer's
+// machine (which would launch embedded postgres and flip the "disabled"
+// assertions). sync.Once has no Reset method so we replace the value.
 func resetSharedStore(t *testing.T) {
 	t.Helper()
 	sharedStore = nil
 	sharedStoreOnce = sync.Once{}
+	t.Setenv("HOME", t.TempDir())
 }
 
 // Integration tests below require GAVEL_GITHUB_CACHE_DSN to point at a real

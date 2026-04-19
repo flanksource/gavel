@@ -52,10 +52,14 @@ export function RepoSelector({ repos, allOrg, org, onChange }: Props) {
     if (e.key === 'Escape') { setOpen(false); }
   }
 
+  // The org itself lives in the OrgChooser on the right; this control is
+  // just the repo-subset picker. When no specific repos are selected we
+  // show "All repos" (org-wide browsing) rather than duplicating the org
+  // name — the OrgChooser already owns that label.
   const label = repos.length > 0
     ? `${repos.length} repos`
     : allOrg
-      ? `org:${org || '?'}`
+      ? 'All repos'
       : 'Current repo';
 
   return (
@@ -74,7 +78,7 @@ export function RepoSelector({ repos, allOrg, org, onChange }: Props) {
           {allOrg && repos.length === 0 && (
             <div class="text-xs text-blue-600 bg-blue-50 rounded px-2 py-1 mb-2">
               <iconify-icon icon="codicon:organization" class="mr-1" />
-              All repos in <span class="font-medium">{org || 'org'}</span>. Select specific repos below.
+              Showing all repos in <span class="font-medium">{org || 'the selected org'}</span>. Use the chooser (top right) to switch orgs; pick specific repos below to narrow this view.
             </div>
           )}
 

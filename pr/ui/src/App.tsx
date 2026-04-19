@@ -8,6 +8,8 @@ import { SplitPane } from './components/SplitPane';
 import { RepoSelector } from './components/RepoSelector';
 import { SearchControls } from './components/SearchControls';
 import { ActivityView } from './components/ActivityView';
+import { StatusIndicator } from './components/StatusIndicator';
+import { OrgChooser } from './components/OrgChooser';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import {
   annotateRoutePaths,
@@ -280,17 +282,21 @@ export function App() {
               </>
             )}
           </div>
-          <Summary
-            prs={prs}
-            fetchedAt={fetchedAt}
-            error={error}
-            nextFetchIn={nextFetchIn}
-            paused={paused}
-            rateLimit={rateLimit}
-            onRefresh={handleRefresh}
-            onPause={handlePause}
-            networkBusy={detailLoading}
-          />
+          <div class="flex items-start gap-3">
+            <div class="pt-0.5"><OrgChooser config={config} onChange={updateConfig} /></div>
+            <Summary
+              prs={prs}
+              fetchedAt={fetchedAt}
+              error={error}
+              nextFetchIn={nextFetchIn}
+              paused={paused}
+              rateLimit={rateLimit}
+              onRefresh={handleRefresh}
+              onPause={handlePause}
+              networkBusy={detailLoading}
+            />
+            <div class="pt-1.5"><StatusIndicator /></div>
+          </div>
         </div>
       </div>
 

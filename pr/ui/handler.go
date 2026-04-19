@@ -15,12 +15,13 @@ import (
 )
 
 type SearchConfig struct {
-	Repos  []string `json:"repos"`
-	All    bool     `json:"all,omitempty"`
-	Org    string   `json:"org,omitempty"`
-	Author string   `json:"author,omitempty"`
-	Any    bool     `json:"any,omitempty"`
-	Bots   bool     `json:"bots,omitempty"`
+	Repos       []string `json:"repos"`
+	All         bool     `json:"all,omitempty"`
+	Org         string   `json:"org,omitempty"`
+	Author      string   `json:"author,omitempty"`
+	Any         bool     `json:"any,omitempty"`
+	Bots        bool     `json:"bots,omitempty"`
+	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
 type repoInfo struct {
@@ -49,7 +50,27 @@ type Server struct {
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
 	repoCacheAt  time.Time
+
+	// auth is the cached result of the most recent GitHub token probe.
+	// Refreshed in the background every authProbeInterval so /api/status
+	// responds instantly. First probe runs asynchronously from NewServer.
+	auth          github.AuthProbeResult
+	authCheckedAt time.Time
+
+	// orgs is a short-TTL cache of GET /user/orgs for the header's org
+	// chooser. Users with 30+ orgs are the exception not the rule, so one
+	// page is enough; a 5-minute TTL keeps the dropdown snappy without
+	// masking fresh memberships for long.
+	orgs         []github.Org
+	orgsCachedAt time.Time
 }
+
+const orgsCacheTTL = 5 * time.Minute
+
+// authProbeInterval is how often the background goroutine re-probes the
+// token. 5 minutes balances "catch token expiry quickly" vs "don't flood
+// the user's rate-limit budget with self-checks".
+const authProbeInterval = 5 * time.Minute
 
 type snapshot struct {
 	PRs         github.PRSearchResults `json:"prs"`
@@ -68,7 +89,7 @@ type snapshot struct {
 }
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
-	return &Server{
+	s := &Server{
 		interval:    interval,
 		ghOpts:      ghOpts,
 		config:      config,
@@ -76,6 +97,35 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		refreshCh:   make(chan struct{}, 1),
 		detailCache: NewDetailCache(),
 	}
+	// Probe runs in the background so NewServer stays fast. First /api/status
+	// hit before the probe completes returns State="" which handleStatus
+	// treats as "probing" (degraded, "checking token...").
+	go s.refreshAuthProbe()
+	go s.authProbeLoop()
+	return s
+}
+
+// authProbeLoop refreshes the cached GitHub auth state every
+// authProbeInterval. Running this in a goroutine means /api/status
+// responses are always served from cache — no user request blocks on a
+// GitHub round-trip.
+func (s *Server) authProbeLoop() {
+	t := time.NewTicker(authProbeInterval)
+	defer t.Stop()
+	for range t.C {
+		s.refreshAuthProbe()
+	}
+}
+
+// refreshAuthProbe performs the probe and stores the result. Called both
+// from the loop above and whenever we want a fresh reading (e.g. after the
+// daemon records a successful fetch, which implies the token still works).
+func (s *Server) refreshAuthProbe() {
+	res := github.ProbeToken(s.ghOpts)
+	s.mu.Lock()
+	s.auth = res
+	s.authCheckedAt = time.Now()
+	s.mu.Unlock()
 }
 
 func (s *Server) DetailCache() *DetailCache {
@@ -179,11 +229,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/orgs", s.handleOrgs)
 	mux.HandleFunc("/api/repos/favicon", s.handleRepoFavicon)
 	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
 	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
+	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
@@ -514,7 +566,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.SetConfig(cfg)
-		go SaveSettings(UISettings{Repos: cfg.Repos, Author: cfg.Author, Any: cfg.Any, Bots: cfg.Bots})
+		go SaveSettings(UISettings{
+			Repos:       cfg.Repos,
+			Author:      cfg.Author,
+			Any:         cfg.Any,
+			Bots:        cfg.Bots,
+			IgnoredOrgs: cfg.IgnoredOrgs,
+		})
 		select {
 		case s.refreshCh <- struct{}{}:
 		default:
@@ -540,6 +598,69 @@ func (s *Server) handleRepos(w http.ResponseWriter, _ *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cache) //nolint:errcheck
+}
+
+// handleOrgs returns the authenticated user's GitHub org memberships for
+// the header's org chooser. Cached for orgsCacheTTL to keep the dropdown
+// snappy — org membership changes rarely enough that a 5-minute staleness
+// ceiling is fine.
+//
+// By default the response is filtered through SearchConfig.IgnoredOrgs so
+// the dropdown only shows orgs the user cares about. Pass
+// ?include-ignored=1 to get the full list — used by the chooser's "manage
+// hidden orgs" expansion so the user can unhide.
+//
+// On fetch failure we return whatever we had cached even if expired; an
+// empty slice rather than an error keeps the chooser functional (it can
+// still offer "All" / "@me" modes).
+func (s *Server) handleOrgs(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	cached := s.orgs
+	fresh := time.Since(s.orgsCachedAt) < orgsCacheTTL
+	ignored := s.config.IgnoredOrgs
+	s.mu.RUnlock()
+
+	if !fresh {
+		orgs, err := github.FetchUserOrgs(s.ghOpts)
+		if err != nil {
+			logger.Warnf("fetch user orgs: %v", err)
+		} else {
+			s.mu.Lock()
+			s.orgs = orgs
+			s.orgsCachedAt = time.Now()
+			s.mu.Unlock()
+			cached = orgs
+		}
+	}
+
+	if cached == nil {
+		cached = []github.Org{}
+	}
+	if r.URL.Query().Get("include-ignored") != "1" {
+		cached = filterIgnoredOrgs(cached, ignored)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cached) //nolint:errcheck
+}
+
+// filterIgnoredOrgs returns a copy of orgs with logins in ignored dropped.
+// A nil / empty ignored slice is a fast path that just returns orgs.
+func filterIgnoredOrgs(orgs []github.Org, ignored []string) []github.Org {
+	if len(ignored) == 0 {
+		return orgs
+	}
+	skip := make(map[string]bool, len(ignored))
+	for _, o := range ignored {
+		skip[o] = true
+	}
+	out := make([]github.Org, 0, len(orgs))
+	for _, o := range orgs {
+		if skip[o.Login] {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
 }
 
 func (s *Server) reposFromCurrentPRs() []repoInfo {

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/commons/http"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/service"
 )
 
 type Options struct {
@@ -22,6 +23,11 @@ type Options struct {
 	Repo    string // owner/repo
 	Token   string // optional; falls back to GITHUB_TOKEN then GH_TOKEN env
 }
+
+// ErrNoTokenMarker is a substring of the "no GitHub token" error returned
+// by Options.token(). ProbeToken uses it to distinguish "token was never
+// configured" (AuthStateNoToken) from other token() failures.
+const ErrNoTokenMarker = "no GitHub token"
 
 func (o Options) token() (string, error) {
 	if o.Token != "" {
@@ -33,7 +39,17 @@ func (o Options) token() (string, error) {
 	if t := os.Getenv("GH_TOKEN"); t != "" {
 		return t, nil
 	}
-	return "", fmt.Errorf("no GitHub token: set Options.Token, GITHUB_TOKEN, or GH_TOKEN")
+	// Last resort: ~/.config/gavel/auth.json written by `gavel system
+	// install`. This is the path used by the launchd/systemd daemon, which
+	// doesn't inherit the user's shell env.
+	cfg, err := service.LoadAuthConfig()
+	if err != nil {
+		return "", fmt.Errorf("load auth config: %w", err)
+	}
+	if cfg.Token != "" {
+		return cfg.Token, nil
+	}
+	return "", fmt.Errorf("no GitHub token: set Options.Token, GITHUB_TOKEN, GH_TOKEN, or run `gavel system install` to persist one")
 }
 
 func (o Options) resolveRepo() (string, error) {

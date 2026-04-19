@@ -3,12 +3,14 @@ package cache
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/shutdown"
+	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
 	internalcache "github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/service"
 	"gorm.io/gorm"
 )
 
@@ -31,22 +33,43 @@ const (
 // pass-through, so callers don't need to branch on whether caching is
 // configured.
 type Store struct {
-	db       *internalcache.DB
-	disabled bool
-	writeMu  sync.Mutex
+	db        *internalcache.DB
+	disabled  bool
+	writeMu   sync.Mutex
+	dsn       string // resolved DSN, captured for Status() reporting
+	dsnSource string // EnvDSN | "db.json (dsn)" | "db.json (embedded)"
 }
 
-// Open initializes the GitHub cache store. It returns a disabled (but
-// non-nil) Store when GAVEL_GITHUB_CACHE=off or when GAVEL_GITHUB_CACHE_DSN
-// is not set, so callers can use the result unconditionally.
+// Open initializes the GitHub cache store. It resolves the DSN in this order:
+//  1. $GAVEL_GITHUB_CACHE_DSN (unchanged fast path)
+//  2. ~/.config/gavel/db.json written by `gavel system install`
+//
+// When db.json selects mode=embedded we launch a per-user postgres via
+// commons-db/db.StartEmbedded and register a shutdown hook so the pr-ui
+// daemon cleanly stops it on SIGTERM. With neither env nor db.json configured
+// the cache remains disabled so the CLI continues to function — but once a
+// mode is configured, failures are surfaced rather than swallowed.
 func Open() (*Store, error) {
 	if os.Getenv(EnvDisable) == "off" {
 		logger.Debugf("github cache disabled via %s=off", EnvDisable)
 		return &Store{disabled: true}, nil
 	}
-	dsn := os.Getenv(EnvDSN)
+	var (
+		dsn       = os.Getenv(EnvDSN)
+		dsnSource string
+	)
+	if dsn != "" {
+		dsnSource = EnvDSN
+	} else {
+		resolved, src, err := resolveConfiguredDSN()
+		if err != nil {
+			return nil, err
+		}
+		dsn = resolved
+		dsnSource = src
+	}
 	if dsn == "" {
-		logger.Debugf("github cache disabled: %s not set", EnvDSN)
+		logger.Debugf("github cache disabled: %s not set and no db config", EnvDSN)
 		return &Store{disabled: true}, nil
 	}
 
@@ -67,10 +90,52 @@ func Open() (*Store, error) {
 		return nil, fmt.Errorf("migrate github cache: %w", err)
 	}
 
-	logger.Debugf("github cache ready (postgres)")
-	s := &Store{db: db}
+	logger.Debugf("github cache ready (postgres, source=%s)", dsnSource)
+	s := &Store{db: db, dsn: dsn, dsnSource: dsnSource}
 	s.pruneOnOpen()
 	return s, nil
+}
+
+// resolveConfiguredDSN reads ~/.config/gavel/db.json. For mode=dsn it returns
+// the stored DSN. For mode=embedded it starts a managed postgres via
+// commons-db and registers a shutdown hook that stops it on daemon exit.
+// Returns ("", "", nil) when no config is present — caller treats that as
+// "cache stays disabled". The second return value names the source so the
+// UI can show "embedded postgres" vs "db.json DSN" in the status panel.
+func resolveConfiguredDSN() (string, string, error) {
+	cfg, err := service.LoadDBConfig()
+	if err != nil {
+		return "", "", fmt.Errorf("load db config: %w", err)
+	}
+	switch cfg.Mode {
+	case "":
+		return "", "", nil
+	case service.DBModeDSN:
+		if cfg.DSN == "" {
+			return "", "", fmt.Errorf("db config: mode=dsn but DSN is empty")
+		}
+		return cfg.DSN, "db.json (dsn)", nil
+	case service.DBModeEmbedded:
+		dataDir, err := service.EmbeddedDataDir()
+		if err != nil {
+			return "", "", err
+		}
+		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
+			DataDir:  dataDir,
+			Database: "gavel",
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("start embedded postgres: %w", err)
+		}
+		shutdown.AddHook("embedded-postgres", func() {
+			if err := stop(); err != nil {
+				logger.Warnf("stop embedded postgres: %v", err)
+			}
+		})
+		return dsn, "db.json (embedded)", nil
+	default:
+		return "", "", fmt.Errorf("unknown db mode %q (expected %q or %q)", cfg.Mode, service.DBModeDSN, service.DBModeEmbedded)
+	}
 }
 
 // Disabled reports whether the store is a no-op pass-through.
@@ -148,17 +213,24 @@ func (s *Store) Status() Status {
 		Counts:       map[string]int64{},
 	}
 
-	dsn := os.Getenv(EnvDSN)
-	if dsn != "" {
+	// Prefer the DSN we actually opened with (env var OR db.json — including
+	// embedded postgres where the DSN is only known at runtime). Fall back to
+	// the env var for a disabled Store so the UI can still show what the user
+	// configured even when Open() chose not to connect.
+	switch {
+	case s.dsn != "":
+		st.DSNSource = s.dsnSource
+		st.DSNMasked = service.MaskDSN(s.dsn)
+	case os.Getenv(EnvDSN) != "":
 		st.DSNSource = EnvDSN
-		st.DSNMasked = maskDSN(dsn)
+		st.DSNMasked = service.MaskDSN(os.Getenv(EnvDSN))
 	}
 	if os.Getenv(EnvDisable) == "off" {
 		st.Error = EnvDisable + "=off"
 		return st
 	}
 	if !st.Enabled {
-		if dsn == "" {
+		if st.DSNMasked == "" {
 			st.Error = EnvDSN + " not set"
 		}
 		return st
@@ -184,33 +256,6 @@ func (s *Store) Status() Status {
 		st.Counts[t.name] = n
 	}
 	return st
-}
-
-// maskDSN hides the password in a postgres DSN so it can be surfaced in the
-// UI without leaking credentials. Handles both URL form (postgres://u:p@h/d)
-// and key-value form (host=... password=...).
-func maskDSN(dsn string) string {
-	// URL form: postgres://user:password@host/db
-	if strings.Contains(dsn, "://") {
-		if at := strings.LastIndex(dsn, "@"); at > 0 {
-			if colon := strings.Index(dsn[:at], "://"); colon >= 0 {
-				schemeEnd := colon + 3
-				creds := dsn[schemeEnd:at]
-				if user, _, ok := strings.Cut(creds, ":"); ok {
-					return dsn[:schemeEnd] + user + ":REDACTED" + dsn[at:]
-				}
-			}
-		}
-		return dsn
-	}
-	// Key-value form: host=... password=... dbname=...
-	parts := strings.Fields(dsn)
-	for i, p := range parts {
-		if strings.HasPrefix(p, "password=") {
-			parts[i] = "password=REDACTED"
-		}
-	}
-	return strings.Join(parts, " ")
 }
 
 // pruneOnOpen drops http_cache_entries older than the retention horizon.

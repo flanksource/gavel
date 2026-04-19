@@ -13,6 +13,12 @@ type UISettings struct {
 	Author string   `json:"author,omitempty"`
 	Any    bool     `json:"any,omitempty"`
 	Bots   bool     `json:"bots,omitempty"`
+	// IgnoredOrgs are GitHub org logins the user has chosen to hide from
+	// the header chooser and exclude from ResolveDefaultOrg. Persists
+	// across daemon restarts so a user's "don't show this org" decision
+	// sticks — common example is a legacy personal org the user still
+	// belongs to but doesn't care about.
+	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
 var settingsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "ui.settings.json")

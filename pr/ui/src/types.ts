@@ -43,6 +43,9 @@ export interface SearchConfig {
   author?: string;
   any?: boolean;
   bots?: boolean;
+  // GitHub org logins the user has chosen to hide from the chooser and
+  // exclude from default-org resolution. Persists across daemon restarts.
+  ignoredOrgs?: string[];
 }
 
 export interface RateLimit {
@@ -219,4 +222,33 @@ export interface CacheStatus {
   retentionSec: number;
   counts: Record<string, number>;
   error?: string;
+}
+
+export type Severity = 'ok' | 'degraded' | 'down';
+
+// ComponentStatus matches pr/ui.ComponentStatus — one component (db / github)
+// of the aggregated /api/status response. `detail` is component-specific
+// extra data the UI can surface in a tooltip.
+export interface ComponentStatus {
+  severity: Severity;
+  message: string;
+  detail?: unknown;
+}
+
+// HealthStatus is the /api/status payload. Drives both the CLI
+// (`gavel system status`) and the PR UI's header status indicator from a
+// single source of truth.
+export interface HealthStatus {
+  overall: Severity;
+  database: ComponentStatus;
+  github: ComponentStatus;
+  checkedAt: string;
+}
+
+// Org matches github.Org — a lightweight entry in the header's org chooser
+// dropdown. AvatarURL comes straight from the GitHub API so it can be used
+// as an <img src>.
+export interface Org {
+  login: string;
+  avatarUrl: string;
 }

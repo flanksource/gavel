@@ -7,20 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMaskDSN(t *testing.T) {
-	tests := map[string]string{
-		"":                                    "",
-		"postgres://api.github.com/db":        "postgres://api.github.com/db",
-		"postgres://user:secret@host:5432/db": "postgres://user:REDACTED@host:5432/db",
-		"postgres://user@host/db":             "postgres://user@host/db",
-		"host=localhost user=u password=s dbname=d": "host=localhost user=u password=REDACTED dbname=d",
-		"password=topsecret":                        "password=REDACTED",
-	}
-	for in, want := range tests {
-		assert.Equal(t, want, maskDSN(in), "input=%q", in)
-	}
-}
-
 func TestStatus_DisabledWhenNoDSN(t *testing.T) {
 	resetSharedStore(t)
 	t.Setenv(EnvDSN, "")
