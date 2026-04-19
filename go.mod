@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/flanksource/clicky v1.21.4
 	github.com/flanksource/commons v1.49.0
-	github.com/flanksource/commons-db v0.1.5
+	github.com/flanksource/commons-db v0.1.6
 	github.com/flanksource/gomplate/v3 v3.24.75
 	github.com/flanksource/is-healthy v1.0.86 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -353,7 +353,7 @@ require (
 
 //  replace github.com/flanksource/clicky => ../clicky
 
-replace github.com/flanksource/commons-db => ../commons-db
+// replace github.com/flanksource/commons-db => ../commons-db
 
 // replace github.com/carlos7ags/folio => ../folio
 
