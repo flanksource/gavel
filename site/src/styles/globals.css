@@ -12,9 +12,18 @@
   --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
   --animate-gradient: gradient 4s linear infinite;
+  --animate-orbit: orbit 30s linear infinite;
+  --animate-pulse-node: pulse-node 1.6s ease-in-out infinite;
 
   @keyframes gradient {
     to { background-position: 200% center; }
+  }
+  @keyframes orbit {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pulse-node {
+    0%, 100% { opacity: 0.35; r: 3; }
+    50%      { opacity: 1;    r: 5; }
   }
 }
 

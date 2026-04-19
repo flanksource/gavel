@@ -3,6 +3,7 @@ dist
 .env
 .env.local
 .vercel
+.tmp
 coverage
 playwright-report
 test-results
