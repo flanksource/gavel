@@ -18,25 +18,28 @@ import (
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/menubar"
 	"github.com/flanksource/gavel/pr/ui"
+	"github.com/flanksource/gavel/service"
 	"github.com/timberio/go-datemath"
 )
 
 type PRListOptions struct {
-	Author   string   `flag:"author" help:"GitHub username (default: @me)"`
-	Since    string   `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
-	State    string   `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
-	All      bool     `flag:"all" help:"List PRs across all repos in the org"`
-	Any      bool     `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
-	Bots     bool     `flag:"bots" help:"Include bot-authored PRs" default:"false"`
-	Org      string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
-	Limit    int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
-	Status   bool     `flag:"status" help:"Show GitHub Actions check status counts"`
-	Logs     bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
-	URL      bool     `flag:"url" help:"Show PR URL instead of number"`
-	UI       bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
-	MenuBar  bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
-	Interval string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
-	Repos    []string `args:"true"`
+	Author      string   `flag:"author" help:"GitHub username (default: @me)"`
+	Since       string   `flag:"since" help:"Show PRs updated since (e.g. 7d, now-30d, 2024-01-01)" default:"7d"`
+	State       string   `flag:"state" help:"PR state: open, closed, merged, all" default:"open"`
+	All         bool     `flag:"all" help:"List PRs across all repos in the org"`
+	Any         bool     `flag:"any" help:"Show PRs from all authors (remove @me filter)"`
+	Bots        bool     `flag:"bots" help:"Include bot-authored PRs" default:"false"`
+	Org         string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
+	Limit       int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
+	Status      bool     `flag:"status" help:"Show GitHub Actions check status counts"`
+	Logs        bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
+	URL         bool     `flag:"url" help:"Show PR URL instead of number"`
+	UI          bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
+	MenuBar     bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
+	Interval    string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
+	Port        int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
+	PersistPort bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
+	Repos       []string `args:"true"`
 }
 
 var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)
@@ -54,6 +57,29 @@ func parseSince(s string) (time.Time, error) {
 		return t, nil
 	}
 	return expr.Time(datemath.WithNow(time.Now())), nil
+}
+
+// bindUIListener opens the TCP listener for the PR UI and handles the
+// --port=0 auto-scan contract: 0 means "start at DefaultUIPort and try the
+// next 50 ports". Any other value is a fixed bind — a conflict is surfaced
+// as an error so the user knows why the daemon couldn't start.
+//
+// Returns the bound listener so the caller doesn't have to re-bind (which
+// could race-lose the port).
+func bindUIListener(requested int) (int, net.Listener, error) {
+	if requested == 0 {
+		port, l, err := service.ScanFreePort(service.DefaultUIPort, 50)
+		if err != nil {
+			return 0, nil, fmt.Errorf("scan for free UI port: %w", err)
+		}
+		return port, l, nil
+	}
+	addr := fmt.Sprintf("localhost:%d", requested)
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return 0, nil, fmt.Errorf("start PR UI server on %s: %w", addr, err)
+	}
+	return requested, l, nil
 }
 
 func resolveRepoArg(arg string) (string, error) {
@@ -165,29 +191,29 @@ func runPRUI(opts PRListOptions) error {
 	isAny := opts.Any
 	isBots := opts.Bots
 
-	if saved := ui.LoadSettings(); saved.Repos != nil || saved.Author != "" || saved.Any || saved.Bots {
-		if len(searchOpts.Repos) == 0 && len(saved.Repos) > 0 {
-			searchOpts.Repos = saved.Repos
-		}
-		if saved.Author != "" {
-			author = saved.Author
-		}
-		if saved.Any {
-			isAny = true
-			author = ""
-		}
-		if saved.Bots {
-			isBots = true
-		}
+	saved := ui.LoadSettings()
+	if len(searchOpts.Repos) == 0 && len(saved.Repos) > 0 {
+		searchOpts.Repos = saved.Repos
+	}
+	if saved.Author != "" {
+		author = saved.Author
+	}
+	if saved.Any {
+		isAny = true
+		author = ""
+	}
+	if saved.Bots {
+		isBots = true
 	}
 
 	srv := ui.NewServer(interval, ghOpts, ui.SearchConfig{
-		Repos:  searchOpts.Repos,
-		All:    searchOpts.All,
-		Org:    searchOpts.Org,
-		Author: author,
-		Any:    isAny,
-		Bots:   isBots,
+		Repos:       searchOpts.Repos,
+		All:         searchOpts.All,
+		Org:         searchOpts.Org,
+		Author:      author,
+		Any:         isAny,
+		Bots:        isBots,
+		IgnoredOrgs: saved.IgnoredOrgs,
 	})
 
 	srv.RepoSearchFn = func() (github.PRSearchResults, error) {
@@ -217,6 +243,12 @@ func runPRUI(opts PRListOptions) error {
 		} else if cfg.Author != "" {
 			so.Author = cfg.Author
 		}
+		// Propagate IgnoredOrgs so ResolveDefaultOrg skips hidden orgs
+		// when --all is set without an explicit --org.
+		so.IgnoredOrgs = cfg.IgnoredOrgs
+		if cfg.Org != "" {
+			so.Org = cfg.Org
+		}
 		so.ShowAuthor = so.Author != "@me"
 		results, rl, err := github.SearchPRs(ghOpts, so)
 		if err != nil {
@@ -239,12 +271,21 @@ func runPRUI(opts PRListOptions) error {
 
 	var dashboardURL string
 	if opts.UI {
-		addr := "localhost:9092"
-		listener, err := net.Listen("tcp", addr)
+		port, listener, err := bindUIListener(opts.Port)
 		if err != nil {
-			return fmt.Errorf("failed to start PR UI server on %s: %w", addr, err)
+			return err
 		}
-		dashboardURL = fmt.Sprintf("http://localhost:%d", listener.Addr().(*net.TCPAddr).Port)
+		dashboardURL = fmt.Sprintf("http://localhost:%d", port)
+		if opts.PersistPort {
+			// Only the managed daemon (launchd/systemd) writes to the port
+			// file — foreground `pr list --ui` runs skip this to avoid
+			// clobbering the daemon's entry on shared dev machines.
+			if err := service.WriteUIPort(port); err != nil {
+				// Consumers fall back to DefaultUIPort when the port file
+				// is unreadable; a write failure is a warning not a fatal.
+				logger.Warnf("persist pr-ui port: %v", err)
+			}
+		}
 
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
