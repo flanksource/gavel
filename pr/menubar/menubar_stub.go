@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin || (darwin && !cgo)
 
 package menubar
 
@@ -17,7 +17,7 @@ func New(_ *ui.Server) *MenuBar {
 }
 
 func (m *MenuBar) Run() error {
-	return fmt.Errorf("menu bar is only supported on macOS")
+	return fmt.Errorf("menu bar requires a macOS build with CGO_ENABLED=1")
 }
 
 func (m *MenuBar) Done() <-chan struct{} {
