@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Gavel — one CLI for tests, linting, AI code review, and PR workflow automation." />
+    <meta property="og:title" content="Gavel" />
+    <meta property="og:description" content="One CLI for tests, linting, AI code review, and PR workflow automation." />
+    <meta property="og:url" content="https://gavel.flanksource.com" />
+    <meta property="og:type" content="website" />
+    <link rel="canonical" href="https://gavel.flanksource.com" />
+    <title>Gavel — tests, linting & AI code review in one CLI</title>
+    <script>
+      // Anti-FOUC: apply theme before React hydrates
+      (function () {
+        try {
+          var saved = localStorage.getItem("gavel-theme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var theme = saved || (prefersDark ? "dark" : "light");
+          document.documentElement.classList.toggle("dark", theme === "dark");
+          document.documentElement.dataset.theme = theme;
+        } catch (_) {
+          // localStorage unavailable (private mode, etc.) — fall back to system preference
+          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            document.documentElement.classList.add("dark");
+          }
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
