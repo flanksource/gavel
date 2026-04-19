@@ -1,0 +1,60 @@
+---
+title: Getting started
+description: Install gavel and run your first test, lint, and AI verify pass.
+order: 1
+---
+
+Gavel is a single CLI that runs your tests, nine linters in parallel, and an AI-powered verify pass — locally and in CI.
+
+## Install
+
+The CLI is a single Go binary. The easiest install is through the Go toolchain:
+
+```bash
+go install github.com/flanksource/gavel/cmd/gavel@latest
+```
+
+Prefer a prebuilt binary? Download a release from [the releases page](https://github.com/flanksource/gavel/releases) and drop it in your `$PATH`.
+
+<Callout variant="tip" title="Shell completion">
+  Run `gavel completion --help` to generate completion scripts for bash, zsh, fish, or PowerShell.
+</Callout>
+
+## Run tests
+
+From the root of any Go project:
+
+```bash
+gavel test
+```
+
+Gavel discovers your `go test` packages, runs them, and writes a structured `dist/tests.json` plus a browsable `dist/tests.html`. Pass `--lint` to also run every linter whose config file is present in the repo, and `--verify` to layer on the AI verify pass.
+
+## Lint in parallel
+
+```bash
+gavel lint
+```
+
+Supported linters (activated when their native config is discovered):
+
+- **Go**: golangci-lint
+- **Python**: ruff, pyright
+- **TypeScript/JavaScript**: eslint, tsc
+- **Markdown & prose**: markdownlint, vale
+- **Cross-cutting**: jscpd (duplicate code), betterleaks (secrets)
+
+All run concurrently and merge into a single report.
+
+## Verify: AI code review with checks
+
+```bash
+gavel verify
+```
+
+`verify` runs a configured set of AI-graded checks against the changes in your working tree or the current PR. Each check produces a structured pass/fail verdict with a rationale — useful for policy (e.g. "every public function needs a doc comment") or correctness (e.g. "new code paths are covered by tests").
+
+## What's next
+
+- [Join the waitlist](/#waitlist) for the hosted tier.
+- Star the repo on [GitHub](https://github.com/flanksource/gavel) — the CLI is MIT-licensed.

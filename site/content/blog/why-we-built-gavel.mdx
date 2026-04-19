@@ -1,0 +1,41 @@
+---
+title: Why we built gavel
+description: A single CLI for the stuff that kept falling out of the cracks between go test, linters, and code review.
+date: 2026-04-19
+tags:
+  - gavel
+  - developer-tooling
+---
+
+Most teams we work with have the same "CI kitchen junk drawer": one tool runs tests, another handles lint, a third watches for secrets, another enforces commit conventions, and somewhere in there a human reviews the pull request. Every tool is individually reasonable. Wired together, they look like a rube goldberg machine with a surprising amount of shell glue, and the glue tends to rot.
+
+## The cracks we kept falling into
+
+Three patterns showed up over and over:
+
+1. **Divergent reports.** `go test -json`, `golangci-lint run --out-format=json`, `ruff check --output-format=json`, `eslint --format=json` — each one is a little snowflake. Aggregating them into a single CI summary meant writing a new stitching script every project.
+2. **Policy drift.** "New code paths have tests" or "No public function without a doc comment" are trivially stated and annoyingly hard to enforce. Humans can read a diff and see them in seconds; mechanical linters can't.
+3. **Local/CI mismatch.** Developers run one subset of checks locally; CI runs a stricter, slower superset. The answer is almost always "just run it all locally too," which nobody does, because it takes six minutes and lights the laptop on fire.
+
+<Callout variant="info" title="The test we kept applying">
+  If I onboard onto a repo today, can I run the *exact* set of checks CI runs with one command, and get a report I can read?
+</Callout>
+
+The answer, almost always, was no. That was the gap we set out to close.
+
+## What gavel actually does
+
+Gavel is one binary that bundles four pieces we kept reaching for:
+
+- **Test runner** — Go and Ginkgo native, with fixtures in markdown and a live browser UI.
+- **Unified lint** — nine linters in parallel, auto-activated by discovering their native config.
+- **AI verify** — structured policy/correctness checks that run an LLM against each diff, with pass/fail verdicts and rationale.
+- **PR workflow** — AI-generated conventional commits, pre-commit hooks, and a `gavel pr fix` that applies review suggestions.
+
+All of it emits a single `tests.json` + `tests.html` you can read, drop into a PR comment, or pipe into any downstream tool. The same command runs locally and in CI — there's a GitHub Action wrapper, but it's the same binary.
+
+## The part we care about most
+
+The hosted tier is coming, but the CLI will always be free and MIT-licensed. If you've ever written a `ci.sh` that started as ten lines and grew to a hundred, gavel is our attempt to give you those hundred lines back.
+
+The waitlist is [on the landing page](/). If you're curious what this actually looks like, `go install github.com/flanksource/gavel/cmd/gavel@latest` and run `gavel test --lint --verify` in your favorite repo.
