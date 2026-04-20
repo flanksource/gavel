@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -29,6 +30,29 @@ type GavelResultsSummary struct {
 	HasBench         bool   `json:"hasBench"`
 	BenchRegressions int    `json:"benchRegressions,omitempty"`
 	Error            string `json:"error,omitempty"`
+	// TopFailures lists the first 5 failing tests for at-a-glance triage.
+	// Populated in walk order (stable) so the same artifact always yields
+	// the same head items.
+	TopFailures []TestFailure `json:"topFailures,omitempty"`
+	// TopLintViolations lists the first 5 lint findings across all linters.
+	TopLintViolations []LintViolation `json:"topLintViolations,omitempty"`
+}
+
+type TestFailure struct {
+	Name    string `json:"name"`
+	Suite   string `json:"suite,omitempty"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Message string `json:"message,omitempty"`
+	Details string `json:"details,omitempty"`
+}
+
+type LintViolation struct {
+	Linter  string `json:"linter"`
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Rule    string `json:"rule,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // gavelResultJSON mirrors the dual-format JSON that gavel emits:
@@ -83,6 +107,18 @@ func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string)
 		}
 		summary.LintLinters++
 		summary.LintViolations += len(lr.Violations)
+		for _, v := range lr.Violations {
+			if len(summary.TopLintViolations) >= 5 {
+				break
+			}
+			summary.TopLintViolations = append(summary.TopLintViolations, LintViolation{
+				Linter:  lr.Linter,
+				File:    v.File,
+				Line:    v.Line,
+				Rule:    violationRule(v),
+				Message: derefString(v.Message),
+			})
+		}
 	}
 
 	if data.Bench != nil {
@@ -108,11 +144,50 @@ func walkTestCounts(t parsers.Test, s *GavelResultsSummary) {
 	switch {
 	case t.Failed:
 		s.TestsFailed++
+		if len(s.TopFailures) < 5 {
+			s.TopFailures = append(s.TopFailures, toTestFailure(t))
+		}
 	case t.Skipped, t.Pending:
 		s.TestsSkipped++
 	case t.Passed:
 		s.TestsPassed++
 	}
+}
+
+func toTestFailure(t parsers.Test) TestFailure {
+	suite := ""
+	if len(t.Suite) > 0 {
+		suite = strings.Join(t.Suite, " › ")
+	}
+	details := t.Stderr
+	if details == "" {
+		details = t.Stdout
+	}
+	return TestFailure{
+		Name:    t.Name,
+		Suite:   suite,
+		File:    t.File,
+		Line:    t.Line,
+		Message: t.Message,
+		Details: details,
+	}
+}
+
+func violationRule(v models.Violation) string {
+	if v.Code != nil && *v.Code != "" {
+		return *v.Code
+	}
+	if v.Rule != nil && v.Rule.Pattern != "" {
+		return v.Rule.Pattern
+	}
+	return ""
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // artifactCache caches downloaded artifact servers keyed by artifact ID.

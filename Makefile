@@ -1,7 +1,7 @@
 # Makefile stub - forwards to Taskfile
 # Install task: https://taskfile.dev/installation/
 
-.PHONY: build lint test install fmt tidy clean all
+.PHONY: build lint test install restart fmt tidy clean all
 
 build:
 	@task build
@@ -14,6 +14,9 @@ test:
 
 install:
 	@task install
+
+restart:
+	@task restart
 
 fmt:
 	@task fmt

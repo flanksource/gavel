@@ -47,6 +47,11 @@ type Server struct {
 	detailCache  *DetailCache
 	detailSyncer *DetailSyncer
 
+	// gavelCache stores the last computed GavelResultsSummary per PR
+	// (keyed by "repo#number"). Populated as a side-effect of detail
+	// fetches so sidebar badges light up lazily without extra traffic.
+	gavelCache map[string]*GavelResultsSummary
+
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
 	repoCacheAt  time.Time
@@ -86,6 +91,10 @@ type snapshot struct {
 	// marked as read are omitted to keep the map sparse on the wire.
 	Unread     map[string]bool         `json:"unread,omitempty"`
 	SyncStatus map[string]PRSyncStatus `json:"syncStatus,omitempty"`
+	// GavelResults maps prKey("repo#number") → latest cached gavel
+	// summary. Sparse — only PRs whose details have been fetched
+	// at least once and that have an artifact appear here.
+	GavelResults map[string]*GavelResultsSummary `json:"gavelResults,omitempty"`
 }
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
@@ -96,6 +105,7 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		updated:     make(chan struct{}, 1),
 		refreshCh:   make(chan struct{}, 1),
 		detailCache: NewDetailCache(),
+		gavelCache:  make(map[string]*GavelResultsSummary),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
@@ -346,7 +356,38 @@ func (s *Server) snapshotLocked() snapshot {
 	if s.err != nil {
 		snap.Error = s.err.Error()
 	}
+	if len(s.gavelCache) > 0 {
+		// Filter to PRs present in the current snapshot so the map
+		// doesn't grow unbounded for stale / filtered-out entries.
+		active := make(map[string]*GavelResultsSummary, len(s.prs))
+		for _, pr := range s.prs {
+			k := prKey(pr)
+			if g, ok := s.gavelCache[k]; ok {
+				active[k] = g
+			}
+		}
+		if len(active) > 0 {
+			snap.GavelResults = active
+		}
+	}
 	return snap
+}
+
+// setGavelSummary caches a PR's gavel summary and triggers a snapshot
+// push so the sidebar can re-render with fresh badges. Safe to call
+// with no server lock held.
+func (s *Server) setGavelSummary(repo string, number int, summary *GavelResultsSummary) {
+	if summary == nil {
+		return
+	}
+	key := fmt.Sprintf("%s#%d", repo, number)
+	s.mu.Lock()
+	if s.gavelCache == nil {
+		s.gavelCache = make(map[string]*GavelResultsSummary)
+	}
+	s.gavelCache[key] = summary
+	s.mu.Unlock()
+	s.notify()
 }
 
 // withUnread attaches the unread map to a snapshot. Runs the cache lookup
@@ -930,6 +971,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		gr := <-gavelCh
 		gavelSummary = gr.summary
 		emit("gavel", map[string]any{"gavelResults": gavelSummary})
+		s.setGavelSummary(repo, prNumber, gavelSummary)
 	}
 
 	emit("done", nil)
@@ -993,6 +1035,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 			summary := computeGavelSummary(jsonBytes, artifactID, artifactURL)
 			result.GavelResults = summary
 		}
+		s.setGavelSummary(repo, number, result.GavelResults)
 	}
 
 	return result

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'preact/hooks';
-import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus } from './types';
+import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
@@ -45,6 +45,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('prs');
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
+  const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
@@ -103,6 +104,9 @@ export function App() {
     if (snap.rateLimit) setRateLimit(snap.rateLimit);
     if (snap.config) setConfig(snap.config);
     if (snap.syncStatus) setSyncStatus(snap.syncStatus);
+    if (snap.gavelResults) {
+      setGavelResultsMap(prev => ({ ...prev, ...snap.gavelResults }));
+    }
   }
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
@@ -168,6 +172,9 @@ export function App() {
     es.addEventListener('gavel', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
       setDetail(prev => prev ? { ...prev, gavelResults: data.gavelResults } : prev);
+      if (data.gavelResults) {
+        setGavelResultsMap(prev => ({ ...prev, [prKey(pr)]: data.gavelResults }));
+      }
     });
 
     es.addEventListener('error', (e: MessageEvent) => {
@@ -302,7 +309,7 @@ export function App() {
 
       {activeTab === 'prs' ? (
         <SplitPane
-          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} />}
+          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} />}
           right={
             selected ? (
               <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />

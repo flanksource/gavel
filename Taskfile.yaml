@@ -93,6 +93,16 @@ tasks:
     cmds:
       - mv "./{{.BINARY_NAME}}" "$GOPATH/bin/"
 
+  restart:
+    desc: Build, install, and restart the local gavel pr-ui daemon
+    deps:
+      - install
+    cmds:
+      # `system stop` is a no-op when nothing is running, so always safe.
+      # `system start` truncates the logfile and kills any stale daemon.
+      - $GOPATH/bin/{{.BINARY_NAME}} system stop
+      - $GOPATH/bin/{{.BINARY_NAME}} system start
+
   deploy:
     desc: |
       Cross-compile gavel for linux-amd64 and install it on a remote host.

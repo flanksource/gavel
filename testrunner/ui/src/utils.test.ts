@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { collapseSingleChildChains, formatCount } from './utils';
-import type { Test } from './types';
+import { collapseLintSingleChildChains, collapseSingleChildChains, formatCount, groupLintByLinterRuleFile } from './utils';
+import type { LinterResult, Test } from './types';
 
 describe('formatCount', () => {
   const cases: Array<[number, string]> = [
@@ -146,5 +146,120 @@ describe('collapseSingleChildChains', () => {
     expect(pkg.children![0].name).toBe('groupA > Describe > It');
     expect(pkg.children![1].name).toBe('groupB');
     expect(pkg.children![1].children).toHaveLength(2);
+  });
+
+  it('preserves linter and rule grouping while still collapsing folder chains', () => {
+    const tree: Test[] = [{
+      name: 'golangci-lint',
+      kind: 'linter',
+      children: [{
+        name: 'errcheck',
+        kind: 'lint-rule-group',
+        linterName: 'golangci-lint',
+        ruleName: 'errcheck',
+        children: [{
+          name: 'src',
+          kind: 'lint-folder',
+          children: [{
+            name: 'foo.go',
+            kind: 'lint-file',
+            file: 'src/foo.go',
+            target_path: 'src/foo.go',
+            linterName: 'golangci-lint',
+            ruleName: 'errcheck',
+            violations: [{ severity: 'error', message: 'boom' }],
+          }],
+        }],
+      }],
+    }];
+
+    const [linter] = collapseLintSingleChildChains(tree);
+    expect(linter.name).toBe('golangci-lint');
+    expect(linter.kind).toBe('linter');
+    expect(linter.children).toHaveLength(1);
+    expect(linter.children![0].name).toBe('errcheck');
+    expect(linter.children![0].kind).toBe('lint-rule-group');
+    expect(linter.children![0].children).toHaveLength(1);
+    expect(linter.children![0].children![0].name).toBe('src > foo.go');
+    expect(linter.children![0].children![0].kind).toBe('lint-file');
+    expect(linter.children![0].children![0].ruleName).toBe('errcheck');
+  });
+});
+
+describe('groupLintByLinterRuleFile', () => {
+  const filters = { severity: new Map(), linter: new Map() };
+
+  it('groups results by linter, then rule, then folder/file', () => {
+    const lint: LinterResult[] = [{
+      linter: 'golangci-lint',
+      success: false,
+      duration: 0,
+      violations: [
+        {
+          file: 'pkg/foo.go',
+          line: 4,
+          severity: 'error',
+          rule: { method: 'errcheck' },
+          message: 'check error',
+        },
+        {
+          file: 'pkg/foo.go',
+          line: 8,
+          severity: 'error',
+          rule: { method: 'errcheck' },
+          message: 'check error again',
+        },
+        {
+          file: 'pkg/sub/bar.go',
+          line: 3,
+          severity: 'warning',
+          rule: { method: 'unused' },
+          message: 'unused value',
+        },
+      ],
+    }];
+
+    const [linter] = groupLintByLinterRuleFile(lint, filters);
+    expect(linter.kind).toBe('linter');
+    expect(linter.children).toHaveLength(2);
+
+    const errcheck = linter.children!.find(child => child.ruleName === 'errcheck');
+    expect(errcheck?.kind).toBe('lint-rule-group');
+    expect(errcheck?.children).toHaveLength(1);
+    expect(errcheck?.children![0].name).toBe('pkg');
+    expect(errcheck?.children![0].kind).toBe('lint-folder');
+    expect(errcheck?.children![0].children).toHaveLength(1);
+    expect(errcheck?.children![0].children![0].name).toBe('foo.go');
+    expect(errcheck?.children![0].children![0].kind).toBe('lint-file');
+    expect(errcheck?.children![0].children![0].linterName).toBe('golangci-lint');
+    expect(errcheck?.children![0].children![0].ruleName).toBe('errcheck');
+    expect(errcheck?.children![0].children![0].violations).toHaveLength(2);
+
+    const unused = linter.children!.find(child => child.ruleName === 'unused');
+    expect(unused?.children).toHaveLength(1);
+    expect(unused?.children![0].name).toBe('pkg');
+  });
+
+  it('keeps fileless violations on the rule group', () => {
+    const lint: LinterResult[] = [{
+      linter: 'betterleaks',
+      success: false,
+      duration: 0,
+      violations: [
+        {
+          line: 1,
+          severity: 'error',
+          rule: { method: 'global-rule' },
+          message: 'secret found',
+        },
+      ],
+    }];
+
+    const [linter] = groupLintByLinterRuleFile(lint, filters);
+    expect(linter.children).toHaveLength(1);
+    expect(linter.children![0].kind).toBe('lint-rule-group');
+    expect(linter.children![0].ruleName).toBe('global-rule');
+    expect(linter.children![0].children ?? []).toHaveLength(0);
+    expect(linter.children![0].noFileViolations).toHaveLength(1);
   });
 });

@@ -40,6 +40,19 @@ interface FileTreeNode {
   files: Map<string, Map<string, Map<string, Violation[]>>>;
 }
 
+interface RuleScopedBucket {
+  files: Map<string, FileBucket>;
+  noFileViolations: Violation[];
+}
+
+interface RuleFileTreeNode {
+  name: string;
+  path?: string;
+  rawPath?: string;
+  children: Map<string, RuleFileTreeNode>;
+  files: Map<string, FileBucket>;
+}
+
 export function relPath(file: string | undefined, workDir: string | undefined): string | undefined {
   if (!file) return undefined;
   const normalizedFile = normalizeLintPath(file);
@@ -80,6 +93,10 @@ function collapsedPathSegments(path: string): string[] {
 }
 
 function fileTreeRoot(): FileTreeNode {
+  return { name: '', rawPath: '', children: new Map(), files: new Map() };
+}
+
+function ruleFileTreeRoot(): RuleFileTreeNode {
   return { name: '', rawPath: '', children: new Map(), files: new Map() };
 }
 
@@ -126,6 +143,40 @@ function insertFileNode(root: FileTreeNode, file: string, rawFile: string, linte
     rules.set(key, arr);
   }
   arr.push(violation);
+}
+
+function insertRuleFileNode(root: RuleFileTreeNode, file: string, rawFile: string, workDir: string | undefined, violation: Violation): void {
+  const segments = collapsedPathSegments(file);
+  const rawSegments = collapsedPathSegments(rawFile);
+  if (segments.length === 0 || rawSegments.length === 0) return;
+  let current = root;
+  const folderSegments = segments.slice(0, -1);
+  const rawFolderSegments = rawSegments.slice(0, -1);
+  const rawOffset = folderSegments.length - rawFolderSegments.length;
+  for (let i = 0; i < folderSegments.length; i += 1) {
+    const segment = folderSegments[i];
+    let child = current.children.get(segment);
+    if (!child) {
+      const rawCount = Math.max(0, Math.min(rawFolderSegments.length, i + 1 - rawOffset));
+      child = {
+        name: segment,
+        path: current.path ? `${current.path}/${segment}` : segment,
+        rawPath: rawCount > 0 ? rawFolderSegments.slice(0, rawCount).join('/') : '',
+        children: new Map(),
+        files: new Map(),
+      };
+      current.children.set(segment, child);
+    }
+    current = child;
+  }
+
+  const basename = segments[segments.length - 1];
+  let bucket = current.files.get(basename);
+  if (!bucket) {
+    bucket = { rawFile, workDir, violations: [] };
+    current.files.set(basename, bucket);
+  }
+  bucket.violations.push(violation);
 }
 
 function worstSeverity(vs: Violation[] | undefined): Severity {
@@ -231,18 +282,32 @@ function ruleLeafNode(rule: string, linterName: string, file: string, rawFile: s
   };
 }
 
+function ruleGroupNode(rule: string, linterName: string, children: Test[], workDir?: string, noFileViolations?: Violation[]): Test {
+  const node = folderNode(rule, 'lint-rule-group', children);
+  node.linterName = linterName;
+  node.ruleName = rule;
+  node.work_dir = workDir;
+  if (noFileViolations && noFileViolations.length > 0) {
+    node.noFileViolations = noFileViolations.slice().sort((a, b) => (a.line || 0) - (b.line || 0));
+    node.failed = worstSeverity(noFileViolations) !== 'info' || node.failed;
+    node.passed = !node.failed;
+  }
+  return node;
+}
+
 function linterNode(
   linterName: string,
   linterResult: LinterResult | undefined,
   children: Test[],
   noFileViolations?: Violation[],
 ): Test {
-  const total = children.reduce((n, child) => n + lintViolationCount(child), 0) + (noFileViolations?.length || 0);
   const node = folderNode(linterName, 'linter', children);
   node.linter = linterResult;
   node.linterName = linterName;
   if (noFileViolations && noFileViolations.length > 0) {
     node.noFileViolations = noFileViolations.slice().sort((a, b) => (a.line || 0) - (b.line || 0));
+    node.failed = worstSeverity(noFileViolations) !== 'info' || node.failed;
+    node.passed = !node.failed;
   }
   return node;
 }
@@ -294,6 +359,49 @@ function buildFolderNode(folder: FileTreeNode, linterMeta: Map<string, LinterRes
   node.file = folder.path;
   node.target_path = folder.rawPath;
   return node;
+}
+
+export function groupLintByLinterRuleFile(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
+  const flat = flattenLint(lint, filters);
+  const byLinter = new Map<string, Map<string, RuleScopedBucket>>();
+  const linterMeta = new Map<string, LinterResult>();
+  for (const f of flat) {
+    linterMeta.set(f.linter, f.linterResult);
+    let rules = byLinter.get(f.linter);
+    if (!rules) {
+      rules = new Map();
+      byLinter.set(f.linter, rules);
+    }
+    const ruleName = ruleKeyFor(f.v);
+    let bucket = rules.get(ruleName);
+    if (!bucket) {
+      bucket = { files: new Map(), noFileViolations: [] };
+      rules.set(ruleName, bucket);
+    }
+    if (!f.file) {
+      bucket.noFileViolations.push(f.v);
+      continue;
+    }
+    let fileBucket = bucket.files.get(f.file);
+    if (!fileBucket) {
+      fileBucket = { rawFile: f.rawFile, workDir: f.workDir, violations: [] };
+      bucket.files.set(f.file, fileBucket);
+    }
+    fileBucket.violations.push(f.v);
+  }
+
+  const linterNames = Array.from(byLinter.keys()).sort();
+  return linterNames.map(linterName => {
+    const rules = byLinter.get(linterName)!;
+    const ruleNames = Array.from(rules.keys()).sort();
+    const ruleNodes = ruleNames.map(ruleName => buildRuleGroupNode(
+      ruleName,
+      linterName,
+      rules.get(ruleName)!,
+      linterMeta.get(linterName),
+    ));
+    return linterNode(linterName, linterMeta.get(linterName), ruleNodes);
+  });
 }
 
 export function groupLintByLinterFile(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
@@ -413,6 +521,50 @@ function buildLinterFolderNode(folder: FileTreeNode, linterName: string, bucket:
   return node;
 }
 
+function buildRuleGroupNode(ruleName: string, linterName: string, bucket: RuleScopedBucket, linterResult: LinterResult | undefined): Test {
+  const root = ruleFileTreeRoot();
+  for (const [file, fileBucket] of bucket.files.entries()) {
+    for (const violation of fileBucket.violations) {
+      insertRuleFileNode(root, file, fileBucket.rawFile || file, fileBucket.workDir, violation);
+    }
+  }
+  const children = buildRuleFileTree(root, linterName, ruleName);
+  return ruleGroupNode(ruleName, linterName, children, uniqueWorkDir(children) || linterResult?.work_dir, bucket.noFileViolations);
+}
+
+function buildRuleFileTree(root: RuleFileTreeNode, linterName: string, ruleName: string): Test[] {
+  const folderNames = Array.from(root.children.keys()).sort();
+  const fileNames = Array.from(root.files.keys()).sort();
+  const children: Test[] = [];
+
+  for (const folderName of folderNames) {
+    const folder = root.children.get(folderName)!;
+    children.push(buildRuleFolderNode(folder, linterName, ruleName));
+  }
+
+  for (const fileName of fileNames) {
+    const fileBucket = root.files.get(fileName)!;
+    const fullPath = root.path ? `${root.path}/${fileName}` : fileName;
+    const rawFile = fileBucket.rawFile || fileBucket.violations[0]?.raw_file || fullPath;
+    const node = fileLeafNode(fileName, fullPath, rawFile, linterName, fileBucket.violations, fileBucket.workDir);
+    node.ruleName = ruleName;
+    children.push(node);
+  }
+
+  return children;
+}
+
+function buildRuleFolderNode(folder: RuleFileTreeNode, linterName: string, ruleName: string): Test {
+  const children = buildRuleFileTree(folder, linterName, ruleName);
+  const node = folderNode(folder.name, 'lint-folder', children);
+  node.file = folder.path;
+  node.target_path = folder.rawPath;
+  node.linterName = linterName;
+  node.ruleName = ruleName;
+  node.work_dir = uniqueWorkDir(children);
+  return node;
+}
+
 function uniqueWorkDir(children: Test[]): string | undefined {
   const dirs = new Set<string>();
   for (const child of children) {
@@ -472,7 +624,8 @@ export function isLintNode(t: Test): boolean {
     || t.kind === 'linter'
     || t.kind === 'violation'
     || t.kind === 'lint-file'
-    || t.kind === 'lint-rule';
+    || t.kind === 'lint-rule'
+    || t.kind === 'lint-rule-group';
 }
 
 export function lintBadgeColor(t: Test): string {
@@ -528,7 +681,7 @@ export function statusIcon(t: Test): string {
     return fileTypeIcon(t.file || t.name);
   }
   if (t.kind === 'linter') return lintToolIcon(t.linterName || t.linter?.linter);
-  if (t.kind === 'lint-rule') {
+  if (t.kind === 'lint-rule' || t.kind === 'lint-rule-group') {
     return 'codicon:symbol-ruler';
   }
   if (t.kind === 'violation') {
@@ -555,7 +708,7 @@ export function statusColor(t: Test): string {
   if (t.kind === 'lint-folder') {
     return 'text-gray-500';
   }
-  if (t.kind === 'lint-file' || t.kind === 'linter' || t.kind === 'lint-rule') {
+  if (t.kind === 'lint-file' || t.kind === 'linter' || t.kind === 'lint-rule' || t.kind === 'lint-rule-group') {
     return 'text-gray-500';
   }
   if (t.kind === 'violation') {
@@ -754,6 +907,10 @@ export function collapseSingleChildChains(tests: Test[]): Test[] {
   return tests.map(collapseNode);
 }
 
+export function collapseLintSingleChildChains(tests: Test[]): Test[] {
+  return tests.map(collapseLintNode);
+}
+
 function collapseNode(t: Test): Test {
   const children = t.children ?? [];
   if (children.length === 0) return t;
@@ -772,11 +929,33 @@ function collapseNode(t: Test): Test {
   return { ...t, children: collapsedChildren };
 }
 
+function collapseLintNode(t: Test): Test {
+  const children = t.children ?? [];
+  if (children.length === 0) return t;
+
+  const collapsedChildren = children.map(collapseLintNode);
+
+  if (collapsedChildren.length === 1 && isCollapsibleLintContainer(t)) {
+    const child = collapsedChildren[0];
+    return {
+      ...child,
+      name: joinChainNames(t.name, child.name),
+      summary: undefined,
+    };
+  }
+
+  return { ...t, children: collapsedChildren };
+}
+
 function isCollapsibleContainer(t: Test): boolean {
   if (t.passed || t.failed || t.skipped || t.pending) return false;
   if (t.kind === 'violation') return false;
   if (t.violations && t.violations.length > 0) return false;
   return true;
+}
+
+function isCollapsibleLintContainer(t: Test): boolean {
+  return t.kind === 'lint-folder' && isCollapsibleContainer(t);
 }
 
 function joinChainNames(parent: string | undefined, child: string | undefined): string {

@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import type { PRItem, PRSyncStatus } from '../types';
+import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
 import { PRRow } from './PRRow';
 import { groupByOrg, prKey, paletteClass } from '../utils';
 import { Avatar } from './Avatar';
@@ -10,6 +10,7 @@ interface Props {
   onSelect: (pr: PRItem) => void;
   unread?: Record<string, boolean>;
   syncStatus?: Record<string, PRSyncStatus>;
+  gavelResults?: Record<string, GavelResultsSummary>;
 }
 
 interface RepoIconProps {
@@ -50,7 +51,7 @@ function RepoIcon({ repo, homepageUrl, size }: RepoIconProps) {
   );
 }
 
-export function PRList({ prs, selected, onSelect, unread, syncStatus }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults }: Props) {
   if (prs.length === 0) {
     return (
       <div class="p-6 text-center text-gray-400">
@@ -103,6 +104,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus }: Props) {
                   selected={selected?.repo === pr.repo && selected?.number === pr.number}
                   unread={!!unread?.[prKey(pr)]}
                   syncStatus={syncStatus?.[prKey(pr)]}
+                  gavelResults={gavelResults?.[prKey(pr)]}
                   onClick={() => onSelect(pr)}
                 />
               ))}
