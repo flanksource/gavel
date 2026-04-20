@@ -3,7 +3,7 @@ import { countLintBySeverity, countLintByLinter, collectLintLinters, formatCount
 import type { FilterMode, FilterState } from '../filterState';
 import { cycleFilterState } from '../filterState';
 
-export type LintGrouping = 'linter-file' | 'file-linter-rule';
+export type LintGrouping = 'linter-rule-file' | 'linter-file' | 'file-linter-rule';
 
 export interface LintFilters {
   severity: FilterState<Severity>;
@@ -12,6 +12,7 @@ export interface LintFilters {
 
 interface Props {
   lint: LinterResult[] | undefined;
+  grouping: LintGrouping;
   filters: LintFilters;
   onFiltersChange: (f: LintFilters) => void;
 }
@@ -22,7 +23,7 @@ const SEVERITY_DEFS: { key: Severity; label: string; badge: string; activeBg: st
   { key: 'info', label: 'Info', badge: 'bg-blue-400', activeBg: 'bg-blue-50', activeBorder: 'border-blue-300', icon: 'codicon:info' },
 ];
 
-export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
+export function LintFilterBar({ lint, grouping, filters, onFiltersChange }: Props) {
   const severityCounts = countLintBySeverity(lint, filters.linter);
   const linterCounts = countLintByLinter(lint, filters.severity);
   const linters = collectLintLinters(lint);
@@ -32,7 +33,7 @@ export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
     <div class="flex items-center gap-1.5 flex-wrap">
       <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
         <iconify-icon icon="codicon:list-tree" />
-        Linter → Folder → File
+        {groupingLabel(grouping)}
       </span>
 
       <span class="text-gray-300 mx-0.5">|</span>
@@ -94,6 +95,12 @@ export function LintFilterBar({ lint, filters, onFiltersChange }: Props) {
       )}
     </div>
   );
+}
+
+function groupingLabel(grouping: LintGrouping): string {
+  if (grouping === 'file-linter-rule') return 'File -> Linter -> Rule';
+  if (grouping === 'linter-file') return 'Linter -> Folder -> File';
+  return 'Linter -> Rule -> Folder -> File';
 }
 
 function triStateClasses(mode: FilterMode | undefined, includeBg: string, includeBorder: string): string {

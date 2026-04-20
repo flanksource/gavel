@@ -70,6 +70,7 @@ export interface Snapshot {
   // every PR is read.
   unread?: Record<string, boolean>;
   syncStatus?: Record<string, PRSyncStatus>;
+  gavelResults?: Record<string, GavelResultsSummary>;
 }
 
 // Sync status types
@@ -163,6 +164,25 @@ export interface GavelResultsSummary {
   hasBench: boolean;
   benchRegressions?: number;
   error?: string;
+  topFailures?: TestFailure[];
+  topLintViolations?: LintViolation[];
+}
+
+export interface TestFailure {
+  name: string;
+  suite?: string;
+  file?: string;
+  line?: number;
+  message?: string;
+  details?: string;
+}
+
+export interface LintViolation {
+  linter: string;
+  file?: string;
+  line?: number;
+  rule?: string;
+  message?: string;
 }
 
 export interface PRDetail {

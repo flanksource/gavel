@@ -16,9 +16,12 @@ import {
   sumNonTaskTests,
   collectFrameworks,
   collapseSingleChildChains,
+  collapseLintSingleChildChains,
   filterTests,
   totalLintViolations,
+  groupLintByLinterRuleFile,
   groupLintByLinterFile,
+  groupLintByFileLinterRule,
   countProcesses,
   findProcessByPID,
   isLintNode,
@@ -105,7 +108,7 @@ export function App() {
     tab: 'tests' as TabKey,
     selectedPath: '',
     filters: { status: defaultStatusFilter(), framework: new Map() },
-    lintGrouping: 'linter-file' as LintGrouping,
+    lintGrouping: 'linter-rule-file' as LintGrouping,
     lintFilters: { severity: new Map(), linter: new Map() },
   };
 
@@ -253,8 +256,13 @@ export function App() {
     [tests, filters],
   );
   const lintTree = useMemo(() => {
-    return annotateRoutePaths(collapseSingleChildChains(groupLintByLinterFile(lint, lintFilters)));
-  }, [lint, lintFilters]);
+    const grouped = lintGrouping === 'file-linter-rule'
+      ? groupLintByFileLinterRule(lint, lintFilters)
+      : lintGrouping === 'linter-file'
+        ? groupLintByLinterFile(lint, lintFilters)
+        : groupLintByLinterRuleFile(lint, lintFilters);
+    return annotateRoutePaths(collapseLintSingleChildChains(grouped));
+  }, [lint, lintFilters, lintGrouping]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
   const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);
 
@@ -346,13 +354,18 @@ export function App() {
       const linters = new Set<string>();
       const files = new Set<string>();
 
-      const addLintMatches = (targetPath: string | undefined, source?: string) => {
+      const addLintMatches = (targetPath: string | undefined, source?: string, rule?: string) => {
         for (const lr of lint || []) {
           if (node.work_dir && lr.work_dir && lr.work_dir !== node.work_dir) continue;
+          if (source && lr.linter !== source) continue;
           let matched = false;
           for (const violation of lr.violations || []) {
             const rawFile = relPath(violation.file, lr.work_dir);
-            if (!rawFile) continue;
+            if (rule && (violation.rule?.method || '(no rule)') !== rule) continue;
+            if (!rawFile) {
+              matched = rule !== undefined && targetPath === undefined;
+              continue;
+            }
             const fileMatch = !targetPath || targetPath === '' || rawFile === targetPath || rawFile.startsWith(`${targetPath}/`);
             if (!fileMatch) continue;
             matched = true;
@@ -360,7 +373,7 @@ export function App() {
           }
           if (matched) {
             if (lr.work_dir) workDirs.add(lr.work_dir);
-            if (!source || lr.linter === source) linters.add(lr.linter);
+            linters.add(lr.linter);
           }
         }
       };
@@ -372,11 +385,11 @@ export function App() {
           (n.children || []).forEach(collectWorkDirs);
         };
         collectWorkDirs(node);
-      } else if (node.kind === 'lint-rule') {
+      } else if (node.kind === 'lint-rule' || node.kind === 'lint-rule-group') {
         if (node.linterName) linters.add(node.linterName);
-        addLintMatches(node.target_path, node.linterName);
+        addLintMatches(node.target_path, node.linterName, node.ruleName);
       } else if (node.kind === 'lint-file' || node.kind === 'lint-folder') {
-        addLintMatches(node.target_path);
+        addLintMatches(node.target_path, node.linterName, node.ruleName);
       }
 
       if (node.work_dir) workDirs.add(node.work_dir);
@@ -711,6 +724,7 @@ export function App() {
           <div class="mt-2">
             <LintFilterBar
               lint={lint}
+              grouping={lintGrouping}
               filters={lintFilters}
               onFiltersChange={onLintFiltersChange}
             />

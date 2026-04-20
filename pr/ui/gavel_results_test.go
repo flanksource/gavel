@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
+
+	"github.com/flanksource/gavel/github"
 )
 
 func TestComputeGavelSummary_ObjectFormat(t *testing.T) {
@@ -59,6 +62,40 @@ func TestComputeGavelSummary_ObjectFormat(t *testing.T) {
 	}
 	if s.LintViolations != 2 {
 		t.Errorf("LintViolations = %d, want 2", s.LintViolations)
+	}
+	if len(s.TopFailures) != 1 || s.TopFailures[0].Name != "TestB" {
+		t.Errorf("TopFailures = %+v, want single TestB failure", s.TopFailures)
+	}
+	if len(s.TopLintViolations) != 2 {
+		t.Errorf("TopLintViolations = %d, want 2", len(s.TopLintViolations))
+	}
+	if s.TopLintViolations[0].Linter != "golangci-lint" || s.TopLintViolations[0].File != "a.go" {
+		t.Errorf("first lint violation = %+v", s.TopLintViolations[0])
+	}
+}
+
+func TestComputeGavelSummary_TopFailuresCap(t *testing.T) {
+	// 7 failing tests — summary must cap at 5 and preserve encounter order.
+	tests := `[
+		{"name": "F1", "failed": true},
+		{"name": "F2", "failed": true},
+		{"name": "F3", "failed": true},
+		{"name": "F4", "failed": true},
+		{"name": "F5", "failed": true},
+		{"name": "F6", "failed": true},
+		{"name": "F7", "failed": true}
+	]`
+	s := computeGavelSummary([]byte(tests), 1, "")
+	if s.TestsFailed != 7 {
+		t.Errorf("TestsFailed = %d, want 7", s.TestsFailed)
+	}
+	if len(s.TopFailures) != 5 {
+		t.Fatalf("TopFailures length = %d, want 5", len(s.TopFailures))
+	}
+	for i, want := range []string{"F1", "F2", "F3", "F4", "F5"} {
+		if s.TopFailures[i].Name != want {
+			t.Errorf("TopFailures[%d] = %s, want %s", i, s.TopFailures[i].Name, want)
+		}
 	}
 }
 
@@ -144,5 +181,50 @@ func TestGavelResultJSON_UnmarshalObject(t *testing.T) {
 	}
 	if len(g.Tests) != 1 || g.Tests[0].Name != "T2" {
 		t.Errorf("got %+v", g.Tests)
+	}
+}
+
+// TestSnapshotIncludesGavelResults ensures that setGavelSummary cached
+// entries surface in snapshotLocked's payload, but only for PRs still
+// present in the current snapshot (prevents unbounded growth when PRs
+// close/drop out of the view).
+func TestSnapshotIncludesGavelResults(t *testing.T) {
+	s := &Server{
+		prs: github.PRSearchResults{
+			{Repo: "owner/a", Number: 1},
+			{Repo: "owner/b", Number: 2},
+		},
+		gavelCache: map[string]*GavelResultsSummary{},
+	}
+
+	s.setGavelSummary("owner/a", 1, &GavelResultsSummary{TestsTotal: 3, TestsFailed: 1, TestsPassed: 2})
+	// "owner/c" is not in the current snapshot — the stale cache entry
+	// must NOT leak into the wire payload.
+	s.setGavelSummary("owner/c", 9, &GavelResultsSummary{TestsTotal: 1, TestsPassed: 1})
+
+	s.mu.RLock()
+	snap := s.snapshotLocked()
+	s.mu.RUnlock()
+
+	if len(snap.GavelResults) != 1 {
+		t.Fatalf("expected 1 entry in snapshot.GavelResults, got %d (%v)", len(snap.GavelResults), snap.GavelResults)
+	}
+	got, ok := snap.GavelResults["owner/a#1"]
+	if !ok {
+		t.Fatalf("missing owner/a#1 entry: %v", snap.GavelResults)
+	}
+	if got.TestsFailed != 1 || got.TestsPassed != 2 {
+		t.Errorf("cached summary lost fields: %+v", got)
+	}
+	if _, leaked := snap.GavelResults["owner/c#9"]; leaked {
+		t.Errorf("stale cache entry leaked into snapshot: %v", snap.GavelResults)
+	}
+
+	b, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`"gavelResults"`)) {
+		t.Errorf("marshaled snapshot missing gavelResults field: %s", b)
 	}
 }

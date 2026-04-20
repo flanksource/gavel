@@ -7,6 +7,7 @@ import { basePath } from './config';
 
 const DEFAULT_STATUS_FILTER_TOKENS = ['!passed', '!skipped'];
 const STATUS_FILTER_ALL_SENTINEL = 'all';
+const DEFAULT_LINT_GROUPING: LintGrouping = 'linter-rule-file';
 
 export function defaultStatusFilter(): FilterState<string> {
   return decodeFilterState(DEFAULT_STATUS_FILTER_TOKENS);
@@ -69,7 +70,7 @@ export function parseRoute(location: Location): RouteState {
       status,
       framework: decodeFilterState(splitCSV(params.get('framework'))),
     },
-    lintGrouping: 'linter-file',
+    lintGrouping: parseLintGrouping(params.get('grouping')),
     lintFilters: {
       severity: decodeFilterState(splitCSV(params.get('severity')) as any[]),
       linter: decodeFilterState(splitCSV(params.get('linter'))),
@@ -94,6 +95,7 @@ export function buildRoute(state: RouteState): string {
     if (state.filters.framework.size > 0) params.set('framework', encodeFilterState(state.filters.framework).join(','));
   }
   if (state.tab === 'lint') {
+    if (state.lintGrouping !== DEFAULT_LINT_GROUPING) params.set('grouping', state.lintGrouping);
     if (state.lintFilters.severity.size > 0) params.set('severity', encodeFilterState(state.lintFilters.severity).join(','));
     if (state.lintFilters.linter.size > 0) params.set('linter', encodeFilterState(state.lintFilters.linter).join(','));
   }
@@ -106,6 +108,13 @@ export function buildExportRoute(state: RouteState, format: ExportFormat): strin
   const route = buildRoute(state);
   const [path, query = ''] = route.split('?', 2);
   return `${path}.${format}${query ? `?${query}` : ''}`;
+}
+
+function parseLintGrouping(value: string | null): LintGrouping {
+  if (value === 'linter-file' || value === 'file-linter-rule' || value === 'linter-rule-file') {
+    return value;
+  }
+  return DEFAULT_LINT_GROUPING;
 }
 
 function slugify(value: string): string {

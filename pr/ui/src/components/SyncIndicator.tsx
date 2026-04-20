@@ -18,17 +18,17 @@ function phaseLabel(phase?: string): string {
 function stateConfig(status: PRSyncStatus): { icon: string; color: string; title: string } {
   switch (status.state) {
     case 'queued':
-      return { icon: '○', color: 'text-gray-300', title: 'Queued for sync' };
+      return { icon: 'codicon:sync-ignored', color: 'text-gray-400', title: 'Queued for sync' };
     case 'syncing':
-      return { icon: '', color: 'text-blue-400', title: `Syncing: ${phaseLabel(status.phase)}...` };
+      return { icon: 'svg-spinners:ring-resize', color: 'text-blue-500', title: `Syncing: ${phaseLabel(status.phase)}...` };
     case 'up-to-date':
-      return { icon: '✓', color: 'text-green-400', title: status.lastSynced ? `Synced ${timeAgo(status.lastSynced)}` : 'Synced' };
+      return { icon: 'codicon:sync', color: 'text-green-500', title: status.lastSynced ? `Synced ${timeAgo(status.lastSynced)}` : 'Synced' };
     case 'out-of-date':
-      return { icon: '○', color: 'text-yellow-400', title: 'Updated since last sync' };
+      return { icon: 'codicon:refresh', color: 'text-yellow-500', title: 'Updated since last sync' };
     case 'error':
-      return { icon: '!', color: 'text-red-400', title: status.error || 'Sync error' };
+      return { icon: 'codicon:warning', color: 'text-red-500', title: status.error || 'Sync error' };
     default:
-      return { icon: '○', color: 'text-gray-300', title: '' };
+      return { icon: 'codicon:sync-ignored', color: 'text-gray-400', title: '' };
   }
 }
 
@@ -42,11 +42,7 @@ export function SyncIndicator({ status }: Props) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      {status.state === 'syncing' ? (
-        <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-400" style="font-size: 8px" />
-      ) : (
-        <span class={`text-[8px] leading-none ${cfg.color}`} title={cfg.title}>{cfg.icon}</span>
-      )}
+      <iconify-icon icon={cfg.icon} class={`${cfg.color} text-[11px]`} title={cfg.title} />
       {hover && <HoverCard status={status} />}
     </span>
   );

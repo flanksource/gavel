@@ -1,10 +1,80 @@
 import { useState, useMemo, useRef } from 'preact/hooks';
-import type { PRItem, PRDetail, PRComment, GavelResultsSummary } from '../types';
+import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation } from '../types';
 import { stateColor, reviewColor, timeAgo, severityIcon } from '../utils';
+import { ansiToHtml, stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
 import { Avatar } from './Avatar';
 import { WorkflowRunView } from './WorkflowView';
 import { BotCommentBody, BotBadge } from './BotComment';
+import type { WorkflowRun } from '../types';
+
+function formatWorkflowsText(runs: WorkflowRun[]): string {
+  return runs.map(r => {
+    const outcome = r.conclusion || r.status;
+    const jobs = (r.jobs || []).map(j => `  - ${j.conclusion || j.status}: ${j.name}`).join('\n');
+    return `${r.name} [${outcome}]${jobs ? '\n' + jobs : ''}`;
+  }).join('\n\n');
+}
+
+function formatWorkflowsMarkdown(runs: WorkflowRun[]): string {
+  return runs.map(r => {
+    const outcome = r.conclusion || r.status;
+    const jobs = (r.jobs || []).map(j => `  - \`${j.conclusion || j.status}\` ${j.name}`).join('\n');
+    return `### ${r.name} _(${outcome})_${r.url ? ` · [view](${r.url})` : ''}${jobs ? '\n' + jobs : ''}`;
+  }).join('\n\n');
+}
+
+function formatGavelText(g: GavelResultsSummary): string {
+  const lines: string[] = [];
+  if (g.testsTotal > 0) {
+    lines.push(`Tests: ${g.testsPassed} passed / ${g.testsFailed} failed / ${g.testsSkipped} skipped (total ${g.testsTotal})`);
+  }
+  if (g.lintLinters > 0) {
+    lines.push(`Lint: ${g.lintViolations} violations across ${g.lintLinters} linters`);
+  }
+  if (g.hasBench) {
+    lines.push(`Bench: ${g.benchRegressions ?? 0} regressions`);
+  }
+  if (g.topFailures && g.topFailures.length) {
+    lines.push('', 'Top failures:');
+    for (const f of g.topFailures) {
+      lines.push(`- ${f.name}${f.file ? ` (${f.file}${f.line ? ':' + f.line : ''})` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
+    }
+  }
+  if (g.topLintViolations && g.topLintViolations.length) {
+    lines.push('', 'Top lint violations:');
+    for (const v of g.topLintViolations) {
+      lines.push(`- [${v.linter}] ${v.file ?? ''}${v.line ? ':' + v.line : ''}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatGavelMarkdown(g: GavelResultsSummary): string {
+  const lines: string[] = [];
+  if (g.testsTotal > 0) {
+    lines.push(`- **Tests**: ✅ ${g.testsPassed} · ❌ ${g.testsFailed} · ⏭ ${g.testsSkipped} (total ${g.testsTotal})`);
+  }
+  if (g.lintLinters > 0) {
+    lines.push(`- **Lint**: ${g.lintViolations} violations across ${g.lintLinters} linters`);
+  }
+  if (g.hasBench) {
+    lines.push(`- **Bench**: ${g.benchRegressions ?? 0} regressions`);
+  }
+  if (g.topFailures && g.topFailures.length) {
+    lines.push('', '**Top failures**');
+    for (const f of g.topFailures) {
+      lines.push(`- \`${f.name}\`${f.file ? ` _${f.file}${f.line ? ':' + f.line : ''}_` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
+    }
+  }
+  if (g.topLintViolations && g.topLintViolations.length) {
+    lines.push('', '**Top lint violations**');
+    for (const v of g.topLintViolations) {
+      lines.push(`- \`${v.linter}\` ${v.file ?? ''}${v.line ? ':' + v.line : ''}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+    }
+  }
+  return lines.join('\n');
+}
 
 interface Props {
   pr: PRItem;
@@ -32,7 +102,14 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
       )}
 
       {detail?.runs && Object.keys(detail.runs).length > 0 && (
-        <Section title="Workflows">
+        <Section
+          title="Workflows"
+          actions={{
+            json: () => detail.runs,
+            text: () => formatWorkflowsText(Object.values(detail.runs!)),
+            markdown: () => formatWorkflowsMarkdown(Object.values(detail.runs!)),
+          }}
+        >
           {Object.values(detail.runs).map(run => (
             <WorkflowRunView key={run.databaseId} run={run} repo={pr.repo} />
           ))}
@@ -310,7 +387,14 @@ function DeploymentsSection({ comments }: { comments: PRComment[] }) {
   if (projects.length === 0) return null;
 
   return (
-    <Section title="Deployments">
+    <Section
+      title="Deployments"
+      actions={{
+        json: () => projects,
+        text: () => projects.map(p => `${p.name}: ${p.status}${p.previewUrl ? ' ' + p.previewUrl : ''}`).join('\n'),
+        markdown: () => projects.map(p => `- **${p.name}** — ${p.status}${p.previewUrl ? ` ([preview](${p.previewUrl}))` : ''}`).join('\n'),
+      }}
+    >
       {projects.map(p => <DeploymentRow key={p.name} project={p} />)}
     </Section>
   );
@@ -356,7 +440,14 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
   }
 
   return (
-    <Section title={`Comments (${filtered.length}/${comments.length})`}>
+    <Section
+      title={`Comments (${filtered.length}/${comments.length})`}
+      actions={{
+        json: () => filtered,
+        text: () => filtered.map(c => `@${c.author}${c.path ? ` [${c.path}${c.line ? ':' + c.line : ''}]` : ''}\n${c.body}`).join('\n\n---\n\n'),
+        markdown: () => filtered.map(c => `**@${c.author}**${c.path ? ` _(${c.path}${c.line ? ':' + c.line : ''})_` : ''}\n\n${c.body}`).join('\n\n---\n\n'),
+      }}
+    >
       <div class="flex items-center gap-1.5 flex-wrap mb-2">
         {SEVERITY_DEFS.map(sf => {
           const count = severityCounts[sf.key] || 0;
@@ -416,6 +507,39 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
   );
 }
 
+interface MetricCardProps {
+  href: string;
+  icon: string;
+  label: string;
+  value: string | number;
+  sub?: string;
+  tone: 'pass' | 'fail' | 'warn' | 'info' | 'neutral';
+}
+
+function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
+  const toneClass = {
+    pass: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100',
+    fail: 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100',
+    warn: 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
+    info: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
+    neutral: 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100',
+  }[tone];
+  return (
+    <a
+      href={href}
+      class={`group block rounded-lg border px-3 py-2 transition-colors ${toneClass}`}
+    >
+      <div class="flex items-center justify-between">
+        <iconify-icon icon={icon} class="text-lg" />
+        <iconify-icon icon="codicon:chevron-right" class="text-xs opacity-30 group-hover:opacity-70" />
+      </div>
+      <div class="text-2xl font-semibold tabular-nums leading-tight mt-1">{value}</div>
+      <div class="text-[11px] font-medium uppercase tracking-wide opacity-80">{label}</div>
+      {sub && <div class="text-[11px] mt-0.5 opacity-70 truncate">{sub}</div>}
+    </a>
+  );
+}
+
 function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr: PRItem }) {
   if (results.error) {
     return (
@@ -430,70 +554,258 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
 
   const backTo = `${window.location.pathname}${window.location.search}`;
   const basePath = `/results/${pr.repo}/${results.artifactId}`;
+  const link = (tab: string) => `${basePath}/${tab}?backTo=${encodeURIComponent(backTo)}`;
 
-  const rows: { tab: string; icon: string; color: string; label: string }[] = [];
+  const cards: MetricCardProps[] = [];
 
   if (results.testsTotal > 0) {
-    const parts: string[] = [];
-    if (results.testsPassed > 0) parts.push(`${results.testsPassed} passed`);
-    if (results.testsFailed > 0) parts.push(`${results.testsFailed} failed`);
-    if (results.testsSkipped > 0) parts.push(`${results.testsSkipped} skipped`);
-    rows.push({
-      tab: 'tests',
-      icon: results.testsFailed > 0 ? 'codicon:error' : 'codicon:pass',
-      color: results.testsFailed > 0 ? 'text-red-600' : 'text-green-600',
-      label: `Tests: ${parts.join(', ')}`,
+    cards.push({
+      href: link('tests?filter=passed'),
+      icon: 'codicon:pass',
+      label: 'Passed',
+      value: results.testsPassed,
+      sub: `of ${results.testsTotal} test${results.testsTotal !== 1 ? 's' : ''}`,
+      tone: 'pass',
     });
+    cards.push({
+      href: link('tests?filter=failed'),
+      icon: 'codicon:error',
+      label: 'Failed',
+      value: results.testsFailed,
+      sub: results.testsFailed > 0 ? 'need triage' : 'none',
+      tone: results.testsFailed > 0 ? 'fail' : 'neutral',
+    });
+    if (results.testsSkipped > 0) {
+      cards.push({
+        href: link('tests?filter=skipped'),
+        icon: 'codicon:debug-step-over',
+        label: 'Skipped',
+        value: results.testsSkipped,
+        sub: 'not run',
+        tone: 'warn',
+      });
+    }
   }
 
   if (results.lintLinters > 0) {
-    rows.push({
-      tab: 'lint',
+    cards.push({
+      href: link('lint'),
       icon: results.lintViolations > 0 ? 'codicon:warning' : 'codicon:pass',
-      color: results.lintViolations > 0 ? 'text-yellow-600' : 'text-green-600',
-      label: results.lintViolations > 0
-        ? `Lint: ${results.lintViolations} violation${results.lintViolations !== 1 ? 's' : ''} from ${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''}`
-        : `Lint: ${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''} clean`,
+      label: 'Lint',
+      value: results.lintViolations,
+      sub: results.lintViolations > 0
+        ? `from ${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''}`
+        : `${results.lintLinters} linter${results.lintLinters !== 1 ? 's' : ''} clean`,
+      tone: results.lintViolations > 0 ? 'warn' : 'pass',
     });
   }
 
   if (results.hasBench) {
-    rows.push({
-      tab: 'bench',
-      icon: (results.benchRegressions ?? 0) > 0 ? 'codicon:warning' : 'codicon:graph',
-      color: (results.benchRegressions ?? 0) > 0 ? 'text-red-600' : 'text-blue-600',
-      label: (results.benchRegressions ?? 0) > 0
-        ? `Bench: ${results.benchRegressions} regression${results.benchRegressions !== 1 ? 's' : ''}`
-        : 'Bench: no regressions',
+    const regs = results.benchRegressions ?? 0;
+    cards.push({
+      href: link('bench'),
+      icon: regs > 0 ? 'codicon:arrow-down' : 'codicon:graph',
+      label: 'Bench',
+      value: regs,
+      sub: regs > 0
+        ? `regression${regs !== 1 ? 's' : ''}`
+        : 'no regressions',
+      tone: regs > 0 ? 'fail' : 'info',
     });
   }
 
-  if (rows.length === 0) return null;
+  if (cards.length === 0) return null;
+
+  const failures = results.topFailures ?? [];
+  const lintHits = results.topLintViolations ?? [];
 
   return (
-    <Section title="Gavel Results">
-      {rows.map(row => (
-        <a
-          key={row.tab}
-          href={`${basePath}/${row.tab}?backTo=${encodeURIComponent(backTo)}`}
-          class="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-gray-50 text-sm group transition-colors"
+    <Section
+      title="Gavel Results"
+      actions={{
+        json: () => results,
+        text: () => formatGavelText(results),
+        markdown: () => formatGavelMarkdown(results),
+      }}
+    >
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+        {cards.map((c, i) => (
+          <MetricCard key={i} {...c} />
+        ))}
+      </div>
+      {failures.length > 0 && (
+        <FailureList
+          title="Test failures"
+          icon="codicon:beaker-stop"
+          iconColor="text-red-600"
+          total={results.testsFailed}
         >
-          <iconify-icon icon={row.icon} class={row.color} />
-          <span class="text-gray-700 flex-1">{row.label}</span>
-          <iconify-icon icon="codicon:chevron-right" class="text-gray-300 group-hover:text-gray-500 text-xs" />
-        </a>
-      ))}
+          {failures.map((f, i) => <TestFailureRow key={i} f={f} />)}
+        </FailureList>
+      )}
+      {lintHits.length > 0 && (
+        <FailureList
+          title="Lint violations"
+          icon="codicon:warning"
+          iconColor="text-yellow-600"
+          total={results.lintViolations}
+        >
+          {lintHits.map((v, i) => <LintViolationRow key={i} v={v} />)}
+        </FailureList>
+      )}
     </Section>
   );
 }
 
-function Section({ title, children }: { title: string; children: any }) {
+function FailureList({ title, icon, iconColor, total, children }: {
+  title: string;
+  icon: string;
+  iconColor: string;
+  total: number;
+  children: any;
+}) {
+  const rows = Array.isArray(children) ? children : [children];
+  const shown = rows.length;
+  return (
+    <div class="mt-3">
+      <div class="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+        <iconify-icon icon={icon} class={iconColor} />
+        <span class="font-semibold">{title}</span>
+        <span class="text-gray-400 normal-case tracking-normal">
+          showing {shown} of {total}
+        </span>
+      </div>
+      <div class="divide-y divide-gray-100 border border-gray-100 rounded">
+        {rows}
+      </div>
+    </div>
+  );
+}
+
+function FailureHeader({ f, withChevron }: { f: TestFailure; withChevron: boolean }) {
+  const location = f.file ? (f.line ? `${f.file}:${f.line}` : f.file) : '';
+  const plainMsg = f.message ?? '';
+  const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
+  return (
+    <div class="flex items-start gap-2 py-1.5 px-2 text-xs">
+      {withChevron && (
+        <iconify-icon icon="codicon:chevron-right" class="text-gray-400 mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
+      )}
+      <iconify-icon icon="codicon:error" class="text-red-600 mt-0.5 shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-gray-800 truncate" title={f.name}>
+          {f.suite ? <span class="text-gray-400">{f.suite} › </span> : null}
+          {f.name}
+        </div>
+        <div class="text-[11px] text-gray-500 truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
+          {location && <span>{location}</span>}
+          {location && plainMsg && <span class="mx-1">·</span>}
+          {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TestFailureRow({ f }: { f: TestFailure }) {
+  const hasDetails = !!(f.details && f.details.trim().length > 0);
+  if (!hasDetails) return <div><FailureHeader f={f} withChevron={false} /></div>;
+  const detailsHtml = ansiToHtml(f.details!);
+  return (
+    <details class="group">
+      <summary class="list-none cursor-pointer hover:bg-gray-50">
+        <FailureHeader f={f} withChevron={true} />
+      </summary>
+      <pre
+        class="text-[11px] font-mono text-gray-100 bg-[#1e1e1e] px-3 py-2 overflow-x-auto whitespace-pre-wrap border-t border-gray-200"
+        dangerouslySetInnerHTML={{ __html: detailsHtml }}
+      />
+    </details>
+  );
+}
+
+function LintViolationRow({ v }: { v: LintViolation }) {
+  const location = v.file ? (v.line ? `${v.file}:${v.line}` : v.file) : '';
+  const plainMsg = v.message ?? '';
+  const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
+  return (
+    <div class="flex items-start gap-2 py-1.5 px-2 text-xs">
+      <iconify-icon icon="codicon:warning" class="text-yellow-600 mt-0.5 shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-gray-800 truncate">
+          <span class="text-gray-400">{v.linter}</span>
+          {v.rule && <span class="ml-1 text-gray-500">({v.rule})</span>}
+        </div>
+        <div class="text-[11px] text-gray-500 truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
+          {location && <span>{location}</span>}
+          {location && plainMsg && <span class="mx-1">·</span>}
+          {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface SectionActions {
+  text?: () => string;
+  markdown?: () => string;
+  json?: () => unknown;
+}
+
+function Section({ title, children, actions }: { title: string; children: any; actions?: SectionActions }) {
   return (
     <div class="mt-4">
-      <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 border-b border-gray-100 pb-1">
-        {title}
-      </h3>
+      <div class="flex items-center justify-between mb-2 border-b border-gray-100 pb-1">
+        <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide">{title}</h3>
+        {actions && <SectionActionsBar actions={actions} title={title} />}
+      </div>
       {children}
+    </div>
+  );
+}
+
+function SectionActionsBar({ actions, title }: { actions: SectionActions; title: string }) {
+  const [copied, setCopied] = useState<'text' | 'json' | 'markdown' | null>(null);
+
+  const flash = (kind: 'text' | 'json' | 'markdown', content: string) => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1200);
+    }).catch(() => {});
+  };
+
+  return (
+    <div class="flex items-center gap-1 text-gray-400">
+      {actions.text && (
+        <button
+          type="button"
+          title={copied === 'text' ? 'Copied!' : `Copy ${title} as text`}
+          class={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'text' ? 'text-green-600' : ''}`}
+          onClick={(e) => { e.stopPropagation(); flash('text', actions.text!()); }}
+        >
+          <iconify-icon icon={copied === 'text' ? 'codicon:check' : 'codicon:copy'} class="text-sm" />
+        </button>
+      )}
+      {actions.markdown && (
+        <button
+          type="button"
+          title={copied === 'markdown' ? 'Copied!' : `Copy ${title} as Markdown`}
+          class={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'markdown' ? 'text-green-600' : ''}`}
+          onClick={(e) => { e.stopPropagation(); flash('markdown', actions.markdown!()); }}
+        >
+          <iconify-icon icon={copied === 'markdown' ? 'codicon:check' : 'codicon:markdown'} class="text-sm" />
+        </button>
+      )}
+      {actions.json && (
+        <button
+          type="button"
+          title={copied === 'json' ? 'Copied!' : `Copy ${title} as JSON`}
+          class={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'json' ? 'text-green-600' : ''}`}
+          onClick={(e) => { e.stopPropagation(); flash('json', JSON.stringify(actions.json!(), null, 2)); }}
+        >
+          <iconify-icon icon={copied === 'json' ? 'codicon:check' : 'codicon:json'} class="text-sm" />
+        </button>
+      )}
     </div>
   );
 }

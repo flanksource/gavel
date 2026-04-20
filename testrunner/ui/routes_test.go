@@ -1,12 +1,63 @@
 package testui
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
+
+func TestParseRouteRequestDefaultsLintGroupingToLinterRuleFile(t *testing.T) {
+	req := httptest.NewRequest("GET", "/lint", nil)
+	parsed, ok := parseRouteRequest(req)
+	if !ok {
+		t.Fatalf("parseRouteRequest returned ok=false")
+	}
+	if parsed.LintFilters.Grouping != "linter-rule-file" {
+		t.Fatalf("grouping = %q, want linter-rule-file", parsed.LintFilters.Grouping)
+	}
+}
+
+func TestBuildLintByLinterRuleFileGroupsRulesBeforeFolders(t *testing.T) {
+	results := []*linters.LinterResult{{
+		Linter:  "golangci-lint",
+		WorkDir: "/tmp/work",
+		Success: false,
+		Violations: []models.Violation{
+			testViolation("pkg/foo.go", 4, "errcheck"),
+			testViolation("pkg/foo.go", 9, "errcheck"),
+			testViolation("pkg/sub/bar.go", 3, "unused"),
+		},
+	}}
+
+	nodes := buildLintByLinterRuleFile(results, lintRouteFilters{Grouping: "linter-rule-file"})
+	if len(nodes) != 1 {
+		t.Fatalf("top-level nodes = %d, want 1", len(nodes))
+	}
+
+	linter := nodes[0]
+	if linter.Kind != "linter" {
+		t.Fatalf("linter kind = %q, want linter", linter.Kind)
+	}
+	if got := names(linter.Children); !containsName(got, "errcheck (2)") || !containsName(got, "unused (1)") {
+		t.Fatalf("rule children = %v, want errcheck and unused groups", got)
+	}
+
+	errcheck := mustChildByName(t, linter.Children, "errcheck (2)")
+	if errcheck.Kind != "lint-rule-group" {
+		t.Fatalf("rule group kind = %q, want lint-rule-group", errcheck.Kind)
+	}
+	pkg := mustChildByName(t, errcheck.Children, "pkg (2)")
+	if pkg.Kind != "lint-folder" {
+		t.Fatalf("pkg kind = %q, want lint-folder", pkg.Kind)
+	}
+	foo := mustChildByName(t, pkg.Children, "foo.go (2)")
+	if foo.Kind != "lint-file" || foo.File != "pkg/foo.go" {
+		t.Fatalf("foo node = %#v", foo)
+	}
+}
 
 func TestBuildLintByFileLinterRuleCollapsesCheckoutPrefix(t *testing.T) {
 	results := []*linters.LinterResult{{

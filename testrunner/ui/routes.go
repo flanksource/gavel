@@ -202,7 +202,7 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	req := routeRequest{
 		Tab: viewTabTests,
 		LintFilters: lintRouteFilters{
-			Grouping: "linter-file",
+			Grouping: "linter-rule-file",
 		},
 	}
 
@@ -296,7 +296,7 @@ func parseTestFilters(r *http.Request) testRouteFilters {
 func parseLintFilters(r *http.Request) lintRouteFilters {
 	grouping := r.URL.Query().Get("grouping")
 	if grouping == "" {
-		grouping = "linter-file"
+		grouping = "linter-rule-file"
 	}
 	return lintRouteFilters{
 		Grouping: grouping,
@@ -510,7 +510,13 @@ func buildLintViewNodes(results []*linters.LinterResult, filters lintRouteFilter
 	if filters.Grouping == "file-linter-rule" {
 		return buildLintByFileLinterRule(results, filters)
 	}
-	return buildLintByLinterFile(results, filters)
+	if filters.Grouping == "linter-file" {
+		return buildLintByLinterFile(results, filters)
+	}
+	if filters.Grouping == "linter-rule-file" {
+		return buildLintByLinterRuleFile(results, filters)
+	}
+	return buildLintByLinterRuleFile(results, filters)
 }
 
 type lintRuleBucket struct {
@@ -528,6 +534,18 @@ type lintFileTreeNode struct {
 	Path     string
 	Children map[string]*lintFileTreeNode
 	Files    map[string]map[string]map[string][]models.Violation
+}
+
+type lintRuleScopedBucket struct {
+	Files            map[string][]models.Violation
+	NoFileViolations []models.Violation
+}
+
+type lintRuleFileTreeNode struct {
+	Name     string
+	Path     string
+	Children map[string]*lintRuleFileTreeNode
+	Files    map[string][]models.Violation
 }
 
 func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFilters) []*ViewNode {
@@ -593,6 +611,64 @@ func buildLintByLinterFile(results []*linters.LinterResult, filters lintRouteFil
 			Framework: "lint",
 			Message:   lintMetaMessage(meta[linterName]),
 			Children:  children,
+		})
+	}
+	return nodes
+}
+
+func buildLintByLinterRuleFile(results []*linters.LinterResult, filters lintRouteFilters) []*ViewNode {
+	linterInclude, linterExclude := splitFilterModes(filters.Linter)
+	severityInclude, severityExclude := splitFilterModes(filters.Severity)
+	byLinter := map[string]map[string]*lintRuleScopedBucket{}
+	meta := map[string]*linters.LinterResult{}
+	for _, result := range results {
+		if !matchesFilterMode(result.Linter, linterInclude, linterExclude) {
+			continue
+		}
+		meta[result.Linter] = result
+		for _, violation := range result.Violations {
+			if !matchesFilterMode(string(violation.Severity), severityInclude, severityExclude) {
+				continue
+			}
+			rules, ok := byLinter[result.Linter]
+			if !ok {
+				rules = map[string]*lintRuleScopedBucket{}
+				byLinter[result.Linter] = rules
+			}
+			rule := lintRuleName(violation)
+			bucket, ok := rules[rule]
+			if !ok {
+				bucket = &lintRuleScopedBucket{Files: map[string][]models.Violation{}}
+				rules[rule] = bucket
+			}
+			file := relLintPath(violation.File, result.WorkDir)
+			if file == "" {
+				bucket.NoFileViolations = append(bucket.NoFileViolations, violation)
+				continue
+			}
+			bucket.Files[file] = append(bucket.Files[file], violation)
+		}
+	}
+
+	lintersList := sortedKeys(byLinter)
+	nodes := make([]*ViewNode, 0, len(lintersList))
+	for _, linterName := range lintersList {
+		rules := byLinter[linterName]
+		ruleNames := sortedKeys(rules)
+		var ruleNodes []*ViewNode
+		total := 0
+		for _, ruleName := range ruleNames {
+			ruleNode := buildLintRuleGroupNode(ruleName, linterName, rules[ruleName])
+			total += lintNodeViolationCount(ruleNode.Children)
+			ruleNodes = append(ruleNodes, ruleNode)
+		}
+		nodes = append(nodes, &ViewNode{
+			Name:      fmt.Sprintf("%s (%d)", linterName, total),
+			Kind:      "linter",
+			Status:    statusFromChildNodes(ruleNodes),
+			Framework: "lint",
+			Message:   lintMetaMessage(meta[linterName]),
+			Children:  ruleNodes,
 		})
 	}
 	return nodes
@@ -727,6 +803,86 @@ func lintViolationNode(linterName, file string, violation models.Violation) *Vie
 		Message:   msg,
 		Command:   linterName,
 	}
+}
+
+func buildLintRuleGroupNode(ruleName, linterName string, bucket *lintRuleScopedBucket) *ViewNode {
+	root := newLintRuleFileTreeNode("", "")
+	for file, violations := range bucket.Files {
+		for _, violation := range violations {
+			insertLintRuleFileNode(root, file, violation)
+		}
+	}
+	children := buildLintRuleFileNodes(root, linterName)
+	for _, violation := range bucket.NoFileViolations {
+		children = append(children, lintViolationNode(linterName, "", violation))
+	}
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].Name < children[j].Name
+	})
+	return &ViewNode{
+		Name:      fmt.Sprintf("%s (%d)", ruleName, lintNodeViolationCount(children)),
+		Kind:      "lint-rule-group",
+		Status:    statusFromChildNodes(children),
+		Framework: "lint",
+		Children:  children,
+	}
+}
+
+func newLintRuleFileTreeNode(name, path string) *lintRuleFileTreeNode {
+	return &lintRuleFileTreeNode{
+		Name:     name,
+		Path:     path,
+		Children: map[string]*lintRuleFileTreeNode{},
+		Files:    map[string][]models.Violation{},
+	}
+}
+
+func insertLintRuleFileNode(root *lintRuleFileTreeNode, file string, violation models.Violation) {
+	segments := collapsedLintSegments(file)
+	if len(segments) == 0 {
+		return
+	}
+	current := root
+	for _, segment := range segments[:len(segments)-1] {
+		child, ok := current.Children[segment]
+		if !ok {
+			path := segment
+			if current.Path != "" {
+				path = current.Path + "/" + segment
+			}
+			child = newLintRuleFileTreeNode(segment, path)
+			current.Children[segment] = child
+		}
+		current = child
+	}
+
+	base := segments[len(segments)-1]
+	current.Files[base] = append(current.Files[base], violation)
+}
+
+func buildLintRuleFileNodes(root *lintRuleFileTreeNode, linterName string) []*ViewNode {
+	nodes := make([]*ViewNode, 0, len(root.Children)+len(root.Files))
+	for _, folderName := range sortedKeys(root.Children) {
+		child := root.Children[folderName]
+		children := buildLintRuleFileNodes(child, linterName)
+		total := lintNodeViolationCount(children)
+		nodes = append(nodes, &ViewNode{
+			Name:      fmt.Sprintf("%s (%d)", child.Name, total),
+			Kind:      "lint-folder",
+			Status:    statusFromChildNodes(children),
+			Framework: "lint",
+			File:      child.Path,
+			Children:  children,
+		})
+	}
+	for _, fileName := range sortedKeys(root.Files) {
+		fullPath := fileName
+		if root.Path != "" {
+			fullPath = root.Path + "/" + fileName
+		}
+		nodes = append(nodes, lintFileNode(fileName, fullPath, linterName, root.Files[fileName]))
+	}
+	return nodes
 }
 
 func newLintFileTreeNode(name, path string) *lintFileTreeNode {

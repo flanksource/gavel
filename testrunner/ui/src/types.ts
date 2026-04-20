@@ -21,7 +21,7 @@ export interface Test {
   context?: GoTestContext | GinkgoContext | FixtureContext;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
-  kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule';
+  kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';
   violation?: Violation;
   violations?: Violation[];
   noFileViolations?: Violation[];
