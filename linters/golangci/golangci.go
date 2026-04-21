@@ -38,6 +38,13 @@ func (g *GolangciLint) Name() string {
 	return "golangci-lint"
 }
 
+// ProjectRootMarkers identifies the file(s) that anchor a Go module. The lint
+// driver runs golangci-lint once per discovered module with WorkDir set to the
+// module directory.
+func (g *GolangciLint) ProjectRootMarkers() []string {
+	return []string{"go.mod"}
+}
+
 // DefaultIncludes returns default file patterns this linter should process
 func (g *GolangciLint) DefaultIncludes() []string {
 	return []string{"**/*.go"}

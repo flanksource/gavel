@@ -111,8 +111,15 @@ func groupViolations(results []*LinterResult, groupBy, workDir string) map[strin
 		}
 		for _, v := range result.Violations {
 			file := v.File
-			if workDir != "" {
-				if rel, err := filepath.Rel(workDir, file); err == nil {
+			// Prefer the linter's own WorkDir (its project root) so files
+			// emitted relative to that root aren't re-relativized against a
+			// parent git root (which would produce ../../ prefixes).
+			base := result.WorkDir
+			if base == "" {
+				base = workDir
+			}
+			if base != "" {
+				if rel, err := filepath.Rel(base, file); err == nil {
 					file = rel
 				}
 			}

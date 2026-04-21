@@ -48,6 +48,12 @@ func (t *TSC) SetOptions(opts linters.RunOptions) { t.RunOptions = opts }
 
 func (t *TSC) Name() string { return "tsc" }
 
+// ProjectRootMarkers anchors tsc at the nearest tsconfig.json so the embedded
+// wrapper's ts.findConfigFile() call resolves to the right project.
+func (t *TSC) ProjectRootMarkers() []string {
+	return []string{"tsconfig.json"}
+}
+
 func (t *TSC) DefaultIncludes() []string {
 	return []string{
 		"**/*.ts",
