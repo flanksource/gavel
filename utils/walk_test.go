@@ -206,6 +206,109 @@ var _ = Describe("WalkGitIgnoredBounded", func() {
 	})
 })
 
+var _ = Describe("FindNearestProjectRoot", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	It("finds the nearest marker inside the git root", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "frontend", "src"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "frontend", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+
+		got := FindNearestProjectRoot(filepath.Join(root, "frontend", "src"), []string{"package.json"})
+		Expect(got).To(Equal(filepath.Join(root, "frontend")))
+	})
+
+	It("returns empty when no marker is found within the git root", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "src"), 0o755)).To(Succeed())
+		got := FindNearestProjectRoot(filepath.Join(root, "src"), []string{"go.mod"})
+		Expect(got).To(BeEmpty())
+	})
+
+	It("stops at the git root boundary", func() {
+		parent := filepath.Dir(root)
+		Expect(os.WriteFile(filepath.Join(parent, "go.mod"), []byte("module parent\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+
+		got := FindNearestProjectRoot(filepath.Join(root, "pkg"), []string{"go.mod"})
+		Expect(got).To(BeEmpty())
+	})
+
+	It("matches any of the supplied markers (first ancestor wins)", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "app", "src"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app", "pyproject.toml"), []byte(""), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "ruff.toml"), []byte(""), 0o644)).To(Succeed())
+
+		got := FindNearestProjectRoot(filepath.Join(root, "app", "src"), []string{"ruff.toml", "pyproject.toml"})
+		Expect(got).To(Equal(filepath.Join(root, "app")))
+	})
+
+	It("treats the git root itself as a candidate", func() {
+		Expect(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/x\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+
+		got := FindNearestProjectRoot(filepath.Join(root, "pkg"), []string{"go.mod"})
+		Expect(got).To(Equal(root))
+	})
+
+	It("returns empty when markers list is empty", func() {
+		Expect(FindNearestProjectRoot(root, nil)).To(BeEmpty())
+		Expect(FindNearestProjectRoot(root, []string{})).To(BeEmpty())
+	})
+})
+
+var _ = Describe("FindAllProjectRoots", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	It("finds every outermost package.json under the tree", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "frontend"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "frontend", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "tools"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "tools", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+
+		got := FindAllProjectRoots(root, []string{"package.json"})
+		Expect(got).To(ConsistOf(
+			filepath.Join(root, "frontend"),
+			filepath.Join(root, "tools"),
+		))
+	})
+
+	It("stops descending once a root is found (nested package.json is ignored)", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "app", "node_modules", "inner"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app", "node_modules", "inner", "package.json"), []byte("{}"), 0o644)).To(Succeed())
+
+		got := FindAllProjectRoots(root, []string{"package.json"})
+		Expect(got).To(ConsistOf(filepath.Join(root, "app")))
+	})
+
+	It("returns the root itself when it carries the marker", func() {
+		Expect(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+
+		got := FindAllProjectRoots(root, []string{"go.mod"})
+		Expect(got).To(ConsistOf(root))
+	})
+
+	It("returns empty slice when no marker present", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "src"), 0o755)).To(Succeed())
+		got := FindAllProjectRoots(root, []string{"go.mod"})
+		Expect(got).To(BeEmpty())
+	})
+
+	It("returns nil when markers list is empty", func() {
+		Expect(FindAllProjectRoots(root, nil)).To(BeNil())
+	})
+})
+
 var _ = Describe("FilterGitIgnored", func() {
 	var root string
 
