@@ -354,3 +354,59 @@ func TestMergeSecretsConfig(t *testing.T) {
 		assert.Equal(t, []string{"/a.toml", "/b.toml", "/c.toml"}, out.Configs)
 	})
 }
+
+func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
+	t.Run("gitignore concatenates across layers with dedup", func(t *testing.T) {
+		base := CommitConfig{GitIgnore: []string{"*.log", ".env"}}
+		override := CommitConfig{GitIgnore: []string{".env", "**/secrets/**"}}
+		out := MergeCommitConfig(base, override)
+		assert.Equal(t, []string{"*.log", ".env", "**/secrets/**"}, out.GitIgnore)
+	})
+
+	t.Run("allow concatenates with dedup", func(t *testing.T) {
+		base := CommitConfig{Allow: []string{"a.log"}}
+		override := CommitConfig{Allow: []string{"b.log", "a.log"}}
+		out := MergeCommitConfig(base, override)
+		assert.Equal(t, []string{"a.log", "b.log"}, out.Allow)
+	})
+
+	t.Run("empty override leaves base untouched", func(t *testing.T) {
+		base := CommitConfig{GitIgnore: []string{"*.log"}, Allow: []string{"ok.log"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, []string{"*.log"}, out.GitIgnore)
+		assert.Equal(t, []string{"ok.log"}, out.Allow)
+	})
+}
+
+func TestLoadSingleGavelConfig(t *testing.T) {
+	t.Run("reads one file without layering", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".gavel.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(`
+commit:
+  gitignore:
+    - "*.log"
+  allow:
+    - "keep.log"
+`), 0o644))
+
+		cfg, err := LoadSingleGavelConfig(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"*.log"}, cfg.Commit.GitIgnore)
+		assert.Equal(t, []string{"keep.log"}, cfg.Commit.Allow)
+	})
+
+	t.Run("missing file returns os.ErrNotExist", func(t *testing.T) {
+		_, err := LoadSingleGavelConfig(filepath.Join(t.TempDir(), "missing.yaml"))
+		require.Error(t, err)
+		assert.True(t, os.IsNotExist(err))
+	})
+
+	t.Run("malformed yaml returns parse error", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, ".gavel.yaml")
+		require.NoError(t, os.WriteFile(path, []byte("not: [valid yaml"), 0o644))
+		_, err := LoadSingleGavelConfig(path)
+		require.Error(t, err)
+	})
+}

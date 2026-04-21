@@ -14,17 +14,18 @@ import (
 )
 
 type CommitOptions struct {
-	Stage     string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
-	CommitAll bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
-	MaxFiles  int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
-	MaxLines  int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
-	Message   string `flag:"message" short:"m" help:"Explicit commit message (skips LLM)"`
-	Model     string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
-	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
-	Force     bool   `flag:"force" help:"Skip pre-commit hooks"`
-	NoCache   bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	Push      bool   `flag:"push" short:"p" help:"After committing, push to a matching open PR or open a new PR"`
-	WorkDir   string `flag:"work-dir" help:"Working directory"`
+	Stage       string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
+	CommitAll   bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
+	MaxFiles    int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
+	MaxLines    int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
+	Message     string `flag:"message" short:"m" help:"Explicit commit message (skips LLM)"`
+	Model       string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
+	DryRun      bool   `flag:"dry-run" help:"Print the generated message without committing"`
+	Force       bool   `flag:"force" help:"Skip pre-commit hooks"`
+	NoCache     bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
+	Push        bool   `flag:"push" short:"p" help:"After committing, push to a matching open PR or open a new PR"`
+	IgnoreCheck string `flag:"ignore-check" help:"Behavior when a staged file matches commit.gitignore: prompt|fail|skip" default:"prompt"`
+	WorkDir     string `flag:"work-dir" help:"Working directory"`
 }
 
 func (o CommitOptions) Help() string {
@@ -33,6 +34,12 @@ func (o CommitOptions) Help() string {
 Reads pre-commit hooks from .gavel.yaml under commit.hooks. Hooks run with
 sh -c in the git root and abort the commit on non-zero exit. Pass --force
 to skip hooks.
+
+Before hooks run, staged files are checked against commit.gitignore patterns
+(typically set in ~/.gavel.yaml). Matches trigger a per-file prompt to
+(1) unstage and append the file to .gitignore, (2) allow it via commit.allow
+in the repo's .gavel.yaml, or (3) cancel. --ignore-check=fail|skip overrides
+the prompt; non-TTY runs auto-escalate prompt -> fail.
 
 The -A flag groups staged files by their top-level directory and recursively
 splits any group that exceeds --max-files or --max-lines. An LLM still writes
@@ -45,7 +52,8 @@ Examples:
   gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
   gavel commit -m "chore: bump dep"     # explicit message, skip LLM
   gavel commit --stage all --dry-run    # stage everything, print message
-  gavel commit --force                  # skip hooks`
+  gavel commit --force                  # skip hooks
+  gavel commit --ignore-check=fail      # error on any commit.gitignore match`
 }
 
 func init() {
@@ -71,23 +79,29 @@ func runCommit(opts CommitOptions) (any, error) {
 	}
 
 	result, err := commitpkg.Run(context.Background(), commitpkg.Options{
-		WorkDir:   workDir,
-		Stage:     opts.Stage,
-		CommitAll: opts.CommitAll,
-		MaxFiles:  opts.MaxFiles,
-		MaxLines:  opts.MaxLines,
-		DryRun:    opts.DryRun,
-		Force:     opts.Force,
-		NoCache:   opts.NoCache,
-		Model:     opts.Model,
-		Message:   opts.Message,
-		Push:      opts.Push,
-		Config:    cfg.Commit,
+		WorkDir:     workDir,
+		Stage:       opts.Stage,
+		CommitAll:   opts.CommitAll,
+		MaxFiles:    opts.MaxFiles,
+		MaxLines:    opts.MaxLines,
+		DryRun:      opts.DryRun,
+		Force:       opts.Force,
+		NoCache:     opts.NoCache,
+		Model:       opts.Model,
+		Message:     opts.Message,
+		Push:        opts.Push,
+		IgnoreCheck: opts.IgnoreCheck,
+		Config:      cfg.Commit,
 	})
 
 	if err != nil {
 		if errors.Is(err, commitpkg.ErrNothingStaged) {
 			fmt.Fprintln(os.Stderr, "nothing staged to commit")
+			exitCode = 1
+			return nil, nil
+		}
+		if errors.Is(err, commitpkg.ErrGitIgnoreCancelled) {
+			fmt.Fprintln(os.Stderr, err.Error())
 			exitCode = 1
 			return nil, nil
 		}

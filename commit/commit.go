@@ -45,18 +45,19 @@ const (
 )
 
 type Options struct {
-	WorkDir   string
-	Stage     string
-	CommitAll bool
-	MaxFiles  int
-	MaxLines  int
-	DryRun    bool
-	Force     bool
-	NoCache   bool
-	Push      bool
-	Model     string
-	Message   string
-	Config    verify.CommitConfig
+	WorkDir     string
+	Stage       string
+	CommitAll   bool
+	MaxFiles    int
+	MaxLines    int
+	DryRun      bool
+	Force       bool
+	NoCache     bool
+	Push        bool
+	Model       string
+	Message     string
+	IgnoreCheck string
+	Config      verify.CommitConfig
 }
 
 type CommitResult struct {
@@ -124,6 +125,14 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
@@ -175,6 +184,14 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	source, err := readStagedSource(opts.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
+	source, err = applyGitIgnoreCheck(ctx, opts, source)
 	if err != nil {
 		return nil, err
 	}
