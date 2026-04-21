@@ -857,8 +857,10 @@ func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *
 			cancelMerge()
 		}()
 	}
-	pkgCtx := base
-	var cancelPkg context.CancelFunc = func() {}
+	var (
+		pkgCtx    context.Context
+		cancelPkg context.CancelFunc
+	)
 	if o.TestTimeout > 0 {
 		pkgCtx, cancelPkg = context.WithTimeout(base, o.TestTimeout)
 	} else {
@@ -941,10 +943,7 @@ func watchPidDeath(process *exec.Process) <-chan struct{} {
 	go func() {
 		defer close(out)
 		// Wait for the pid to appear.
-		for {
-			if process.Pid() > 0 {
-				break
-			}
+		for process.Pid() <= 0 {
 			time.Sleep(50 * time.Millisecond)
 		}
 		pid := process.Pid()
