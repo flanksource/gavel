@@ -82,7 +82,7 @@ func (r *Jest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun, 
 	args = append(args, "jest", "--json", "--outputFile="+reportPath)
 	args = append(args, extraArgs...)
 
-	process := exec.NewExec(cmd, args...).WithCwd(cwd)
+	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup()
 	process.SucceedOnNonZero = true
 
 	return &TestRun{

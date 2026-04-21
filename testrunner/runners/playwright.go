@@ -74,7 +74,7 @@ func (r *Playwright) BuildCommand(packagePath string, extraArgs ...string) (*Tes
 	args = append(args, "playwright", "test", "--reporter=json")
 	args = append(args, extraArgs...)
 
-	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithEnv(map[string]string{
+	process := exec.NewExec(cmd, args...).WithCwd(cwd).WithProcessGroup().WithEnv(map[string]string{
 		"PLAYWRIGHT_JSON_OUTPUT_NAME": reportPath,
 	})
 	process.SucceedOnNonZero = true

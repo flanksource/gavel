@@ -244,7 +244,7 @@ func (r *GoTest) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 	args = append(args, packagePath)
 
 	// Build command using exec.Process (but don't execute)
-	process := exec.NewExec("go", args...).WithCwd(r.workDir)
+	process := exec.NewExec("go", args...).WithCwd(r.workDir).WithProcessGroup()
 	process.SucceedOnNonZero = true // go test returns non-zero on test failures
 
 	return &TestRun{
