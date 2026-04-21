@@ -1,5 +1,17 @@
 import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta } from '../types';
-import { statusIcon, statusColor, formatDuration, sum, frameworkIcon, relPath, lintNodeCount } from '../utils';
+import {
+  statusIcon,
+  statusColor,
+  formatDuration,
+  sum,
+  frameworkIcon,
+  relPath,
+  lintNodeCount,
+  formatRunTimestamp,
+  formatRunDuration,
+  hasTimeoutArgs,
+  timeoutArgValue,
+} from '../utils';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
@@ -113,16 +125,30 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
 
       {runMeta && (
         <Section title="Run">
-          <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="grid grid-cols-3 gap-3 text-sm">
             <MetaCard
               label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
-              value={runMeta.started ? new Date(runMeta.started).toLocaleString() : 'Unavailable'}
+              value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Unavailable'}
             />
             <MetaCard
               label="Finished"
-              value={runMeta.ended ? new Date(runMeta.ended).toLocaleString() : 'In progress'}
+              value={runMeta.ended ? formatRunTimestamp(runMeta.ended) : 'In progress'}
             />
+            <MetaCard label="Duration" value={formatRunDuration(runMeta.started, runMeta.ended)} />
           </div>
+          {hasTimeoutArgs(runMeta.args) && (
+            <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
+              {timeoutArgValue(runMeta.args, 'timeout') && (
+                <MetaCard label="Global timeout" value={timeoutArgValue(runMeta.args, 'timeout')!} />
+              )}
+              {timeoutArgValue(runMeta.args, 'test_timeout') && (
+                <MetaCard label="Per-test" value={timeoutArgValue(runMeta.args, 'test_timeout')!} />
+              )}
+              {timeoutArgValue(runMeta.args, 'lint_timeout') && (
+                <MetaCard label="Per-linter" value={timeoutArgValue(runMeta.args, 'lint_timeout')!} />
+              )}
+            </div>
+          )}
         </Section>
       )}
 
@@ -421,7 +447,7 @@ function LinterDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
         <>
           <Section title="Status">
             <div class="flex gap-3 text-sm">
-              <span class={lr.success ? 'text-green-600' : 'text-red-600'}>
+              <span class={lr.skipped ? 'text-gray-500' : lr.timed_out ? 'text-amber-600' : lr.success ? 'text-green-600' : 'text-red-600'}>
                 {lr.skipped ? 'skipped' : lr.timed_out ? 'timed out' : lr.success ? 'success' : 'failed'}
               </span>
               <span class="text-gray-500">{(lr.violations || []).length} violations</span>
