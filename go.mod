@@ -3,7 +3,7 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/clicky v1.21.4
+	github.com/flanksource/clicky v1.21.5
 	github.com/flanksource/commons v1.49.0
 	github.com/flanksource/commons-db v0.1.7
 	github.com/flanksource/gomplate/v3 v3.24.75
@@ -351,7 +351,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/flanksource/clicky => ../clicky
+// replace github.com/flanksource/clicky => ../clicky
 
 // replace github.com/flanksource/commons-db => ../commons-db
 
