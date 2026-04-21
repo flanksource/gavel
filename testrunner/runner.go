@@ -1,10 +1,13 @@
 package testrunner
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"syscall"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -118,6 +121,10 @@ type RunOptions struct {
 	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
 	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
 	IdleTimeout   time.Duration         `json:"idle_timeout,omitempty"`                                       // Idle deadline for the detached UI child; resets on every HTTP request. 0 = use default (5m). Only meaningful with --detach.
+	Timeout       time.Duration         `json:"timeout,omitempty"`                                            // Global wall-clock deadline for the entire test+lint run. 0 = default 10m. Cancels every in-flight subprocess when it fires.
+	LintTimeout   time.Duration         `json:"lint_timeout,omitempty"`                                       // Per-linter subprocess deadline. 0 = default 5m. Forwarded to executeLinters when --lint is set.
+	TestTimeout   time.Duration         `json:"test_timeout,omitempty"`                                       // Per-test-package subprocess deadline. 0 = default 5m.
+	Context       context.Context       `json:"-"`                                                            // Parent context for the run. Nil = context.Background(). Global --timeout is applied on top.
 	Lint          bool                  `json:"lint,omitempty" flag:"lint"`                                   // Run linters in parallel with tests
 	Cache         bool                  `json:"cache,omitempty" flag:"cache"`                                 // Skip packages whose content fingerprint matches the last passing run
 	Changed       bool                  `json:"changed,omitempty" flag:"changed"`                             // Only run packages affected by staged/unstaged/untracked changes and the diff against origin/main
@@ -180,6 +187,15 @@ func (opts RunOptions) Pretty() api.Text {
 	if len(opts.FixtureFiles) > 0 {
 		text = text.Space().Append("FixtureFiles: ", "text-muted").Append(clicky.CompactList(opts.FixtureFiles), "text-blue-500")
 	}
+	if opts.Timeout > 0 {
+		text = text.Space().Append("Timeout: ", "text-muted").Append(opts.Timeout.String(), "text-blue-500")
+	}
+	if opts.LintTimeout > 0 {
+		text = text.Space().Append("LintTimeout: ", "text-muted").Append(opts.LintTimeout.String(), "text-blue-500")
+	}
+	if opts.TestTimeout > 0 {
+		text = text.Space().Append("TestTimeout: ", "text-muted").Append(opts.TestTimeout.String(), "text-blue-500")
+	}
 	return text
 }
 
@@ -213,6 +229,7 @@ type packageResult struct {
 	framework   Framework
 	testResults parsers.TestSuiteResults
 	err         error
+	timedOut    bool
 }
 
 // testGroup holds a set of starting paths that share the same execution root.
@@ -822,6 +839,176 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	return allResults, nil
 }
 
+// supervisePackage wraps the package's parent context with the per-package
+// timeout (and the global --timeout) and starts a goroutine that kills the
+// running process when either deadline fires. Returns the derived context,
+// a cancel func, and a pointer to the timedOut flag that the supervisor sets
+// when it had to kill the subprocess.
+func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, pkgPath string) (commonsCtx.Context, context.CancelFunc, *bool) {
+	timedOut := new(bool)
+
+	// Compose: parent (clicky task ctx) ∧ o.Context (global --timeout) ∧ per-package deadline.
+	base := context.Context(parent)
+	if o.Context != nil {
+		merged, cancelMerge := mergeParentContext(base, o.Context)
+		base = merged
+		go func() {
+			<-merged.Done()
+			cancelMerge()
+		}()
+	}
+	pkgCtx := base
+	var cancelPkg context.CancelFunc = func() {}
+	if o.TestTimeout > 0 {
+		pkgCtx, cancelPkg = context.WithTimeout(base, o.TestTimeout)
+	} else {
+		pkgCtx, cancelPkg = context.WithCancel(base)
+	}
+
+	go func() {
+		<-pkgCtx.Done()
+		if !errors.Is(pkgCtx.Err(), context.DeadlineExceeded) && !errors.Is(pkgCtx.Err(), context.Canceled) {
+			return
+		}
+		// Only act when the process is still running (i.e. we cancelled, not
+		// the process finished first).
+		if !process.IsRunning() {
+			return
+		}
+		*timedOut = true
+		logger.Warnf("test package %s exceeded deadline — capturing diagnostics before killing tree", pkgPath)
+		captureGlobalDiagnostics()
+		if err := process.KillTree(); err != nil {
+			logger.Warnf("kill-tree failed for %s: %v", pkgPath, err)
+		}
+	}()
+
+	return commonsCtx.NewContext(pkgCtx), cancelPkg, timedOut
+}
+
+// runProcessBounded runs the subprocess and returns its ExecResult with two
+// safety nets:
+//
+//  1. When pkgCtx fires (global or per-package timeout), the supervisor has
+//     already issued KillTree; give the pipes a bounded window to drain.
+//  2. When the subprocess pid is dead but Run() still hasn't returned (e.g.
+//     because a grandchild or Go toolchain helper kept the stdout pipe open),
+//     wait 1s for Run() to catch up, then synthesise the result from
+//     captureOutput so the CLI task completes in sync with the UI signal.
+//
+// The spawned Run goroutine is deliberately orphaned in the synthesise path:
+// Go's runtime will reclaim it once the pipes eventually EOF.
+func runProcessBounded(process *exec.Process, pkgCtx commonsCtx.Context, pkgPath string) *exec.ExecResult {
+	done := make(chan *exec.ExecResult, 1)
+	go func() {
+		done <- process.Run().Result()
+	}()
+
+	pidDead := watchPidDeath(process)
+
+	for {
+		select {
+		case r := <-done:
+			return r
+		case <-pkgCtx.Done():
+			// Supervisor kill is in flight; give the pipes a bounded window.
+			select {
+			case r := <-done:
+				return r
+			case <-time.After(gracefulKillWait + 5*time.Second):
+				logger.Warnf("test package %s: subprocess pipes did not drain after KillTree", pkgPath)
+				return process.Result()
+			}
+		case <-pidDead:
+			// Subprocess exited normally, but Run() still hasn't returned
+			// because something holds the pipes. Wait briefly; then bail.
+			select {
+			case r := <-done:
+				return r
+			case <-time.After(1500 * time.Millisecond):
+				logger.V(1).Infof("test package %s: pid exited but pipes still open, synthesising result", pkgPath)
+				return process.Result()
+			}
+		}
+	}
+}
+
+// watchPidDeath returns a channel closed when process's OS pid is no longer
+// alive. Polls signal(0) every 100ms. Returns an already-closed channel if
+// the pid can't be determined yet or was never set.
+func watchPidDeath(process *exec.Process) <-chan struct{} {
+	out := make(chan struct{})
+	go func() {
+		defer close(out)
+		// Wait for the pid to appear.
+		for {
+			if process.Pid() > 0 {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		pid := process.Pid()
+		for {
+			if !pidReachable(pid) {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	return out
+}
+
+// pidReachable reports whether pid is still alive on the current host,
+// using signal 0 (the canonical POSIX liveness probe).
+func pidReachable(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+// mergeParentContext returns a child context that is cancelled when either
+// primary or parent is cancelled. Cancelling child never cancels the parents.
+func mergeParentContext(primary, parent context.Context) (context.Context, context.CancelFunc) {
+	child, cancel := context.WithCancel(primary)
+	if parent == nil {
+		return child, cancel
+	}
+	go func() {
+		select {
+		case <-parent.Done():
+			cancel()
+		case <-child.Done():
+		}
+	}()
+	return child, cancel
+}
+
+// gracefulKillWait is the grace period between process.Kill() (SIGTERM) and
+// ForceKill() (SIGKILL) when a per-package or global timeout fires.
+const gracefulKillWait = 3 * time.Second
+
+// captureGlobalDiagnostics is set by the CLI layer when diagnostics are
+// enabled for the run. Called once before the first subprocess kill so the
+// snapshot captures live goroutine state.
+var captureGlobalDiagnostics = func() {}
+
+// SetCaptureGlobalDiagnostics installs the diagnostics hook invoked by the
+// per-package supervisor before it kills a timed-out subprocess. The caller
+// is responsible for ensuring the hook itself is safe to run concurrently
+// (typical implementations wrap sync.Once to capture exactly one snapshot).
+func SetCaptureGlobalDiagnostics(fn func()) {
+	if fn == nil {
+		captureGlobalDiagnostics = func() {}
+		return
+	}
+	captureGlobalDiagnostics = fn
+}
+
 func (o *TestOrchestrator) runPackageTest(
 	ctx commonsCtx.Context,
 	pkgPath string,
@@ -860,9 +1047,16 @@ func (o *TestOrchestrator) runPackageTest(
 	// Keep the RUNNING-state label short; it may be rendered if the
 	// task group dumps dirty tasks before the package finishes.
 	t.SetName(formatRunningCommand(testRun.Process.Cmd, testRun.Process.Args))
+
+	pkgCtx, cancelPkg, timedOutPtr := o.supervisePackage(ctx, process, pkgPath)
+	defer cancelPkg()
+	_ = pkgCtx
+
 	runStart := time.Now()
-	result := process.Run().Result()
+	result := runProcessBounded(process, pkgCtx, pkgPath)
 	runDuration := time.Since(runStart)
+	cancelPkg()
+	timedOut := timedOutPtr != nil && *timedOutPtr
 
 	// Always attempt to parse test results first, even if there was an execution error
 	// This handles cases like `go test -json` which outputs valid JSON even when tests fail
@@ -878,11 +1072,16 @@ func (o *TestOrchestrator) runPackageTest(
 		}
 
 		fallback := parsers.Test{
-			Failed:  true,
-			Name:    fmt.Sprintf("%s Execution", framework),
-			Message: message,
-			Stderr:  result.Stderr,
-			Stdout:  result.Stdout,
+			Failed:   true,
+			TimedOut: timedOut,
+			Name:     fmt.Sprintf("%s Execution", framework),
+			Message:  message,
+			Stderr:   result.Stderr,
+			Stdout:   result.Stdout,
+		}
+		if timedOut {
+			fallback.Name = fmt.Sprintf("%s Timeout", framework)
+			fallback.Message = ""
 		}
 		testResults = parsers.TestSuiteResults{{
 			Command:   process.Cmd,
@@ -906,6 +1105,7 @@ func (o *TestOrchestrator) runPackageTest(
 			packagePath: pkgPath,
 			framework:   framework,
 			testResults: testResults,
+			timedOut:    timedOut,
 		}, nil
 	}
 
