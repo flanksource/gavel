@@ -24,12 +24,15 @@ var (
 	ErrLLMUnavailable       = errors.New("LLM agent unavailable")
 	ErrInvalidStage         = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage = errors.New("--commit-all does not support --message")
-	ErrInvalidCommitAllPlan = errors.New("invalid commit-all plan")
 
 	newAgentFunc                      = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return gavelai.NewAgent(cfg) }
 	analyzeCommitWithAIFunc           = git.AnalyzeWithAI
-	planCommitGroupsFunc              = planCommitGroups
 	dryRunOutput            io.Writer = os.Stdout
+)
+
+const (
+	defaultMaxFiles = 7
+	defaultMaxLines = 500
 )
 
 const (
@@ -45,7 +48,8 @@ type Options struct {
 	WorkDir   string
 	Stage     string
 	CommitAll bool
-	Max       int
+	MaxFiles  int
+	MaxLines  int
 	DryRun    bool
 	Force     bool
 	NoCache   bool
@@ -85,6 +89,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.CommitAll {
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
+		}
+		if opts.MaxFiles == 0 {
+			opts.MaxFiles = defaultMaxFiles
+		}
+		if opts.MaxLines == 0 {
+			opts.MaxLines = defaultMaxLines
 		}
 		result, err = runCommitAll(ctx, opts)
 	} else {
@@ -193,14 +203,9 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	}
 	result.Staged = source.Files
 
-	groupSpecs, err := planCommitGroupsFunc(ctx, opts, source.Changes)
-	if err != nil {
-		return result, fmt.Errorf("plan commit groups: %w", err)
-	}
-
-	groups, err := validateCommitPlan(groupSpecs, source.Changes)
-	if err != nil {
-		return result, err
+	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)
+	if len(groups) == 0 {
+		return result, ErrNothingStaged
 	}
 
 	result.Commits = make([]CommitResult, 0, len(groups))

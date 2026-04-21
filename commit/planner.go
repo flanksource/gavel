@@ -1,31 +1,12 @@
 package commit
 
 import (
-	"context"
-	_ "embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
-	"github.com/ghodss/yaml"
 )
-
-//go:embed ai-commit-group.md
-var commitGroupPrompt string
-
-type commitGroupSpec struct {
-	Label string   `json:"label,omitempty" description:"Short human-readable label for the commit group"`
-	Files []string `json:"files" description:"Ordered list of repo-relative file paths assigned to this commit"`
-}
-
-type commitGroupPlanSchema struct {
-	Groups []commitGroupSpec `json:"groups" description:"Ordered commit groups covering every changed file exactly once"`
-}
 
 type commitGroup struct {
 	Label   string
@@ -76,203 +57,103 @@ func (g commitGroup) labelOrDefault() string {
 	return fmt.Sprintf("%d files", len(g.Changes))
 }
 
-func planCommitGroups(ctx context.Context, opts Options, changes []stagedChange) ([]commitGroupSpec, error) {
+const rootGroupLabel = "root"
+
+// groupChangesByDir buckets changes by top-level directory, then recursively
+// subdivides any bucket that exceeds maxFiles or maxLines. Values <= 0 disable
+// the corresponding budget. Output is sorted by label for deterministic order.
+func groupChangesByDir(changes []stagedChange, maxFiles, maxLines int) []commitGroup {
 	if len(changes) == 0 {
-		return nil, nil
-	}
-	if os.Getenv(testEnvVar) == "1" {
-		groups := make([]commitGroupSpec, 0, len(changes))
-		for _, change := range changes {
-			groups = append(groups, commitGroupSpec{
-				Label: filepath.Base(change.Path),
-				Files: []string{change.Path},
-			})
-		}
-		return mergeGroupsToMax(groups, opts.Max), nil
+		return nil
 	}
 
-	if commitGroupPrompt == "" {
-		return nil, fmt.Errorf("commit group prompt template is empty")
+	buckets := bucketByDepth(changes, 1)
+	keys := make([]string, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 
-	templateData := map[string]any{
-		"changes": changes,
+	var out []commitGroup
+	for _, key := range keys {
+		out = append(out, splitBucket(buckets[key], key, 1, maxFiles, maxLines)...)
 	}
-	if opts.Max > 0 {
-		templateData["max"] = opts.Max
-	}
-	prompt, err := gomplate.RunTemplate(templateData, gomplate.Template{Template: commitGroupPrompt})
-	if err != nil {
-		return nil, fmt.Errorf("render commit group prompt: %w", err)
-	}
-
-	agent, err := buildAgent(opts)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:             "Commit grouping plan",
-		Prompt:           prompt,
-		StructuredOutput: &commitGroupPlanSchema{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("execute commit group prompt: %w", err)
-	}
-	if resp.Error != "" {
-		return nil, fmt.Errorf("commit group prompt returned error: %s", resp.Error)
-	}
-
-	if groups, ok, err := parseCommitGroupResponse(resp.StructuredData, resp.Result); err != nil {
-		return nil, fmt.Errorf("parse commit group response: %w", err)
-	} else if ok && len(groups) > 0 {
-		return groups, nil
-	}
-
-	logger.Warnf("commit grouping prompt did not populate structured output, raw result=%q structuredData=%+v", resp.Result, resp.StructuredData)
-	return nil, fmt.Errorf("commit grouping prompt returned no groups")
+	return out
 }
 
-func parseCommitGroupResponse(data any, raw string) ([]commitGroupSpec, bool, error) {
-	if len(strings.TrimSpace(raw)) == 0 && data == nil {
-		return nil, false, nil
+func splitBucket(changes []stagedChange, label string, depth, maxFiles, maxLines int) []commitGroup {
+	if len(changes) == 0 {
+		return nil
 	}
 
-	var schema commitGroupPlanSchema
-	if ok, err := decodeCommitGroupSchema(data, &schema); err != nil {
-		return nil, false, err
-	} else if ok && len(schema.Groups) > 0 {
-		return schema.Groups, true, nil
+	totalLines := countBudgetedLines(changes)
+
+	fitsFiles := maxFiles <= 0 || len(changes) <= maxFiles
+	fitsLines := maxLines <= 0 || totalLines <= maxLines
+	if fitsFiles && fitsLines {
+		return []commitGroup{{Label: label, Changes: changes}}
 	}
 
-	cleaned := cleanStructuredResult(raw)
-	if cleaned == "" {
-		return nil, false, nil
+	buckets := bucketByDepth(changes, depth+1)
+	hasSubdir := false
+	for _, bucket := range buckets {
+		if len(bucket) > 1 {
+			hasSubdir = true
+			break
+		}
 	}
-	if ok, err := decodeCommitGroupSchema([]byte(cleaned), &schema); err != nil {
-		return nil, false, err
-	} else if ok && len(schema.Groups) > 0 {
-		return schema.Groups, true, nil
+	if len(buckets) <= 1 || !hasSubdir {
+		logger.Warnf("commit group %q exceeds budget (files=%d, lines=%d) and cannot be subdivided further",
+			label, len(changes), totalLines)
+		return []commitGroup{{Label: label, Changes: changes}}
 	}
 
-	return nil, false, nil
+	keys := make([]string, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var out []commitGroup
+	for _, key := range keys {
+		out = append(out, splitBucket(buckets[key], key, depth+1, maxFiles, maxLines)...)
+	}
+	return out
 }
 
-func decodeCommitGroupSchema(input any, schema *commitGroupPlanSchema) (bool, error) {
-	if input == nil {
-		return false, nil
+// countBudgetedLines sums Adds+Dels for the --max-lines budget, skipping
+// newly-inserted files so adding a large generated/vendored/first-party file
+// does not push an otherwise-small group over the limit.
+func countBudgetedLines(changes []stagedChange) int {
+	total := 0
+	for _, c := range changes {
+		if c.Status == "inserted" {
+			continue
+		}
+		total += c.Adds + c.Dels
 	}
-
-	switch v := input.(type) {
-	case *commitGroupPlanSchema:
-		if v == nil {
-			return false, nil
-		}
-		*schema = *v
-		return true, nil
-	case commitGroupPlanSchema:
-		*schema = v
-		return true, nil
-	case []byte:
-		if err := yaml.Unmarshal(v, schema); err != nil {
-			return false, err
-		}
-		return true, nil
-	case string:
-		if err := yaml.Unmarshal([]byte(v), schema); err != nil {
-			return false, err
-		}
-		return true, nil
-	default:
-		data, err := yaml.Marshal(v)
-		if err != nil {
-			return false, err
-		}
-		if err := yaml.Unmarshal(data, schema); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
+	return total
 }
 
-func cleanStructuredResult(result string) string {
-	result = strings.TrimSpace(result)
-	switch {
-	case strings.HasPrefix(result, "```yaml"):
-		result = strings.TrimPrefix(result, "```yaml")
-	case strings.HasPrefix(result, "```json"):
-		result = strings.TrimPrefix(result, "```json")
-	case strings.HasPrefix(result, "```"):
-		result = strings.TrimPrefix(result, "```")
-	}
-	result = strings.TrimSuffix(result, "```")
-	return strings.TrimSpace(result)
-}
-
-func validateCommitPlan(specs []commitGroupSpec, changes []stagedChange) ([]commitGroup, error) {
-	if len(specs) == 0 {
-		return nil, fmt.Errorf("%w: planner returned no groups", ErrInvalidCommitAllPlan)
-	}
-
-	available := make(map[string]stagedChange, len(changes))
+func bucketByDepth(changes []stagedChange, depth int) map[string][]stagedChange {
+	buckets := make(map[string][]stagedChange)
 	for _, change := range changes {
-		available[change.Path] = change
+		key := pathPrefix(change.Path, depth)
+		buckets[key] = append(buckets[key], change)
 	}
-
-	seen := make(map[string]struct{}, len(changes))
-	groups := make([]commitGroup, 0, len(specs))
-	for i, spec := range specs {
-		if len(spec.Files) == 0 {
-			return nil, fmt.Errorf("%w: group %d is empty", ErrInvalidCommitAllPlan, i+1)
-		}
-
-		group := commitGroup{Label: strings.TrimSpace(spec.Label)}
-		groupSeen := make(map[string]struct{}, len(spec.Files))
-		for _, file := range spec.Files {
-			file = strings.TrimSpace(file)
-			if file == "" {
-				return nil, fmt.Errorf("%w: group %d contains an empty file entry", ErrInvalidCommitAllPlan, i+1)
-			}
-			if _, ok := groupSeen[file]; ok {
-				return nil, fmt.Errorf("%w: file %s appears multiple times in group %d", ErrInvalidCommitAllPlan, file, i+1)
-			}
-			groupSeen[file] = struct{}{}
-			if _, ok := seen[file]; ok {
-				return nil, fmt.Errorf("%w: file %s appears in multiple groups", ErrInvalidCommitAllPlan, file)
-			}
-			change, ok := available[file]
-			if !ok {
-				return nil, fmt.Errorf("%w: file %s is not part of the staged change set", ErrInvalidCommitAllPlan, file)
-			}
-			seen[file] = struct{}{}
-			group.Changes = append(group.Changes, change)
-		}
-		groups = append(groups, group)
-	}
-
-	if len(seen) != len(available) {
-		missing := make([]string, 0, len(available)-len(seen))
-		for file := range available {
-			if _, ok := seen[file]; !ok {
-				missing = append(missing, file)
-			}
-		}
-		sort.Strings(missing)
-		return nil, fmt.Errorf("%w: missing files from plan: %s", ErrInvalidCommitAllPlan, strings.Join(missing, ", "))
-	}
-
-	return groups, nil
+	return buckets
 }
 
-// mergeGroupsToMax collapses trailing groups into the last kept group
-// so the total count does not exceed max. If max <= 0, returns groups unchanged.
-func mergeGroupsToMax(groups []commitGroupSpec, max int) []commitGroupSpec {
-	if max <= 0 || len(groups) <= max {
-		return groups
+// pathPrefix joins the first `depth` path segments. Top-level files collapse
+// into rootGroupLabel so they share a single bucket; paths shorter than depth
+// return the full path so distinct leaves never collide.
+func pathPrefix(path string, depth int) string {
+	segments := strings.Split(path, "/")
+	if len(segments) == 1 && depth == 1 {
+		return rootGroupLabel
 	}
-	merged := make([]commitGroupSpec, max)
-	copy(merged, groups[:max])
-	for _, g := range groups[max:] {
-		merged[max-1].Files = append(merged[max-1].Files, g.Files...)
+	if len(segments) <= depth {
+		return path
 	}
-	return merged
+	return strings.Join(segments[:depth], "/")
 }
