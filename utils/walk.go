@@ -85,6 +85,20 @@ func FindNearestProjectRoot(dir string, markers []string) string {
 	}
 }
 
+// IsWithin reports whether path is equal to root or nested inside it. Paths
+// are compared as cleaned, absolute strings; any `..` traversal that would
+// escape root returns false.
+func IsWithin(path, root string) bool {
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func LoadIgnorePatterns(path string, domain []string) []gitignore.Pattern {
 	f, err := os.Open(path)
 	if err != nil {

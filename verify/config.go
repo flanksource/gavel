@@ -73,10 +73,18 @@ type CommitHook struct {
 }
 
 type CommitConfig struct {
-	Model     string       `yaml:"model,omitempty" json:"model,omitempty"`
-	Hooks     []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	GitIgnore []string     `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
-	Allow     []string     `yaml:"allow,omitempty" json:"allow,omitempty"`
+	Model      string           `yaml:"model,omitempty" json:"model,omitempty"`
+	Hooks      []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	GitIgnore  []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
+	Allow      []string         `yaml:"allow,omitempty" json:"allow,omitempty"`
+	LinkedDeps LinkedDepsConfig `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
+}
+
+// LinkedDepsConfig configures the pre-commit check that blocks go.mod
+// replace directives and package.json file:/link: references pointing
+// outside the git root. Mode is "prompt" (default), "fail", or "skip".
+type LinkedDepsConfig struct {
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // HookStep is a single shell command rendered into the SSH post-receive hook.
@@ -284,6 +292,9 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	base.GitIgnore = dedupStrings(append(base.GitIgnore, override.GitIgnore...))
 	base.Allow = dedupStrings(append(base.Allow, override.Allow...))
+	if override.LinkedDeps.Mode != "" {
+		base.LinkedDeps.Mode = override.LinkedDeps.Mode
+	}
 	return base
 }
 
