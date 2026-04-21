@@ -28,11 +28,51 @@ func FindGitRoot(dir string) string {
 }
 
 func FindNearestGoModRoot(dir string) string {
+	return FindNearestProjectRoot(dir, []string{"go.mod"})
+}
+
+// FindAllProjectRoots returns every outermost directory under root that
+// contains one of the given marker filenames. Descent stops once a project
+// root is found (nested sub-projects are ignored here; their files fan out to
+// the innermost root via FindNearestProjectRoot at invocation time). Respects
+// gitignore via WalkGitIgnored. Results are absolute paths.
+func FindAllProjectRoots(root string, markers []string) []string {
+	if len(markers) == 0 {
+		return nil
+	}
+	root, _ = filepath.Abs(root)
+	var roots []string
+	_ = WalkGitIgnored(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		for _, marker := range markers {
+			if info, err := os.Stat(filepath.Join(path, marker)); err == nil && !info.IsDir() {
+				roots = append(roots, path)
+				return fs.SkipDir
+			}
+		}
+		return nil
+	})
+	return roots
+}
+
+// FindNearestProjectRoot walks up from dir looking for the first directory
+// that contains any of the given marker filenames as a regular file. The
+// search is bounded by the enclosing git root (inclusive) to avoid escaping
+// the repository when a marker only exists further up in the filesystem.
+// Returns "" when no marker is found within the git root.
+func FindNearestProjectRoot(dir string, markers []string) string {
+	if len(markers) == 0 {
+		return ""
+	}
 	dir, _ = filepath.Abs(dir)
 	gitRoot := FindGitRoot(dir)
 	for {
-		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
-			return dir
+		for _, marker := range markers {
+			if info, err := os.Stat(filepath.Join(dir, marker)); err == nil && !info.IsDir() {
+				return dir
+			}
 		}
 		if gitRoot != "" && dir == gitRoot {
 			return ""
