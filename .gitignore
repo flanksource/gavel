@@ -75,3 +75,4 @@ testrunner/ui/dist/
 .tmp/
 .claude
 /*.json
+.gavel/
