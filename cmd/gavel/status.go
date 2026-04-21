@@ -14,15 +14,15 @@ type StatusOptions struct {
 
 func (o StatusOptions) Help() api.Textable {
 	const (
-		heading     = "font-bold text-purple-600"
-		flagStyle   = "text-cyan-600 font-bold"
-		muted       = "text-muted"
-		staged      = "text-green-500 font-bold"
-		modified    = "text-yellow-500 font-bold"
-		untracked   = "text-purple-500 font-bold"
-		conflicted  = "text-red-600 font-bold underline"
-		deleted     = "text-red-500 font-bold"
-		renamed     = "text-blue-500 font-bold"
+		heading    = "font-bold text-purple-600"
+		flagStyle  = "text-cyan-600 font-bold"
+		muted      = "text-muted"
+		staged     = "text-green-500 font-bold"
+		modified   = "text-yellow-500 font-bold"
+		untracked  = "text-purple-500 font-bold"
+		conflicted = "text-red-600 font-bold underline"
+		deleted    = "text-red-500 font-bold"
+		renamed    = "text-blue-500 font-bold"
 	)
 
 	legend := func(sym, style, label string) api.Text {

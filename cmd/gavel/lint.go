@@ -39,24 +39,24 @@ import (
 )
 
 type LintOptions struct {
-	Linters      []string  `flag:"linters" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
-	Ignore       []string  `flag:"ignore" help:"Glob patterns to exclude from linting"`
-	Triage       bool      `flag:"triage" help:"Interactive mode to select violation types to ignore"`
-	Fix          bool      `flag:"fix" help:"Enable auto-fixing"`
-	NoCache      bool      `flag:"no-cache" help:"Disable caching/debounce"`
-	Timeout      string    `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
-	SyncTodos    string    `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
-	GroupBy      string    `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
-	WorkDir      string    `flag:"work-dir" help:"Working directory"`
-	Changed      bool      `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
-	Since        string    `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
-	UI           bool      `flag:"ui" help:"Launch browser UI to view violations"`
-	Addr         string    `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
-	DryRun       bool      `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
-	Baseline     string    `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
-	Failed       string    `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
-	Summary      bool      `flag:"summary" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
-	SummaryLimit int       `flag:"summary-limit" help:"Max example locations shown per rule in --summary mode" default:"5"`
+	Linters      []string        `flag:"linters" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
+	Ignore       []string        `flag:"ignore" help:"Glob patterns to exclude from linting"`
+	Triage       bool            `flag:"triage" help:"Interactive mode to select violation types to ignore"`
+	Fix          bool            `flag:"fix" help:"Enable auto-fixing"`
+	NoCache      bool            `flag:"no-cache" help:"Disable caching/debounce"`
+	Timeout      string          `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
+	SyncTodos    string          `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
+	GroupBy      string          `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
+	WorkDir      string          `flag:"work-dir" help:"Working directory"`
+	Changed      bool            `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
+	Since        string          `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
+	UI           bool            `flag:"ui" help:"Launch browser UI to view violations"`
+	Addr         string          `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	DryRun       bool            `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
+	Baseline     string          `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
+	Failed       string          `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
+	Summary      bool            `flag:"summary" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
+	SummaryLimit int             `flag:"summary-limit" help:"Max example locations shown per rule in --summary mode" default:"5"`
 	Files        []string        `args:"true"`
 	OutputTee    io.Writer       `json:"-"`
 	Context      context.Context `json:"-"`
