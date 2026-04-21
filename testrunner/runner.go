@@ -376,7 +376,6 @@ func findNearestGoModRoot(dir string) string {
 	}
 }
 
-
 func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
