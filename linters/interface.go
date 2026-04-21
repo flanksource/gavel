@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/api/icons"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/models"
 )
@@ -211,23 +212,22 @@ func (lr *LinterResult) Pretty() api.Text {
 	var status string
 	var style string
 
-	if lr.Skipped {
-		status = "⊘"
-		style = "text-muted"
-	} else if lr.TimedOut {
-		status = "⏱"
-		style = "text-red-600"
-	} else if lr.Success {
-		if lr.HasViolations() {
-			status = "⚠️"
-			style = "text-yellow-600"
-		} else {
-			status = "✅"
-			style = "text-green-600"
-		}
-	} else {
-		status = "❌"
-		style = "text-red-600"
+	switch {
+	case lr.Skipped:
+		status = icons.Skip.Unicode
+		style = "text-orange-500"
+	case lr.TimedOut:
+		status = "⏳"
+		style = "text-amber-600"
+	case lr.Success && lr.HasViolations():
+		status = "⚠"
+		style = "text-yellow-600"
+	case lr.Success:
+		status = icons.Pass.Unicode
+		style = "text-green-600"
+	default:
+		status = icons.Fail.Unicode
+		style = "text-red-500"
 	}
 
 	text := fmt.Sprintf("%s %s", status, lr.Linter)
