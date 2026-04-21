@@ -293,7 +293,7 @@ func (s *Server) snapshot() Snapshot {
 		Metadata: cloneSnapshotMetadata(s.metadata),
 		Git:      cloneSnapshotGit(s.git),
 		Status: SnapshotStatus{
-			Running:              !(s.done && tasksDone()),
+			Running:              !s.done || !tasksDone(),
 			LintRun:              s.lintRun,
 			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
 		},
