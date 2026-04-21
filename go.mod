@@ -351,7 +351,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-//  replace github.com/flanksource/clicky => ../clicky
+replace github.com/flanksource/clicky => ../clicky
 
 // replace github.com/flanksource/commons-db => ../commons-db
 
