@@ -1,6 +1,7 @@
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
 import { reviewColor, checkSummaryText, timeAgo } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
+import { Avatar } from './Avatar';
 
 interface Props {
   pr: PRItem;
@@ -156,6 +157,15 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
 
         <span class="ml-auto inline-flex items-center gap-1.5 text-gray-400">
           {syncStatus && <SyncIndicator status={syncStatus} />}
+          {pr.author && (
+            <Avatar
+              src={pr.authorAvatarUrl}
+              alt={pr.author}
+              size={16}
+              href={`https://github.com/${pr.author}`}
+              title={`@${pr.author}`}
+            />
+          )}
           <span title={pr.updatedAt}>{timeAgo(pr.updatedAt)}</span>
         </span>
       </div>
