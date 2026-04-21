@@ -29,6 +29,7 @@ import (
 	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/linters/vale"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/utils"
@@ -37,24 +38,26 @@ import (
 )
 
 type LintOptions struct {
-	Linters   []string  `flag:"linters" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
-	Ignore    []string  `flag:"ignore" help:"Glob patterns to exclude from linting"`
-	Triage    bool      `flag:"triage" help:"Interactive mode to select violation types to ignore"`
-	Fix       bool      `flag:"fix" help:"Enable auto-fixing"`
-	NoCache   bool      `flag:"no-cache" help:"Disable caching/debounce"`
-	Timeout   string    `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
-	SyncTodos string    `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
-	GroupBy   string    `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
-	WorkDir   string    `flag:"work-dir" help:"Working directory"`
-	Changed   bool      `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
-	Since     string    `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
-	UI        bool      `flag:"ui" help:"Launch browser UI to view violations"`
-	Addr      string    `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
-	DryRun    bool      `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
-	Baseline  string    `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
-	Failed    string    `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
-	Files     []string  `args:"true"`
-	OutputTee io.Writer `json:"-"`
+	Linters      []string  `flag:"linters" help:"Only run the named linters (comma-separated or repeated). Empty = run every detected linter. Unknown names hard-fail."`
+	Ignore       []string  `flag:"ignore" help:"Glob patterns to exclude from linting"`
+	Triage       bool      `flag:"triage" help:"Interactive mode to select violation types to ignore"`
+	Fix          bool      `flag:"fix" help:"Enable auto-fixing"`
+	NoCache      bool      `flag:"no-cache" help:"Disable caching/debounce"`
+	Timeout      string    `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
+	SyncTodos    string    `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
+	GroupBy      string    `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
+	WorkDir      string    `flag:"work-dir" help:"Working directory"`
+	Changed      bool      `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
+	Since        string    `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
+	UI           bool      `flag:"ui" help:"Launch browser UI to view violations"`
+	Addr         string    `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	DryRun       bool      `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
+	Baseline     string    `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
+	Failed       string    `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
+	Summary      bool      `flag:"summary" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
+	SummaryLimit int       `flag:"summary-limit" help:"Max example locations shown per rule in --summary mode" default:"5"`
+	Files        []string  `args:"true"`
+	OutputTee    io.Writer `json:"-"`
 }
 
 func (o LintOptions) Pretty() api.Text {
@@ -241,6 +244,22 @@ func runLint(opts LintOptions) (any, error) {
 			len(syncResult.Created), len(syncResult.Updated), len(syncResult.Completed))
 	}
 
+	snap := &testui.Snapshot{
+		Git: snapshotGitInfo(opts.WorkDir),
+		Status: testui.SnapshotStatus{
+			LintRun: true,
+		},
+		Lint: allResults,
+	}
+	if path, err := snapshots.Save(opts.WorkDir, snap); err != nil {
+		logger.Warnf("persist snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote snapshot to %s", path)
+	}
+
+	if opts.Summary {
+		return newLintSummaryView(allResults, opts.SummaryLimit), nil
+	}
 	return allResults, nil
 }
 
@@ -298,6 +317,92 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 	return true, ""
 }
 
+// buildLinterRegistry registers every available linter rooted at workDir.
+// Shared between the execute path and the dry-run path so both stay in sync.
+func buildLinterRegistry(workDir string) *linters.Registry {
+	registry := linters.NewRegistry()
+	registry.Register(golangci.NewGolangciLint(workDir))
+	registry.Register(ruff.NewRuff(workDir))
+	registry.Register(eslint.NewESLint(workDir))
+	registry.Register(pyright.NewPyright(workDir))
+	registry.Register(tsc.NewTSC(workDir))
+	registry.Register(markdownlint.NewMarkdownlint(workDir))
+	registry.Register(vale.NewVale(workDir))
+	registry.Register(jscpd.NewJSCPD(workDir))
+	registry.Register(betterleaks.NewBetterleaks(workDir))
+	return registry
+}
+
+// linterInvocation describes one scheduled linter run against a specific
+// project root (go.mod / package.json / tsconfig.json / ...). A linter may
+// produce multiple invocations when the input spans several project roots.
+type linterInvocation struct {
+	linter      linters.Linter
+	projectRoot string   // absolute; WorkDir the linter runs from
+	files       []string // relative to projectRoot (may be empty = whole root)
+}
+
+// resolveLinterInvocations splits one linter across the project roots it
+// should run against. When the linter does not implement ProjectRooted, it
+// runs once at opts.WorkDir (current behavior). When it does, roots are
+// discovered via the input files (or by scanning opts.WorkDir when no files
+// were passed) and files are bucketed + relativized per root.
+func resolveLinterInvocations(linter linters.Linter, opts LintOptions) []linterInvocation {
+	rooted, ok := linter.(linters.ProjectRooted)
+	if !ok {
+		return []linterInvocation{{linter: linter, projectRoot: opts.WorkDir, files: opts.Files}}
+	}
+	markers := rooted.ProjectRootMarkers()
+	if len(markers) == 0 {
+		return []linterInvocation{{linter: linter, projectRoot: opts.WorkDir, files: opts.Files}}
+	}
+
+	if len(opts.Files) == 0 {
+		roots := utils.FindAllProjectRoots(opts.WorkDir, markers)
+		if len(roots) == 0 {
+			return nil
+		}
+		out := make([]linterInvocation, 0, len(roots))
+		for _, root := range roots {
+			out = append(out, linterInvocation{linter: linter, projectRoot: root})
+		}
+		return out
+	}
+
+	buckets := make(map[string][]string)
+	var order []string
+	for _, f := range opts.Files {
+		abs := f
+		if !filepath.IsAbs(abs) {
+			// opts.Files arrive relative to opts.WorkDir (see
+			// groupFilesByGitRoot). Resolve against that, not os.Getwd().
+			abs = filepath.Join(opts.WorkDir, abs)
+		}
+		dir := abs
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			dir = filepath.Dir(abs)
+		}
+		root := utils.FindNearestProjectRoot(dir, markers)
+		if root == "" {
+			logger.V(2).Infof("Skipping %s for %s: no %v found", linter.Name(), f, markers)
+			continue
+		}
+		if _, seen := buckets[root]; !seen {
+			order = append(order, root)
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			rel = abs
+		}
+		buckets[root] = append(buckets[root], rel)
+	}
+	out := make([]linterInvocation, 0, len(order))
+	for _, root := range order {
+		out = append(out, linterInvocation{linter: linter, projectRoot: root, files: buckets[root]})
+	}
+	return out
+}
+
 // executeLinters runs all applicable linters and returns their results.
 // Reusable by both the lint command and the test --lint flag.
 func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
@@ -310,22 +415,21 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 		timeout = models.DefaultLinterTimeout
 	}
 
-	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
-
-	registry := linters.NewRegistry()
-	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
-	registry.Register(ruff.NewRuff(opts.WorkDir))
-	registry.Register(eslint.NewESLint(opts.WorkDir))
-	registry.Register(pyright.NewPyright(opts.WorkDir))
-	registry.Register(tsc.NewTSC(opts.WorkDir))
-	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
-	registry.Register(vale.NewVale(opts.WorkDir))
-	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
-	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
-
+	registry := buildLinterRegistry(opts.WorkDir)
 	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
 	if err != nil {
 		return nil, err
+	}
+
+	// Resolve the merge-base once per git-root so every per-module golangci
+	// invocation shares the same --new-from-rev target.
+	var golangciExtraArgs []string
+	if ref := lintBaseRef(opts); ref != "" {
+		if base, mbErr := resolveMergeBase(opts.WorkDir, ref); mbErr != nil {
+			logger.Warnf("golangci-lint --new-from-rev: %v", mbErr)
+		} else {
+			golangciExtraArgs = []string{"--new-from-rev=" + base}
+		}
 	}
 
 	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
@@ -339,18 +443,6 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 			return nil, fmt.Errorf("internal: linter %q missing from registry", name)
 		}
 
-		if ok, reason := shouldSelectLinter(opts.WorkDir, gavelCfg, linter, explicit); !ok {
-			logger.V(2).Infof("Skipping %s: %s", linter.Name(), reason)
-			if linter.Name() == "betterleaks" {
-				allResults = append(allResults, &linters.LinterResult{
-					Linter:  linter.Name(),
-					Skipped: true,
-					Error:   reason,
-				})
-			}
-			continue
-		}
-
 		if _, err := exec.LookPath(linter.Name()); err != nil {
 			logger.V(2).Infof("Skipping %s: not found on PATH", linter.Name())
 			allResults = append(allResults, &linters.LinterResult{
@@ -361,38 +453,55 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 			continue
 		}
 
-		runOpts := linters.RunOptions{
-			WorkDir:   opts.WorkDir,
-			Files:     opts.Files,
-			Ignores:   opts.Ignore,
-			Fix:       opts.Fix,
-			NoCache:   opts.NoCache,
-			Timeout:   timeout,
-			ForceJSON: true,
-			OutputTee: opts.OutputTee,
+		invocations := resolveLinterInvocations(linter, opts)
+		if len(invocations) == 0 {
+			logger.V(2).Infof("Skipping %s: no project roots found", linter.Name())
+			continue
 		}
 
-		if linter.Name() == "golangci-lint" {
-			if ref := lintBaseRef(opts); ref != "" {
-				base, err := resolveMergeBase(opts.WorkDir, ref)
-				if err != nil {
-					logger.Warnf("golangci-lint --new-from-rev: %v", err)
-				} else {
-					runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev="+base)
+		anyScheduled := false
+		for _, inv := range invocations {
+			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
+			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
+				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
+				if linter.Name() == "betterleaks" && !anyScheduled {
+					allResults = append(allResults, &linters.LinterResult{
+						Linter:  linter.Name(),
+						Skipped: true,
+						Error:   reason,
+					})
 				}
+				continue
 			}
-		}
 
-		if mixin, ok := linter.(linters.OptionsMixin); ok {
-			mixin.SetOptions(runOpts)
+			runOpts := linters.RunOptions{
+				WorkDir:   inv.projectRoot,
+				Files:     inv.files,
+				Ignores:   opts.Ignore,
+				Fix:       opts.Fix,
+				NoCache:   opts.NoCache,
+				Timeout:   timeout,
+				ForceJSON: true,
+				OutputTee: opts.OutputTee,
+			}
+			if linter.Name() == "golangci-lint" && len(golangciExtraArgs) > 0 {
+				runOpts.ExtraArgs = append(runOpts.ExtraArgs, golangciExtraArgs...)
+			}
+
+			invCopy := inv
+			optsCopy := runOpts
+			lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
+				result := linters.RunLinterWithTask(ctx, t, invCopy.linter, optsCopy)
+				result.WorkDir = invCopy.projectRoot
+				return result, nil
+			}))
+			anyScheduled = true
 		}
-		lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
-			result := linters.RunLinterWithTask(ctx, t, linter, runOpts)
-			result.WorkDir = opts.WorkDir
-			return result, nil
-		}))
 	}
 
+	// Wait for the entire group (handles dynamically queued tasks and the
+	// concurrency semaphore correctly) before harvesting individual results.
+	group.WaitFor()
 	for _, task := range lintTasks {
 		result, err := task.GetResult()
 		if err != nil {
@@ -450,13 +559,8 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 	for _, f := range opts.Files {
 		abs, _ := filepath.Abs(f)
 
-		isDir := false
-		if info, err := os.Stat(abs); err == nil && info.IsDir() {
-			isDir = true
-		}
-
 		dir := abs
-		if !isDir {
+		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
 			dir = filepath.Dir(abs)
 		}
 
@@ -468,10 +572,14 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 		if _, ok := groups[gitRoot]; !ok {
 			order = append(order, gitRoot)
 		}
-		if !isDir {
-			rel, _ := filepath.Rel(gitRoot, abs)
-			groups[gitRoot] = append(groups[gitRoot], rel)
+		// Preserve both files and directories as-passed. The linter fan-out
+		// (resolveLinterInvocations) uses directory entries as project-root
+		// seeds and individual files as bucketing keys.
+		rel, err := filepath.Rel(gitRoot, abs)
+		if err != nil {
+			rel = abs
 		}
+		groups[gitRoot] = append(groups[gitRoot], rel)
 	}
 
 	result := make([]lintGroup, 0, len(order))
@@ -485,7 +593,7 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 // the shell command each selected linter would run, without executing
 // anything. Linters that are registered but filtered out (no matching files
 // or not on PATH) are printed with a skipped reason so users see the full
-// picture.
+// picture. Project-rooted linters print one line per discovered project root.
 func displayLintDryRun(opts LintOptions) error {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed")
 	logger.Infof("")
@@ -498,18 +606,7 @@ func displayLintDryRun(opts LintOptions) error {
 		timeout = models.DefaultLinterTimeout
 	}
 
-	gavelCfg, _ := verify.LoadGavelConfig(opts.WorkDir)
-	registry := linters.NewRegistry()
-	registry.Register(golangci.NewGolangciLint(opts.WorkDir))
-	registry.Register(ruff.NewRuff(opts.WorkDir))
-	registry.Register(eslint.NewESLint(opts.WorkDir))
-	registry.Register(pyright.NewPyright(opts.WorkDir))
-	registry.Register(tsc.NewTSC(opts.WorkDir))
-	registry.Register(markdownlint.NewMarkdownlint(opts.WorkDir))
-	registry.Register(vale.NewVale(opts.WorkDir))
-	registry.Register(jscpd.NewJSCPD(opts.WorkDir))
-	registry.Register(betterleaks.NewBetterleaks(opts.WorkDir))
-
+	registry := buildLinterRegistry(opts.WorkDir)
 	requestedLinters, explicit, err := resolveRequestedLinters(registry, opts.Linters)
 	if err != nil {
 		return err
@@ -521,35 +618,15 @@ func displayLintDryRun(opts LintOptions) error {
 			testrunner.PrintDryRunSkipped("lint", name, "unknown linter")
 			continue
 		}
-
-		if ok, reason := shouldSelectLinter(opts.WorkDir, gavelCfg, linter, explicit); !ok {
-			testrunner.PrintDryRunSkipped("lint", linter.Name(), reason)
-			continue
-		}
 		if _, err := exec.LookPath(linter.Name()); err != nil {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "not found on PATH")
 			continue
 		}
 
-		runOpts := linters.RunOptions{
-			WorkDir:   opts.WorkDir,
-			Files:     opts.Files,
-			Ignores:   opts.Ignore,
-			Fix:       opts.Fix,
-			NoCache:   opts.NoCache,
-			Timeout:   timeout,
-			ForceJSON: true,
-		}
-		if linter.Name() == "golangci-lint" {
-			if ref := lintBaseRef(opts); ref != "" {
-				// Dry-run deliberately does not invoke `git merge-base` —
-				// show the literal ref as a placeholder so users see the
-				// intent without side effects.
-				runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
-			}
-		}
-		if mixin, ok := linter.(linters.OptionsMixin); ok {
-			mixin.SetOptions(runOpts)
+		invocations := resolveLinterInvocations(linter, opts)
+		if len(invocations) == 0 {
+			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no project roots found")
+			continue
 		}
 
 		dr, ok := linter.(linters.DryRunner)
@@ -557,8 +634,38 @@ func displayLintDryRun(opts LintOptions) error {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no DryRunCommand support")
 			continue
 		}
-		cmdName, args := dr.DryRunCommand()
-		testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, opts.WorkDir)
+
+		for _, inv := range invocations {
+			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
+			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
+				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
+				continue
+			}
+
+			runOpts := linters.RunOptions{
+				WorkDir:   inv.projectRoot,
+				Files:     inv.files,
+				Ignores:   opts.Ignore,
+				Fix:       opts.Fix,
+				NoCache:   opts.NoCache,
+				Timeout:   timeout,
+				ForceJSON: true,
+			}
+			if linter.Name() == "golangci-lint" {
+				if ref := lintBaseRef(opts); ref != "" {
+					// Dry-run deliberately does not invoke `git merge-base` —
+					// show the literal ref as a placeholder so users see the
+					// intent without side effects.
+					runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
+				}
+			}
+			if mixin, ok := linter.(linters.OptionsMixin); ok {
+				mixin.SetOptions(runOpts)
+			}
+
+			cmdName, args := dr.DryRunCommand()
+			testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, inv.projectRoot)
+		}
 	}
 	return nil
 }

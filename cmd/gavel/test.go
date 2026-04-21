@@ -22,6 +22,7 @@ import (
 	"github.com/flanksource/gavel/baseline"
 	_ "github.com/flanksource/gavel/fixtures/types"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
@@ -241,6 +242,11 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		if uiServer != nil {
 			if testDurationFlags.Detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+				logger.Warnf("persist snapshot: %v", err)
+			} else {
+				logger.V(1).Infof("wrote snapshot to %s", path)
+			}
 				clicky.CancelAllGlobalTasks()
 				clicky.WaitForGlobalCompletionSilent()
 				if err := handoffDetachedUI(uiListener, snapshot, opts.AutoStop, opts.IdleTimeout); err != nil {
@@ -253,7 +259,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			<-sig
 			return nil, nil
 		}
-		return buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid())), nil
+		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+				logger.Warnf("persist snapshot: %v", err)
+			} else {
+				logger.V(1).Infof("wrote snapshot to %s", path)
+			}
+		return snapshot, nil
 	}
 	return result, nil
 }

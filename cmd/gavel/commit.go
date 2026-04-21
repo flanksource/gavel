@@ -15,8 +15,9 @@ import (
 
 type CommitOptions struct {
 	Stage     string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
-	CommitAll bool   `flag:"commit-all" short:"A" help:"Split the selected change set into multiple AI-planned commits"`
-	Max       int    `flag:"max" help:"Maximum number of commit groups (0 = unlimited)" default:"0"`
+	CommitAll bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
+	MaxFiles  int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
+	MaxLines  int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
 	Message   string `flag:"message" short:"m" help:"Explicit commit message (skips LLM)"`
 	Model     string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
 	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
@@ -33,10 +34,15 @@ Reads pre-commit hooks from .gavel.yaml under commit.hooks. Hooks run with
 sh -c in the git root and abort the commit on non-zero exit. Pass --force
 to skip hooks.
 
+The -A flag groups staged files by their top-level directory and recursively
+splits any group that exceeds --max-files or --max-lines. An LLM still writes
+the conventional commit message for each group.
+
 Examples:
   gavel commit                          # LLM-generated message, staged changes
-  gavel commit -A                       # split staged changes into multiple commits
-  gavel commit -A --max=5               # split into at most 5 commits
+  gavel commit -A                       # one commit per directory, split when large
+  gavel commit -A --max-files=3         # tighter file cap; triggers deeper splits
+  gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
   gavel commit -m "chore: bump dep"     # explicit message, skip LLM
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --force                  # skip hooks`
@@ -68,7 +74,8 @@ func runCommit(opts CommitOptions) (any, error) {
 		WorkDir:   workDir,
 		Stage:     opts.Stage,
 		CommitAll: opts.CommitAll,
-		Max:       opts.Max,
+		MaxFiles:  opts.MaxFiles,
+		MaxLines:  opts.MaxLines,
 		DryRun:    opts.DryRun,
 		Force:     opts.Force,
 		NoCache:   opts.NoCache,
