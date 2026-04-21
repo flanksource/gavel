@@ -38,6 +38,12 @@ func (p *Pyright) Name() string {
 	return "pyright"
 }
 
+// ProjectRootMarkers anchors pyright at the nearest pyrightconfig.json or
+// pyproject.toml so it resolves the right project config.
+func (p *Pyright) ProjectRootMarkers() []string {
+	return []string{"pyrightconfig.json", "pyproject.toml"}
+}
+
 // DefaultIncludes returns default file patterns this linter should process
 func (p *Pyright) DefaultIncludes() []string {
 	return []string{

@@ -38,6 +38,12 @@ func (r *Ruff) Name() string {
 	return "ruff"
 }
 
+// ProjectRootMarkers anchors ruff at the nearest ruff.toml or pyproject.toml
+// so config lookup matches the project the Python source belongs to.
+func (r *Ruff) ProjectRootMarkers() []string {
+	return []string{"ruff.toml", "pyproject.toml"}
+}
+
 // DefaultIncludes returns default file patterns this linter should process
 func (r *Ruff) DefaultIncludes() []string {
 	return []string{"**/*.py"}

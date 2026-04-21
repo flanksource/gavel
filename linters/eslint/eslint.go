@@ -38,6 +38,26 @@ func (e *ESLint) Name() string {
 	return "eslint"
 }
 
+// ProjectRootMarkers identifies a JS/TS project — either a package.json or
+// any of eslint's own flat/legacy config file names. Listing config files
+// means a repo that ships eslint config without a package.json (unusual, but
+// valid — e.g. docs repos) still lints.
+func (e *ESLint) ProjectRootMarkers() []string {
+	return []string{
+		"package.json",
+		"eslint.config.js",
+		"eslint.config.mjs",
+		"eslint.config.cjs",
+		"eslint.config.ts",
+		".eslintrc",
+		".eslintrc.js",
+		".eslintrc.cjs",
+		".eslintrc.json",
+		".eslintrc.yaml",
+		".eslintrc.yml",
+	}
+}
+
 // DefaultIncludes returns default file patterns this linter should process
 func (e *ESLint) DefaultIncludes() []string {
 	return []string{

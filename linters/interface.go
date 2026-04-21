@@ -59,6 +59,14 @@ type DryRunner interface {
 	DryRunCommand() (cmd string, args []string)
 }
 
+// ProjectRooted is implemented by linters that must run from their own project
+// root (go.mod, package.json, tsconfig.json, pyproject.toml, ...) rather than
+// the enclosing git root. The lint driver resolves the root per input file via
+// utils.FindNearestProjectRoot; first marker found walking up wins.
+type ProjectRooted interface {
+	ProjectRootMarkers() []string
+}
+
 // MetadataProvider provides file and rule count information from linters
 type MetadataProvider interface {
 	GetFileCount() int
@@ -156,6 +164,8 @@ var DefaultRegistry = NewRegistry()
 type LinterResult struct {
 	Linter       string             `json:"linter"`
 	WorkDir      string             `json:"work_dir,omitempty"`
+	Command      string             `json:"command,omitempty"` // resolved executable name, e.g. "eslint"
+	Args         []string           `json:"args,omitempty"`    // argv without the command name
 	Success      bool               `json:"success"`
 	Skipped      bool               `json:"skipped,omitempty"`
 	TimedOut     bool               `json:"timed_out,omitempty"`
@@ -167,6 +177,18 @@ type LinterResult struct {
 	DebounceUsed time.Duration      `json:"debounce_used,omitempty"`
 	FileCount    int                `json:"file_count,omitempty"`
 	RuleCount    int                `json:"rule_count,omitempty"`
+}
+
+// CommandLine returns the shell-style command (including args) that the
+// linter would execute, or "" when the argv isn't captured.
+func (lr *LinterResult) CommandLine() string {
+	if lr.Command == "" {
+		return ""
+	}
+	if len(lr.Args) == 0 {
+		return lr.Command
+	}
+	return lr.Command + " " + strings.Join(lr.Args, " ")
 }
 
 // GetViolationCount returns the number of violations found
@@ -428,6 +450,9 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 		Duration:   time.Since(start),
 		Violations: violations,
 		Error:      formatErr(statusErr),
+	}
+	if dr, ok := linter.(DryRunner); ok {
+		result.Command, result.Args = dr.DryRunCommand()
 	}
 
 	if metadata, ok := linter.(MetadataProvider); ok {
