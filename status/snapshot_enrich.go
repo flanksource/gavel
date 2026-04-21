@@ -117,4 +117,3 @@ func normalisePath(path, workDir string) string {
 	}
 	return filepath.ToSlash(path)
 }
-

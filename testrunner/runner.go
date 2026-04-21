@@ -7,11 +7,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"syscall"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"

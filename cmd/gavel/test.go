@@ -267,10 +267,10 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			if testDurationFlags.Detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
 				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
-				logger.Warnf("persist snapshot: %v", err)
-			} else {
-				logger.V(1).Infof("wrote snapshot to %s", path)
-			}
+					logger.Warnf("persist snapshot: %v", err)
+				} else {
+					logger.V(1).Infof("wrote snapshot to %s", path)
+				}
 				clicky.CancelAllGlobalTasks()
 				clicky.WaitForGlobalCompletionSilent()
 				if err := handoffDetachedUI(uiListener, snapshot, opts.AutoStop, opts.IdleTimeout); err != nil {
@@ -285,10 +285,10 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
 		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
-				logger.Warnf("persist snapshot: %v", err)
-			} else {
-				logger.V(1).Infof("wrote snapshot to %s", path)
-			}
+			logger.Warnf("persist snapshot: %v", err)
+		} else {
+			logger.V(1).Infof("wrote snapshot to %s", path)
+		}
 		return snapshot, nil
 	}
 	return result, nil
