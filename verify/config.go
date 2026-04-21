@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -72,8 +73,10 @@ type CommitHook struct {
 }
 
 type CommitConfig struct {
-	Model string       `yaml:"model,omitempty" json:"model,omitempty"`
-	Hooks []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	Model     string       `yaml:"model,omitempty" json:"model,omitempty"`
+	Hooks     []CommitHook `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	GitIgnore []string     `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
+	Allow     []string     `yaml:"allow,omitempty" json:"allow,omitempty"`
 }
 
 // HookStep is a single shell command rendered into the SSH post-receive hook.
@@ -160,6 +163,22 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// LoadSingleGavelConfig reads one .gavel.yaml file from the given absolute
+// path without layering with home/gitRoot/cwd siblings. Returns a zero-value
+// config with os.ErrNotExist when the file is missing so callers can detect
+// "need to create" vs. a real read/parse error.
+func LoadSingleGavelConfig(path string) (GavelConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return GavelConfig{}, err
+	}
+	var gc GavelConfig
+	if err := yaml.Unmarshal(data, &gc); err != nil {
+		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return gc, nil
 }
 
 func SaveGavelConfig(dir string, cfg GavelConfig) error {
@@ -263,7 +282,25 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	if len(override.Hooks) > 0 {
 		base.Hooks = append(base.Hooks, override.Hooks...)
 	}
+	base.GitIgnore = dedupStrings(append(base.GitIgnore, override.GitIgnore...))
+	base.Allow = dedupStrings(append(base.Allow, override.Allow...))
 	return base
+}
+
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // MergeFixturesConfig merges override onto base. Enabled is true if either side
