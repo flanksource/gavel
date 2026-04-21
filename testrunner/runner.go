@@ -294,7 +294,7 @@ func executionRootForPath(workDirRoot, abs string) string {
 	if gitRoot := utils.FindGitRoot(abs); gitRoot != "" {
 		groupRoot = gitRoot
 	}
-	if moduleRoot := findNearestGoModRoot(abs); moduleRoot != "" && isWithin(moduleRoot, groupRoot) {
+	if moduleRoot := findNearestGoModRoot(abs); moduleRoot != "" && utils.IsWithin(moduleRoot, groupRoot) {
 		groupRoot = moduleRoot
 	}
 	return groupRoot
@@ -376,16 +376,6 @@ func findNearestGoModRoot(dir string) string {
 	}
 }
 
-func isWithin(path, root string) bool {
-	if path == root {
-		return true
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
 
 func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
