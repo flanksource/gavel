@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -56,8 +57,9 @@ type LintOptions struct {
 	Failed       string    `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
 	Summary      bool      `flag:"summary" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
 	SummaryLimit int       `flag:"summary-limit" help:"Max example locations shown per rule in --summary mode" default:"5"`
-	Files        []string  `args:"true"`
-	OutputTee    io.Writer `json:"-"`
+	Files        []string        `args:"true"`
+	OutputTee    io.Writer       `json:"-"`
+	Context      context.Context `json:"-"`
 }
 
 func (o LintOptions) Pretty() api.Text {
@@ -70,6 +72,9 @@ func (o LintOptions) Pretty() api.Text {
 	}
 	if o.Fix {
 		t = t.Append("Fix: on", "text-green-500").Space()
+	}
+	if o.Timeout != "" {
+		t = t.Append("Timeout: ", "text-muted").Append(o.Timeout, "text-blue-500").Space()
 	}
 	if len(o.Files) > 0 {
 		t = t.Append("Files: ", "text-muted").Append(clicky.CompactList(o.Files), "text-blue-500")
@@ -490,8 +495,10 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 
 			invCopy := inv
 			optsCopy := runOpts
+			parentCtx := opts.Context
 			lintTasks = append(lintTasks, group.Add(linter.Name(), func(ctx commonsContext.Context, t *clickytask.Task) (*linters.LinterResult, error) {
-				result := linters.RunLinterWithTask(ctx, t, invCopy.linter, optsCopy)
+				runCtx := mergeContexts(ctx, parentCtx)
+				result := linters.RunLinterWithTask(runCtx, t, invCopy.linter, optsCopy)
 				result.WorkDir = invCopy.projectRoot
 				return result, nil
 			}))

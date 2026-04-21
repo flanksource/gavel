@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -45,6 +46,21 @@ var (
 func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.AutoStop = testDurationFlags.AutoStop
 	opts.IdleTimeout = testDurationFlags.IdleTimeout
+	opts.Timeout = testDurationFlags.Timeout
+	opts.LintTimeout = testDurationFlags.LintTimeout
+	opts.TestTimeout = testDurationFlags.TestTimeout
+
+	globalCtx, cancelGlobal := context.WithCancel(context.Background())
+	defer cancelGlobal()
+	if opts.Timeout > 0 {
+		var cancelTimeout context.CancelFunc
+		globalCtx, cancelTimeout = context.WithTimeout(globalCtx, opts.Timeout)
+		defer cancelTimeout()
+	}
+	opts.Context = globalCtx
+
+	installTimeoutDiagnosticsHook(opts)
+
 	clicky.ClearGlobalTasks()
 
 	if opts.WorkDir == "" {
@@ -169,8 +185,16 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			if workDir == "" {
 				workDir, _ = os.Getwd()
 			}
+			lintTimeout := opts.LintTimeout
+			if lintTimeout <= 0 {
+				lintTimeout = 5 * time.Minute
+			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
-				results, err := executeLinters(LintOptions{WorkDir: dir, Timeout: "5m"})
+				results, err := executeLinters(LintOptions{
+					WorkDir: dir,
+					Timeout: lintTimeout.String(),
+					Context: opts.Context,
+				})
 				if err != nil {
 					lintErr = err
 					break
@@ -507,6 +531,9 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 var testDurationFlags struct {
 	AutoStop    time.Duration
 	IdleTimeout time.Duration
+	Timeout     time.Duration
+	LintTimeout time.Duration
+	TestTimeout time.Duration
 	Detach      bool
 }
 
@@ -524,4 +551,10 @@ func init() {
 		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
 	testCmd.Flags().DurationVar(&testDurationFlags.IdleTimeout, "idle-timeout", 0,
 		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
+	testCmd.Flags().DurationVar(&testDurationFlags.Timeout, "timeout", 10*time.Minute,
+		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
+	testCmd.Flags().DurationVar(&testDurationFlags.LintTimeout, "lint-timeout", 5*time.Minute,
+		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
+	testCmd.Flags().DurationVar(&testDurationFlags.TestTimeout, "test-timeout", 5*time.Minute,
+		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
 }
