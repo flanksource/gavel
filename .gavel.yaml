@@ -4,7 +4,11 @@ lint:
   ignore:
   - file: .shell/checkout/8d512cac74b933d1f8d97629ab79966828d2e0789c66a463d8a78e7d40ccc42f/**
 secrets: {}
-ssh: {}
+pre:
+  - name: deps
+    run: make tidy
+ssh:
+  cmd: make all
 verify:
   checks:
     disabled: null

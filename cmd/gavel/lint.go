@@ -222,14 +222,20 @@ func runLint(opts LintOptions) (any, error) {
 			return nil, fmt.Errorf("triage failed: %w", err)
 		}
 		if len(newRules) > 0 {
-			gavelCfg.Lint.Ignore = append(gavelCfg.Lint.Ignore, newRules...)
 			gitRoot := repomap.FindGitRoot(opts.WorkDir)
 			if gitRoot == "" {
 				gitRoot = opts.WorkDir
 			}
-			if err := verify.SaveGavelConfig(gitRoot, gavelCfg); err != nil {
+			repoCfg, err := verify.LoadSingleGavelConfig(filepath.Join(gitRoot, ".gavel.yaml"))
+			if err != nil && !os.IsNotExist(err) {
+				return nil, fmt.Errorf("failed to read repo .gavel.yaml: %w", err)
+			}
+			repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
+			if err := verify.SaveGavelConfig(gitRoot, repoCfg); err != nil {
 				return nil, fmt.Errorf("failed to save .gavel.yaml: %w", err)
 			}
+			// Keep the in-memory merged view consistent with what was persisted.
+			gavelCfg.Lint.Ignore = append(gavelCfg.Lint.Ignore, newRules...)
 			logger.Infof("Saved %d new ignore rules to .gavel.yaml", len(newRules))
 			linters.FilterIgnoredViolations(allResults, newRules)
 		}

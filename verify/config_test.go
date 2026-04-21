@@ -335,6 +335,89 @@ post:
 	assert.Equal(t, "home-post", cfg.Post[0].Name)
 }
 
+// TestSaveAfterLayeredLoad_DoesNotLeakHomeIntoRepo is a regression test for
+// a data-leak bug where callers loaded a merged GavelConfig (home+repo+cwd)
+// and then wrote it back to the repo's .gavel.yaml via SaveGavelConfig —
+// silently promoting every ~/.gavel.yaml field into the repo on the next
+// `gavel lint --triage` or UI ignore click.
+//
+// The fix is to always load the single repo file for the read-modify-write
+// cycle. This test guards callers by using the primitives directly and
+// asserting the leak does not happen.
+func TestSaveAfterLayeredLoad_DoesNotLeakHomeIntoRepo(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	t.Setenv("HOME", home)
+
+	// Home has a global commit.gitignore list the user never wants in any repo.
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`commit:
+  gitignore:
+    - .env
+    - .claude
+`), 0o644))
+
+	// Repo starts with a narrow lint.ignore only.
+	repoPath := filepath.Join(repo, ".gavel.yaml")
+	require.NoError(t, os.WriteFile(repoPath, []byte(`lint:
+  ignore:
+    - file: existing.go
+`), 0o644))
+
+	// Simulate the lint --triage / UI ignore flow: read just the repo file,
+	// append a rule, save back.
+	repoCfg, err := LoadSingleGavelConfig(repoPath)
+	require.NoError(t, err)
+	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, LintIgnoreRule{File: "new.go"})
+	require.NoError(t, SaveGavelConfig(repo, repoCfg))
+
+	written, err := os.ReadFile(repoPath)
+	require.NoError(t, err)
+	body := string(written)
+
+	// The repo file must carry the new rule.
+	assert.Contains(t, body, "new.go")
+	assert.Contains(t, body, "existing.go")
+
+	// The repo file must NOT have absorbed anything from ~/.gavel.yaml.
+	assert.NotContains(t, body, ".env",
+		"home-level commit.gitignore must not leak into the repo file")
+	assert.NotContains(t, body, ".claude",
+		"home-level commit.gitignore must not leak into the repo file")
+}
+
+// TestSaveGavelConfig_RoundTripPreservesPreAndSSH guards the other half of
+// the regression: once the repo file is loaded via the single-file loader,
+// a save round-trip must preserve every top-level field (pre, ssh.cmd, post,
+// verify.*). Without this, a future refactor that drops a YAML tag would
+// silently eat fields on the next write.
+func TestSaveGavelConfig_RoundTripPreservesPreAndSSH(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte(`pre:
+  - name: deps
+    run: make tidy
+ssh:
+  cmd: make all
+verify:
+  model: claude
+`)
+	path := filepath.Join(dir, ".gavel.yaml")
+	require.NoError(t, os.WriteFile(path, original, 0o644))
+
+	cfg, err := LoadSingleGavelConfig(path)
+	require.NoError(t, err)
+	require.NoError(t, SaveGavelConfig(dir, cfg))
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	body := string(written)
+
+	assert.Contains(t, body, "name: deps")
+	assert.Contains(t, body, "run: make tidy")
+	assert.Contains(t, body, "cmd: make all")
+	assert.Contains(t, body, "model: claude")
+}
+
 func TestMergeSecretsConfig(t *testing.T) {
 	t.Run("zero + zero", func(t *testing.T) {
 		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{})
@@ -375,6 +458,18 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 		out := MergeCommitConfig(base, CommitConfig{})
 		assert.Equal(t, []string{"*.log"}, out.GitIgnore)
 		assert.Equal(t, []string{"ok.log"}, out.Allow)
+	})
+
+	t.Run("linkedDeps mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "fail"}})
+		assert.Equal(t, "fail", out.LinkedDeps.Mode)
+	})
+
+	t.Run("linkedDeps empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, "skip", out.LinkedDeps.Mode)
 	})
 }
 
