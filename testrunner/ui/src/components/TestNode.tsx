@@ -78,6 +78,13 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
 
         <span class="flex-1" />
 
+        {t.timed_out && (
+          <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+            <iconify-icon icon="ion:hourglass-outline" class="text-sm" />
+            timed out
+          </span>
+        )}
+
         {(() => {
           const dur = t.duration || (hasChildren ? totalDuration(t) : 0);
           return dur > 0 ? <span class="text-xs text-gray-400 shrink-0">{formatDuration(dur)}</span> : null;

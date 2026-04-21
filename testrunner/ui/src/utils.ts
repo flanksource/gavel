@@ -900,20 +900,31 @@ export function statusIcon(t: Test): string {
     const sev = t.violation?.severity;
     if (sev === 'error') return 'codicon:error';
     if (sev === 'warning') return 'codicon:warning';
-    return 'codicon:info';
+    return 'codicon:circle-small';
   }
+  if (t.timed_out) return 'ion:hourglass-outline';
   if (t.pending) return 'svg-spinners:ring-resize';
   if (t.failed) return 'codicon:error';
   if (t.skipped) return 'codicon:circle-slash';
   if (t.passed) return 'codicon:pass-filled';
   if (t.children && t.children.length > 0) {
     const s = sum(t);
+    if (hasTimedOutDescendant(t)) return 'ion:hourglass-outline';
     if (s.failed > 0 && s.passed > 0) return 'codicon:warning';
     if (s.failed > 0) return 'codicon:error';
     if (s.pending > 0) return 'svg-spinners:ring-resize';
     return 'codicon:pass-filled';
   }
   return 'codicon:circle-outline';
+}
+
+function hasTimedOutDescendant(t: Test): boolean {
+  if (t.timed_out) return true;
+  if (!t.children) return false;
+  for (const c of t.children) {
+    if (hasTimedOutDescendant(c)) return true;
+  }
+  return false;
 }
 
 export function statusColor(t: Test): string {
@@ -927,14 +938,16 @@ export function statusColor(t: Test): string {
     const sev = t.violation?.severity;
     if (sev === 'error') return 'text-red-600';
     if (sev === 'warning') return 'text-yellow-600';
-    return 'text-blue-500';
+    return 'text-gray-500';
   }
+  if (t.timed_out) return 'text-amber-600';
   if (t.pending) return 'text-blue-500';
   if (t.failed) return 'text-red-600';
   if (t.skipped) return 'text-yellow-600';
   if (t.passed) return 'text-green-600';
   if (t.children && t.children.length > 0) {
     const s = sum(t);
+    if (hasTimedOutDescendant(t)) return 'text-amber-600';
     if (s.failed > 0 && s.passed > 0) return 'text-orange-500';
     if (s.failed > 0) return 'text-red-600';
     if (s.pending > 0) return 'text-blue-500';
@@ -994,6 +1007,54 @@ export function formatDuration(ns: number): string {
   const ms = ns / 1e6;
   if (ms < 1000) return `${ms.toFixed(0)}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// formatRunTimestamp renders an RFC3339 timestamp with an explicit year so
+// the UI no longer hides the year via toLocaleString() defaults.
+export function formatRunTimestamp(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// formatRunDuration reports a human duration between two RFC3339 timestamps.
+// Returns a live "… so far" tick when ended is undefined.
+export function formatRunDuration(started: string | undefined, ended: string | undefined): string {
+  if (!started) return '—';
+  const start = Date.parse(started);
+  if (Number.isNaN(start)) return '—';
+  const end = ended ? Date.parse(ended) : Date.now();
+  if (Number.isNaN(end) || end < start) return '—';
+  const ms = end - start;
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s${ended ? '' : ' so far'}`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  if (min < 60) return `${min}m ${rem}s${ended ? '' : ' so far'}`;
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return `${hr}h ${remMin}m${ended ? '' : ' so far'}`;
+}
+
+// hasTimeoutArgs reports whether SnapshotMetadata.Args carries any of the
+// three timeout knobs so the DetailPanel can conditionally render the row.
+export function hasTimeoutArgs(args: Record<string, unknown> | undefined): boolean {
+  if (!args) return false;
+  return !!(
+    timeoutArgValue(args, 'timeout') ||
+    timeoutArgValue(args, 'test_timeout') ||
+    timeoutArgValue(args, 'lint_timeout')
+  );
+}
+
+export function timeoutArgValue(args: Record<string, unknown> | undefined, key: string): string | null {
+  if (!args) return null;
+  const raw = args[key];
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed === '' ? null : trimmed;
 }
 
 // formatCount renders integer counts compactly so large totals don't crowd

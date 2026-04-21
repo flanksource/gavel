@@ -14,6 +14,7 @@ export interface Test {
   failed?: boolean;
   passed?: boolean;
   pending?: boolean;
+  timed_out?: boolean;
   stdout?: string;
   stderr?: string;
   children?: Test[];
