@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -48,16 +49,16 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := verify.LoadGavelConfig(root)
-	if err != nil {
+	repoCfg, err := verify.LoadSingleGavelConfig(filepath.Join(root, ".gavel.yaml"))
+	if err != nil && !os.IsNotExist(err) {
 		http.Error(w, fmt.Sprintf("load .gavel.yaml: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	newRule := verify.LintIgnoreRule{Source: req.Source, Rule: req.Rule, File: req.File}
-	if !slices.Contains(cfg.Lint.Ignore, newRule) {
-		cfg.Lint.Ignore = append(cfg.Lint.Ignore, newRule)
-		if err := verify.SaveGavelConfig(root, cfg); err != nil {
+	if !slices.Contains(repoCfg.Lint.Ignore, newRule) {
+		repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRule)
+		if err := verify.SaveGavelConfig(root, repoCfg); err != nil {
 			http.Error(w, fmt.Sprintf("save .gavel.yaml: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -69,7 +70,7 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 	s.notify()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: len(cfg.Lint.Ignore), Filtered: filtered})
+	_ = json.NewEncoder(w).Encode(IgnoreResponse{RuleCount: len(repoCfg.Lint.Ignore), Filtered: filtered})
 }
 
 func (s *Server) resolveGitRootLocked(workDir string) string {

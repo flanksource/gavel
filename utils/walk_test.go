@@ -260,6 +260,24 @@ var _ = Describe("FindNearestProjectRoot", func() {
 	})
 })
 
+var _ = Describe("IsWithin", func() {
+	It("returns true when path equals root", func() {
+		Expect(IsWithin("/repo", "/repo")).To(BeTrue())
+	})
+	It("returns true for a nested path", func() {
+		Expect(IsWithin("/repo/pkg/a", "/repo")).To(BeTrue())
+	})
+	It("returns false for a sibling path", func() {
+		Expect(IsWithin("/other/pkg", "/repo")).To(BeFalse())
+	})
+	It("returns false when a ../ traversal escapes root", func() {
+		Expect(IsWithin("/repo/../outside", "/repo")).To(BeFalse())
+	})
+	It("returns false for a parent of root", func() {
+		Expect(IsWithin("/", "/repo")).To(BeFalse())
+	})
+})
+
 var _ = Describe("FindAllProjectRoots", func() {
 	var root string
 
