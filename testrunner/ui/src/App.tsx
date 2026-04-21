@@ -22,6 +22,7 @@ import {
   groupLintByLinterRuleFile,
   groupLintByLinterFile,
   groupLintByFileLinterRule,
+  groupLintBySummary,
   countProcesses,
   findProcessByPID,
   isLintNode,
@@ -256,12 +257,24 @@ export function App() {
     [tests, filters],
   );
   const lintTree = useMemo(() => {
-    const grouped = lintGrouping === 'file-linter-rule'
-      ? groupLintByFileLinterRule(lint, lintFilters)
-      : lintGrouping === 'linter-file'
-        ? groupLintByLinterFile(lint, lintFilters)
-        : groupLintByLinterRuleFile(lint, lintFilters);
-    return annotateRoutePaths(collapseLintSingleChildChains(grouped));
+    let grouped: Test[];
+    switch (lintGrouping) {
+      case 'summary':
+        grouped = groupLintBySummary(lint, lintFilters);
+        break;
+      case 'file-linter-rule':
+        grouped = groupLintByFileLinterRule(lint, lintFilters);
+        break;
+      case 'linter-file':
+        grouped = groupLintByLinterFile(lint, lintFilters);
+        break;
+      default:
+        grouped = groupLintByLinterRuleFile(lint, lintFilters);
+    }
+    // Summary mode is pre-collapsed and intentionally keeps its single-child
+    // branches (linter -> rule -> file) separate; skip the chain-collapser.
+    const collapsed = lintGrouping === 'summary' ? grouped : collapseLintSingleChildChains(grouped);
+    return annotateRoutePaths(collapsed);
   }, [lint, lintFilters, lintGrouping]);
   const lintTotal = useMemo(() => totalLintViolations(lint), [lint]);
   const processCount = useMemo(() => countProcesses(diagnostics?.root), [diagnostics]);
@@ -341,6 +354,15 @@ export function App() {
       ...routeState,
       tab: 'lint',
       lintFilters: nextFilters,
+      selectedPath: '',
+    });
+  }, [routeState, commitRoute]);
+
+  const onLintGroupingChange = useCallback((nextGrouping: LintGrouping) => {
+    commitRoute({
+      ...routeState,
+      tab: 'lint',
+      lintGrouping: nextGrouping,
       selectedPath: '',
     });
   }, [routeState, commitRoute]);
@@ -727,6 +749,7 @@ export function App() {
               grouping={lintGrouping}
               filters={lintFilters}
               onFiltersChange={onLintFiltersChange}
+              onGroupingChange={onLintGroupingChange}
             />
           </div>
         )}

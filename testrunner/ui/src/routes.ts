@@ -111,7 +111,7 @@ export function buildExportRoute(state: RouteState, format: ExportFormat): strin
 }
 
 function parseLintGrouping(value: string | null): LintGrouping {
-  if (value === 'linter-file' || value === 'file-linter-rule' || value === 'linter-rule-file') {
+  if (value === 'linter-file' || value === 'file-linter-rule' || value === 'linter-rule-file' || value === 'summary') {
     return value;
   }
   return DEFAULT_LINT_GROUPING;
