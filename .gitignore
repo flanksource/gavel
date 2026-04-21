@@ -76,3 +76,4 @@ testrunner/ui/dist/
 .claude
 /*.json
 .gavel/
+.vitest/
