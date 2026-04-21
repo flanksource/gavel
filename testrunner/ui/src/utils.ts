@@ -489,6 +489,218 @@ export function groupLintByFileLinterRule(lint: LinterResult[] | undefined, filt
   return [...fileTreeNodes, ...noFileLinterNodes];
 }
 
+const SUMMARY_FILE_LIMIT = 5;
+
+// groupLintBySummary collapses raw lint results into linter -> rule -> per-file
+// nodes, mirroring the CLI `--summary` view. Skipped linters and linters that
+// errored (even with zero violations) are shown as leaves so failures aren't
+// silently hidden.
+export function groupLintBySummary(lint: LinterResult[] | undefined, filters: LintFilters): Test[] {
+  if (!lint || lint.length === 0) return [];
+
+  const byLinter = new Map<string, {
+    meta: LinterResult;
+    violations: FlatViolation[];
+    skipReason?: string;
+    errorMsg?: string;
+  }>();
+
+  const workDirs = new Set<string>();
+  for (const lr of lint) {
+    if (lr.work_dir) workDirs.add(normalizeLintPath(lr.work_dir));
+  }
+  const multiRoot = workDirs.size > 1;
+
+  for (const lr of lint) {
+    if (!matchesFilterState(lr.linter, filters.linter)) continue;
+    let bucket = byLinter.get(lr.linter);
+    if (!bucket) {
+      bucket = { meta: lr, violations: [] };
+      byLinter.set(lr.linter, bucket);
+    }
+    if (lr.skipped) {
+      bucket.skipReason = lr.error || 'skipped';
+      continue;
+    }
+    if (!lr.success && lr.error && !bucket.errorMsg) {
+      bucket.errorMsg = lr.error;
+    }
+    for (const v of lr.violations || []) {
+      const sev = (v.severity || 'error') as Severity;
+      if (!matchesFilterState(sev, filters.severity)) continue;
+      const rawFile = relPath(v.file, lr.work_dir);
+      const file = decorateLintFile(rawFile, lr.work_dir, multiRoot);
+      bucket.violations.push({
+        linter: lr.linter,
+        linterResult: lr,
+        v: { ...v, raw_file: rawFile, file },
+        file,
+        rawFile,
+        workDir: lr.work_dir,
+      });
+    }
+  }
+
+  const names = Array.from(byLinter.keys()).sort();
+  return names.map(name => {
+    const b = byLinter.get(name)!;
+    return summaryLinterNode(name, b.meta, b.violations, b.skipReason, b.errorMsg);
+  });
+}
+
+function summaryLinterNode(
+  linterName: string,
+  meta: LinterResult,
+  violations: FlatViolation[],
+  skipReason: string | undefined,
+  errorMsg: string | undefined,
+): Test {
+  // Skipped (no error, no violations).
+  if (skipReason && violations.length === 0 && !errorMsg) {
+    return {
+      name: linterName,
+      framework: 'lint',
+      kind: 'linter',
+      linter: meta,
+      linterName,
+      skipped: true,
+      passed: false,
+      failed: false,
+      message: `skipped: ${skipReason}`,
+    };
+  }
+
+  // Group violations by rule, then per-file.
+  const byRule = new Map<string, FlatViolation[]>();
+  for (const fv of violations) {
+    const key = ruleKeyFor(fv.v);
+    let list = byRule.get(key);
+    if (!list) {
+      list = [];
+      byRule.set(key, list);
+    }
+    list.push(fv);
+  }
+  const ruleOrder = Array.from(byRule.keys()).sort((a, b) => {
+    const diff = byRule.get(b)!.length - byRule.get(a)!.length;
+    return diff !== 0 ? diff : a.localeCompare(b);
+  });
+  const ruleChildren = ruleOrder.map(rule => summaryRuleNode(rule, linterName, byRule.get(rule)!));
+
+  const children: Test[] = [];
+  if (errorMsg) {
+    children.push(summaryErrorNode(linterName, errorMsg));
+  }
+  children.push(...ruleChildren);
+
+  const failed = Boolean(errorMsg) || ruleChildren.some(r => r.failed);
+  const passed = !failed && violations.length === 0;
+  return {
+    name: linterName,
+    framework: 'lint',
+    kind: 'linter',
+    linter: meta,
+    linterName,
+    children,
+    failed,
+    passed,
+    skipped: false,
+  };
+}
+
+function summaryRuleNode(rule: string, linterName: string, flats: FlatViolation[]): Test {
+  // Aggregate per file.
+  const byFile = new Map<string, { file?: string; rawFile?: string; workDir?: string; violations: Violation[] }>();
+  const fileOrder: string[] = [];
+  for (const f of flats) {
+    const key = f.file ?? '';
+    let bucket = byFile.get(key);
+    if (!bucket) {
+      bucket = { file: f.file, rawFile: f.rawFile, workDir: f.workDir, violations: [] };
+      byFile.set(key, bucket);
+      fileOrder.push(key);
+    }
+    bucket.violations.push(f.v);
+  }
+
+  const shownKeys = fileOrder.slice(0, SUMMARY_FILE_LIMIT);
+  const children: Test[] = shownKeys.map(key => {
+    const b = byFile.get(key)!;
+    const displayName = summaryFileLabel(b.file, b.violations);
+    return {
+      name: displayName,
+      framework: 'lint',
+      kind: 'lint-file',
+      file: b.file,
+      target_path: b.rawFile,
+      work_dir: b.workDir,
+      linterName,
+      ruleName: rule,
+      violations: b.violations.slice().sort((a, b) => (a.line || 0) - (b.line || 0)),
+      failed: worstSeverity(b.violations) !== 'info',
+      passed: worstSeverity(b.violations) === 'info',
+      skipped: false,
+    };
+  });
+  const remaining = fileOrder.length - shownKeys.length;
+  if (remaining > 0) {
+    children.push({
+      name: `… ${remaining} more file${remaining === 1 ? '' : 's'}`,
+      framework: 'lint',
+      kind: 'lint-file',
+      linterName,
+      ruleName: rule,
+      passed: true,
+      failed: false,
+      skipped: false,
+    });
+  }
+
+  const firstMessage = flats.find(f => f.v.message)?.v.message || '';
+  const displayName = firstMessage
+    ? `${rule} (${flats.length}) — ${firstMessage}`
+    : `${rule} (${flats.length})`;
+  return {
+    name: displayName,
+    framework: 'lint',
+    kind: 'lint-rule-group',
+    linterName,
+    ruleName: rule,
+    children,
+    failed: children.some(c => c.failed),
+    passed: children.every(c => c.passed),
+    skipped: false,
+  };
+}
+
+function summaryFileLabel(file: string | undefined, violations: Violation[]): string {
+  if (!file) return '(no file)';
+  if (violations.length > 1) return `${file} (${violations.length})`;
+  const v = violations[0];
+  if (v && v.line) {
+    return v.column ? `${file}:${v.line}:${v.column}` : `${file}:${v.line}`;
+  }
+  return file;
+}
+
+function summaryErrorNode(linterName: string, message: string): Test {
+  return {
+    name: `❌ ${firstLine(message)}`,
+    framework: 'lint',
+    kind: 'violation',
+    linterName,
+    failed: true,
+    passed: false,
+    skipped: false,
+    message,
+  };
+}
+
+function firstLine(s: string): string {
+  const idx = s.indexOf('\n');
+  return idx === -1 ? s : s.slice(0, idx);
+}
+
 function buildLinterFileTree(root: FileTreeNode, linterName: string, bucket: LinterBucket): Test[] {
   const folderNames = Array.from(root.children.keys()).sort();
   const fileNames = Array.from(root.files.keys()).sort();

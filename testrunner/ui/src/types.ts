@@ -49,6 +49,8 @@ export interface Violation {
 export interface LinterResult {
   linter: string;
   work_dir?: string;
+  command?: string;   // resolved executable, e.g. "eslint"
+  args?: string[];    // argv without the command name
   success: boolean;
   skipped?: boolean;
   timed_out?: boolean;

@@ -429,6 +429,14 @@ function LinterDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
               {lr.rule_count !== undefined && <span class="text-gray-500">{lr.rule_count} rules</span>}
             </div>
           </Section>
+          {lr.command && (
+            <Section title="Command">
+              <pre class="text-xs text-gray-800 whitespace-pre-wrap break-all font-mono bg-gray-50 rounded p-3">{formatLinterCommand(lr)}</pre>
+              {workDir && (
+                <div class="mt-1 text-xs text-gray-500 font-mono">cwd: {workDir}</div>
+              )}
+            </Section>
+          )}
           {linter && (
             <Section title="Actions">
               <div class="flex flex-wrap gap-1.5">
@@ -480,6 +488,21 @@ function LinterDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       )}
     </>
   );
+}
+
+// formatLinterCommand returns the shell-quoted argv that was executed. Args
+// containing whitespace or shell metacharacters are single-quoted so the line
+// can be copy-pasted into a terminal safely.
+function formatLinterCommand(lr: LinterResult): string {
+  if (!lr.command) return '';
+  const parts = [shellQuote(lr.command), ...(lr.args || []).map(shellQuote)];
+  return parts.join(' ');
+}
+
+function shellQuote(s: string): string {
+  if (s === '') return "''";
+  if (/^[A-Za-z0-9_./:=@%+,-]+$/.test(s)) return s;
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 function folderPattern(path: string | undefined): string {

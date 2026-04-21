@@ -3,7 +3,7 @@ import { countLintBySeverity, countLintByLinter, collectLintLinters, formatCount
 import type { FilterMode, FilterState } from '../filterState';
 import { cycleFilterState } from '../filterState';
 
-export type LintGrouping = 'linter-rule-file' | 'linter-file' | 'file-linter-rule';
+export type LintGrouping = 'linter-rule-file' | 'linter-file' | 'file-linter-rule' | 'summary';
 
 export interface LintFilters {
   severity: FilterState<Severity>;
@@ -15,7 +15,15 @@ interface Props {
   grouping: LintGrouping;
   filters: LintFilters;
   onFiltersChange: (f: LintFilters) => void;
+  onGroupingChange: (g: LintGrouping) => void;
 }
+
+const GROUPING_OPTIONS: { key: LintGrouping; label: string; icon: string }[] = [
+  { key: 'linter-rule-file', label: 'Linter · Rule · File', icon: 'codicon:list-tree' },
+  { key: 'linter-file', label: 'Linter · File', icon: 'codicon:folder' },
+  { key: 'file-linter-rule', label: 'File · Linter · Rule', icon: 'codicon:file-code' },
+  { key: 'summary', label: 'Summary', icon: 'codicon:collapse-all' },
+];
 
 const SEVERITY_DEFS: { key: Severity; label: string; badge: string; activeBg: string; activeBorder: string; icon: string }[] = [
   { key: 'error', label: 'Error', badge: 'bg-red-500', activeBg: 'bg-red-50', activeBorder: 'border-red-300', icon: 'codicon:error' },
@@ -23,7 +31,7 @@ const SEVERITY_DEFS: { key: Severity; label: string; badge: string; activeBg: st
   { key: 'info', label: 'Info', badge: 'bg-blue-400', activeBg: 'bg-blue-50', activeBorder: 'border-blue-300', icon: 'codicon:info' },
 ];
 
-export function LintFilterBar({ lint, grouping, filters, onFiltersChange }: Props) {
+export function LintFilterBar({ lint, grouping, filters, onFiltersChange, onGroupingChange }: Props) {
   const severityCounts = countLintBySeverity(lint, filters.linter);
   const linterCounts = countLintByLinter(lint, filters.severity);
   const linters = collectLintLinters(lint);
@@ -31,10 +39,22 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange }: Prop
 
   return (
     <div class="flex items-center gap-1.5 flex-wrap">
-      <span class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
-        <iconify-icon icon="codicon:list-tree" />
-        {groupingLabel(grouping)}
-      </span>
+      {GROUPING_OPTIONS.map(opt => {
+        const active = opt.key === grouping;
+        return (
+          <button
+            key={opt.key}
+            class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${active
+              ? 'bg-blue-50 border-blue-300 text-gray-900 font-medium'
+              : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+            onClick={() => onGroupingChange(opt.key)}
+            title={`Group by ${opt.label}`}
+          >
+            <iconify-icon icon={opt.icon} class="text-sm" />
+            {opt.label}
+          </button>
+        );
+      })}
 
       <span class="text-gray-300 mx-0.5">|</span>
 
@@ -95,12 +115,6 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange }: Prop
       )}
     </div>
   );
-}
-
-function groupingLabel(grouping: LintGrouping): string {
-  if (grouping === 'file-linter-rule') return 'File -> Linter -> Rule';
-  if (grouping === 'linter-file') return 'Linter -> Folder -> File';
-  return 'Linter -> Rule -> Folder -> File';
 }
 
 function triStateClasses(mode: FilterMode | undefined, includeBg: string, includeBorder: string): string {
