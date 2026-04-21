@@ -75,7 +75,8 @@ type Test struct {
 	Failed      bool          `json:"failed,omitempty"`
 	Passed      bool          `json:"passed,omitempty"`
 	Pending     bool          `json:"pending,omitempty"`
-	Cached      bool          `json:"cached,omitempty"` // True when this result came from gavel's run-cache, not a fresh run
+	Cached      bool          `json:"cached,omitempty"`  // True when this result came from gavel's run-cache, not a fresh run
+	TimedOut    bool          `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
 	// IsGinkgoBootstrap marks a Go test function whose body only invokes ginkgo's RunSpecs.
 	// These wrappers still carry pass/fail/duration for the whole suite when a Ginkgo
 	// JSON report file is unavailable, but are deduped against real specs from the
@@ -169,13 +170,17 @@ func (t Test) GetChildren() []api.TreeNode {
 func (t Test) Pretty() api.Text {
 	s := clicky.Text("")
 	textStyle := "bold"
-	if t.Skipped {
+	switch {
+	case t.TimedOut:
+		s = s.Append("⏳", "text-amber-600 font-bold")
+		textStyle = "text-amber-600"
+	case t.Skipped:
 		s = s.Append(icons.Skip, "text-orange-500")
 		textStyle = "text-yellow-500"
-	} else if t.Failed {
+	case t.Failed:
 		s = s.Append(icons.Fail, "text-red-500")
 		textStyle = "text-red-500"
-	} else {
+	default:
 		s = s.Add(icons.Pass)
 	}
 
@@ -190,6 +195,9 @@ func (t Test) Pretty() api.Text {
 	// Add duration if non-zero
 	if t.Duration > 0 {
 		s = s.Append(fmt.Sprintf("(%s)", t.Duration), "text-muted")
+	}
+	if t.TimedOut {
+		s = s.Space().Append("[timed out]", "text-amber-600 font-bold")
 	}
 
 	// Add benchmark metrics if present
