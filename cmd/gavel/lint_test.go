@@ -3,10 +3,13 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/linters/eslint"
+	"github.com/flanksource/gavel/linters/golangci"
+	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -222,4 +225,122 @@ func TestShouldSelectLinterExplicitFilesDoNotBypassConfigRequirement(t *testing.
 	if ok {
 		t.Fatal("expected nested file to be insufficient without direct cwd config or enablement")
 	}
+}
+
+func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+
+	backend := filepath.Join(root, "backend")
+	backendPkg := filepath.Join(backend, "pkg")
+	frontend := filepath.Join(root, "frontend")
+	frontendSrc := filepath.Join(frontend, "src")
+	if err := os.MkdirAll(backendPkg, 0o755); err != nil {
+		t.Fatalf("mkdir backend: %v", err)
+	}
+	if err := os.MkdirAll(frontendSrc, 0o755); err != nil {
+		t.Fatalf("mkdir frontend: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backend, "go.mod"), []byte("module example.com/backend\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(frontend, "package.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	backendFile := filepath.Join(backendPkg, "foo.go")
+	frontendFile := filepath.Join(frontendSrc, "index.ts")
+	if err := os.WriteFile(backendFile, []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("write foo.go: %v", err)
+	}
+	if err := os.WriteFile(frontendFile, []byte("export const x = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write index.ts: %v", err)
+	}
+
+	opts := LintOptions{
+		WorkDir: root,
+		Files:   []string{backendFile, frontendFile},
+	}
+
+	t.Run("go files route to go.mod root", func(t *testing.T) {
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 golangci invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != backend {
+			t.Fatalf("expected projectRoot=%q, got %q", backend, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 1 || invs[0].files[0] != filepath.Join("pkg", "foo.go") {
+			t.Fatalf("expected files=[pkg/foo.go] relative to backend, got %v", invs[0].files)
+		}
+	})
+
+	t.Run("ts files route to package.json root", func(t *testing.T) {
+		invs := resolveLinterInvocations(eslint.NewESLint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 eslint invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != frontend {
+			t.Fatalf("expected projectRoot=%q, got %q", frontend, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 1 || invs[0].files[0] != filepath.Join("src", "index.ts") {
+			t.Fatalf("expected files=[src/index.ts] relative to frontend, got %v", invs[0].files)
+		}
+	})
+
+	t.Run("non-rooted linter keeps workdir and files", func(t *testing.T) {
+		invs := resolveLinterInvocations(markdownlint.NewMarkdownlint(root), opts)
+		if len(invs) != 1 {
+			t.Fatalf("expected 1 markdownlint invocation, got %d", len(invs))
+		}
+		if invs[0].projectRoot != root {
+			t.Fatalf("expected projectRoot=%q, got %q", root, invs[0].projectRoot)
+		}
+		if len(invs[0].files) != 2 {
+			t.Fatalf("expected 2 files passed through unchanged, got %d", len(invs[0].files))
+		}
+	})
+
+	t.Run("no files: fans out across every discovered project root", func(t *testing.T) {
+		// Add a second go.mod under tools/ so golangci has two roots to find.
+		tools := filepath.Join(root, "tools")
+		if err := os.MkdirAll(tools, 0o755); err != nil {
+			t.Fatalf("mkdir tools: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(tools, "go.mod"), []byte("module example.com/tools\n"), 0o644); err != nil {
+			t.Fatalf("write tools/go.mod: %v", err)
+		}
+
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), LintOptions{WorkDir: root})
+		if len(invs) != 2 {
+			t.Fatalf("expected 2 golangci invocations (backend, tools), got %d", len(invs))
+		}
+		got := []string{invs[0].projectRoot, invs[1].projectRoot}
+		sort.Strings(got)
+		want := []string{backend, tools}
+		sort.Strings(want)
+		if got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("expected roots=%v, got %v", want, got)
+		}
+		for _, inv := range invs {
+			if len(inv.files) != 0 {
+				t.Fatalf("expected empty files for whole-root invocation, got %v", inv.files)
+			}
+		}
+	})
+
+	t.Run("files with no project root are dropped", func(t *testing.T) {
+		orphan := filepath.Join(root, "orphan.go")
+		if err := os.WriteFile(orphan, []byte("package orphan\n"), 0o644); err != nil {
+			t.Fatalf("write orphan: %v", err)
+		}
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), LintOptions{
+			WorkDir: root,
+			Files:   []string{orphan},
+		})
+		if len(invs) != 0 {
+			t.Fatalf("expected 0 invocations for file without go.mod, got %+v", invs)
+		}
+	})
 }
