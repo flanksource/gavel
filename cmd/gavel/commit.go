@@ -38,9 +38,10 @@ to skip hooks.
 
 Before hooks run, staged files are checked against commit.gitignore patterns
 (typically set in ~/.gavel.yaml). Matches trigger a per-file prompt to
-(1) unstage and append the file to .gitignore, (2) allow it via commit.allow
-in the repo's .gavel.yaml, or (3) cancel. --ignore-check=fail|skip overrides
-the prompt; non-TTY runs auto-escalate prompt -> fail.
+(1) append the matched pattern to the repo .gitignore, (2) append the file's
+folder, (3) append the exact file, (4) allow it via commit.allow in the repo's
+.gavel.yaml, or (5) cancel. --ignore-check=fail|skip overrides the prompt;
+non-TTY runs auto-escalate prompt -> fail.
 
 Staged go.mod / go.work / package.json files are also scanned for local
 references that escape the git root (go.mod replace, go.work use,

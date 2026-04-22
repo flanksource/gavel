@@ -121,6 +121,55 @@ func TestRunGitIgnoreCheck_Unstage(t *testing.T) {
 	assert.NotContains(t, staged, "debug.log")
 }
 
+func TestRunGitIgnoreCheck_UnstagePattern(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "debug.log", "log content\n")
+	gitRun(t, repo, "add", "debug.log")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"debug.log"},
+		Config: verify.CommitConfig{
+			GitIgnore: []string{"*.log"},
+		},
+		Decider: staticDecider(DecisionGitIgnorePattern),
+		SaveDir: repo,
+		Mode:    IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"debug.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"*.log"}, outcome.GitIgnored)
+
+	gitignoreBody := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Contains(t, gitignoreBody, "*.log")
+}
+
+func TestRunGitIgnoreCheck_UnstageFolder(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "logs"), 0o755))
+	writeFile(t, repo, "logs/debug.log", "log content\n")
+	gitRun(t, repo, "add", "logs/debug.log")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"logs/debug.log"},
+		Config: verify.CommitConfig{
+			GitIgnore: []string{"*.log"},
+		},
+		Decider: staticDecider(DecisionGitIgnoreFolder),
+		SaveDir: repo,
+		Mode:    IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"logs/debug.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"logs/"}, outcome.GitIgnored)
+
+	gitignoreBody := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Contains(t, gitignoreBody, "logs/")
+}
+
 func TestRunGitIgnoreCheck_Allow(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, "secrets.env", "SECRET=1\n")
@@ -347,6 +396,28 @@ func TestAppendGitIgnore_SkipsDuplicate(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	require.NoError(t, err)
 	assert.Equal(t, "x.log\n", string(body))
+}
+
+func TestGitIgnoreChoices(t *testing.T) {
+	t.Run("nested file offers pattern, folder, file, allow, cancel", func(t *testing.T) {
+		choices := gitIgnoreChoices(Violation{File: "logs/debug.log", Pattern: "*.log"})
+		require.Len(t, choices, 5)
+		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
+		assert.Equal(t, DecisionGitIgnoreFolder, choices[1].Decision)
+		assert.Equal(t, DecisionGitIgnoreFile, choices[2].Decision)
+		assert.Equal(t, DecisionAllow, choices[3].Decision)
+		assert.Equal(t, DecisionCancel, choices[4].Decision)
+		assert.Contains(t, choices[1].Text, `"logs/"`)
+	})
+
+	t.Run("root file omits folder option", func(t *testing.T) {
+		choices := gitIgnoreChoices(Violation{File: "debug.log", Pattern: "*.log"})
+		require.Len(t, choices, 4)
+		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
+		assert.Equal(t, DecisionGitIgnoreFile, choices[1].Decision)
+		assert.Equal(t, DecisionAllow, choices[2].Decision)
+		assert.Equal(t, DecisionCancel, choices[3].Decision)
+	})
 }
 
 func staticDecider(d Decision) Decider {

@@ -22,6 +22,7 @@ func TestNewModel_WithOptions(t *testing.T) {
 	assert.Equal(t, "Pick:", m.header)
 	assert.Equal(t, 5, m.height)
 	assert.Equal(t, 1, m.limit)
+	assert.True(t, m.singleSelect)
 }
 
 func TestModel_NavigationWraps(t *testing.T) {
@@ -73,6 +74,39 @@ func TestModel_SubmitReturnsSelected(t *testing.T) {
 	m = updated.(model)
 	assert.True(t, m.submitted)
 	assert.True(t, m.items[0].selected)
+	assert.True(t, m.items[1].selected)
+	assert.False(t, m.items[2].selected)
+}
+
+func TestModel_SingleSelectToggleReplacesSelection(t *testing.T) {
+	m := newModel([]string{"a", "b", "c"}, WithLimit(1))
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: ' '})
+	m = updated.(model)
+	assert.True(t, m.items[0].selected)
+	assert.False(t, m.items[1].selected)
+	assert.Equal(t, 1, m.numSelected)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'j'})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: ' '})
+	m = updated.(model)
+	assert.False(t, m.items[0].selected)
+	assert.True(t, m.items[1].selected)
+	assert.False(t, m.items[2].selected)
+	assert.Equal(t, 1, m.numSelected)
+}
+
+func TestModel_SingleSelectSubmitChoosesCurrentItem(t *testing.T) {
+	m := newModel([]string{"a", "b", "c"}, WithLimit(1))
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(model)
+
+	assert.True(t, m.submitted)
+	assert.False(t, m.items[0].selected)
 	assert.True(t, m.items[1].selected)
 	assert.False(t, m.items[2].selected)
 }
@@ -137,6 +171,16 @@ func TestModel_ViewWithoutDetail(t *testing.T) {
 	assert.Contains(t, content, "Test:")
 	assert.Contains(t, content, "item1")
 	assert.Contains(t, content, "item2")
+}
+
+func TestModel_ViewSingleSelectUsesRadioMarkers(t *testing.T) {
+	m := newModel([]string{"item1", "item2"}, WithHeader("Pick one:"), WithLimit(1))
+
+	view := m.View()
+	content := view.Content
+	assert.Contains(t, content, "( ) item1")
+	assert.Contains(t, content, "( ) item2")
+	assert.NotContains(t, content, "[ ] item1")
 }
 
 func TestModel_WindowSizeMsg(t *testing.T) {

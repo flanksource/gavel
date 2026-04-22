@@ -39,12 +39,17 @@ type keymap struct {
 
 func (k keymap) FullHelp() [][]key.Binding { return nil }
 func (k keymap) ShortHelp() []key.Binding {
-	return []key.Binding{
-		k.Toggle,
+	out := []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "navigate")),
 		k.Submit,
-		k.ToggleAll,
 	}
+	if k.Toggle.Enabled() {
+		out = append([]key.Binding{k.Toggle}, out...)
+	}
+	if k.ToggleAll.Enabled() {
+		out = append(out, k.ToggleAll)
+	}
+	return out
 }
 
 type model struct {
@@ -52,6 +57,7 @@ type model struct {
 	items        []item
 	quitting     bool
 	submitted    bool
+	singleSelect bool
 	index        int
 	limit        int // 0 = unlimited
 	numSelected  int
@@ -73,7 +79,7 @@ type model struct {
 
 const minDetailWidth = 100
 
-func defaultKeymap(multiSelect bool) keymap {
+func defaultKeymap(singleSelect bool) keymap {
 	km := keymap{
 		Down:  key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
 		Up:    key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
@@ -88,14 +94,17 @@ func defaultKeymap(multiSelect bool) keymap {
 		),
 		Toggle: key.NewBinding(
 			key.WithKeys("space", "tab", "x"),
-			key.WithHelp("x", "toggle"),
+			key.WithHelp("space", "toggle"),
 			key.WithDisabled(),
 		),
 		Abort:  key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "abort")),
 		Quit:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "quit")),
 		Submit: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "submit")),
 	}
-	if multiSelect {
+	if singleSelect {
+		km.Toggle.SetEnabled(true)
+		km.Toggle.SetHelp("space", "select")
+	} else {
 		km.Toggle.SetEnabled(true)
 		km.ToggleAll.SetEnabled(true)
 	}
@@ -123,8 +132,8 @@ func newModel(items []string, opts ...Option) model {
 		opt(&m)
 	}
 
-	multiSelect := m.limit != 1
-	m.keymap = defaultKeymap(multiSelect)
+	m.singleSelect = m.limit == 1
+	m.keymap = defaultKeymap(m.singleSelect)
 
 	if m.limit == 0 {
 		m.limit = len(items)
@@ -195,7 +204,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case key.Matches(msg, km.Toggle):
-			if m.limit == 1 {
+			if m.singleSelect {
+				m = m.selectOne(m.index)
 				break
 			}
 			if m.items[m.index].selected {
@@ -209,8 +219,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, km.Submit):
 			m.quitting = true
-			if m.limit == 1 && m.numSelected < 1 {
-				m.items[m.index].selected = true
+			if m.singleSelect {
+				m = m.selectOne(m.index)
 			}
 			m.submitted = true
 			return m, tea.Quit
@@ -220,6 +230,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.paginator, cmd = m.paginator.Update(msg)
 	return m, cmd
+}
+
+func (m model) selectOne(index int) model {
+	if index < 0 || index >= len(m.items) {
+		return m
+	}
+	for i := range m.items {
+		m.items[i].selected = i == index
+		if !m.items[i].selected {
+			m.items[i].order = 0
+		}
+	}
+	m.items[index].order = 0
+	m.numSelected = 1
+	m.currentOrder = 1
+	return m
 }
 
 func (m model) selectAll() model {
@@ -283,6 +309,11 @@ func (m model) renderList() string {
 	selectedPrefix := "[x] "
 	unselectedPrefix := "[ ] "
 	cursorPrefix := "[ ] "
+	if m.singleSelect {
+		selectedPrefix = "(*) "
+		unselectedPrefix = "( ) "
+		cursorPrefix = "( ) "
+	}
 
 	for i, it := range m.items[start:end] {
 		if i == m.index%m.height {
@@ -370,7 +401,7 @@ func truncateHeight(s string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n")
 }
 
-// Run presents an interactive multi-select list and returns indices of selected items.
+// Run presents an interactive chooser and returns indices of selected items.
 // Returns nil slice if user cancels (Esc/Ctrl+C).
 func Run(items []string, opts ...Option) ([]int, error) {
 	m := newModel(items, opts...)
