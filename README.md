@@ -601,6 +601,20 @@ gavel repomap view .
 gavel repomap get src/main.go
 ```
 
+#### `gavel config`
+
+View the merged `.gavel.yaml` for a path and which files contributed to it.
+
+```bash
+gavel config
+gavel config ./pkg/api
+gavel config ./cmd/gavel/main.go
+gavel config --format yaml ./cmd/gavel/main.go
+```
+
+Resolution order is: built-in defaults, `~/.gavel.yaml`, `<git-root>/.gavel.yaml`,
+and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a file).
+
 ### Task Management
 
 #### `gavel todos`
@@ -636,6 +650,9 @@ Supported formats: `json`, `html`, `text` (default).
 ### `.gavel.yaml`
 
 Project-level configuration placed at the repository root. Gavel also loads `~/.gavel.yaml` for user-level defaults and merges them (repo settings win).
+
+Use `gavel config [path]` to inspect the merged result for any directory or file path.
+A full annotated example lives in `gavel.yaml.example` and is also rendered in `gavel config --help`.
 
 ```yaml
 verify:
