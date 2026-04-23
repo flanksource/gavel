@@ -1,12 +1,16 @@
 package status
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
+	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/snapshots"
@@ -172,6 +176,98 @@ func TestGatherFromRepo(t *testing.T) {
 	assert.Equal(t, "go", byPath["staged.go"].FileMap.Language)
 }
 
+func TestGatherWithAIFileSummaries(t *testing.T) {
+	repo := initStatusRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "staged.go"), []byte("package x\n\nfunc Added() {}\n"), 0o644))
+	gitRun(t, repo, "add", "staged.go")
+
+	prev := summarizeFileChangeWithAIFunc
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+		return "add helper function", nil
+	}
+	t.Cleanup(func() {
+		summarizeFileChangeWithAIFunc = prev
+	})
+
+	result, err := Gather(repo, Options{
+		NoRepomap: true,
+		Agent:     stubStatusAgent{},
+		Context:   context.Background(),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "add helper function", result.Files[0].AISummary)
+}
+
+func TestSummarizeFileChangeWithAISendsDiffOnlyPrompt(t *testing.T) {
+	restoreIO := stubAISummaryIO(
+		func(string, string, bool) (string, error) {
+			return "diff --git a/a.go b/a.go\n+added helper\n", nil
+		},
+		func(string, string) (string, error) {
+			t.Fatal("readUntrackedStatusFileFunc should not be called for tracked files")
+			return "", nil
+		},
+	)
+	defer restoreIO()
+
+	agent := &capturePromptAgent{}
+	summary, err := summarizeFileChangeWithAI(context.Background(), "", agent, FileStatus{
+		Path:  "a.go",
+		State: StateStaged,
+		Adds:  3,
+		Dels:  1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tighten handler flow", summary)
+	assert.Contains(t, agent.prompt, "Staged diff:")
+	assert.NotContains(t, agent.prompt, "File metadata:")
+	assert.NotContains(t, agent.prompt, "path:")
+	assert.NotContains(t, agent.prompt, "state:")
+	assert.NotContains(t, agent.prompt, "adds:")
+	assert.NotContains(t, agent.prompt, "dels:")
+}
+
+func TestStreamAISummariesPreservesFileOrdering(t *testing.T) {
+	prev := summarizeFileChangeWithAIFunc
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+		switch file.Path {
+		case "slow.go":
+			time.Sleep(40 * time.Millisecond)
+			return "slow summary", nil
+		case "fast.go":
+			return "fast summary", nil
+		default:
+			return "", nil
+		}
+	}
+	t.Cleanup(func() {
+		summarizeFileChangeWithAIFunc = prev
+	})
+
+	result := &Result{
+		Files: []FileStatus{
+			{Path: "slow.go", State: StateStaged, StagedKind: KindModified},
+			{Path: "fast.go", State: StateStaged, StagedKind: KindModified},
+		},
+	}
+	result.PrepareAISummaries()
+
+	var running int
+	for update := range StreamAISummaries(context.Background(), "", stubStatusAgent{}, result.Files, 2) {
+		if update.Status == AISummaryStatusRunning {
+			running++
+		}
+		result.ApplyAISummaryUpdate(update)
+	}
+
+	assert.Equal(t, 2, running)
+	assert.Equal(t, "slow summary", result.Files[0].AISummary)
+	assert.Equal(t, "fast summary", result.Files[1].AISummary)
+	assert.Equal(t, AISummaryStatusDone, result.Files[0].AIStatus)
+	assert.Equal(t, AISummaryStatusDone, result.Files[1].AIStatus)
+}
+
 func TestPrettyCleanRepo(t *testing.T) {
 	r := &Result{Branch: "main"}
 	out := stripANSI(r.Pretty().ANSI())
@@ -223,6 +319,89 @@ func TestPrettyIncludesRepomapItems(t *testing.T) {
 	assert.Contains(t, clean, "iac")
 	assert.Contains(t, clean, "k8s:3")
 	assert.Contains(t, clean, "viol:2")
+}
+
+func TestPrettyIncludesAISummary(t *testing.T) {
+	r := &Result{
+		Branch: "main",
+		Files: []FileStatus{{
+			Path:       "a.go",
+			State:      StateStaged,
+			StagedKind: KindModified,
+			AISummary:  "tighten handler error handling",
+		}},
+	}
+	clean := stripANSI(r.Pretty().ANSI())
+	assert.Contains(t, clean, "tighten handler error handling")
+}
+
+func TestPrettyShowsAISummaryStatuses(t *testing.T) {
+	r := &Result{
+		Branch: "main",
+		Files: []FileStatus{
+			{Path: "pending.go", State: StateStaged, StagedKind: KindModified, AIStatus: AISummaryStatusPending},
+			{Path: "running.go", State: StateStaged, StagedKind: KindModified, AIStatus: AISummaryStatusRunning},
+			{Path: "failed.go", State: StateStaged, StagedKind: KindModified, AIStatus: AISummaryStatusFailed},
+			{Path: "done.go", State: StateStaged, StagedKind: KindModified, AIStatus: AISummaryStatusDone, AISummary: "refactor handler flow"},
+		},
+	}
+
+	clean := stripANSI(r.Pretty().ANSI())
+	assert.Contains(t, clean, "⏳ ai")
+	assert.Contains(t, clean, "⟳ ai")
+	assert.Contains(t, clean, "⚠ ai summary failed")
+	assert.Contains(t, clean, "refactor handler flow")
+}
+
+func TestPrettyGroupsFilesByScopeWithTestsLast(t *testing.T) {
+	r := &Result{
+		Branch: "main",
+		Files: []FileStatus{
+			{
+				Path:       "z_test.go",
+				State:      StateStaged,
+				StagedKind: KindModified,
+				FileMap:    &repomap.FileMap{Language: "go", Scopes: repomap.Scopes{repomap.ScopeTypeTest}},
+			},
+			{
+				Path:       "docs.md",
+				State:      StateStaged,
+				StagedKind: KindModified,
+				FileMap:    &repomap.FileMap{Language: "markdown", Scopes: repomap.Scopes{repomap.ScopeTypeDocs}},
+			},
+			{
+				Path:       "app.go",
+				State:      StateStaged,
+				StagedKind: KindModified,
+				FileMap:    &repomap.FileMap{Language: "go", Scopes: repomap.Scopes{repomap.ScopeTypeApp, repomap.ScopeTypeSecurity}},
+			},
+		},
+	}
+
+	clean := stripANSI(r.Pretty().ANSI())
+
+	appHeader := strings.Index(clean, "\n go · app · security\n")
+	docsHeader := strings.Index(clean, "\n markdown · docs\n")
+	testHeader := strings.Index(clean, "\n go · test\n")
+	appRow := strings.Index(clean, "app.go")
+	docsRow := strings.Index(clean, "docs.md")
+	testRow := strings.Index(clean, "z_test.go")
+
+	require.NotEqual(t, -1, appHeader)
+	require.NotEqual(t, -1, docsHeader)
+	require.NotEqual(t, -1, testHeader)
+	require.NotEqual(t, -1, appRow)
+	require.NotEqual(t, -1, docsRow)
+	require.NotEqual(t, -1, testRow)
+
+	assert.Less(t, appHeader, testHeader)
+	assert.Less(t, docsHeader, testHeader)
+	assert.Less(t, appHeader, appRow)
+	assert.Less(t, docsHeader, docsRow)
+	assert.Less(t, testHeader, testRow)
+	assert.Equal(t, 1, strings.Count(clean, "go · app · security"))
+	assert.Equal(t, 1, strings.Count(clean, "markdown · docs"))
+	assert.Equal(t, 1, strings.Count(clean, "go · test"))
 }
 
 func TestGatherWithFreshSnapshot(t *testing.T) {
@@ -362,6 +541,58 @@ func stubFileMap(fn func(path, commit string) (*repomap.FileMap, error)) func() 
 	fetchFileMapFunc = fn
 	return func() {
 		fetchFileMapFunc = previous
+	}
+}
+
+type stubStatusAgent struct{}
+
+func (stubStatusAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
+func (stubStatusAgent) GetConfig() clickyai.AgentConfig {
+	return clickyai.AgentConfig{}
+}
+func (stubStatusAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
+func (stubStatusAgent) ExecutePrompt(context.Context, clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
+	return nil, nil
+}
+func (stubStatusAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
+	return nil, nil
+}
+func (stubStatusAgent) GetCosts() clickyai.Costs { return clickyai.Costs{} }
+func (stubStatusAgent) Close() error             { return nil }
+
+type capturePromptAgent struct {
+	prompt string
+}
+
+func (a *capturePromptAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
+func (a *capturePromptAgent) GetConfig() clickyai.AgentConfig {
+	return clickyai.AgentConfig{}
+}
+func (a *capturePromptAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
+func (a *capturePromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
+	a.prompt = req.Prompt
+	if schema, ok := req.StructuredOutput.(*fileSummarySchema); ok {
+		schema.Summary = "tighten handler flow"
+	}
+	return &clickyai.PromptResponse{}, nil
+}
+func (a *capturePromptAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
+	return nil, nil
+}
+func (a *capturePromptAgent) GetCosts() clickyai.Costs { return clickyai.Costs{} }
+func (a *capturePromptAgent) Close() error             { return nil }
+
+func stubAISummaryIO(
+	diff func(workDir, path string, cached bool) (string, error),
+	read func(workDir, path string) (string, error),
+) func() {
+	prevDiff := diffForStatusFileFunc
+	prevRead := readUntrackedStatusFileFunc
+	diffForStatusFileFunc = diff
+	readUntrackedStatusFileFunc = read
+	return func() {
+		diffForStatusFileFunc = prevDiff
+		readUntrackedStatusFileFunc = prevRead
 	}
 }
 

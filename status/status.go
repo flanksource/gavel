@@ -1,6 +1,7 @@
 package status
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	clickyai "github.com/flanksource/clicky/ai"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/repomap"
 )
 
@@ -42,6 +45,9 @@ type FileStatus struct {
 	WorkKind     ChangeKind
 	Adds         int
 	Dels         int
+	AISummary    string
+	AIError      string
+	AIStatus     AISummaryStatus
 	FileMap      *repomap.FileMap
 	RepomapError error
 	TestStatus   TestStatus
@@ -71,7 +77,10 @@ type Result struct {
 }
 
 type Options struct {
-	NoRepomap bool
+	NoRepomap    bool
+	Agent        clickyai.Agent  `json:"-"`
+	Context      context.Context `json:"-"`
+	AIMaxWorkers int             `json:"-"`
 }
 
 // fetchFileMapFunc is the indirection point for repomap lookups so tests can
@@ -79,8 +88,26 @@ type Options struct {
 var fetchFileMapFunc = repomap.GetFileMap
 
 func Gather(workDir string, opts Options) (*Result, error) {
+	result, err := GatherBase(workDir, opts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Agent == nil {
+		return result, nil
+	}
+
+	prompting.Prepare()
+	result.PrepareAISummaries()
+	for update := range StreamAISummaries(opts.Context, workDir, opts.Agent, result.Files, opts.AIMaxWorkers) {
+		result.ApplyAISummaryUpdate(update)
+	}
+
+	return result, nil
+}
+
+func GatherBase(workDir string, opts Options) (*Result, error) {
 	if workDir == "" {
-		return nil, errors.New("status.Gather: workDir is required")
+		return nil, errors.New("status.GatherBase: workDir is required")
 	}
 
 	branch, err := currentBranch(workDir)
