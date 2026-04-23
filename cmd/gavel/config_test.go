@@ -8,8 +8,8 @@ import (
 )
 
 func TestConfigHelpIncludesExample(t *testing.T) {
-	if !strings.Contains(gaveldocs.GavelConfigExample, "linkedDeps:") {
-		t.Fatalf("embedded config example is missing linkedDeps section:\n%s", gaveldocs.GavelConfigExample)
+	if !strings.Contains(gaveldocs.GavelConfigExample, "precommit:") {
+		t.Fatalf("embedded config example is missing precommit section:\n%s", gaveldocs.GavelConfigExample)
 	}
 
 	cmd, _, err := rootCmd.Find([]string{"config"})
@@ -22,7 +22,7 @@ func TestConfigHelpIncludesExample(t *testing.T) {
 		"UBER EXAMPLE",
 		"gavel.yaml.example",
 		"verify:",
-		"linkedDeps:",
+		"precommit:",
 		"fixtures:",
 		"secrets:",
 	} {

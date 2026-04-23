@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/repomap"
 )
 
@@ -72,6 +73,7 @@ func runAIRecommendation(model, repoRoot, configPath string, debug bool) error {
 
 	logger.V(1).Infof("exec: %s %s", name, strings.Join(args, " "))
 
+	prompting.Prepare()
 	proc := clicky.Exec(name, args...).
 		WithCwd(repoRoot).
 		WithTimeout(3*time.Minute).

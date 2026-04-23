@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,19 +74,64 @@ type CommitHook struct {
 	Files []string `yaml:"files,omitempty" json:"files,omitempty"`
 }
 
+type CheckMode string
+
+func (m CheckMode) String() string {
+	return string(m)
+}
+
+func (m *CheckMode) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*m = ""
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*m = "skip"
+		return nil
+	}
+	if bytes.Equal(data, []byte("true")) {
+		return fmt.Errorf("expected mode string or false, got true")
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	*m = CheckMode(s)
+	return nil
+}
+
 type CommitConfig struct {
-	Model      string           `yaml:"model,omitempty" json:"model,omitempty"`
-	Hooks      []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	GitIgnore  []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
-	Allow      []string         `yaml:"allow,omitempty" json:"allow,omitempty"`
-	LinkedDeps LinkedDepsConfig `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
+	Model         string              `yaml:"model,omitempty" json:"model,omitempty"`
+	Hooks         []CommitHook        `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	GitIgnore     []string            `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
+	Allow         []string            `yaml:"allow,omitempty" json:"allow,omitempty"`
+	Precommit     PrecommitConfig     `yaml:"precommit,omitempty" json:"precommit,omitempty"`
+	LinkedDeps    LinkedDepsConfig    `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
+	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
+}
+
+// PrecommitConfig configures the combined pre-commit gate for commit.gitignore
+// and linked dependency checks. Mode is "prompt" (default), "fail", "skip",
+// or false (alias for skip).
+type PrecommitConfig struct {
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // LinkedDepsConfig configures the pre-commit check that blocks go.mod
 // replace directives and package.json file:/link: references pointing
-// outside the git root. Mode is "prompt" (default), "fail", or "skip".
+// outside the git root. This remains for backward-compatible config loading;
+// new config should use commit.precommit.mode.
 type LinkedDepsConfig struct {
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
+}
+
+// CompatibilityConfig configures the AI-powered pre-commit warning that
+// surfaces removed functionality and backward compatibility issues. Mode is
+// "skip" (default), "prompt", "fail", or false (alias for skip).
+type CompatibilityConfig struct {
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // HookStep is a single shell command rendered into the SSH post-receive hook.
@@ -306,6 +353,10 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	return base
 }
 
+func MergeGavelConfig(base, override GavelConfig) GavelConfig {
+	return mergeGavelConfig(base, override)
+}
+
 func resolveGavelConfigTarget(path string) (string, string, error) {
 	if path == "" {
 		path = "."
@@ -402,8 +453,14 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	base.GitIgnore = dedupStrings(append(base.GitIgnore, override.GitIgnore...))
 	base.Allow = dedupStrings(append(base.Allow, override.Allow...))
+	if override.Precommit.Mode != "" {
+		base.Precommit.Mode = override.Precommit.Mode
+	}
 	if override.LinkedDeps.Mode != "" {
 		base.LinkedDeps.Mode = override.LinkedDeps.Mode
+	}
+	if override.Compatibility.Mode != "" {
+		base.Compatibility.Mode = override.Compatibility.Mode
 	}
 	return base
 }

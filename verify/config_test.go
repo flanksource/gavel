@@ -460,16 +460,40 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 		assert.Equal(t, []string{"ok.log"}, out.Allow)
 	})
 
+	t.Run("precommit mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{Precommit: PrecommitConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{Precommit: PrecommitConfig{Mode: "fail"}})
+		assert.Equal(t, CheckMode("fail"), out.Precommit.Mode)
+	})
+
+	t.Run("precommit empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{Precommit: PrecommitConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, CheckMode("skip"), out.Precommit.Mode)
+	})
+
 	t.Run("linkedDeps mode override wins when non-empty", func(t *testing.T) {
 		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "prompt"}}
 		out := MergeCommitConfig(base, CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "fail"}})
-		assert.Equal(t, "fail", out.LinkedDeps.Mode)
+		assert.Equal(t, CheckMode("fail"), out.LinkedDeps.Mode)
 	})
 
 	t.Run("linkedDeps empty override preserves base mode", func(t *testing.T) {
 		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "skip"}}
 		out := MergeCommitConfig(base, CommitConfig{})
-		assert.Equal(t, "skip", out.LinkedDeps.Mode)
+		assert.Equal(t, CheckMode("skip"), out.LinkedDeps.Mode)
+	})
+
+	t.Run("compatibility mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{Compatibility: CompatibilityConfig{Mode: "fail"}})
+		assert.Equal(t, CheckMode("fail"), out.Compatibility.Mode)
+	})
+
+	t.Run("compatibility empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, CheckMode("skip"), out.Compatibility.Mode)
 	})
 }
 
@@ -483,12 +507,15 @@ commit:
     - "*.log"
   allow:
     - "keep.log"
+  precommit:
+    mode: false
 `), 0o644))
 
 		cfg, err := LoadSingleGavelConfig(path)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"*.log"}, cfg.Commit.GitIgnore)
 		assert.Equal(t, []string{"keep.log"}, cfg.Commit.Allow)
+		assert.Equal(t, CheckMode("skip"), cfg.Commit.Precommit.Mode)
 	})
 
 	t.Run("missing file returns os.ErrNotExist", func(t *testing.T) {

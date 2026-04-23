@@ -28,57 +28,6 @@ type ConfigResult struct {
 	Merged     verify.GavelConfig         `json:"merged" yaml:"merged"`
 }
 
-func (r ConfigResult) Pretty() api.Text {
-	const (
-		heading = "font-bold text-purple-600"
-		label   = "text-cyan-600 font-bold"
-		muted   = "text-muted"
-		path    = "text-yellow-500"
-		code    = "font-mono"
-	)
-
-	t := clicky.Text("gavel config", heading).Space().
-		Append("— merged .gavel.yaml for a path with source provenance", muted).
-		NewLine().NewLine().
-		Append("TARGET", heading).NewLine().
-		Append("  path", label).Append("  ").Append(r.TargetPath, path).NewLine().
-		Append("  config dir", label).Append("  ").Append(r.TargetDir, path).NewLine()
-
-	if r.GitRoot != "" {
-		t = t.Append("  git root", label).Append("  ").Append(r.GitRoot, path).NewLine()
-	} else {
-		t = t.Append("  git root", label).Append("  ").Append("<none>", muted).NewLine()
-	}
-
-	t = t.NewLine().
-		Append("LAYERS", heading).NewLine().
-		Append("  0. ", path).Append("built-in defaults", label).NewLine()
-
-	if len(r.Sources) == 0 {
-		t = t.Append("  no .gavel.yaml files found for this path", muted).NewLine()
-	} else {
-		for i, source := range r.Sources {
-			body := source.Raw
-			if strings.TrimSpace(body) == "" {
-				body = prettyYAML(source.Config)
-			}
-			t = t.Append(fmt.Sprintf("  %d. ", i+1), path).
-				Append(configOriginLabel(source.Origin), label).
-				Append("  ").
-				Append(source.Path, path).
-				NewLine().
-				Append(indentBlock(body), code).
-				NewLine()
-		}
-	}
-
-	t = t.NewLine().
-		Append("MERGED CONFIG", heading).NewLine().
-		Append(indentBlock(prettyYAML(r.Merged)), code)
-
-	return t
-}
-
 func init() {
 	configCmd := clicky.AddNamedCommand("config", rootCmd, ConfigOptions{}, runConfig)
 	configCmd.Use = "config [path]"
@@ -136,13 +85,15 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  2. ", flag).Append("<git-root>/.gavel.yaml", code).Append(" when the target is inside a git repo", muted).NewLine().
 		Append("  3. ", flag).Append("<target-dir>/.gavel.yaml", code).Append(" or the parent directory when the target path is a file", muted).NewLine().NewLine().
 		Append("OUTPUT", heading).NewLine().
-		Append("  pretty output shows the target path, every applied layer, and the merged YAML", muted).NewLine().
-		Append("  use ", muted).Append("--format json", flag).Append(" or ", muted).Append("--format yaml", flag).Append(" for machine-readable output", muted).NewLine().NewLine().
+		Append("  interactive output shows merged YAML with comments for non-git-root sources", muted).NewLine().
+		Append("  redirected output writes merged YAML only", muted).NewLine().
+		Append("  use ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" for machine-readable merged config", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  ").Append("gavel config", code).Append("                         inspect config for the current directory", muted).NewLine().
 		Append("  ").Append("gavel config ./pkg/api", code).Append("               inspect config for a nested directory", muted).NewLine().
 		Append("  ").Append("gavel config ./cmd/gavel/main.go", code).Append("   inspect config for a specific file path", muted).NewLine().
-		Append("  ").Append("gavel config --format yaml", code).Append("          emit the trace and merged config as YAML", muted).NewLine().
+		Append("  ").Append("gavel config --yaml", code).Append("                 emit merged config as YAML", muted).NewLine().
+		Append("  ").Append("gavel config > merged.gavel.yaml", code).Append("      write merged YAML without source comments", muted).NewLine().
 		Append("  ").Append("gavel --cwd ../repo config src/app.ts", code).Append("  resolve a relative path from another working tree", muted).NewLine().NewLine().
 		Append("UBER EXAMPLE", heading).NewLine().
 		Append("  bundled from ", muted).Append("gavel.yaml.example", code).Append(" so the file and help stay in sync", muted).NewLine().
