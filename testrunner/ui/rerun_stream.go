@@ -19,7 +19,7 @@ type OutputLine struct {
 type RerunOutputBuffer struct {
 	mu      sync.Mutex
 	lines   []OutputLine
-	status  string // "running", "success", "failed"
+	status  string // "running", "success", "failed", "canceled"
 	command string
 	updated chan struct{}
 }
@@ -66,11 +66,24 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 // Finish marks the buffer as done with the given status.
 func (b *RerunOutputBuffer) Finish(success bool) {
 	b.mu.Lock()
+	if b.status == "canceled" {
+		b.mu.Unlock()
+		b.notify()
+		return
+	}
 	if success {
 		b.status = "success"
 	} else {
 		b.status = "failed"
 	}
+	b.mu.Unlock()
+	b.notify()
+}
+
+// Cancel marks the buffer as canceled by the user.
+func (b *RerunOutputBuffer) Cancel() {
+	b.mu.Lock()
+	b.status = "canceled"
 	b.mu.Unlock()
 	b.notify()
 }

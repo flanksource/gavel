@@ -25,9 +25,12 @@ type SnapshotGit struct {
 }
 
 type SnapshotStatus struct {
-	Running              bool `json:"running"`
-	LintRun              bool `json:"lint_run,omitempty"`
-	DiagnosticsAvailable bool `json:"diagnostics_available,omitempty"`
+	Running              bool   `json:"running"`
+	LintRun              bool   `json:"lint_run,omitempty"`
+	DiagnosticsAvailable bool   `json:"diagnostics_available,omitempty"`
+	StopSupported        bool   `json:"stop_supported,omitempty"`
+	Stopped              bool   `json:"stopped,omitempty"`
+	StopMessage          string `json:"stop_message,omitempty"`
 }
 
 type Snapshot struct {

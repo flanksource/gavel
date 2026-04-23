@@ -1,7 +1,9 @@
 package testui
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -58,11 +60,17 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	err := s.rerunFn(req, buf)
-	buf.Finish(err == nil)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			buf.Cancel()
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		buf.Finish(false)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	buf.Finish(true)
 	w.WriteHeader(http.StatusAccepted)
 }
 

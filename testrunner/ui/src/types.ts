@@ -15,6 +15,8 @@ export interface Test {
   passed?: boolean;
   pending?: boolean;
   timed_out?: boolean;
+  task_id?: string;
+  can_stop?: boolean;
   stdout?: string;
   stderr?: string;
   children?: Test[];
@@ -101,6 +103,9 @@ export interface SnapshotStatus {
   running: boolean;
   lint_run?: boolean;
   diagnostics_available?: boolean;
+  stop_supported?: boolean;
+  stopped?: boolean;
+  stop_message?: string;
 }
 
 export interface DiagnosticsSnapshot {

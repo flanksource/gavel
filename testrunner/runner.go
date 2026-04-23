@@ -2,6 +2,7 @@ package testrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ import (
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
+	"golang.org/x/mod/modfile"
 )
 
 var exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
@@ -408,20 +410,148 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 		defer close(base.Updates)
 	}
 
+	baseWorkDir := base.WorkDir
 	var allTree []parsers.Test
+	var streamedTree []parsers.Test
 	for _, g := range groups {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
-		result, err := runSingleRootWithUpdateOwnership(opts, false)
+
+		var result any
+		var err error
+		var streamedRoot *parsers.Test
+		if base.Updates != nil {
+			groupUpdates := make(chan []parsers.Test, 16)
+			prefix := append([]parsers.Test(nil), streamedTree...)
+			opts.Updates = groupUpdates
+
+			done := make(chan *parsers.Test, 1)
+			go func(workDir string, completed []parsers.Test) {
+				var last *parsers.Test
+				for batch := range groupUpdates {
+					wrapped := wrapExecutionRootTree(baseWorkDir, workDir, annotateTestsWorkDir(batch, workDir))
+					wrappedCopy := wrapped
+					last = &wrappedCopy
+					merged := append(append([]parsers.Test(nil), completed...), wrapped)
+					sendTestUpdate(base.Updates, merged)
+				}
+				done <- last
+			}(g.workDir, prefix)
+
+			result, err = runSingleRootWithUpdateOwnership(opts, true)
+			streamedRoot = <-done
+		} else {
+			result, err = runSingleRootWithUpdateOwnership(opts, false)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if tests, ok := result.([]parsers.Test); ok {
-			allTree = append(allTree, tests...)
+		if streamedRoot != nil {
+			streamedTree = append(streamedTree, *streamedRoot)
+			sendTestUpdate(base.Updates, append([]parsers.Test(nil), streamedTree...))
+		}
+		if tests, ok := result.([]parsers.Test); ok && len(tests) > 0 {
+			allTree = append(allTree, wrapExecutionRootTree(baseWorkDir, g.workDir, tests))
 		}
 	}
 	return allTree, nil
+}
+
+func wrapExecutionRootTree(baseWorkDir, rootWorkDir string, tests []parsers.Test) parsers.Test {
+	root := parsers.Test{
+		Name:     executionRootLabel(baseWorkDir, rootWorkDir),
+		WorkDir:  rootWorkDir,
+		Children: tests,
+	}
+
+	summary := root.Sum()
+	switch {
+	case summary.Pending > 0:
+		root.Pending = true
+	case summary.Failed > 0:
+		root.Failed = true
+	case summary.Passed > 0:
+		root.Passed = true
+	case summary.Skipped > 0:
+		root.Skipped = true
+	}
+
+	return root
+}
+
+func executionRootLabel(baseWorkDir, rootWorkDir string) string {
+	if label, ok := executionRootProjectLabel(rootWorkDir); ok {
+		return label
+	}
+	if baseWorkDir == "" {
+		baseWorkDir = rootWorkDir
+	}
+
+	baseWorkDir, _ = filepath.Abs(baseWorkDir)
+	rootWorkDir, _ = filepath.Abs(rootWorkDir)
+	rel, err := filepath.Rel(baseWorkDir, rootWorkDir)
+	if err != nil || rel == "" {
+		rel = rootWorkDir
+	}
+	rel = filepath.ToSlash(rel)
+
+	switch {
+	case rel == ".":
+		return "./"
+	case strings.HasPrefix(rel, "."):
+		return rel + "/"
+	default:
+		return "./" + rel + "/"
+	}
+}
+
+func executionRootProjectLabel(rootWorkDir string) (string, bool) {
+	if modulePath, ok := goModuleName(rootWorkDir); ok {
+		return modulePath, true
+	}
+	if packageName, ok := packageJSONName(rootWorkDir); ok {
+		return packageName, true
+	}
+	return "", false
+}
+
+func goModuleName(rootWorkDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(rootWorkDir, "go.mod"))
+	if err != nil {
+		return "", false
+	}
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil || f.Module == nil {
+		return "", false
+	}
+	name := strings.TrimSpace(f.Module.Mod.Path)
+	return name, name != ""
+}
+
+func packageJSONName(rootWorkDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(rootWorkDir, "package.json"))
+	if err != nil {
+		return "", false
+	}
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", false
+	}
+	pkg.Name = strings.TrimSpace(pkg.Name)
+	return pkg.Name, pkg.Name != ""
+}
+
+func sendTestUpdate(updates chan<- []parsers.Test, tree []parsers.Test) {
+	if updates == nil {
+		return
+	}
+	select {
+	case updates <- tree:
+	default:
+	}
 }
 
 func runSingleRoot(opts RunOptions) (any, error) {

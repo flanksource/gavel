@@ -885,7 +885,14 @@ export function lintNodeCount(t: Test): number {
   return (t.noFileViolations?.length || 0) + (t.children || []).reduce((n, child) => n + lintNodeCount(child), 0);
 }
 
+function taskStatus(t: Test): string {
+  if (t.framework !== 'task' || !t.context || typeof t.context !== 'object') return '';
+  const value = (t.context as Record<string, unknown>).status;
+  return typeof value === 'string' ? value.toLowerCase() : '';
+}
+
 export function statusIcon(t: Test): string {
+  if (taskStatus(t) === 'canceled') return 'codicon:debug-stop';
   if (t.kind === 'lint-folder') {
     return 'codicon:folder';
   }
@@ -928,6 +935,7 @@ function hasTimedOutDescendant(t: Test): boolean {
 }
 
 export function statusColor(t: Test): string {
+  if (taskStatus(t) === 'canceled') return 'text-orange-600';
   if (t.kind === 'lint-folder') {
     return 'text-gray-500';
   }

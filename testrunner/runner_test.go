@@ -1,6 +1,7 @@
 package testrunner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,6 +33,14 @@ func TestPass(t *testing.T) {}
 `
 	if err := os.WriteFile(testFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("write test file: %v", err)
+	}
+}
+
+func writePackageJSON(t *testing.T, dir, name string) {
+	t.Helper()
+	body := fmt.Sprintf("{\"name\":%q}\n", name)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
 	}
 }
 
@@ -374,6 +383,7 @@ func TestRunMultiRootKeepsSharedUpdatesOpenUntilAllRootsComplete(t *testing.T) {
 	}
 
 	seenPackages := make(map[string]bool)
+	var lastBatch []parsers.Test
 	timeout := time.After(10 * time.Second)
 	for {
 		select {
@@ -382,13 +392,100 @@ func TestRunMultiRootKeepsSharedUpdatesOpenUntilAllRootsComplete(t *testing.T) {
 				if !seenPackages["./pkg1"] || !seenPackages["./pkg2"] {
 					t.Fatalf("expected streamed updates for both multiroot packages, saw %v", seenPackages)
 				}
+				if len(lastBatch) != 2 {
+					t.Fatalf("expected final multiroot snapshot with 2 execution roots, got %d: %+v", len(lastBatch), lastBatch)
+				}
+				if lastBatch[0].Name != "example.com/repoA" || lastBatch[1].Name != "example.com/repoB" {
+					t.Fatalf("expected final execution root labels [example.com/repoA example.com/repoB], got [%s %s]", lastBatch[0].Name, lastBatch[1].Name)
+				}
 				return
 			}
+			lastBatch = batch
 			collectPackagePaths(batch, seenPackages)
 		case <-timeout:
 			t.Fatal("timed out waiting for multiroot updates channel to close")
 		}
 	}
+}
+
+func TestRunMultiRootWrapsExecutionRootsInFinalTree(t *testing.T) {
+	parent := t.TempDir()
+	repoA := filepath.Join(parent, "repoA")
+	repoB := filepath.Join(parent, "repoB")
+	writeGoTestPackage(t, repoA, "pkg1", "example.com/repoA")
+	writeGoTestPackage(t, repoB, "pkg2", "example.com/repoB")
+
+	result, err := Run(RunOptions{
+		WorkDir:       parent,
+		StartingPaths: []string{filepath.Join(repoA, "pkg1"), filepath.Join(repoB, "pkg2")},
+		ShowPassed:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	tests, ok := result.([]parsers.Test)
+	if !ok {
+		t.Fatalf("Run returned %T, want []parsers.Test", result)
+	}
+	if len(tests) != 2 {
+		t.Fatalf("expected 2 execution-root nodes, got %d: %+v", len(tests), tests)
+	}
+
+	if tests[0].Name != "example.com/repoA" || tests[0].WorkDir != repoA {
+		t.Fatalf("first root = %+v, want example.com/repoA rooted at %s", tests[0], repoA)
+	}
+	if !tests[0].Passed {
+		t.Fatalf("expected example.com/repoA root to be marked passed, got %+v", tests[0])
+	}
+	if len(tests[0].Children) == 0 || tests[0].Children[0].WorkDir != repoA {
+		t.Fatalf("expected example.com/repoA children to inherit workdir %s, got %+v", repoA, tests[0].Children)
+	}
+
+	if tests[1].Name != "example.com/repoB" || tests[1].WorkDir != repoB {
+		t.Fatalf("second root = %+v, want example.com/repoB rooted at %s", tests[1], repoB)
+	}
+	if !tests[1].Passed {
+		t.Fatalf("expected example.com/repoB root to be marked passed, got %+v", tests[1])
+	}
+	if len(tests[1].Children) == 0 || tests[1].Children[0].WorkDir != repoB {
+		t.Fatalf("expected example.com/repoB children to inherit workdir %s, got %+v", repoB, tests[1].Children)
+	}
+}
+
+func TestExecutionRootLabelPrefersProjectMetadata(t *testing.T) {
+	t.Run("go module name", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/root\n"), 0o644); err != nil {
+			t.Fatalf("write go.mod: %v", err)
+		}
+		if got := executionRootLabel(filepath.Dir(root), root); got != "example.com/root" {
+			t.Fatalf("executionRootLabel() = %q, want example.com/root", got)
+		}
+	})
+
+	t.Run("package.json name", func(t *testing.T) {
+		base := t.TempDir()
+		root := filepath.Join(base, "frontend")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir frontend: %v", err)
+		}
+		writePackageJSON(t, root, "@flanksource/frontend")
+		if got := executionRootLabel(base, root); got != "@flanksource/frontend" {
+			t.Fatalf("executionRootLabel() = %q, want @flanksource/frontend", got)
+		}
+	})
+
+	t.Run("path fallback", func(t *testing.T) {
+		base := t.TempDir()
+		root := filepath.Join(base, "tools")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir tools: %v", err)
+		}
+		if got := executionRootLabel(base, root); got != "./tools/" {
+			t.Fatalf("executionRootLabel() = %q, want ./tools/", got)
+		}
+	})
 }
 
 func TestRunnerNoTests(t *testing.T) {

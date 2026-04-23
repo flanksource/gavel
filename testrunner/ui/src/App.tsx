@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
-import type { Test, Snapshot, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
+import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
@@ -42,6 +42,7 @@ function applySnapshot(
   setBench: (b: BenchComparison | undefined) => void,
   setDiagnosticsAvailable: (v: boolean) => void,
   setDiagnostics: (d: DiagnosticsSnapshot | undefined) => void,
+  setSnapshotStatus: (s: SnapshotStatus) => void,
   setRunMeta: (r: RunMeta | undefined) => void,
   setDone: (d: boolean) => void,
   setStatus: (s: string) => void,
@@ -67,11 +68,16 @@ function applySnapshot(
   setBench(snap.bench);
   setDiagnosticsAvailable(!!status.diagnostics_available);
   if (snap.diagnostics) setDiagnostics(snap.diagnostics);
+  setSnapshotStatus(status);
   setRunMeta(meta);
   if (!status.running) {
     doneRef.current = true;
     setDone(true);
-    setStatus(meta?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
+    if (status.stopped) {
+      setStatus(status.stop_message || 'Stopped by user');
+    } else {
+      setStatus(meta?.kind === 'rerun' ? 'Rerun complete' : 'Test run complete');
+    }
   } else {
     setDone(false);
     doneRef.current = false;
@@ -120,6 +126,7 @@ export function App() {
   const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsSnapshot | undefined>(undefined);
   const [runMeta, setRunMeta] = useState<RunMeta | undefined>(undefined);
+  const [snapshotStatus, setSnapshotStatus] = useState<SnapshotStatus>({ running: false });
   const [done, setDone] = useState(false);
   const [status, setStatus] = useState('Loading...');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
@@ -135,6 +142,7 @@ export function App() {
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [copyError, setCopyError] = useState('');
   const [streamToken, setStreamToken] = useState(0);
+  const [stopBusyKey, setStopBusyKey] = useState<string | null>(null);
   const startTime = useRef<number | null>(null);
   const endTime = useRef<number | null>(null);
   const [, tick] = useState(0);
@@ -187,7 +195,7 @@ export function App() {
       fetch(apiUrl('/api/tests'))
         .then(r => r.json())
         .then((snap: Snapshot) => {
-          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
         })
         .catch(() => {});
     }
@@ -196,7 +204,7 @@ export function App() {
 
     es.addEventListener('message', (e: MessageEvent) => {
       const snap: Snapshot = JSON.parse(e.data);
-      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
+      applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
       if (!snap.status?.running) es.close();
     });
 
@@ -204,7 +212,7 @@ export function App() {
       endTime.current = Date.now();
       doneRef.current = true;
       setDone(true);
-      setStatus('Test run complete');
+      setSnapshotStatus(prev => ({ ...prev, running: false }));
       es.close();
     });
 
@@ -218,6 +226,12 @@ export function App() {
 
     return () => { es.close(); clearInterval(timer); };
   }, [streamToken]);
+
+  useEffect(() => {
+    if (!snapshotStatus.running) {
+      setStopBusyKey(null);
+    }
+  }, [snapshotStatus.running]);
 
   const fetchDiagnostics = useCallback(async () => {
     const res = await fetch(apiUrl('/api/diagnostics'));
@@ -446,8 +460,6 @@ export function App() {
         } else if (!res.ok) {
           const text = await res.text();
           setStatus(`Rerun failed: ${text.trim()}`);
-        } else {
-          setStatus('Rerun complete');
         }
       } catch (e: any) {
         setStatus(`Rerun error: ${e?.message || e}`);
@@ -497,8 +509,6 @@ export function App() {
       } else if (!res.ok) {
         const text = await res.text();
         setStatus(`Rerun failed: ${text.trim()}`);
-      } else {
-        setStatus('Rerun complete');
       }
     } catch (e: any) {
       setStatus(`Rerun error: ${e?.message || e}`);
@@ -506,6 +516,48 @@ export function App() {
       setRerunBusy(false);
     }
   }, [rerunBusy, lint]);
+
+  const onStop = useCallback(async (t: Test) => {
+    if (stopBusyKey || !t.task_id) return;
+    setStopBusyKey(t.task_id);
+    setStatus(`Stopping ${t.name}...`);
+    try {
+      const res = await fetch(apiUrl('/api/stop'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'task', task_id: t.task_id }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setStatus(`Stop failed: ${text.trim()}`);
+      }
+    } catch (e: any) {
+      setStatus(`Stop error: ${e?.message || e}`);
+    } finally {
+      setStopBusyKey(null);
+    }
+  }, [stopBusyKey]);
+
+  const onStopAll = useCallback(async () => {
+    if (stopBusyKey || !snapshotStatus.stop_supported || !snapshotStatus.running) return;
+    setStopBusyKey('__global__');
+    setStatus('Stopping...');
+    try {
+      const res = await fetch(apiUrl('/api/stop'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'global' }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setStatus(`Stop failed: ${text.trim()}`);
+      }
+    } catch (e: any) {
+      setStatus(`Stop error: ${e?.message || e}`);
+    } finally {
+      setStopBusyKey(null);
+    }
+  }, [snapshotStatus, stopBusyKey]);
 
   const onIgnore = useCallback(async (req: IgnoreRequest) => {
     if (ignoreBusy) return;
@@ -572,6 +624,7 @@ export function App() {
   const canExportCurrentView = (activeTab === 'tests' && tests.length > 0)
     || (activeTab === 'lint' && lintRun)
     || (activeTab === 'bench' && !!bench);
+  const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
   const jsonExportURL = useMemo(() => buildExportRoute(routeState, 'json'), [routeState]);
   const markdownExportURL = useMemo(() => buildExportRoute(routeState, 'md'), [routeState]);
 
@@ -689,6 +742,17 @@ export function App() {
                 </button>
               </div>
             )}
+            {canGlobalStop && (
+              <button
+                class="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={onStopAll}
+                disabled={stopBusyKey !== null}
+                title="Stop the active run"
+              >
+                <iconify-icon icon="codicon:debug-stop" class="mr-0.5" />
+                {stopBusyKey === '__global__' ? 'Stopping...' : 'Stop'}
+              </button>
+            )}
             <span class="text-sm text-gray-400">{status}</span>
           </div>
           <Summary tests={tests} startTime={startTime.current} endTime={endTime.current} done={done} runMeta={runMeta} />
@@ -762,7 +826,7 @@ export function App() {
             {activeTab === 'tests' && (
               <>
                 {filteredTests.map((t, i) => (
-                  <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} rerunBusy={rerunBusy} />
+                  <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusyKey !== null} />
                 ))}
                 {tests.length === 0 && !done && (
                   <div class="p-8 text-center text-gray-400">
@@ -799,7 +863,7 @@ export function App() {
         }
         right={activeTab === 'diagnostics'
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
+          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
       />
       <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>

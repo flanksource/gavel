@@ -77,6 +77,8 @@ type Test struct {
 	Pending     bool          `json:"pending,omitempty"`
 	Cached      bool          `json:"cached,omitempty"`    // True when this result came from gavel's run-cache, not a fresh run
 	TimedOut    bool          `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
+	TaskID      string        `json:"task_id,omitempty"`
+	CanStop     bool          `json:"can_stop,omitempty"`
 	// IsGinkgoBootstrap marks a Go test function whose body only invokes ginkgo's RunSpecs.
 	// These wrappers still carry pass/fail/duration for the whole suite when a Ginkgo
 	// JSON report file is unavailable, but are deduped against real specs from the

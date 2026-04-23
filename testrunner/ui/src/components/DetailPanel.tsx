@@ -28,6 +28,8 @@ interface Props {
   lint?: LinterResult[];
   onRerun?: (t: Test) => void;
   rerunBusy?: boolean;
+  onStop?: (t: Test) => void;
+  stopBusy?: boolean;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
   runMeta?: RunMeta;
@@ -43,7 +45,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignoreBusy, runMeta }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, runMeta }: Props) {
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -63,6 +65,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
   const isLint = t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter'
     || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule' || t.kind === 'lint-rule-group';
   const canRerun = !!onRerun && t.kind !== 'violation' && t.framework !== 'task';
+  const canStop = !!onStop && !!t.can_stop && !!t.task_id;
 
   return (
     <div class="h-full overflow-y-auto p-5 space-y-4">
@@ -81,6 +84,17 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
               >
                 <iconify-icon icon="codicon:refresh" />
                 {rerunBusy ? 'Running...' : 'Rerun'}
+              </button>
+            )}
+            {canStop && (
+              <button
+                class="shrink-0 text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                onClick={() => onStop!(t)}
+                disabled={stopBusy}
+                title="Stop this running task"
+              >
+                <iconify-icon icon="codicon:debug-stop" />
+                {stopBusy ? 'Stopping...' : 'Stop'}
               </button>
             )}
           </div>

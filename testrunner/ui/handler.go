@@ -28,9 +28,12 @@ type Server struct {
 	gitRoot             string
 	diag                *DiagnosticsManager
 
-	rerunMu     sync.Mutex
-	rerunFn     RerunFunc
-	rerunOutput *RerunOutputBuffer
+	rerunMu       sync.Mutex
+	rerunFn       RerunFunc
+	rerunOutput   *RerunOutputBuffer
+	stopFn        func()
+	stopMessage   string
+	stopRequested bool
 }
 
 func NewServer() *Server {
@@ -52,6 +55,8 @@ func (s *Server) BeginRun(kind string) {
 	meta.Started = time.Now().UTC()
 	meta.Ended = time.Time{}
 	s.done = false
+	s.stopRequested = false
+	s.stopMessage = ""
 	s.notify()
 }
 
@@ -115,6 +120,8 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.git = cloneSnapshotGit(snapshot.Git)
 	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
 	s.done = !snapshot.Status.Running
+	s.stopRequested = snapshot.Status.Stopped
+	s.stopMessage = snapshot.Status.StopMessage
 	if snapshot.Git != nil && snapshot.Git.Root != "" {
 		s.gitRoot = snapshot.Git.Root
 	}
@@ -204,6 +211,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
+	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
@@ -289,13 +297,22 @@ func (s *Server) snapshot() Snapshot {
 		merged = append(merged, s.tests...)
 		tests = merged
 	}
+	running := !s.done || !tasksDone()
+	stopped := s.stopRequested && !running
+	stopMessage := ""
+	if stopped {
+		stopMessage = s.stopMessage
+	}
 	return Snapshot{
 		Metadata: cloneSnapshotMetadata(s.metadata),
 		Git:      cloneSnapshotGit(s.git),
 		Status: SnapshotStatus{
-			Running:              !s.done || !tasksDone(),
+			Running:              running,
 			LintRun:              s.lintRun,
 			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
+			StopSupported:        s.stopFn != nil,
+			Stopped:              stopped,
+			StopMessage:          stopMessage,
 		},
 		Tests:       tests,
 		Lint:        s.lint,
@@ -349,6 +366,8 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 	}
 	if snap.Type == "task" {
 		t.Command = snap.Name
+		t.TaskID = snap.ID
+		t.CanStop = snap.Status == "running" || snap.Status == "pending"
 	}
 	if snap.Message != "" {
 		t.Message = snap.Message
