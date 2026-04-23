@@ -106,10 +106,18 @@ func init() {
 }
 
 func runLint(opts LintOptions) (any, error) {
+	var err error
+	opts, err = normalizeLintRootArg(opts)
+	if err != nil {
+		return nil, fmt.Errorf("normalize lint root: %w", err)
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
 	clicky.ClearGlobalTasks()
+	runCtx, cancelRun := newStopContext(opts.Context, 0)
+	defer cancelRun()
+	opts.Context = runCtx
 
 	if opts.DryRun {
 		groups := groupFilesByGitRoot(opts)
@@ -127,11 +135,16 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.UI {
 		uiServer, uiListener = startTestUI(opts.Addr)
 		if uiServer != nil {
+			uiServer.SetStopFunc(cancelRun)
 			uiServer.BeginRun("initial")
 			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 				clicky.ClearGlobalTasks()
+				rerunCtx, cancelRerun := newStopContext(nil, 0)
+				defer cancelRerun()
+				uiServer.SetStopFunc(cancelRerun)
 				uiServer.BeginRun("rerun")
 				rerunOpts := opts
+				rerunOpts.Context = rerunCtx
 				rerunOpts.OutputTee = output.StdoutWriter()
 				results, err := executeLintRerun(rerunOpts, req)
 				if err != nil {
@@ -177,16 +190,10 @@ func runLint(opts LintOptions) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := applyGroupIgnores(groupOpts.WorkDir, results); err != nil {
+			logger.Warnf("Failed to load .gavel.yaml for %s: %v", groupOpts.WorkDir, err)
+		}
 		allResults = append(allResults, results...)
-	}
-
-	gavelCfg, err := verify.LoadGavelConfig(opts.WorkDir)
-	if err != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", err)
-	}
-
-	if filtered := linters.FilterIgnoredViolations(allResults, gavelCfg.Lint.Ignore); filtered > 0 {
-		logger.Infof("Filtered %d ignored violations", filtered)
 	}
 
 	if opts.Baseline != "" {
@@ -234,8 +241,6 @@ func runLint(opts LintOptions) (any, error) {
 			if err := verify.SaveGavelConfig(gitRoot, repoCfg); err != nil {
 				return nil, fmt.Errorf("failed to save .gavel.yaml: %w", err)
 			}
-			// Keep the in-memory merged view consistent with what was persisted.
-			gavelCfg.Lint.Ignore = append(gavelCfg.Lint.Ignore, newRules...)
 			logger.Infof("Saved %d new ignore rules to .gavel.yaml", len(newRules))
 			linters.FilterIgnoredViolations(allResults, newRules)
 		}
@@ -307,7 +312,18 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 	return results, nil
 }
 
-func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, cliExplicit bool, explicitEnabled bool, hasDirectConfig bool) (bool, string) {
+func applyGroupIgnores(workDir string, results []*linters.LinterResult) error {
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return err
+	}
+	if filtered := linters.FilterIgnoredViolations(results, cfg.Lint.Ignore); filtered > 0 {
+		logger.Infof("Filtered %d ignored violations in %s", filtered, workDir)
+	}
+	return nil
+}
+
+func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, cliExplicit bool, explicitEnabled bool, hasConfig bool) (bool, string) {
 	if linterName == "golangci-lint" && utils.FindNearestGoModRoot(workDir) == "" {
 		return false, "no go.mod found"
 	}
@@ -319,9 +335,9 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 			return false, "disabled via .gavel.yaml"
 		}
 	}
-	if !cliExplicit && !explicitEnabled && linterRequiresDirectConfig(linterName) && !hasDirectConfig {
+	if !cliExplicit && !explicitEnabled && linterRequiresDirectConfig(linterName) && !hasConfig {
 		if linterName == "betterleaks" {
-			return false, "no betterleaks/gitleaks config found in work dir"
+			return false, "no betterleaks/gitleaks config found"
 		}
 		return false, fmt.Sprintf("no %s config found in work dir", linterName)
 	}
@@ -383,12 +399,7 @@ func resolveLinterInvocations(linter linters.Linter, opts LintOptions) []linterI
 	buckets := make(map[string][]string)
 	var order []string
 	for _, f := range opts.Files {
-		abs := f
-		if !filepath.IsAbs(abs) {
-			// opts.Files arrive relative to opts.WorkDir (see
-			// groupFilesByGitRoot). Resolve against that, not os.Getwd().
-			abs = filepath.Join(opts.WorkDir, abs)
-		}
+		abs := resolveLintPath(opts.WorkDir, f)
 		dir := abs
 		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
 			dir = filepath.Dir(abs)
@@ -446,22 +457,17 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 	group := clicky.StartGroup[*linters.LinterResult](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
 	var allResults []*linters.LinterResult
 	var lintTasks []clickytask.TypedTask[*linters.LinterResult]
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	groupGitRoot := lintGitRoot(opts.WorkDir)
 	for _, name := range requestedLinters {
 		linter, ok := registry.Get(name)
 		if !ok {
 			// resolveRequestedLinters already validated every name; hitting
 			// this path means the registry was mutated mid-flight.
 			return nil, fmt.Errorf("internal: linter %q missing from registry", name)
-		}
-
-		if _, err := exec.LookPath(linter.Name()); err != nil {
-			logger.V(2).Infof("Skipping %s: not found on PATH", linter.Name())
-			allResults = append(allResults, &linters.LinterResult{
-				Linter:  linter.Name(),
-				Skipped: true,
-				Error:   "not found on PATH",
-			})
-			continue
 		}
 
 		invocations := resolveLinterInvocations(linter, opts)
@@ -471,6 +477,7 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 		}
 
 		anyScheduled := false
+		skipReason := ""
 		for _, inv := range invocations {
 			projectCfg, _ := verify.LoadGavelConfig(inv.projectRoot)
 			if ok, reason := shouldSelectLinter(inv.projectRoot, projectCfg, linter, explicit); !ok {
@@ -484,16 +491,29 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 				}
 				continue
 			}
+			hasDirectConfig := hasDirectMatchingFiles(inv.projectRoot, linterConfigPatterns(linter.Name()))
+			executable, reason, err := resolveLinterExecutable(ctx, linter, groupGitRoot, hasDirectConfig, false)
+			if err != nil {
+				return nil, err
+			}
+			if executable == "" {
+				logger.V(2).Infof("Skipping %s at %s: %s", linter.Name(), inv.projectRoot, reason)
+				if skipReason == "" {
+					skipReason = reason
+				}
+				continue
+			}
 
 			runOpts := linters.RunOptions{
-				WorkDir:   inv.projectRoot,
-				Files:     inv.files,
-				Ignores:   opts.Ignore,
-				Fix:       opts.Fix,
-				NoCache:   opts.NoCache,
-				Timeout:   timeout,
-				ForceJSON: true,
-				OutputTee: opts.OutputTee,
+				WorkDir:    inv.projectRoot,
+				Executable: executable,
+				Files:      inv.files,
+				Ignores:    opts.Ignore,
+				Fix:        opts.Fix,
+				NoCache:    opts.NoCache,
+				Timeout:    timeout,
+				ForceJSON:  true,
+				OutputTee:  opts.OutputTee,
 			}
 			if linter.Name() == "golangci-lint" && len(golangciExtraArgs) > 0 {
 				runOpts.ExtraArgs = append(runOpts.ExtraArgs, golangciExtraArgs...)
@@ -509,6 +529,13 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 				return result, nil
 			}))
 			anyScheduled = true
+		}
+		if !anyScheduled && skipReason != "" {
+			allResults = append(allResults, &linters.LinterResult{
+				Linter:  linter.Name(),
+				Skipped: true,
+				Error:   skipReason,
+			})
 		}
 	}
 
@@ -570,7 +597,7 @@ func groupFilesByGitRoot(opts LintOptions) []lintGroup {
 	groups := make(map[string][]string)
 	var order []string
 	for _, f := range opts.Files {
-		abs, _ := filepath.Abs(f)
+		abs := resolveLintPath(opts.WorkDir, f)
 
 		dir := abs
 		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
@@ -631,10 +658,6 @@ func displayLintDryRun(opts LintOptions) error {
 			testrunner.PrintDryRunSkipped("lint", name, "unknown linter")
 			continue
 		}
-		if _, err := exec.LookPath(linter.Name()); err != nil {
-			testrunner.PrintDryRunSkipped("lint", linter.Name(), "not found on PATH")
-			continue
-		}
 
 		invocations := resolveLinterInvocations(linter, opts)
 		if len(invocations) == 0 {
@@ -642,7 +665,7 @@ func displayLintDryRun(opts LintOptions) error {
 			continue
 		}
 
-		dr, ok := linter.(linters.DryRunner)
+		_, ok = linter.(linters.DryRunner)
 		if !ok {
 			testrunner.PrintDryRunSkipped("lint", linter.Name(), "no DryRunCommand support")
 			continue
@@ -654,15 +677,25 @@ func displayLintDryRun(opts LintOptions) error {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
 			}
+			hasDirectConfig := hasDirectMatchingFiles(inv.projectRoot, linterConfigPatterns(linter.Name()))
+			executable, reason, err := resolveLinterExecutable(nil, linter, lintGitRoot(opts.WorkDir), hasDirectConfig, true)
+			if err != nil {
+				return err
+			}
+			if executable == "" {
+				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
+				continue
+			}
 
 			runOpts := linters.RunOptions{
-				WorkDir:   inv.projectRoot,
-				Files:     inv.files,
-				Ignores:   opts.Ignore,
-				Fix:       opts.Fix,
-				NoCache:   opts.NoCache,
-				Timeout:   timeout,
-				ForceJSON: true,
+				WorkDir:    inv.projectRoot,
+				Executable: executable,
+				Files:      inv.files,
+				Ignores:    opts.Ignore,
+				Fix:        opts.Fix,
+				NoCache:    opts.NoCache,
+				Timeout:    timeout,
+				ForceJSON:  true,
 			}
 			if linter.Name() == "golangci-lint" {
 				if ref := lintBaseRef(opts); ref != "" {
@@ -672,11 +705,7 @@ func displayLintDryRun(opts LintOptions) error {
 					runOpts.ExtraArgs = append(runOpts.ExtraArgs, "--new-from-rev=<merge-base HEAD "+ref+">")
 				}
 			}
-			if mixin, ok := linter.(linters.OptionsMixin); ok {
-				mixin.SetOptions(runOpts)
-			}
-
-			cmdName, args := dr.DryRunCommand()
+			cmdName, args := linters.PrepareCommand(linter, runOpts)
 			testrunner.PrintDryRunCommand("lint", linter.Name(), cmdName, args, inv.projectRoot)
 		}
 	}

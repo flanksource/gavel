@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -50,14 +49,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.LintTimeout = testDurationFlags.LintTimeout
 	opts.TestTimeout = testDurationFlags.TestTimeout
 
-	globalCtx, cancelGlobal := context.WithCancel(context.Background())
-	defer cancelGlobal()
-	if opts.Timeout > 0 {
-		var cancelTimeout context.CancelFunc
-		globalCtx, cancelTimeout = context.WithTimeout(globalCtx, opts.Timeout)
-		defer cancelTimeout()
-	}
-	opts.Context = globalCtx
+	runCtx, cancelRun := newStopContext(nil, opts.Timeout)
+	defer cancelRun()
+	opts.Context = runCtx
 
 	installTimeoutDiagnosticsHook(opts)
 
@@ -125,6 +119,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			uiServer.SetRunArgs(snapshotArgs(opts))
 			uiServer.SetGitInfo(gitInfo)
 			uiServer.EnableDiagnostics(os.Getpid())
+			uiServer.SetStopFunc(cancelRun)
 		}
 		attachUIUpdates = func() chan []parsers.Test {
 			testrunnerUpdates := make(chan []parsers.Test, 16)
@@ -142,11 +137,15 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		opts.Updates = attachUIUpdates()
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
+			rerunCtx, cancelRerun := newStopContext(nil, opts.Timeout)
+			defer cancelRerun()
+			uiServer.SetStopFunc(cancelRerun)
 			uiServer.BeginRun("rerun")
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
 					WorkDir:   opts.WorkDir,
 					Timeout:   "5m",
+					Context:   rerunCtx,
 					OutputTee: output.StdoutWriter(),
 				}, req)
 				if err != nil {
@@ -157,6 +156,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				return nil
 			}
 			rerunOpts := prepareRerunOptions(opts, req, attachUIUpdates())
+			rerunOpts.Context = rerunCtx
 			rerunOpts.OutputTee = output.StdoutWriter()
 			_, err := testrunner.Run(rerunOpts)
 			return err

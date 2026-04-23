@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/linters/betterleaks"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/markdownlint"
@@ -208,6 +209,67 @@ func TestShouldSelectLinterAllowsExplicitGavelEnablementWithoutToolConfig(t *tes
 	ok, reason := shouldSelectLinter(subdir, cfg, eslint.NewESLint(subdir), false)
 	if !ok {
 		t.Fatalf("expected eslint to be selected via inherited .gavel enablement, got %q", reason)
+	}
+}
+
+func TestShouldSelectBetterleaksFromHomeConfigExtras(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repo := t.TempDir()
+	workDir := filepath.Join(repo, "service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("secrets:\n  configs:\n    - .betterleaks.toml\n"), 0o644); err != nil {
+		t.Fatalf("write home .gavel.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".betterleaks.toml"), []byte("title = \"home\"\n"), 0o644); err != nil {
+		t.Fatalf("write home betterleaks config: %v", err)
+	}
+
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		t.Fatalf("load gavel config: %v", err)
+	}
+	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if !ok {
+		t.Fatalf("expected betterleaks to be selected via home secrets.configs, got %q", reason)
+	}
+}
+
+func TestShouldSelectBetterleaksSkipsWhenExtraConfigMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repo := t.TempDir()
+	workDir := filepath.Join(repo, "service")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create work dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("secrets:\n  configs:\n    - .betterleaks.toml\n"), 0o644); err != nil {
+		t.Fatalf("write home .gavel.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		t.Fatalf("load gavel config: %v", err)
+	}
+	ok, reason := shouldSelectLinter(workDir, cfg, betterleaks.NewBetterleaks(workDir), false)
+	if ok {
+		t.Fatal("expected betterleaks to be skipped when configured extra file is missing")
+	}
+	if reason != "no betterleaks/gitleaks config found" {
+		t.Fatalf("unexpected skip reason: %q", reason)
 	}
 }
 

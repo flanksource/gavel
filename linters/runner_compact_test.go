@@ -1,6 +1,7 @@
 package linters
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -227,7 +228,20 @@ func (d dryRunLinter) DryRunCommand() (string, []string) {
 }
 
 func TestRunningCommandLabel(t *testing.T) {
-	if got := runningCommandLabel(dryRunLinter{}); got != "eslint --format=json ." {
+	cmd, args := PrepareCommand(dryRunLinter{}, RunOptions{})
+	if got := runningCommandLabel(cmd, args); got != "eslint --format=json ." {
 		t.Errorf("runningCommandLabel(dryRunLinter) = %q, want %q", got, "eslint --format=json .")
+	}
+}
+
+func TestRunLinterWithTaskUsesResolvedExecutable(t *testing.T) {
+	result := RunLinterWithTask(context.Background(), nil, dryRunLinter{}, RunOptions{
+		Executable: "/repo/.gavel/eslint",
+	})
+	if result.Command != "/repo/.gavel/eslint" {
+		t.Fatalf("Command = %q, want /repo/.gavel/eslint", result.Command)
+	}
+	if got := result.CommandLine(); got != "/repo/.gavel/eslint --format=json ." {
+		t.Fatalf("CommandLine() = %q, want %q", got, "/repo/.gavel/eslint --format=json .")
 	}
 }

@@ -168,7 +168,7 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--timeout` | Timeout per linter (default: `5m`) |
 | `--dry-run` | Print linter commands without executing |
 
-Config-file-gated linters (e.g. betterleaks) only run when their native config (`.betterleaks.toml` / `.gitleaks.toml`) is present, unless explicitly named. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
+Config-file-gated linters only run when a usable config is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
 
 #### `gavel fixtures`
 
@@ -341,7 +341,7 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -A                       # split staged changes into multiple commits
-gavel commit -m "chore: bump dep"     # explicit message, skip LLM
+gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
 ```
@@ -350,13 +350,15 @@ gavel commit --force                  # skip hooks
 |------|-------------|
 | `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
 | `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
-| `-m` / `--message` | Explicit commit message (skips LLM) |
+| `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
 | `--model` | Override LLM model from `.gavel.yaml` `commit.model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
+| `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
+| `--compat` | How to handle AI compatibility analysis + findings: `prompt`, `fail`, `skip`, or `false` |
 
-Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml).
+Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml). Combined precommit behavior is controlled by `.gavel.yaml` `commit.precommit.mode`, and compatibility warnings by `commit.compatibility.mode`.
 
 ### Pull Requests
 
@@ -603,13 +605,17 @@ gavel repomap get src/main.go
 
 #### `gavel config`
 
-View the merged `.gavel.yaml` for a path and which files contributed to it.
+View the merged `.gavel.yaml` for a path.
+
+Interactive output shows merged YAML with comments for non-git-root sources.
+Redirected output, `--yaml`, and `--json` emit only the merged config.
 
 ```bash
 gavel config
 gavel config ./pkg/api
 gavel config ./cmd/gavel/main.go
-gavel config --format yaml ./cmd/gavel/main.go
+gavel config --yaml ./cmd/gavel/main.go
+gavel config > merged.gavel.yaml
 ```
 
 Resolution order is: built-in defaults, `~/.gavel.yaml`, `<git-root>/.gavel.yaml`,
@@ -677,6 +683,10 @@ commit:
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"
       files: ["*.go"]
+  precommit:
+    mode: prompt                     # prompt|fail|skip|false for gitignore + linked-deps checks
+  compatibility:
+    mode: prompt                     # prompt|fail|skip|false for removed-functionality / compatibility warnings
 
 fixtures:
   enabled: true                      # auto-discover fixture files during gavel test

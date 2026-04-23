@@ -285,3 +285,59 @@ secrets:
 	absExtra, _ := filepath.Abs(extraPath)
 	require.Contains(t, found, absExtra)
 }
+
+func TestDiscoverConfigsResolvesLayerRelativeExtrasInOrder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repo := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+
+	workDir := filepath.Join(repo, "service")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+
+	homeNative := filepath.Join(home, ".betterleaks.toml")
+	homeExtra := filepath.Join(home, "home-extra.toml")
+	repoNative := filepath.Join(repo, ".gitleaks.toml")
+	repoExtra := filepath.Join(repo, "config", "repo-extra.toml")
+	cwdNative := filepath.Join(workDir, ".betterleaks.toml")
+	cwdExtra := filepath.Join(workDir, "nested", "cwd-extra.toml")
+
+	for _, path := range []string{
+		homeNative,
+		homeExtra,
+		repoNative,
+		repoExtra,
+		cwdNative,
+		cwdExtra,
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(`title = "cfg"`+"\n"), 0o644))
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`
+secrets:
+  configs:
+    - home-extra.toml
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`
+secrets:
+  configs:
+    - config/repo-extra.toml
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(`
+secrets:
+  configs:
+    - nested/cwd-extra.toml
+`), 0o644))
+
+	found := DiscoverConfigs(workDir)
+	require.Equal(t, []string{
+		homeNative,
+		homeExtra,
+		repoNative,
+		repoExtra,
+		cwdNative,
+		cwdExtra,
+	}, found)
+}
