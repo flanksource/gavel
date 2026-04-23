@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 	"github.com/flanksource/gavel/utils"
 	"golang.org/x/mod/modfile"
 )
@@ -56,7 +55,7 @@ type LinkedDepsParams struct {
 }
 
 var (
-	interactiveLinkedDepDecider = runChooseLinkedDepDecider
+	interactiveLinkedDepDecider = runPromptLinkedDepDecider
 )
 
 // EvaluateLinkedDeps inspects the staged blob of each manifest in stagedFiles
@@ -530,7 +529,7 @@ func formatLinkedDepsError(violations []LinkedDepViolation) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-func runChooseLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedDepDecision, error) {
+func runPromptLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedDepDecision, error) {
 	header := fmt.Sprintf("%s in %s: %q -> %s (outside git root)",
 		v.Kind, v.File, v.Name, v.Resolved)
 	items := []string{
@@ -538,17 +537,14 @@ func runChooseLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedD
 		"Ignore and keep it in this commit",
 		"Cancel commit",
 	}
-	idx, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
-	if err != nil {
-		return LinkedDepDecisionCancel, err
-	}
-	if len(idx) == 0 {
+	idx, ok := promptSelectIndex(header, items)
+	if !ok {
 		return LinkedDepDecisionCancel, nil
 	}
-	if idx[0] == 0 {
+	if idx == 0 {
 		return LinkedDepDecisionUnstage, nil
 	}
-	if idx[0] == 1 {
+	if idx == 1 {
 		return LinkedDepDecisionIgnore, nil
 	}
 	return LinkedDepDecisionCancel, nil

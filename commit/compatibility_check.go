@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 )
 
 var ErrCompatibilityCancelled = errors.New("commit cancelled by compatibility checks")
@@ -33,7 +31,7 @@ type CompatibilityOutcome struct {
 	Cancelled bool
 }
 
-var interactiveCompatibilityDecider = runChooseCompatibilityDecider
+var interactiveCompatibilityDecider = runPromptCompatibilityDecider
 
 func RunCompatibilityCheck(ctx context.Context, p CompatibilityParams) (CompatibilityOutcome, error) {
 	mode, err := normalizeCheckMode(p.Mode, "--compat")
@@ -134,20 +132,14 @@ func formatCompatibilityAnalysisFailure(err error) string {
 	return fmt.Sprintf("AI compatibility analysis failed: %s", err)
 }
 
-func runChooseCompatibilityDecider(_ context.Context, commit CommitResult) (CompatibilityDecision, error) {
-	header := clicky.Text("Compatibility warning", "text-yellow-600 font-bold").NewLine().
-		Append(formatCompatibilityFindings(commit), "").
-		ANSI()
-
+func runPromptCompatibilityDecider(_ context.Context, commit CommitResult) (CompatibilityDecision, error) {
+	header := strings.TrimSpace("Compatibility warning\n" + formatCompatibilityFindings(commit))
 	items := []string{
 		"Continue commit",
 		"Cancel commit",
 	}
-	idx, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
-	if err != nil {
-		return CompatibilityDecisionCancel, err
-	}
-	if len(idx) == 0 || idx[0] == 1 {
+	idx, ok := promptSelectIndex(header, items)
+	if !ok || idx == 1 {
 		return CompatibilityDecisionCancel, nil
 	}
 	return CompatibilityDecisionContinue, nil

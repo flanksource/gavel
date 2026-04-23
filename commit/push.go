@@ -10,7 +10,6 @@ import (
 
 	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -234,19 +233,16 @@ func runGitPush(workDir, refspec string) error {
 	return cmd.Run()
 }
 
-// --- PR picker (bubbletea single-select wrapper) ---
+// --- PR picker ---
 
 func choosePR(header string, prs []github.PRListItem) (*github.PRListItem, error) {
 	items := make([]string, len(prs))
 	for i, pr := range prs {
 		items[i] = fmt.Sprintf("#%d  %s  (%s → %s)", pr.Number, pr.Title, pr.Source, pr.Target)
 	}
-	indices, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
-	if err != nil {
-		return nil, err
-	}
-	if len(indices) == 0 {
+	index, ok := promptSelectIndex(header, items)
+	if !ok {
 		return nil, nil
 	}
-	return &prs[indices[0]], nil
+	return &prs[index], nil
 }

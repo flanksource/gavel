@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -70,6 +71,55 @@ var _ = Describe("findAncestorPRs", func() {
 		Expect(nums).To(ConsistOf(1, 2, 4))
 	})
 })
+
+func TestChoosePRReturnsSelectedPR(t *testing.T) {
+	previous := promptSelectFunc
+	promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
+		if title != "Pick a PR" {
+			t.Fatalf("unexpected title: %q", title)
+		}
+		if len(options) != 2 {
+			t.Fatalf("unexpected option count: %d", len(options))
+		}
+		return options[1], true
+	}
+	defer func() {
+		promptSelectFunc = previous
+	}()
+
+	prs := []github.PRListItem{
+		{Number: 17, Title: "First", Source: "feat/a", Target: "main"},
+		{Number: 23, Title: "Second", Source: "feat/b", Target: "main"},
+	}
+
+	selected, err := choosePR("Pick a PR", prs)
+	if err != nil {
+		t.Fatalf("choosePR returned error: %v", err)
+	}
+	if selected == nil || selected.Number != 23 {
+		t.Fatalf("expected PR #23, got %#v", selected)
+	}
+}
+
+func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
+	previous := promptSelectFunc
+	promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
+		return promptSelectOption{}, false
+	}
+	defer func() {
+		promptSelectFunc = previous
+	}()
+
+	selected, err := choosePR("Pick a PR", []github.PRListItem{
+		{Number: 17, Title: "First", Source: "feat/a", Target: "main"},
+	})
+	if err != nil {
+		t.Fatalf("choosePR returned error: %v", err)
+	}
+	if selected != nil {
+		t.Fatalf("expected nil selection, got %#v", selected)
+	}
+}
 
 var _ = Describe("decidePushTarget", func() {
 	branchMatchPR := github.PRListItem{Number: 42, Source: "feat/foo", Target: "main"}

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 	"github.com/flanksource/gavel/verify"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"golang.org/x/term"
@@ -66,7 +65,7 @@ type gitIgnoreChoice struct {
 }
 
 var (
-	interactiveDeciderFunc = runChooseDecider
+	interactiveDeciderFunc = runPromptDecider
 	stdinIsTerminal        = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 )
 
@@ -410,19 +409,16 @@ func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource)
 	return refreshed, nil
 }
 
-func runChooseDecider(_ context.Context, v Violation) (Decision, error) {
+func runPromptDecider(_ context.Context, v Violation) (Decision, error) {
 	header := fmt.Sprintf("Staged %q matches commit.gitignore pattern %q", v.File, v.Pattern)
 	choices := gitIgnoreChoices(v)
 	items := make([]string, len(choices))
 	for i, choice := range choices {
 		items[i] = choice.Text
 	}
-	idx, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
-	if err != nil {
-		return DecisionCancel, err
-	}
-	if len(idx) == 0 {
+	idx, ok := promptSelectIndex(header, items)
+	if !ok {
 		return DecisionCancel, nil
 	}
-	return choices[idx[0]].Decision, nil
+	return choices[idx].Decision, nil
 }
