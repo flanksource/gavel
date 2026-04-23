@@ -262,6 +262,26 @@ func TestRunLinkedDepsCheck_Unstage(t *testing.T) {
 	assert.Contains(t, body, "replace foo => ../../escaping")
 }
 
+func TestRunLinkedDepsCheck_IgnoreKeepsFileStaged(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "go.mod", "module example.com/app\n\ngo 1.22\n\nreplace foo => ../../escaping\n")
+	gitRun(t, repo, "add", "go.mod")
+
+	outcome, err := RunLinkedDepsCheck(context.Background(), LinkedDepsParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"go.mod"},
+		Decider:     staticLinkedDepDecider(LinkedDepDecisionIgnore),
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.False(t, outcome.Cancelled)
+	assert.Empty(t, outcome.Unstaged)
+
+	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
+	assert.Contains(t, staged, "go.mod")
+}
+
 func TestRunLinkedDepsCheck_Cancel(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, "go.mod", "module example.com/app\n\ngo 1.22\n\nreplace foo => ../../escaping\n")
@@ -346,4 +366,82 @@ func TestRunLinkedDepsCheck_NonTTYEscalatesToFail(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outside the git root")
+}
+
+func TestRunLinkedDepsCheck_IgnoresViolationsAlreadyPresentOnHEAD(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "go.mod", `module example.com/app
+
+go 1.22
+
+require github.com/flanksource/commons v1.0.0
+
+replace github.com/flanksource/commons => ../../commons
+`)
+	gitRun(t, repo, "add", "go.mod")
+	gitRun(t, repo, "commit", "-m", "seed existing linked dep")
+
+	writeFile(t, repo, "go.mod", `module example.com/app
+
+go 1.22
+
+require (
+	github.com/flanksource/commons v1.0.0
+	example.com/newdep v1.2.3
+)
+
+replace github.com/flanksource/commons => ../../commons
+`)
+	gitRun(t, repo, "add", "go.mod")
+
+	source, err := readStagedSource(repo)
+	require.NoError(t, err)
+
+	outcome, err := RunLinkedDepsCheck(context.Background(), LinkedDepsParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: source.Files,
+		Changes:     source.Changes,
+		Decider: func(context.Context, LinkedDepViolation) (LinkedDepDecision, error) {
+			t.Fatal("pre-existing HEAD violation should not prompt")
+			return LinkedDepDecisionCancel, nil
+		},
+		Mode: IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.False(t, outcome.Cancelled)
+	assert.Empty(t, outcome.Unstaged)
+}
+
+func TestRunLinkedDepsCheck_FlagsChangedViolationRelativeToHEAD(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "go.mod", `module example.com/app
+
+go 1.22
+
+replace foo => ../../escaping
+`)
+	gitRun(t, repo, "add", "go.mod")
+	gitRun(t, repo, "commit", "-m", "seed existing linked dep")
+
+	writeFile(t, repo, "go.mod", `module example.com/app
+
+go 1.22
+
+replace foo => ../../../new-escaping
+`)
+	gitRun(t, repo, "add", "go.mod")
+
+	source, err := readStagedSource(repo)
+	require.NoError(t, err)
+
+	_, err = RunLinkedDepsCheck(context.Background(), LinkedDepsParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: source.Files,
+		Changes:     source.Changes,
+		Mode:        IgnoreCheckModeFail,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "../../../new-escaping")
 }

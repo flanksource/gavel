@@ -10,7 +10,8 @@
 #
 # Merge behavior summary:
 #   - Last-write-wins scalars:
-#       verify.model, verify.prompt, commit.model, commit.linkedDeps.mode, ssh.cmd
+#       verify.model, verify.prompt, commit.model, commit.precommit.mode,
+#       commit.compatibility.mode, ssh.cmd
 #   - Appended lists:
 #       verify.checks.disabled, verify.checks.disabledCategories, lint.ignore,
 #       commit.hooks, commit.gitignore, commit.allow, pre, post, secrets.configs
@@ -95,13 +96,24 @@ commit:
     - "dist/schema.json"
     - "docs/generated/**"
 
-  linkedDeps:
-    # Controls local-path dependency handling for package.json file:/link: refs
-    # and go.mod replace directives that point outside the repo.
+  precommit:
+    # Controls both commit.gitignore prompts and local-path dependency handling
+    # for package.json file:/link: refs and go.mod replace directives that
+    # point outside the repo.
     # Values:
     #   prompt  ask before committing (default)
     #   fail    hard-fail the commit
-    #   skip    allow linked deps without prompting
+    #   skip    bypass both precommit checks
+    #   false   alias for skip
+    mode: prompt
+
+  compatibility:
+    # Controls AI warnings for removed functionality and compatibility issues.
+    # Values:
+    #   prompt  ask before committing when warnings are present (default)
+    #   fail    hard-fail the commit when warnings are present
+    #   skip    bypass compatibility AI checks entirely
+    #   false   alias for skip
     mode: prompt
 
 fixtures:

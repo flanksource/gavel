@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	IgnoreCheckModePrompt = "prompt"
-	IgnoreCheckModeFail   = "fail"
-	IgnoreCheckModeSkip   = "skip"
+	IgnoreCheckModePrompt = CheckModePrompt
+	IgnoreCheckModeFail   = CheckModeFail
+	IgnoreCheckModeSkip   = CheckModeSkip
+	IgnoreCheckModeFalse  = CheckModeFalse
 )
 
 var ErrGitIgnoreCancelled = errors.New("commit cancelled: staged file matched a .gavel.yaml gitignore pattern")
@@ -134,6 +135,14 @@ func splitGitPath(p string) []string {
 // entry to .gitignore, or append to commit.allow in the repo's .gavel.yaml).
 // Cancel on any match aborts without applying any change.
 func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error) {
+	mode, err := normalizeCheckMode(p.Mode, "--precommit")
+	if err != nil {
+		return CheckOutcome{}, err
+	}
+	if mode == CheckModeSkip {
+		return CheckOutcome{}, nil
+	}
+
 	violations, err := EvaluateGitIgnoreMatches(p.StagedFiles, p.Config.GitIgnore, p.Config.Allow)
 	if err != nil {
 		return CheckOutcome{}, err
@@ -142,29 +151,20 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 		return CheckOutcome{}, nil
 	}
 
-	mode := p.Mode
-	if mode == "" {
-		mode = IgnoreCheckModePrompt
-	}
 	// Only escalate on non-TTY if we'd otherwise fall through to the real
 	// interactive prompt. Callers that inject a Decider (tests, future
 	// non-interactive flows) have already decided how to answer.
 	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
-		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --ignore-check=fail")
+		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
 
 	switch mode {
-	case IgnoreCheckModeSkip:
-		for _, v := range violations {
-			logger.Warnf("gitignore check skipped: %q matches %q", v.File, v.Pattern)
-		}
-		return CheckOutcome{}, nil
 	case IgnoreCheckModeFail:
 		return CheckOutcome{}, formatViolationsError(violations)
 	case IgnoreCheckModePrompt:
 	default:
-		return CheckOutcome{}, fmt.Errorf("unknown ignore-check mode: %q", mode)
+		return CheckOutcome{}, fmt.Errorf("unknown --precommit mode: %q", mode)
 	}
 
 	decider := p.Decider
@@ -382,13 +382,17 @@ func gitIgnoreChoices(v Violation) []gitIgnoreChoice {
 // the staged source so the caller sees the updated file list. Returns
 // ErrGitIgnoreCancelled when the user cancels.
 func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
+	if !shouldRunPrecommitChecks(opts.PrecommitMode) {
+		return source, nil
+	}
+
 	outcome, err := RunGitIgnoreCheck(ctx, CheckParams{
 		WorkDir:     opts.WorkDir,
 		GitRoot:     opts.WorkDir,
 		StagedFiles: source.Files,
 		Config:      opts.Config,
 		SaveDir:     opts.WorkDir,
-		Mode:        opts.IgnoreCheck,
+		Mode:        opts.PrecommitMode,
 	})
 	if err != nil {
 		return source, err

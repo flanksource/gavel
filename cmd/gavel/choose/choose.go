@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/paginator"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/flanksource/gavel/internal/prompting"
 )
 
 type Option func(*model)
@@ -404,6 +405,8 @@ func truncateHeight(s string, maxLines int) string {
 // Run presents an interactive chooser and returns indices of selected items.
 // Returns nil slice if user cancels (Esc/Ctrl+C).
 func Run(items []string, opts ...Option) ([]int, error) {
+	prompting.Prepare()
+
 	m := newModel(items, opts...)
 	tm, err := tea.NewProgram(m, tea.WithOutput(os.Stderr)).Run()
 	if err != nil {

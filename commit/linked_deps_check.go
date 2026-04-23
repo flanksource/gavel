@@ -40,6 +40,7 @@ type LinkedDepDecision int
 
 const (
 	LinkedDepDecisionCancel LinkedDepDecision = iota
+	LinkedDepDecisionIgnore
 	LinkedDepDecisionUnstage
 )
 
@@ -116,11 +117,160 @@ func readStagedBlob(workDir, path string) ([]byte, error) {
 	return out, nil
 }
 
+// readHeadBlob returns the contents of path as stored in HEAD. The boolean is
+// false when the repository has no HEAD yet or the path does not exist there.
+func readHeadBlob(workDir, path string) ([]byte, bool, error) {
+	cmd := exec.Command("git", "show", "HEAD:"+path)
+	cmd.Dir = workDir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if missingHeadBlob(msg) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("git show HEAD:%s: %w: %s", path, err, msg)
+	}
+	return out, true, nil
+}
+
+func missingHeadBlob(stderr string) bool {
+	return strings.Contains(stderr, "does not exist in 'HEAD'") ||
+		strings.Contains(stderr, "exists on disk, but not in 'HEAD'") ||
+		strings.Contains(stderr, "invalid object name 'HEAD'") ||
+		strings.Contains(stderr, "bad revision 'HEAD'")
+}
+
+func isLinkedDepsManifest(path string) bool {
+	switch filepath.Base(path) {
+	case "go.mod", "go.work", "package.json":
+		return true
+	default:
+		return false
+	}
+}
+
+func evaluateManifestLinkedDeps(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
+	switch filepath.Base(rel) {
+	case "go.mod":
+		return evaluateGoModBlob(gitRoot, rel, blob)
+	case "go.work":
+		return evaluateGoWorkBlob(gitRoot, rel, blob)
+	case "package.json":
+		return evaluatePackageJSONBlob(gitRoot, rel, blob)
+	default:
+		return nil, nil
+	}
+}
+
+// EvaluateLinkedDepsAgainstHEAD returns only the linked-dependency violations
+// that are newly introduced or changed relative to HEAD for the staged
+// changeset. Pre-existing violations in HEAD are ignored so unrelated manifest
+// edits do not get blocked by old state.
+func EvaluateLinkedDepsAgainstHEAD(workDir, gitRoot string, changes []stagedChange) ([]LinkedDepViolation, error) {
+	if len(changes) == 0 {
+		return nil, nil
+	}
+
+	var out []LinkedDepViolation
+	for _, change := range changes {
+		rel := change.Path
+		if rel == "" {
+			rel = change.PreviousPath
+		}
+		if rel == "" || change.Status == "deleted" || !isLinkedDepsManifest(rel) {
+			continue
+		}
+
+		stagedBlob, err := readStagedBlob(workDir, rel)
+		if err != nil {
+			return nil, err
+		}
+		stagedViolations, err := evaluateManifestLinkedDeps(gitRoot, rel, stagedBlob)
+		if err != nil {
+			return nil, err
+		}
+		if len(stagedViolations) == 0 {
+			continue
+		}
+
+		headPath := rel
+		if change.PreviousPath != "" && isLinkedDepsManifest(change.PreviousPath) {
+			headPath = change.PreviousPath
+		}
+
+		headBlob, ok, err := readHeadBlob(workDir, headPath)
+		if err != nil {
+			return nil, err
+		}
+
+		var headViolations []LinkedDepViolation
+		if ok {
+			headViolations, err = evaluateManifestLinkedDeps(gitRoot, headPath, headBlob)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		out = append(out, newLinkedDepViolations(stagedViolations, headViolations)...)
+	}
+	return out, nil
+}
+
+type linkedDepViolationKey struct {
+	Kind     LinkedDepKind
+	Name     string
+	Target   string
+	Resolved string
+}
+
+func newLinkedDepViolations(staged, head []LinkedDepViolation) []LinkedDepViolation {
+	if len(staged) == 0 {
+		return nil
+	}
+	if len(head) == 0 {
+		return staged
+	}
+
+	seen := make(map[linkedDepViolationKey]struct{}, len(head))
+	for _, v := range head {
+		seen[linkedDepViolationKey{
+			Kind:     v.Kind,
+			Name:     v.Name,
+			Target:   v.Target,
+			Resolved: v.Resolved,
+		}] = struct{}{}
+	}
+
+	out := make([]LinkedDepViolation, 0, len(staged))
+	for _, v := range staged {
+		key := linkedDepViolationKey{
+			Kind:     v.Kind,
+			Name:     v.Name,
+			Target:   v.Target,
+			Resolved: v.Resolved,
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func evaluateGoMod(workDir, gitRoot, rel string) ([]LinkedDepViolation, error) {
 	blob, err := readStagedBlob(workDir, rel)
 	if err != nil {
 		return nil, err
 	}
+	return evaluateGoModBlob(gitRoot, rel, blob)
+}
+
+func evaluateGoModBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
 	f, err := modfile.Parse(rel, blob, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", rel, err)
@@ -151,6 +301,10 @@ func evaluateGoWork(workDir, gitRoot, rel string) ([]LinkedDepViolation, error) 
 	if err != nil {
 		return nil, err
 	}
+	return evaluateGoWorkBlob(gitRoot, rel, blob)
+}
+
+func evaluateGoWorkBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
 	f, err := modfile.ParseWork(rel, blob, nil)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", rel, err)
@@ -210,6 +364,10 @@ func evaluatePackageJSON(workDir, gitRoot, rel string) ([]LinkedDepViolation, er
 	if err != nil {
 		return nil, err
 	}
+	return evaluatePackageJSONBlob(gitRoot, rel, blob)
+}
+
+func evaluatePackageJSONBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
 	var pkg pkgJSON
 	if err := json.Unmarshal(blob, &pkg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", rel, err)
@@ -268,12 +426,21 @@ func resolveFrom(manifestDir, target string) string {
 	return filepath.Clean(filepath.Join(manifestDir, target))
 }
 
-// RunLinkedDepsCheck evaluates staged manifests, prompts for each violation,
-// and applies the user's choice. The Mode field follows the same idiom as the
-// gitignore check: "prompt" (default), "fail", or "skip"; non-TTY prompts
-// without an injected Decider escalate to "fail".
+// RunLinkedDepsCheck evaluates staged manifests, prompts for each newly
+// introduced or changed violation relative to HEAD, and applies the user's
+// choice. The Mode field follows the same idiom as the gitignore check:
+// "prompt" (default), "fail", or "skip"; non-TTY prompts without an injected
+// Decider escalate to "fail".
 func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, error) {
-	violations, err := EvaluateLinkedDeps(p.WorkDir, rootOrWorkDir(p), p.StagedFiles, deletedPaths(p.Changes))
+	mode, err := normalizeCheckMode(p.Mode, "--precommit")
+	if err != nil {
+		return CheckOutcome{}, err
+	}
+	if mode == CheckModeSkip {
+		return CheckOutcome{}, nil
+	}
+
+	violations, err := evaluateLinkedDepsForCheck(p)
 	if err != nil {
 		return CheckOutcome{}, err
 	}
@@ -281,27 +448,17 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		return CheckOutcome{}, nil
 	}
 
-	mode := p.Mode
-	if mode == "" {
-		mode = IgnoreCheckModePrompt
-	}
 	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
-		logger.Warnf("linked-deps check: stdin is not a terminal; escalating to --linked-deps-check=fail")
+		logger.Warnf("linked-deps check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
 
 	switch mode {
-	case IgnoreCheckModeSkip:
-		for _, v := range violations {
-			logger.Warnf("linked-deps check skipped: %s %q in %s points to %s (outside git root)",
-				v.Kind, v.Name, v.File, v.Resolved)
-		}
-		return CheckOutcome{}, nil
 	case IgnoreCheckModeFail:
 		return CheckOutcome{}, formatLinkedDepsError(violations)
 	case IgnoreCheckModePrompt:
 	default:
-		return CheckOutcome{}, fmt.Errorf("unknown linked-deps-check mode: %q", mode)
+		return CheckOutcome{}, fmt.Errorf("unknown --precommit mode: %q", mode)
 	}
 
 	decider := p.Decider
@@ -318,6 +475,8 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		switch d {
 		case LinkedDepDecisionCancel:
 			return CheckOutcome{Cancelled: true}, nil
+		case LinkedDepDecisionIgnore:
+			continue
 		case LinkedDepDecisionUnstage:
 			unstage[v.File] = struct{}{}
 		}
@@ -335,6 +494,14 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 	}
 	return CheckOutcome{Unstaged: files}, nil
+}
+
+func evaluateLinkedDepsForCheck(p LinkedDepsParams) ([]LinkedDepViolation, error) {
+	gitRoot := rootOrWorkDir(p)
+	if len(p.Changes) > 0 {
+		return EvaluateLinkedDepsAgainstHEAD(p.WorkDir, gitRoot, p.Changes)
+	}
+	return EvaluateLinkedDeps(p.WorkDir, gitRoot, p.StagedFiles, deletedPaths(p.Changes))
 }
 
 func rootOrWorkDir(p LinkedDepsParams) string {
@@ -368,6 +535,7 @@ func runChooseLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedD
 		v.Kind, v.File, v.Name, v.Resolved)
 	items := []string{
 		fmt.Sprintf("Unstage %s (drop the edit from this commit)", v.File),
+		"Ignore and keep it in this commit",
 		"Cancel commit",
 	}
 	idx, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
@@ -380,6 +548,9 @@ func runChooseLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedD
 	if idx[0] == 0 {
 		return LinkedDepDecisionUnstage, nil
 	}
+	if idx[0] == 1 {
+		return LinkedDepDecisionIgnore, nil
+	}
 	return LinkedDepDecisionCancel, nil
 }
 
@@ -387,12 +558,16 @@ func runChooseLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedD
 // the staged source so the caller sees the updated file list. Returns
 // ErrLinkedDepsCancelled when the user cancels.
 func applyLinkedDepsCheck(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
+	if !shouldRunPrecommitChecks(opts.PrecommitMode) {
+		return source, nil
+	}
+
 	outcome, err := RunLinkedDepsCheck(ctx, LinkedDepsParams{
 		WorkDir:     opts.WorkDir,
 		GitRoot:     opts.WorkDir,
 		StagedFiles: source.Files,
 		Changes:     source.Changes,
-		Mode:        opts.LinkedDepsCheck,
+		Mode:        opts.PrecommitMode,
 	})
 	if err != nil {
 		return source, err
