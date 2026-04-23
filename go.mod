@@ -28,7 +28,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/cel-go v0.27.0
 	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
