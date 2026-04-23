@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/prompting"
 )
 
 type AutoFixOptions struct {
@@ -288,6 +289,7 @@ func executeFix(adapter Adapter, model, prompt, workDir string, patchOnly bool) 
 
 	logger.V(1).Infof("fix exec: %s %s", name, strings.Join(args, " "))
 
+	prompting.Prepare()
 	proc := clicky.Exec(name, args...).WithCwd(workDir)
 	if logger.V(2).Enabled() {
 		proc = proc.Debug()

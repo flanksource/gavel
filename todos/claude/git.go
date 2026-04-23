@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -289,6 +290,7 @@ Diff:
 
 	cmd := exec.Command(claudePath, "-p", prompt)
 	cmd.Dir = workDir
+	prompting.Prepare()
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("claude CLI failed: %w", err)

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/types"
@@ -166,6 +167,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 func newInteraction() *todos.UserInteraction {
 	return &todos.UserInteraction{
 		AskFunc: func(question todos.Question) (string, error) {
+			prompting.Prepare()
 			fmt.Println(question.Pretty().ANSI())
 			fmt.Print(clicky.Text("Your response: ", "text-green-600").ANSI())
 			reader := bufio.NewReader(os.Stdin)

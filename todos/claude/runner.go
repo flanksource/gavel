@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -236,6 +237,7 @@ func (e *ClaudeExecutor) runAgent(ctx *todos.ExecutorContext, agentDir, prompt s
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
+	prompting.Prepare()
 	if err := cmd.Start(); err != nil {
 		stdoutR.Close()
 		stdoutW.Close()
