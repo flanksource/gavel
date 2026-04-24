@@ -83,6 +83,9 @@ func (n *ViewNode) Pretty() api.Text {
 	var style string
 
 	switch n.Status {
+	case "timedout":
+		text = text.Append("⏳", "text-amber-600 font-bold")
+		style = "text-amber-600"
 	case "failed":
 		text = text.Append(icons.Fail, "text-red-500")
 		style = "text-red-500"
@@ -415,6 +418,8 @@ func testToViewNode(test parsers.Test) *ViewNode {
 		Duration:    test.Duration,
 	}
 	switch {
+	case test.TimedOut:
+		node.Status = "timedout"
 	case test.Failed:
 		node.Status = "failed"
 	case test.Skipped:

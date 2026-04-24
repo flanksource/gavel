@@ -90,6 +90,39 @@ type Test struct {
 	Summary           *TestSummary     `json:"summary,omitempty"`
 	Context           any              `json:"context,omitempty"`
 	Benchmark         *BenchmarkResult `json:"benchmark,omitempty"`
+	// Attempts is the per-run execution history for this test. A fresh run
+	// appends a TestAttempt to the tail; reruns (via the UI) append further
+	// attempts without discarding earlier ones. The Test's top-level
+	// Passed/Failed/Skipped/Pending/TimedOut flags always reflect the most
+	// recent attempt so existing filters keep working.
+	Attempts []TestAttempt `json:"attempts,omitempty"`
+}
+
+// TestAttempt records one execution of a test: when it ran, on what pid,
+// the command invoked, and the final state. Populated by the runner on
+// completion and extended by the UI on rerun.
+type TestAttempt struct {
+	Sequence    int           `json:"sequence"`
+	RunKind     string        `json:"run_kind,omitempty"` // "initial", "rerun"
+	Started     time.Time     `json:"started,omitempty"`
+	Ended       time.Time     `json:"ended,omitempty"`
+	Duration    time.Duration `json:"duration,omitempty"`
+	PID         int           `json:"pid,omitempty"`
+	Command     string        `json:"command,omitempty"`
+	Framework   Framework     `json:"framework,omitempty"`
+	ExitCode    *int          `json:"exit_code,omitempty"`
+	Passed      bool          `json:"passed,omitempty"`
+	Failed      bool          `json:"failed,omitempty"`
+	Skipped     bool          `json:"skipped,omitempty"`
+	Pending     bool          `json:"pending,omitempty"`
+	TimedOut    bool          `json:"timed_out,omitempty"`
+	Message     string        `json:"message,omitempty"`
+	Stdout      string        `json:"stdout,omitempty"`
+	Stderr      string        `json:"stderr,omitempty"`
+	StackTrace  string        `json:"stack_trace,omitempty"`
+	CPUPercent  float64       `json:"cpu_percent,omitempty"`
+	RSS         uint64        `json:"rss,omitempty"`
+	GoroutineCt int           `json:"goroutine_count,omitempty"`
 }
 
 type GoTestContext struct {

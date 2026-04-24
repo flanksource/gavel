@@ -15,6 +15,7 @@ import {
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
+import { TestAttempts } from './TestAttempts';
 
 export interface IgnoreRequest {
   source?: string;
@@ -139,17 +140,69 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {runMeta && (
         <Section title="Run">
-          <div class="grid grid-cols-3 gap-3 text-sm">
+          <div class="grid grid-cols-4 gap-3 text-sm">
             <MetaCard
               label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
-              value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Unavailable'}
+              value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Pending'}
             />
             <MetaCard
-              label="Finished"
-              value={runMeta.ended ? formatRunTimestamp(runMeta.ended) : 'In progress'}
+              label="Duration"
+              value={
+                runMeta.ended
+                  ? formatRunDuration(runMeta.started, runMeta.ended)
+                  : runMeta.started
+                    ? (
+                      <span class="inline-flex items-center gap-1">
+                        <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
+                        {formatRunDuration(runMeta.started, undefined)}
+                      </span>
+                    )
+                    : '—'
+              }
             />
-            <MetaCard label="Duration" value={formatRunDuration(runMeta.started, runMeta.ended)} />
+            <MetaCard
+              label="Exit"
+              value={
+                runMeta.exit_code !== undefined
+                  ? (
+                    <span class={runMeta.exit_code === 0 ? 'text-green-700' : 'text-red-700'}>
+                      {runMeta.exit_code}
+                    </span>
+                  )
+                  : runMeta.ended ? '—' : 'running'
+              }
+            />
+            <MetaCard
+              label="Timeout"
+              value={
+                runMeta.timed_out
+                  ? <span class="text-amber-700 inline-flex items-center gap-1"><iconify-icon icon="mdi:clock-alert-outline" />triggered</span>
+                  : runMeta.ended ? 'ok' : '—'
+              }
+            />
           </div>
+          {(runMeta.pid || runMeta.command || (runMeta.frameworks && runMeta.frameworks.length > 0)) && (
+            <div class="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-600">
+              {runMeta.pid !== undefined && runMeta.pid > 0 && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">PID</span>
+                  <span class="font-mono">{runMeta.pid}</span>
+                </div>
+              )}
+              {runMeta.frameworks && runMeta.frameworks.length > 0 && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">Frameworks</span>
+                  <span>{runMeta.frameworks.join(', ')}</span>
+                </div>
+              )}
+              {runMeta.command && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">Command</span>
+                  <span class="font-mono truncate" title={runMeta.command}>{runMeta.command}</span>
+                </div>
+              )}
+            </div>
+          )}
           {hasTimeoutArgs(runMeta.args) && (
             <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
               {timeoutArgValue(runMeta.args, 'timeout') && (
@@ -206,9 +259,10 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       {/* Error message */}
       {t.message && (
         <Section title="Error">
-          <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto">
-            {t.message}
-          </pre>
+          <AnsiHtml
+            text={t.message}
+            class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto block"
+          />
         </Section>
       )}
 
@@ -234,6 +288,12 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       {fw === 'fixture' && t.context && <FixtureDetail ctx={t.context as FixtureContext} />}
       {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} />}
       {fw === 'go test' && t.context && <GoTestDetail ctx={t.context as GoTestContext} />}
+
+      {t.attempts && t.attempts.length > 0 && (
+        <Section title={t.attempts.length > 1 ? `Attempts (${t.attempts.length})` : 'Attempt'}>
+          <TestAttempts test={t} />
+        </Section>
+      )}
 
       {t.stdout && (
         <Section title="stdout">
@@ -386,7 +446,7 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
   );
 }
 
-function MetaCard({ label, value }: { label: string; value: string }) {
+function MetaCard({ label, value }: { label: string; value: any }) {
   return (
     <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
       <div class="text-xs uppercase tracking-wide text-gray-500">{label}</div>

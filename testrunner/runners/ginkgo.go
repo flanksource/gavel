@@ -125,12 +125,16 @@ func (r *Ginkgo) BuildCommand(packagePath string, extraArgs ...string) (*TestRun
 		return nil, fmt.Errorf("failed to create report directory: %w", err)
 	}
 
-	// Build command args: standard flags, then extra args, then package path
+	// Build command args: standard flags, then extra args, then package path.
+	// -v enables parseable per-spec lines on stdout so the streaming parser
+	// can surface "in progress" events to the UI in realtime. Node-entered /
+	// exited events (surfaced via the default --show-node-events=true) also
+	// flow through the final JSON report, giving richer post-run timelines.
 	args := []string{
 		"run",
 		"github.com/onsi/ginkgo/v2/ginkgo",
 		fmt.Sprintf("--json-report=%s", reportPath),
-		"--show-node-events=false",
+		"-v",
 	}
 	args = append(args, extraArgs...)
 	args = append(args, packagePath)

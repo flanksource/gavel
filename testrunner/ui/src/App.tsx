@@ -253,7 +253,7 @@ export function App() {
   }, [diagnosticsAvailable, fetchDiagnostics]);
 
   const totals = useMemo(() => {
-    const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+    const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
     for (const test of tests) {
       const s = sumNonTaskTests(test);
       t.total += s.total;
@@ -261,6 +261,7 @@ export function App() {
       t.failed += s.failed;
       t.skipped += s.skipped;
       t.pending += s.pending;
+      t.timedout += s.timedout;
     }
     return t;
   }, [tests]);
@@ -496,7 +497,9 @@ export function App() {
     startTime.current = null;
     endTime.current = null;
     setDone(false);
-    setTests([]);
+    // Keep existing tests in place; the backend merges rerun results into
+    // the tree by appending new TestAttempts rather than replacing prior
+    // outcomes.
     setStreamToken(n => n + 1);
     try {
       const res = await fetch(apiUrl('/api/rerun'), {

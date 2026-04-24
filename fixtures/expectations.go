@@ -68,10 +68,22 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 		t["stderr"] = p.Stderr
 		t["exitCode"] = p.ExitCode
 		combined := p.Stdout + p.Stderr
+		dups := duplicateLines(combined)
+		dupList := make([]map[string]any, 0, len(dups))
+		for _, d := range dups {
+			dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
+		}
 		t["ansi"] = map[string]any{
-			"has_any":     hasAnyANSI(combined),
-			"has_color":   hasColorCodes(combined),
-			"has_updates": hasCursorUpdates(combined),
+			"has_any":         hasAnyANSI(combined),
+			"has_color":       hasColorCodes(combined),
+			"has_updates":     hasCursorUpdates(combined),
+			"has_cursor_hide": hasCursorHide(combined),
+			"has_cursor_show": hasCursorShow(combined),
+			"has_reset":       hasSGRReset(combined),
+			"stray_controls":  hasStrayControls(combined),
+			"final_text":      finalText(combined),
+			"duplicate_lines": dupList,
+			"has_duplicates":  len(dups) > 0,
 		}
 		// Try to parse JSON output if it looks like JSON
 		if strings.HasPrefix(strings.TrimSpace(p.Stdout), "{") || strings.HasPrefix(strings.TrimSpace(p.Stdout), "[") {

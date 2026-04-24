@@ -21,6 +21,7 @@ export interface Test {
   stderr?: string;
   children?: Test[];
   summary?: TestSummary;
+  attempts?: TestAttempt[];
   context?: GoTestContext | GinkgoContext | FixtureContext;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
@@ -65,6 +66,30 @@ export interface LinterResult {
   rule_count?: number;
 }
 
+export interface TestAttempt {
+  sequence: number;
+  run_kind?: string;
+  started?: string;
+  ended?: string;
+  duration?: number;
+  pid?: number;
+  command?: string;
+  framework?: string;
+  exit_code?: number;
+  passed?: boolean;
+  failed?: boolean;
+  skipped?: boolean;
+  pending?: boolean;
+  timed_out?: boolean;
+  message?: string;
+  stdout?: string;
+  stderr?: string;
+  stack_trace?: string;
+  cpu_percent?: number;
+  rss?: number;
+  goroutine_count?: number;
+}
+
 export interface TestSummary {
   Total: number;
   Passed: number;
@@ -91,6 +116,11 @@ export interface RunMeta {
   started?: string;
   ended?: string;
   args?: Record<string, unknown>;
+  pid?: number;
+  command?: string;
+  frameworks?: string[];
+  exit_code?: number;
+  timed_out?: boolean;
 }
 
 export interface SnapshotGit {

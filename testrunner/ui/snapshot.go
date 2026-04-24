@@ -10,12 +10,17 @@ import (
 )
 
 type SnapshotMetadata struct {
-	Version  string         `json:"version,omitempty"`
-	Started  time.Time      `json:"started,omitempty"`
-	Ended    time.Time      `json:"ended,omitempty"`
-	Kind     string         `json:"kind,omitempty"`
-	Sequence int            `json:"sequence,omitempty"`
-	Args     map[string]any `json:"args,omitempty"`
+	Version    string         `json:"version,omitempty"`
+	Started    time.Time      `json:"started,omitempty"`
+	Ended      time.Time      `json:"ended,omitempty"`
+	Kind       string         `json:"kind,omitempty"`
+	Sequence   int            `json:"sequence,omitempty"`
+	Args       map[string]any `json:"args,omitempty"`
+	PID        int            `json:"pid,omitempty"`        // gavel's own PID (the parent orchestrator)
+	Command    string         `json:"command,omitempty"`    // gavel command line (argv[0] + args)
+	Frameworks []string       `json:"frameworks,omitempty"` // test frameworks scheduled for the run (go test, ginkgo, …)
+	ExitCode   *int           `json:"exit_code,omitempty"`  // final exit code once the run completes; nil while running
+	TimedOut   bool           `json:"timed_out,omitempty"`  // true when the global --timeout fired during the run
 }
 
 type SnapshotGit struct {
@@ -57,6 +62,13 @@ func cloneSnapshotMetadata(meta *SnapshotMetadata) *SnapshotMetadata {
 		for k, v := range meta.Args {
 			cloned.Args[k] = v
 		}
+	}
+	if meta.Frameworks != nil {
+		cloned.Frameworks = append([]string(nil), meta.Frameworks...)
+	}
+	if meta.ExitCode != nil {
+		code := *meta.ExitCode
+		cloned.ExitCode = &code
 	}
 	return &cloned
 }
