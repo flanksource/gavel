@@ -138,7 +138,9 @@ func missingHeadBlob(stderr string) bool {
 	return strings.Contains(stderr, "does not exist in 'HEAD'") ||
 		strings.Contains(stderr, "exists on disk, but not in 'HEAD'") ||
 		strings.Contains(stderr, "invalid object name 'HEAD'") ||
-		strings.Contains(stderr, "bad revision 'HEAD'")
+		strings.Contains(stderr, "bad revision 'HEAD'") ||
+		strings.Contains(stderr, "Not a valid object name HEAD") ||
+		strings.Contains(stderr, "not a valid object name HEAD")
 }
 
 func isLinkedDepsManifest(path string) bool {

@@ -154,6 +154,14 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyFileSizeCheck(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	source, err = applyLinkedDepsCheck(ctx, opts, source)
 	if err != nil {
 		return nil, err
@@ -227,6 +235,14 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
+	source, err = applyFileSizeCheck(ctx, opts, source)
 	if err != nil {
 		return nil, err
 	}
