@@ -73,6 +73,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		opts.WorkDir = wd
 	}
+	if opts.Failed == failedAutoSentinel {
+		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("--failed: %w", err)
+		}
+		opts.Failed = resolved
+	}
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
 
@@ -758,4 +765,15 @@ func init() {
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
 	testCmd.Flags().DurationVar(&testDurationFlags.TestTimeout, "test-timeout", 5*time.Minute,
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
+	if f := testCmd.Flags().Lookup("failed"); f != nil {
+		f.NoOptDefVal = failedAutoSentinel
+		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+	}
 }
+
+// failedAutoSentinel is the value cobra assigns to --failed when the flag is
+// supplied with no argument (`gavel test --failed`). The runTests/runLint
+// callers swap it for the resolved .gavel/last.json path before the runner
+// sees it. Must not start with "@" — clicky's flag binding treats a leading
+// "@" as "load this path or URL", which would try to open the sentinel.
+const failedAutoSentinel = "auto"

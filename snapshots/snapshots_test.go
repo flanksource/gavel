@@ -94,6 +94,43 @@ func TestLoadCorruptPointer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestResolveLastReturnsAbsolutePath(t *testing.T) {
+	repo := initRepo(t)
+	snap := &testui.Snapshot{}
+	saved, err := Save(repo, snap)
+	require.NoError(t, err)
+
+	got, err := ResolveLast(repo)
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(got), "ResolveLast must return an absolute path, got %q", got)
+	assert.Equal(t, saved, got)
+}
+
+func TestResolveLastErrorsWhenNoPointer(t *testing.T) {
+	repo := initRepo(t)
+	_, err := ResolveLast(repo)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no previous run")
+}
+
+func TestResolveLastErrorsWhenSnapshotMissing(t *testing.T) {
+	repo := initRepo(t)
+	snap := &testui.Snapshot{}
+	saved, err := Save(repo, snap)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(saved))
+
+	_, err = ResolveLast(repo)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "last-run snapshot missing")
+}
+
+func TestResolveLastRequiresWorkDir(t *testing.T) {
+	_, err := ResolveLast("")
+	require.Error(t, err)
+}
+
 func TestSanitiseBranch(t *testing.T) {
 	assert.Equal(t, "feat-foo", SanitiseBranch("feat/foo"))
 	assert.Equal(t, "feat-foo-bar", SanitiseBranch("feat/foo/bar"))

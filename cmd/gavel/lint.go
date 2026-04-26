@@ -103,6 +103,10 @@ Examples:
 func init() {
 	lintCmd := clicky.AddNamedCommand("lint", rootCmd, LintOptions{}, runLint)
 	registerLintLinterSubcommands(lintCmd)
+	if f := lintCmd.Flags().Lookup("failed"); f != nil {
+		f.NoOptDefVal = failedAutoSentinel
+		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
+	}
 }
 
 func runLint(opts LintOptions) (any, error) {
@@ -113,6 +117,13 @@ func runLint(opts LintOptions) (any, error) {
 	}
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
+	}
+	if opts.Failed == failedAutoSentinel {
+		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("--failed: %w", err)
+		}
+		opts.Failed = resolved
 	}
 	clicky.ClearGlobalTasks()
 	runCtx, cancelRun := newStopContext(opts.Context, 0)

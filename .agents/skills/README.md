@@ -79,6 +79,7 @@ After manual changes, reload with `/reload-plugins`.
 | Skill | Description |
 |-------|-------------|
 | [gavel-fixture-tester](gavel-fixture-tester/SKILL.md) | Create and run fixture-based tests using markdown files with command blocks, tables, and CEL assertions |
+| [gavel-runner](gavel-runner/SKILL.md) | Run gavel test and lint, focus on a subset, re-run only failures, filter noise with baselines, and pull JSON/markdown results from finished or live runs |
 
 ### gavel-fixture-tester
 
@@ -96,6 +97,25 @@ gavel fixtures fixtures/**/*.md
 
 See [gavel-fixture-tester/SKILL.md](gavel-fixture-tester/SKILL.md) for full documentation and live examples.
 
+### gavel-runner
+
+Drive the everyday test + lint loop:
+
+- **Subset** — `gavel test ./pkg/foo`, `--changed`, `--cache`, `--framework`, runner pass-through (`-- --focus`)
+- **Re-run failures** — `gavel test --failed` (defaults to `.gavel/last.json`)
+- **Suppress noise** — `--baseline` against a saved snapshot
+- **Output** — `--format "json=…,markdown=…,html=…"` and `gavel summary` for PR-comment-shaped markdown
+- **Live runs** — `gavel test --ui` exposes an HTTP+SSE API for snapshot, stream, rerun, stop
+- **Timeouts** — `--timeout`, `--test-timeout`, `--lint-timeout`
+
+```bash
+gavel test --lint
+gavel test --failed
+gavel test --ui
+```
+
+See [gavel-runner/SKILL.md](gavel-runner/SKILL.md) for the full reference and `jq`/`curl` recipes.
+
 ## Prerequisites
 
 - [Gavel](https://github.com/flanksource/gavel) installed for running fixture tests (`go install github.com/flanksource/gavel/cmd/gavel@latest`)
@@ -108,6 +128,8 @@ See [gavel-fixture-tester/SKILL.md](gavel-fixture-tester/SKILL.md) for full docu
 │   └── plugin.json              # Claude Code plugin manifest
 ├── skills/
 │   ├── gavel-fixture-tester/
+│   │   └── SKILL.md             # Skill instructions (agentskills.io format)
+│   ├── gavel-runner/
 │   │   └── SKILL.md             # Skill instructions (agentskills.io format)
 │   └── README.md
 .claude-plugin/

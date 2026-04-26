@@ -831,21 +831,38 @@ gavel git analyze --verbose            # show skip reasons
 
 ## Agent Skills
 
-Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents the ability to create and run fixture-based tests. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents two complementary capabilities: writing data-driven tests *and* driving the everyday test+lint loop. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
 
-| Skill | Description |
-|-------|-------------|
-| `gavel-fixture-tester` | Create and run fixture-based tests using markdown files with command blocks, tables, and CEL assertions |
+| Skill | What it teaches the agent |
+|-------|---------------------------|
+| [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
+| [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
 
 ### Install
 
+**For Claude Code (marketplace):**
+
 ```bash
-npx skills add flanksource/gavel
+# Add the Flanksource marketplace, then install the gavel-skills plugin
+/plugin marketplace add flanksource/gavel
+/plugin install gavel-skills@flanksource-gavel
 ```
 
-Use `-g` to install globally (all projects) or omit for project-only. Preview available skills first with `npx skills add flanksource/gavel -l`.
+After installation, both skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, and `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results.
 
-See [.agents/skills/README.md](.agents/skills/README.md) for alternative installation methods.
+**For any agent (via the open Skills CLI):**
+
+```bash
+npx skills add flanksource/gavel        # current project
+npx skills add flanksource/gavel -g     # all projects
+npx skills add flanksource/gavel -l     # preview before installing
+```
+
+**For a local clone (auto-discovery):**
+
+Clone the repo and open it in your agent — `.agents/skills/` is picked up automatically with no extra setup.
+
+See [.agents/skills/README.md](.agents/skills/README.md) for the full reference, including manual `settings.json` configuration and per-agent install paths.
 
 ## Development
 
