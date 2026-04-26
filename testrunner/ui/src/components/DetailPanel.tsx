@@ -1,4 +1,4 @@
-import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail } from '../types';
 import {
   statusIcon,
   statusColor,
@@ -256,15 +256,22 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         </Section>
       )}
 
-      {/* Error message */}
-      {t.message && (
+      {/* Error message — prefer the structured FailureDetail view when the
+          parser recognised a known failure shape, otherwise fall back to the
+          raw message. The raw message is still reachable as a <details>
+          fallback so nothing is hidden by parsing heuristics. */}
+      {t.failure_detail && t.failure_detail.kind && t.failure_detail.kind !== 'raw' ? (
+        <Section title="Error">
+          <FailureDetailView detail={t.failure_detail} rawMessage={t.message} />
+        </Section>
+      ) : t.message ? (
         <Section title="Error">
           <AnsiHtml
             text={t.message}
             class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto block"
           />
         </Section>
-      )}
+      ) : null}
 
       {/* Command */}
       {t.command && (
@@ -286,7 +293,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {/* Framework-specific context */}
       {fw === 'fixture' && t.context && <FixtureDetail ctx={t.context as FixtureContext} />}
-      {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} />}
+      {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} failureLocation={t.failure_detail?.location} suiteAbove={t.suite?.join(' > ')} />}
       {fw === 'go test' && t.context && <GoTestDetail ctx={t.context as GoTestContext} />}
 
       {t.attempts && t.attempts.length > 0 && (
@@ -333,6 +340,66 @@ function filterCelVars(vars: Record<string, any>): Record<string, any> {
     }
   }
   return filtered;
+}
+
+function FailureDetailView({ detail: d, rawMessage }: { detail: FailureDetail; rawMessage?: string }) {
+  const showRawFallback = !!rawMessage && rawMessage !== d.summary && rawMessage.includes('\n');
+
+  return (
+    <div class="space-y-2">
+      {d.summary && (
+        <div class="text-sm text-red-700 font-mono bg-red-50 rounded p-2">
+          {d.summary}
+        </div>
+      )}
+
+      {d.kind === 'gomega' && (d.actual || d.expected) && (
+        <div class="grid grid-cols-2 gap-2">
+          {d.actual !== undefined && (
+            <div>
+              <div class="text-xs font-semibold text-gray-500 mb-1">Actual</div>
+              <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+            </div>
+          )}
+          {d.expected !== undefined && (
+            <div>
+              <div class="text-xs font-semibold text-gray-500 mb-1">
+                Expected{d.matcher ? ` (${d.matcher})` : ''}
+              </div>
+              <pre class="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.expected}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {d.kind === 'panic' && d.stack && (
+        <details class="bg-gray-50 rounded p-2">
+          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Stack trace</summary>
+          <pre class="text-xs font-mono text-gray-800 whitespace-pre-wrap mt-2 max-h-80 overflow-y-auto">{d.stack}</pre>
+        </details>
+      )}
+
+      {d.kind === 'go_test' && d.actual && (
+        <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+      )}
+
+      {d.location && (
+        <div class="text-xs text-gray-500 font-mono">
+          <iconify-icon icon="codicon:location" class="mr-0.5" />{d.location}
+        </div>
+      )}
+
+      {showRawFallback && (
+        <details class="bg-gray-50 rounded p-2">
+          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Full message</summary>
+          <AnsiHtml
+            text={rawMessage!}
+            class="text-xs text-gray-700 font-mono whitespace-pre-wrap mt-2 max-h-64 overflow-y-auto block"
+          />
+        </details>
+      )}
+    </div>
+  );
 }
 
 function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
@@ -392,17 +459,32 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
   );
 }
 
-function GinkgoDetail({ ctx }: { ctx: GinkgoContext }) {
+function GinkgoDetail({
+  ctx,
+  failureLocation,
+  suiteAbove,
+}: {
+  ctx: GinkgoContext;
+  failureLocation?: string;
+  suiteAbove?: string;
+}) {
+  // Skip the Failure Location block when FailureDetailView already shows the
+  // same file:line above. Skip the suite_description line when the top
+  // "Suite" section already shows the same string. suite_path (filesystem
+  // location of the suite binary) is still useful — keep it when present.
+  const showLocation = ctx.failure_location && ctx.failure_location !== failureLocation;
+  const showDescription = ctx.suite_description && ctx.suite_description !== suiteAbove;
+  const showSuite = showDescription || ctx.suite_path;
   return (
     <>
-      {(ctx.suite_description || ctx.suite_path) && (
+      {showSuite && (
         <Section title="Suite">
-          {ctx.suite_description && <div class="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
+          {showDescription && <div class="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
           {ctx.suite_path && <div class="text-xs text-gray-500 font-mono mt-0.5">{ctx.suite_path}</div>}
         </Section>
       )}
 
-      {ctx.failure_location && (
+      {showLocation && (
         <Section title="Failure Location">
           <span class="text-sm text-red-600 font-mono">{ctx.failure_location}</span>
         </Section>

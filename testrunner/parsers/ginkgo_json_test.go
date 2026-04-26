@@ -144,6 +144,52 @@ func TestGinkgoJSONParseFailedTests(t *testing.T) {
 	}
 }
 
+func TestGinkgoJSONParseFailedSetupSpecGetsSyntheticName(t *testing.T) {
+	// BeforeSuite / AfterSuite / DeferCleanup failures arrive with no
+	// LeafNodeText. We synthesise one so the UI tree row and detail
+	// heading aren't blank.
+	suites := []ginkgoSuiteReport{
+		{
+			SuitePath:        "/repo/tests/e2e-blobs",
+			SuiteDescription: "Blob Stores E2E Suite",
+			SpecReports: []ginkgoSpecReport{
+				{
+					LeafNodeText: "",
+					LeafNodeLocation: ginkgoLocation{
+						FileName:   "/repo/tests/e2e-blobs/suite_test.go",
+						LineNumber: 40,
+					},
+					State: "failed",
+					Failure: &ginkgoFailure{
+						Message: "Unexpected error:\n    <error>: boom\noccurred",
+						Location: ginkgoLocation{
+							FileName:   "/repo/tests/e2e-blobs/suite_test.go",
+							LineNumber: 51,
+						},
+					},
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(suites)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	tests, err := NewGinkgoJSON("/repo").Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("want 1 test, got %d", len(tests))
+	}
+	if tests[0].Name == "" {
+		t.Error("expected synthetic name, got empty")
+	}
+	if !strings.Contains(tests[0].Name, "Blob Stores E2E Suite") {
+		t.Errorf("synthetic name should reference the suite, got %q", tests[0].Name)
+	}
+}
+
 func TestGinkgoJSONParseSkippedTests(t *testing.T) {
 	suites := []ginkgoSuiteReport{
 		{

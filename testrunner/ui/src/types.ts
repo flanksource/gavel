@@ -23,6 +23,7 @@ export interface Test {
   summary?: TestSummary;
   attempts?: TestAttempt[];
   context?: GoTestContext | GinkgoContext | FixtureContext;
+  failure_detail?: FailureDetail;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
   kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';
@@ -222,4 +223,16 @@ export interface FixtureContext {
   cel_vars?: Record<string, any>;
   expected?: any;
   actual?: any;
+}
+
+export type FailureKind = 'gomega' | 'panic' | 'go_test' | 'raw';
+
+export interface FailureDetail {
+  kind?: FailureKind;
+  summary?: string;
+  matcher?: string;
+  expected?: string;
+  actual?: string;
+  location?: string;
+  stack?: string;
 }
