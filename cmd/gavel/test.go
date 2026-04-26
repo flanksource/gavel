@@ -544,7 +544,11 @@ var testCmd *cobra.Command
 
 func init() {
 	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
-	testCmd.Flags().SetInterspersed(false)
+	// Allow flags and positional package paths to interleave so callers (e.g. the
+	// flanksource/gavel composite action) can append flags after user-supplied
+	// paths. Use `--` to terminate flag parsing when forwarding flags to the
+	// underlying runner via the `gavel test ./pkg -- --focus X` idiom.
+	testCmd.Flags().SetInterspersed(true)
 	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
 		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
 	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
