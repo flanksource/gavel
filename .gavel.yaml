@@ -1,12 +1,18 @@
-commit: {}
+commit:
+  allow:
+  - .agents/skills/README.md
+  - .agents/skills/gavel-runner/SKILL.md
+  compatibility: {}
+  linkedDeps: {}
+  precommit: {}
 fixtures: {}
 lint:
   ignore:
   - file: .shell/checkout/8d512cac74b933d1f8d97629ab79966828d2e0789c66a463d8a78e7d40ccc42f/**
-secrets: {}
 pre:
-  - name: deps
-    run: make tidy
+- name: deps
+  run: make tidy
+secrets: {}
 ssh:
   cmd: make all
 verify:

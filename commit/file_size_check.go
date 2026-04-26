@@ -64,6 +64,7 @@ const (
 	FileSizeDecisionGitIgnoreFile
 	FileSizeDecisionGitIgnoreFolder
 	FileSizeDecisionAllow
+	FileSizeDecisionAllowFolder
 )
 
 type FileSizeDecider func(ctx context.Context, v FileSizeViolation) (FileSizeDecision, error)
@@ -251,8 +252,28 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 			}
 		case FileSizeDecisionAllow:
 			plan.allowEntries = appendUnique(plan.allowEntries, v.File)
+			plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+v.File)
 			plan.allowed = appendUnique(plan.allowed, v.File)
 			decided[v.File] = struct{}{}
+		case FileSizeDecisionAllowFolder:
+			folder := gitIgnoreFolderEntry(v.File)
+			if folder == "" {
+				plan.allowEntries = appendUnique(plan.allowEntries, v.File)
+				plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+v.File)
+				plan.allowed = appendUnique(plan.allowed, v.File)
+				decided[v.File] = struct{}{}
+				break
+			}
+			plan.allowEntries = appendUnique(plan.allowEntries, folder+"**")
+			plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+folder)
+			plan.allowed = appendUnique(plan.allowed, v.File)
+			decided[v.File] = struct{}{}
+			for _, o := range violations[i+1:] {
+				if strings.HasPrefix(filepath.ToSlash(o.File)+"/", folder) {
+					plan.allowed = appendUnique(plan.allowed, o.File)
+					decided[o.File] = struct{}{}
+				}
+			}
 		default:
 			return CheckOutcome{}, fmt.Errorf("unknown file-size decision %v for %q", d, v.File)
 		}
@@ -262,10 +283,11 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 }
 
 type fileSizePlan struct {
-	gitIgnoreEntries []string
-	allowEntries     []string
-	unstage          []string
-	allowed          []string
+	gitIgnoreEntries    []string
+	allowEntries        []string
+	allowGitIgnoreLines []string // negation lines (`!path`, `!folder/`) added to .gitignore as overrides
+	unstage             []string
+	allowed             []string
 }
 
 // withFolderSiblings decorates v with sibling metadata used by the prompt so
@@ -318,6 +340,12 @@ func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error
 			return CheckOutcome{}, fmt.Errorf("update .gavel.yaml: %w", err)
 		}
 		outcome.Allowed = added
+
+		negated, err := appendGitIgnoreAllow(gitRoot, plan.allowGitIgnoreLines)
+		if err != nil {
+			return CheckOutcome{}, fmt.Errorf("append .gitignore allow override: %w", err)
+		}
+		outcome.GitIgnored = appendUniqueAll(outcome.GitIgnored, negated)
 	}
 
 	return outcome, nil
@@ -375,9 +403,17 @@ func fileSizeChoices(v FileSizeViolation) []fileSizeChoice {
 	}
 	choices = append(choices,
 		fileSizeChoice{
-			Text:     "Allow this file in ./.gavel.yaml (commit.allow)",
+			Text:     fmt.Sprintf("Allow this file (%q in .gavel.yaml + !%s in .gitignore)", v.File, v.File),
 			Decision: FileSizeDecisionAllow,
 		},
+	)
+	if folder := gitIgnoreFolderEntry(v.File); folder != "" {
+		choices = append(choices, fileSizeChoice{
+			Text:     fmt.Sprintf("Allow folder %q (and everything under it: !%s in .gitignore + %s** in .gavel.yaml)", folder, folder, folder),
+			Decision: FileSizeDecisionAllowFolder,
+		})
+	}
+	choices = append(choices,
 		fileSizeChoice{
 			Text:     "Cancel commit",
 			Decision: FileSizeDecisionCancel,

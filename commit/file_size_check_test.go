@@ -307,13 +307,62 @@ func TestRunFileSizeCheck_Allow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Unstaged)
 	assert.Equal(t, []string{"fixture.bin"}, outcome.Allowed)
+	assert.Equal(t, []string{"!fixture.bin"}, outcome.GitIgnored,
+		"Allow must also write a !path negation into .gitignore as the explicit override")
 
 	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(repo, ".gavel.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"fixture.bin"}, cfg.Commit.Allow)
 
+	gitignore := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Equal(t, "!fixture.bin\n", gitignore)
+
 	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
 	assert.Contains(t, staged, "fixture.bin")
+}
+
+func TestRunFileSizeCheck_AllowFolder(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "assets"), 0o755))
+	writeLargeFile(t, repo, "assets/big1.bin", 2*maxFileBytes, false)
+	writeLargeFile(t, repo, "assets/big2.bin", 2*maxFileBytes, false)
+	gitRun(t, repo, "add", "assets/big1.bin", "assets/big2.bin")
+
+	outcome, err := RunFileSizeCheck(context.Background(), FileSizeParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"assets/big1.bin", "assets/big2.bin"},
+		Decider:     staticFileSizeDecider(FileSizeDecisionAllowFolder),
+		SaveDir:     repo,
+		Mode:        CheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, outcome.Unstaged)
+	assert.Equal(t, []string{"assets/**"}, outcome.Allowed,
+		"folder allow records the recursive glob (.gavel.yaml entry) so a single decision covers every nested file")
+	assert.Equal(t, []string{"!assets/"}, outcome.GitIgnored)
+
+	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(repo, ".gavel.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"assets/**"}, cfg.Commit.Allow,
+		"folder allow records the recursive glob in .gavel.yaml so EvaluateFileSizeViolations sees every nested file")
+
+	gitignore := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Equal(t, "!assets/\n", gitignore)
+}
+
+func TestAppendGitIgnoreAllow_DedupesAndAddsBangPrefix(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n!already.bin\n"), 0o644))
+
+	written, err := appendGitIgnoreAllow(dir, []string{"new.bin", "!already.bin", "assets/"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"!new.bin", "!assets/"}, written,
+		"already-present negation must dedupe; raw entries must get the ! prefix")
+
+	body, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	require.NoError(t, err)
+	assert.Equal(t, "*.log\n!already.bin\n!new.bin\n!assets/\n", string(body))
 }
 
 func TestRunFileSizeCheck_Cancel(t *testing.T) {
