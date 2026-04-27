@@ -36,6 +36,37 @@ type GavelResultsSummary struct {
 	TopFailures []TestFailure `json:"topFailures,omitempty"`
 	// TopLintViolations lists the first 5 lint findings across all linters.
 	TopLintViolations []LintViolation `json:"topLintViolations,omitempty"`
+	// Jobs is the per-job breakdown when the PR has more than one gavel
+	// artifact. Empty when only a single artifact was discovered. The
+	// outer counts/TopFailures fields are the sum across Jobs so PR
+	// sidebar badges and existing single-summary consumers keep working.
+	Jobs []GavelJobSummary `json:"jobs,omitempty"`
+}
+
+// GavelJobSummary holds the merged results from one workflow run / job.
+// When a single job uploads N gavel-* artifacts (matrix shards, separate
+// bench json, etc.), all of them are downloaded and merged into one entry.
+type GavelJobSummary struct {
+	// JobName is a human label — typically the artifact name (or a comma list
+	// when several artifacts were merged into the same run).
+	JobName string `json:"jobName"`
+	// RunID is the workflow run that produced these artifacts.
+	RunID int64 `json:"runId,omitempty"`
+	// ArtifactIDs lists every artifact ID merged into this entry. The first
+	// ID is treated as the canonical "open in UI" target.
+	ArtifactIDs       []int64         `json:"artifactIds"`
+	ArtifactURL       string          `json:"artifactUrl,omitempty"`
+	TestsPassed       int             `json:"testsPassed"`
+	TestsFailed       int             `json:"testsFailed"`
+	TestsSkipped      int             `json:"testsSkipped"`
+	TestsTotal        int             `json:"testsTotal"`
+	LintViolations    int             `json:"lintViolations"`
+	LintLinters       int             `json:"lintLinters"`
+	HasBench          bool            `json:"hasBench"`
+	BenchRegressions  int             `json:"benchRegressions,omitempty"`
+	Error             string          `json:"error,omitempty"`
+	TopFailures       []TestFailure   `json:"topFailures,omitempty"`
+	TopLintViolations []LintViolation `json:"topLintViolations,omitempty"`
 }
 
 type TestFailure struct {
@@ -82,6 +113,21 @@ func (g *gavelResultJSON) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// mergeGavelResults concatenates tests/lint/bench from multiple JSON payloads
+// belonging to the same job. The first non-nil bench wins (bench comparisons
+// are aggregate-level; we don't try to merge two of them).
+func mergeGavelResults(payloads ...gavelResultJSON) gavelResultJSON {
+	var merged gavelResultJSON
+	for _, p := range payloads {
+		merged.Tests = append(merged.Tests, p.Tests...)
+		merged.Lint = append(merged.Lint, p.Lint...)
+		if merged.Bench == nil {
+			merged.Bench = p.Bench
+		}
+	}
+	return merged
+}
+
 func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string) *GavelResultsSummary {
 	var data gavelResultJSON
 	if err := json.Unmarshal(jsonBytes, &data); err != nil {
@@ -96,7 +142,14 @@ func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string)
 		ArtifactID:  artifactID,
 		ArtifactURL: artifactURL,
 	}
+	applyResultsToSummary(data, summary)
+	return summary
+}
 
+// applyResultsToSummary populates the count/top fields of a GavelResultsSummary
+// from a (possibly-merged) gavelResultJSON payload. Used both by the
+// single-artifact path and by the multi-artifact merge path.
+func applyResultsToSummary(data gavelResultJSON, summary *GavelResultsSummary) {
 	for _, root := range data.Tests {
 		walkTestCounts(root, summary)
 	}
@@ -129,8 +182,149 @@ func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string)
 			}
 		}
 	}
+}
 
-	return summary
+// computeGavelJobSummary downloads every artifact in `arts`, merges all of
+// their .json payloads into one logical result set, and returns a single
+// GavelJobSummary representing the job.
+//
+// `arts` MUST share a workflow run — typically the slice produced by grouping
+// FindGavelArtifacts() output by RunID. Download errors on individual
+// artifacts are recorded in the Error field rather than aborting the merge,
+// so a partially-broken job still surfaces its successful files.
+func computeGavelJobSummary(opts github.Options, arts []github.GavelArtifact) GavelJobSummary {
+	if len(arts) == 0 {
+		return GavelJobSummary{Error: "no artifacts"}
+	}
+
+	job := GavelJobSummary{
+		RunID:       arts[0].RunID,
+		JobName:     jobNameFromArtifacts(arts),
+		ArtifactURL: arts[0].URL,
+	}
+	job.ArtifactIDs = make([]int64, 0, len(arts))
+
+	var payloads []gavelResultJSON
+	var partialErrors []string
+	for _, a := range arts {
+		job.ArtifactIDs = append(job.ArtifactIDs, a.ID)
+		if a.Expired {
+			partialErrors = append(partialErrors, fmt.Sprintf("artifact %s (%d) expired", a.Name, a.ID))
+			continue
+		}
+		files, err := github.DownloadArtifactFiles(opts, a.ID)
+		if err != nil {
+			partialErrors = append(partialErrors, fmt.Sprintf("download %s (%d): %v", a.Name, a.ID, err))
+			continue
+		}
+		for _, f := range files {
+			var p gavelResultJSON
+			if err := json.Unmarshal(f.Body, &p); err != nil {
+				partialErrors = append(partialErrors, fmt.Sprintf("parse %s/%s: %v", a.Name, f.Name, err))
+				continue
+			}
+			payloads = append(payloads, p)
+		}
+	}
+
+	merged := mergeGavelResults(payloads...)
+
+	// Reuse the summary-population logic via a transient summary, then copy
+	// the count fields onto the job struct. Keeps a single source of truth
+	// for "how do we count tests".
+	tmp := &GavelResultsSummary{}
+	applyResultsToSummary(merged, tmp)
+
+	job.TestsPassed = tmp.TestsPassed
+	job.TestsFailed = tmp.TestsFailed
+	job.TestsSkipped = tmp.TestsSkipped
+	job.TestsTotal = tmp.TestsTotal
+	job.LintViolations = tmp.LintViolations
+	job.LintLinters = tmp.LintLinters
+	job.HasBench = tmp.HasBench
+	job.BenchRegressions = tmp.BenchRegressions
+	job.TopFailures = tmp.TopFailures
+	job.TopLintViolations = tmp.TopLintViolations
+
+	if len(partialErrors) > 0 && len(payloads) == 0 {
+		// Total failure: surface the first error verbatim so the UI shows
+		// it instead of a misleading "0 tests" panel.
+		job.Error = partialErrors[0]
+	} else if len(partialErrors) > 0 {
+		job.Error = fmt.Sprintf("%d of %d artifact(s) failed to load: %s",
+			len(partialErrors), len(arts), strings.Join(partialErrors, "; "))
+	}
+	return job
+}
+
+// jobNameFromArtifacts produces a human label for a job entry. When all
+// artifacts share a name we use that; when names differ we join them so the
+// UI can show "gavel-results, gavel-bench".
+func jobNameFromArtifacts(arts []github.GavelArtifact) string {
+	if len(arts) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool, len(arts))
+	var names []string
+	for _, a := range arts {
+		if seen[a.Name] {
+			continue
+		}
+		seen[a.Name] = true
+		names = append(names, a.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// summarizeGavelArtifacts groups the discovered artifacts by workflow run,
+// downloads + merges each group, then folds the per-job results into a
+// single PR-level summary. The PR-level summary's Jobs field carries the
+// per-job breakdown for surfaces that want detail.
+func summarizeGavelArtifacts(opts github.Options, arts []github.GavelArtifact) *GavelResultsSummary {
+	if len(arts) == 0 {
+		return nil
+	}
+
+	byRun := make(map[int64][]github.GavelArtifact)
+	var runOrder []int64
+	for _, a := range arts {
+		if _, ok := byRun[a.RunID]; !ok {
+			runOrder = append(runOrder, a.RunID)
+		}
+		byRun[a.RunID] = append(byRun[a.RunID], a)
+	}
+
+	pr := &GavelResultsSummary{
+		ArtifactID:  arts[0].ID,
+		ArtifactURL: arts[0].URL,
+	}
+	for _, runID := range runOrder {
+		job := computeGavelJobSummary(opts, byRun[runID])
+		pr.Jobs = append(pr.Jobs, job)
+		pr.TestsPassed += job.TestsPassed
+		pr.TestsFailed += job.TestsFailed
+		pr.TestsSkipped += job.TestsSkipped
+		pr.TestsTotal += job.TestsTotal
+		pr.LintViolations += job.LintViolations
+		pr.LintLinters += job.LintLinters
+		if job.HasBench {
+			pr.HasBench = true
+		}
+		pr.BenchRegressions += job.BenchRegressions
+		for _, f := range job.TopFailures {
+			if len(pr.TopFailures) >= 5 {
+				break
+			}
+			pr.TopFailures = append(pr.TopFailures, f)
+		}
+		for _, v := range job.TopLintViolations {
+			if len(pr.TopLintViolations) >= 5 {
+				break
+			}
+			pr.TopLintViolations = append(pr.TopLintViolations, v)
+		}
+	}
+	return pr
 }
 
 func walkTestCounts(t parsers.Test, s *GavelResultsSummary) {
@@ -231,29 +425,39 @@ func (s *Server) getOrCreateArtifact(artifactID int64, repo string) (*artifactEn
 
 	opts := s.ghOpts
 	opts.Repo = repo
-	jsonBytes, err := github.DownloadArtifact(opts, artifactID)
+	files, err := github.DownloadArtifactFiles(opts, artifactID)
 	if err != nil {
 		return nil, err
 	}
 
-	summary := computeGavelSummary(jsonBytes, artifactID, "")
+	// Merge every JSON entry in the zip into a single payload before
+	// computing summary / loading the snapshot. Single-file artifacts hit
+	// the same path with one payload, so behaviour is unchanged for them.
+	var payloads []gavelResultJSON
+	for _, f := range files {
+		var p gavelResultJSON
+		if err := json.Unmarshal(f.Body, &p); err != nil {
+			logger.Warnf("artifact %d: parse %s: %v", artifactID, f.Name, err)
+			continue
+		}
+		payloads = append(payloads, p)
+	}
+	if len(payloads) == 0 {
+		return nil, fmt.Errorf("artifact %d: no parseable .json file in zip", artifactID)
+	}
+	merged := mergeGavelResults(payloads...)
+
+	summary := &GavelResultsSummary{ArtifactID: artifactID}
+	applyResultsToSummary(merged, summary)
 
 	srv := testui.NewServer()
-	var snap testui.Snapshot
-	if err := json.Unmarshal(jsonBytes, &snap); err != nil {
-		logger.Warnf("artifact %d: unmarshal as snapshot: %v, trying legacy format", artifactID, err)
-		var data gavelResultJSON
-		if err := json.Unmarshal(jsonBytes, &data); err != nil {
-			return nil, fmt.Errorf("parse artifact %d: %w", artifactID, err)
-		}
-		snap = testui.Snapshot{
-			Tests: data.Tests,
-			Lint:  data.Lint,
-			Bench: data.Bench,
-			Status: testui.SnapshotStatus{
-				LintRun: len(data.Lint) > 0,
-			},
-		}
+	snap := testui.Snapshot{
+		Tests: merged.Tests,
+		Lint:  merged.Lint,
+		Bench: merged.Bench,
+		Status: testui.SnapshotStatus{
+			LintRun: len(merged.Lint) > 0,
+		},
 	}
 	srv.LoadSnapshot(snap)
 	srv.MarkDone()

@@ -26,6 +26,7 @@ type Server struct {
 	embeddedDiagnostics *DiagnosticsSnapshot
 	updated             chan struct{}
 	gitRoot             string
+	gavelDir            string
 	diag                *DiagnosticsManager
 
 	rerunMu     sync.Mutex
@@ -206,6 +207,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
+	mux.HandleFunc("/api/runs", s.handleRunsIndex)
+	mux.HandleFunc("/api/runs/", s.handleRunSnapshot)
 	return mux
 }
 

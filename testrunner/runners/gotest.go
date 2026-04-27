@@ -56,7 +56,7 @@ func (r *GoTest) Detect(workDir string) (bool, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(d.Name(), "_test.go") {
+		if strings.HasSuffix(d.Name(), "_test.go") && matchesBuildContext(path) {
 			return errGoTestDetected
 		}
 		return nil
@@ -81,6 +81,9 @@ func (r *GoTest) packageHasNonGinkgoTests(pkgDir string) bool {
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
 			path := filepath.Join(pkgDir, entry.Name())
+			if !matchesBuildContext(path) {
+				continue
+			}
 			if !hasGinkgoImports(path) {
 				return true
 			}
@@ -103,6 +106,9 @@ func (r *GoTest) inspectPackage(pkgDir string) (hasTests bool, hasBench bool) {
 			continue
 		}
 		path := filepath.Join(pkgDir, entry.Name())
+		if !matchesBuildContext(path) {
+			continue
+		}
 		if hasGinkgoImports(path) {
 			continue
 		}
@@ -162,6 +168,9 @@ func (r *GoTest) hasTestsBeyondTestMain(pkgDir string) bool {
 			continue
 		}
 		path := filepath.Join(pkgDir, entry.Name())
+		if !matchesBuildContext(path) {
+			continue
+		}
 		if hasGinkgoImports(path) {
 			continue
 		}
@@ -198,7 +207,7 @@ func (r *GoTest) DiscoverPackages(workDir string, recursive bool) ([]string, err
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && matchesBuildContext(path) {
 			pkgDir := filepath.Dir(path)
 			if !seen[pkgDir] {
 				seen[pkgDir] = true

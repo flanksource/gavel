@@ -188,3 +188,24 @@ export interface FixtureContext {
   expected?: any;
   actual?: any;
 }
+
+export interface RunCounts {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  pending: number;
+}
+
+export interface RunIndexEntry {
+  name: string;
+  path: string;
+  pointer?: string;
+  modified: string;
+  sha?: string;
+  started?: string;
+  ended?: string;
+  counts?: RunCounts;
+  lint?: number;
+  error?: string;
+}

@@ -228,3 +228,127 @@ func TestSnapshotIncludesGavelResults(t *testing.T) {
 		t.Errorf("marshaled snapshot missing gavelResults field: %s", b)
 	}
 }
+
+// TestMergeGavelResultsConcatenates exercises the per-job merge: when one job
+// uploads multiple gavel-* artifacts (e.g. matrix shards or a separate bench
+// JSON), all of their tests/lint/bench data must aggregate into one logical
+// payload. Pass + Fail + Skip counts must equal the sum across inputs.
+func TestMergeGavelResultsConcatenates(t *testing.T) {
+	a := gavelResultJSON{}
+	if err := json.Unmarshal([]byte(`{"tests":[{"name":"A1","passed":true},{"name":"A2","failed":true}]}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	b := gavelResultJSON{}
+	if err := json.Unmarshal([]byte(`{"tests":[{"name":"B1","passed":true}],"lint":[{"linter":"lint1","success":false,"violations":[{"file":"x.go","line":1,"message":"x"}]}]}`), &b); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := mergeGavelResults(a, b)
+	if len(merged.Tests) != 3 {
+		t.Errorf("merged tests = %d, want 3", len(merged.Tests))
+	}
+	if len(merged.Lint) != 1 {
+		t.Errorf("merged lint = %d, want 1", len(merged.Lint))
+	}
+
+	summary := &GavelResultsSummary{}
+	applyResultsToSummary(merged, summary)
+	if summary.TestsPassed != 2 || summary.TestsFailed != 1 || summary.TestsTotal != 3 {
+		t.Errorf("summary counts wrong: passed=%d failed=%d total=%d",
+			summary.TestsPassed, summary.TestsFailed, summary.TestsTotal)
+	}
+	if summary.LintViolations != 1 {
+		t.Errorf("LintViolations = %d, want 1", summary.LintViolations)
+	}
+}
+
+// TestMergeGavelResultsKeepsFirstBench documents that bench comparisons are
+// not summed across artifacts — the first non-nil one wins. Two artifacts
+// each carrying their own bench struct is rare, but if it happens we want a
+// deterministic answer (no double-counting regressions, no panic).
+func TestMergeGavelResultsKeepsFirstBench(t *testing.T) {
+	a := gavelResultJSON{}
+	b := gavelResultJSON{}
+	if err := json.Unmarshal([]byte(`{"bench":{"threshold":1.05}}`), &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"bench":{"threshold":2.0}}`), &b); err != nil {
+		t.Fatal(err)
+	}
+	merged := mergeGavelResults(a, b)
+	if merged.Bench == nil || merged.Bench.Threshold != 1.05 {
+		t.Errorf("expected first bench to win (threshold=1.05), got %+v", merged.Bench)
+	}
+}
+
+// TestJobNameFromArtifactsDistinct asserts that distinct artifact names from
+// the same job are joined into a comma-separated label so the UI can show
+// "gavel-results, gavel-bench" instead of just "gavel-results".
+func TestJobNameFromArtifactsDistinct(t *testing.T) {
+	got := jobNameFromArtifacts([]github.GavelArtifact{
+		{Name: "gavel-results"},
+		{Name: "gavel-bench"},
+		{Name: "gavel-results"}, // duplicate must be deduped
+	})
+	if got != "gavel-results, gavel-bench" {
+		t.Errorf("jobNameFromArtifacts = %q, want %q", got, "gavel-results, gavel-bench")
+	}
+}
+
+// TestSummarizeGavelArtifactsGroupsByRun verifies that the PR-level rollup
+// groups artifacts from the same workflow run into a single GavelJobSummary
+// entry. We can't exercise the network-fetch path here (DownloadArtifactFiles
+// would call out to GitHub), so we use an empty artifact set per run — the
+// grouping/RunID handling is what matters.
+func TestSummarizeGavelArtifactsGroupsByRun(t *testing.T) {
+	// Fake out the github layer by passing only metadata: the function will
+	// try to download and fail, recording an error on each job. That's
+	// enough to assert the grouping shape.
+	arts := []github.GavelArtifact{
+		{Name: "gavel-results", ID: 1, RunID: 100, URL: "u1"},
+		{Name: "gavel-bench", ID: 2, RunID: 100, URL: "u2"},
+		{Name: "gavel-results", ID: 3, RunID: 200, URL: "u3"},
+	}
+	// Without a token, DownloadArtifactFiles errors immediately at
+	// opts.token() — no network call. The merge logic still has to walk
+	// every group and produce the right number of Job entries.
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	pr := summarizeGavelArtifacts(github.Options{Repo: "o/r"}, arts)
+	if pr == nil {
+		t.Fatal("summarizeGavelArtifacts returned nil")
+	}
+	if len(pr.Jobs) != 2 {
+		t.Fatalf("Jobs = %d, want 2 (one per RunID)", len(pr.Jobs))
+	}
+	// Job for RunID 100 must merge both artifact IDs.
+	var run100 *GavelJobSummary
+	for i := range pr.Jobs {
+		if pr.Jobs[i].RunID == 100 {
+			run100 = &pr.Jobs[i]
+		}
+	}
+	if run100 == nil {
+		t.Fatalf("missing RunID 100 in Jobs: %+v", pr.Jobs)
+	}
+	if len(run100.ArtifactIDs) != 2 {
+		t.Errorf("RunID 100 ArtifactIDs = %v, want 2 entries", run100.ArtifactIDs)
+	}
+	if run100.JobName != "gavel-results, gavel-bench" {
+		t.Errorf("RunID 100 JobName = %q", run100.JobName)
+	}
+	// Each job recorded an error (no token); the PR-level counts should
+	// therefore be zero rather than misleading partials.
+	if pr.TestsTotal != 0 {
+		t.Errorf("expected 0 tests (all downloads failed), got %d", pr.TestsTotal)
+	}
+}
+
+// TestSummarizeGavelArtifactsEmpty asserts that an empty input returns nil
+// so the caller can short-circuit emit("gavel", ...) and not show an empty
+// "Gavel results" section in the UI.
+func TestSummarizeGavelArtifactsEmpty(t *testing.T) {
+	if got := summarizeGavelArtifacts(github.Options{}, nil); got != nil {
+		t.Errorf("expected nil for empty input, got %+v", got)
+	}
+}

@@ -48,7 +48,7 @@ func (r *Ginkgo) Detect(workDir string) (bool, error) {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && hasGinkgoImports(path) {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && matchesBuildContext(path) && hasGinkgoImports(path) {
 			return errGinkgoDetected
 		}
 		return nil
@@ -81,7 +81,7 @@ func (r *Ginkgo) DiscoverPackages(workDir string, recursive bool) ([]string, err
 			return err
 		}
 
-		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") {
+		if !d.IsDir() && strings.HasSuffix(d.Name(), "_test.go") && matchesBuildContext(path) {
 			if hasGinkgoImports(path) {
 				pkgDir := filepath.Dir(path)
 				if !seen[pkgDir] {

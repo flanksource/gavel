@@ -216,6 +216,23 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 	}
 
 	segments := strings.Split(path, "/")
+	// `/run/<name>` is a frontend-only prefix that selects which saved
+	// snapshot to load. Strip it so the rest of the route parses the same
+	// way as the bare `/<tab>/...` form.
+	if segments[0] == "run" {
+		if len(segments) < 2 {
+			// `/run` with no name behaves like the index page.
+			req.TestFilters = parseTestFilters(r)
+			req.LintFilters = parseLintFilters(r)
+			return req, true
+		}
+		segments = segments[2:]
+		if len(segments) == 0 {
+			req.TestFilters = parseTestFilters(r)
+			req.LintFilters = parseLintFilters(r)
+			return req, true
+		}
+	}
 	tabSeg := segments[0]
 	pathFormat := ""
 	if base, format := stripKnownFormat(tabSeg); format != "" {

@@ -24,7 +24,7 @@ func registerTestFrameworkSubcommands() {
 			return runTests(opts)
 		})
 		sub.Short = fmt.Sprintf("Run only %s tests", fw)
-		sub.Flags().SetInterspersed(false)
+		sub.Flags().SetInterspersed(true)
 		if err := sub.Flags().MarkHidden("framework"); err != nil {
 			panic(fmt.Sprintf("hide --framework on %s subcommand: %v", name, err))
 		}
