@@ -84,15 +84,29 @@ func TestBuildCompactSummary(t *testing.T) {
 
 	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
 
-	// Counts table by source — expect one row per test package AND one per linter.
+	// Counts table by source — only sources that have failures or skips
+	// should appear. The serve package has failures, the verify package
+	// has a skipped test, and golangci-lint reports a violation, so all
+	// three keep their row. Sources that are 100% passing (e.g. the
+	// clean gofmt linter below) are folded into the passing-only summary
+	// row + Totals line.
 	if !strings.Contains(out, "github.com/flanksource/gavel/serve") {
 		t.Errorf("expected serve package row in counts table, got:\n%s", out)
 	}
 	if !strings.Contains(out, "github.com/flanksource/gavel/verify") {
-		t.Errorf("expected verify package row in counts table, got:\n%s", out)
+		t.Errorf("expected verify package row (has a skipped test) in counts table, got:\n%s", out)
 	}
 	if !strings.Contains(out, "golangci-lint") {
 		t.Errorf("expected golangci-lint row in counts table, got:\n%s", out)
+	}
+	// gofmt is a passing-only linter — must not appear as its own row.
+	if strings.Contains(out, "| lint: gofmt |") {
+		t.Errorf("passing-only linter must be folded into the passing summary row, got:\n%s", out)
+	}
+	// The collapsed-passing row should mention the gofmt linter's pass count
+	// (1) and the "more passing source(s)" text.
+	if !strings.Contains(out, "more passing source(s)") {
+		t.Errorf("expected collapsed passing-source row, got:\n%s", out)
 	}
 
 	// Passing rows present, but no per-test listing for passing tests in the detail section.
@@ -280,8 +294,11 @@ func TestBuildCompactSummaryPrefersRealResultsOverCrashField(t *testing.T) {
 		Error: "partial error that should be ignored",
 	}
 	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
-	if !strings.Contains(out, "pkg/x") {
-		t.Errorf("expected normal results to render, got:\n%s", out)
+	// pkg/x is 100% passing so its row is collapsed into the totals; we
+	// only need to confirm the normal counts path ran (Totals line) and
+	// that the crash-stub path did not render.
+	if !strings.Contains(out, "**Totals:** 1 passed") {
+		t.Errorf("expected normal Totals line for the single passing test, got:\n%s", out)
 	}
 	if strings.Contains(out, "Gavel crashed") {
 		t.Errorf("normal results must not fall through to crash path, got:\n%s", out)
@@ -326,6 +343,85 @@ func TestRunSummaryReadsJSONFile(t *testing.T) {
 	}
 	if strings.Contains(body, "TestOne") {
 		t.Errorf("passing test must not appear in details, got:\n%s", body)
+	}
+}
+
+// TestBuildCompactSummaryCollapsesAllPassingSources exercises the
+// "PR comment must stay short" behaviour: when every source is 100%
+// passing, the per-source table disappears entirely and the Totals
+// line carries the full headline (count + duration). Regressing to
+// the old behaviour (one row per package) blows up PR comments on
+// large monorepos.
+func TestBuildCompactSummaryCollapsesAllPassingSources(t *testing.T) {
+	input := gavelResultJSON{
+		Tests: []parsers.Test{
+			{Package: "pkg/a", Children: parsers.Tests{
+				{Package: "pkg/a", Name: "TestOne", Passed: true, Duration: 10 * time.Millisecond},
+				{Package: "pkg/a", Name: "TestTwo", Passed: true, Duration: 20 * time.Millisecond},
+			}},
+			{Package: "pkg/b", Children: parsers.Tests{
+				{Package: "pkg/b", Name: "TestThree", Passed: true, Duration: 30 * time.Millisecond},
+			}},
+		},
+	}
+	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
+
+	// No per-package rows when every source is clean.
+	if strings.Contains(out, "| pkg/a |") {
+		t.Errorf("all-passing pkg/a must not appear as its own row, got:\n%s", out)
+	}
+	if strings.Contains(out, "| pkg/b |") {
+		t.Errorf("all-passing pkg/b must not appear as its own row, got:\n%s", out)
+	}
+	// No table headers either — the table itself collapses.
+	if strings.Contains(out, "| Source |") {
+		t.Errorf("counts table must collapse when every source is clean, got:\n%s", out)
+	}
+	// Totals line still carries the headline.
+	if !strings.Contains(out, "**Totals:** 3 passed · 0 failed · 0 skipped") {
+		t.Errorf("expected Totals line with aggregate counts, got:\n%s", out)
+	}
+}
+
+// TestBuildCompactSummaryCollapsesPassingAlongsideFailing checks the
+// mixed case: failing sources keep their own row, but every all-passing
+// source is folded into a single trailing summary row whose pass count
+// matches the sum of the hidden sources.
+func TestBuildCompactSummaryCollapsesPassingAlongsideFailing(t *testing.T) {
+	input := gavelResultJSON{
+		Tests: []parsers.Test{
+			{Package: "pkg/fail", Children: parsers.Tests{
+				{Package: "pkg/fail", Name: "TestBoom", Failed: true, Message: "boom"},
+			}},
+			{Package: "pkg/clean1", Children: parsers.Tests{
+				{Package: "pkg/clean1", Name: "TestOne", Passed: true, Duration: 100 * time.Millisecond},
+				{Package: "pkg/clean1", Name: "TestTwo", Passed: true, Duration: 100 * time.Millisecond},
+			}},
+			{Package: "pkg/clean2", Children: parsers.Tests{
+				{Package: "pkg/clean2", Name: "TestThree", Passed: true, Duration: 50 * time.Millisecond},
+			}},
+		},
+	}
+	out := buildCompactSummary(input, compactSummaryBudget{maxFailures: 5, maxLinesPerFailure: 5, maxCharsPerLine: 200})
+
+	// Failing source keeps its dedicated row.
+	if !strings.Contains(out, "| pkg/fail |") {
+		t.Errorf("failing pkg/fail row must be present, got:\n%s", out)
+	}
+	// Clean sources do not appear by name…
+	if strings.Contains(out, "pkg/clean1") {
+		t.Errorf("clean pkg/clean1 must not appear by name, got:\n%s", out)
+	}
+	if strings.Contains(out, "pkg/clean2") {
+		t.Errorf("clean pkg/clean2 must not appear by name, got:\n%s", out)
+	}
+	// …but a single collapsed row reports the count of hidden sources
+	// AND the sum of their pass counts (2 + 1 = 3).
+	if !strings.Contains(out, "_2 more passing source(s)_") {
+		t.Errorf("expected '2 more passing source(s)' collapse row, got:\n%s", out)
+	}
+	if !strings.Contains(out, "| _2 more passing source(s)_ | 3 | 0 | 0 |") {
+		t.Errorf("expected collapsed row with summed pass count, got:\n%s", out)
 	}
 }
 

@@ -231,9 +231,25 @@ func ensureSource(sources map[string]*sourceCounts, name string) *sourceCounts {
 	return sc
 }
 
+// writeCountsTable emits a markdown table containing only sources that have
+// failures or skips. Sources with 100% passing tests are intentionally
+// omitted — their pass count and duration are rolled into the totals row
+// emitted by writeTotals so the PR comment stays short for the common
+// "all green" case. When every source is clean, the table is omitted
+// entirely and writeTotals carries the headline.
 func writeCountsTable(b *strings.Builder, sources map[string]*sourceCounts) {
-	rows := make([]*sourceCounts, 0, len(sources))
+	var rows []*sourceCounts
+	var passingOnly, passingDuration int
+	var hiddenSources int
+	totalPassing := 0
 	for _, sc := range sources {
+		totalPassing += sc.passed
+		if sc.failed == 0 && sc.skipped == 0 {
+			passingOnly += sc.passed
+			passingDuration += int(sc.duration)
+			hiddenSources++
+			continue
+		}
 		rows = append(rows, sc)
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -245,11 +261,21 @@ func writeCountsTable(b *strings.Builder, sources map[string]*sourceCounts) {
 	})
 
 	b.WriteString("## Gavel summary\n\n")
+	if len(rows) == 0 {
+		// Nothing to break out — totals row alone tells the story.
+		return
+	}
 	b.WriteString("| Source | Pass | Fail | Skip | Duration |\n")
 	b.WriteString("|---|---:|---:|---:|---:|\n")
 	for _, sc := range rows {
 		fmt.Fprintf(b, "| %s | %d | %d | %d | %s |\n",
 			escapePipe(sc.name), sc.passed, sc.failed, sc.skipped, formatDuration(sc.duration))
+	}
+	if hiddenSources > 0 {
+		// One collapsed row covers every all-passing source so a reader
+		// can still see "we ran more than what's listed".
+		fmt.Fprintf(b, "| _%d more passing source(s)_ | %d | 0 | 0 | %s |\n",
+			hiddenSources, passingOnly, formatDuration(time.Duration(passingDuration)))
 	}
 	b.WriteString("\n")
 }
