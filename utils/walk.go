@@ -13,6 +13,27 @@ import (
 
 type walkStopFn func(root, path string, d fs.DirEntry) (bool, error)
 
+// disableGitignoreWalk, when true, makes WalkGitIgnored / WalkGitIgnoredBounded
+// behave like a plain filepath.WalkDir (still skipping .git and respecting the
+// stopAtNestedProjectRoot bound, but ignoring .gitignore patterns).
+//
+// This is set at most once per CLI invocation from the testrunner orchestrator
+// when the user passes --no-gitignore. It is process-global because the Runner
+// interface threads no per-call options through to discovery, and propagating
+// one would ripple through every runner implementation. Acceptable trade-off
+// for a CLI binary.
+var disableGitignoreWalk bool
+
+// SetGitignoreDisabled toggles the global gitignore-aware walking flag.
+// Pass true to make subsequent WalkGitIgnored / WalkGitIgnoredBounded calls
+// skip .gitignore filtering. Returns the previous value so callers can
+// restore it (useful in tests).
+func SetGitignoreDisabled(v bool) bool {
+	prev := disableGitignoreWalk
+	disableGitignoreWalk = v
+	return prev
+}
+
 func FindGitRoot(dir string) string {
 	dir, _ = filepath.Abs(dir)
 	for {
@@ -135,7 +156,7 @@ func WalkGitIgnoredBounded(root string, fn fs.WalkDirFunc, allowList ...string) 
 func walkGitIgnored(root string, fn fs.WalkDirFunc, stop walkStopFn, allowList ...string) error {
 	root, _ = filepath.Abs(root)
 	gitRoot := FindGitRoot(root)
-	if gitRoot == "" {
+	if gitRoot == "" || disableGitignoreWalk {
 		return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return fn(path, d, err)
@@ -243,8 +264,12 @@ func stopAtNestedProjectRoot(root, path string, d fs.DirEntry) (bool, error) {
 
 // FilterGitIgnored returns the subset of absolute paths that are not matched
 // by .gitignore patterns. Uses go-git's ReadPatterns to recursively load all
-// .gitignore files. If no git root is found, all paths are returned.
+// .gitignore files. If no git root is found or the global disable flag is
+// set (see SetGitignoreDisabled), all paths are returned.
 func FilterGitIgnored(paths []string, dir string) []string {
+	if disableGitignoreWalk {
+		return paths
+	}
 	dir, _ = filepath.Abs(dir)
 	gitRoot := FindGitRoot(dir)
 	if gitRoot == "" {

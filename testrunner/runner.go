@@ -105,6 +105,8 @@ type TestOrchestrator struct {
 type RunOptions struct {
 	SyncTodos     bool                  `json:"sync_todos,omitempty" flag:"sync-todos"`                       // Whether to sync test failures to TODOs
 	StartingPaths []string              `json:"starting_paths,omitempty" args:"true"`                         // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
+	Ignore        []string              `json:"ignore,omitempty" flag:"ignore"`                               // Package paths to exclude from discovery. Bare directories are recursive (e.g. ./bench excludes ./bench and ./bench/sub). Trailing /... is also accepted.
+	NoGitignore   bool                  `json:"no_gitignore,omitempty" flag:"no-gitignore"`                   // Disable .gitignore-based pruning during package discovery. By default gitignored directories are skipped.
 	ExtraArgs     []string              `json:"extra_args,omitempty" flag:"extra-args"`                       // Additional arguments to pass to test runners (e.g., ["--focus", "TestName"])
 	ShowPassed    bool                  `json:"show_passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
 	ShowStdout    OutputMode            `json:"show_stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
@@ -146,6 +148,12 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if len(opts.StartingPaths) > 0 {
 		text = text.Space().Append("StartingPaths: ", "text-muted").Append(clicky.CompactList(opts.StartingPaths), "text-blue-500")
+	}
+	if len(opts.Ignore) > 0 {
+		text = text.Space().Append("Ignore: ", "text-muted").Append(clicky.CompactList(opts.Ignore), "text-blue-500")
+	}
+	if opts.NoGitignore {
+		text = text.Space().Append("NoGitignore: ", "text-muted").Append(icons.Check, "text-green-500")
 	}
 	if len(opts.ExtraArgs) > 0 {
 		text = text.Space().Append("ExtraArgs: ", "text-muted").Append(clicky.CompactList(opts.ExtraArgs), "text-blue-500")
@@ -380,6 +388,13 @@ func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+
+	// --no-gitignore: short-circuit gitignore-aware walking process-wide. The
+	// flag is package-global because the Runner interface does not thread
+	// per-call options through to discovery. Acceptable for a single-shot
+	// CLI process.
+	prevDisable := utils.SetGitignoreDisabled(opts.NoGitignore)
+	defer utils.SetGitignoreDisabled(prevDisable)
 
 	// Split starting paths by execution root so each group runs with the
 	// correct WorkDir. Nested Go modules get their own groups.
@@ -1213,7 +1228,7 @@ func (o *TestOrchestrator) discoverPackagesInPaths(runner runners.Runner, starti
 
 	}
 
-	return lo.Uniq(allPackages), nil
+	return applyIgnorePatterns(lo.Uniq(allPackages), o.Ignore), nil
 }
 
 // parseTestResults parses test results from either stdout (go test) or report file (Ginkgo).

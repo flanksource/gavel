@@ -381,3 +381,66 @@ var _ = Describe("FilterGitIgnored", func() {
 		Expect(result).To(BeEmpty())
 	})
 })
+
+var _ = Describe("SetGitignoreDisabled", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+	})
+
+	AfterEach(func() {
+		// Always restore the default; test isolation depends on this.
+		SetGitignoreDisabled(false)
+	})
+
+	It("WalkGitIgnored honors gitignored paths when enabled (default)", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0644)
+		os.MkdirAll(filepath.Join(root, "ignored"), 0755)
+		os.WriteFile(filepath.Join(root, "ignored", "x.go"), nil, 0644)
+		os.WriteFile(filepath.Join(root, "main.go"), nil, 0644)
+
+		paths, err := collectPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("main.go"))
+		Expect(paths).NotTo(ContainElement("ignored"))
+	})
+
+	It("WalkGitIgnored ignores .gitignore once disabled", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored/\n"), 0644)
+		os.MkdirAll(filepath.Join(root, "ignored"), 0755)
+		os.WriteFile(filepath.Join(root, "ignored", "x.go"), nil, 0644)
+		os.WriteFile(filepath.Join(root, "main.go"), nil, 0644)
+
+		SetGitignoreDisabled(true)
+
+		paths, err := collectPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("main.go"))
+		Expect(paths).To(ContainElement("ignored"))
+		Expect(paths).To(ContainElement("ignored/x.go"))
+	})
+
+	It("FilterGitIgnored is bypassed once disabled", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "main.go"),
+			filepath.Join(root, "debug.log"),
+		}
+
+		SetGitignoreDisabled(true)
+		result := FilterGitIgnored(paths, root)
+		Expect(result).To(ConsistOf(paths))
+	})
+
+	It("returns the previous value so callers can restore it", func() {
+		prev := SetGitignoreDisabled(true)
+		Expect(prev).To(BeFalse())
+		prev2 := SetGitignoreDisabled(false)
+		Expect(prev2).To(BeTrue())
+	})
+})
