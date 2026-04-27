@@ -125,8 +125,23 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		stdout += spec.CapturedGinkgoWriterOutput
 	}
 
+	// Ginkgo emits BeforeSuite / AfterSuite / DeferCleanup failures with no
+	// LeafNodeText. Fall back to a synthetic name so the UI tree row and
+	// detail heading aren't blank.
+	leafName := spec.LeafNodeText
+	if leafName == "" {
+		switch {
+		case suite.SuiteDescription != "":
+			leafName = "[" + suite.SuiteDescription + " setup/teardown]"
+		case spec.LeafNodeLocation.FileName != "":
+			leafName = "[setup at " + p.relToWorkDir(spec.LeafNodeLocation.FileName) + "]"
+		default:
+			leafName = "[suite setup]"
+		}
+	}
+
 	test := Test{
-		Name:      spec.LeafNodeText,
+		Name:      leafName,
 		Suite:     suiteHierarchy,
 		File:      p.relToWorkDir(spec.LeafNodeLocation.FileName),
 		Line:      spec.LeafNodeLocation.LineNumber,
@@ -144,10 +159,14 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 		test.Failed = true
 		if spec.Failure != nil {
 			test.Message = spec.Failure.Message
+			test.FailureDetail = ParseFailureDetail(spec.Failure.Message)
 			failLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.Failure.Location.FileName), spec.Failure.Location.LineNumber)
 			testLoc := fmt.Sprintf("%s:%d", p.relToWorkDir(spec.LeafNodeLocation.FileName), spec.LeafNodeLocation.LineNumber)
 			if failLoc != testLoc {
 				ctx.FailureLocation = failLoc
+			}
+			if test.FailureDetail != nil && test.FailureDetail.Location == "" && ctx.FailureLocation != "" {
+				test.FailureDetail.Location = ctx.FailureLocation
 			}
 		}
 	case "skipped":

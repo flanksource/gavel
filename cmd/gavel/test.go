@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -50,16 +49,20 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.LintTimeout = testDurationFlags.LintTimeout
 	opts.TestTimeout = testDurationFlags.TestTimeout
 
-	globalCtx, cancelGlobal := context.WithCancel(context.Background())
-	defer cancelGlobal()
-	if opts.Timeout > 0 {
-		var cancelTimeout context.CancelFunc
-		globalCtx, cancelTimeout = context.WithTimeout(globalCtx, opts.Timeout)
-		defer cancelTimeout()
-	}
-	opts.Context = globalCtx
+	runCtx, cancelRun := newStopContext(nil, opts.Timeout)
+	defer cancelRun()
+	opts.Context = runCtx
 
 	installTimeoutDiagnosticsHook(opts)
+
+	// Route bare fmt.Print / os.Stderr writes through an in-memory buffer
+	// while the task renderer is live, then flush everything in order at
+	// the end of the command. Keeps the task progress display clean while
+	// still surfacing every byte the run produced. Defer-driven so even
+	// panics / early returns release the capture before Go's panic
+	// printer tries to write to the now-redirected os.Stderr.
+	clicky.StartCapturingOutput()
+	defer clicky.StopCapturingOutput()
 
 	clicky.ClearGlobalTasks()
 
@@ -69,6 +72,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			return nil, err
 		}
 		opts.WorkDir = wd
+	}
+	if opts.Failed == failedAutoSentinel {
+		resolved, err := snapshots.ResolveLast(opts.WorkDir)
+		if err != nil {
+			return nil, fmt.Errorf("--failed: %w", err)
+		}
+		opts.Failed = resolved
 	}
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
@@ -125,6 +135,11 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			uiServer.SetRunArgs(snapshotArgs(opts))
 			uiServer.SetGitInfo(gitInfo)
 			uiServer.EnableDiagnostics(os.Getpid())
+			uiServer.SetStopFunc(cancelRun)
+			uiServer.SetRunProcess(os.Getpid(), strings.Join(os.Args, " "))
+			if len(opts.Frameworks) > 0 {
+				uiServer.SetRunFrameworks(opts.Frameworks)
+			}
 		}
 		attachUIUpdates = func() chan []parsers.Test {
 			testrunnerUpdates := make(chan []parsers.Test, 16)
@@ -138,15 +153,31 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			}()
 			return testrunnerUpdates
 		}
+		attachUIRerunUpdates := func() chan []parsers.Test {
+			testrunnerUpdates := make(chan []parsers.Test, 16)
+			uiUpdates := make(chan []parsers.Test, 16)
+			uiServer.StreamRerunFrom(uiUpdates)
+			go func() {
+				for batch := range testrunnerUpdates {
+					uiUpdates <- mergeHooksWithTests(batch)
+				}
+				close(uiUpdates)
+			}()
+			return testrunnerUpdates
+		}
 		uiServer.BeginRun("initial")
 		opts.Updates = attachUIUpdates()
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
+			rerunCtx, cancelRerun := newStopContext(nil, opts.Timeout)
+			defer cancelRerun()
+			uiServer.SetStopFunc(cancelRerun)
 			uiServer.BeginRun("rerun")
 			if req.Lint {
 				results, err := executeLintRerun(LintOptions{
 					WorkDir:   opts.WorkDir,
 					Timeout:   "5m",
+					Context:   rerunCtx,
 					OutputTee: output.StdoutWriter(),
 				}, req)
 				if err != nil {
@@ -156,7 +187,8 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				uiServer.MarkDone()
 				return nil
 			}
-			rerunOpts := prepareRerunOptions(opts, req, attachUIUpdates())
+			rerunOpts := prepareRerunOptions(opts, req, attachUIRerunUpdates())
+			rerunOpts.Context = rerunCtx
 			rerunOpts.OutputTee = output.StdoutWriter()
 			_, err := testrunner.Run(rerunOpts)
 			return err
@@ -210,6 +242,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}()
 	}
 
+	// fullSummary receives the unfiltered aggregate from the runner. The
+	// returned `tests` slice is filtered down to failures-only for display,
+	// so we can't derive real pass/skip counts from it.
+	var fullSummary parsers.TestSummary
+	opts.SummaryOut = &fullSummary
+
 	result, err := testrunner.Run(opts)
 
 	// Post-hooks run after tests, regardless of pass/fail. A failing post
@@ -249,6 +287,19 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	}
 
 	if err != nil {
+		// Even on a runner-level failure (subprocess non-zero, timeout, …)
+		// we want the details + summary visible so the user sees what did
+		// complete. SummaryOut is populated by the runner before it returns
+		// the error. Drain the clicky task pane first so its final ✓/✗/⚠
+		// lines land before our details block and summary. When result
+		// contains the partial tree we also dump failure / timeout / skip
+		// sections; otherwise just the summary.
+		clicky.StopCapturingOutput()
+		clicky.WaitForGlobalCompletion()
+		if tests, ok := result.([]parsers.Test); ok {
+			printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
+		}
+		printTestRunSummary(fullSummary, lintResults)
 		return result, err
 	}
 	if tests, ok := result.([]parsers.Test); ok {
@@ -272,12 +323,31 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
 				clicky.CancelAllGlobalTasks()
-				clicky.WaitForGlobalCompletionSilent()
+				// WaitForGlobalCompletion (not -Silent) so the final task
+				// pane prints before our details + summary below.
+				clicky.WaitForGlobalCompletion()
 				if err := handoffDetachedUI(uiListener, snapshot, opts.AutoStop, opts.IdleTimeout); err != nil {
 					logger.Warnf("Detached UI handoff failed: %v", err)
 				}
+				clicky.StopCapturingOutput()
+				printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
+				printTestRunSummary(fullSummary, lintResults)
 				return nil, nil
 			}
+			// Release the stdout/stderr capture before we block on SIGINT:
+			// failure details + any further logger output should print to
+			// the real terminal immediately, not sit buffered until the
+			// user Ctrl+Cs out of the UI minutes later. The deferred
+			// StopCapturingOutput at the top is still safe because the
+			// underlying Stop is a no-op when capture wasn't started.
+			clicky.StopCapturingOutput()
+			// Before blocking on SIGINT, mirror the non-UI CLI contract by
+			// printing failure details to the terminal. The UI keeps the full
+			// stdout/stderr for live inspection; the terminal render is
+			// gated by --show-stdout / --show-stderr so CI logs don't get
+			// flooded unless the user opts in.
+			printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
+			printTestRunSummary(fullSummary, lintResults)
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
@@ -289,7 +359,22 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
-		return snapshot, nil
+		// Release the stdout/stderr capture started at the top of runTests
+		// before printing so the details + summary show up on the terminal
+		// instead of sitting in clicky's capture buffer until after we
+		// return. The deferred StopCapturingOutput is still safe because
+		// the underlying Stop is a no-op when capture was already released.
+		// Drain the clicky task pane first so its final ✓/✗/⚠ lines land
+		// above the details block — the user wants task state before test
+		// details + summary, not after.
+		clicky.StopCapturingOutput()
+		clicky.WaitForGlobalCompletion()
+		printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
+		printTestRunSummary(fullSummary, lintResults)
+		// Return nil rather than the snapshot so clicky doesn't also render
+		// Snapshot.Pretty() — a single-line duplicate of the summary above.
+		// The snapshot is already persisted to disk for PR/status consumers.
+		return nil, nil
 	}
 	return result, nil
 }
@@ -419,6 +504,128 @@ func finishHookTest(idx int, dur time.Duration, output string, runErr error) {
 	}
 }
 
+// printFailureDetails writes per-test failure details to stdout for failed
+// tests in the tree, honouring --show-stdout / --show-stderr. Called from
+// the --ui path right after tests complete so UI users still see the same
+// CLI-side failure dump non-UI runs get via printTestRunDetails. Skips
+// entirely when nothing failed so passing runs stay quiet.
+func printFailureDetails(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode) {
+	failed := collectLeaves(tests, func(t parsers.Test) bool {
+		return t.Failed && !t.TimedOut
+	})
+	if len(failed) == 0 {
+		return
+	}
+	fmt.Println(clicky.MustFormat(clicky.Text("Test failures", "bold text-red-600")))
+	for _, t := range failed {
+		if !showStdout.ShouldShow(true) {
+			t.Stdout = ""
+		}
+		if !showStderr.ShouldShow(true) {
+			t.Stderr = ""
+		}
+		fmt.Println(clicky.MustFormat(t.Pretty()))
+	}
+}
+
+// printTestRunDetails writes a three-section breakdown of everything the
+// user needs to see at the end of a run: failures, timeouts, and skips.
+// Each section is elided when empty so passing runs stay quiet. Called from
+// every non-UI exit path so the user sees what went wrong without having
+// to scroll back through the streaming task pane.
+func printTestRunDetails(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode) {
+	failed := collectLeaves(tests, func(t parsers.Test) bool {
+		return t.Failed && !t.TimedOut
+	})
+	timedOut := collectLeaves(tests, func(t parsers.Test) bool { return t.TimedOut })
+	skipped := collectLeaves(tests, func(t parsers.Test) bool { return t.Skipped })
+
+	printSection := func(title, style string, items []parsers.Test, applyOutputMask bool) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Println(clicky.MustFormat(clicky.Text(fmt.Sprintf("%s (%d)", title, len(items)), "bold "+style)))
+		for _, t := range items {
+			if applyOutputMask {
+				if !showStdout.ShouldShow(true) {
+					t.Stdout = ""
+				}
+				if !showStderr.ShouldShow(true) {
+					t.Stderr = ""
+				}
+			}
+			fmt.Println(clicky.MustFormat(t.Pretty()))
+		}
+	}
+
+	printSection("Test failures", "text-red-600", failed, true)
+	printSection("Test timeouts", "text-amber-600", timedOut, true)
+	printSection("Skipped tests", "text-yellow-500", skipped, false)
+}
+
+// printTestRunSummary writes the end-of-run summary block that mirrors
+// `gavel lint`'s behavior: a "Test summary" header + pass/fail/skip/duration
+// line, plus the lintSummaryView tree when --lint ran. Called from every exit
+// path of runTests so the terminal always shows a visible roll-up after the
+// streaming output. No-op when the summary is zero and no lint results ran.
+func printTestRunSummary(summary parsers.TestSummary, lintResults []*linters.LinterResult) {
+	if out := formatTestRunSummary(summary, lintResults); out != "" {
+		fmt.Print(out)
+	}
+}
+
+// formatTestRunSummary produces the multi-line string printTestRunSummary
+// emits. Split from the print wrapper so tests can assert on the exact bytes
+// without needing to reassign os.Stdout. Returns an empty string when the
+// summary is zero and no lint results ran.
+func formatTestRunSummary(summary parsers.TestSummary, lintResults []*linters.LinterResult) string {
+	if summary.Total == 0 && len(lintResults) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if summary.Total > 0 {
+		header := clicky.Text("Test summary:", "bold text-blue-500")
+		b.WriteString(clicky.MustFormat(header.Add(clicky.Text(" ")).Add(summary.Pretty())))
+		b.WriteByte('\n')
+	}
+	if len(lintResults) > 0 {
+		b.WriteString(clicky.MustFormat(newLintSummaryView(lintResults, 0), clicky.FormatOptions{Pretty: true}))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// collectLeaves returns every leaf node (no children) that satisfies pred,
+// walking the tree depth-first. Container nodes are skipped; state surfaces
+// via their descendants so callers see individual test identities, not
+// suite-level rollups.
+func collectLeaves(tests []parsers.Test, pred func(parsers.Test) bool) []parsers.Test {
+	var out []parsers.Test
+	var walk func(t parsers.Test)
+	walk = func(t parsers.Test) {
+		if len(t.Children) == 0 {
+			if pred(t) {
+				out = append(out, t)
+			}
+			return
+		}
+		for _, c := range t.Children {
+			walk(c)
+		}
+	}
+	for _, t := range tests {
+		walk(t)
+	}
+	return out
+}
+
+// collectFailed is kept for the existing test_failure_print_test.go
+// call site and back-compat with any external callers that relied on the
+// leaf-only, failed-only predicate.
+func collectFailed(tests []parsers.Test) []parsers.Test {
+	return collectLeaves(tests, func(t parsers.Test) bool { return t.Failed })
+}
+
 // publishHookSnapshotToUI flushes the current hookTests slice to the UI
 // directly via SetResults. This is used before testrunner.Run starts
 // streaming (when no real tests have arrived yet) and as a last-ditch
@@ -514,6 +721,7 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	rerunOpts := base
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
+	rerunOpts.RunKind = "rerun"
 	if req.WorkDir != "" {
 		rerunOpts.WorkDir = req.WorkDir
 	}
@@ -544,7 +752,11 @@ var testCmd *cobra.Command
 
 func init() {
 	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
-	testCmd.Flags().SetInterspersed(false)
+	// Allow flags and positional package paths to interleave so callers (e.g. the
+	// flanksource/gavel composite action) can append flags after user-supplied
+	// paths. Use `--` to terminate flag parsing when forwarding flags to the
+	// underlying runner via the `gavel test ./pkg -- --focus X` idiom.
+	testCmd.Flags().SetInterspersed(true)
 	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
 		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
 	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
@@ -557,4 +769,15 @@ func init() {
 		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
 	testCmd.Flags().DurationVar(&testDurationFlags.TestTimeout, "test-timeout", 5*time.Minute,
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
+	if f := testCmd.Flags().Lookup("failed"); f != nil {
+		f.NoOptDefVal = failedAutoSentinel
+		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+	}
 }
+
+// failedAutoSentinel is the value cobra assigns to --failed when the flag is
+// supplied with no argument (`gavel test --failed`). The runTests/runLint
+// callers swap it for the resolved .gavel/last.json path before the runner
+// sees it. Must not start with "@" — clicky's flag binding treats a leading
+// "@" as "load this path or URL", which would try to open the sentinel.
+const failedAutoSentinel = "auto"

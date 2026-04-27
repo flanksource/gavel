@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
 
 	"github.com/samber/lo"
@@ -265,6 +266,7 @@ func formatCommitMessage(analysis models.CommitAnalysis) string {
 }
 
 func promptUserDecision() (string, error) {
+	prompting.Prepare()
 	fmt.Fprintf(os.Stderr, "[A]ccept | [S]kip | [C]ancel: ")
 
 	reader := bufio.NewReader(os.Stdin)

@@ -498,11 +498,13 @@ func (p *GoTestJSON) parseTestOutput(testName, pkgName, output string) *Test {
 		}
 	}
 
+	cleanMessage := strings.TrimSpace(message)
 	return &Test{
-		Name:      testName,
-		Package:   pkgName,
-		Message:   strings.TrimSpace(message),
-		Framework: GoTest,
-		Failed:    true,
+		Name:          testName,
+		Package:       pkgName,
+		Message:       cleanMessage,
+		FailureDetail: ParseFailureDetail(cleanMessage),
+		Framework:     GoTest,
+		Failed:        true,
 	}
 }

@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/ai"
-	"github.com/flanksource/gavel/models"
-
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/ghodss/yaml"
 )
@@ -54,6 +54,7 @@ func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window st
 		return "", "", fmt.Errorf("failed to render AI prompt template: %w", err)
 	}
 
+	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:   fmt.Sprintf("Summary: %s - %s", scope, window),
 		Prompt: prompt,

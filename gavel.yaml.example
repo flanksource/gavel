@@ -1,0 +1,161 @@
+# Example `.gavel.yaml` for Gavel.
+#
+# You can place `.gavel.yaml` in any of these locations:
+#   1. ~/.gavel.yaml
+#   2. <git-root>/.gavel.yaml
+#   3. <target-dir>/.gavel.yaml
+#
+# Merge order is exactly the list above, with later layers overriding earlier ones.
+# Use `gavel config [path]` to inspect the merged result for a specific file or directory.
+#
+# Merge behavior summary:
+#   - Last-write-wins scalars:
+#       verify.model, verify.prompt, commit.model, commit.precommit.mode,
+#       commit.compatibility.mode, ssh.cmd
+#   - Appended lists:
+#       verify.checks.disabled, verify.checks.disabledCategories, lint.ignore,
+#       commit.hooks, commit.gitignore, commit.allow, pre, post, secrets.configs
+#   - Per-linter overrides:
+#       lint.linters.<name>.enabled overrides by linter name
+#   - Sticky booleans:
+#       fixtures.enabled and secrets.disabled stay true once any layer enables them
+#   - Replacement lists:
+#       fixtures.files replaces the parent layer instead of appending
+
+verify:
+  # AI CLI / model selection for `gavel verify`.
+  # Common values: claude, gemini, codex, or a fully qualified model name.
+  model: claude
+
+  # Optional prompt suffix appended to Gavel's built-in verify prompt.
+  # Use this for repo-specific review policy, not for one-off instructions.
+  prompt: |
+    Prioritize API compatibility, migration safety, and operator-facing errors.
+    Flag missing tests for behavior changes and any undocumented config changes.
+
+  checks:
+    # Disable individual check IDs emitted by the verify engine.
+    disabled:
+      - SEC-1
+      - PERF-2
+
+    # Disable entire categories of checks.
+    # Known categories include: completeness, code-quality, testing,
+    # consistency, security, performance.
+    disabledCategories:
+      - performance
+
+lint:
+  # Ignore rules are appended across layers.
+  # Each rule may match by source, rule ID, file glob, or any combination.
+  ignore:
+    - source: golangci-lint
+      rule: errcheck
+      file: "internal/generated/**"
+
+    - source: eslint
+      file: "web/vendor/**"
+
+  linters:
+    # Linter enablement is keyed by name and overrides per linter.
+    # This is useful for opt-in linters like jscpd or selectively disabling one tool.
+    jscpd:
+      enabled: true
+
+    vale:
+      enabled: false
+
+commit:
+  # AI CLI / model selection for `gavel commit`.
+  model: claude
+
+  # Hooks run during `gavel commit` before the final commit is written.
+  # Hooks are appended across layers in declaration order.
+  hooks:
+    - name: gofmt
+      run: gofmt -w ./...
+      files:
+        - "**/*.go"
+
+    - name: unit
+      run: gavel test --changed
+      files:
+        - "**/*.go"
+        - "**/*.ts"
+
+  # Extra ignore globs applied by `gavel commit` when selecting files to commit.
+  # These are appended and deduped across layers.
+  gitignore:
+    - ".claude/"
+    - ".cache/"
+    - "dist/"
+
+  # Paths that are allowed through even when broader commit.gitignore globs match.
+  # This is useful for generated artifacts you intentionally commit.
+  allow:
+    - "dist/schema.json"
+    - "docs/generated/**"
+
+  precommit:
+    # Controls both commit.gitignore prompts and local-path dependency handling
+    # for package.json file:/link: refs and go.mod replace directives that
+    # point outside the repo.
+    # Values:
+    #   prompt  ask before committing (default)
+    #   fail    hard-fail the commit
+    #   skip    bypass both precommit checks
+    #   false   alias for skip
+    mode: prompt
+
+  compatibility:
+    # Controls AI warnings for removed functionality and compatibility issues.
+    # Values:
+    #   prompt  ask before committing when warnings are present (default)
+    #   fail    hard-fail the commit when warnings are present
+    #   skip    bypass compatibility AI checks entirely
+    #   false   alias for skip
+    mode: prompt
+
+fixtures:
+  # When true, `gavel test` auto-discovers fixture files.
+  enabled: true
+
+  # Files replaces the parent layer instead of appending.
+  # If omitted, Gavel falls back to the built-in default: **/*.fixture.md
+  files:
+    - "tests/**/*.fixture.md"
+    - "fixtures/**/*.md"
+
+ssh:
+  # Overrides the command executed by the SSH post-receive hook / push backend.
+  # If omitted, the fallback is `gavel test --lint`.
+  cmd: gavel test --lint --verify --fixtures
+
+pre:
+  # Top-level pre hooks run before the main test/lint pipeline.
+  # These are appended across layers and run in declaration order.
+  - name: generate
+    run: go generate ./...
+
+  - name: deps
+    run: make tidy
+
+post:
+  # Top-level post hooks run after the main pipeline.
+  # These are non-blocking cleanup / reporting hooks.
+  - name: summarize
+    run: gavel summary --input gavel-results.json --output gavel-summary.md
+
+  - name: cleanup
+    run: rm -rf .tmp/gavel
+
+secrets:
+  # Set true to disable betterleaks / gitleaks orchestration entirely.
+  # This is sticky across layers: once true anywhere, it stays true.
+  disabled: false
+
+  # Additional .betterleaks.toml / .gitleaks.toml files to merge in.
+  # Relative paths resolve from the directory containing this `.gavel.yaml`.
+  configs:
+    - ".betterleaks.toml"
+    - "security/custom-gitleaks.toml"

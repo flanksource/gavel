@@ -163,12 +163,16 @@ func toTestFailure(t parsers.Test) TestFailure {
 	if details == "" {
 		details = t.Stdout
 	}
+	message := t.Message
+	if d := t.FailureDetail; d != nil && d.Summary != "" {
+		message = d.Summary
+	}
 	return TestFailure{
 		Name:    t.Name,
 		Suite:   suite,
 		File:    t.File,
 		Line:    t.Line,
-		Message: t.Message,
+		Message: message,
 		Details: details,
 	}
 }

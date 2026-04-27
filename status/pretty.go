@@ -2,10 +2,12 @@ package status
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/repomap"
 )
 
 // Starship git_status symbols (https://starship.rs/config/#git-status).
@@ -33,6 +35,7 @@ const (
 	styleScope      = "text-cyan-600"
 	styleLanguage   = "text-muted italic"
 	styleError      = "text-red-500"
+	styleRunning    = "text-blue-500"
 )
 
 func (r *Result) Pretty() api.Text {
@@ -48,8 +51,14 @@ func (r *Result) Pretty() api.Text {
 	}
 
 	pathWidth := longestPath(r.Files)
-	for _, f := range r.Files {
-		t = t.Add(f.prettyRow(pathWidth)).NewLine()
+	for i, group := range groupFilesByScopeKey(r.Files) {
+		if i > 0 {
+			t = t.NewLine()
+		}
+		t = t.Add(prettyScopeHeader(group.label)).NewLine()
+		for _, f := range group.files {
+			t = t.Add(f.prettyRow(pathWidth)).NewLine()
+		}
 	}
 	return t
 }
@@ -141,38 +150,27 @@ func (f FileStatus) prettyEnrichment() api.Text {
 	t := clicky.Text("")
 
 	if f.RepomapError != nil {
-		return t.Append("repomap error: "+f.RepomapError.Error(), styleError)
+		return appendAISummaryState(t.Append("repomap error: "+f.RepomapError.Error(), styleError), f)
 	}
 
 	if f.State == StateConflict {
 		t = t.Append("⚠ conflict", styleConflicted)
-		return t
+		return appendAISummaryState(t, f)
 	}
 	if f.State == StateUntracked && f.FileMap == nil {
 		t = t.Append("(untracked)", styleMuted)
-		return t
+		return appendAISummaryState(t, f)
 	}
 	if f.WorkKind == KindDeleted || f.StagedKind == KindDeleted {
 		t = t.Append("(deleted)", styleMuted)
 		if f.FileMap == nil {
-			return t
+			return appendAISummaryState(t, f)
 		}
 		t = t.Space()
 	}
 
 	if f.FileMap == nil {
-		return t.Add(prettyTestLintBadges(f))
-	}
-
-	scopes := make([]string, 0, len(f.FileMap.Scopes))
-	for _, s := range f.FileMap.Scopes {
-		scopes = append(scopes, string(s))
-	}
-	if len(scopes) > 0 {
-		t = t.Append("· ", styleMuted).Append(strings.Join(scopes, " · "), styleScope)
-	}
-	if f.FileMap.Language != "" && !containsScope(scopes, f.FileMap.Language) {
-		t = t.Space().Append(f.FileMap.Language, styleLanguage)
+		return appendAISummaryState(t.Add(prettyTestLintBadges(f)), f)
 	}
 
 	k8s := len(f.FileMap.KubernetesRefs)
@@ -192,7 +190,155 @@ func (f FileStatus) prettyEnrichment() api.Text {
 
 	t = t.Add(prettyTestLintBadges(f))
 
-	return t
+	return appendAISummaryState(t, f)
+}
+
+func appendAISummaryState(t api.Text, f FileStatus) api.Text {
+	summary := prettyAISummary(f)
+	if summary.IsEmpty() {
+		return t
+	}
+	if !t.IsEmpty() {
+		t = t.Append("  ", "")
+	}
+	return t.Add(summary)
+}
+
+func prettyAISummary(f FileStatus) api.Text {
+	summary := strings.TrimSpace(f.AISummary)
+	if summary != "" {
+		return clicky.Text(summary, styleMuted)
+	}
+
+	switch f.AIStatus {
+	case AISummaryStatusPending:
+		return clicky.Text("⏳ ai", styleMuted)
+	case AISummaryStatusRunning:
+		return clicky.Text("⟳ ai", styleRunning)
+	case AISummaryStatusFailed:
+		return clicky.Text("⚠ ai summary failed", styleError)
+	default:
+		return clicky.Text("")
+	}
+}
+
+type scopeGroup struct {
+	key   scopeGroupKey
+	label string
+	files []FileStatus
+}
+
+type scopeGroupKey struct {
+	label      string
+	hasNonTest bool
+	hasTest    bool
+}
+
+func groupFilesByScopeKey(files []FileStatus) []scopeGroup {
+	if len(files) == 0 {
+		return nil
+	}
+
+	groupsByScope := make(map[scopeGroupKey][]FileStatus)
+	for _, file := range files {
+		key := scopeKey(file)
+		groupsByScope[key] = append(groupsByScope[key], file)
+	}
+
+	keys := make([]scopeGroupKey, 0, len(groupsByScope))
+	for key := range groupsByScope {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return compareScopeKeys(keys[i], keys[j]) < 0
+	})
+
+	groups := make([]scopeGroup, 0, len(keys))
+	for _, key := range keys {
+		groups = append(groups, scopeGroup{
+			key:   key,
+			label: key.label,
+			files: groupsByScope[key],
+		})
+	}
+	return groups
+}
+
+func scopeKey(f FileStatus) scopeGroupKey {
+	if f.FileMap == nil {
+		return scopeGroupKey{label: string(repomap.ScopeTypeGeneral)}
+	}
+
+	parts := make([]string, 0, len(f.FileMap.Scopes)+1)
+	seen := map[string]struct{}{}
+	if language := strings.TrimSpace(f.FileMap.Language); language != "" {
+		parts = append(parts, language)
+		seen[strings.ToLower(language)] = struct{}{}
+	}
+
+	var (
+		nonTest []string
+		tests   []string
+	)
+	for _, scope := range f.FileMap.Scopes {
+		label := strings.TrimSpace(string(scope))
+		if label == "" {
+			continue
+		}
+		key := strings.ToLower(label)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if scope == repomap.ScopeTypeTest {
+			tests = append(tests, label)
+			continue
+		}
+		nonTest = append(nonTest, label)
+	}
+
+	parts = append(parts, nonTest...)
+	parts = append(parts, tests...)
+	if len(parts) == 0 {
+		parts = append(parts, string(repomap.ScopeTypeGeneral))
+	}
+
+	return scopeGroupKey{
+		label:      strings.Join(parts, " · "),
+		hasNonTest: len(nonTest) > 0 || (strings.TrimSpace(f.FileMap.Language) != "" && len(tests) == 0),
+		hasTest:    len(tests) > 0,
+	}
+}
+
+func compareScopeKeys(a, b scopeGroupKey) int {
+	aRank := scopeSortRank(a)
+	bRank := scopeSortRank(b)
+	if aRank != bRank {
+		return aRank - bRank
+	}
+	switch {
+	case a.label < b.label:
+		return -1
+	case a.label > b.label:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func scopeSortRank(key scopeGroupKey) int {
+	switch {
+	case key.hasTest && !key.hasNonTest:
+		return 2
+	case !key.hasNonTest && !key.hasTest:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func prettyScopeHeader(label string) api.Text {
+	return clicky.Text(" ").Append(label, "font-bold "+styleScope)
 }
 
 func symbolFor(f FileStatus) (string, string) {

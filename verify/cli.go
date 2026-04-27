@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/prompting"
 )
 
 var adapters = map[string]Adapter{
@@ -41,6 +42,7 @@ func Execute(adapter Adapter, prompt, model, schemaFile, workDir string, debug b
 
 	logger.V(1).Infof("exec: %s %s", name, strings.Join(args, " "))
 
+	prompting.Prepare()
 	proc := clicky.Exec(name, args...).
 		WithCwd(workDir).
 		WithTimeout(5*time.Minute).

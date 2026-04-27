@@ -93,6 +93,7 @@ type LinterWithLanguageSupport interface {
 // RunOptions provides configuration for linter execution
 type RunOptions struct {
 	WorkDir    string
+	Executable string
 	Files      []string
 	Config     *models.LinterConfig
 	ArchConfig *models.Config // Full arch-unit config for all_language_excludes macro
@@ -389,22 +390,41 @@ func readFileLine(path string, lineNum int) string {
 	return ""
 }
 
-func runningCommandLabel(linter Linter) string {
-	if dryRunner, ok := linter.(DryRunner); ok {
-		cmd, args := dryRunner.DryRunCommand()
-		cmd = strings.TrimSpace(cmd)
-		switch {
-		case cmd == "" && len(args) == 0:
-			return linter.Name()
-		case cmd == "":
-			return strings.Join(args, " ")
-		case len(args) == 0:
-			return cmd
-		default:
-			return cmd + " " + strings.Join(args, " ")
-		}
+// PrepareCommand applies opts to linter when supported and returns the command
+// line that should be displayed and recorded for the run. opts.Executable, when
+// set, overrides the command name from DryRunCommand so reporting matches the
+// actual executable used at runtime.
+func PrepareCommand(linter Linter, opts RunOptions) (string, []string) {
+	if mixin, ok := linter.(OptionsMixin); ok {
+		mixin.SetOptions(opts)
 	}
-	return linter.Name()
+
+	cmd := linter.Name()
+	var args []string
+	if dryRunner, ok := linter.(DryRunner); ok {
+		cmd, args = dryRunner.DryRunCommand()
+	}
+	if opts.Executable != "" {
+		cmd = opts.Executable
+	}
+	if strings.TrimSpace(cmd) == "" {
+		cmd = linter.Name()
+	}
+	return cmd, args
+}
+
+func runningCommandLabel(cmd string, args []string) string {
+	cmd = strings.TrimSpace(cmd)
+	switch {
+	case cmd == "" && len(args) == 0:
+		return ""
+	case cmd == "":
+		return strings.Join(args, " ")
+	case len(args) == 0:
+		return cmd
+	default:
+		return cmd + " " + strings.Join(args, " ")
+	}
 }
 
 // RunLinterWithTask executes a single linter using the provided clicky task.
@@ -418,16 +438,18 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if mixin, ok := linter.(OptionsMixin); ok {
-		mixin.SetOptions(opts)
+	cmd, args := PrepareCommand(linter, opts)
+	label := runningCommandLabel(cmd, args)
+	if label == "" {
+		label = linter.Name()
 	}
 	if task != nil {
-		task.SetName(runningCommandLabel(linter))
+		task.SetName(label)
 		task.SetDescription("")
 	}
 
 	if opts.OutputTee != nil {
-		fmt.Fprintf(opts.OutputTee, "▶ %s\n", runningCommandLabel(linter))
+		fmt.Fprintf(opts.OutputTee, "▶ %s\n", label)
 	}
 
 	start := time.Now()
@@ -450,9 +472,8 @@ func RunLinterWithTask(ctx context.Context, task *clicky.Task, linter Linter, op
 		Duration:   time.Since(start),
 		Violations: violations,
 		Error:      formatErr(statusErr),
-	}
-	if dr, ok := linter.(DryRunner); ok {
-		result.Command, result.Args = dr.DryRunCommand()
+		Command:    cmd,
+		Args:       args,
 	}
 
 	if metadata, ok := linter.(MetadataProvider); ok {

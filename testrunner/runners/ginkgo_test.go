@@ -451,3 +451,26 @@ import "github.com/onsi/gomega"
 		})
 	}
 }
+
+func TestGinkgoBuildCommandArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeGinkgoGoMod(t, tmpDir)
+	runner := NewGinkgo(tmpDir)
+
+	testRun, err := runner.BuildCommand("./pkg", "--timeout=4m30s", "--poll-progress-after=4m20s")
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	args := strings.Join(testRun.Process.Args, " ")
+	for _, want := range []string{"-v", "--json-report=", "--timeout=4m30s", "--poll-progress-after=4m20s", "./pkg"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("expected args to contain %q, got: %s", want, args)
+		}
+	}
+	if strings.Contains(args, "--show-node-events=false") {
+		t.Errorf("expected --show-node-events=false to be removed, got: %s", args)
+	}
+	if strings.Index(args, "--timeout=4m30s") > strings.Index(args, "./pkg") {
+		t.Errorf("timeout flag should precede package path, got: %s", args)
+	}
+}

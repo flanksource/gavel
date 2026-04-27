@@ -335,6 +335,89 @@ post:
 	assert.Equal(t, "home-post", cfg.Post[0].Name)
 }
 
+// TestSaveAfterLayeredLoad_DoesNotLeakHomeIntoRepo is a regression test for
+// a data-leak bug where callers loaded a merged GavelConfig (home+repo+cwd)
+// and then wrote it back to the repo's .gavel.yaml via SaveGavelConfig —
+// silently promoting every ~/.gavel.yaml field into the repo on the next
+// `gavel lint --triage` or UI ignore click.
+//
+// The fix is to always load the single repo file for the read-modify-write
+// cycle. This test guards callers by using the primitives directly and
+// asserting the leak does not happen.
+func TestSaveAfterLayeredLoad_DoesNotLeakHomeIntoRepo(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	t.Setenv("HOME", home)
+
+	// Home has a global commit.gitignore list the user never wants in any repo.
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`commit:
+  gitignore:
+    - .env
+    - .claude
+`), 0o644))
+
+	// Repo starts with a narrow lint.ignore only.
+	repoPath := filepath.Join(repo, ".gavel.yaml")
+	require.NoError(t, os.WriteFile(repoPath, []byte(`lint:
+  ignore:
+    - file: existing.go
+`), 0o644))
+
+	// Simulate the lint --triage / UI ignore flow: read just the repo file,
+	// append a rule, save back.
+	repoCfg, err := LoadSingleGavelConfig(repoPath)
+	require.NoError(t, err)
+	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, LintIgnoreRule{File: "new.go"})
+	require.NoError(t, SaveGavelConfig(repo, repoCfg))
+
+	written, err := os.ReadFile(repoPath)
+	require.NoError(t, err)
+	body := string(written)
+
+	// The repo file must carry the new rule.
+	assert.Contains(t, body, "new.go")
+	assert.Contains(t, body, "existing.go")
+
+	// The repo file must NOT have absorbed anything from ~/.gavel.yaml.
+	assert.NotContains(t, body, ".env",
+		"home-level commit.gitignore must not leak into the repo file")
+	assert.NotContains(t, body, ".claude",
+		"home-level commit.gitignore must not leak into the repo file")
+}
+
+// TestSaveGavelConfig_RoundTripPreservesPreAndSSH guards the other half of
+// the regression: once the repo file is loaded via the single-file loader,
+// a save round-trip must preserve every top-level field (pre, ssh.cmd, post,
+// verify.*). Without this, a future refactor that drops a YAML tag would
+// silently eat fields on the next write.
+func TestSaveGavelConfig_RoundTripPreservesPreAndSSH(t *testing.T) {
+	dir := t.TempDir()
+	original := []byte(`pre:
+  - name: deps
+    run: make tidy
+ssh:
+  cmd: make all
+verify:
+  model: claude
+`)
+	path := filepath.Join(dir, ".gavel.yaml")
+	require.NoError(t, os.WriteFile(path, original, 0o644))
+
+	cfg, err := LoadSingleGavelConfig(path)
+	require.NoError(t, err)
+	require.NoError(t, SaveGavelConfig(dir, cfg))
+
+	written, err := os.ReadFile(path)
+	require.NoError(t, err)
+	body := string(written)
+
+	assert.Contains(t, body, "name: deps")
+	assert.Contains(t, body, "run: make tidy")
+	assert.Contains(t, body, "cmd: make all")
+	assert.Contains(t, body, "model: claude")
+}
+
 func TestMergeSecretsConfig(t *testing.T) {
 	t.Run("zero + zero", func(t *testing.T) {
 		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{})
@@ -376,6 +459,42 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 		assert.Equal(t, []string{"*.log"}, out.GitIgnore)
 		assert.Equal(t, []string{"ok.log"}, out.Allow)
 	})
+
+	t.Run("precommit mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{Precommit: PrecommitConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{Precommit: PrecommitConfig{Mode: "fail"}})
+		assert.Equal(t, CheckMode("fail"), out.Precommit.Mode)
+	})
+
+	t.Run("precommit empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{Precommit: PrecommitConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, CheckMode("skip"), out.Precommit.Mode)
+	})
+
+	t.Run("linkedDeps mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "fail"}})
+		assert.Equal(t, CheckMode("fail"), out.LinkedDeps.Mode)
+	})
+
+	t.Run("linkedDeps empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, CheckMode("skip"), out.LinkedDeps.Mode)
+	})
+
+	t.Run("compatibility mode override wins when non-empty", func(t *testing.T) {
+		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "prompt"}}
+		out := MergeCommitConfig(base, CommitConfig{Compatibility: CompatibilityConfig{Mode: "fail"}})
+		assert.Equal(t, CheckMode("fail"), out.Compatibility.Mode)
+	})
+
+	t.Run("compatibility empty override preserves base mode", func(t *testing.T) {
+		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "skip"}}
+		out := MergeCommitConfig(base, CommitConfig{})
+		assert.Equal(t, CheckMode("skip"), out.Compatibility.Mode)
+	})
 }
 
 func TestLoadSingleGavelConfig(t *testing.T) {
@@ -388,12 +507,15 @@ commit:
     - "*.log"
   allow:
     - "keep.log"
+  precommit:
+    mode: false
 `), 0o644))
 
 		cfg, err := LoadSingleGavelConfig(path)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"*.log"}, cfg.Commit.GitIgnore)
 		assert.Equal(t, []string{"keep.log"}, cfg.Commit.Allow)
+		assert.Equal(t, CheckMode("skip"), cfg.Commit.Precommit.Mode)
 	})
 
 	t.Run("missing file returns os.ErrNotExist", func(t *testing.T) {
@@ -409,4 +531,88 @@ commit:
 		_, err := LoadSingleGavelConfig(path)
 		require.Error(t, err)
 	})
+}
+
+func TestLoadGavelConfigTrace_FilePath(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	targetDir := filepath.Join(repo, "pkg", "api")
+	targetFile := filepath.Join(targetDir, "handler.go")
+
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(targetDir, 0o755))
+	require.NoError(t, os.WriteFile(targetFile, []byte("package api\n"), 0o644))
+	t.Setenv("HOME", home)
+
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`verify:
+  model: gemini
+pre:
+  - name: home
+    run: echo home
+`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`verify:
+  model: claude
+pre:
+  - name: repo
+    run: echo repo
+ssh:
+  cmd: make ci
+`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".gavel.yaml"), []byte(`verify:
+  model: codex
+pre:
+  - name: target
+    run: echo target
+lint:
+  ignore:
+    - file: pkg/api/**
+`), 0o644))
+
+	trace, err := LoadGavelConfigTrace(targetFile)
+	require.NoError(t, err)
+
+	assert.Equal(t, targetFile, trace.TargetPath)
+	assert.Equal(t, targetDir, trace.TargetDir)
+	assert.Equal(t, repo, trace.GitRoot)
+
+	require.Len(t, trace.Sources, 3)
+	assert.Equal(t, "user-home", trace.Sources[0].Origin)
+	assert.Equal(t, filepath.Join(home, ".gavel.yaml"), trace.Sources[0].Path)
+	assert.Equal(t, "git-root", trace.Sources[1].Origin)
+	assert.Equal(t, filepath.Join(repo, ".gavel.yaml"), trace.Sources[1].Path)
+	assert.Equal(t, "parent-directory", trace.Sources[2].Origin)
+	assert.Equal(t, filepath.Join(targetDir, ".gavel.yaml"), trace.Sources[2].Path)
+
+	assert.Equal(t, "codex", trace.Merged.Verify.Model)
+	require.Len(t, trace.Merged.Pre, 3)
+	assert.Equal(t, "home", trace.Merged.Pre[0].Name)
+	assert.Equal(t, "repo", trace.Merged.Pre[1].Name)
+	assert.Equal(t, "target", trace.Merged.Pre[2].Name)
+	assert.Equal(t, "make ci", trace.Merged.SSH.Cmd)
+	require.Len(t, trace.Merged.Lint.Ignore, 1)
+	assert.Equal(t, "pkg/api/**", trace.Merged.Lint.Ignore[0].File)
+}
+
+func TestLoadGavelConfigTrace_DedupesGitRootTarget(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`verify:
+  model: gemini
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`verify:
+  model: claude
+`), 0o644))
+
+	trace, err := LoadGavelConfigTrace(repo)
+	require.NoError(t, err)
+
+	require.Len(t, trace.Sources, 2)
+	assert.Equal(t, "user-home", trace.Sources[0].Origin)
+	assert.Equal(t, "git-root", trace.Sources[1].Origin)
+	assert.Equal(t, "claude", trace.Merged.Verify.Model)
 }

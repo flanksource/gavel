@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,19 +74,64 @@ type CommitHook struct {
 	Files []string `yaml:"files,omitempty" json:"files,omitempty"`
 }
 
+type CheckMode string
+
+func (m CheckMode) String() string {
+	return string(m)
+}
+
+func (m *CheckMode) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*m = ""
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*m = "skip"
+		return nil
+	}
+	if bytes.Equal(data, []byte("true")) {
+		return fmt.Errorf("expected mode string or false, got true")
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	*m = CheckMode(s)
+	return nil
+}
+
 type CommitConfig struct {
-	Model      string           `yaml:"model,omitempty" json:"model,omitempty"`
-	Hooks      []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	GitIgnore  []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
-	Allow      []string         `yaml:"allow,omitempty" json:"allow,omitempty"`
-	LinkedDeps LinkedDepsConfig `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
+	Model         string              `yaml:"model,omitempty" json:"model,omitempty"`
+	Hooks         []CommitHook        `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	GitIgnore     []string            `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
+	Allow         []string            `yaml:"allow,omitempty" json:"allow,omitempty"`
+	Precommit     PrecommitConfig     `yaml:"precommit,omitempty" json:"precommit,omitempty"`
+	LinkedDeps    LinkedDepsConfig    `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
+	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
+}
+
+// PrecommitConfig configures the combined pre-commit gate for commit.gitignore
+// and linked dependency checks. Mode is "prompt" (default), "fail", "skip",
+// or false (alias for skip).
+type PrecommitConfig struct {
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // LinkedDepsConfig configures the pre-commit check that blocks go.mod
 // replace directives and package.json file:/link: references pointing
-// outside the git root. Mode is "prompt" (default), "fail", or "skip".
+// outside the git root. This remains for backward-compatible config loading;
+// new config should use commit.precommit.mode.
 type LinkedDepsConfig struct {
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
+}
+
+// CompatibilityConfig configures the AI-powered pre-commit warning that
+// surfaces removed functionality and backward compatibility issues. Mode is
+// "skip" (default), "prompt", "fail", or false (alias for skip).
+type CompatibilityConfig struct {
+	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // HookStep is a single shell command rendered into the SSH post-receive hook.
@@ -141,6 +188,21 @@ type SecretsConfig struct {
 	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty"`
 }
 
+type GavelConfigSource struct {
+	Origin string      `json:"origin" yaml:"origin"`
+	Path   string      `json:"path" yaml:"path"`
+	Raw    string      `json:"-" yaml:"-"`
+	Config GavelConfig `json:"config" yaml:"config"`
+}
+
+type GavelConfigTrace struct {
+	TargetPath string              `json:"targetPath" yaml:"targetPath"`
+	TargetDir  string              `json:"targetDir" yaml:"targetDir"`
+	GitRoot    string              `json:"gitRoot,omitempty" yaml:"gitRoot,omitempty"`
+	Sources    []GavelConfigSource `json:"sources,omitempty" yaml:"sources,omitempty"`
+	Merged     GavelConfig         `json:"merged" yaml:"merged"`
+}
+
 func DefaultVerifyConfig() VerifyConfig {
 	return VerifyConfig{
 		Model: "claude",
@@ -173,20 +235,93 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 	return cfg, nil
 }
 
+// LoadGavelConfigTrace resolves the effective config for the provided file or
+// directory path and records which .gavel.yaml files contributed to the merged
+// result. Resolution order matches normal loading: built-in defaults, then the
+// user's home config, then the git-root config, then the target directory (or
+// the parent directory when the target path is a file).
+func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
+	targetPath, targetDir, err := resolveGavelConfigTarget(path)
+	if err != nil {
+		return GavelConfigTrace{}, err
+	}
+
+	trace := GavelConfigTrace{
+		TargetPath: targetPath,
+		TargetDir:  targetDir,
+		Merged: GavelConfig{
+			Verify: DefaultVerifyConfig(),
+		},
+	}
+
+	var candidates []GavelConfigSource
+	seen := make(map[string]struct{})
+	addCandidate := func(origin, candidatePath string) {
+		if candidatePath == "" {
+			return
+		}
+		if _, ok := seen[candidatePath]; ok {
+			return
+		}
+		seen[candidatePath] = struct{}{}
+		candidates = append(candidates, GavelConfigSource{
+			Origin: origin,
+			Path:   candidatePath,
+		})
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		addCandidate("user-home", filepath.Join(home, ".gavel.yaml"))
+	}
+
+	trace.GitRoot = repomap.FindGitRoot(targetDir)
+	if trace.GitRoot != "" {
+		addCandidate("git-root", filepath.Join(trace.GitRoot, ".gavel.yaml"))
+	}
+
+	origin := "target-directory"
+	if targetPath != targetDir {
+		origin = "parent-directory"
+	}
+	addCandidate(origin, filepath.Join(targetDir, ".gavel.yaml"))
+
+	for _, candidate := range candidates {
+		cfg, raw, err := loadSingleGavelConfig(candidate.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return GavelConfigTrace{}, err
+		}
+
+		candidate.Raw = raw
+		candidate.Config = cfg
+		trace.Sources = append(trace.Sources, candidate)
+		trace.Merged = mergeGavelConfig(trace.Merged, cfg)
+	}
+
+	return trace, nil
+}
+
 // LoadSingleGavelConfig reads one .gavel.yaml file from the given absolute
 // path without layering with home/gitRoot/cwd siblings. Returns a zero-value
 // config with os.ErrNotExist when the file is missing so callers can detect
 // "need to create" vs. a real read/parse error.
 func LoadSingleGavelConfig(path string) (GavelConfig, error) {
+	cfg, _, err := loadSingleGavelConfig(path)
+	return cfg, err
+}
+
+func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return GavelConfig{}, err
+		return GavelConfig{}, "", err
 	}
 	var gc GavelConfig
 	if err := yaml.Unmarshal(data, &gc); err != nil {
-		return GavelConfig{}, fmt.Errorf("parse %s: %w", path, err)
+		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
-	return gc, nil
+	return gc, string(data), nil
 }
 
 func SaveGavelConfig(dir string, cfg GavelConfig) error {
@@ -199,23 +334,49 @@ func SaveGavelConfig(dir string, cfg GavelConfig) error {
 }
 
 func mergeFromFile(base GavelConfig, path string) GavelConfig {
-	data, err := os.ReadFile(path)
+	cfg, err := LoadSingleGavelConfig(path)
 	if err != nil {
 		return base
 	}
-	var gc GavelConfig
-	if err := yaml.Unmarshal(data, &gc); err != nil {
-		return base
-	}
-	base.Verify = MergeVerifyConfig(base.Verify, gc.Verify)
-	base.Lint = MergeLintConfig(base.Lint, gc.Lint)
-	base.Commit = MergeCommitConfig(base.Commit, gc.Commit)
-	base.Fixtures = MergeFixturesConfig(base.Fixtures, gc.Fixtures)
-	base.SSH = MergeSSHConfig(base.SSH, gc.SSH)
-	base.Pre = append(base.Pre, gc.Pre...)
-	base.Post = append(base.Post, gc.Post...)
-	base.Secrets = MergeSecretsConfig(base.Secrets, gc.Secrets)
+	return mergeGavelConfig(base, cfg)
+}
+
+func mergeGavelConfig(base, override GavelConfig) GavelConfig {
+	base.Verify = MergeVerifyConfig(base.Verify, override.Verify)
+	base.Lint = MergeLintConfig(base.Lint, override.Lint)
+	base.Commit = MergeCommitConfig(base.Commit, override.Commit)
+	base.Fixtures = MergeFixturesConfig(base.Fixtures, override.Fixtures)
+	base.SSH = MergeSSHConfig(base.SSH, override.SSH)
+	base.Pre = append(base.Pre, override.Pre...)
+	base.Post = append(base.Post, override.Post...)
+	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
 	return base
+}
+
+func MergeGavelConfig(base, override GavelConfig) GavelConfig {
+	return mergeGavelConfig(base, override)
+}
+
+func resolveGavelConfigTarget(path string) (string, string, error) {
+	if path == "" {
+		path = "."
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", "", fmt.Errorf("stat %s: %w", absPath, err)
+	}
+
+	if info.IsDir() {
+		return absPath, absPath, nil
+	}
+
+	return absPath, filepath.Dir(absPath), nil
 }
 
 // MergeSecretsConfig merges override onto base. Disabled is OR (any layer
@@ -292,8 +453,14 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	base.GitIgnore = dedupStrings(append(base.GitIgnore, override.GitIgnore...))
 	base.Allow = dedupStrings(append(base.Allow, override.Allow...))
+	if override.Precommit.Mode != "" {
+		base.Precommit.Mode = override.Precommit.Mode
+	}
 	if override.LinkedDeps.Mode != "" {
 		base.LinkedDeps.Mode = override.LinkedDeps.Mode
+	}
+	if override.Compatibility.Mode != "" {
+		base.Compatibility.Mode = override.Compatibility.Mode
 	}
 	return base
 }

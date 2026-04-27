@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	clickyai "github.com/flanksource/clicky/ai"
+	"github.com/flanksource/gavel/internal/prompting"
 )
 
 type prContentInput struct {
@@ -51,6 +52,7 @@ func generatePRContent(ctx context.Context, agent clickyai.Agent, in prContentIn
 	prompt := fmt.Sprintf(prContentPromptTemplate, b.String())
 
 	schema := &prContentSchema{}
+	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
 		Name:             "PR title and body",
 		Prompt:           prompt,

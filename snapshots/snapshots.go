@@ -112,6 +112,31 @@ func LoadByPointer(workDir string, p *Pointer) (*testui.Snapshot, error) {
 	return &snap, nil
 }
 
+// ResolveLast returns the absolute filesystem path of the snapshot referenced
+// by .gavel/last.json. It errors loudly when no pointer exists so callers
+// (e.g. `gavel test --failed`) fail fast instead of silently widening to a
+// full run.
+func ResolveLast(workDir string) (string, error) {
+	if workDir == "" {
+		return "", errors.New("snapshots.ResolveLast: workDir is required")
+	}
+	ptr, err := LoadPointer(workDir, PointerLast)
+	if err != nil {
+		return "", err
+	}
+	if ptr == nil {
+		return "", fmt.Errorf("no previous run found at %s — run `gavel test` once to create it", filepath.Join(Dir, PointerLast+".json"))
+	}
+	path := ptr.Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("last-run snapshot missing at %s: %w", path, err)
+	}
+	return path, nil
+}
+
 // SnapshotID returns the HEAD sha and, when the worktree is dirty, an 8-char
 // hex checksum of the uncommitted state. The checksum hashes the combined
 // output of `git diff --cached`, `git diff`, and the contents of every

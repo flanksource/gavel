@@ -7,6 +7,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/linters/betterleaks"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -76,14 +77,17 @@ func shouldSelectLinter(workDir string, cfg verify.GavelConfig, linter linters.L
 		return shouldRunLinter(workDir, cfg, linter.Name(), true, false, false)
 	}
 
-	hasDirectConfig := hasDirectMatchingFiles(workDir, linterConfigPatterns(linter.Name()))
-	hasDirectTrigger := hasDirectMatchingFiles(workDir, linter.DefaultIncludes()) || hasDirectConfig
+	hasConfig := hasDirectMatchingFiles(workDir, linterConfigPatterns(linter.Name()))
+	if linter.Name() == "betterleaks" {
+		hasConfig = len(betterleaks.DiscoverConfigs(workDir)) > 0
+	}
+	hasDirectTrigger := hasDirectMatchingFiles(workDir, linter.DefaultIncludes()) || hasConfig
 	if !hasDirectTrigger {
 		return false, "no matching files or config in work dir"
 	}
 
 	explicitEnabled := isLinterExplicitlyEnabled(cfg, linter.Name())
-	return shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasDirectConfig)
+	return shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasConfig)
 }
 
 func hasDirectMatchingFiles(workDir string, patterns []string) bool {

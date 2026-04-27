@@ -143,18 +143,19 @@ func (g *GolangciLint) buildArgs() []string {
 
 // DryRunCommand reports the command golangci-lint would execute.
 func (g *GolangciLint) DryRunCommand() (string, []string) {
-	return "golangci-lint", g.buildArgs()
+	return g.commandName(), g.buildArgs()
 }
 
 // Run executes golangci-lint and returns violations
 func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]models.Violation, error) {
 	args := g.buildArgs()
+	cmdName := g.commandName()
 
 	// Execute command — capture stdout (JSON) separately from stderr (text)
-	cmd := exec.CommandContext(ctx, "golangci-lint", args...)
+	cmd := exec.CommandContext(ctx, cmdName, args...)
 	cmd.Dir = g.WorkDir
 
-	logger.Infof("Executing: golangci-lint %s", strings.Join(args, " "))
+	logger.Infof("Executing: %s %s", cmdName, strings.Join(args, " "))
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = g.WrapWriter(&stdout)
@@ -189,6 +190,13 @@ func (g *GolangciLint) Run(ctx commonsContext.Context, task *clicky.Task) ([]mod
 	}
 
 	return g.parseViolations([]byte(output))
+}
+
+func (g *GolangciLint) commandName() string {
+	if g.Executable != "" {
+		return g.Executable
+	}
+	return "golangci-lint"
 }
 
 // hasFormatArg checks if the args already contain a format argument

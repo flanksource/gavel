@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/formatters"
@@ -16,13 +17,17 @@ import (
 )
 
 var (
-	benchRunCount     int
-	benchRunTimeout   string
-	benchRunBenchtime string
-	benchRunOut       string
-	benchRunPattern   string
-	benchRunMem       bool
-	benchRunExtra     []string
+	benchRunCount         int
+	benchRunTimeout       string
+	benchRunBenchtime     string
+	benchRunOut           string
+	benchRunPattern       string
+	benchRunMem           bool
+	benchRunExtra         []string
+	benchRunUI            bool
+	benchRunUIAddr        string
+	benchRunGlobalTimeout time.Duration
+	benchRunTestTimeout   time.Duration
 
 	benchCompareBase      string
 	benchCompareHead      string
@@ -74,6 +79,9 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 		pattern = "."
 	}
 
+	runCtx, cancelRun := newStopContext(nil, benchRunGlobalTimeout)
+	defer cancelRun()
+
 	opts := testrunner.RunOptions{
 		WorkDir:       workDir,
 		StartingPaths: args,
@@ -83,6 +91,25 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 		Recursive:     true,
 		ShowStdout:    testrunner.OutputNever,
 		ShowStderr:    testrunner.OutputOnFailure,
+		Context:       runCtx,
+		Timeout:       benchRunGlobalTimeout,
+		TestTimeout:   benchRunTestTimeout,
+	}
+
+	if benchRunUI {
+		srv, _ := startTestUI(benchRunUIAddr)
+		if srv != nil {
+			srv.SetVersion(version)
+			srv.SetRunArgs(snapshotArgs(opts))
+			srv.SetGitInfo(snapshotGitInfo(opts.WorkDir))
+			srv.SetStopFunc(cancelRun)
+			srv.SetRunProcess(os.Getpid(), "gavel bench run")
+			srv.SetRunFrameworks([]string{"go"})
+			srv.BeginRun("initial")
+			updates := make(chan []parsers.Test, 16)
+			srv.StreamFrom(updates)
+			opts.Updates = updates
+		}
 	}
 
 	result, err := testrunner.Run(opts)
@@ -101,9 +128,14 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 	}
 	if benchRunOut == "" || benchRunOut == "-" {
 		fmt.Println(string(data))
-		return nil
+	} else if err := os.WriteFile(benchRunOut, data, 0644); err != nil {
+		return err
 	}
-	return os.WriteFile(benchRunOut, data, 0644)
+
+	if benchRunUI {
+		waitForInterrupt()
+	}
+	return nil
 }
 
 // testsToBenchRuns flattens the hierarchical test tree, picking out benchmark leaves.
@@ -190,6 +222,10 @@ func init() {
 	benchRunCmd.Flags().StringVar(&benchRunPattern, "pattern", ".", "Benchmark name regex (go test -bench)")
 	benchRunCmd.Flags().BoolVar(&benchRunMem, "benchmem", true, "Include memory allocation stats (-benchmem)")
 	benchRunCmd.Flags().StringSliceVar(&benchRunExtra, "extra", nil, "Extra flags passed through to go test")
+	benchRunCmd.Flags().BoolVar(&benchRunUI, "ui", false, "Launch browser UI streaming benchmark progress as packages complete")
+	benchRunCmd.Flags().StringVar(&benchRunUIAddr, "addr", "localhost", "Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.")
+	benchRunCmd.Flags().DurationVar(&benchRunGlobalTimeout, "global-timeout", 30*time.Minute, "Global wall-clock deadline for the entire bench run. Cancels every in-flight subprocess when it fires.")
+	benchRunCmd.Flags().DurationVar(&benchRunTestTimeout, "test-timeout", 20*time.Minute, "Per-package subprocess deadline. Applies to each go test invocation running benchmarks.")
 
 	benchCompareCmd.Flags().StringVar(&benchCompareBase, "base", "", "Path to base bench JSON file (required)")
 	benchCompareCmd.Flags().StringVar(&benchCompareHead, "head", "", "Path to head bench JSON file (required)")

@@ -15,11 +15,15 @@ export interface Test {
   passed?: boolean;
   pending?: boolean;
   timed_out?: boolean;
+  task_id?: string;
+  can_stop?: boolean;
   stdout?: string;
   stderr?: string;
   children?: Test[];
   summary?: TestSummary;
+  attempts?: TestAttempt[];
   context?: GoTestContext | GinkgoContext | FixtureContext;
+  failure_detail?: FailureDetail;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
   kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';
@@ -63,6 +67,30 @@ export interface LinterResult {
   rule_count?: number;
 }
 
+export interface TestAttempt {
+  sequence: number;
+  run_kind?: string;
+  started?: string;
+  ended?: string;
+  duration?: number;
+  pid?: number;
+  command?: string;
+  framework?: string;
+  exit_code?: number;
+  passed?: boolean;
+  failed?: boolean;
+  skipped?: boolean;
+  pending?: boolean;
+  timed_out?: boolean;
+  message?: string;
+  stdout?: string;
+  stderr?: string;
+  stack_trace?: string;
+  cpu_percent?: number;
+  rss?: number;
+  goroutine_count?: number;
+}
+
 export interface TestSummary {
   Total: number;
   Passed: number;
@@ -89,6 +117,11 @@ export interface RunMeta {
   started?: string;
   ended?: string;
   args?: Record<string, unknown>;
+  pid?: number;
+  command?: string;
+  frameworks?: string[];
+  exit_code?: number;
+  timed_out?: boolean;
 }
 
 export interface SnapshotGit {
@@ -101,6 +134,9 @@ export interface SnapshotStatus {
   running: boolean;
   lint_run?: boolean;
   diagnostics_available?: boolean;
+  stop_supported?: boolean;
+  stopped?: boolean;
+  stop_message?: string;
 }
 
 export interface DiagnosticsSnapshot {
@@ -187,4 +223,16 @@ export interface FixtureContext {
   cel_vars?: Record<string, any>;
   expected?: any;
   actual?: any;
+}
+
+export type FailureKind = 'gomega' | 'panic' | 'go_test' | 'raw';
+
+export interface FailureDetail {
+  kind?: FailureKind;
+  summary?: string;
+  matcher?: string;
+  expected?: string;
+  actual?: string;
+  location?: string;
+  stack?: string;
 }

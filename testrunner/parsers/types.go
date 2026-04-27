@@ -77,6 +77,8 @@ type Test struct {
 	Pending     bool          `json:"pending,omitempty"`
 	Cached      bool          `json:"cached,omitempty"`    // True when this result came from gavel's run-cache, not a fresh run
 	TimedOut    bool          `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
+	TaskID      string        `json:"task_id,omitempty"`
+	CanStop     bool          `json:"can_stop,omitempty"`
 	// IsGinkgoBootstrap marks a Go test function whose body only invokes ginkgo's RunSpecs.
 	// These wrappers still carry pass/fail/duration for the whole suite when a Ginkgo
 	// JSON report file is unavailable, but are deduped against real specs from the
@@ -88,6 +90,44 @@ type Test struct {
 	Summary           *TestSummary     `json:"summary,omitempty"`
 	Context           any              `json:"context,omitempty"`
 	Benchmark         *BenchmarkResult `json:"benchmark,omitempty"`
+	// Attempts is the per-run execution history for this test. A fresh run
+	// appends a TestAttempt to the tail; reruns (via the UI) append further
+	// attempts without discarding earlier ones. The Test's top-level
+	// Passed/Failed/Skipped/Pending/TimedOut flags always reflect the most
+	// recent attempt so existing filters keep working.
+	Attempts []TestAttempt `json:"attempts,omitempty"`
+	// FailureDetail is a structured view of Message recognised at parse time
+	// (gomega expected/actual, panic+stack, go test trailers). Renderers use
+	// it to show side-by-side diffs and a short summary; Message stays as the
+	// canonical raw form so consumers that want the original still see it.
+	FailureDetail *FailureDetail `json:"failure_detail,omitempty"`
+}
+
+// TestAttempt records one execution of a test: when it ran, on what pid,
+// the command invoked, and the final state. Populated by the runner on
+// completion and extended by the UI on rerun.
+type TestAttempt struct {
+	Sequence    int           `json:"sequence"`
+	RunKind     string        `json:"run_kind,omitempty"` // "initial", "rerun"
+	Started     time.Time     `json:"started,omitempty"`
+	Ended       time.Time     `json:"ended,omitempty"`
+	Duration    time.Duration `json:"duration,omitempty"`
+	PID         int           `json:"pid,omitempty"`
+	Command     string        `json:"command,omitempty"`
+	Framework   Framework     `json:"framework,omitempty"`
+	ExitCode    *int          `json:"exit_code,omitempty"`
+	Passed      bool          `json:"passed,omitempty"`
+	Failed      bool          `json:"failed,omitempty"`
+	Skipped     bool          `json:"skipped,omitempty"`
+	Pending     bool          `json:"pending,omitempty"`
+	TimedOut    bool          `json:"timed_out,omitempty"`
+	Message     string        `json:"message,omitempty"`
+	Stdout      string        `json:"stdout,omitempty"`
+	Stderr      string        `json:"stderr,omitempty"`
+	StackTrace  string        `json:"stack_trace,omitempty"`
+	CPUPercent  float64       `json:"cpu_percent,omitempty"`
+	RSS         uint64        `json:"rss,omitempty"`
+	GoroutineCt int           `json:"goroutine_count,omitempty"`
 }
 
 type GoTestContext struct {
@@ -205,9 +245,16 @@ func (t Test) Pretty() api.Text {
 		s = s.Append(t.Benchmark.Pretty(), "text-muted")
 	}
 
-	// Add message if present
-	if t.Message != "" {
+	// Add message if present. Prefer the structured FailureDetail summary
+	// when available so the per-test line stays scannable; the full body
+	// drops underneath in collapsed sections.
+	if d := t.FailureDetail; d != nil && d.Summary != "" {
+		s = s.Space().Append(d.Summary, textStyle)
+	} else if t.Message != "" {
 		s = s.Space().Append(t.Message, textStyle)
+	}
+	if t.FailureDetail != nil {
+		s = appendFailureDetail(s, t.FailureDetail, t.Message)
 	}
 	if t.Failed && t.Stdout != "" {
 		s = s.NewLine().Add(api.Collapsed{
@@ -222,6 +269,48 @@ func (t Test) Pretty() api.Text {
 		})
 	}
 
+	return s
+}
+
+// appendFailureDetail renders the structured parts of a gomega/panic/go-test
+// failure beneath the per-test summary line. Uses collapsed code blocks for
+// long values so the terminal stays readable on a screen full of failures.
+func appendFailureDetail(s api.Text, d *FailureDetail, raw string) api.Text {
+	switch d.Kind {
+	case FailureKindGomega:
+		if d.Actual != "" {
+			s = s.NewLine().Add(api.Collapsed{
+				Label:   "actual",
+				Content: clicky.Text("").Add(api.Code{Content: d.Actual}),
+			})
+		}
+		if d.Expected != "" {
+			s = s.NewLine().Add(api.Collapsed{
+				Label:   "expected (" + d.Matcher + ")",
+				Content: clicky.Text("").Add(api.Code{Content: d.Expected}),
+			})
+		}
+	case FailureKindPanic:
+		if d.Stack != "" {
+			s = s.NewLine().Add(api.Collapsed{
+				Label:   "stack trace",
+				Content: clicky.Text(d.Stack, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
+			})
+		}
+	case FailureKindGoTest:
+		if d.Location != "" {
+			s = s.NewLine().Append(d.Location, "text-muted font-mono")
+		}
+	}
+	// Always keep the raw message reachable so nothing is hidden by parsing
+	// heuristics — but only when the raw form has more than the one-line
+	// summary, otherwise it's pure noise.
+	if raw != "" && raw != d.Summary && strings.Contains(raw, "\n") {
+		s = s.NewLine().Add(api.Collapsed{
+			Label:   "full message",
+			Content: clicky.Text(raw, "text-muted font-mono text-xs whitespace-pre-wrap"),
+		})
+	}
 	return s
 }
 
@@ -273,9 +362,27 @@ func (t Test) PrettyTODO() api.Text {
 	text = text.NewLine().Append("## Re-run Command", "").NewLine().NewLine()
 	text = text.Add(api.Code{Content: t.RerunCommand(), Language: "bash"}).NewLine()
 
-	// Latest Failure section
+	// Latest Failure section. When we have a structured FailureDetail (gomega),
+	// emit Expected/Actual as labelled fenced blocks so the markdown reader
+	// sees the assertion shape directly instead of one big code dump.
 	text = text.NewLine().Append("## Latest Failure", "").NewLine().NewLine()
-	if t.Message != "" {
+	if d := t.FailureDetail; d != nil && d.Kind == FailureKindGomega {
+		if d.Summary != "" {
+			text = text.Append(d.Summary, "").NewLine().NewLine()
+		}
+		if d.Actual != "" {
+			text = text.Append("**Actual**", "").NewLine().NewLine()
+			text = text.Add(api.Code{Content: d.Actual}).NewLine().NewLine()
+		}
+		if d.Expected != "" {
+			label := "**Expected**"
+			if d.Matcher != "" {
+				label = "**Expected (" + d.Matcher + ")**"
+			}
+			text = text.Append(label, "").NewLine().NewLine()
+			text = text.Add(api.Code{Content: d.Expected}).NewLine()
+		}
+	} else if t.Message != "" {
 		text = text.Add(api.Code{Content: t.Message}).NewLine()
 	}
 

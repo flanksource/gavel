@@ -885,7 +885,14 @@ export function lintNodeCount(t: Test): number {
   return (t.noFileViolations?.length || 0) + (t.children || []).reduce((n, child) => n + lintNodeCount(child), 0);
 }
 
+function taskStatus(t: Test): string {
+  if (t.framework !== 'task' || !t.context || typeof t.context !== 'object') return '';
+  const value = (t.context as Record<string, unknown>).status;
+  return typeof value === 'string' ? value.toLowerCase() : '';
+}
+
 export function statusIcon(t: Test): string {
+  if (taskStatus(t) === 'canceled') return 'codicon:debug-stop';
   if (t.kind === 'lint-folder') {
     return 'codicon:folder';
   }
@@ -928,6 +935,7 @@ function hasTimedOutDescendant(t: Test): boolean {
 }
 
 export function statusColor(t: Test): string {
+  if (taskStatus(t) === 'canceled') return 'text-orange-600';
   if (t.kind === 'lint-folder') {
     return 'text-gray-500';
   }
@@ -966,6 +974,9 @@ export function frameworkIcon(framework?: string): string | null {
   switch (framework) {
     case 'go test': return 'devicon:go';
     case 'ginkgo': return 'devicon:go';
+    case 'jest': return 'devicon:jest';
+    case 'vitest': return 'logos:vitest';
+    case 'playwright': return 'devicon:playwright';
     case 'fixture': return 'vscode-icons:file-type-markdown';
     case 'lint': return 'codicon:lightbulb';
     case 'task': return 'codicon:tools';
@@ -1072,20 +1083,23 @@ function compactWithUnit(value: number, unit: string): string {
   return `${rounded}${unit}`;
 }
 
-export function sum(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number } {
+export function sum(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number; timedout: number } {
   if (t.summary) {
-    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0 };
+    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0, timedout: 0 };
   }
   if (!t.children || t.children.length === 0) {
+    const isTimedOut = !!t.timed_out;
+    const counted = isTimedOut || t.passed || t.failed || t.skipped || t.pending;
     return {
-      total: (t.passed || t.failed || t.skipped || t.pending) ? 1 : 0,
-      passed: t.passed ? 1 : 0,
-      failed: t.failed ? 1 : 0,
-      skipped: t.skipped ? 1 : 0,
-      pending: t.pending ? 1 : 0,
+      total: counted ? 1 : 0,
+      passed: !isTimedOut && t.passed ? 1 : 0,
+      failed: !isTimedOut && t.failed ? 1 : 0,
+      skipped: !isTimedOut && t.skipped ? 1 : 0,
+      pending: !isTimedOut && t.pending ? 1 : 0,
+      timedout: isTimedOut ? 1 : 0,
     };
   }
-  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
   for (const c of t.children) {
     const s = sum(c);
     r.total += s.total;
@@ -1093,16 +1107,17 @@ export function sum(t: Test): { total: number; passed: number; failed: number; s
     r.failed += s.failed;
     r.skipped += s.skipped;
     r.pending += s.pending;
+    r.timedout += s.timedout;
   }
   return r;
 }
 
-export function sumNonTaskTests(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number } {
+export function sumNonTaskTests(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number; timedout: number } {
   if (t.framework === 'task') {
     if (!t.children || t.children.length === 0) {
-      return { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+      return { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
     }
-    const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+    const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
     for (const c of t.children) {
       const s = sumNonTaskTests(c);
       r.total += s.total;
@@ -1110,23 +1125,27 @@ export function sumNonTaskTests(t: Test): { total: number; passed: number; faile
       r.failed += s.failed;
       r.skipped += s.skipped;
       r.pending += s.pending;
+      r.timedout += s.timedout;
     }
     return r;
   }
 
   if (t.summary) {
-    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0 };
+    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0, timedout: 0 };
   }
   if (!t.children || t.children.length === 0) {
+    const isTimedOut = !!t.timed_out;
+    const counted = isTimedOut || t.passed || t.failed || t.skipped || t.pending;
     return {
-      total: (t.passed || t.failed || t.skipped || t.pending) ? 1 : 0,
-      passed: t.passed ? 1 : 0,
-      failed: t.failed ? 1 : 0,
-      skipped: t.skipped ? 1 : 0,
-      pending: t.pending ? 1 : 0,
+      total: counted ? 1 : 0,
+      passed: !isTimedOut && t.passed ? 1 : 0,
+      failed: !isTimedOut && t.failed ? 1 : 0,
+      skipped: !isTimedOut && t.skipped ? 1 : 0,
+      pending: !isTimedOut && t.pending ? 1 : 0,
+      timedout: isTimedOut ? 1 : 0,
     };
   }
-  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
   for (const c of t.children) {
     const s = sumNonTaskTests(c);
     r.total += s.total;
@@ -1134,6 +1153,7 @@ export function sumNonTaskTests(t: Test): { total: number; passed: number; faile
     r.failed += s.failed;
     r.skipped += s.skipped;
     r.pending += s.pending;
+    r.timedout += s.timedout;
   }
   return r;
 }
@@ -1164,6 +1184,7 @@ export function collectFrameworks(tests: Test[]): string[] {
 
 export function testStatus(t: Test): string | null {
   if (t.kind === 'violation') return 'failed';
+  if (t.timed_out) return 'timedout';
   if (t.pending) return 'pending';
   if (t.failed) return 'failed';
   if (t.skipped) return 'skipped';

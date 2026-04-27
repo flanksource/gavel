@@ -9,7 +9,7 @@ interface OutputLine {
 
 interface StreamSnapshot {
   lines: OutputLine[];
-  status: 'running' | 'success' | 'failed';
+  status: 'running' | 'success' | 'failed' | 'canceled';
   command: string;
 }
 
@@ -20,7 +20,7 @@ interface Props {
 
 export function RerunDialog({ open, onClose }: Props) {
   const [lines, setLines] = useState<OutputLine[]>([]);
-  const [status, setStatus] = useState<'running' | 'success' | 'failed'>('running');
+  const [status, setStatus] = useState<'running' | 'success' | 'failed' | 'canceled'>('running');
   const [command, setCommand] = useState('');
   const scrollRef = useRef<HTMLPreElement>(null);
   const autoScrollRef = useRef(true);
@@ -68,11 +68,15 @@ export function RerunDialog({ open, onClose }: Props) {
 
   const statusIcon = status === 'running'
     ? 'line-md:loading-loop'
+    : status === 'canceled'
+      ? 'codicon:debug-stop'
     : status === 'success'
       ? 'mdi:check-circle'
       : 'mdi:close-circle';
   const statusColor = status === 'running'
     ? 'text-blue-400'
+    : status === 'canceled'
+      ? 'text-orange-400'
     : status === 'success'
       ? 'text-green-400'
       : 'text-red-400';
@@ -89,7 +93,7 @@ export function RerunDialog({ open, onClose }: Props) {
             <iconify-icon icon={statusIcon} class={`text-xl ${statusColor}`} />
             <span class="text-sm font-mono text-gray-300 truncate">{command || 'rerun'}</span>
             {status !== 'running' && (
-              <span class={`text-xs px-2 py-0.5 rounded ${status === 'success' ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+              <span class={`text-xs px-2 py-0.5 rounded ${status === 'success' ? 'bg-green-900 text-green-300' : status === 'canceled' ? 'bg-orange-900 text-orange-300' : 'bg-red-900 text-red-300'}`}>
                 {status}
               </span>
             )}

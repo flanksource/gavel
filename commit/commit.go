@@ -25,9 +25,10 @@ var (
 	ErrInvalidStage         = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage = errors.New("--commit-all does not support --message")
 
-	newAgentFunc                      = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return gavelai.NewAgent(cfg) }
-	analyzeCommitWithAIFunc           = git.AnalyzeWithAI
-	dryRunOutput            io.Writer = os.Stdout
+	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return gavelai.NewAgent(cfg) }
+	analyzeCommitMessageWithAIFunc                  = git.AnalyzeWithAI
+	analyzeCompatibilityPromptsWithAIFunc           = git.AnalyzeCompatibilityPromptsWithAI
+	dryRunOutput                          io.Writer = os.Stdout
 )
 
 const (
@@ -45,27 +46,29 @@ const (
 )
 
 type Options struct {
-	WorkDir         string
-	Stage           string
-	CommitAll       bool
-	MaxFiles        int
-	MaxLines        int
-	DryRun          bool
-	Force           bool
-	NoCache         bool
-	Push            bool
-	Model           string
-	Message         string
-	IgnoreCheck     string
-	LinkedDepsCheck string
-	Config          verify.CommitConfig
+	WorkDir       string
+	Stage         string
+	CommitAll     bool
+	MaxFiles      int
+	MaxLines      int
+	DryRun        bool
+	Force         bool
+	NoCache       bool
+	Push          bool
+	Model         string
+	Message       string
+	PrecommitMode string
+	CompatMode    string
+	Config        verify.CommitConfig
 }
 
 type CommitResult struct {
-	Label   string   `json:"label,omitempty"`
-	Message string   `json:"message"`
-	Hash    string   `json:"hash,omitempty"`
-	Files   []string `json:"files,omitempty"`
+	Label                string   `json:"label,omitempty"`
+	Message              string   `json:"message"`
+	Hash                 string   `json:"hash,omitempty"`
+	Files                []string `json:"files,omitempty"`
+	FunctionalityRemoved []string `json:"functionality_removed,omitempty"`
+	CompatibilityIssues  []string `json:"compatibility_issues,omitempty"`
 }
 
 type Result struct {
@@ -77,6 +80,12 @@ type Result struct {
 	Commits []CommitResult `json:"commits,omitempty"`
 }
 
+type commitAIAnalysis struct {
+	Message              string
+	FunctionalityRemoved []string
+	CompatibilityIssues  []string
+}
+
 func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Stage == "" {
 		opts.Stage = StageStaged
@@ -84,9 +93,20 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.WorkDir == "" {
 		return nil, errors.New("commit.Run: WorkDir is required")
 	}
+	precommitMode, err := resolvePrecommitMode(opts.PrecommitMode, opts.Config)
+	if err != nil {
+		return nil, err
+	}
+	opts.PrecommitMode = precommitMode
+
+	compatMode, err := resolveCompatMode(opts.CompatMode, opts.Config)
+	if err != nil {
+		return nil, err
+	}
+	opts.CompatMode = compatMode
+
 	var (
 		result *Result
-		err    error
 	)
 	if opts.CommitAll {
 		if opts.Message != "" {
@@ -134,6 +154,14 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyFileSizeCheck(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	source, err = applyLinkedDepsCheck(ctx, opts, source)
 	if err != nil {
 		return nil, err
@@ -163,14 +191,16 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	}
 	result.Staged = source.Files
 
-	msg, err := generateMessage(ctx, opts, source.Diff)
+	analysis, err := generateCommitAnalysis(ctx, opts, source.Diff)
 	if err != nil {
-		return result, fmt.Errorf("generate commit message: %w", err)
+		return result, fmt.Errorf("generate commit analysis: %w", err)
 	}
-	result.Message = msg
+	result.Message = analysis.Message
 	result.Commits = []CommitResult{{
-		Message: msg,
-		Files:   source.Files,
+		Message:              analysis.Message,
+		Files:                source.Files,
+		FunctionalityRemoved: analysis.FunctionalityRemoved,
+		CompatibilityIssues:  analysis.CompatibilityIssues,
 	}}
 
 	if opts.DryRun {
@@ -178,12 +208,16 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return result, nil
 	}
 
-	hash, err := commitWithMessage(opts.WorkDir, msg)
+	if err := applyCompatibilityCheck(ctx, opts, result.Commits[0]); err != nil {
+		return result, err
+	}
+
+	hash, err := commitWithMessage(opts.WorkDir, analysis.Message)
 	if err != nil {
 		return result, fmt.Errorf("create commit: %w", err)
 	}
 	result.Hash = hash
-	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(msg))
+	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Message))
 	return result, nil
 }
 
@@ -201,6 +235,14 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
+	source, err = applyFileSizeCheck(ctx, opts, source)
 	if err != nil {
 		return nil, err
 	}
@@ -244,20 +286,28 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 
 	result.Commits = make([]CommitResult, 0, len(groups))
 	for _, group := range groups {
-		msg, msgErr := generateMessage(ctx, opts, group.diff())
+		analysis, msgErr := generateCommitAnalysis(ctx, opts, group.diff())
 		if msgErr != nil {
-			return result, fmt.Errorf("generate commit message for %s: %w", group.labelOrDefault(), msgErr)
+			return result, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), msgErr)
 		}
 		result.Commits = append(result.Commits, CommitResult{
-			Label:   group.Label,
-			Message: msg,
-			Files:   group.Files(),
+			Label:                group.Label,
+			Message:              analysis.Message,
+			Files:                group.Files(),
+			FunctionalityRemoved: analysis.FunctionalityRemoved,
+			CompatibilityIssues:  analysis.CompatibilityIssues,
 		})
 	}
 
 	if opts.DryRun {
 		printDryRunPreview(result)
 		return result, nil
+	}
+
+	for _, commit := range result.Commits {
+		if err := applyCompatibilityCheck(ctx, opts, commit); err != nil {
+			return result, err
+		}
 	}
 
 	if err := resetFiles(opts.WorkDir, source.GitPaths()); err != nil {
@@ -312,37 +362,63 @@ func stageCommitAllSource(workDir string) error {
 	return nil
 }
 
-func generateMessage(ctx context.Context, opts Options, diff string) (string, error) {
-	if opts.Message != "" {
-		return opts.Message, nil
-	}
-
+func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (commitAIAnalysis, error) {
 	if os.Getenv(testEnvVar) == "1" {
-		logger.V(1).Infof("%s=1, returning stub commit message", testEnvVar)
-		return stubMessage, nil
+		logger.V(1).Infof("%s=1, returning stub commit analysis", testEnvVar)
+		msg := strings.TrimSpace(opts.Message)
+		if msg == "" {
+			msg = stubMessage
+		}
+		return commitAIAnalysis{Message: msg}, nil
+	}
+	explicitMessage := strings.TrimSpace(opts.Message)
+	if explicitMessage != "" && !shouldRunCompatibilityAnalysis(opts.CompatMode) {
+		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
 	agent, err := buildAgent(opts)
 	if err != nil {
-		return "", err
+		return commitAIAnalysis{}, err
 	}
-	return generateMessageWithAgent(ctx, diff, agent)
+	return generateCommitAnalysisWithAgent(ctx, diff, explicitMessage, opts.CompatMode, agent)
 }
 
-func generateMessageWithAgent(ctx context.Context, diff string, agent clickyai.Agent) (string, error) {
+func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage, compatMode string, agent clickyai.Agent) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
-	analyzed, err := analyzeCommitWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
-	if err != nil {
-		return "", err
+	message := explicitMessage
+	if message == "" {
+		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
+		if err != nil {
+			return commitAIAnalysis{}, err
+		}
+		out := models.AIAnalysisOutput{
+			Type:    analyzed.Commit.CommitType,
+			Scope:   analyzed.Commit.Scope,
+			Subject: analyzed.Commit.Subject,
+			Body:    analyzed.Commit.Body,
+		}
+		message = strings.TrimSpace(out.String())
+		analysis = analyzed
 	}
 
-	out := models.AIAnalysisOutput{
-		Type:    analyzed.CommitType,
-		Scope:   analyzed.Scope,
-		Subject: analyzed.Subject,
-		Body:    analyzed.Body,
+	result := commitAIAnalysis{
+		Message: message,
 	}
-	return strings.TrimSpace(out.String()), nil
+	if !shouldRunCompatibilityAnalysis(compatMode) {
+		return result, nil
+	}
+
+	analyzed, err := analyzeCompatibilityPromptsWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
+	if err != nil {
+		result.CompatibilityIssues = []string{formatCompatibilityAnalysisFailure(err)}
+		return result, nil
+	}
+
+	return commitAIAnalysis{
+		Message:              result.Message,
+		FunctionalityRemoved: analyzed.FunctionalityRemoved,
+		CompatibilityIssues:  analyzed.CompatibilityIssues,
+	}, nil
 }
 
 func buildAgent(opts Options) (clickyai.Agent, error) {
@@ -358,7 +434,7 @@ func buildAgent(opts Options) (clickyai.Agent, error) {
 
 	agent, err := newAgentFunc(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w (set ANTHROPIC_API_KEY / CLAUDE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY, or pass -m)", ErrLLMUnavailable, err)
+		return nil, fmt.Errorf("%w: %w (set ANTHROPIC_API_KEY / CLAUDE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)", ErrLLMUnavailable, err)
 	}
 	return agent, nil
 }
@@ -419,6 +495,7 @@ func (c CommitResult) prettyAt(index, total int, dryRun bool) api.Text {
 			t = t.Append("    ", "").Append(line).NewLine()
 		}
 	}
+	t = appendCompatibilityPreview(t, c.FunctionalityRemoved, c.CompatibilityIssues)
 	return t
 }
 

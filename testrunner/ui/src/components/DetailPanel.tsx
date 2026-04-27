@@ -1,4 +1,4 @@
-import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail } from '../types';
 import {
   statusIcon,
   statusColor,
@@ -15,6 +15,7 @@ import {
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
+import { TestAttempts } from './TestAttempts';
 
 export interface IgnoreRequest {
   source?: string;
@@ -28,6 +29,8 @@ interface Props {
   lint?: LinterResult[];
   onRerun?: (t: Test) => void;
   rerunBusy?: boolean;
+  onStop?: (t: Test) => void;
+  stopBusy?: boolean;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
   runMeta?: RunMeta;
@@ -43,7 +46,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignoreBusy, runMeta }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, runMeta }: Props) {
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -63,6 +66,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
   const isLint = t.kind === 'lint-root' || t.kind === 'lint-folder' || t.kind === 'linter'
     || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule' || t.kind === 'lint-rule-group';
   const canRerun = !!onRerun && t.kind !== 'violation' && t.framework !== 'task';
+  const canStop = !!onStop && !!t.can_stop && !!t.task_id;
 
   return (
     <div class="h-full overflow-y-auto p-5 space-y-4">
@@ -81,6 +85,17 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
               >
                 <iconify-icon icon="codicon:refresh" />
                 {rerunBusy ? 'Running...' : 'Rerun'}
+              </button>
+            )}
+            {canStop && (
+              <button
+                class="shrink-0 text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                onClick={() => onStop!(t)}
+                disabled={stopBusy}
+                title="Stop this running task"
+              >
+                <iconify-icon icon="codicon:debug-stop" />
+                {stopBusy ? 'Stopping...' : 'Stop'}
               </button>
             )}
           </div>
@@ -125,17 +140,69 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
 
       {runMeta && (
         <Section title="Run">
-          <div class="grid grid-cols-3 gap-3 text-sm">
+          <div class="grid grid-cols-4 gap-3 text-sm">
             <MetaCard
               label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
-              value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Unavailable'}
+              value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Pending'}
             />
             <MetaCard
-              label="Finished"
-              value={runMeta.ended ? formatRunTimestamp(runMeta.ended) : 'In progress'}
+              label="Duration"
+              value={
+                runMeta.ended
+                  ? formatRunDuration(runMeta.started, runMeta.ended)
+                  : runMeta.started
+                    ? (
+                      <span class="inline-flex items-center gap-1">
+                        <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
+                        {formatRunDuration(runMeta.started, undefined)}
+                      </span>
+                    )
+                    : '—'
+              }
             />
-            <MetaCard label="Duration" value={formatRunDuration(runMeta.started, runMeta.ended)} />
+            <MetaCard
+              label="Exit"
+              value={
+                runMeta.exit_code !== undefined
+                  ? (
+                    <span class={runMeta.exit_code === 0 ? 'text-green-700' : 'text-red-700'}>
+                      {runMeta.exit_code}
+                    </span>
+                  )
+                  : runMeta.ended ? '—' : 'running'
+              }
+            />
+            <MetaCard
+              label="Timeout"
+              value={
+                runMeta.timed_out
+                  ? <span class="text-amber-700 inline-flex items-center gap-1"><iconify-icon icon="mdi:clock-alert-outline" />triggered</span>
+                  : runMeta.ended ? 'ok' : '—'
+              }
+            />
           </div>
+          {(runMeta.pid || runMeta.command || (runMeta.frameworks && runMeta.frameworks.length > 0)) && (
+            <div class="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-600">
+              {runMeta.pid !== undefined && runMeta.pid > 0 && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">PID</span>
+                  <span class="font-mono">{runMeta.pid}</span>
+                </div>
+              )}
+              {runMeta.frameworks && runMeta.frameworks.length > 0 && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">Frameworks</span>
+                  <span>{runMeta.frameworks.join(', ')}</span>
+                </div>
+              )}
+              {runMeta.command && (
+                <div class="flex gap-2">
+                  <span class="text-gray-400 w-20">Command</span>
+                  <span class="font-mono truncate" title={runMeta.command}>{runMeta.command}</span>
+                </div>
+              )}
+            </div>
+          )}
           {hasTimeoutArgs(runMeta.args) && (
             <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
               {timeoutArgValue(runMeta.args, 'timeout') && (
@@ -189,14 +256,22 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
         </Section>
       )}
 
-      {/* Error message */}
-      {t.message && (
+      {/* Error message — prefer the structured FailureDetail view when the
+          parser recognised a known failure shape, otherwise fall back to the
+          raw message. The raw message is still reachable as a <details>
+          fallback so nothing is hidden by parsing heuristics. */}
+      {t.failure_detail && t.failure_detail.kind && t.failure_detail.kind !== 'raw' ? (
         <Section title="Error">
-          <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto">
-            {t.message}
-          </pre>
+          <FailureDetailView detail={t.failure_detail} rawMessage={t.message} />
         </Section>
-      )}
+      ) : t.message ? (
+        <Section title="Error">
+          <AnsiHtml
+            text={t.message}
+            class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto block"
+          />
+        </Section>
+      ) : null}
 
       {/* Command */}
       {t.command && (
@@ -218,8 +293,14 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onIgnore, ignor
 
       {/* Framework-specific context */}
       {fw === 'fixture' && t.context && <FixtureDetail ctx={t.context as FixtureContext} />}
-      {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} />}
+      {fw === 'ginkgo' && t.context && <GinkgoDetail ctx={t.context as GinkgoContext} failureLocation={t.failure_detail?.location} suiteAbove={t.suite?.join(' > ')} />}
       {fw === 'go test' && t.context && <GoTestDetail ctx={t.context as GoTestContext} />}
+
+      {t.attempts && t.attempts.length > 0 && (
+        <Section title={t.attempts.length > 1 ? `Attempts (${t.attempts.length})` : 'Attempt'}>
+          <TestAttempts test={t} />
+        </Section>
+      )}
 
       {t.stdout && (
         <Section title="stdout">
@@ -259,6 +340,66 @@ function filterCelVars(vars: Record<string, any>): Record<string, any> {
     }
   }
   return filtered;
+}
+
+function FailureDetailView({ detail: d, rawMessage }: { detail: FailureDetail; rawMessage?: string }) {
+  const showRawFallback = !!rawMessage && rawMessage !== d.summary && rawMessage.includes('\n');
+
+  return (
+    <div class="space-y-2">
+      {d.summary && (
+        <div class="text-sm text-red-700 font-mono bg-red-50 rounded p-2">
+          {d.summary}
+        </div>
+      )}
+
+      {d.kind === 'gomega' && (d.actual || d.expected) && (
+        <div class="grid grid-cols-2 gap-2">
+          {d.actual !== undefined && (
+            <div>
+              <div class="text-xs font-semibold text-gray-500 mb-1">Actual</div>
+              <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+            </div>
+          )}
+          {d.expected !== undefined && (
+            <div>
+              <div class="text-xs font-semibold text-gray-500 mb-1">
+                Expected{d.matcher ? ` (${d.matcher})` : ''}
+              </div>
+              <pre class="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.expected}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {d.kind === 'panic' && d.stack && (
+        <details class="bg-gray-50 rounded p-2">
+          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Stack trace</summary>
+          <pre class="text-xs font-mono text-gray-800 whitespace-pre-wrap mt-2 max-h-80 overflow-y-auto">{d.stack}</pre>
+        </details>
+      )}
+
+      {d.kind === 'go_test' && d.actual && (
+        <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+      )}
+
+      {d.location && (
+        <div class="text-xs text-gray-500 font-mono">
+          <iconify-icon icon="codicon:location" class="mr-0.5" />{d.location}
+        </div>
+      )}
+
+      {showRawFallback && (
+        <details class="bg-gray-50 rounded p-2">
+          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Full message</summary>
+          <AnsiHtml
+            text={rawMessage!}
+            class="text-xs text-gray-700 font-mono whitespace-pre-wrap mt-2 max-h-64 overflow-y-auto block"
+          />
+        </details>
+      )}
+    </div>
+  );
 }
 
 function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
@@ -318,17 +459,32 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
   );
 }
 
-function GinkgoDetail({ ctx }: { ctx: GinkgoContext }) {
+function GinkgoDetail({
+  ctx,
+  failureLocation,
+  suiteAbove,
+}: {
+  ctx: GinkgoContext;
+  failureLocation?: string;
+  suiteAbove?: string;
+}) {
+  // Skip the Failure Location block when FailureDetailView already shows the
+  // same file:line above. Skip the suite_description line when the top
+  // "Suite" section already shows the same string. suite_path (filesystem
+  // location of the suite binary) is still useful — keep it when present.
+  const showLocation = ctx.failure_location && ctx.failure_location !== failureLocation;
+  const showDescription = ctx.suite_description && ctx.suite_description !== suiteAbove;
+  const showSuite = showDescription || ctx.suite_path;
   return (
     <>
-      {(ctx.suite_description || ctx.suite_path) && (
+      {showSuite && (
         <Section title="Suite">
-          {ctx.suite_description && <div class="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
+          {showDescription && <div class="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
           {ctx.suite_path && <div class="text-xs text-gray-500 font-mono mt-0.5">{ctx.suite_path}</div>}
         </Section>
       )}
 
-      {ctx.failure_location && (
+      {showLocation && (
         <Section title="Failure Location">
           <span class="text-sm text-red-600 font-mono">{ctx.failure_location}</span>
         </Section>
@@ -372,7 +528,7 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
   );
 }
 
-function MetaCard({ label, value }: { label: string; value: string }) {
+function MetaCard({ label, value }: { label: string; value: any }) {
   return (
     <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
       <div class="text-xs uppercase tracking-wide text-gray-500">{label}</div>

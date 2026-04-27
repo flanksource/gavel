@@ -9,16 +9,16 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/cmd/gavel/choose"
 	"github.com/flanksource/gavel/verify"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"golang.org/x/term"
 )
 
 const (
-	IgnoreCheckModePrompt = "prompt"
-	IgnoreCheckModeFail   = "fail"
-	IgnoreCheckModeSkip   = "skip"
+	IgnoreCheckModePrompt = CheckModePrompt
+	IgnoreCheckModeFail   = CheckModeFail
+	IgnoreCheckModeSkip   = CheckModeSkip
+	IgnoreCheckModeFalse  = CheckModeFalse
 )
 
 var ErrGitIgnoreCancelled = errors.New("commit cancelled: staged file matched a .gavel.yaml gitignore pattern")
@@ -26,15 +26,25 @@ var ErrGitIgnoreCancelled = errors.New("commit cancelled: staged file matched a 
 type Violation struct {
 	File    string
 	Pattern string
+	// FolderSiblings is the count of other pending violations under the same
+	// directory. Populated by the iterative checker so the prompt can describe
+	// how many files a "add folder" choice would batch-unstage. Zero means no
+	// siblings (or the violation didn't come from the iterative checker).
+	FolderSiblings int
 }
 
 type Decision int
 
 const (
 	DecisionCancel Decision = iota
-	DecisionGitIgnore
+	DecisionGitIgnorePattern
+	DecisionGitIgnoreFolder
+	DecisionGitIgnoreFile
 	DecisionAllow
+	DecisionAllowFolder
 )
+
+const DecisionGitIgnore = DecisionGitIgnoreFile
 
 type Decider func(ctx context.Context, v Violation) (Decision, error)
 
@@ -55,8 +65,13 @@ type CheckOutcome struct {
 	Allowed    []string
 }
 
+type gitIgnoreChoice struct {
+	Text     string
+	Decision Decision
+}
+
 var (
-	interactiveDeciderFunc = runChooseDecider
+	interactiveDeciderFunc = runPromptDecider
 	stdinIsTerminal        = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 )
 
@@ -121,10 +136,18 @@ func splitGitPath(p string) []string {
 }
 
 // RunGitIgnoreCheck evaluates the staged files, prompts for each match, and
-// applies the user's chosen action (unstage + append to .gitignore, or append
-// to commit.allow in the repo's .gavel.yaml). Cancel on any match aborts
-// without applying any change.
+// applies the user's chosen action (unstage + append a pattern / folder / file
+// entry to .gitignore, or append to commit.allow in the repo's .gavel.yaml).
+// Cancel on any match aborts without applying any change.
 func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error) {
+	mode, err := normalizeCheckMode(p.Mode, "--precommit")
+	if err != nil {
+		return CheckOutcome{}, err
+	}
+	if mode == CheckModeSkip {
+		return CheckOutcome{}, nil
+	}
+
 	violations, err := EvaluateGitIgnoreMatches(p.StagedFiles, p.Config.GitIgnore, p.Config.Allow)
 	if err != nil {
 		return CheckOutcome{}, err
@@ -133,29 +156,20 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 		return CheckOutcome{}, nil
 	}
 
-	mode := p.Mode
-	if mode == "" {
-		mode = IgnoreCheckModePrompt
-	}
 	// Only escalate on non-TTY if we'd otherwise fall through to the real
 	// interactive prompt. Callers that inject a Decider (tests, future
 	// non-interactive flows) have already decided how to answer.
 	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
-		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --ignore-check=fail")
+		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
 
 	switch mode {
-	case IgnoreCheckModeSkip:
-		for _, v := range violations {
-			logger.Warnf("gitignore check skipped: %q matches %q", v.File, v.Pattern)
-		}
-		return CheckOutcome{}, nil
 	case IgnoreCheckModeFail:
 		return CheckOutcome{}, formatViolationsError(violations)
 	case IgnoreCheckModePrompt:
 	default:
-		return CheckOutcome{}, fmt.Errorf("unknown ignore-check mode: %q", mode)
+		return CheckOutcome{}, fmt.Errorf("unknown --precommit mode: %q", mode)
 	}
 
 	decider := p.Decider
@@ -163,19 +177,185 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 		decider = interactiveDeciderFunc
 	}
 
-	decisions := make([]Decision, len(violations))
-	for i, v := range violations {
+	plan, err := iterateDecisions(ctx, p, violations, decider)
+	if err != nil {
+		return CheckOutcome{}, err
+	}
+	if plan.cancelled {
+		return CheckOutcome{Cancelled: true}, nil
+	}
+	return applyPlan(p, plan)
+}
+
+// iterateDecisions walks the remaining violations one decision at a time and,
+// after each decision, recomputes the remaining set against the patterns and
+// allow-list accumulated so far. A single "add folder" or "add pattern" choice
+// therefore batch-covers every sibling file it implies, instead of re-prompting
+// for each one.
+func iterateDecisions(ctx context.Context, p CheckParams, violations []Violation, decider Decider) (decisionPlan, error) {
+	plan := decisionPlan{
+		basePatterns: append([]string(nil), p.Config.GitIgnore...),
+		baseAllow:    append([]string(nil), p.Config.Allow...),
+	}
+	remaining := append([]Violation(nil), violations...)
+
+	for len(remaining) > 0 {
+		v := remaining[0]
+		v.FolderSiblings = countFolderSiblings(v.File, remaining[1:])
+
 		d, err := decider(ctx, v)
 		if err != nil {
-			return CheckOutcome{}, fmt.Errorf("gitignore prompt: %w", err)
+			return decisionPlan{}, fmt.Errorf("gitignore prompt: %w", err)
 		}
 		if d == DecisionCancel {
-			return CheckOutcome{Cancelled: true}, nil
+			return decisionPlan{cancelled: true}, nil
 		}
-		decisions[i] = d
-	}
 
-	return applyDecisions(p, violations, decisions)
+		switch d {
+		case DecisionGitIgnorePattern:
+			plan.gitIgnoreEntries = appendUnique(plan.gitIgnoreEntries, v.Pattern)
+		case DecisionGitIgnoreFolder:
+			entry := gitIgnoreFolderEntry(v.File)
+			if entry == "" {
+				entry = v.File
+			}
+			plan.gitIgnoreEntries = appendUnique(plan.gitIgnoreEntries, entry)
+		case DecisionGitIgnoreFile:
+			plan.gitIgnoreEntries = appendUnique(plan.gitIgnoreEntries, v.File)
+		case DecisionAllow:
+			plan.allowEntries = appendUnique(plan.allowEntries, v.File)
+			plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+v.File)
+		case DecisionAllowFolder:
+			folder := gitIgnoreFolderEntry(v.File)
+			if folder == "" {
+				// File is at the repo root — fall back to a per-file allow.
+				plan.allowEntries = appendUnique(plan.allowEntries, v.File)
+				plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+v.File)
+			} else {
+				plan.allowEntries = appendUnique(plan.allowEntries, folder+"**")
+				plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+folder)
+			}
+		default:
+			return decisionPlan{}, fmt.Errorf("unknown gitignore decision %v for %q", d, v.File)
+		}
+
+		// Collect the files this decision directly covers.
+		covered := coveredFiles(d, v, remaining)
+		switch d {
+		case DecisionGitIgnorePattern, DecisionGitIgnoreFolder, DecisionGitIgnoreFile:
+			plan.unstage = appendUniqueAll(plan.unstage, covered)
+		case DecisionAllow, DecisionAllowFolder:
+			plan.allowed = appendUniqueAll(plan.allowed, covered)
+		}
+
+		// Rebuild the remaining set by re-evaluating every originally-staged
+		// file against the accumulated patterns / allow. Files newly covered
+		// by this round's decision drop out automatically.
+		patterns := append(append([]string(nil), plan.basePatterns...), plan.gitIgnoreEntries...)
+		allow := append(append([]string(nil), plan.baseAllow...), plan.allowEntries...)
+		next, err := EvaluateGitIgnoreMatches(p.StagedFiles, patterns, allow)
+		if err != nil {
+			return decisionPlan{}, err
+		}
+		remaining = filterDecided(next, plan.unstage, plan.allowed)
+	}
+	return plan, nil
+}
+
+// decisionPlan accumulates the outcome of the per-decision loop so apply
+// writes disk state exactly once at the end.
+type decisionPlan struct {
+	basePatterns        []string
+	baseAllow           []string
+	gitIgnoreEntries    []string
+	allowEntries        []string
+	allowGitIgnoreLines []string // negation lines (`!path`, `!folder/`) added to .gitignore as overrides
+	unstage             []string
+	allowed             []string
+	cancelled           bool
+}
+
+// countFolderSiblings returns how many of the other violations live in the
+// same directory as file. Returns 0 for root-level files because a "folder"
+// decision would not be offered there.
+func countFolderSiblings(file string, others []Violation) int {
+	dir := gitIgnoreFolderEntry(file)
+	if dir == "" {
+		return 0
+	}
+	n := 0
+	for _, o := range others {
+		if strings.HasPrefix(filepath.ToSlash(o.File)+"/", dir) {
+			n++
+		}
+	}
+	return n
+}
+
+// coveredFiles reports which of the current remaining violations this one
+// decision unstages/allows. DecisionGitIgnoreFile and DecisionAllow cover only
+// the chosen file; folder / pattern decisions cover every matching sibling.
+func coveredFiles(d Decision, v Violation, remaining []Violation) []string {
+	switch d {
+	case DecisionGitIgnoreFile, DecisionAllow:
+		return []string{v.File}
+	case DecisionGitIgnoreFolder, DecisionAllowFolder:
+		dir := gitIgnoreFolderEntry(v.File)
+		if dir == "" {
+			return []string{v.File}
+		}
+		out := []string{v.File}
+		for _, o := range remaining[1:] {
+			if strings.HasPrefix(filepath.ToSlash(o.File)+"/", dir) {
+				out = append(out, o.File)
+			}
+		}
+		return out
+	case DecisionGitIgnorePattern:
+		out := []string{v.File}
+		for _, o := range remaining[1:] {
+			if o.Pattern == v.Pattern {
+				out = append(out, o.File)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func filterDecided(violations []Violation, unstaged, allowed []string) []Violation {
+	decided := make(map[string]struct{}, len(unstaged)+len(allowed))
+	for _, f := range unstaged {
+		decided[f] = struct{}{}
+	}
+	for _, f := range allowed {
+		decided[f] = struct{}{}
+	}
+	out := violations[:0]
+	for _, v := range violations {
+		if _, ok := decided[v.File]; ok {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func appendUnique(dst []string, v string) []string {
+	for _, x := range dst {
+		if x == v {
+			return dst
+		}
+	}
+	return append(dst, v)
+}
+
+func appendUniqueAll(dst, src []string) []string {
+	for _, v := range src {
+		dst = appendUnique(dst, v)
+	}
+	return dst
 }
 
 func formatViolationsError(violations []Violation) error {
@@ -187,48 +367,42 @@ func formatViolationsError(violations []Violation) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-func applyDecisions(p CheckParams, violations []Violation, decisions []Decision) (CheckOutcome, error) {
-	var (
-		toUnstage []string
-		toAllow   []string
-		outcome   CheckOutcome
-	)
-	for i, v := range violations {
-		switch decisions[i] {
-		case DecisionGitIgnore:
-			toUnstage = append(toUnstage, v.File)
-		case DecisionAllow:
-			toAllow = append(toAllow, v.File)
-		}
-	}
+func applyPlan(p CheckParams, plan decisionPlan) (CheckOutcome, error) {
+	var outcome CheckOutcome
 
 	gitRoot := p.GitRoot
 	if gitRoot == "" {
 		gitRoot = p.WorkDir
 	}
 
-	if len(toUnstage) > 0 {
-		appended, err := appendGitIgnore(gitRoot, toUnstage)
+	if len(plan.unstage) > 0 {
+		appended, err := appendGitIgnore(gitRoot, plan.gitIgnoreEntries)
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("append .gitignore: %w", err)
 		}
-		if err := resetFiles(p.WorkDir, toUnstage); err != nil {
+		if err := resetFiles(p.WorkDir, plan.unstage); err != nil {
 			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
 		}
-		outcome.Unstaged = toUnstage
+		outcome.Unstaged = plan.unstage
 		outcome.GitIgnored = appended
 	}
 
-	if len(toAllow) > 0 {
+	if len(plan.allowed) > 0 {
 		saveDir := p.SaveDir
 		if saveDir == "" {
 			saveDir = gitRoot
 		}
-		added, err := appendAllow(saveDir, toAllow)
+		added, err := appendAllow(saveDir, plan.allowEntries)
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("update .gavel.yaml: %w", err)
 		}
 		outcome.Allowed = added
+
+		negated, err := appendGitIgnoreAllow(gitRoot, plan.allowGitIgnoreLines)
+		if err != nil {
+			return CheckOutcome{}, fmt.Errorf("append .gitignore allow override: %w", err)
+		}
+		outcome.GitIgnored = appendUniqueAll(outcome.GitIgnored, negated)
 	}
 
 	return outcome, nil
@@ -238,6 +412,29 @@ func applyDecisions(p CheckParams, violations []Violation, decisions []Decision)
 // existing content. Lines already present (exact match) are skipped. Returns
 // the subset of entries actually written so callers can report them.
 func appendGitIgnore(gitRoot string, entries []string) ([]string, error) {
+	return appendGitIgnoreLines(gitRoot, entries)
+}
+
+// appendGitIgnoreAllow appends explicit-allow negation lines (`!entry`) to
+// {gitRoot}/.gitignore. Entries already prefixed with "!" pass through as-is;
+// otherwise the prefix is added. The negations live in the same .gitignore so
+// the override is self-documenting and survives a future broad ignore.
+func appendGitIgnoreAllow(gitRoot string, entries []string) ([]string, error) {
+	negated := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e == "" {
+			continue
+		}
+		if strings.HasPrefix(e, "!") {
+			negated = append(negated, e)
+			continue
+		}
+		negated = append(negated, "!"+e)
+	}
+	return appendGitIgnoreLines(gitRoot, negated)
+}
+
+func appendGitIgnoreLines(gitRoot string, entries []string) ([]string, error) {
 	path := filepath.Join(gitRoot, ".gitignore")
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -313,17 +510,71 @@ func appendAllow(saveDir string, entries []string) ([]string, error) {
 	return added, nil
 }
 
+func gitIgnoreFolderEntry(file string) string {
+	dir := filepath.Dir(filepath.ToSlash(file))
+	if dir == "." || dir == "" {
+		return ""
+	}
+	return dir + "/"
+}
+
+func gitIgnoreChoices(v Violation) []gitIgnoreChoice {
+	choices := []gitIgnoreChoice{
+		{
+			Text:     fmt.Sprintf("Add matched pattern %q to .gitignore (unstage now)", v.Pattern),
+			Decision: DecisionGitIgnorePattern,
+		},
+	}
+	if dir := gitIgnoreFolderEntry(v.File); dir != "" {
+		text := fmt.Sprintf("Add folder %q to .gitignore (unstage now)", dir)
+		if v.FolderSiblings > 0 {
+			text = fmt.Sprintf("Add folder %q to .gitignore (unstages %d files)", dir, v.FolderSiblings+1)
+		}
+		choices = append(choices, gitIgnoreChoice{
+			Text:     text,
+			Decision: DecisionGitIgnoreFolder,
+		})
+	}
+	choices = append(choices,
+		gitIgnoreChoice{
+			Text:     fmt.Sprintf("Add file %q to .gitignore (unstage now)", v.File),
+			Decision: DecisionGitIgnoreFile,
+		},
+		gitIgnoreChoice{
+			Text:     fmt.Sprintf("Allow this file (%q in .gavel.yaml + !%s in .gitignore)", v.File, v.File),
+			Decision: DecisionAllow,
+		},
+	)
+	if folder := gitIgnoreFolderEntry(v.File); folder != "" {
+		choices = append(choices, gitIgnoreChoice{
+			Text:     fmt.Sprintf("Allow folder %q (and everything under it: !%s in .gitignore + %s** in .gavel.yaml)", folder, folder, folder),
+			Decision: DecisionAllowFolder,
+		})
+	}
+	choices = append(choices,
+		gitIgnoreChoice{
+			Text:     "Cancel commit",
+			Decision: DecisionCancel,
+		},
+	)
+	return choices
+}
+
 // applyGitIgnoreCheck runs the check and, if any file was unstaged, re-reads
 // the staged source so the caller sees the updated file list. Returns
 // ErrGitIgnoreCancelled when the user cancels.
 func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
+	if !shouldRunPrecommitChecks(opts.PrecommitMode) {
+		return source, nil
+	}
+
 	outcome, err := RunGitIgnoreCheck(ctx, CheckParams{
 		WorkDir:     opts.WorkDir,
 		GitRoot:     opts.WorkDir,
 		StagedFiles: source.Files,
 		Config:      opts.Config,
 		SaveDir:     opts.WorkDir,
-		Mode:        opts.IgnoreCheck,
+		Mode:        opts.PrecommitMode,
 	})
 	if err != nil {
 		return source, err
@@ -341,26 +592,16 @@ func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource)
 	return refreshed, nil
 }
 
-func runChooseDecider(_ context.Context, v Violation) (Decision, error) {
+func runPromptDecider(_ context.Context, v Violation) (Decision, error) {
 	header := fmt.Sprintf("Staged %q matches commit.gitignore pattern %q", v.File, v.Pattern)
-	items := []string{
-		fmt.Sprintf("Add %s to .gitignore (unstage now)", v.File),
-		"Allow this file in ./.gavel.yaml (commit.allow)",
-		"Cancel commit",
+	choices := gitIgnoreChoices(v)
+	items := make([]string, len(choices))
+	for i, choice := range choices {
+		items[i] = choice.Text
 	}
-	idx, err := choose.Run(items, choose.WithHeader(header), choose.WithLimit(1))
-	if err != nil {
-		return DecisionCancel, err
-	}
-	if len(idx) == 0 {
+	idx, ok := promptSelectIndex(header, items)
+	if !ok {
 		return DecisionCancel, nil
 	}
-	switch idx[0] {
-	case 0:
-		return DecisionGitIgnore, nil
-	case 1:
-		return DecisionAllow, nil
-	default:
-		return DecisionCancel, nil
-	}
+	return choices[idx].Decision, nil
 }

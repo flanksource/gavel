@@ -2,6 +2,7 @@ package testrunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
+	gopsutilProcess "github.com/shirou/gopsutil/v3/process"
+	"golang.org/x/mod/modfile"
 )
 
 var exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
@@ -137,6 +140,8 @@ type RunOptions struct {
 	Failed        string                `json:"failed,omitempty" flag:"failed"`                               // Path to previous results JSON; re-run only failed tests
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
+	RunKind       string                `json:"run_kind,omitempty"`                                           // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
+	SummaryOut    *parsers.TestSummary  `json:"-"`                                                            // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning. Lets CLI callers print an end-of-run summary without losing the passed-test counts that the returned tree filters out.
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -408,20 +413,148 @@ func runMultiRoot(base RunOptions, groups []testGroup) (any, error) {
 		defer close(base.Updates)
 	}
 
+	baseWorkDir := base.WorkDir
 	var allTree []parsers.Test
+	var streamedTree []parsers.Test
 	for _, g := range groups {
 		opts := base
 		opts.WorkDir = g.workDir
 		opts.StartingPaths = g.paths
-		result, err := runSingleRootWithUpdateOwnership(opts, false)
+
+		var result any
+		var err error
+		var streamedRoot *parsers.Test
+		if base.Updates != nil {
+			groupUpdates := make(chan []parsers.Test, 16)
+			prefix := append([]parsers.Test(nil), streamedTree...)
+			opts.Updates = groupUpdates
+
+			done := make(chan *parsers.Test, 1)
+			go func(workDir string, completed []parsers.Test) {
+				var last *parsers.Test
+				for batch := range groupUpdates {
+					wrapped := wrapExecutionRootTree(baseWorkDir, workDir, annotateTestsWorkDir(batch, workDir))
+					wrappedCopy := wrapped
+					last = &wrappedCopy
+					merged := append(append([]parsers.Test(nil), completed...), wrapped)
+					sendTestUpdate(base.Updates, merged)
+				}
+				done <- last
+			}(g.workDir, prefix)
+
+			result, err = runSingleRootWithUpdateOwnership(opts, true)
+			streamedRoot = <-done
+		} else {
+			result, err = runSingleRootWithUpdateOwnership(opts, false)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if tests, ok := result.([]parsers.Test); ok {
-			allTree = append(allTree, tests...)
+		if streamedRoot != nil {
+			streamedTree = append(streamedTree, *streamedRoot)
+			sendTestUpdate(base.Updates, append([]parsers.Test(nil), streamedTree...))
+		}
+		if tests, ok := result.([]parsers.Test); ok && len(tests) > 0 {
+			allTree = append(allTree, wrapExecutionRootTree(baseWorkDir, g.workDir, tests))
 		}
 	}
 	return allTree, nil
+}
+
+func wrapExecutionRootTree(baseWorkDir, rootWorkDir string, tests []parsers.Test) parsers.Test {
+	root := parsers.Test{
+		Name:     executionRootLabel(baseWorkDir, rootWorkDir),
+		WorkDir:  rootWorkDir,
+		Children: tests,
+	}
+
+	summary := root.Sum()
+	switch {
+	case summary.Pending > 0:
+		root.Pending = true
+	case summary.Failed > 0:
+		root.Failed = true
+	case summary.Passed > 0:
+		root.Passed = true
+	case summary.Skipped > 0:
+		root.Skipped = true
+	}
+
+	return root
+}
+
+func executionRootLabel(baseWorkDir, rootWorkDir string) string {
+	if label, ok := executionRootProjectLabel(rootWorkDir); ok {
+		return label
+	}
+	if baseWorkDir == "" {
+		baseWorkDir = rootWorkDir
+	}
+
+	baseWorkDir, _ = filepath.Abs(baseWorkDir)
+	rootWorkDir, _ = filepath.Abs(rootWorkDir)
+	rel, err := filepath.Rel(baseWorkDir, rootWorkDir)
+	if err != nil || rel == "" {
+		rel = rootWorkDir
+	}
+	rel = filepath.ToSlash(rel)
+
+	switch {
+	case rel == ".":
+		return "./"
+	case strings.HasPrefix(rel, "."):
+		return rel + "/"
+	default:
+		return "./" + rel + "/"
+	}
+}
+
+func executionRootProjectLabel(rootWorkDir string) (string, bool) {
+	if modulePath, ok := goModuleName(rootWorkDir); ok {
+		return modulePath, true
+	}
+	if packageName, ok := packageJSONName(rootWorkDir); ok {
+		return packageName, true
+	}
+	return "", false
+}
+
+func goModuleName(rootWorkDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(rootWorkDir, "go.mod"))
+	if err != nil {
+		return "", false
+	}
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil || f.Module == nil {
+		return "", false
+	}
+	name := strings.TrimSpace(f.Module.Mod.Path)
+	return name, name != ""
+}
+
+func packageJSONName(rootWorkDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(rootWorkDir, "package.json"))
+	if err != nil {
+		return "", false
+	}
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", false
+	}
+	pkg.Name = strings.TrimSpace(pkg.Name)
+	return pkg.Name, pkg.Name != ""
+}
+
+func sendTestUpdate(updates chan<- []parsers.Test, tree []parsers.Test) {
+	if updates == nil {
+		return
+	}
+	select {
+	case updates <- tree:
+	default:
+	}
 }
 
 func runSingleRoot(opts RunOptions) (any, error) {
@@ -447,6 +580,11 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 		streamer:   streamer,
 	}
 	results, err := t.Run()
+	// Populate SummaryOut from whatever completed before the error, so the
+	// CLI can still print an end-of-run summary when a subprocess failed.
+	if opts.SummaryOut != nil {
+		*opts.SummaryOut = opts.SummaryOut.Add(results.All().Sum())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -454,17 +592,22 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	showAll := opts.UI || opts.ShowPassed
 	for _, result := range results {
 		for _, test := range result.Tests {
-			if test.Failed || showAll {
-				if !opts.UI {
-					if !opts.ShowStdout.ShouldShow(test.Failed) {
-						test.Stdout = ""
-					}
-					if !opts.ShowStderr.ShouldShow(test.Failed) {
-						test.Stderr = ""
-					}
-				}
-				tests = append(tests, test)
+			// Keep everything non-passing so the CLI can enumerate failures,
+			// timeouts, and skips in the end-of-run details block. Showing
+			// the full tree when --ui or --show-passed still wins.
+			keep := showAll || test.Failed || test.TimedOut || test.Skipped || test.Pending
+			if !keep {
+				continue
 			}
+			if !opts.UI {
+				if !opts.ShowStdout.ShouldShow(test.Failed) {
+					test.Stdout = ""
+				}
+				if !opts.ShowStderr.ShouldShow(test.Failed) {
+					test.Stderr = ""
+				}
+			}
+			tests = append(tests, test)
 		}
 	}
 
@@ -518,6 +661,9 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 
 	results, err := o.detectAndRun(frameworks, o.StartingPaths, o.ExtraArgs)
 	failed := results.Failed()
+	// Safe as Info again: clicky's task renderer installs a serializing
+	// logger writer while active, so this line waits on the same mutex
+	// as tick renders and can't interleave mid-frame.
 	logger.Infof("Test run completed. %d total failures.", len(failed))
 
 	if o.SyncTodos && len(failed) > 0 {
@@ -828,6 +974,46 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	return allResults, nil
 }
 
+// subprocessTimeoutFor computes the deadline to pass into the test
+// subprocess (go test -timeout / ginkgo --timeout) so the subprocess fires
+// its own timeout handler — and emits a goroutine dump / progress report —
+// before gavel's supervisor SIGKILLs the process group. The margin is
+// max(20s, testTimeout/10): short budgets keep ~20s of head-room, long
+// budgets reserve 10%. Returns 0 when testTimeout is too small (or zero)
+// to meaningfully carve out a margin; callers then skip the flag.
+func subprocessTimeoutFor(testTimeout time.Duration) time.Duration {
+	if testTimeout <= 20*time.Second {
+		return 0
+	}
+	margin := testTimeout / 10
+	if margin < 20*time.Second {
+		margin = 20 * time.Second
+	}
+	return testTimeout - margin
+}
+
+// subprocessTimeoutArgs returns the framework-specific CLI flags that arm
+// the subprocess's own timeout handler. These are prepended to extraArgs
+// so user-supplied flags (via --extra-args) still win — go test / ginkgo
+// both honour the last occurrence of a flag.
+func subprocessTimeoutArgs(framework Framework, subTimeout time.Duration) []string {
+	switch framework {
+	case parsers.GoTest:
+		return []string{fmt.Sprintf("-timeout=%s", subTimeout)}
+	case parsers.Ginkgo:
+		pollAfter := subTimeout - 10*time.Second
+		if pollAfter <= 0 {
+			pollAfter = subTimeout / 2
+		}
+		return []string{
+			fmt.Sprintf("--timeout=%s", subTimeout),
+			fmt.Sprintf("--poll-progress-after=%s", pollAfter),
+		}
+	default:
+		return nil
+	}
+}
+
 // supervisePackage wraps the package's parent context with the per-package
 // timeout (and the global --timeout) and starts a goroutine that kills the
 // running process when either deadline fires. Returns the derived context,
@@ -1005,6 +1191,13 @@ func (o *TestOrchestrator) runPackageTest(
 	t *task.Task,
 	extraArgs []string,
 ) (packageResult, error) {
+	// Prepend subprocess-timeout flags so the test binary fires its own
+	// timeout (goroutine dump / progress report) before gavel SIGKILLs it.
+	// Prepend (not append) so user-supplied extraArgs still win.
+	if subTimeout := subprocessTimeoutFor(o.TestTimeout); subTimeout > 0 {
+		extraArgs = append(subprocessTimeoutArgs(framework, subTimeout), extraArgs...)
+	}
+
 	// Build the test command (without executing)
 	testRun, err := runner.BuildCommand(pkgPath, extraArgs...)
 	if err != nil {
@@ -1030,6 +1223,15 @@ func (o *TestOrchestrator) runPackageTest(
 	if o.OutputTee != nil {
 		testRun.Process.Stream(o.OutputTee, o.OutputTee)
 	}
+	// For ginkgo, tap stdout into a streaming parser so the UI reflects
+	// per-spec progress while the subprocess is still running. The final
+	// authoritative result still comes from the --json-report file once the
+	// run finishes.
+	var ginkgoStream *parsers.GinkgoStreamWriter
+	if framework == parsers.Ginkgo && o.streamer != nil {
+		ginkgoStream = parsers.NewGinkgoStreamWriter(pkgPath, o.streamer)
+		testRun.Process.Stream(ginkgoStream, io.Discard)
+	}
 	// Execute the test process in the orchestrator
 	process := testRun.Process.WithTask(t)
 	// Keep the RUNNING-state label short; it may be rendered if the
@@ -1041,10 +1243,16 @@ func (o *TestOrchestrator) runPackageTest(
 	_ = pkgCtx
 
 	runStart := time.Now()
+	stopSampler, peakPtr := startProcessMetricsSampler(process)
 	result := runProcessBounded(process, pkgCtx, pkgPath)
 	runDuration := time.Since(runStart)
+	stopSampler()
 	cancelPkg()
 	timedOut := timedOutPtr != nil && *timedOutPtr
+	if ginkgoStream != nil {
+		ginkgoStream.Flush()
+	}
+	peakMetrics := *peakPtr
 
 	// Always attempt to parse test results first, even if there was an execution error
 	// This handles cases like `go test -json` which outputs valid JSON even when tests fail
@@ -1079,6 +1287,11 @@ func (o *TestOrchestrator) runPackageTest(
 			ExitCode:  result.ExitCode,
 			Tests:     parsers.Tests{fallback},
 		}}
+		runKind := o.RunKind
+		if runKind == "" {
+			runKind = "initial"
+		}
+		stampAttempts(testResults, runKind, runStart, runStart.Add(runDuration), process.Pid(), result.ExitCode, peakMetrics)
 
 		// Fold the parse/execution failure reason into the compact task
 		// label so the single line in the CI step log is self-explanatory.
@@ -1096,6 +1309,21 @@ func (o *TestOrchestrator) runPackageTest(
 			timedOut:    timedOut,
 		}, nil
 	}
+
+	// If the package was killed by our timeout supervisor but the parser
+	// still yielded tests (happens when JSON events were flushed before the
+	// SIGKILL), propagate TimedOut onto any test the parser saw start but
+	// never observed finishing. Tests that already reported pass/fail/skip
+	// before the kill keep their actual outcome.
+	if timedOut {
+		markTimedOutTests(testResults, runDuration, result.Stdout, result.Stderr, framework)
+	}
+
+	runKind := o.RunKind
+	if runKind == "" {
+		runKind = "initial"
+	}
+	stampAttempts(testResults, runKind, runStart, runStart.Add(runDuration), process.Pid(), result.ExitCode, peakMetrics)
 
 	// Update task status based on results. Build a compact, no-ANSI label
 	// that fits in the one-line-per-task CI budget. On failure the label
@@ -1127,7 +1355,194 @@ func (o *TestOrchestrator) runPackageTest(
 		packagePath: pkgPath,
 		framework:   framework,
 		testResults: testResults,
+		timedOut:    timedOut,
 	}, nil
+}
+
+// stampAttempts appends one TestAttempt per leaf Test capturing the command,
+// PID, framework, and final state of the subprocess run. The Attempts slice
+// is additive: existing entries (from earlier runs or reruns merged via the
+// streamer) are preserved. Called after the parser produces final results
+// so each attempt records the observed outcome accurately.
+// processMetricsSample holds peak CPU% + RSS observed while a subprocess
+// was alive. Zero values mean the sampler never got a reading (fast exit).
+type processMetricsSample struct {
+	CPUPercent float64
+	RSS        uint64
+}
+
+func stampAttempts(results parsers.TestSuiteResults, runKind string, runStart, runEnd time.Time, pid int, exitCode int, metrics processMetricsSample) {
+	for ri := range results {
+		tr := &results[ri]
+		cmd := tr.Command
+		for ti := range tr.Tests {
+			stampAttemptSubtree(&tr.Tests[ti], runKind, runStart, runEnd, pid, exitCode, cmd, tr.Framework, metrics)
+		}
+	}
+}
+
+func stampAttemptSubtree(t *parsers.Test, runKind string, runStart, runEnd time.Time, pid int, exitCode int, cmd string, framework parsers.Framework, metrics processMetricsSample) {
+	for i := range t.Children {
+		stampAttemptSubtree(&t.Children[i], runKind, runStart, runEnd, pid, exitCode, cmd, framework, metrics)
+	}
+	code := exitCode
+	attempt := parsers.TestAttempt{
+		Sequence:   len(t.Attempts) + 1,
+		RunKind:    runKind,
+		Started:    runStart,
+		Ended:      runEnd,
+		Duration:   t.Duration,
+		PID:        pid,
+		Command:    cmd,
+		Framework:  framework,
+		ExitCode:   &code,
+		Passed:     t.Passed,
+		Failed:     t.Failed,
+		Skipped:    t.Skipped,
+		Pending:    t.Pending,
+		TimedOut:   t.TimedOut,
+		Message:    t.Message,
+		Stdout:     t.Stdout,
+		Stderr:     t.Stderr,
+		CPUPercent: metrics.CPUPercent,
+		RSS:        metrics.RSS,
+	}
+	// Extract a goroutine / panic dump from captured streams when the test
+	// timed out — Go's -timeout flag and ginkgo's --poll-progress-after
+	// both emit the thread dump to stdout or stderr before SIGKILL.
+	if t.TimedOut {
+		attempt.StackTrace = extractStackTrace(t.Stdout, t.Stderr)
+	}
+	t.Attempts = append(t.Attempts, attempt)
+}
+
+// startProcessMetricsSampler spawns a background goroutine that polls the
+// subprocess's CPU% and RSS via gopsutil every second and remembers the
+// peak observed values. Returns a stop function (must be called once the
+// process exits) and a pointer to the sample so the caller can read the
+// final value. Safe to call even when the PID isn't yet known — the
+// sampler retries until the process becomes visible or stop() fires.
+func startProcessMetricsSampler(process *exec.Process) (func(), *processMetricsSample) {
+	peak := &processMetricsSample{}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				pid := process.Pid()
+				if pid <= 0 {
+					continue
+				}
+				proc, err := gopsutilProcess.NewProcess(int32(pid))
+				if err != nil {
+					continue
+				}
+				if cpu, err := proc.CPUPercent(); err == nil && cpu > peak.CPUPercent {
+					peak.CPUPercent = cpu
+				}
+				if mem, err := proc.MemoryInfo(); err == nil && mem != nil && mem.RSS > peak.RSS {
+					peak.RSS = mem.RSS
+				}
+			}
+		}
+	}()
+
+	stopFn := func() {
+		close(stop)
+		<-done
+	}
+	return stopFn, peak
+}
+
+// extractStackTrace scans captured streams for the start of a Go panic /
+// goroutine-dump block ("panic: test timed out" or "goroutine 1 [running]:")
+// and returns from that marker to EOF. Returns "" when no recognizable
+// dump is present — better to leave the field empty than invent noise.
+func extractStackTrace(stdout, stderr string) string {
+	for _, src := range []string{stderr, stdout} {
+		if src == "" {
+			continue
+		}
+		markers := []string{
+			"panic: test timed out",
+			"\ngoroutine 1 [",
+			"\nSIGQUIT: quit",
+			"\nruntime: goroutine stack exceeds",
+		}
+		for _, m := range markers {
+			if idx := strings.Index(src, m); idx >= 0 {
+				return strings.TrimSpace(src[idx:])
+			}
+		}
+	}
+	return ""
+}
+
+// markTimedOutTests walks the parsed results from a package whose subprocess
+// was killed by the timeout supervisor and annotates every Test that did not
+// report a terminal outcome (passed/failed/skipped) with TimedOut=true +
+// Failed=true. When every parsed test is already terminal but the package
+// itself ran past its deadline, append a synthetic timeout record to the
+// first suite so the UI still surfaces one timeout entry with captured
+// stdout/stderr. Also marks the enclosing TestSuiteResult so aggregators can
+// show the package-level timeout icon.
+func markTimedOutTests(results parsers.TestSuiteResults, runDuration time.Duration, stdout, stderr string, framework Framework) {
+	marker := fmt.Sprintf("killed by gavel test-timeout supervisor after %s", runDuration.Round(time.Millisecond))
+	touched := false
+	for ri := range results {
+		for ti := range results[ri].Tests {
+			if markSubtreeTimedOut(&results[ri].Tests[ti], marker) {
+				touched = true
+			}
+		}
+	}
+	if touched {
+		return
+	}
+	if len(results) == 0 {
+		return
+	}
+	results[0].Tests = append(results[0].Tests, parsers.Test{
+		Failed:   true,
+		TimedOut: true,
+		Name:     fmt.Sprintf("%s Timeout", framework),
+		Message:  marker,
+		Stdout:   stdout,
+		Stderr:   stderr,
+	})
+}
+
+// markSubtreeTimedOut recursively flags any non-terminal leaf under t as
+// TimedOut + Failed. Returns true when at least one leaf was marked.
+func markSubtreeTimedOut(t *parsers.Test, marker string) bool {
+	if len(t.Children) > 0 {
+		marked := false
+		for i := range t.Children {
+			if markSubtreeTimedOut(&t.Children[i], marker) {
+				marked = true
+			}
+		}
+		if marked {
+			t.TimedOut = true
+		}
+		return marked
+	}
+	if t.Passed || t.Failed || t.Skipped {
+		return false
+	}
+	t.TimedOut = true
+	t.Failed = true
+	if t.Message == "" {
+		t.Message = marker
+	}
+	return true
 }
 
 // augmentBenchArgs decides whether benchmarks should run for a specific Go test package

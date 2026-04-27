@@ -1,5 +1,5 @@
 import type { Test, RunMeta } from '../types';
-import { sumNonTaskTests } from '../utils';
+import { hasTimeoutArgs, sumNonTaskTests, timeoutArgValue } from '../utils';
 import { ProgressBar } from './ProgressBar';
 
 interface Props {
@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
-  const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0 };
+  const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
   for (const t of tests) {
     const s = sumNonTaskTests(t);
     totals.total += s.total;
@@ -19,6 +19,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
     totals.failed += s.failed;
     totals.skipped += s.skipped;
     totals.pending += s.pending;
+    totals.timedout += s.timedout;
   }
   const now = done && endTime ? endTime : Date.now();
   const elapsed = startTime ? ((now - startTime) / 1000).toFixed(1) + 's' : '';
@@ -26,8 +27,36 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
   const failPct = totals.total > 0 ? Math.round((totals.failed / totals.total) * 100) : 0;
   const pendingPct = totals.total > 0 ? Math.round((totals.pending / totals.total) * 100) : 0;
 
+  const showTimeouts = runMeta && hasTimeoutArgs(runMeta.args);
+  const globalTimeout = runMeta ? timeoutArgValue(runMeta.args, 'timeout') : null;
+  const testTimeout = runMeta ? timeoutArgValue(runMeta.args, 'test_timeout') : null;
+  const lintTimeout = runMeta ? timeoutArgValue(runMeta.args, 'lint_timeout') : null;
+
   return (
     <div class="flex flex-col items-end gap-2 min-w-[21rem]">
+      {showTimeouts && (
+        <div class="flex gap-2 text-[11px] text-gray-500 items-center justify-end flex-wrap">
+          <iconify-icon icon="codicon:watch" class="text-gray-400" />
+          {globalTimeout && (
+            <span class="inline-flex items-center gap-1 rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5" title="Global --timeout">
+              <span class="opacity-70">global</span>
+              <span class="font-medium text-gray-700">{globalTimeout}</span>
+            </span>
+          )}
+          {testTimeout && (
+            <span class="inline-flex items-center gap-1 rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5" title="--test-timeout (per-package)">
+              <span class="opacity-70">per-test</span>
+              <span class="font-medium text-gray-700">{testTimeout}</span>
+            </span>
+          )}
+          {lintTimeout && (
+            <span class="inline-flex items-center gap-1 rounded-full bg-gray-50 border border-gray-200 px-2 py-0.5" title="--lint-timeout (per-linter)">
+              <span class="opacity-70">per-lint</span>
+              <span class="font-medium text-gray-700">{lintTimeout}</span>
+            </span>
+          )}
+        </div>
+      )}
       <div class="flex gap-3 text-sm text-gray-500 items-center justify-end flex-wrap">
         <span class="font-medium text-gray-700">{totals.total} tests</span>
         {runMeta && (
@@ -41,6 +70,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
         )}
         {totals.passed > 0 && <><Sep /><span class="text-green-600">{totals.passed} passed</span></>}
         {totals.failed > 0 && <><Sep /><span class="text-red-600">{totals.failed} failed</span></>}
+        {totals.timedout > 0 && <><Sep /><span class="text-amber-600">{totals.timedout} timed out</span></>}
         {totals.skipped > 0 && <><Sep /><span class="text-yellow-600">{totals.skipped} skipped</span></>}
         {totals.pending > 0 && <><Sep /><span class="text-blue-500">{totals.pending} pending</span></>}
         {elapsed && (
@@ -62,6 +92,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
               { count: totals.passed, color: 'bg-green-500', label: 'passed' },
               { count: totals.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: totals.failed, color: 'bg-red-500', label: 'failed' },
+              { count: totals.timedout, color: 'bg-amber-500', label: 'timed out' },
               { count: totals.pending, color: 'bg-blue-300', label: 'pending' },
             ]}
             total={totals.total}

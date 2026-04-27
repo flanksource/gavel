@@ -168,7 +168,7 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--timeout` | Timeout per linter (default: `5m`) |
 | `--dry-run` | Print linter commands without executing |
 
-Config-file-gated linters (e.g. betterleaks) only run when their native config (`.betterleaks.toml` / `.gitleaks.toml`) is present, unless explicitly named. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
+Config-file-gated linters only run when a usable config is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
 
 #### `gavel fixtures`
 
@@ -341,7 +341,7 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -A                       # split staged changes into multiple commits
-gavel commit -m "chore: bump dep"     # explicit message, skip LLM
+gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
 ```
@@ -350,13 +350,15 @@ gavel commit --force                  # skip hooks
 |------|-------------|
 | `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
 | `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
-| `-m` / `--message` | Explicit commit message (skips LLM) |
+| `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
 | `--model` | Override LLM model from `.gavel.yaml` `commit.model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
+| `--precommit` | How to handle gitignore + linked-dependency precommit checks: `prompt`, `fail`, `skip`, or `false` |
+| `--compat` | How to handle AI compatibility analysis + findings: `prompt`, `fail`, `skip`, or `false` |
 
-Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml).
+Pre-commit hooks are configured in `.gavel.yaml` under `commit.hooks` — see [Configuration](#gavelyaml). Combined precommit behavior is controlled by `.gavel.yaml` `commit.precommit.mode`, and compatibility warnings by `commit.compatibility.mode`.
 
 ### Pull Requests
 
@@ -601,6 +603,24 @@ gavel repomap view .
 gavel repomap get src/main.go
 ```
 
+#### `gavel config`
+
+View the merged `.gavel.yaml` for a path.
+
+Interactive output shows merged YAML with comments for non-git-root sources.
+Redirected output, `--yaml`, and `--json` emit only the merged config.
+
+```bash
+gavel config
+gavel config ./pkg/api
+gavel config ./cmd/gavel/main.go
+gavel config --yaml ./cmd/gavel/main.go
+gavel config > merged.gavel.yaml
+```
+
+Resolution order is: built-in defaults, `~/.gavel.yaml`, `<git-root>/.gavel.yaml`,
+and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a file).
+
 ### Task Management
 
 #### `gavel todos`
@@ -637,6 +657,9 @@ Supported formats: `json`, `html`, `text` (default).
 
 Project-level configuration placed at the repository root. Gavel also loads `~/.gavel.yaml` for user-level defaults and merges them (repo settings win).
 
+Use `gavel config [path]` to inspect the merged result for any directory or file path.
+A full annotated example lives in `gavel.yaml.example` and is also rendered in `gavel config --help`.
+
 ```yaml
 verify:
   model: claude                      # AI model for gavel verify
@@ -660,6 +683,10 @@ commit:
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"
       files: ["*.go"]
+  precommit:
+    mode: prompt                     # prompt|fail|skip|false for gitignore + linked-deps checks
+  compatibility:
+    mode: prompt                     # prompt|fail|skip|false for removed-functionality / compatibility warnings
 
 fixtures:
   enabled: true                      # auto-discover fixture files during gavel test
@@ -804,21 +831,38 @@ gavel git analyze --verbose            # show skip reasons
 
 ## Agent Skills
 
-Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents the ability to create and run fixture-based tests. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents two complementary capabilities: writing data-driven tests *and* driving the everyday test+lint loop. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
 
-| Skill | Description |
-|-------|-------------|
-| `gavel-fixture-tester` | Create and run fixture-based tests using markdown files with command blocks, tables, and CEL assertions |
+| Skill | What it teaches the agent |
+|-------|---------------------------|
+| [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
+| [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
 
 ### Install
 
+**For Claude Code (marketplace):**
+
 ```bash
-npx skills add flanksource/gavel
+# Add the Flanksource marketplace, then install the gavel-skills plugin
+/plugin marketplace add flanksource/gavel
+/plugin install gavel-skills@flanksource-gavel
 ```
 
-Use `-g` to install globally (all projects) or omit for project-only. Preview available skills first with `npx skills add flanksource/gavel -l`.
+After installation, both skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, and `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results.
 
-See [.agents/skills/README.md](.agents/skills/README.md) for alternative installation methods.
+**For any agent (via the open Skills CLI):**
+
+```bash
+npx skills add flanksource/gavel        # current project
+npx skills add flanksource/gavel -g     # all projects
+npx skills add flanksource/gavel -l     # preview before installing
+```
+
+**For a local clone (auto-discovery):**
+
+Clone the repo and open it in your agent — `.agents/skills/` is picked up automatically with no extra setup.
+
+See [.agents/skills/README.md](.agents/skills/README.md) for the full reference, including manual `settings.json` configuration and per-agent install paths.
 
 ## Development
 

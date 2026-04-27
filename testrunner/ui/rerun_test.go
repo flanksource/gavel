@@ -330,6 +330,12 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 			if !child.Pending {
 				t.Fatalf("child task should be pending/running: %+v", child)
 			}
+			if child.TaskID == "" {
+				t.Fatalf("child task should include task_id: %+v", child)
+			}
+			if !child.CanStop {
+				t.Fatalf("child task should be stoppable while running: %+v", child)
+			}
 			if !strings.Contains(child.Stderr, "go test -json ./pkg/foo") {
 				t.Fatalf("child stderr should contain task logs, got %q", child.Stderr)
 			}

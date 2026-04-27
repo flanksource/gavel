@@ -9,7 +9,9 @@ interface Props {
   selected: Test | null;
   onSelect: (t: Test) => void;
   onRerun?: (t: Test) => void;
+  onStop?: (t: Test) => void;
   rerunBusy?: boolean;
+  stopBusy?: boolean;
 }
 
 function resolveFramework(t: Test): string | undefined {
@@ -21,7 +23,7 @@ function resolveFramework(t: Test): string | undefined {
   return undefined;
 }
 
-export function TestNode({ test: t, depth, expandAll, selected, onSelect, onRerun, rerunBusy }: Props) {
+export function TestNode({ test: t, depth, expandAll, selected, onSelect, onRerun, onStop, rerunBusy, stopBusy }: Props) {
   const hasChildren = (t.children?.length ?? 0) > 0;
   const failed = hasFailed(t);
   const defaultOpen = failed || depth < 1;
@@ -41,6 +43,8 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
   const fwIcon = frameworkIcon(fw);
   const isLint = isLintNode(t);
   const lintCount = isLint ? lintNodeCount(t) : 0;
+  const isStoppedTask = t.framework === 'task' && typeof (t.context as any)?.status === 'string' && (t.context as any).status.toLowerCase() === 'canceled';
+  const canStop = !!onStop && !!t.can_stop && !!t.task_id;
 
   const rowBg = isSelected
     ? 'bg-blue-50 border-l-2 border-blue-500'
@@ -72,7 +76,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           <iconify-icon icon={fwIcon} class="text-sm shrink-0 opacity-60" />
         )}
 
-        <span class={`truncate ${isLint ? 'text-gray-800' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
+        <span class={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
           {humanizeName(t.name, fw)}
         </span>
 
@@ -105,6 +109,17 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           </span>
         )}
 
+        {canStop && (
+          <button
+            class="text-gray-400 hover:text-orange-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
+            onClick={(e) => { e.stopPropagation(); onStop!(t); }}
+            disabled={stopBusy}
+            title="Stop"
+          >
+            <iconify-icon icon="codicon:debug-stop" class="text-sm" />
+          </button>
+        )}
+
         {onRerun && t.framework !== 'task' && t.kind !== 'violation' && (
           <button
             class="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
@@ -118,7 +133,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
       </div>
 
       {open && hasChildren && t.children!.map((child, i) => (
-        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} rerunBusy={rerunBusy} />
+        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusy} />
       ))}
     </div>
   );

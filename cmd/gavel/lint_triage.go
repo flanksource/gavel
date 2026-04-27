@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/cmd/gavel/choose"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/verify"
 )
@@ -76,9 +76,7 @@ func collectViolationTypes(results []*linters.LinterResult) []violationType {
 }
 
 func runTriage(results []*linters.LinterResult, workDir string) ([]verify.LintIgnoreRule, error) {
-	// Stop the clicky task manager's render loop before launching
-	// the bubbletea interactive UI — both write to stderr and conflict.
-	task.WaitSilent()
+	prompting.Prepare()
 
 	types := collectViolationTypes(results)
 	if len(types) == 0 {

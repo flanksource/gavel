@@ -9,7 +9,6 @@ import (
 	osExec "os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/creack/pty"
@@ -83,18 +82,11 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(err, "failed to template exec base")
 	}
 
-	// Resolve final workDir: use expanded CWD if set, otherwise baseDir
+	// ResolveWorkDir already joined SourceDir with the merged CWD, so baseDir
+	// is the fully resolved working directory. Re-applying exec.CWD here
+	// would double-apply the relative path (e.g. ".. .." gets joined twice),
+	// leaving the child process in the wrong directory.
 	workDir := baseDir
-	if exec.CWD != "" && exec.CWD != "." {
-		if filepath.IsAbs(exec.CWD) {
-			workDir = exec.CWD
-		} else {
-			workDir = filepath.Join(baseDir, exec.CWD)
-		}
-	}
-	if workDir != baseDir {
-		logger.V(3).Infof("WorkDir: %s (expanded from %s)", workDir, exec.CWD)
-	}
 
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
@@ -129,12 +121,12 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 }
 
 func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
-	cmdLine := execBase.Exec
-	if len(execBase.Args) > 0 {
-		cmdLine += " " + strings.Join(execBase.Args, " ")
-	}
-
-	cmd := osExec.Command("bash", "-c", cmdLine)
+	// Invoke the configured executable directly so shells like bash/sh don't
+	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
+	// outer shell treats the inner `bash` as the script and the rest as
+	// positional args — the command never runs and we get the target
+	// program's help banner instead).
+	cmd := osExec.Command(execBase.Exec, execBase.Args...)
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 	for k, v := range execBase.Env {
@@ -164,9 +156,14 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.E
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 
+	// PTY merges stdout+stderr into a single byte stream; there is no way
+	// to separate them at the consumer. Assign the full capture to Stdout
+	// only and leave Stderr empty so that CEL expressions (which build
+	// `combined := stdout + stderr`) see the stream once, not twice. The
+	// doubled form was flagging every non-empty line as a duplicate in
+	// ansi.has_duplicates.
 	return &clickyExec.ExecResult{
 		Stdout:   buf.String(),
-		Stderr:   buf.String(),
 		ExitCode: exitCode,
 		Started:  &now,
 		Duration: time.Since(now),

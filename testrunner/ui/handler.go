@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	gopsutilProcess "github.com/shirou/gopsutil/v3/process"
 )
 
 type Server struct {
@@ -28,9 +30,12 @@ type Server struct {
 	gitRoot             string
 	diag                *DiagnosticsManager
 
-	rerunMu     sync.Mutex
-	rerunFn     RerunFunc
-	rerunOutput *RerunOutputBuffer
+	rerunMu       sync.Mutex
+	rerunFn       RerunFunc
+	rerunOutput   *RerunOutputBuffer
+	stopFn        func()
+	stopMessage   string
+	stopRequested bool
 }
 
 func NewServer() *Server {
@@ -52,6 +57,8 @@ func (s *Server) BeginRun(kind string) {
 	meta.Started = time.Now().UTC()
 	meta.Ended = time.Time{}
 	s.done = false
+	s.stopRequested = false
+	s.stopMessage = ""
 	s.notify()
 }
 
@@ -73,6 +80,32 @@ func (s *Server) SetVersion(version string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureMetadataLocked().Version = version
+}
+
+// SetRunProcess records the parent gavel process identity (PID + command
+// line). Intended to be called once per run from BeginRun's caller.
+func (s *Server) SetRunProcess(pid int, command string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta := s.ensureMetadataLocked()
+	meta.PID = pid
+	meta.Command = command
+}
+
+// SetRunFrameworks records which test frameworks the run scheduled.
+func (s *Server) SetRunFrameworks(frameworks []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureMetadataLocked().Frameworks = append([]string(nil), frameworks...)
+}
+
+// SetRunExitCode records the final exit code once the run completes.
+func (s *Server) SetRunExitCode(code int, timedOut bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta := s.ensureMetadataLocked()
+	meta.ExitCode = &code
+	meta.TimedOut = timedOut
 }
 
 func (s *Server) SetRunArgs(args map[string]any) {
@@ -115,6 +148,8 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.git = cloneSnapshotGit(snapshot.Git)
 	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
 	s.done = !snapshot.Status.Running
+	s.stopRequested = snapshot.Status.Stopped
+	s.stopMessage = snapshot.Status.StopMessage
 	if snapshot.Git != nil && snapshot.Git.Root != "" {
 		s.gitRoot = snapshot.Git.Root
 	}
@@ -172,10 +207,26 @@ func (s *Server) MarkDone() {
 }
 
 func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
+	s.streamFrom(ch, false)
+}
+
+// StreamRerunFrom consumes a rerun's update channel and merges each snapshot
+// into the existing test tree, appending new TestAttempts to tests that ran
+// again rather than discarding prior attempts. Tests not covered by the
+// rerun are preserved as-is.
+func (s *Server) StreamRerunFrom(ch <-chan []parsers.Test) {
+	s.streamFrom(ch, true)
+}
+
+func (s *Server) streamFrom(ch <-chan []parsers.Test, mergeAttempts bool) {
 	go func() {
 		for tests := range ch {
 			s.mu.Lock()
-			s.tests = tests
+			if mergeAttempts {
+				s.tests = mergeRerunTests(s.tests, tests)
+			} else {
+				s.tests = tests
+			}
 			s.done = false
 			s.mu.Unlock()
 			s.notify()
@@ -202,8 +253,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/stream", s.handleSSE)
 	mux.HandleFunc("/api/diagnostics", s.handleDiagnosticsJSON)
 	mux.HandleFunc("/api/diagnostics/collect", s.handleDiagnosticsCollect)
+	mux.HandleFunc("/api/process/metrics", s.handleProcessMetrics)
 	mux.HandleFunc("/api/rerun", s.handleRerun)
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
+	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
@@ -289,13 +342,22 @@ func (s *Server) snapshot() Snapshot {
 		merged = append(merged, s.tests...)
 		tests = merged
 	}
+	running := !s.done || !tasksDone()
+	stopped := s.stopRequested && !running
+	stopMessage := ""
+	if stopped {
+		stopMessage = s.stopMessage
+	}
 	return Snapshot{
 		Metadata: cloneSnapshotMetadata(s.metadata),
 		Git:      cloneSnapshotGit(s.git),
 		Status: SnapshotStatus{
-			Running:              !s.done || !tasksDone(),
+			Running:              running,
 			LintRun:              s.lintRun,
 			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
+			StopSupported:        s.stopFn != nil,
+			Stopped:              stopped,
+			StopMessage:          stopMessage,
 		},
 		Tests:       tests,
 		Lint:        s.lint,
@@ -349,6 +411,8 @@ func taskSnapshotToTest(snap clickytask.TaskSnapshot) parsers.Test {
 	}
 	if snap.Type == "task" {
 		t.Command = snap.Name
+		t.TaskID = snap.ID
+		t.CanStop = snap.Status == "running" || snap.Status == "pending"
 	}
 	if snap.Message != "" {
 		t.Message = snap.Message
@@ -527,4 +591,38 @@ func (s *Server) handleDiagnosticsCollect(w http.ResponseWriter, r *http.Request
 	s.notify()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(details) //nolint:errcheck
+}
+
+// handleProcessMetrics returns live CPU/memory/file-descriptor stats for a
+// given PID so the UI can render metrics next to a running test when the
+// user clicks it. Returns 404 when the process has already exited so the
+// frontend can distinguish "still alive" from "gone".
+func (s *Server) handleProcessMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pidStr := r.URL.Query().Get("pid")
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil || pid <= 0 {
+		http.Error(w, "pid query param required and must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	proc, err := gopsutilProcess.NewProcess(int32(pid))
+	if err != nil {
+		http.Error(w, "process not found", http.StatusNotFound)
+		return
+	}
+	running, _ := proc.IsRunning()
+	if !running {
+		http.Error(w, "process not running", http.StatusNotFound)
+		return
+	}
+	node, err := snapshotProcess(proc, false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(node) //nolint:errcheck
 }

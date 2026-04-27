@@ -187,6 +187,10 @@ commit:
       run: golangci-lint run ./...
       files:
         - "**/*.go"
+  precommit:
+    mode: prompt
+  compatibility:
+    mode: prompt
 
 fixtures:
   enabled: true
@@ -224,13 +228,15 @@ Field reference:
 | `commit.model` | Default model for `gavel commit` |
 | `commit.hooks` | Pre-commit shell hooks run by `gavel commit` |
 | `commit.hooks[].files` | Optional staged-file glob filter; hook runs only if any staged file matches |
+| `commit.precommit.mode` | How `gavel commit` handles gitignore + linked-dependency precommit checks |
+| `commit.compatibility.mode` | How `gavel commit` handles AI-detected removed functionality / compatibility issues |
 | `fixtures.enabled` | Turn fixture discovery on for `gavel test` |
 | `fixtures.files` | Replace the default fixture discovery glob list |
 | `ssh.cmd` | Override the command run by `gavel ssh serve` after push |
 | `pre` | Shell steps run before `gavel test` when hooks are enabled |
 | `post` | Shell steps run after `gavel test`; failures are logged but do not replace the main test result |
 | `secrets.disabled` | Disable the `betterleaks` / `secrets` linter entirely |
-| `secrets.configs` | Extra betterleaks/gitleaks TOML files to merge into secrets scanning |
+| `secrets.configs` | Extra betterleaks/gitleaks TOML files to merge into secrets scanning; relative paths resolve from the declaring `.gavel.yaml` |
 
 Merge rules matter because `.gavel.yaml` can come from multiple layers:
 
@@ -241,6 +247,8 @@ Merge rules matter because `.gavel.yaml` can come from multiple layers:
 | `lint.ignore` | Appended across layers |
 | `lint.linters.<name>.enabled` | Later layer wins for that linter |
 | `commit.model` | Last non-empty value wins |
+| `commit.precommit.mode` | Last non-empty value wins |
+| `commit.compatibility.mode` | Last non-empty value wins |
 | `commit.hooks` | Appended across layers |
 | `fixtures.enabled` | Any layer can enable it |
 | `fixtures.files` | Later non-empty list replaces earlier list |
@@ -478,6 +486,7 @@ Use `--patch-only` when the AI side should return patches instead of relying on 
 This is the right command when you want:
 
 - An LLM-generated conventional commit message
+- AI warnings for removed functionality or compatibility issues before the commit is written
 - Hook execution before finalizing the commit
 - AI-assisted splitting of a large change into multiple commits
 - Optional follow-up push behavior

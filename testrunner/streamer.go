@@ -41,6 +41,38 @@ func (s *TestStreamer) SetPackageOutline(pkgs []parsers.Test) {
 	s.buildAndSendLocked()
 }
 
+// UpdateGinkgoProgress implements parsers.GinkgoProgressSink. Ginkgo
+// streaming parsers call this while a suite is still running with a summary
+// Test whose Children reflect observed spec completions so far.
+func (s *TestStreamer) UpdateGinkgoProgress(progress parsers.Test) {
+	s.UpdatePackageProgress(progress.PackagePath, progress.Framework, progress)
+}
+
+// UpdatePackageProgress replaces the pending outline entry for (pkgPath,
+// framework) with a richer tree containing currently-running and already-
+// finished children from the streaming parser. Called while the subprocess
+// is still alive — final results come through CompletePackage once the
+// authoritative parser has run.
+func (s *TestStreamer) UpdatePackageProgress(pkgPath string, framework parsers.Framework, progress parsers.Test) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	for i, p := range s.pendingPkgs {
+		if p.PackagePath == pkgPath && p.Framework == framework {
+			progress.PackagePath = pkgPath
+			progress.Framework = framework
+			if progress.Name == "" {
+				progress.Name = p.Name
+			}
+			s.pendingPkgs[i] = progress
+			s.buildAndSendLocked()
+			return
+		}
+	}
+}
+
 func (s *TestStreamer) CompletePackage(pkgPath string, framework parsers.Framework, results parsers.TestSuiteResults) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

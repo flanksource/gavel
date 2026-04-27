@@ -552,3 +552,32 @@ func BenchmarkIgnored(b *testing.B) {}
 		}
 	})
 }
+
+func TestGoTestBuildCommandHonoursTimeoutFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeGoMod(t, tmpDir)
+	runner := NewGoTest(tmpDir)
+
+	// Caller passes -timeout once at the front; a user-supplied override
+	// comes in as a later extraArg and must win via Go's last-flag-wins rule.
+	testRun, err := runner.BuildCommand("./pkg", "-timeout=4m30s", "-run", "TestFoo", "-timeout=1s")
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	args := testRun.Process.Args
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-timeout=4m30s") {
+		t.Errorf("expected -timeout=4m30s in args, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-timeout=1s") {
+		t.Errorf("expected user-supplied -timeout=1s to survive, got: %s", joined)
+	}
+	firstIdx := strings.Index(joined, "-timeout=4m30s")
+	lastIdx := strings.Index(joined, "-timeout=1s")
+	if firstIdx < 0 || lastIdx < 0 || firstIdx > lastIdx {
+		t.Errorf("auto-timeout must come before user override, got: %s", joined)
+	}
+	if args[0] != "test" || args[1] != "-json" {
+		t.Errorf("expected `test -json` prefix, got: %v", args[:2])
+	}
+}

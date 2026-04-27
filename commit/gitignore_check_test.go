@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/verify"
@@ -121,6 +122,55 @@ func TestRunGitIgnoreCheck_Unstage(t *testing.T) {
 	assert.NotContains(t, staged, "debug.log")
 }
 
+func TestRunGitIgnoreCheck_UnstagePattern(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "debug.log", "log content\n")
+	gitRun(t, repo, "add", "debug.log")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"debug.log"},
+		Config: verify.CommitConfig{
+			GitIgnore: []string{"*.log"},
+		},
+		Decider: staticDecider(DecisionGitIgnorePattern),
+		SaveDir: repo,
+		Mode:    IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"debug.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"*.log"}, outcome.GitIgnored)
+
+	gitignoreBody := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Contains(t, gitignoreBody, "*.log")
+}
+
+func TestRunGitIgnoreCheck_UnstageFolder(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "logs"), 0o755))
+	writeFile(t, repo, "logs/debug.log", "log content\n")
+	gitRun(t, repo, "add", "logs/debug.log")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"logs/debug.log"},
+		Config: verify.CommitConfig{
+			GitIgnore: []string{"*.log"},
+		},
+		Decider: staticDecider(DecisionGitIgnoreFolder),
+		SaveDir: repo,
+		Mode:    IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"logs/debug.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"logs/"}, outcome.GitIgnored)
+
+	gitignoreBody := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Contains(t, gitignoreBody, "logs/")
+}
+
 func TestRunGitIgnoreCheck_Allow(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, "secrets.env", "SECRET=1\n")
@@ -140,13 +190,49 @@ func TestRunGitIgnoreCheck_Allow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Unstaged)
 	assert.Equal(t, []string{"secrets.env"}, outcome.Allowed)
+	assert.Equal(t, []string{"!secrets.env"}, outcome.GitIgnored,
+		"Allow must also write a !path negation into .gitignore as the explicit override")
 
 	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(repo, ".gavel.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"secrets.env"}, cfg.Commit.Allow)
 
+	gitignore := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Equal(t, "!secrets.env\n", gitignore)
+
 	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
 	assert.Contains(t, staged, "secrets.env")
+}
+
+func TestRunGitIgnoreCheck_AllowFolder(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "bundles"), 0o755))
+	writeFile(t, repo, "bundles/a.md", "skill 1\n")
+	writeFile(t, repo, "bundles/b.md", "skill 2\n")
+	gitRun(t, repo, "add", "bundles/a.md", "bundles/b.md")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"bundles/a.md", "bundles/b.md"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"bundles/"}},
+		Decider:     staticDecider(DecisionAllowFolder),
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, outcome.Unstaged)
+	assert.Equal(t, []string{"bundles/**"}, outcome.Allowed,
+		"folder allow records the recursive glob (.gavel.yaml entry) so a single decision covers every nested file")
+	assert.Equal(t, []string{"!bundles/"}, outcome.GitIgnored)
+
+	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(repo, ".gavel.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bundles/**"}, cfg.Commit.Allow,
+		"folder allow records the recursive glob in .gavel.yaml so EvaluateGitIgnoreMatches sees every nested file")
+
+	gitignore := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Equal(t, "!bundles/\n", gitignore)
 }
 
 func TestRunGitIgnoreCheck_Cancel(t *testing.T) {
@@ -349,6 +435,150 @@ func TestAppendGitIgnore_SkipsDuplicate(t *testing.T) {
 	assert.Equal(t, "x.log\n", string(body))
 }
 
+func TestGitIgnoreChoices(t *testing.T) {
+	t.Run("nested file offers pattern, ignore-folder, ignore-file, allow, allow-folder, cancel", func(t *testing.T) {
+		choices := gitIgnoreChoices(Violation{File: "logs/debug.log", Pattern: "*.log"})
+		require.Len(t, choices, 6)
+		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
+		assert.Equal(t, DecisionGitIgnoreFolder, choices[1].Decision)
+		assert.Equal(t, DecisionGitIgnoreFile, choices[2].Decision)
+		assert.Equal(t, DecisionAllow, choices[3].Decision)
+		assert.Equal(t, DecisionAllowFolder, choices[4].Decision)
+		assert.Equal(t, DecisionCancel, choices[5].Decision)
+		assert.Contains(t, choices[1].Text, `"logs/"`)
+		assert.Contains(t, choices[4].Text, `"logs/"`)
+	})
+
+	t.Run("root file omits both folder options", func(t *testing.T) {
+		choices := gitIgnoreChoices(Violation{File: "debug.log", Pattern: "*.log"})
+		require.Len(t, choices, 4)
+		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
+		assert.Equal(t, DecisionGitIgnoreFile, choices[1].Decision)
+		assert.Equal(t, DecisionAllow, choices[2].Decision)
+		assert.Equal(t, DecisionCancel, choices[3].Decision)
+	})
+}
+
 func staticDecider(d Decision) Decider {
 	return func(context.Context, Violation) (Decision, error) { return d, nil }
+}
+
+func TestRunGitIgnoreCheck_FolderDecisionBatchesSiblings(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "logs"), 0o755))
+	writeFile(t, repo, "logs/a.log", "a\n")
+	writeFile(t, repo, "logs/b.log", "b\n")
+	writeFile(t, repo, "logs/c.log", "c\n")
+	gitRun(t, repo, "add", "logs/a.log", "logs/b.log", "logs/c.log")
+
+	var seen []Violation
+	decider := func(_ context.Context, v Violation) (Decision, error) {
+		seen = append(seen, v)
+		return DecisionGitIgnoreFolder, nil
+	}
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"logs/a.log", "logs/b.log", "logs/c.log"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"*.log"}},
+		Decider:     decider,
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	require.Len(t, seen, 1, "folder decision must batch all siblings in one prompt")
+	assert.Equal(t, 2, seen[0].FolderSiblings, "sibling count should be reported to the decider")
+	assert.ElementsMatch(t, []string{"logs/a.log", "logs/b.log", "logs/c.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"logs/"}, outcome.GitIgnored)
+
+	body := readFile(t, filepath.Join(repo, ".gitignore"))
+	assert.Equal(t, "logs/\n", body)
+}
+
+func TestRunGitIgnoreCheck_PatternDecisionBatchesAcrossDirs(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "logs"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "var"), 0o755))
+	writeFile(t, repo, "logs/a.log", "a\n")
+	writeFile(t, repo, "var/b.log", "b\n")
+	writeFile(t, repo, "c.log", "c\n")
+	gitRun(t, repo, "add", "logs/a.log", "var/b.log", "c.log")
+
+	calls := 0
+	decider := func(_ context.Context, v Violation) (Decision, error) {
+		calls++
+		return DecisionGitIgnorePattern, nil
+	}
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"logs/a.log", "var/b.log", "c.log"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"*.log"}},
+		Decider:     decider,
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "pattern decision must batch every file matching the pattern")
+	assert.ElementsMatch(t, []string{"logs/a.log", "var/b.log", "c.log"}, outcome.Unstaged)
+	assert.Equal(t, []string{"*.log"}, outcome.GitIgnored)
+}
+
+func TestRunGitIgnoreCheck_MixedDecisionsRecalcAfterEach(t *testing.T) {
+	repo := initCommitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "logs"), 0o755))
+	writeFile(t, repo, "logs/a.log", "a\n")
+	writeFile(t, repo, "logs/b.log", "b\n")
+	writeFile(t, repo, "secrets.env", "S=1\n")
+	gitRun(t, repo, "add", "logs/a.log", "logs/b.log", "secrets.env")
+
+	var seen []Violation
+	decider := func(_ context.Context, v Violation) (Decision, error) {
+		seen = append(seen, v)
+		if strings.HasSuffix(v.File, ".env") {
+			return DecisionAllow, nil
+		}
+		return DecisionGitIgnoreFolder, nil
+	}
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"logs/a.log", "logs/b.log", "secrets.env"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"*.log", "*.env"}},
+		Decider:     decider,
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	require.Len(t, seen, 2, "folder decision batches the two logs; env still prompts separately")
+	assert.ElementsMatch(t, []string{"logs/a.log", "logs/b.log"}, outcome.Unstaged)
+	assert.ElementsMatch(t, []string{"logs/", "!secrets.env"}, outcome.GitIgnored,
+		"folder ignore writes logs/, allow writes the !secrets.env negation override")
+	assert.Equal(t, []string{"secrets.env"}, outcome.Allowed)
+}
+
+func TestRunGitIgnoreCheck_RootFileFolderSiblingsZero(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "debug.log", "x\n")
+	gitRun(t, repo, "add", "debug.log")
+
+	var seen Violation
+	decider := func(_ context.Context, v Violation) (Decision, error) {
+		seen = v
+		return DecisionGitIgnoreFile, nil
+	}
+	_, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"debug.log"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"*.log"}},
+		Decider:     decider,
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, seen.FolderSiblings)
 }

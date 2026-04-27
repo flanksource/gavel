@@ -22,43 +22,25 @@ var configFilenames = []string{
 	"gitleaks.toml",
 }
 
-// DiscoverConfigs walks the standard gavel config hierarchy
-// (home dir → git root → cwd) plus any extra paths listed in the
-// `.gavel.yaml` `secrets.configs:` field, and returns every existing
-// betterleaks/gitleaks TOML path it finds, in the order gavel should merge
-// them (earlier entries are overridden by later ones).
+type configLayer struct {
+	dir string
+	cfg verify.GavelConfig
+}
+
+// DiscoverConfigs walks the standard gavel config hierarchy layer-by-layer
+// (home dir → git root → cwd), collecting the native betterleaks/gitleaks
+// config in each directory plus any extra paths declared by that layer's
+// `.gavel.yaml`. Relative `secrets.configs` entries resolve from the
+// directory containing the `.gavel.yaml` that declared them.
 //
 // Paths are deduped so the same file referenced twice only appears once.
 // Non-existent paths are silently skipped — the caller treats an empty
 // result as "no secrets config present, skip the linter".
 func DiscoverConfigs(workDir string) []string {
-	gc, _ := verify.LoadGavelConfig(workDir)
-
 	var candidates []string
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = appendConfigsInDir(candidates, home)
-	}
-	if gitRoot := repomap.FindGitRoot(workDir); gitRoot != "" {
-		candidates = appendConfigsInDir(candidates, gitRoot)
-	}
-	if abs, err := filepath.Abs(workDir); err == nil {
-		candidates = appendConfigsInDir(candidates, abs)
-	}
-
-	for _, extra := range gc.Secrets.Configs {
-		resolved := extra
-		if !filepath.IsAbs(resolved) {
-			if gitRoot := repomap.FindGitRoot(workDir); gitRoot != "" {
-				resolved = filepath.Join(gitRoot, extra)
-			} else {
-				resolved = filepath.Join(workDir, extra)
-			}
-		}
-		if _, err := os.Stat(resolved); err == nil {
-			candidates = append(candidates, resolved)
-		} else {
-			logger.V(2).Infof("betterleaks: skipping missing extra config %s", resolved)
-		}
+	for _, layer := range discoverConfigLayers(workDir) {
+		candidates = appendConfigsInDir(candidates, layer.dir)
+		candidates = appendExtraConfigs(candidates, layer.dir, layer.cfg.Secrets.Configs)
 	}
 
 	seen := make(map[string]struct{}, len(candidates))
@@ -77,12 +59,74 @@ func DiscoverConfigs(workDir string) []string {
 	return out
 }
 
+func discoverConfigLayers(workDir string) []configLayer {
+	sourceConfigs := make(map[string]verify.GavelConfig)
+	if trace, err := verify.LoadGavelConfigTrace(workDir); err == nil {
+		for _, source := range trace.Sources {
+			sourceConfigs[source.Path] = source.Config
+		}
+	} else {
+		logger.V(2).Infof("betterleaks: failed to load config trace for %s: %v", workDir, err)
+	}
+
+	seen := make(map[string]struct{}, 3)
+	layers := make([]configLayer, 0, 3)
+	addLayer := func(dir string) {
+		if dir == "" {
+			return
+		}
+		abs, err := filepath.Abs(dir)
+		if err == nil {
+			dir = abs
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+
+		layer := configLayer{dir: dir}
+		if cfg, ok := sourceConfigs[filepath.Join(dir, ".gavel.yaml")]; ok {
+			layer.cfg = cfg
+		}
+		layers = append(layers, layer)
+	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		addLayer(home)
+	}
+	if gitRoot := repomap.FindGitRoot(workDir); gitRoot != "" {
+		addLayer(gitRoot)
+	}
+	if abs, err := filepath.Abs(workDir); err == nil {
+		addLayer(abs)
+	} else {
+		addLayer(workDir)
+	}
+
+	return layers
+}
+
 func appendConfigsInDir(acc []string, dir string) []string {
 	for _, name := range configFilenames {
 		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			acc = append(acc, p)
 			return acc
+		}
+	}
+	return acc
+}
+
+func appendExtraConfigs(acc []string, baseDir string, extras []string) []string {
+	for _, extra := range extras {
+		resolved := extra
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(baseDir, extra)
+		}
+		if _, err := os.Stat(resolved); err == nil {
+			acc = append(acc, resolved)
+		} else {
+			logger.V(2).Infof("betterleaks: skipping missing extra config %s", resolved)
 		}
 	}
 	return acc
