@@ -729,6 +729,7 @@ function buildLinterFolderNode(folder: FileTreeNode, linterName: string, bucket:
   const node = folderNode(folder.name, 'lint-folder', children);
   node.file = folder.path;
   node.target_path = folder.rawPath;
+  node.linterName = linterName;
   node.work_dir = uniqueWorkDir(children);
   return node;
 }
@@ -828,6 +829,39 @@ export function totalLintViolations(lint: LinterResult[] | undefined): number {
   let n = 0;
   for (const lr of lint || []) n += (lr.violations || []).length;
   return n;
+}
+
+// Names of the clicky task groups injected as virtual pseudo-tests by the
+// Go server (testrunner/ui/task_groups.go). They appear at the top of the
+// snapshot tree while their underlying tasks are running/pending.
+export const TEST_TASK_GROUP_NAME = 'Running tests across packages';
+export const LINT_TASK_GROUP_NAME = 'Running linters';
+
+function isVirtualTaskGroup(t: Test, groupName: string): boolean {
+  return t.framework === 'task' && t.name === groupName;
+}
+
+// stripTestTaskGroup removes the "Running tests across packages" virtual task
+// group from the rendered tree. Used while linters are still running but tests
+// have settled, so the only "in-flight" indicator left is the lint task group.
+// Real parsed test results are untouched.
+export function stripTestTaskGroup(tests: Test[]): Test[] {
+  return tests.filter(t => !isVirtualTaskGroup(t, TEST_TASK_GROUP_NAME));
+}
+
+// isLintOnlyPhase reports whether the run is in the window where the test
+// phase has settled (no test task group is still running) but linters have
+// not finished yet. The server keeps `running: true` until lint completes,
+// and `lint_run` flips true only when SetLintResults is called.
+export function isLintOnlyPhase(tests: Test[], running: boolean, lintRun: boolean): boolean {
+  if (!running || lintRun) return false;
+  const testGroup = tests.find(t => isVirtualTaskGroup(t, TEST_TASK_GROUP_NAME));
+  if (!testGroup) return true;
+  // Group's running/pending state is encoded in its context.status. The
+  // server only emits the group while running/pending (handler.go:381), so
+  // its presence alone implies tests are still in flight.
+  const status = (testGroup.context as Record<string, unknown> | undefined)?.status;
+  return status !== 'running' && status !== 'pending';
 }
 
 export function isLintNode(t: Test): boolean {

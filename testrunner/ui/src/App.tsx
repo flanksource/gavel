@@ -11,7 +11,9 @@ import { LintView } from './components/LintView';
 import { BenchView } from './components/BenchView';
 import { RerunDialog } from './components/RerunDialog';
 import { SplitPane } from './components/SplitPane';
-import { copyCurrentViewForAgent, downloadCurrentView } from './export';
+import { copyCurrentViewForAgent } from './export';
+import { decodeFilterState } from './filterState';
+import { DownloadMenu } from './components/DownloadMenu';
 import {
   sumNonTaskTests,
   collectFrameworks,
@@ -26,6 +28,8 @@ import {
   countProcesses,
   findProcessByPID,
   isLintNode,
+  isLintOnlyPhase,
+  stripTestTaskGroup,
   relPath,
 } from './utils';
 import { annotateRoutePaths, buildExportRoute, buildRoute, defaultStatusFilter, findNodeByRoutePath, parseRoute, type RouteState, type TabKey } from './routes';
@@ -62,7 +66,8 @@ function applySnapshot(
   } else if (status.running) {
     endTime.current = null;
   }
-  setTests(snap.tests || []);
+  const incomingTests = snap.tests || [];
+  setTests(incomingTests);
   setLint(snap.lint);
   setLintRun(!!status.lint_run);
   setBench(snap.bench);
@@ -81,7 +86,13 @@ function applySnapshot(
   } else {
     setDone(false);
     doneRef.current = false;
-    setStatus(meta?.kind === 'rerun' ? `Running rerun #${meta.sequence || 1}...` : 'Running tests...');
+    if (meta?.kind === 'rerun') {
+      setStatus(`Running rerun #${meta.sequence || 1}...`);
+    } else if (isLintOnlyPhase(incomingTests, status.running, !!status.lint_run)) {
+      setStatus('Running linters...');
+    } else {
+      setStatus('Running tests...');
+    }
   }
 }
 
@@ -252,9 +263,19 @@ export function App() {
     };
   }, [diagnosticsAvailable, fetchDiagnostics]);
 
+  // While linters are still running but the test phase has settled, drop the
+  // "Running tests across packages" virtual task group so the UI's only
+  // pending row is "Running linters". Real parsed test results stay visible.
+  const displayedTests = useMemo(() => {
+    if (isLintOnlyPhase(tests, !!snapshotStatus.running, lintRun)) {
+      return stripTestTaskGroup(tests);
+    }
+    return tests;
+  }, [tests, snapshotStatus.running, lintRun]);
+
   const totals = useMemo(() => {
     const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
-    for (const test of tests) {
+    for (const test of displayedTests) {
       const s = sumNonTaskTests(test);
       t.total += s.total;
       t.passed += s.passed;
@@ -264,12 +285,12 @@ export function App() {
       t.timedout += s.timedout;
     }
     return t;
-  }, [tests]);
+  }, [displayedTests]);
 
-  const frameworks = useMemo(() => collectFrameworks(tests), [tests]);
+  const frameworks = useMemo(() => collectFrameworks(displayedTests), [displayedTests]);
   const filteredTests = useMemo(
-    () => annotateRoutePaths(collapseSingleChildChains(filterTests(tests, filters.status, filters.framework))),
-    [tests, filters],
+    () => annotateRoutePaths(collapseSingleChildChains(filterTests(displayedTests, filters.status, filters.framework))),
+    [displayedTests, filters],
   );
   const lintTree = useMemo(() => {
     let grouped: Test[];
@@ -618,18 +639,31 @@ export function App() {
   const showTabs = showLintTab || showBenchTab || showDiagnosticsTab;
   const benchRegressions = bench?.deltas?.filter(d => d.significant && d.delta_pct > bench.threshold).length || 0;
   const hasContent = activeTab === 'tests'
-    ? tests.length > 0
+    ? displayedTests.length > 0
     : activeTab === 'lint'
       ? lintTree.length > 0
       : activeTab === 'diagnostics'
         ? processCount > 0
         : !!bench;
-  const canExportCurrentView = (activeTab === 'tests' && tests.length > 0)
+  const canExportCurrentView = (activeTab === 'tests' && displayedTests.length > 0)
     || (activeTab === 'lint' && lintRun)
     || (activeTab === 'bench' && !!bench);
   const canGlobalStop = snapshotStatus.running && !!snapshotStatus.stop_supported;
-  const jsonExportURL = useMemo(() => buildExportRoute(routeState, 'json'), [routeState]);
-  const markdownExportURL = useMemo(() => buildExportRoute(routeState, 'md'), [routeState]);
+  const wholeResultRouteState = useMemo<RouteState>(
+    () => ({ ...routeState, selectedPath: '' }),
+    [routeState],
+  );
+  const nodeRouteState = useMemo<RouteState | undefined>(
+    () => selected?.route_path ? { ...routeState, selectedPath: selected.route_path } : undefined,
+    [routeState, selected?.route_path],
+  );
+  const failingOnlyRouteState = useMemo<RouteState | undefined>(
+    () => nodeRouteState
+      ? { ...nodeRouteState, filters: { ...nodeRouteState.filters, status: decodeFilterState(['failed', 'timed_out']) } }
+      : undefined,
+    [nodeRouteState],
+  );
+  const wholeResultMarkdownURL = useMemo(() => buildExportRoute(wholeResultRouteState, 'md'), [wholeResultRouteState]);
 
   const resetCopyFeedback = useCallback((nextState: 'copied' | 'error', error: string = '') => {
     setCopyState(nextState);
@@ -642,14 +676,6 @@ export function App() {
     }, nextState === 'copied' ? 2000 : 3000);
   }, []);
 
-  const onDownloadJSON = useCallback(() => {
-    downloadCurrentView(routeState, 'json');
-  }, [routeState]);
-
-  const onDownloadMarkdown = useCallback(() => {
-    downloadCurrentView(routeState, 'md');
-  }, [routeState]);
-
   const onCopyForAgent = useCallback(async () => {
     if (copyState === 'copying') return;
     setCopyState('copying');
@@ -659,12 +685,12 @@ export function App() {
       copyResetTimer.current = null;
     }
     try {
-      await copyCurrentViewForAgent(routeState);
+      await copyCurrentViewForAgent(wholeResultRouteState);
       resetCopyFeedback('copied');
     } catch (e: any) {
       resetCopyFeedback('error', e?.message || 'Copy failed');
     }
-  }, [copyState, routeState, resetCopyFeedback]);
+  }, [copyState, wholeResultRouteState, resetCopyFeedback]);
 
   const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
 
@@ -711,40 +737,6 @@ export function App() {
                 </button>
               </div>
             )}
-            {canExportCurrentView && (
-              <div class="flex gap-1">
-                <button
-                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
-                  onClick={onDownloadJSON}
-                  title={jsonExportURL}
-                >
-                  <iconify-icon icon="codicon:json" class="mr-0.5" />
-                  JSON
-                </button>
-                <button
-                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
-                  onClick={onDownloadMarkdown}
-                  title={markdownExportURL}
-                >
-                  <iconify-icon icon="codicon:markdown" class="mr-0.5" />
-                  Markdown
-                </button>
-                <button
-                  class={`text-xs px-2 py-1 rounded border transition-colors ${
-                    copyState === 'error'
-                      ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
-                      : copyState === 'copied'
-                        ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
-                        : 'border-gray-300 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  onClick={onCopyForAgent}
-                  title={copyError || markdownExportURL}
-                >
-                  <iconify-icon icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'} class="mr-0.5" />
-                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
-                </button>
-              </div>
-            )}
             {canGlobalStop && (
               <button
                 class="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -758,7 +750,28 @@ export function App() {
             )}
             <span class="text-sm text-gray-400">{status}</span>
           </div>
-          <Summary tests={tests} startTime={startTime.current} endTime={endTime.current} done={done} runMeta={runMeta} />
+          <div class="flex items-center gap-3">
+            {canExportCurrentView && (
+              <div class="flex gap-1">
+                <DownloadMenu routeState={wholeResultRouteState} align="right" title="Download the whole result as JSON or Markdown" />
+                <button
+                  class={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                    copyState === 'error'
+                      ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
+                      : copyState === 'copied'
+                        ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  onClick={onCopyForAgent}
+                  title={copyError || wholeResultMarkdownURL}
+                >
+                  <iconify-icon icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'} />
+                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy AI Prompt'}
+                </button>
+              </div>
+            )}
+            <Summary tests={displayedTests} startTime={startTime.current} endTime={endTime.current} done={done} runMeta={runMeta} />
+          </div>
         </div>
 
         {showTabs && (
@@ -804,7 +817,7 @@ export function App() {
           </div>
         )}
 
-        {activeTab === 'tests' && tests.length > 0 && (
+        {activeTab === 'tests' && displayedTests.length > 0 && (
           <div class="mt-2">
             <FilterBar filters={filters} onChange={onTestFiltersChange} counts={totals} frameworks={frameworks} />
           </div>
@@ -831,13 +844,13 @@ export function App() {
                 {filteredTests.map((t, i) => (
                   <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusyKey !== null} />
                 ))}
-                {tests.length === 0 && !done && (
+                {displayedTests.length === 0 && !done && (
                   <div class="p-8 text-center text-gray-400">
                     <iconify-icon icon="svg-spinners:ring-resize" class="text-3xl text-blue-500" />
                     <p class="mt-2">Waiting for test results...</p>
                   </div>
                 )}
-                {filteredTests.length === 0 && tests.length > 0 && (
+                {filteredTests.length === 0 && displayedTests.length > 0 && (
                   <div class="p-8 text-center text-gray-400 text-sm">
                     No tests match the current filters
                   </div>
@@ -866,7 +879,7 @@ export function App() {
         }
         right={activeTab === 'diagnostics'
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} />}
+          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
       />
       <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>

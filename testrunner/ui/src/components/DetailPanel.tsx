@@ -1,3 +1,4 @@
+import { useState, useRef, useCallback } from 'preact/hooks';
 import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail } from '../types';
 import {
   statusIcon,
@@ -5,7 +6,6 @@ import {
   formatDuration,
   sum,
   frameworkIcon,
-  relPath,
   lintNodeCount,
   formatRunTimestamp,
   formatRunDuration,
@@ -16,13 +16,19 @@ import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
 import { TestAttempts } from './TestAttempts';
+import { DownloadMenu } from './DownloadMenu';
+import { copyCurrentViewForAgent } from '../export';
+import type { RouteState } from '../routes';
+import {
+  lintFolderActions,
+  lintFileActions,
+  collectFolderLintStats,
+  folderPattern,
+  type IgnoreRequest,
+  type LintAction,
+} from './lintActions';
 
-export interface IgnoreRequest {
-  source?: string;
-  rule?: string;
-  file?: string;
-  work_dir?: string;
-}
+export type { IgnoreRequest } from './lintActions';
 
 interface Props {
   test: Test | null;
@@ -34,6 +40,8 @@ interface Props {
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
   runMeta?: RunMeta;
+  nodeRouteState?: RouteState;
+  failingOnlyRouteState?: RouteState;
 }
 
 function taskMeta(t: Test): { duration?: string; status?: string; type?: string } | null {
@@ -46,7 +54,38 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, runMeta }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, runMeta, nodeRouteState, failingOnlyRouteState }: Props) {
+  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
+  const [copyError, setCopyError] = useState('');
+  const copyResetTimer = useRef<number | null>(null);
+
+  const resetCopyFeedback = useCallback((nextState: 'copied' | 'error', error: string = '') => {
+    setCopyState(nextState);
+    setCopyError(error);
+    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(() => {
+      setCopyState('idle');
+      setCopyError('');
+      copyResetTimer.current = null;
+    }, nextState === 'copied' ? 2000 : 3000);
+  }, []);
+
+  const onCopyAIPrompt = useCallback(async () => {
+    if (copyState === 'copying' || !failingOnlyRouteState) return;
+    setCopyState('copying');
+    setCopyError('');
+    if (copyResetTimer.current) {
+      window.clearTimeout(copyResetTimer.current);
+      copyResetTimer.current = null;
+    }
+    try {
+      await copyCurrentViewForAgent(failingOnlyRouteState);
+      resetCopyFeedback('copied');
+    } catch (e: any) {
+      resetCopyFeedback('error', e?.message || 'Copy failed');
+    }
+  }, [copyState, failingOnlyRouteState, resetCopyFeedback]);
+
   if (!t) {
     return (
       <div class="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -67,6 +106,9 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
     || t.kind === 'violation' || t.kind === 'lint-file' || t.kind === 'lint-rule' || t.kind === 'lint-rule-group';
   const canRerun = !!onRerun && t.kind !== 'violation' && t.framework !== 'task';
   const canStop = !!onStop && !!t.can_stop && !!t.task_id;
+  const canExportNode = !!nodeRouteState && !!t.route_path && !isLint && t.kind !== 'violation' && t.framework !== 'task';
+  const hasFailingContent = !!t.failed || !!t.timed_out || (s ? s.failed > 0 || s.timedout > 0 : false);
+  const canCopyAIPrompt = canExportNode && !!failingOnlyRouteState && hasFailingContent;
 
   return (
     <div class="h-full overflow-y-auto p-5 space-y-4">
@@ -76,28 +118,50 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         <div class="min-w-0 flex-1">
           <div class="flex items-start justify-between gap-2">
             <h2 class="text-lg font-bold text-gray-900 break-words">{t.name}</h2>
-            {canRerun && (
-              <button
-                class="shrink-0 text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                onClick={() => onRerun!(t)}
-                disabled={rerunBusy}
-                title="Rerun this test or subtree"
-              >
-                <iconify-icon icon="codicon:refresh" />
-                {rerunBusy ? 'Running...' : 'Rerun'}
-              </button>
-            )}
-            {canStop && (
-              <button
-                class="shrink-0 text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                onClick={() => onStop!(t)}
-                disabled={stopBusy}
-                title="Stop this running task"
-              >
-                <iconify-icon icon="codicon:debug-stop" />
-                {stopBusy ? 'Stopping...' : 'Stop'}
-              </button>
-            )}
+            <div class="flex items-center gap-1 shrink-0">
+              {canExportNode && nodeRouteState && (
+                <DownloadMenu routeState={nodeRouteState} align="right" title="Download this node as JSON or Markdown" />
+              )}
+              {canExportNode && (
+                <button
+                  class={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                    copyState === 'error'
+                      ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
+                      : copyState === 'copied'
+                        ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-200'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  onClick={onCopyAIPrompt}
+                  disabled={!canCopyAIPrompt || copyState === 'copying'}
+                  title={!hasFailingContent ? 'No failures to copy' : (copyError || 'Copy failing output and repro steps as AI prompt')}
+                >
+                  <iconify-icon icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'} />
+                  {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy AI Prompt'}
+                </button>
+              )}
+              {canRerun && (
+                <button
+                  class="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  onClick={() => onRerun!(t)}
+                  disabled={rerunBusy}
+                  title="Rerun this test or subtree"
+                >
+                  <iconify-icon icon="codicon:refresh" />
+                  {rerunBusy ? 'Running...' : 'Rerun'}
+                </button>
+              )}
+              {canStop && (
+                <button
+                  class="text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  onClick={() => onStop!(t)}
+                  disabled={stopBusy}
+                  title="Stop this running task"
+                >
+                  <iconify-icon icon="codicon:debug-stop" />
+                  {stopBusy ? 'Stopping...' : 'Stop'}
+                </button>
+              )}
+            </div>
           </div>
           <div class="flex items-center gap-2 mt-1 flex-wrap">
             {fwIcon && (
@@ -687,40 +751,15 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-function folderPattern(path: string | undefined): string {
-  if (!path) return '**';
-  const trimmed = path.replace(/\/+$/, '');
-  return trimmed ? `${trimmed}/**` : '**';
-}
-
-function collectFolderLintStats(folder: Test, lint: LinterResult[] | undefined): Array<{ linter: string; count: number; workDir?: string }> {
-  const targetPath = folder.target_path || '';
-  const counts = new Map<string, { linter: string; count: number; workDir?: string }>();
-  for (const lr of lint || []) {
-    if (folder.work_dir && lr.work_dir && lr.work_dir !== folder.work_dir) continue;
-    for (const violation of lr.violations || []) {
-      const rawFile = relPath(violation.file, lr.work_dir);
-      if (!rawFile) continue;
-      const matches = targetPath === '' ? true : rawFile === targetPath || rawFile.startsWith(`${targetPath}/`);
-      if (!matches) continue;
-      const current = counts.get(lr.linter);
-      if (current) {
-        current.count += 1;
-      } else {
-        counts.set(lr.linter, { linter: lr.linter, count: 1, workDir: lr.work_dir });
-      }
-    }
-  }
-  return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.linter.localeCompare(b.linter));
-}
-
 function FolderLintDetail({ t, lint, onIgnore, ignoreBusy }: LintDetailProps & { lint?: LinterResult[] }) {
   const folderDisplay = t.file || t.name;
   const pattern = folderPattern(t.target_path);
   const scopedRule = t.ruleName || '';
   const scopedLinter = t.linterName || '';
-  const linters = scopedRule ? [] : collectFolderLintStats(t, lint);
-  const workDir = t.work_dir || (linters.length === 1 ? linters[0].workDir : '');
+  const actions = lintFolderActions(t, lint);
+  // The Linters section still wants stat counts to render — keep the
+  // aggregation only for that informational block (not for action gating).
+  const linterStats = scopedRule ? [] : collectFolderLintStats(t, lint);
   return (
     <>
       <Section title="Folder">
@@ -731,50 +770,7 @@ function FolderLintDetail({ t, lint, onIgnore, ignoreBusy }: LintDetailProps & {
           )}
         </div>
       </Section>
-      <Section title="Actions">
-        <div class="flex flex-wrap gap-1.5">
-          {scopedRule ? (
-            <>
-              <IgnoreButton
-                label={`Ignore ${scopedRule} in this path`}
-                title="Add {source, rule, file} to .gavel.yaml"
-                req={{ source: scopedLinter, rule: scopedRule, file: pattern, work_dir: workDir }}
-                onIgnore={onIgnore}
-                disabled={ignoreBusy || !workDir}
-              />
-              <IgnoreButton
-                label={`Disable ${scopedLinter} entirely`}
-                title="Add {source} to .gavel.yaml"
-                req={{ source: scopedLinter, work_dir: workDir }}
-                onIgnore={onIgnore}
-                disabled={ignoreBusy}
-                variant="subtle"
-              />
-            </>
-          ) : (
-            <>
-              <IgnoreButton
-                label="Ignore everything in this folder"
-                title="Add {file} to .gavel.yaml"
-                req={{ file: pattern, work_dir: workDir }}
-                onIgnore={onIgnore}
-                disabled={ignoreBusy || !workDir}
-              />
-              {linters.map(({ linter }) => (
-                <IgnoreButton
-                  key={linter}
-                  label={`Ignore ${linter} in this folder`}
-                  title="Add {source, file} to .gavel.yaml"
-                  req={{ source: linter, file: pattern, work_dir: workDir }}
-                  onIgnore={onIgnore}
-                  disabled={ignoreBusy || !workDir}
-                  variant="subtle"
-                />
-              ))}
-            </>
-          )}
-        </div>
-      </Section>
+      <ActionList actions={actions} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       {scopedRule ? (
         <Section title="Scope">
           <div class="space-y-1 text-sm text-gray-700">
@@ -785,19 +781,40 @@ function FolderLintDetail({ t, lint, onIgnore, ignoreBusy }: LintDetailProps & {
       ) : (
         <Section title="Linters">
           <div class="space-y-1">
-            {linters.map(({ linter, count }) => (
+            {linterStats.map(({ linter, count }) => (
               <div key={linter} class="flex items-center justify-between text-sm text-gray-700">
                 <span class="font-mono">{linter}</span>
                 <span class="text-xs text-gray-400">{count} violations</span>
               </div>
             ))}
-            {linters.length === 0 && (
+            {linterStats.length === 0 && (
               <div class="text-sm text-gray-400">No violations found under this folder.</div>
             )}
           </div>
         </Section>
       )}
     </>
+  );
+}
+
+function ActionList({ actions, onIgnore, ignoreBusy }: { actions: LintAction[]; onIgnore?: (req: IgnoreRequest) => Promise<void> | void; ignoreBusy?: boolean }) {
+  if (!onIgnore || actions.length === 0) return null;
+  return (
+    <Section title="Actions">
+      <div class="flex flex-wrap gap-1.5">
+        {actions.map(a => (
+          <IgnoreButton
+            key={a.key}
+            label={a.label}
+            title={a.title}
+            req={a.req}
+            onIgnore={onIgnore}
+            disabled={!!ignoreBusy || (!!a.disabledWithoutWorkDir && !a.req.work_dir)}
+            variant={a.variant}
+          />
+        ))}
+      </div>
+    </Section>
   );
 }
 
@@ -846,6 +863,7 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
   const targetPath = t.target_path || file;
   const workDir = t.work_dir || '';
   const vs = t.violations || [];
+  const actions = lintFileActions(t);
   return (
     <>
       <Section title="File">
@@ -854,43 +872,23 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
           {vs.length > 0 && <span class="text-xs text-gray-400">({vs.length} violations)</span>}
         </div>
       </Section>
+      <ActionList actions={actions} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       {vs.length > 0 && (
-        <>
-          <Section title="Actions">
-            <div class="flex flex-wrap gap-1.5">
-              <IgnoreButton
-                label={`Ignore all ${linter} in this file`}
-                title="Add {source, file} to .gavel.yaml"
-                req={{ source: linter, file: targetPath, work_dir: workDir }}
+        <Section title="Violations">
+          <div class="space-y-2">
+            {vs.map((v, i) => (
+              <ViolationRow
+                key={i}
+                v={v}
+                linter={linter}
+                file={targetPath}
+                workDir={workDir}
                 onIgnore={onIgnore}
-                disabled={ignoreBusy}
+                ignoreBusy={ignoreBusy}
               />
-              <IgnoreButton
-                label={`Disable ${linter} entirely`}
-                title="Add {source} to .gavel.yaml"
-                req={{ source: linter, work_dir: workDir }}
-                onIgnore={onIgnore}
-                disabled={ignoreBusy}
-                variant="subtle"
-              />
-            </div>
-          </Section>
-          <Section title="Violations">
-            <div class="space-y-2">
-              {vs.map((v, i) => (
-                <ViolationRow
-                  key={i}
-                  v={v}
-                  linter={linter}
-                  file={targetPath}
-                  workDir={workDir}
-                  onIgnore={onIgnore}
-                  ignoreBusy={ignoreBusy}
-                />
-              ))}
-            </div>
-          </Section>
-        </>
+            ))}
+          </div>
+        </Section>
       )}
     </>
   );

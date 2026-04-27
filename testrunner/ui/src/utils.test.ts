@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { collapseLintSingleChildChains, collapseSingleChildChains, formatCount, groupLintByLinterRuleFile } from './utils';
+import {
+  collapseLintSingleChildChains,
+  collapseSingleChildChains,
+  formatCount,
+  groupLintByLinterRuleFile,
+  isLintOnlyPhase,
+  stripTestTaskGroup,
+  TEST_TASK_GROUP_NAME,
+  LINT_TASK_GROUP_NAME,
+} from './utils';
 import type { LinterResult, Test } from './types';
 
 describe('formatCount', () => {
@@ -261,5 +270,91 @@ describe('groupLintByLinterRuleFile', () => {
     expect(linter.children![0].ruleName).toBe('global-rule');
     expect(linter.children![0].children ?? []).toHaveLength(0);
     expect(linter.children![0].noFileViolations).toHaveLength(1);
+  });
+});
+
+function virtualGroup(name: string, status: 'running' | 'pending' | 'success' | 'failed'): Test {
+  return {
+    name,
+    framework: 'task',
+    context: { status, type: 'group' },
+  };
+}
+
+function realTest(name: string, opts: Partial<Test> = {}): Test {
+  return {
+    name,
+    framework: 'go test',
+    passed: true,
+    ...opts,
+  };
+}
+
+describe('stripTestTaskGroup', () => {
+  it('removes the test task group while keeping real tests and lint group', () => {
+    const tests: Test[] = [
+      virtualGroup(TEST_TASK_GROUP_NAME, 'success'),
+      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
+      realTest('TestFoo'),
+    ];
+    const stripped = stripTestTaskGroup(tests);
+    expect(stripped).toHaveLength(2);
+    expect(stripped.map(t => t.name)).toEqual([LINT_TASK_GROUP_NAME, 'TestFoo']);
+  });
+
+  it('is a no-op when the test task group is absent', () => {
+    const tests: Test[] = [realTest('TestFoo'), virtualGroup(LINT_TASK_GROUP_NAME, 'running')];
+    expect(stripTestTaskGroup(tests)).toEqual(tests);
+  });
+
+  it('only matches the task framework, not real tests sharing the name', () => {
+    const tests: Test[] = [
+      { name: TEST_TASK_GROUP_NAME, framework: 'go test', passed: true },
+      virtualGroup(TEST_TASK_GROUP_NAME, 'running'),
+    ];
+    const stripped = stripTestTaskGroup(tests);
+    expect(stripped).toHaveLength(1);
+    expect(stripped[0].framework).toBe('go test');
+  });
+});
+
+describe('isLintOnlyPhase', () => {
+  it('returns false when the run has finished', () => {
+    expect(isLintOnlyPhase([], false, true)).toBe(false);
+    expect(isLintOnlyPhase([], false, false)).toBe(false);
+  });
+
+  it('returns false when lint already reported results', () => {
+    const tests: Test[] = [realTest('TestFoo')];
+    expect(isLintOnlyPhase(tests, true, true)).toBe(false);
+  });
+
+  it('returns false while the test task group is still running', () => {
+    const tests: Test[] = [
+      virtualGroup(TEST_TASK_GROUP_NAME, 'running'),
+      realTest('TestFoo', { passed: true }),
+    ];
+    expect(isLintOnlyPhase(tests, true, false)).toBe(false);
+  });
+
+  it('returns false while the test task group is still pending', () => {
+    const tests: Test[] = [virtualGroup(TEST_TASK_GROUP_NAME, 'pending')];
+    expect(isLintOnlyPhase(tests, true, false)).toBe(false);
+  });
+
+  it('returns true when test task group is gone but run is still active', () => {
+    const tests: Test[] = [
+      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
+      realTest('TestFoo', { passed: true }),
+    ];
+    expect(isLintOnlyPhase(tests, true, false)).toBe(true);
+  });
+
+  it('returns true when test task group has finished but is still in the snapshot', () => {
+    const tests: Test[] = [
+      virtualGroup(TEST_TASK_GROUP_NAME, 'success'),
+      virtualGroup(LINT_TASK_GROUP_NAME, 'running'),
+    ];
+    expect(isLintOnlyPhase(tests, true, false)).toBe(true);
   });
 });

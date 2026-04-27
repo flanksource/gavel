@@ -22,7 +22,7 @@ export interface Test {
   children?: Test[];
   summary?: TestSummary;
   attempts?: TestAttempt[];
-  context?: GoTestContext | GinkgoContext | FixtureContext;
+  context?: GoTestContext | GinkgoContext | FixtureContext | TaskContext;
   failure_detail?: FailureDetail;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
@@ -213,6 +213,14 @@ export interface GinkgoContext {
   suite_description?: string;
   suite_path?: string;
   failure_location?: string;
+}
+
+// TaskContext mirrors the shape emitted by the Go server for virtual
+// clicky-task pseudo-tests (testrunner/ui/handler.go: taskSnapshotToTest).
+export interface TaskContext {
+  status?: string;
+  type?: string;
+  duration?: number;
 }
 
 export interface FixtureContext {
