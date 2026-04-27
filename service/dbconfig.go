@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // DBMode labels the two supported github-cache backends.
@@ -91,6 +95,113 @@ func SaveDBConfig(cfg DBConfig) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
+}
+
+// RunningEmbeddedPostgres represents a postmaster discovered via
+// postmaster.pid in the embedded data directory. Returned by
+// FindRunningEmbeddedPostgres so CLI invocations can connect to a postgres
+// already started by the system service instead of spinning up a duplicate.
+type RunningEmbeddedPostgres struct {
+	PID  int
+	Port int
+}
+
+// embeddedPGUser / embeddedPGPassword / embeddedPGDatabase mirror the values
+// commons-db's StartEmbedded uses (see EmbeddedConfig defaults). The github
+// cache uses Database="gavel" — keep this in sync with cache.Open.
+const (
+	embeddedPGUser     = "postgres"
+	embeddedPGPassword = "postgres"
+	embeddedPGDatabase = "gavel"
+)
+
+// posmasterLinePort is the line index in postmaster.pid that holds the
+// listening port; line 0 is the pid. Format is stable across postgres
+// releases and matches commons-db/db/embedded.go.
+const posmasterLinePort = 3
+
+// FindRunningEmbeddedPostgres parses <EmbeddedDataDir>/data/postmaster.pid
+// and verifies the postmaster is reachable. Returns (nil, nil) when:
+//   - postmaster.pid is missing (no instance ever started, or it shut down
+//     cleanly and removed the file)
+//   - the recorded pid is not alive (stale pidfile after a crash)
+//   - the recorded port is not accepting TCP connections (postgres dying
+//     mid-shutdown, file not yet rewritten)
+//
+// Returns an error only for unexpected I/O / parse failures so callers can
+// distinguish "definitely not running" from "couldn't determine".
+func FindRunningEmbeddedPostgres() (*RunningEmbeddedPostgres, error) {
+	dataDir, err := EmbeddedDataDir()
+	if err != nil {
+		return nil, err
+	}
+	return findRunningEmbeddedPostgresIn(dataDir)
+}
+
+func findRunningEmbeddedPostgresIn(dataDir string) (*RunningEmbeddedPostgres, error) {
+	pidPath := filepath.Join(dataDir, "data", "postmaster.pid")
+	raw, err := os.ReadFile(pidPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", pidPath, err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	if len(lines) <= posmasterLinePort {
+		return nil, fmt.Errorf("%s has %d lines, need >%d", pidPath, len(lines), posmasterLinePort)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	if err != nil || pid <= 0 {
+		return nil, fmt.Errorf("%s: invalid pid %q: %w", pidPath, lines[0], err)
+	}
+	port, err := strconv.Atoi(strings.TrimSpace(lines[posmasterLinePort]))
+	if err != nil || port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("%s: invalid port %q: %w", pidPath, lines[posmasterLinePort], err)
+	}
+	if !pidAlive(pid) {
+		return nil, nil
+	}
+	if !tcpReachable("localhost", port) {
+		return nil, nil
+	}
+	return &RunningEmbeddedPostgres{PID: pid, Port: port}, nil
+}
+
+// EmbeddedDSN returns the DSN string for the embedded postgres at the given
+// port. Uses the same user/password/database that commons-db.StartEmbedded
+// would have used, so connecting via this DSN is equivalent to the path that
+// went through StartEmbedded.
+func EmbeddedDSN(port int) string {
+	return fmt.Sprintf("postgres://%s:%s@localhost:%d/%s?sslmode=disable",
+		embeddedPGUser, embeddedPGPassword, port, embeddedPGDatabase)
+}
+
+// pidAlive reports whether a process with pid exists. Uses signal 0 which is
+// a no-op send — succeeds when the process exists and can receive signals
+// from the current user.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// tcpReachable returns true if a short TCP dial to host:port succeeds. Used
+// to confirm the postmaster recorded in postmaster.pid is actually serving;
+// a stale file pointing at a port nobody's listening on counts as "not
+// running" rather than a hard failure.
+func tcpReachable(host string, port int) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // MaskDSN hides the password in a postgres DSN so it can be surfaced in the

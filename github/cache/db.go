@@ -116,6 +116,18 @@ func resolveConfiguredDSN() (string, string, error) {
 		}
 		return cfg.DSN, "db.json (dsn)", nil
 	case service.DBModeEmbedded:
+		// Fast path: if a postmaster is already running for our embedded data
+		// dir (typically because `gavel system start` is up), connect to it
+		// directly instead of going through StartEmbedded — that avoids the
+		// "try to start, fail with 'another postmaster', read postmaster.pid"
+		// dance and the no-op shutdown hook that goes with it.
+		if running, err := service.FindRunningEmbeddedPostgres(); err != nil {
+			logger.V(1).Infof("probe running embedded postgres: %v", err)
+		} else if running != nil {
+			logger.Debugf("reusing embedded postgres (pid=%d, port=%d)", running.PID, running.Port)
+			return service.EmbeddedDSN(running.Port), "db.json (embedded, reused)", nil
+		}
+
 		dataDir, err := service.EmbeddedDataDir()
 		if err != nil {
 			return "", "", err

@@ -320,7 +320,7 @@ func (a AIAnalysisOutput) String() string {
 	}
 	s += ": " + a.Subject
 	if a.Body != "" {
-		s += "\n" + a.Body
+		s += "\n\n" + a.Body
 	}
 	return s
 }

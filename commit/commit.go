@@ -21,6 +21,7 @@ import (
 
 var (
 	ErrNothingStaged        = errors.New("nothing staged to commit")
+	ErrNothingToPush        = errors.New("nothing to commit and no local commits ahead of upstream")
 	ErrLLMUnavailable       = errors.New("LLM agent unavailable")
 	ErrInvalidStage         = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage = errors.New("--commit-all does not support --message")
@@ -72,12 +73,17 @@ type CommitResult struct {
 }
 
 type Result struct {
-	Message string         `json:"message"`
-	Hash    string         `json:"hash,omitempty"`
-	DryRun  bool           `json:"dry_run,omitempty"`
-	Staged  []string       `json:"staged,omitempty"`
-	Hooks   []HookResult   `json:"hooks,omitempty"`
-	Commits []CommitResult `json:"commits,omitempty"`
+	Message string `json:"message"`
+	Hash    string `json:"hash,omitempty"`
+	DryRun  bool   `json:"dry_run,omitempty"`
+	// PushOnly is set when --push was used with nothing staged — the
+	// commits in this Result already exist in HEAD; we're only pushing
+	// them. Pretty() uses this to switch the dry-run header from
+	// "would create" to "would push existing".
+	PushOnly bool           `json:"push_only,omitempty"`
+	Staged   []string       `json:"staged,omitempty"`
+	Hooks    []HookResult   `json:"hooks,omitempty"`
+	Commits  []CommitResult `json:"commits,omitempty"`
 }
 
 type commitAIAnalysis struct {
@@ -123,7 +129,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		result, err = runSingleCommit(ctx, opts)
 	}
 	if err != nil {
-		return result, err
+		// With --push, "nothing staged" is not fatal: fall through and
+		// push existing local commits / open a PR for what HEAD already
+		// has ahead of upstream.
+		if opts.Push && errors.Is(err, ErrNothingStaged) {
+			result = &Result{DryRun: opts.DryRun, PushOnly: true}
+			err = nil
+		} else {
+			return result, err
+		}
 	}
 	if opts.Push {
 		if perr := pushAfterCommit(ctx, opts, result); perr != nil {
@@ -457,9 +471,13 @@ func (r *Result) Pretty() api.Text {
 
 	t := clicky.Text("")
 	if r.DryRun {
+		summary := fmt.Sprintf("would create %d commit(s)", len(r.Commits))
+		if r.PushOnly {
+			summary = fmt.Sprintf("would push %d existing commit(s)", len(r.Commits))
+		}
 		t = t.Append("DRY RUN", "font-bold text-yellow-600").
 			Append(" ", "").
-			Append(fmt.Sprintf("would create %d commit(s)", len(r.Commits)), "text-muted").
+			Append(summary, "text-muted").
 			NewLine()
 	}
 

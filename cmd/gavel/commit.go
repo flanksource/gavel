@@ -23,7 +23,7 @@ type CommitOptions struct {
 	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force     bool   `flag:"force" help:"Skip pre-commit hooks"`
 	NoCache   bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	Push      bool   `flag:"push" short:"p" help:"After committing, push to a matching open PR or open a new PR"`
+	Push      bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
 	Precommit string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
 	Compat    string `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
 	WorkDir   string `flag:"work-dir" help:"Working directory"`
@@ -60,6 +60,12 @@ The -A flag groups staged files by their top-level directory and recursively
 splits any group that exceeds --max-files or --max-lines. An LLM still writes
 the conventional commit message for each group.
 
+With --push (-p), if nothing is staged the commit step is skipped and the
+existing local commits ahead of upstream are pushed instead. A new PR is
+opened (or pushed to a matching open PR). When neither staged changes nor
+ahead-of-upstream commits exist, gavel exits non-zero with "nothing to
+commit and no local commits ahead of upstream".
+
 Examples:
   gavel commit                          # LLM-generated message, staged changes
   gavel commit -A                       # one commit per directory, split when large
@@ -68,7 +74,9 @@ Examples:
   gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --force                  # skip hooks
-  gavel commit --precommit=fail         # error on gitignore or linked-deps issues`
+  gavel commit --precommit=fail         # error on gitignore or linked-deps issues
+  gavel commit -p                       # commit (if anything staged) then push / open PR
+  gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR`
 }
 
 func init() {
@@ -127,6 +135,11 @@ func runCommit(opts CommitOptions) (any, error) {
 			return nil, nil
 		}
 		if errors.Is(err, commitpkg.ErrCompatibilityCancelled) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			exitCode = 1
+			return nil, nil
+		}
+		if errors.Is(err, commitpkg.ErrNothingToPush) {
 			fmt.Fprintln(os.Stderr, err.Error())
 			exitCode = 1
 			return nil, nil

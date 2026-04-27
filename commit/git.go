@@ -152,6 +152,118 @@ func commitWithMessage(workDir, msg string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// loadAheadCommits returns local commits on HEAD that are not yet on the
+// remote tracking branch, oldest-first. Used by --push when nothing is
+// staged so we have something to seed PR title/body generation with.
+//
+// Resolution order for the base ref:
+//  1. The branch's upstream (@{upstream}) when configured.
+//  2. origin/<branch> when that ref exists locally.
+//  3. defaultBase (e.g. "origin/main") when non-empty and the ref exists.
+//
+// Returns an empty slice when no base can be resolved or HEAD is not ahead.
+func loadAheadCommits(workDir, branch, defaultBase string) ([]CommitResult, error) {
+	base := resolveAheadBase(workDir, branch, defaultBase)
+	if base == "" {
+		return nil, nil
+	}
+	hashes, err := revList(workDir, base+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	commits := make([]CommitResult, 0, len(hashes))
+	for i := len(hashes) - 1; i >= 0; i-- {
+		h := hashes[i]
+		msg, mErr := commitMessage(workDir, h)
+		if mErr != nil {
+			return nil, fmt.Errorf("read commit %s: %w", h, mErr)
+		}
+		files, fErr := commitFiles(workDir, h)
+		if fErr != nil {
+			return nil, fmt.Errorf("read files for %s: %w", h, fErr)
+		}
+		commits = append(commits, CommitResult{
+			Hash:    h,
+			Message: msg,
+			Files:   files,
+		})
+	}
+	return commits, nil
+}
+
+func resolveAheadBase(workDir, branch, defaultBase string) string {
+	if branch != "" {
+		if validRef(workDir, branch+"@{upstream}") {
+			return branch + "@{upstream}"
+		}
+		if validRef(workDir, "origin/"+branch) {
+			return "origin/" + branch
+		}
+	}
+	if defaultBase != "" && validRef(workDir, defaultBase) {
+		return defaultBase
+	}
+	return ""
+}
+
+func validRef(workDir, ref string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	return cmd.Run() == nil
+}
+
+func revList(workDir, spec string) ([]string, error) {
+	cmd := exec.Command("git", "rev-list", spec)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git rev-list %s: %w: %s", spec, err, strings.TrimSpace(stderr.String()))
+	}
+	var hashes []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			hashes = append(hashes, line)
+		}
+	}
+	return hashes, nil
+}
+
+func commitMessage(workDir, hash string) (string, error) {
+	cmd := exec.Command("git", "log", "-1", "--pretty=%B", hash)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func commitFiles(workDir, hash string) ([]string, error) {
+	cmd := exec.Command("git", "show", "--name-only", "--pretty=", hash)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			files = append(files, line)
+		}
+	}
+	return files, nil
+}
+
 func parseStagedChanges(diff string) ([]stagedChange, error) {
 	summaries, err := gavelgit.ParsePatch(diff)
 	if err != nil {

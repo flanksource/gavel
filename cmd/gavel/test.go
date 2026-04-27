@@ -83,6 +83,18 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
 
+	// Periodic snapshots: every 3s the recorder writes the in-flight tree to
+	// .gavel/running.json. Removed on clean termination, retained on
+	// interrupt / timeout / non-zero exit so callers can inspect what was
+	// in-flight when the run died. Per-run timestamped snapshots are written
+	// at end-of-run alongside the existing sha-keyed snapshot.
+	recorder := snapshots.NewRecorder(opts.WorkDir)
+	recorder.Start()
+	runSucceeded := false
+	defer func() {
+		recorder.Stop(runSucceeded)
+	}()
+
 	// Dynamic default for --skip-hooks: when the user didn't pass the flag,
 	// skip hooks unless $CI is set. This keeps local `gavel test` snappy and
 	// auto-enables pre/post hooks in CI / SSH-push contexts.
@@ -118,6 +130,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		if !opts.SkipHooks {
 			printDryRunHooks(opts.WorkDir, gavelCfg.Post, "post-hook")
 		}
+		runSucceeded = true
 		return nil, nil
 	}
 
@@ -166,7 +179,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			return testrunnerUpdates
 		}
 		uiServer.BeginRun("initial")
-		opts.Updates = attachUIUpdates()
+		opts.Updates = attachRecorderTee(recorder, opts, runStarted, attachUIUpdates())
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
 			rerunCtx, cancelRerun := newStopContext(nil, opts.Timeout)
@@ -193,6 +206,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			_, err := testrunner.Run(rerunOpts)
 			return err
 		})
+	}
+
+	// In non-UI mode the recorder still needs a feed of test updates; attach
+	// a tee with no downstream so each batch reaches the recorder.
+	if opts.Updates == nil {
+		opts.Updates = attachRecorderTee(recorder, opts, runStarted, nil)
 	}
 
 	if !opts.SkipHooks && len(gavelCfg.Pre) > 0 {
@@ -322,6 +341,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				} else {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
+				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+					logger.Warnf("persist per-run snapshot: %v", err)
+				} else {
+					logger.V(1).Infof("wrote per-run snapshot to %s", path)
+				}
+				runSucceeded = true
 				clicky.CancelAllGlobalTasks()
 				// WaitForGlobalCompletion (not -Silent) so the final task
 				// pane prints before our details + summary below.
@@ -348,6 +373,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			// flooded unless the user opts in.
 			printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
 			printTestRunSummary(fullSummary, lintResults)
+			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+				logger.Warnf("persist per-run snapshot: %v", err)
+			} else {
+				logger.V(1).Infof("wrote per-run snapshot to %s", path)
+			}
+			runSucceeded = true
 			sig := make(chan os.Signal, 1)
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			<-sig
@@ -359,6 +391,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
+		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+			logger.Warnf("persist per-run snapshot: %v", err)
+		} else {
+			logger.V(1).Infof("wrote per-run snapshot to %s", path)
+		}
+		runSucceeded = true
 		// Release the stdout/stderr capture started at the top of runTests
 		// before printing so the details + summary show up on the terminal
 		// instead of sitting in clicky's capture buffer until after we

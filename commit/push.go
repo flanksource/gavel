@@ -36,8 +36,10 @@ type pushDeps struct {
 	createPR         func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error)
 	isAncestor       func(workDir, ref, head string) bool
 	gitPush          func(workDir, refspec string) error
+	rebaseOnto       func(workDir, upstreamBranch string) error
 	pickPR           func(header string, prs []github.PRListItem) (*github.PRListItem, error)
 	generatePRPrompt func(ctx context.Context, agent clickyai.Agent, in prContentInput) (prContent, error)
+	aheadCommits     func(workDir, branch, defaultBase string) ([]CommitResult, error)
 }
 
 func defaultPushDeps() pushDeps {
@@ -47,16 +49,36 @@ func defaultPushDeps() pushDeps {
 		createPR:         github.CreatePR,
 		isAncestor:       gitIsAncestor,
 		gitPush:          runGitPush,
+		rebaseOnto:       rebaseOnto,
 		pickPR:           choosePR,
 		generatePRPrompt: generatePRContent,
+		aheadCommits:     loadAheadCommits,
 	}
 }
+
+// pushDepsForTest, when non-nil, replaces defaultPushDeps() inside
+// pushAfterCommit. Only set from tests that drive Run() end-to-end and
+// need to swap GitHub/git side effects.
+var pushDepsForTest *pushDeps
 
 // pushAfterCommit runs the push/PR flow after a successful commit (or in
 // dry-run, simulates it). Called once per `Run` invocation — if CommitAll
 // produced several commits, we still push the final HEAD once.
+//
+// When result.Commits is empty (i.e. --push was used with nothing staged),
+// pushAfterCommit falls back to local commits ahead of upstream so there's
+// still something to seed PR title/body generation with. If HEAD has no
+// commits ahead of upstream either, returns ErrNothingToPush.
 func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
-	if result == nil || len(result.Commits) == 0 {
+	deps := defaultPushDeps()
+	if pushDepsForTest != nil {
+		deps = *pushDepsForTest
+	}
+	return pushWithDeps(ctx, opts, result, deps)
+}
+
+func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDeps) error {
+	if result == nil {
 		return nil
 	}
 
@@ -69,7 +91,28 @@ func pushAfterCommit(ctx context.Context, opts Options, result *Result) error {
 		return fmt.Errorf("cannot push from detached HEAD")
 	}
 
-	deps := defaultPushDeps()
+	if len(result.Commits) == 0 {
+		base, _ := deps.defaultBranch(ghOpts)
+		baseRef := ""
+		if base != "" {
+			baseRef = "origin/" + base
+		}
+		ahead, aErr := deps.aheadCommits(opts.WorkDir, branch, baseRef)
+		if aErr != nil {
+			return fmt.Errorf("read ahead commits: %w", aErr)
+		}
+		if len(ahead) == 0 {
+			return ErrNothingToPush
+		}
+		result.Commits = ahead
+		// In dry-run mode, runSingleCommit/runCommitAll would have printed
+		// the commit preview; here we print it ourselves so the user sees
+		// what's about to be pushed before the "would push ..." line.
+		if opts.DryRun {
+			printDryRunPreview(result)
+		}
+	}
+
 	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
 	if err != nil {
 		return err
@@ -144,6 +187,9 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 		fmt.Fprintf(dryRunOutput, "would push %s (%s → PR #%d %s)\n", refspec, reason, pr.Number, pr.URL)
 		return nil
 	}
+	if err := deps.rebaseOnto(opts.WorkDir, pr.Source); err != nil {
+		return err
+	}
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
 		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
@@ -153,6 +199,7 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
 	refspec := "HEAD:" + branch
+	base, _ := deps.defaultBranch(ghOpts)
 
 	agent, err := buildAgent(opts)
 	if err != nil {
@@ -166,13 +213,16 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	}
 
 	if opts.DryRun {
-		base, _ := deps.defaultBranch(ghOpts)
 		fmt.Fprintf(dryRunOutput, "would push %s and open PR against %s\n", refspec, base)
 		fmt.Fprintf(dryRunOutput, "title: %s\n", content.Title)
 		if content.Body != "" {
 			fmt.Fprintf(dryRunOutput, "body:\n%s\n", content.Body)
 		}
 		return nil
+	}
+
+	if err := deps.rebaseOnto(opts.WorkDir, base); err != nil {
+		return err
 	}
 
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
