@@ -82,3 +82,63 @@ func TestFilterViolationsByGitIgnore(t *testing.T) {
 		assert.Equal(t, file, result[1].File)
 	})
 }
+
+func TestFilterViolationsByGitIgnoreInResults(t *testing.T) {
+	mkViolation := func(file string) models.Violation {
+		return models.Violation{File: file, Source: "test"}
+	}
+
+	t.Run("filters per-result using each WorkDir", func(t *testing.T) {
+		rootA := t.TempDir()
+		setupGitRepo(rootA)
+		os.WriteFile(filepath.Join(rootA, ".gitignore"), []byte("vendor/\n"), 0644)
+
+		rootB := t.TempDir()
+		setupGitRepo(rootB)
+		os.WriteFile(filepath.Join(rootB, ".gitignore"), []byte("*.log\n"), 0644)
+
+		results := []*LinterResult{
+			{
+				Linter:  "a",
+				WorkDir: rootA,
+				Violations: []models.Violation{
+					mkViolation(filepath.Join(rootA, "main.go")),
+					mkViolation(filepath.Join(rootA, "vendor", "dep.go")),
+				},
+			},
+			{
+				Linter:  "b",
+				WorkDir: rootB,
+				Violations: []models.Violation{
+					mkViolation(filepath.Join(rootB, "app.go")),
+					mkViolation(filepath.Join(rootB, "debug.log")),
+					mkViolation(filepath.Join(rootB, "trace.log")),
+				},
+			},
+		}
+
+		filtered := FilterViolationsByGitIgnoreInResults(results)
+		assert.Equal(t, 3, filtered)
+		assert.Len(t, results[0].Violations, 1)
+		assert.Equal(t, filepath.Join(rootA, "main.go"), results[0].Violations[0].File)
+		assert.Len(t, results[1].Violations, 1)
+		assert.Equal(t, filepath.Join(rootB, "app.go"), results[1].Violations[0].File)
+	})
+
+	t.Run("returns 0 for nil and empty results", func(t *testing.T) {
+		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults(nil))
+		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults([]*LinterResult{}))
+		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults([]*LinterResult{nil}))
+	})
+
+	t.Run("skips results with no violations", func(t *testing.T) {
+		root := t.TempDir()
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0644)
+
+		results := []*LinterResult{
+			{Linter: "empty", WorkDir: root, Violations: nil},
+		}
+		assert.Equal(t, 0, FilterViolationsByGitIgnoreInResults(results))
+	})
+}

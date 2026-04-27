@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/flanksource/clicky"
 	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
@@ -31,29 +32,59 @@ type pushTarget struct {
 // pushFlags lets tests intercept the network/git side-effects without
 // spinning up GitHub and git servers.
 type pushDeps struct {
-	searchPRs        func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error)
-	defaultBranch    func(github.Options) (string, error)
-	createPR         func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error)
-	isAncestor       func(workDir, ref, head string) bool
-	gitPush          func(workDir, refspec string) error
-	rebaseOnto       func(workDir, upstreamBranch string) error
-	pickPR           func(header string, prs []github.PRListItem) (*github.PRListItem, error)
-	generatePRPrompt func(ctx context.Context, agent clickyai.Agent, in prContentInput) (prContent, error)
-	aheadCommits     func(workDir, branch, defaultBase string) ([]CommitResult, error)
+	searchPRs           func(github.Options, github.PRSearchOptions) (github.PRSearchResults, *github.RateLimit, error)
+	defaultBranch       func(github.Options) (string, error)
+	createPR            func(github.Options, github.CreatePRInput) (*github.CreatePRResult, error)
+	isAncestor          func(workDir, ref, head string) bool
+	gitPush             func(workDir, refspec string) error
+	rebaseOnto          func(workDir, upstreamBranch string) error
+	pickPR              func(header string, prs []github.PRListItem) (*github.PRListItem, error)
+	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in prContentInput) (prContent, error)
+	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
+	confirmProtectedRef func(branch string) bool
 }
 
 func defaultPushDeps() pushDeps {
 	return pushDeps{
-		searchPRs:        github.SearchPRs,
-		defaultBranch:    github.DefaultBranch,
-		createPR:         github.CreatePR,
-		isAncestor:       gitIsAncestor,
-		gitPush:          runGitPush,
-		rebaseOnto:       rebaseOnto,
-		pickPR:           choosePR,
-		generatePRPrompt: generatePRContent,
-		aheadCommits:     loadAheadCommits,
+		searchPRs:           github.SearchPRs,
+		defaultBranch:       github.DefaultBranch,
+		createPR:            github.CreatePR,
+		isAncestor:          gitIsAncestor,
+		gitPush:             runGitPush,
+		rebaseOnto:          rebaseOnto,
+		pickPR:              choosePR,
+		generatePRPrompt:    generatePRContent,
+		aheadCommits:        loadAheadCommits,
+		confirmProtectedRef: confirmProtectedBranchPush,
 	}
+}
+
+// protectedBranches are remote branches gavel will never push to without
+// explicit user confirmation. These are the names commonly configured as
+// branch-protected on GitHub; pushing directly to them bypasses PR review.
+var protectedBranches = map[string]bool{
+	"main":    true,
+	"master":  true,
+	"develop": true,
+	"trunk":   true,
+}
+
+func isProtectedBranch(name string) bool {
+	return protectedBranches[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// confirmProtectedBranchPush prompts the user before pushing to a
+// protected remote branch. Returns true if the user confirmed.
+func confirmProtectedBranchPush(branch string) bool {
+	header := fmt.Sprintf("Pushing to protected branch %q bypasses PR review. Proceed?", branch)
+	idx, ok := promptSelectIndex(header, []string{
+		fmt.Sprintf("No, cancel push to %s", branch),
+		fmt.Sprintf("Yes, push directly to %s", branch),
+	})
+	if !ok {
+		return false
+	}
+	return idx == 1
 }
 
 // pushDepsForTest, when non-nil, replaces defaultPushDeps() inside
@@ -187,6 +218,11 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 		fmt.Fprintf(dryRunOutput, "would push %s (%s → PR #%d %s)\n", refspec, reason, pr.Number, pr.URL)
 		return nil
 	}
+	if isProtectedBranch(pr.Source) {
+		if !deps.confirmProtectedRef(pr.Source) {
+			return fmt.Errorf("push to protected branch %q cancelled", pr.Source)
+		}
+	}
 	if err := deps.rebaseOnto(opts.WorkDir, pr.Source); err != nil {
 		return err
 	}
@@ -194,11 +230,11 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 		return fmt.Errorf("git push %s: %w", refspec, err)
 	}
 	logger.Infof("Pushed to PR #%d (%s): %s", pr.Number, pr.Source, pr.URL)
+	printExistingPRSummary(pr)
 	return nil
 }
 
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
-	refspec := "HEAD:" + branch
 	base, _ := deps.defaultBranch(ghOpts)
 
 	agent, err := buildAgent(opts)
@@ -212,6 +248,19 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("generate PR title/body: %w", err)
 	}
 
+	// When the user is on a protected branch (e.g. main/master), pushing
+	// HEAD:main bypasses review entirely. Use the AI-suggested branch
+	// name as the head ref instead so the new PR is opened from a fresh
+	// topic branch.
+	headBranch := branch
+	if isProtectedBranch(branch) {
+		if content.Branch == "" {
+			return fmt.Errorf("on protected branch %q, but AI did not suggest a branch name", branch)
+		}
+		headBranch = content.Branch
+	}
+	refspec := "HEAD:" + headBranch
+
 	if opts.DryRun {
 		fmt.Fprintf(dryRunOutput, "would push %s and open PR against %s\n", refspec, base)
 		fmt.Fprintf(dryRunOutput, "title: %s\n", content.Title)
@@ -221,8 +270,21 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return nil
 	}
 
-	if err := deps.rebaseOnto(opts.WorkDir, base); err != nil {
-		return err
+	// Guard against pushing directly to a protected remote branch. This
+	// only fires when the LLM-suggested branch (or the user's current
+	// branch on the non-protected path) collides with main/master/etc.
+	if isProtectedBranch(headBranch) {
+		if !deps.confirmProtectedRef(headBranch) {
+			return fmt.Errorf("push to protected branch %q cancelled", headBranch)
+		}
+	}
+
+	// Skip the rebase when we're pushing to a brand-new branch derived
+	// from HEAD: there's nothing remote to reconcile against.
+	if headBranch == branch {
+		if err := deps.rebaseOnto(opts.WorkDir, base); err != nil {
+			return err
+		}
 	}
 
 	if err := deps.gitPush(opts.WorkDir, refspec); err != nil {
@@ -232,14 +294,44 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	created, err := deps.createPR(ghOpts, github.CreatePRInput{
 		Title: content.Title,
 		Body:  content.Body,
-		Head:  branch,
+		Head:  headBranch,
 	})
 	if err != nil {
 		return fmt.Errorf("create PR: %w", err)
 	}
 	logger.Infof("Opened PR #%d against %s: %s", created.Number, created.Base, created.URL)
-	fmt.Fprintln(dryRunOutput, created.URL)
+	printNewPRSummary(created, content)
 	return nil
+}
+
+// printNewPRSummary renders the just-opened PR's title, URL, and body on
+// stdout. Replaces the trailing commit re-print: the user already saw
+// "Committed <hash> ..." per commit, what they actually want at the end
+// is the PR they just opened.
+func printNewPRSummary(created *github.CreatePRResult, content prContent) {
+	if created == nil {
+		return
+	}
+	t := clicky.Text(fmt.Sprintf("PR #%d", created.Number), "font-bold text-green-600").
+		Space().Append(content.Title, "font-bold").NewLine().
+		Append(created.URL, "text-muted").NewLine()
+	if body := strings.TrimSpace(content.Body); body != "" {
+		t = t.NewLine().Append(body, "")
+	}
+	fmt.Println(t.ANSI())
+}
+
+// printExistingPRSummary renders the target PR's title and URL after a
+// successful push to an existing PR. PRListItem has no body field, so
+// only title + URL are shown.
+func printExistingPRSummary(pr *github.PRListItem) {
+	if pr == nil {
+		return
+	}
+	t := clicky.Text(fmt.Sprintf("PR #%d", pr.Number), "font-bold text-green-600").
+		Space().Append(pr.Title, "font-bold").NewLine().
+		Append(pr.URL, "text-muted").NewLine()
+	fmt.Println(t.ANSI())
 }
 
 // --- git helpers ---

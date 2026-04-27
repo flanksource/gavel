@@ -464,22 +464,25 @@ func printDryRunPreview(result *Result) {
 // one header line per commit (short hash or dry-run ref + conventional
 // subject) followed by indented body lines. The default reflection-based
 // struct printer is intentionally bypassed.
+//
+// Live runs (non-dry-run) return empty text: per-commit "Committed <hash>"
+// lines are already logged by runSingleCommit/runCommitAll, and `--push`
+// prints PR title/body separately. The trailing block this used to emit
+// only restated information the user just saw.
 func (r *Result) Pretty() api.Text {
-	if r == nil || len(r.Commits) == 0 {
+	if r == nil || len(r.Commits) == 0 || !r.DryRun {
 		return clicky.Text("")
 	}
 
 	t := clicky.Text("")
-	if r.DryRun {
-		summary := fmt.Sprintf("would create %d commit(s)", len(r.Commits))
-		if r.PushOnly {
-			summary = fmt.Sprintf("would push %d existing commit(s)", len(r.Commits))
-		}
-		t = t.Append("DRY RUN", "font-bold text-yellow-600").
-			Append(" ", "").
-			Append(summary, "text-muted").
-			NewLine()
+	summary := fmt.Sprintf("would create %d commit(s)", len(r.Commits))
+	if r.PushOnly {
+		summary = fmt.Sprintf("would push %d existing commit(s)", len(r.Commits))
 	}
+	t = t.Append("DRY RUN", "font-bold text-yellow-600").
+		Append(" ", "").
+		Append(summary, "text-muted").
+		NewLine()
 
 	total := len(r.Commits)
 	for i, commit := range r.Commits {

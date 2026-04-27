@@ -5,6 +5,22 @@ import (
 	"github.com/flanksource/gavel/utils"
 )
 
+// FilterViolationsByGitIgnoreInResults removes gitignored violations from each
+// result in place, using each result's own WorkDir to discover .gitignore
+// patterns. Returns the total number of filtered violations.
+func FilterViolationsByGitIgnoreInResults(results []*LinterResult) int {
+	filtered := 0
+	for _, result := range results {
+		if result == nil || len(result.Violations) == 0 {
+			continue
+		}
+		before := len(result.Violations)
+		result.Violations = FilterViolationsByGitIgnore(result.Violations, result.WorkDir)
+		filtered += before - len(result.Violations)
+	}
+	return filtered
+}
+
 // FilterViolationsByGitIgnore removes violations whose File is matched by
 // .gitignore patterns found in the git repository containing workDir.
 func FilterViolationsByGitIgnore(violations []models.Violation, workDir string) []models.Violation {

@@ -261,8 +261,9 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 			generatePRPrompt: func(context.Context, clickyai.Agent, prContentInput) (prContent, error) {
 				llmCalls++
 				return prContent{
-					Title: "feat: add the thing",
-					Body:  "## What\n- adds the thing\n## Why\n- needed it",
+					Title:  "feat: add the thing",
+					Body:   "## What\n- adds the thing\n## Why\n- needed it",
+					Branch: "feat/add-the-thing",
 				}, nil
 			},
 			gitPush: func(_, _ string) error {
@@ -319,6 +320,9 @@ func pushAfterCommitForTest(ctx context.Context, opts Options, result *Result, d
 	}
 	if deps.aheadCommits != nil {
 		d.aheadCommits = deps.aheadCommits
+	}
+	if deps.confirmProtectedRef != nil {
+		d.confirmProtectedRef = deps.confirmProtectedRef
 	}
 	return pushWithDeps(ctx, opts, result, d)
 }

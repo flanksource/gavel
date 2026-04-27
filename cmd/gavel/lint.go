@@ -201,6 +201,9 @@ func runLint(opts LintOptions) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if filtered := linters.FilterViolationsByGitIgnoreInResults(results); filtered > 0 {
+			logger.Infof("Filtered %d gitignored violations in %s", filtered, groupOpts.WorkDir)
+		}
 		if err := applyGroupIgnores(groupOpts.WorkDir, results); err != nil {
 			logger.Warnf("Failed to load .gavel.yaml for %s: %v", groupOpts.WorkDir, err)
 		}

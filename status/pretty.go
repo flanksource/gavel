@@ -154,7 +154,11 @@ func (f FileStatus) prettyEnrichment() api.Text {
 	}
 
 	if f.State == StateConflict {
-		t = t.Append("⚠ conflict", styleConflicted)
+		label := "⚠ conflict"
+		if f.ConflictReason == ConflictReasonMarker {
+			label = "⚠ conflict (markers)"
+		}
+		t = t.Append(label, styleConflicted)
 		return appendAISummaryState(t, f)
 	}
 	if f.State == StateUntracked && f.FileMap == nil {

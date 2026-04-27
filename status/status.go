@@ -1,9 +1,12 @@
 package status
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,22 +41,37 @@ const (
 )
 
 type FileStatus struct {
-	Path         string
-	PreviousPath string
-	State        FileState
-	StagedKind   ChangeKind
-	WorkKind     ChangeKind
-	Adds         int
-	Dels         int
-	AISummary    string
-	AIError      string
-	AIStatus     AISummaryStatus
-	FileMap      *repomap.FileMap
-	RepomapError error
-	TestStatus   TestStatus
-	LintStatus   LintStatus
-	ResultsStale bool
+	Path           string
+	PreviousPath   string
+	State          FileState
+	StagedKind     ChangeKind
+	WorkKind       ChangeKind
+	Adds           int
+	Dels           int
+	AISummary      string
+	AIError        string
+	AIStatus       AISummaryStatus
+	FileMap        *repomap.FileMap
+	RepomapError   error
+	TestStatus     TestStatus
+	LintStatus     LintStatus
+	ResultsStale   bool
+	ConflictReason ConflictReason
 }
+
+// ConflictReason explains why a FileStatus is in StateConflict. Empty when
+// the file is not conflicted.
+type ConflictReason string
+
+const (
+	// ConflictReasonUnmerged means git's porcelain output flagged the file as
+	// unmerged (UU/AA/DD or any pair containing 'U').
+	ConflictReasonUnmerged ConflictReason = "unmerged"
+	// ConflictReasonMarker means the working-tree content contains unresolved
+	// conflict markers even though git no longer flags the file as unmerged
+	// (e.g., the user `git add`-ed a file that still has <<<<<<< / >>>>>>>).
+	ConflictReasonMarker ConflictReason = "marker"
+)
 
 type TestStatus struct {
 	Passed  int
@@ -130,6 +148,8 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	enrichWithConflictMarkers(workDir, files)
+
 	if !opts.NoRepomap {
 		for i := range files {
 			enrichWithRepomap(&files[i], workDir)
@@ -196,6 +216,9 @@ func parseStatusPorcelain(raw []byte) ([]FileStatus, error) {
 			StagedKind: mapKindByte(stagedByte),
 			WorkKind:   mapKindByte(workByte),
 			State:      deriveState(stagedByte, workByte),
+		}
+		if fs.State == StateConflict {
+			fs.ConflictReason = ConflictReasonUnmerged
 		}
 
 		if stagedByte == 'R' || stagedByte == 'C' || workByte == 'R' || workByte == 'C' {
@@ -392,6 +415,94 @@ func countFileLines(path string) int {
 		n++
 	}
 	return n
+}
+
+// Conflict-marker scanning constants.
+const (
+	conflictMaxFileBytes  = 1 << 20 // 1 MiB; bigger files are skipped (binary or generated)
+	conflictBinarySniffer = 8192    // bytes inspected for NUL byte to skip binaries
+	conflictMaxLineBytes  = 1 << 20 // 1 MiB single-line cap for the scanner
+)
+
+// enrichWithConflictMarkers promotes any file whose working-tree content
+// contains unresolved git conflict markers to StateConflict, even when git's
+// porcelain output no longer flags the file as unmerged. This catches the
+// "git add of a partially-resolved file" case where the staged content still
+// has <<<<<<< / ======= / >>>>>>> lines.
+//
+// Best-effort: I/O errors, binary files, and oversized files are silently
+// skipped so a single unreadable file never breaks the whole status command.
+func enrichWithConflictMarkers(workDir string, files []FileStatus) {
+	for i := range files {
+		f := &files[i]
+		if f.State == StateConflict {
+			continue
+		}
+		if f.WorkKind == KindDeleted || f.StagedKind == KindDeleted {
+			continue
+		}
+		if fileHasConflictMarkers(filepath.Join(workDir, f.Path)) {
+			f.State = StateConflict
+			f.ConflictReason = ConflictReasonMarker
+		}
+	}
+}
+
+// fileHasConflictMarkers returns true iff the file at absPath contains all
+// three of the standard merge-conflict markers — a line starting with
+// "<<<<<<< ", a line that is exactly "=======", and a line starting with
+// ">>>>>>> ". Requiring all three together avoids false positives on
+// Markdown rule lines or code that happens to contain `=======` alone.
+func fileHasConflictMarkers(absPath string) bool {
+	info, err := os.Stat(absPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > conflictMaxFileBytes {
+		return false
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	if isLikelyBinary(file) {
+		return false
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return false
+	}
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), conflictMaxLineBytes)
+
+	var hasStart, hasMid, hasEnd bool
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		switch {
+		case !hasStart && bytes.HasPrefix(line, []byte("<<<<<<< ")):
+			hasStart = true
+		case !hasMid && (bytes.Equal(line, []byte("=======")) || bytes.HasPrefix(line, []byte("======= "))):
+			hasMid = true
+		case !hasEnd && bytes.HasPrefix(line, []byte(">>>>>>> ")):
+			hasEnd = true
+		}
+		if hasStart && hasMid && hasEnd {
+			return true
+		}
+	}
+	return false
+}
+
+// isLikelyBinary samples the first few KB of the reader and returns true if
+// it contains a NUL byte, matching git's own binary-detection heuristic. The
+// reader is left at an arbitrary offset; callers should Seek back if needed.
+func isLikelyBinary(r io.Reader) bool {
+	buf := make([]byte, conflictBinarySniffer)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return true
+	}
+	return bytes.IndexByte(buf[:n], 0) >= 0
 }
 
 func enrichWithRepomap(fs *FileStatus, workDir string) {
