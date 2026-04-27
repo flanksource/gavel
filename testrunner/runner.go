@@ -253,6 +253,8 @@ type testGroup struct {
 func groupPathsByGitRoot(workDir string, startingPaths []string) ([]testGroup, error) {
 	workDir, _ = filepath.Abs(workDir)
 
+	startingPaths = expandRecursiveWildcards(startingPaths)
+
 	if len(startingPaths) == 0 {
 		return expandNestedModuleGroups([]testGroup{{workDir: workDir}})
 	}
@@ -401,6 +403,10 @@ func Run(opts RunOptions) (any, error) {
 	groups, err := groupPathsByGitRoot(opts.WorkDir, opts.StartingPaths)
 	if err != nil {
 		return nil, err
+	}
+	groups = filterIgnoredGroups(opts.WorkDir, groups, opts.Ignore)
+	if len(groups) == 0 {
+		return parsers.TestSuiteResults{}, nil
 	}
 	if len(groups) > 1 {
 		return runMultiRoot(opts, groups)
@@ -677,6 +683,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			packages, err = o.discoverPackagesInPaths(runner, startingPaths)
 		} else {
 			packages, err = runner.DiscoverPackages(o.WorkDir, o.Recursive)
+			packages = applyIgnorePatterns(packages, o.Ignore)
 		}
 
 		if err != nil {
