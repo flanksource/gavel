@@ -22,8 +22,14 @@ function isDefaultStatusFilter(state: FilterState<string>): boolean {
 }
 
 export type TabKey = 'tests' | 'lint' | 'bench' | 'diagnostics';
+export type ViewKey = 'index' | 'run';
 
 export interface RouteState {
+  view: ViewKey;
+  // runName identifies which .gavel/<name>.json the detail view should fetch.
+  // Empty string means "use the in-memory snapshot" — the case when `gavel ui
+  // serve <file>` was launched with an explicit path.
+  runName: string;
   tab: TabKey;
   selectedPath: string;
   filters: Filters;
@@ -45,12 +51,27 @@ export function parseRoute(location: Location): RouteState {
   }
   const trimmed = pathname.replace(/^\/+|\/+$/g, '');
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
+  let view: ViewKey = 'run';
+  let runName = '';
   let tab: TabKey = 'tests';
   let selectedPath = '';
+  let tabSegments = segments;
 
-  if (segments[0] === 'tests' || segments[0] === 'lint' || segments[0] === 'bench' || segments[0] === 'diagnostics') {
-    tab = segments[0];
-    selectedPath = segments.slice(1).join('/');
+  if (segments.length === 0) {
+    view = 'index';
+    tabSegments = [];
+  } else if (segments[0] === 'run') {
+    runName = segments[1] || '';
+    if (!runName) {
+      // /run with no name behaves like the index — defensive against half-typed URLs.
+      view = 'index';
+    }
+    tabSegments = segments.slice(2);
+  }
+
+  if (tabSegments[0] === 'tests' || tabSegments[0] === 'lint' || tabSegments[0] === 'bench' || tabSegments[0] === 'diagnostics') {
+    tab = tabSegments[0];
+    selectedPath = tabSegments.slice(1).join('/');
   }
 
   const params = new URLSearchParams(location.search);
@@ -64,6 +85,8 @@ export function parseRoute(location: Location): RouteState {
     status = decodeFilterState(splitCSV(rawStatus));
   }
   return {
+    view,
+    runName,
     tab,
     selectedPath,
     filters: {
@@ -79,7 +102,13 @@ export function parseRoute(location: Location): RouteState {
 }
 
 export function buildRoute(state: RouteState): string {
-  const segments: string[] = [state.tab];
+  if (state.view === 'index') {
+    return `${basePath}/`;
+  }
+
+  const segments: string[] = [];
+  if (state.runName) segments.push('run', encodeURIComponent(state.runName));
+  segments.push(state.tab);
   if (state.selectedPath) segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
 
   const params = new URLSearchParams();

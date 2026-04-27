@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -94,7 +96,14 @@ func runUIServe(opts UIServeOptions) (any, error) {
 			return nil, fmt.Errorf("load results %v: %w", opts.ResultsFiles, err)
 		}
 	} else {
+		root, err := resolveGavelRoot()
+		if err != nil {
+			listener.Close() //nolint:errcheck
+			return nil, err
+		}
+		srv.SetGavelDir(root)
 		srv.MarkDone()
+		logger.Infof("Indexing snapshots from %s", filepath.Join(root, ".gavel"))
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
@@ -313,6 +322,28 @@ func firstNonLoopbackIPv4() string {
 		return v4.String()
 	}
 	return ""
+}
+
+// resolveGavelRoot returns the git root of the current working directory and
+// validates that .gavel/ exists inside it. Used by `gavel ui serve` (no args)
+// to discover the snapshot directory to index.
+func resolveGavelRoot() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", fmt.Errorf("not inside a git repository: %w", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "", fmt.Errorf("git rev-parse --show-toplevel returned empty")
+	}
+	gavelDir := filepath.Join(root, ".gavel")
+	if _, err := os.Stat(gavelDir); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no %s directory found in %s — run `gavel test` to populate it, or pass a snapshot path explicitly", ".gavel", root)
+		}
+		return "", err
+	}
+	return root, nil
 }
 
 // writeURLFile writes url to path atomically (write to tempfile in same dir,

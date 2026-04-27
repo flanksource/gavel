@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
-import type { Test, Snapshot, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
+import type { Test, Snapshot, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, RunIndexEntry } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
@@ -10,6 +10,7 @@ import { LintFilterBar, type LintGrouping, type LintFilters } from './components
 import { LintView } from './components/LintView';
 import { BenchView } from './components/BenchView';
 import { RerunDialog } from './components/RerunDialog';
+import { RunIndex } from './components/RunIndex';
 import { SplitPane } from './components/SplitPane';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import {
@@ -80,13 +81,15 @@ function applySnapshot(
 }
 
 function currentRouteState(
+  view: 'index' | 'run',
+  runName: string,
   tab: TabKey,
   selectedPath: string,
   filters: Filters,
   lintGrouping: LintGrouping,
   lintFilters: LintFilters,
 ): RouteState {
-  return { tab, selectedPath, filters, lintGrouping, lintFilters };
+  return { view, runName, tab, selectedPath, filters, lintGrouping, lintFilters };
 }
 
 function mergeProcessDetails(root: ProcessNode | undefined, details: ProcessDetails): ProcessNode | undefined {
@@ -105,7 +108,9 @@ function mergeProcessDetails(root: ProcessNode | undefined, details: ProcessDeta
 }
 
 export function App() {
-  const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location) : {
+  const initialRoute: RouteState = typeof window !== 'undefined' ? parseRoute(window.location) : {
+    view: 'run',
+    runName: '',
     tab: 'tests' as TabKey,
     selectedPath: '',
     filters: { status: defaultStatusFilter(), framework: new Map() },
@@ -124,6 +129,8 @@ export function App() {
   const [status, setStatus] = useState('Loading...');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
   const [filters, setFilters] = useState<Filters>(initialRoute.filters);
+  const [activeView, setActiveView] = useState<'index' | 'run'>(initialRoute.view);
+  const [runName, setRunName] = useState(initialRoute.runName);
   const [activeTab, setActiveTab] = useState<TabKey>(initialRoute.tab);
   const [lintGrouping, setLintGrouping] = useState<LintGrouping>(initialRoute.lintGrouping);
   const [lintFilters, setLintFilters] = useState<LintFilters>(initialRoute.lintFilters);
@@ -142,11 +149,13 @@ export function App() {
   const copyResetTimer = useRef<number | null>(null);
 
   const routeState = useMemo(
-    () => currentRouteState(activeTab, selectedPath, filters, lintGrouping, lintFilters),
-    [activeTab, selectedPath, filters, lintGrouping, lintFilters],
+    () => currentRouteState(activeView, runName, activeTab, selectedPath, filters, lintGrouping, lintFilters),
+    [activeView, runName, activeTab, selectedPath, filters, lintGrouping, lintFilters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
+    setActiveView(next.view);
+    setRunName(next.runName);
     setActiveTab(next.tab);
     setSelectedPath(next.selectedPath);
     setFilters(next.filters);
@@ -163,6 +172,8 @@ export function App() {
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
+      setActiveView(next.view);
+      setRunName(next.runName);
       setActiveTab(next.tab);
       setSelectedPath(next.selectedPath);
       setFilters(next.filters);
@@ -183,6 +194,27 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (activeView === 'index') return;
+
+    // Static replay mode: fetch the named snapshot once, no SSE.
+    if (runName) {
+      fetch(apiUrl(`/api/runs/${encodeURIComponent(runName)}`))
+        .then(async r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).trim()}`);
+          return r.json() as Promise<Snapshot>;
+        })
+        .then(snap => {
+          applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setRunMeta, setDone, setStatus);
+          doneRef.current = true;
+          setDone(true);
+          setStatus('Snapshot loaded');
+        })
+        .catch(e => {
+          setStatus(`Failed to load snapshot: ${e?.message || e}`);
+        });
+      return;
+    }
+
     if (streamToken === 0) {
       fetch(apiUrl('/api/tests'))
         .then(r => r.json())
@@ -217,7 +249,7 @@ export function App() {
     }, 1000);
 
     return () => { es.close(); clearInterval(timer); };
-  }, [streamToken]);
+  }, [streamToken, activeView, runName]);
 
   const fetchDiagnostics = useCallback(async () => {
     const res = await fetch(apiUrl('/api/diagnostics'));
@@ -322,6 +354,41 @@ export function App() {
       selectedPath: '',
     });
   }, [routeState, commitRoute]);
+
+  const onIndexSelect = useCallback((entry: RunIndexEntry) => {
+    // Reset transient run-state so the new snapshot loads cleanly.
+    startTime.current = null;
+    endTime.current = null;
+    doneRef.current = false;
+    setTests([]);
+    setLint(undefined);
+    setLintRun(false);
+    setBench(undefined);
+    setDiagnosticsAvailable(false);
+    setDiagnostics(undefined);
+    setStatus('Loading snapshot...');
+    commitRoute({
+      view: 'run',
+      runName: entry.name,
+      tab: 'tests',
+      selectedPath: '',
+      filters: { status: defaultStatusFilter(), framework: new Map() },
+      lintGrouping: 'linter-rule-file',
+      lintFilters: { severity: new Map(), linter: new Map() },
+    });
+  }, [commitRoute]);
+
+  const onBackToIndex = useCallback(() => {
+    commitRoute({
+      view: 'index',
+      runName: '',
+      tab: 'tests',
+      selectedPath: '',
+      filters: { status: defaultStatusFilter(), framework: new Map() },
+      lintGrouping: 'linter-rule-file',
+      lintFilters: { severity: new Map(), linter: new Map() },
+    });
+  }, [commitRoute]);
 
   const onSelect = useCallback((test: Test) => {
     const nextPath = test.route_path === selectedPath ? '' : (test.route_path || '');
@@ -612,6 +679,22 @@ export function App() {
 
   const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
 
+  if (activeView === 'index') {
+    return (
+      <div class="bg-gray-100 h-screen flex flex-col">
+        {backTo && (
+          <div class="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
+            <a href={backTo} class="text-blue-300 hover:text-white flex items-center gap-1 no-underline">
+              <iconify-icon icon="codicon:arrow-left" />
+              Back to PR
+            </a>
+          </div>
+        )}
+        <RunIndex onSelect={onIndexSelect} />
+      </div>
+    );
+  }
+
   return (
     <div class="bg-gray-100 h-screen flex flex-col">
       {backTo && (
@@ -620,6 +703,16 @@ export function App() {
             <iconify-icon icon="codicon:arrow-left" />
             Back to PR
           </a>
+        </div>
+      )}
+      {runName && (
+        <div class="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
+          <button onClick={onBackToIndex} class="text-blue-300 hover:text-white flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0">
+            <iconify-icon icon="codicon:arrow-left" />
+            All runs
+          </button>
+          <span class="text-gray-400">/</span>
+          <span class="font-mono text-xs text-gray-300">{runName}</span>
         </div>
       )}
       <div class="border-b bg-white px-6 py-3">
