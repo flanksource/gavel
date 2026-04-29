@@ -40,6 +40,13 @@ var (
 	goTestExitStatusRe   = regexp.MustCompile(`^\s*exit status \d+\s*$`)
 	goTestPackageTrailRe = regexp.MustCompile(`^(FAIL|ok|PASS)\s+\S+\s+[\d.]+s\s*$`)
 	goTestDashFailRe     = regexp.MustCompile(`^---\s+(FAIL|PASS|SKIP):`)
+	// testifyFieldRe matches a testify field line: a leading-tab block
+	// followed by "FieldName:" then the value. testify pads field names to
+	// 12 chars then a tab — we accept any whitespace gap.
+	testifyFieldRe = regexp.MustCompile(`^\s*(Error Trace|Error|Messages|Test):\s*(.*)$`)
+	// testifyTracePathRe pulls "/abs/path/file.go:123" out of an Error Trace
+	// value (or from a continuation frame line).
+	testifyTracePathRe = regexp.MustCompile(`(\S+\.go:\d+)`)
 )
 
 // ParseFailureDetail recognises common failure shapes (gomega, panic,
@@ -57,6 +64,9 @@ func ParseFailureDetail(msg string) *FailureDetail {
 		return d
 	}
 	if d := parseGomega(msg); d != nil {
+		return d
+	}
+	if d := parseTestify(msg); d != nil {
 		return d
 	}
 	if d := parsePanic(msg); d != nil {
@@ -490,6 +500,227 @@ func parseGoTestTrailer(msg string) *FailureDetail {
 		Actual:   body,
 		Location: location,
 	}
+}
+
+// parseTestify recognises the failure shape printed by testify
+// (`github.com/stretchr/testify/assert` and `require`):
+//
+//	file.go:NN:
+//	    \tError Trace:\t/abs/path/file.go:NN
+//	    \t            \t…optional extra frames
+//	    \tError:      \t<headline>
+//	    \t            \t<continuation lines for the Error block>
+//	    \tMessages:   \t<user msg, optional>
+//	    \tTest:       \tTestName/Subtest
+//
+// We emit FailureKindGomega so the existing UI/Pretty paths render the
+// Expected/Actual side-by-side panel without modification — the kind labels
+// rendering shape, not source library. The function returns nil unless all
+// three required testify fields (Error Trace, Error, Test) are present so
+// arbitrary t.Errorf output is left to the trailer/raw fallbacks.
+func parseTestify(msg string) *FailureDetail {
+	lines := strings.Split(msg, "\n")
+	traceIdx, errorIdx, testIdx := -1, -1, -1
+	for i, line := range lines {
+		m := testifyFieldRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		switch m[1] {
+		case "Error Trace":
+			if traceIdx < 0 {
+				traceIdx = i
+			}
+		case "Error":
+			if errorIdx < 0 {
+				errorIdx = i
+			}
+		case "Test":
+			if testIdx < 0 {
+				testIdx = i
+			}
+		}
+	}
+	if traceIdx < 0 || errorIdx < 0 || testIdx < 0 {
+		return nil
+	}
+	if !(traceIdx < errorIdx && errorIdx < testIdx) {
+		return nil
+	}
+
+	location := ""
+	if m := testifyFieldRe.FindStringSubmatch(lines[traceIdx]); m != nil {
+		if path := testifyTracePathRe.FindString(m[2]); path != "" {
+			location = path
+		}
+	}
+
+	headline := ""
+	if m := testifyFieldRe.FindStringSubmatch(lines[errorIdx]); m != nil {
+		headline = strings.TrimSpace(m[2])
+	}
+	headline = strings.TrimSuffix(headline, ":")
+
+	body := testifyContinuationLines(lines, errorIdx+1, testIdx)
+	expected, actual := parseTestifyExpectedActual(body)
+	matcher := testifyMatcher(headline, expected, actual)
+
+	d := &FailureDetail{
+		Kind:     FailureKindGomega,
+		Matcher:  matcher,
+		Expected: expected,
+		Actual:   actual,
+		Location: location,
+	}
+	switch {
+	case expected != "" || actual != "":
+		d.Summary = buildGomegaSummary(actual, matcher, expected)
+	case headline != "":
+		d.Summary = oneLine(headline, summaryMaxLen)
+	default:
+		d.Summary = oneLine(body, summaryMaxLen)
+	}
+	// "Received unexpected error:" carries the error text in the
+	// continuation lines, not in expected/actual. Lift it into Actual so
+	// the gomega panel shows it.
+	if matcher == "to succeed" && actual == "" && body != "" {
+		d.Actual = strings.TrimSpace(body)
+		d.Summary = buildGomegaSummary(d.Actual, matcher, "")
+	}
+	return d
+}
+
+// testifyContinuationLines returns the dedented body between the Error: line
+// (exclusive) and the next field marker (exclusive). testify indents
+// continuation lines under the value column with a "\t<spaces>\t" gutter;
+// we dedent by the longest common prefix so interior indentation in
+// multi-line literals is preserved.
+func testifyContinuationLines(lines []string, start, end int) string {
+	var collected []string
+	for i := start; i < end; i++ {
+		line := lines[i]
+		if testifyFieldRe.MatchString(line) {
+			break
+		}
+		collected = append(collected, line)
+	}
+	for len(collected) > 0 && strings.TrimSpace(collected[len(collected)-1]) == "" {
+		collected = collected[:len(collected)-1]
+	}
+	if len(collected) == 0 {
+		return ""
+	}
+	return dedent(collected)
+}
+
+// parseTestifyExpectedActual extracts the values from
+//
+//	expected: <value>
+//	actual  : <value>
+//
+// out of an Error block. Returns ("", "") when those markers aren't both
+// present (e.g. the failure was a plain headline like "Should be true").
+// Multi-line values continue until the next "actual" / "Diff:" marker or
+// the end of the block.
+func parseTestifyExpectedActual(body string) (expected, actual string) {
+	if body == "" {
+		return "", ""
+	}
+	lines := strings.Split(body, "\n")
+	expectedIdx, actualIdx, diffIdx := -1, -1, -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case expectedIdx < 0 && strings.HasPrefix(trimmed, "expected:"):
+			expectedIdx = i
+		case actualIdx < 0 && strings.HasPrefix(trimmed, "actual"):
+			// "actual:" or "actual  :" — testify pads to align colons.
+			if rest := strings.TrimPrefix(trimmed, "actual"); strings.HasPrefix(strings.TrimLeft(rest, " "), ":") {
+				actualIdx = i
+			}
+		case diffIdx < 0 && trimmed == "Diff:":
+			diffIdx = i
+		}
+	}
+	if expectedIdx < 0 || actualIdx < 0 {
+		return "", ""
+	}
+	end := len(lines)
+	if diffIdx > actualIdx {
+		end = diffIdx
+	}
+	expected = sliceTestifyValue(lines, expectedIdx, actualIdx, "expected:")
+	actual = sliceTestifyValue(lines, actualIdx, end, "actual")
+	return expected, actual
+}
+
+// sliceTestifyValue collects lines[start:end], strips the leading marker
+// ("expected:" / "actual  :") from the first line, dedents the remainder,
+// and unquotes a single-line value when testify wrapped it in `"..."`.
+func sliceTestifyValue(lines []string, start, end int, marker string) string {
+	if start >= end {
+		return ""
+	}
+	first := strings.TrimSpace(lines[start])
+	first = strings.TrimPrefix(first, marker)
+	// Handle "actual  :" / "actual:" — strip the colon and any padding.
+	if idx := strings.Index(first, ":"); idx >= 0 && marker == "actual" {
+		first = first[idx+1:]
+	}
+	first = strings.TrimSpace(first)
+	rest := lines[start+1 : end]
+	for len(rest) > 0 && strings.TrimSpace(rest[len(rest)-1]) == "" {
+		rest = rest[:len(rest)-1]
+	}
+	if len(rest) == 0 {
+		return unquoteTestifyValue(first)
+	}
+	combined := append([]string{first}, dedentForJoin(rest)...)
+	for len(combined) > 0 && combined[len(combined)-1] == "" {
+		combined = combined[:len(combined)-1]
+	}
+	return strings.Join(combined, "\n")
+}
+
+// dedentForJoin removes the common leading whitespace from a slice of lines
+// already split, returning them as a slice (no trailing newline). Wrapper
+// over dedent that returns []string for easier prepending.
+func dedentForJoin(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	dedented := dedent(lines)
+	return strings.Split(dedented, "\n")
+}
+
+// unquoteTestifyValue strips the surrounding double quotes testify wraps
+// single-line string values in. Leaves unquoted values (numbers, slices,
+// etc.) untouched.
+func unquoteTestifyValue(s string) string {
+	if len(s) >= 2 && strings.HasPrefix(s, "\"") && strings.HasSuffix(s, "\"") {
+		if unq, err := strconv.Unquote(s); err == nil {
+			return unq
+		}
+	}
+	return s
+}
+
+// testifyMatcher maps a testify Error: headline to the gomega-style matcher
+// phrase used in the summary line. Returns "" for headlines that already
+// stand on their own.
+func testifyMatcher(headline, expected, actual string) string {
+	switch {
+	case strings.HasPrefix(headline, "Not equal"), strings.HasPrefix(headline, "Should be equal"):
+		return "to equal"
+	case headline == "An error is expected but got nil.", headline == "An error is expected but got nil":
+		return "to return error"
+	case strings.HasPrefix(headline, "Received unexpected error"):
+		return "to succeed"
+	}
+	if expected != "" || actual != "" {
+		return "to equal"
+	}
+	return ""
 }
 
 // oneLine collapses whitespace to a single line and truncates with an ellipsis

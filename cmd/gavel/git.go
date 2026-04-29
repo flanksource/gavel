@@ -142,6 +142,16 @@ func init() {
 
 	ai.BindFlags(amendCommits.Flags())
 
+	clicky.AddNamedCommand("summary", gitCmd, git.SummaryByTypeOptions{}, func(opts git.SummaryByTypeOptions) (any, error) {
+		if opts.Path == "" {
+			opts.Path = "."
+		}
+		if _, err := os.Stat(opts.Path); os.IsNotExist(err) {
+			return nil, fmt.Errorf("path %q does not exist", opts.Path)
+		}
+		return git.GetCommitStatsByType(opts)
+	})
+
 	clicky.AddCommand(gitCmd, git.InitConfigOptions{}, func(opts git.InitConfigOptions) (any, error) {
 		configPath, err := git.InitConfig(opts)
 		if err != nil {

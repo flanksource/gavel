@@ -327,3 +327,183 @@ func TestParseFailureDetail_GomegaWithErrorMarker(t *testing.T) {
 		t.Errorf("matcher = %q", d.Matcher)
 	}
 }
+
+// Live capture: testify `assert.Equal` failure with single-line string values.
+// The parser must lift Error Trace into Location, the headline into Summary,
+// and the expected/actual values into Expected/Actual so the UI's gomega
+// side-by-side panel renders them.
+func TestParseFailureDetail_TestifyNotEqual(t *testing.T) {
+	msg := "    search_test.go:84: \n" +
+		"        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/github/search_test.go:84\n" +
+		"        \tError:      \tNot equal: \n" +
+		"        \t            \texpected: \"is:pr author:@me is:open updated:>2026-03-31 org:flanksource\"\n" +
+		"        \t            \tactual  : \"is:pr author:@me is:open updated:>2026-03-31 org:Sefaria\"\n" +
+		"        \t            \t\n" +
+		"        \t            \tDiff:\n" +
+		"        \t            \t--- Expected\n" +
+		"        \t            \t+++ Actual\n" +
+		"        \t            \t@@ -1 +1 @@\n" +
+		"        \t            \t-is:pr author:@me is:open updated:>2026-03-31 org:flanksource\n" +
+		"        \t            \t+is:pr author:@me is:open updated:>2026-03-31 org:Sefaria\n" +
+		"        \tTest:       \tTestBuildSearchQuery/all_repos_in_org"
+
+	d := ParseFailureDetail(msg)
+	if d == nil {
+		t.Fatal("expected non-nil FailureDetail")
+	}
+	if d.Kind != FailureKindGomega {
+		t.Errorf("kind = %q, want %q", d.Kind, FailureKindGomega)
+	}
+	if d.Matcher != "to equal" {
+		t.Errorf("matcher = %q, want %q", d.Matcher, "to equal")
+	}
+	if d.Location != "/Users/moshe/go/src/github.com/flanksource/gavel/github/search_test.go:84" {
+		t.Errorf("location = %q", d.Location)
+	}
+	if d.Expected != "is:pr author:@me is:open updated:>2026-03-31 org:flanksource" {
+		t.Errorf("expected = %q", d.Expected)
+	}
+	if d.Actual != "is:pr author:@me is:open updated:>2026-03-31 org:Sefaria" {
+		t.Errorf("actual = %q", d.Actual)
+	}
+	if !strings.Contains(d.Summary, "to equal") {
+		t.Errorf("summary should mention matcher, got %q", d.Summary)
+	}
+}
+
+// Live capture: testify `assert.Error` (or `require.Error`) where the call
+// site expects a non-nil error and the function returned nil. No
+// expected/actual block — just a headline.
+func TestParseFailureDetail_TestifyErrorExpectedButNil(t *testing.T) {
+	msg := "    search_test.go:80: \n" +
+		"        \tError Trace:\t/Users/moshe/go/src/github.com/flanksource/gavel/github/search_test.go:80\n" +
+		"        \tError:      \tAn error is expected but got nil.\n" +
+		"        \tTest:       \tTestBuildSearchQuery/all_without_repo_or_org_fails"
+
+	d := ParseFailureDetail(msg)
+	if d == nil {
+		t.Fatal("expected non-nil FailureDetail")
+	}
+	if d.Kind != FailureKindGomega {
+		t.Errorf("kind = %q, want %q", d.Kind, FailureKindGomega)
+	}
+	if d.Matcher != "to return error" {
+		t.Errorf("matcher = %q, want %q", d.Matcher, "to return error")
+	}
+	if d.Location != "/Users/moshe/go/src/github.com/flanksource/gavel/github/search_test.go:80" {
+		t.Errorf("location = %q", d.Location)
+	}
+	if d.Expected != "" || d.Actual != "" {
+		t.Errorf("expected/actual should be empty, got expected=%q actual=%q", d.Expected, d.Actual)
+	}
+	if !strings.Contains(d.Summary, "An error is expected but got nil") {
+		t.Errorf("summary should carry headline, got %q", d.Summary)
+	}
+}
+
+// testify `assert.Equal` on slices/maps/structs prints multi-line values
+// indented under expected:/actual:. The parser must dedent and preserve
+// internal newlines.
+func TestParseFailureDetail_TestifyNotEqualMultiline(t *testing.T) {
+	msg := "    foo_test.go:42: \n" +
+		"        \tError Trace:\t/repo/foo_test.go:42\n" +
+		"        \tError:      \tNot equal: \n" +
+		"        \t            \texpected: []string{\n" +
+		"        \t            \t  \"a\",\n" +
+		"        \t            \t  \"b\",\n" +
+		"        \t            \t}\n" +
+		"        \t            \tactual  : []string{\n" +
+		"        \t            \t  \"a\",\n" +
+		"        \t            \t  \"c\",\n" +
+		"        \t            \t}\n" +
+		"        \tTest:       \tTestThing"
+
+	d := ParseFailureDetail(msg)
+	if d == nil || d.Kind != FailureKindGomega {
+		t.Fatalf("want gomega, got %#v", d)
+	}
+	if !strings.Contains(d.Expected, "\"a\",\n  \"b\",") {
+		t.Errorf("expected should preserve multiline body, got %q", d.Expected)
+	}
+	if !strings.Contains(d.Actual, "\"a\",\n  \"c\",") {
+		t.Errorf("actual should preserve multiline body, got %q", d.Actual)
+	}
+}
+
+// testify `assert.NoError` / `require.NoError` failure: function returned
+// an error when none was expected.
+func TestParseFailureDetail_TestifyReceivedUnexpectedError(t *testing.T) {
+	msg := "    api_test.go:101: \n" +
+		"        \tError Trace:\t/repo/api_test.go:101\n" +
+		"        \tError:      \tReceived unexpected error:\n" +
+		"        \t            \tdial tcp 127.0.0.1:5432: connect: connection refused\n" +
+		"        \tTest:       \tTestConnect"
+
+	d := ParseFailureDetail(msg)
+	if d == nil || d.Kind != FailureKindGomega {
+		t.Fatalf("want gomega, got %#v", d)
+	}
+	if d.Matcher != "to succeed" {
+		t.Errorf("matcher = %q", d.Matcher)
+	}
+	if !strings.Contains(d.Actual, "connection refused") {
+		t.Errorf("actual should carry error body, got %q", d.Actual)
+	}
+}
+
+// testify `assert.True` / boolean assertion: just a headline, no
+// expected/actual block.
+func TestParseFailureDetail_TestifyShouldBeTrue(t *testing.T) {
+	msg := "    flag_test.go:7: \n" +
+		"        \tError Trace:\t/repo/flag_test.go:7\n" +
+		"        \tError:      \tShould be true\n" +
+		"        \tTest:       \tTestFlag"
+
+	d := ParseFailureDetail(msg)
+	if d == nil || d.Kind != FailureKindGomega {
+		t.Fatalf("want gomega, got %#v", d)
+	}
+	if d.Matcher != "" {
+		t.Errorf("matcher should be empty for unrecognised headlines, got %q", d.Matcher)
+	}
+	if !strings.Contains(d.Summary, "Should be true") {
+		t.Errorf("summary should carry headline, got %q", d.Summary)
+	}
+	if d.Expected != "" || d.Actual != "" {
+		t.Errorf("expected/actual should be empty, got expected=%q actual=%q", d.Expected, d.Actual)
+	}
+}
+
+// `require` chains call helpers that themselves call assert; testify prints
+// every frame on its own line under Error Trace. We keep only the first
+// (the actual call site) — additional frames are noise for the summary.
+func TestParseFailureDetail_TestifyMultiFrameTrace(t *testing.T) {
+	msg := "    helper_test.go:10: \n" +
+		"        \tError Trace:\t/repo/helpers/assert.go:55\n" +
+		"        \t            \t/repo/helpers/assert.go:99\n" +
+		"        \t            \t/repo/helper_test.go:10\n" +
+		"        \tError:      \tShould be true\n" +
+		"        \tTest:       \tTestSomething"
+
+	d := ParseFailureDetail(msg)
+	if d == nil || d.Kind != FailureKindGomega {
+		t.Fatalf("want gomega, got %#v", d)
+	}
+	if d.Location != "/repo/helpers/assert.go:55" {
+		t.Errorf("location = %q, want first frame only", d.Location)
+	}
+}
+
+// A plain `t.Errorf` message that happens to contain the word "Error:" but
+// isn't from testify (no Error Trace, no Test:) must not be claimed by
+// parseTestify. It should fall through to parseGoTestTrailer / raw.
+func TestParseFailureDetail_NotTestifyFallsThrough(t *testing.T) {
+	msg := "    foo_test.go:42: Error: something went wrong"
+	d := ParseFailureDetail(msg)
+	if d == nil {
+		t.Fatal("expected non-nil")
+	}
+	if d.Kind == FailureKindGomega {
+		t.Errorf("plain t.Errorf must not be claimed as testify, got kind=%q", d.Kind)
+	}
+}
