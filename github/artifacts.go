@@ -35,26 +35,64 @@ var artifactLinkPattern = regexp.MustCompile(
 	`\[View full results\]\((https://[^)]+/actions/runs/\d+/artifacts/\d+)\)`,
 )
 
-// FindGavelArtifact scans PR comments for the gavel sticky comment and
-// extracts the artifact ID and URL. It returns the most recent match.
-func FindGavelArtifact(comments []PRComment) (artifactID int64, artifactURL string, found bool) {
-	for i := len(comments) - 1; i >= 0; i-- {
-		body := comments[i].Body
-		if !strings.Contains(body, "<!-- sticky-comment:") {
+var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*) -->`)
+
+// GavelArtifact identifies one gavel sticky comment on a PR — typically
+// one per matrix shard (e.g. gavel-test-pg15, gavel-e2e). A single PR can
+// have many of these.
+type GavelArtifact struct {
+	StickyID    string
+	ArtifactID  int64
+	ArtifactURL string
+	CommentID   int64
+}
+
+// FindGavelArtifacts scans PR comments and returns one GavelArtifact per
+// distinct sticky id. When the same id appears more than once (gavel
+// rewrites the sticky comment on every push), the most recent occurrence
+// wins. Order is determined by first appearance in the comment list so
+// the UI renders shards in a stable, source-controlled order.
+func FindGavelArtifacts(comments []PRComment) []GavelArtifact {
+	type slot struct {
+		idx int
+		art GavelArtifact
+	}
+	byID := make(map[string]*slot)
+	order := make([]string, 0)
+	for _, c := range comments {
+		body := c.Body
+		sm := stickyIDPattern.FindStringSubmatch(body)
+		if len(sm) < 2 {
 			continue
 		}
-		m := artifactLinkPattern.FindStringSubmatch(body)
-		if len(m) < 2 {
+		stickyID := sm[1]
+		am := artifactLinkPattern.FindStringSubmatch(body)
+		if len(am) < 2 {
 			continue
 		}
-		url := m[1]
+		url := am[1]
 		_, _, id, err := ParseArtifactURL(url)
 		if err != nil {
 			continue
 		}
-		return id, url, true
+		art := GavelArtifact{
+			StickyID:    stickyID,
+			ArtifactID:  id,
+			ArtifactURL: url,
+			CommentID:   c.ID,
+		}
+		if existing, ok := byID[stickyID]; ok {
+			existing.art = art
+			continue
+		}
+		byID[stickyID] = &slot{idx: len(order), art: art}
+		order = append(order, stickyID)
 	}
-	return 0, "", false
+	out := make([]GavelArtifact, len(order))
+	for i, id := range order {
+		out[i] = byID[id].art
+	}
+	return out
 }
 
 // DownloadArtifact downloads a GitHub Actions artifact ZIP and extracts

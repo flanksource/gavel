@@ -24,6 +24,47 @@ type Tab = 'prs' | 'activity';
 
 const defaultConfig: SearchConfig = { repos: [], author: '@me' };
 
+// aggregateShards rolls per-shard summaries into one badge for the sidebar,
+// where there is only room for a single number per PR. Returns null if the
+// list is empty.
+function aggregateShards(shards: GavelResultsSummary[]): GavelResultsSummary | null {
+  if (!shards || shards.length === 0) return null;
+  if (shards.length === 1) return shards[0];
+  const agg: GavelResultsSummary = {
+    artifactId: 0,
+    artifactUrl: '',
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0,
+    testsTotal: 0,
+    lintViolations: 0,
+    lintLinters: 0,
+    hasBench: false,
+    benchRegressions: 0,
+    topFailures: [],
+    topLintViolations: [],
+  };
+  for (const s of shards) {
+    agg.testsPassed += s.testsPassed;
+    agg.testsFailed += s.testsFailed;
+    agg.testsSkipped += s.testsSkipped;
+    agg.testsTotal += s.testsTotal;
+    agg.lintViolations += s.lintViolations;
+    agg.lintLinters += s.lintLinters;
+    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
+    if (s.hasBench) agg.hasBench = true;
+    for (const f of s.topFailures ?? []) {
+      if ((agg.topFailures?.length ?? 0) >= 5) break;
+      agg.topFailures!.push(f);
+    }
+    for (const v of s.topLintViolations ?? []) {
+      if ((agg.topLintViolations?.length ?? 0) >= 5) break;
+      agg.topLintViolations!.push(v);
+    }
+  }
+  return agg;
+}
+
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
@@ -171,9 +212,11 @@ export function App() {
 
     es.addEventListener('gavel', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
-      setDetail(prev => prev ? { ...prev, gavelResults: data.gavelResults } : prev);
-      if (data.gavelResults) {
-        setGavelResultsMap(prev => ({ ...prev, [prKey(pr)]: data.gavelResults }));
+      const shards: GavelResultsSummary[] = data.gavelResults ?? [];
+      setDetail(prev => prev ? { ...prev, gavelResults: shards } : prev);
+      const agg = aggregateShards(shards);
+      if (agg) {
+        setGavelResultsMap(prev => ({ ...prev, [prKey(pr)]: agg }));
       }
     });
 

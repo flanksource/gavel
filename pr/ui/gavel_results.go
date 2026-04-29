@@ -19,6 +19,9 @@ import (
 )
 
 type GavelResultsSummary struct {
+	// StickyID is the gavel sticky-comment id, e.g. "gavel-test-pg15".
+	// Empty for the legacy single-artifact path or for an aggregate.
+	StickyID         string `json:"stickyId,omitempty"`
 	ArtifactID       int64  `json:"artifactId"`
 	ArtifactURL      string `json:"artifactUrl"`
 	TestsPassed      int    `json:"testsPassed"`
@@ -36,6 +39,48 @@ type GavelResultsSummary struct {
 	TopFailures []TestFailure `json:"topFailures,omitempty"`
 	// TopLintViolations lists the first 5 lint findings across all linters.
 	TopLintViolations []LintViolation `json:"topLintViolations,omitempty"`
+}
+
+// aggregateGavelSummaries rolls up per-shard results into a single summary
+// suitable for the sidebar badge, where there is only room for one number
+// per PR. The detail page renders the shards individually and does not use
+// this. Returns nil if shards is empty.
+func aggregateGavelSummaries(shards []*GavelResultsSummary) *GavelResultsSummary {
+	if len(shards) == 0 {
+		return nil
+	}
+	if len(shards) == 1 {
+		return shards[0]
+	}
+	agg := &GavelResultsSummary{}
+	for _, s := range shards {
+		if s == nil {
+			continue
+		}
+		agg.TestsPassed += s.TestsPassed
+		agg.TestsFailed += s.TestsFailed
+		agg.TestsSkipped += s.TestsSkipped
+		agg.TestsTotal += s.TestsTotal
+		agg.LintViolations += s.LintViolations
+		agg.LintLinters += s.LintLinters
+		agg.BenchRegressions += s.BenchRegressions
+		if s.HasBench {
+			agg.HasBench = true
+		}
+		for _, f := range s.TopFailures {
+			if len(agg.TopFailures) >= 5 {
+				break
+			}
+			agg.TopFailures = append(agg.TopFailures, f)
+		}
+		for _, v := range s.TopLintViolations {
+			if len(agg.TopLintViolations) >= 5 {
+				break
+			}
+			agg.TopLintViolations = append(agg.TopLintViolations, v)
+		}
+	}
+	return agg
 }
 
 type TestFailure struct {
@@ -192,6 +237,39 @@ func derefString(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// fetchGavelArtifacts downloads each artifact and writes the resulting
+// summary into out[i]. Concurrency is capped so a PR with many matrix
+// shards doesn't fan out one goroutine per shard onto GitHub's artifacts
+// API. The caller owns out and must size it to len(artifacts).
+func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact, out []*GavelResultsSummary) {
+	const maxConcurrent = 4
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	for i, a := range artifacts {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, a github.GavelArtifact) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			jsonBytes, err := github.DownloadArtifact(opts, a.ArtifactID)
+			if err != nil {
+				logger.Warnf("artifact %d (%s) download failed: %v", a.ArtifactID, a.StickyID, err)
+				out[i] = &GavelResultsSummary{
+					StickyID:    a.StickyID,
+					ArtifactID:  a.ArtifactID,
+					ArtifactURL: a.ArtifactURL,
+					Error:       err.Error(),
+				}
+				return
+			}
+			summary := computeGavelSummary(jsonBytes, a.ArtifactID, a.ArtifactURL)
+			summary.StickyID = a.StickyID
+			out[i] = summary
+		}(i, a)
+	}
+	wg.Wait()
 }
 
 // artifactCache caches downloaded artifact servers keyed by artifact ID.

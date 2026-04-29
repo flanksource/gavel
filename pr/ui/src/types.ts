@@ -153,6 +153,9 @@ export interface PRComment {
 }
 
 export interface GavelResultsSummary {
+  // stickyId is the gavel sticky-comment id, e.g. "gavel-test-pg15".
+  // Empty for the legacy single-artifact path or for an aggregate.
+  stickyId?: string;
   artifactId: number;
   artifactUrl: string;
   testsPassed: number;
@@ -189,7 +192,9 @@ export interface PRDetail {
   pr?: PRInfo;
   runs?: Record<string, WorkflowRun>;
   comments?: PRComment[];
-  gavelResults?: GavelResultsSummary;
+  // One summary per gavel sticky comment on the PR (typically one per
+  // matrix shard). Order matches the order of the sticky comments.
+  gavelResults?: GavelResultsSummary[];
   error?: string;
   // Progressive loading state (set by frontend, not backend)
   runsLoading?: boolean;

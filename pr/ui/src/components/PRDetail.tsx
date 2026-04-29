@@ -116,8 +116,8 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
         </Section>
       )}
 
-      {detail?.gavelResults && (
-        <GavelResultsSection results={detail.gavelResults} pr={pr} />
+      {detail?.gavelResults && detail.gavelResults.length > 0 && (
+        <GavelResultsSection shards={detail.gavelResults} pr={pr} />
       )}
 
       {detail?.comments && <DeploymentsSection comments={detail.comments} />}
@@ -508,7 +508,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
 }
 
 interface MetricCardProps {
-  href: string;
+  href?: string;
   icon: string;
   label: string;
   value: string | number;
@@ -518,49 +518,153 @@ interface MetricCardProps {
 
 function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
   const toneClass = {
-    pass: 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100',
-    fail: 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100',
-    warn: 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
-    info: 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
-    neutral: 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100',
+    pass: href ? 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100' : 'bg-green-50 border-green-200 text-green-700',
+    fail: href ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100' : 'bg-red-50 border-red-200 text-red-700',
+    warn: href ? 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100' : 'bg-yellow-50 border-yellow-200 text-yellow-700',
+    info: href ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-blue-50 border-blue-200 text-blue-700',
+    neutral: href ? 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100' : 'bg-gray-50 border-gray-200 text-gray-600',
   }[tone];
-  return (
-    <a
-      href={href}
-      class={`group block rounded-lg border px-3 py-2 transition-colors ${toneClass}`}
-    >
+  const body = (
+    <>
       <div class="flex items-center justify-between">
         <iconify-icon icon={icon} class="text-lg" />
-        <iconify-icon icon="codicon:chevron-right" class="text-xs opacity-30 group-hover:opacity-70" />
+        {href && <iconify-icon icon="codicon:chevron-right" class="text-xs opacity-30 group-hover:opacity-70" />}
       </div>
       <div class="text-2xl font-semibold tabular-nums leading-tight mt-1">{value}</div>
       <div class="text-[11px] font-medium uppercase tracking-wide opacity-80">{label}</div>
       {sub && <div class="text-[11px] mt-0.5 opacity-70 truncate">{sub}</div>}
-    </a>
+    </>
+  );
+  const cls = `group block rounded-lg border px-3 py-2 transition-colors ${toneClass}`;
+  return href ? <a href={href} class={cls}>{body}</a> : <div class={cls}>{body}</div>;
+}
+
+// aggregateShardsForUI rolls up per-shard summaries for the detail card's
+// header. The artifactId/Url fields are intentionally zeroed because the
+// aggregate has no single artifact to deep-link to — drill-downs should
+// happen via the per-shard rows below it.
+function aggregateShardsForUI(shards: GavelResultsSummary[]): GavelResultsSummary {
+  if (shards.length === 1) return shards[0];
+  const agg: GavelResultsSummary = {
+    artifactId: 0,
+    artifactUrl: '',
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0,
+    testsTotal: 0,
+    lintViolations: 0,
+    lintLinters: 0,
+    hasBench: false,
+    benchRegressions: 0,
+    topFailures: [],
+    topLintViolations: [],
+  };
+  for (const s of shards) {
+    agg.testsPassed += s.testsPassed;
+    agg.testsFailed += s.testsFailed;
+    agg.testsSkipped += s.testsSkipped;
+    agg.testsTotal += s.testsTotal;
+    agg.lintViolations += s.lintViolations;
+    agg.lintLinters += s.lintLinters;
+    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
+    if (s.hasBench) agg.hasBench = true;
+    for (const f of s.topFailures ?? []) {
+      if ((agg.topFailures!.length) >= 5) break;
+      agg.topFailures!.push(f);
+    }
+    for (const v of s.topLintViolations ?? []) {
+      if ((agg.topLintViolations!.length) >= 5) break;
+      agg.topLintViolations!.push(v);
+    }
+  }
+  return agg;
+}
+
+function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr: PRItem }) {
+  if (shards.length === 0) return null;
+
+  const agg = useMemo(() => aggregateShardsForUI(shards), [shards]);
+  const multi = shards.length > 1;
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+
+  // The aggregate has no single artifact, so the metric cards in the
+  // header don't deep-link when there are multiple shards — clicks on
+  // specific results happen via the per-shard rows.
+  const headerCards = buildMetricCards(agg, multi ? null : (tab: string) => shardLink(pr, agg, tab));
+
+  return (
+    <Section
+      title="Gavel Results"
+      actions={{
+        json: () => (multi ? { aggregate: agg, shards } : agg),
+        text: () => formatGavelText(agg),
+        markdown: () => formatGavelMarkdown(agg),
+      }}
+    >
+      {headerCards.length > 0 ? (
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {headerCards.map((c, i) => (
+            <MetricCard key={i} {...c} />
+          ))}
+        </div>
+      ) : (
+        <div class="text-xs text-gray-400 py-1">
+          {multi
+            ? `${shards.length} shard${shards.length !== 1 ? 's' : ''} reported but produced no test, lint, or bench data.`
+            : 'No test, lint, or bench data in this artifact.'}
+        </div>
+      )}
+
+      {!multi && (
+        <ShardExtras results={shards[0]} />
+      )}
+
+      {multi && (
+        <div class="mt-3">
+          <button
+            type="button"
+            class="flex items-center gap-1 text-[11px] uppercase tracking-wide text-gray-500 hover:text-gray-700"
+            onClick={() => setBreakdownOpen(o => !o)}
+            aria-expanded={breakdownOpen}
+          >
+            <iconify-icon
+              icon={breakdownOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+              class="text-gray-400"
+            />
+            <span class="font-semibold">Per-shard breakdown</span>
+            <span class="text-gray-400 normal-case tracking-normal">
+              ({shards.length} shard{shards.length !== 1 ? 's' : ''})
+            </span>
+          </button>
+          {breakdownOpen && (
+            <div class="mt-2 divide-y divide-gray-100 border border-gray-100 rounded">
+              {shards.map(s => (
+                <GavelShardRow key={s.stickyId || s.artifactId} results={s} pr={pr} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
   );
 }
 
-function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr: PRItem }) {
-  if (results.error) {
-    return (
-      <Section title="Gavel Results">
-        <div class="text-xs text-gray-400 py-1">
-          <iconify-icon icon="codicon:warning" class="text-yellow-500 mr-1" />
-          {results.error}
-        </div>
-      </Section>
-    );
-  }
-
+function shardLink(pr: PRItem, results: GavelResultsSummary, tab: string): string {
   const backTo = `${window.location.pathname}${window.location.search}`;
   const basePath = `/results/${pr.repo}/${results.artifactId}`;
-  const link = (tab: string) => `${basePath}/${tab}?backTo=${encodeURIComponent(backTo)}`;
+  return `${basePath}/${tab}?backTo=${encodeURIComponent(backTo)}`;
+}
 
+function buildMetricCards(
+  results: GavelResultsSummary,
+  link: ((tab: string) => string) | null,
+): MetricCardProps[] {
   const cards: MetricCardProps[] = [];
+  const href = (tab: string) => (link ? link(tab) : undefined);
 
   if (results.testsTotal > 0) {
     cards.push({
-      href: link('tests?filter=passed'),
+      href: href('tests?filter=passed'),
       icon: 'codicon:pass',
       label: 'Passed',
       value: results.testsPassed,
@@ -568,7 +672,7 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
       tone: 'pass',
     });
     cards.push({
-      href: link('tests?filter=failed'),
+      href: href('tests?filter=failed'),
       icon: 'codicon:error',
       label: 'Failed',
       value: results.testsFailed,
@@ -577,7 +681,7 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
     });
     if (results.testsSkipped > 0) {
       cards.push({
-        href: link('tests?filter=skipped'),
+        href: href('tests?filter=skipped'),
         icon: 'codicon:debug-step-over',
         label: 'Skipped',
         value: results.testsSkipped,
@@ -589,7 +693,7 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
 
   if (results.lintLinters > 0) {
     cards.push({
-      href: link('lint'),
+      href: href('lint'),
       icon: results.lintViolations > 0 ? 'codicon:warning' : 'codicon:pass',
       label: 'Lint',
       value: results.lintViolations,
@@ -603,7 +707,7 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
   if (results.hasBench) {
     const regs = results.benchRegressions ?? 0;
     cards.push({
-      href: link('bench'),
+      href: href('bench'),
       icon: regs > 0 ? 'codicon:arrow-down' : 'codicon:graph',
       label: 'Bench',
       value: regs,
@@ -614,25 +718,14 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
     });
   }
 
-  if (cards.length === 0) return null;
+  return cards;
+}
 
+function ShardExtras({ results }: { results: GavelResultsSummary }) {
   const failures = results.topFailures ?? [];
   const lintHits = results.topLintViolations ?? [];
-
   return (
-    <Section
-      title="Gavel Results"
-      actions={{
-        json: () => results,
-        text: () => formatGavelText(results),
-        markdown: () => formatGavelMarkdown(results),
-      }}
-    >
-      <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-        {cards.map((c, i) => (
-          <MetricCard key={i} {...c} />
-        ))}
-      </div>
+    <>
       {failures.length > 0 && (
         <FailureList
           title="Test failures"
@@ -653,7 +746,93 @@ function GavelResultsSection({ results, pr }: { results: GavelResultsSummary; pr
           {lintHits.map((v, i) => <LintViolationRow key={i} v={v} />)}
         </FailureList>
       )}
-    </Section>
+    </>
+  );
+}
+
+function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
+  if (g.error) {
+    return (
+      <span class="inline-flex items-center text-yellow-600" title={g.error}>
+        <iconify-icon icon="codicon:warning" />
+      </span>
+    );
+  }
+  const items: { icon: string; color: string; count: number; title: string }[] = [];
+  if (g.testsPassed > 0) {
+    items.push({ icon: 'codicon:pass', color: 'text-green-600', count: g.testsPassed, title: `${g.testsPassed} passed` });
+  }
+  if (g.testsFailed > 0) {
+    items.push({ icon: 'codicon:error', color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
+  }
+  if (g.testsSkipped > 0) {
+    items.push({ icon: 'codicon:debug-step-over', color: 'text-gray-500', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
+  }
+  if (g.lintViolations > 0) {
+    items.push({ icon: 'codicon:warning', color: 'text-yellow-600', count: g.lintViolations, title: `${g.lintViolations} lint` });
+  }
+  if ((g.benchRegressions ?? 0) > 0) {
+    items.push({ icon: 'codicon:arrow-down', color: 'text-red-600', count: g.benchRegressions ?? 0, title: `${g.benchRegressions} bench regression` });
+  }
+  if (items.length === 0) return null;
+  return (
+    <span class="inline-flex items-center gap-1 tabular-nums">
+      {items.map((it, i) => (
+        <span key={i} class={`inline-flex items-center ${it.color} leading-none`} title={it.title}>
+          <iconify-icon icon={it.icon} class="text-[12px]" />
+          <span class="text-[11px] font-medium">{it.count}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRItem }) {
+  const [open, setOpen] = useState(false);
+  const label = results.stickyId || `artifact ${results.artifactId}`;
+  const link = (tab: string) => shardLink(pr, results, tab);
+  const cards = buildMetricCards(results, link);
+
+  return (
+    <div>
+      <button
+        type="button"
+        class="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 text-left"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+      >
+        <iconify-icon
+          icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+          class="text-gray-400 text-[12px] shrink-0"
+        />
+        <span class="text-xs font-mono text-gray-700 truncate">{label}</span>
+        <ShardSummaryBadges g={results} />
+      </button>
+      {open && (
+        <div class="px-2 pb-3 pt-1">
+          {results.error ? (
+            <div class="text-xs text-gray-400 py-1">
+              <iconify-icon icon="codicon:warning" class="text-yellow-500 mr-1" />
+              {results.error}
+            </div>
+          ) : cards.length === 0 ? (
+            <div class="text-xs text-gray-400 py-1">
+              No test, lint, or bench data in this artifact.{' '}
+              <a class="text-blue-600 hover:underline" href={link('tests')}>Open results</a>
+            </div>
+          ) : (
+            <>
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {cards.map((c, i) => (
+                  <MetricCard key={i} {...c} />
+                ))}
+              </div>
+              <ShardExtras results={results} />
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

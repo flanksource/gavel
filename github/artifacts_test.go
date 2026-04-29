@@ -57,16 +57,20 @@ func TestParseArtifactURL(t *testing.T) {
 	}
 }
 
-func TestFindGavelArtifact(t *testing.T) {
+func TestFindGavelArtifacts(t *testing.T) {
+	type want struct {
+		StickyID    string
+		ArtifactID  int64
+		ArtifactURL string
+		CommentID   int64
+	}
 	tests := []struct {
-		name      string
-		comments  []PRComment
-		wantID    int64
-		wantURL   string
-		wantFound bool
+		name     string
+		comments []PRComment
+		want     []want
 	}{
 		{
-			name: "gavel sticky comment with artifact link",
+			name: "single shard",
 			comments: []PRComment{
 				{ID: 1, Body: "Some unrelated comment"},
 				{
@@ -76,80 +80,107 @@ func TestFindGavelArtifact(t *testing.T) {
 						"[View full results](https://github.com/flanksource/gavel/actions/runs/999/artifacts/555)",
 				},
 			},
-			wantID:    555,
-			wantURL:   "https://github.com/flanksource/gavel/actions/runs/999/artifacts/555",
-			wantFound: true,
+			want: []want{{StickyID: "gavel", ArtifactID: 555, ArtifactURL: "https://github.com/flanksource/gavel/actions/runs/999/artifacts/555", CommentID: 2}},
 		},
 		{
-			name: "custom header still matches",
+			name: "matrix shards (PR 1926 shape)",
 			comments: []PRComment{
 				{
-					ID: 3,
-					Body: "<!-- sticky-comment:gavel-self-test -->\n\n## Gavel summary\n\n" +
-						"[View full results](https://github.com/org/repo/actions/runs/1/artifacts/2)",
+					ID: 100,
+					Body: "<!-- sticky-comment:gavel-test-pg15 -->\n\n## Gavel summary\n\n" +
+						"[View full results](https://github.com/flanksource/duty/actions/runs/1/artifacts/100)",
+				},
+				{
+					ID: 101,
+					Body: "<!-- sticky-comment:gavel-e2e -->\n\n## Gavel summary\n\n" +
+						"[View full results](https://github.com/flanksource/duty/actions/runs/1/artifacts/101)",
+				},
+				{
+					ID: 102,
+					Body: "<!-- sticky-comment:gavel-migrate-head-pg15 -->\n\nGavel crashed before producing results\n\n" +
+						"[View full results](https://github.com/flanksource/duty/actions/runs/1/artifacts/102)",
 				},
 			},
-			wantID:    2,
-			wantURL:   "https://github.com/org/repo/actions/runs/1/artifacts/2",
-			wantFound: true,
+			want: []want{
+				{StickyID: "gavel-test-pg15", ArtifactID: 100, ArtifactURL: "https://github.com/flanksource/duty/actions/runs/1/artifacts/100", CommentID: 100},
+				{StickyID: "gavel-e2e", ArtifactID: 101, ArtifactURL: "https://github.com/flanksource/duty/actions/runs/1/artifacts/101", CommentID: 101},
+				{StickyID: "gavel-migrate-head-pg15", ArtifactID: 102, ArtifactURL: "https://github.com/flanksource/duty/actions/runs/1/artifacts/102", CommentID: 102},
+			},
 		},
 		{
-			name: "most recent comment wins",
+			name: "duplicate sticky id keeps latest, preserves first-seen order",
 			comments: []PRComment{
 				{
 					ID: 10,
-					Body: "<!-- sticky-comment:gavel -->\n\n" +
+					Body: "<!-- sticky-comment:gavel-test -->\n\n" +
 						"[View full results](https://github.com/a/b/actions/runs/1/artifacts/100)",
 				},
 				{
+					ID: 11,
+					Body: "<!-- sticky-comment:gavel-lint -->\n\n" +
+						"[View full results](https://github.com/a/b/actions/runs/1/artifacts/110)",
+				},
+				{
 					ID: 20,
-					Body: "<!-- sticky-comment:gavel -->\n\n" +
+					Body: "<!-- sticky-comment:gavel-test -->\n\n" +
 						"[View full results](https://github.com/a/b/actions/runs/2/artifacts/200)",
 				},
 			},
-			wantID:    200,
-			wantURL:   "https://github.com/a/b/actions/runs/2/artifacts/200",
-			wantFound: true,
-		},
-		{
-			name: "no gavel comment",
-			comments: []PRComment{
-				{ID: 1, Body: "LGTM"},
-				{ID: 2, Body: "Please fix the tests"},
+			want: []want{
+				{StickyID: "gavel-test", ArtifactID: 200, ArtifactURL: "https://github.com/a/b/actions/runs/2/artifacts/200", CommentID: 20},
+				{StickyID: "gavel-lint", ArtifactID: 110, ArtifactURL: "https://github.com/a/b/actions/runs/1/artifacts/110", CommentID: 11},
 			},
-			wantFound: false,
 		},
 		{
-			name: "gavel comment without artifact link",
+			name: "gavel comment without artifact link is skipped",
 			comments: []PRComment{
 				{
 					ID:   1,
 					Body: "<!-- sticky-comment:gavel -->\n\nGavel exited with code 1.",
 				},
+				{
+					ID: 2,
+					Body: "<!-- sticky-comment:gavel-test -->\n\n" +
+						"[View full results](https://github.com/a/b/actions/runs/1/artifacts/22)",
+				},
 			},
-			wantFound: false,
+			want: []want{{StickyID: "gavel-test", ArtifactID: 22, ArtifactURL: "https://github.com/a/b/actions/runs/1/artifacts/22", CommentID: 2}},
 		},
 		{
-			name:      "empty comments",
-			comments:  nil,
-			wantFound: false,
+			name: "non-gavel sticky comments are ignored",
+			comments: []PRComment{
+				{ID: 1, Body: "<!-- sticky-comment:codecov -->\nCoverage report"},
+				{ID: 2, Body: "LGTM"},
+			},
+			want: nil,
+		},
+		{
+			name:     "empty comments",
+			comments: nil,
+			want:     nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id, url, found := FindGavelArtifact(tt.comments)
-			if found != tt.wantFound {
-				t.Fatalf("found = %v, want %v", found, tt.wantFound)
+			got := FindGavelArtifacts(tt.comments)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (got=%+v)", len(got), len(tt.want), got)
 			}
-			if !found {
-				return
-			}
-			if id != tt.wantID {
-				t.Errorf("artifactID = %d, want %d", id, tt.wantID)
-			}
-			if url != tt.wantURL {
-				t.Errorf("url = %q, want %q", url, tt.wantURL)
+			for i, g := range got {
+				w := tt.want[i]
+				if g.StickyID != w.StickyID {
+					t.Errorf("[%d] StickyID = %q, want %q", i, g.StickyID, w.StickyID)
+				}
+				if g.ArtifactID != w.ArtifactID {
+					t.Errorf("[%d] ArtifactID = %d, want %d", i, g.ArtifactID, w.ArtifactID)
+				}
+				if g.ArtifactURL != w.ArtifactURL {
+					t.Errorf("[%d] ArtifactURL = %q, want %q", i, g.ArtifactURL, w.ArtifactURL)
+				}
+				if g.CommentID != w.CommentID {
+					t.Errorf("[%d] CommentID = %d, want %d", i, g.CommentID, w.CommentID)
+				}
 			}
 		})
 	}

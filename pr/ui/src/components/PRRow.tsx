@@ -56,43 +56,53 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
     );
   }
   const items: { icon: string; color: string; count: number; title: string }[] = [];
-  if (g.testsTotal > 0) {
-    const failed = g.testsFailed;
+  if (g.testsPassed > 0) {
     items.push({
-      icon: failed > 0 ? 'codicon:error' : 'codicon:pass',
-      color: failed > 0 ? 'text-red-600' : 'text-green-600',
-      count: failed > 0 ? failed : g.testsPassed,
-      title: failed > 0
-        ? `${failed} test${failed !== 1 ? 's' : ''} failed`
-        : `${g.testsPassed} test${g.testsPassed !== 1 ? 's' : ''} passed`,
+      icon: 'codicon:pass',
+      color: 'text-green-600',
+      count: g.testsPassed,
+      title: `${g.testsPassed} test${g.testsPassed !== 1 ? 's' : ''} passed`,
     });
   }
-  if (g.lintLinters > 0) {
+  if (g.testsFailed > 0) {
     items.push({
-      icon: g.lintViolations > 0 ? 'codicon:warning' : 'codicon:check',
-      color: g.lintViolations > 0 ? 'text-yellow-600' : 'text-green-600',
+      icon: 'codicon:error',
+      color: 'text-red-600',
+      count: g.testsFailed,
+      title: `${g.testsFailed} test${g.testsFailed !== 1 ? 's' : ''} failed`,
+    });
+  }
+  if (g.testsSkipped > 0) {
+    items.push({
+      icon: 'codicon:debug-step-over',
+      color: 'text-gray-500',
+      count: g.testsSkipped,
+      title: `${g.testsSkipped} skipped`,
+    });
+  }
+  if (g.lintViolations > 0) {
+    items.push({
+      icon: 'codicon:warning',
+      color: 'text-yellow-600',
       count: g.lintViolations,
-      title: g.lintViolations > 0
-        ? `${g.lintViolations} lint violation${g.lintViolations !== 1 ? 's' : ''}`
-        : `${g.lintLinters} linter${g.lintLinters !== 1 ? 's' : ''} clean`,
+      title: `${g.lintViolations} lint violation${g.lintViolations !== 1 ? 's' : ''}`,
     });
   }
-  if (g.hasBench) {
-    const regs = g.benchRegressions ?? 0;
+  if ((g.benchRegressions ?? 0) > 0) {
     items.push({
-      icon: regs > 0 ? 'codicon:arrow-down' : 'codicon:graph',
-      color: regs > 0 ? 'text-red-600' : 'text-blue-600',
-      count: regs,
-      title: regs > 0 ? `${regs} bench regression${regs !== 1 ? 's' : ''}` : 'no bench regressions',
+      icon: 'codicon:arrow-down',
+      color: 'text-red-600',
+      count: g.benchRegressions ?? 0,
+      title: `${g.benchRegressions} bench regression${g.benchRegressions !== 1 ? 's' : ''}`,
     });
   }
   if (items.length === 0) return null;
   return (
-    <span class="inline-flex items-center gap-1.5" aria-label="gavel results">
+    <span class="inline-flex items-center gap-1" aria-label="gavel results">
       {items.map((it, i) => (
-        <span key={i} class={`inline-flex items-center gap-0.5 ${it.color} tabular-nums`} title={it.title}>
-          <iconify-icon icon={it.icon} />
-          {it.count > 0 && <span class="text-[11px] font-medium">{it.count}</span>}
+        <span key={i} class={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
+          <iconify-icon icon={it.icon} class="text-[12px]" />
+          <span class="text-[11px] font-medium">{it.count}</span>
         </span>
       ))}
     </span>

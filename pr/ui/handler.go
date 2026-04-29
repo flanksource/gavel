@@ -821,11 +821,14 @@ func (s *Server) knownHomepage(homepage string) bool {
 }
 
 type prDetail struct {
-	PR           *github.PRInfo                `json:"pr,omitempty"`
-	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments     []github.PRComment            `json:"comments,omitempty"`
-	GavelResults *GavelResultsSummary          `json:"gavelResults,omitempty"`
-	Error        string                        `json:"error,omitempty"`
+	PR       *github.PRInfo                `json:"pr,omitempty"`
+	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	Comments []github.PRComment            `json:"comments,omitempty"`
+	// GavelResults holds one summary per gavel sticky comment on the PR
+	// (typically one per matrix shard). Order matches the order of the
+	// sticky comments on the PR.
+	GavelResults []*GavelResultsSummary `json:"gavelResults,omitempty"`
+	Error        string                 `json:"error,omitempty"`
 }
 
 func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
@@ -871,7 +874,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		if len(d.Runs) > 0 {
 			emit("runs", map[string]any{"runs": d.Runs})
 		}
-		if d.GavelResults != nil {
+		if len(d.GavelResults) > 0 {
 			emit("gavel", map[string]any{"gavelResults": d.GavelResults})
 		}
 		emit("done", nil)
@@ -917,27 +920,20 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		runIDs = append(runIDs, runID)
 	}
 
-	// Start gavel results fetch in parallel
-	type gavelResult struct {
-		summary *GavelResultsSummary
-	}
-	gavelCh := make(chan gavelResult, 1)
+	// Start gavel results fetch in parallel — one goroutine per sticky
+	// shard, with bounded concurrency so PRs with many matrix shards
+	// don't hammer the artifacts API.
 	allComments := append(pr.Comments, pr.ReviewThreads...)
-	artifactID, artifactURL, hasArtifact := github.FindGavelArtifact(allComments)
-	if hasArtifact {
+	artifacts := github.FindGavelArtifacts(allComments)
+	gavelSummaries := make([]*GavelResultsSummary, len(artifacts))
+	gavelDone := make(chan struct{})
+	if len(artifacts) > 0 {
 		go func() {
-			jsonBytes, err := github.DownloadArtifact(opts, artifactID)
-			if err != nil {
-				logger.Warnf("artifact %d download failed: %v", artifactID, err)
-				gavelCh <- gavelResult{&GavelResultsSummary{
-					ArtifactID:  artifactID,
-					ArtifactURL: artifactURL,
-					Error:       err.Error(),
-				}}
-			} else {
-				gavelCh <- gavelResult{computeGavelSummary(jsonBytes, artifactID, artifactURL)}
-			}
+			defer close(gavelDone)
+			fetchGavelArtifacts(opts, artifacts, gavelSummaries)
 		}()
+	} else {
+		close(gavelDone)
 	}
 
 	// Fetch workflow runs in parallel
@@ -965,19 +961,17 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 		emit("runs", map[string]any{"runs": runs})
 	}
 
-	// Wait for gavel results
-	var gavelSummary *GavelResultsSummary
-	if hasArtifact {
-		gr := <-gavelCh
-		gavelSummary = gr.summary
-		emit("gavel", map[string]any{"gavelResults": gavelSummary})
-		s.setGavelSummary(repo, prNumber, gavelSummary)
+	// Wait for all gavel artifacts (parallel fetch above)
+	<-gavelDone
+	if len(gavelSummaries) > 0 {
+		emit("gavel", map[string]any{"gavelResults": gavelSummaries})
+		s.setGavelSummary(repo, prNumber, aggregateGavelSummaries(gavelSummaries))
 	}
 
 	emit("done", nil)
 
 	// Cache the result for future requests
-	detail := prDetail{PR: pr, Runs: runs, Comments: comments, GavelResults: gavelSummary}
+	detail := prDetail{PR: pr, Runs: runs, Comments: comments, GavelResults: gavelSummaries}
 	prUpdated := s.prUpdatedAt(repo, prNumber)
 	s.detailCache.Put(cacheKey, detail, prUpdated)
 	s.detailCache.SetStatus(cacheKey, PRSyncStatus{State: SyncUpToDate, LastSynced: time.Now()})
@@ -1020,22 +1014,14 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	result.Comments = prwatch.MergeAndFilter(pr.Comments, pr.ReviewThreads)
 
 	// Scan all comments (including general issue comments, not just review
-	// threads) for a gavel sticky comment with an artifact link.
+	// threads) for gavel sticky comments — one per matrix shard.
 	allComments := append(pr.Comments, pr.ReviewThreads...)
-	if artifactID, artifactURL, found := github.FindGavelArtifact(allComments); found {
-		jsonBytes, err := github.DownloadArtifact(opts, artifactID)
-		if err != nil {
-			logger.Warnf("artifact %d download failed: %v", artifactID, err)
-			result.GavelResults = &GavelResultsSummary{
-				ArtifactID:  artifactID,
-				ArtifactURL: artifactURL,
-				Error:       err.Error(),
-			}
-		} else {
-			summary := computeGavelSummary(jsonBytes, artifactID, artifactURL)
-			result.GavelResults = summary
-		}
-		s.setGavelSummary(repo, number, result.GavelResults)
+	artifacts := github.FindGavelArtifacts(allComments)
+	if len(artifacts) > 0 {
+		summaries := make([]*GavelResultsSummary, len(artifacts))
+		fetchGavelArtifacts(opts, artifacts, summaries)
+		result.GavelResults = summaries
+		s.setGavelSummary(repo, number, aggregateGavelSummaries(summaries))
 	}
 
 	return result
