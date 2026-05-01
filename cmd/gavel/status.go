@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -14,13 +15,15 @@ import (
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
+	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
 type StatusOptions struct {
-	WorkDir   string `flag:"work-dir" help:"Working directory"`
-	NoRepomap bool   `flag:"no-repomap" help:"Skip repomap enrichment (faster)"`
-	AI        bool   `flag:"ai" help:"Add a one-line AI summary for each changed file"`
+	WorkDir   string   `flag:"work-dir" help:"Working directory"`
+	NoRepomap bool     `flag:"no-repomap" help:"Skip repomap enrichment (faster)"`
+	AI        bool     `flag:"ai" help:"Add a one-line AI summary for each changed file"`
+	Args      []string `json:"-" args:"true"`
 }
 
 func (o StatusOptions) Help() api.Textable {
@@ -49,6 +52,12 @@ func (o StatusOptions) Help() api.Textable {
 		Append("Starship git_status", "italic").
 		Append(" symbols, plus line deltas, inferred scopes, and repomap findings (Kubernetes refs, architecture violations).", "").
 		NewLine().
+		Append("By default the listing is scoped to the current working directory. Pass a ", "").
+		Append("[folder]", flagStyle).
+		Append(" to scope to a different subdirectory of the repo, or ", "").
+		Append(".", flagStyle).
+		Append(" from the repo root for the whole repo.", "").
+		NewLine().
 		Append("Use ", "").
 		Append("--ai", flagStyle).
 		Append(" to add a one-line LLM summary of each file change.", muted).
@@ -66,7 +75,9 @@ func (o StatusOptions) Help() api.Textable {
 		Append("  --ai", flagStyle).Append("         add one-line AI summaries per changed file", muted).NewLine().
 		Append("  --ai-model", flagStyle).Append("   override the AI model used with --ai", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
-		Append("  gavel status", flagStyle).Append("                 enriched view", muted).NewLine().
+		Append("  gavel status", flagStyle).Append("                 changes under cwd", muted).NewLine().
+		Append("  gavel status .", flagStyle).Append("               whole repo (run from git root)", muted).NewLine().
+		Append("  gavel status cmd/gavel", flagStyle).Append("       changes under cmd/gavel", muted).NewLine().
 		Append("  gavel status --no-repomap", flagStyle).Append("    skip repomap lookup", muted).NewLine().
 		Append("  gavel status --ai", flagStyle).Append("             include AI one-line file summaries", muted).NewLine()
 
@@ -75,17 +86,22 @@ func (o StatusOptions) Help() api.Textable {
 
 func init() {
 	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
+	statusCmd.Use = "status [folder]"
+	statusCmd.Args = cobra.MaximumNArgs(1)
 	clickyai.BindFlags(statusCmd.Flags())
 }
 
 func runStatus(opts StatusOptions) (any, error) {
-	workDir, err := resolveStatusWorkDir(opts.WorkDir)
+	workDir, folderFilter, err := resolveStatusWorkDir(opts.WorkDir, opts.Args)
 	if err != nil {
 		return nil, err
 	}
 
 	if !opts.AI {
-		return status.Gather(workDir, status.Options{NoRepomap: opts.NoRepomap})
+		return status.Gather(workDir, status.Options{
+			NoRepomap:    opts.NoRepomap,
+			FolderFilter: folderFilter,
+		})
 	}
 
 	agent, err := gavelai.NewAgent(clickyai.DefaultConfig())
@@ -97,6 +113,7 @@ func runStatus(opts StatusOptions) (any, error) {
 	ctx := context.Background()
 	gatherOpts := status.Options{
 		NoRepomap:    opts.NoRepomap,
+		FolderFilter: folderFilter,
 		Agent:        agent,
 		Context:      ctx,
 		AIMaxWorkers: clickyai.DefaultConfig().MaxConcurrent,
@@ -117,18 +134,67 @@ func runStatus(opts StatusOptions) (any, error) {
 	return nil, nil
 }
 
-func resolveStatusWorkDir(workDir string) (string, error) {
+// resolveStatusWorkDir resolves the git root to scan and the optional
+// folder-relative-to-root filter. The first return is always the git root so
+// status enrichment (numstat, repomap, snapshot) sees the full repo. The
+// second return is a slash-separated path relative to the git root, or "" if
+// no scoping is requested.
+//
+//   - workDirFlag is the value of --work-dir (may be empty).
+//   - args is the positional argument list (0 or 1 entry per cobra config).
+//
+// When no positional arg is given the filter defaults to the current working
+// directory, so `gavel status` from a subdirectory shows only that subtree.
+// Pass `.` from the repo root to see the whole repo.
+func resolveStatusWorkDir(workDirFlag string, args []string) (string, string, error) {
+	workDir := workDirFlag
 	if workDir == "" {
 		wd, err := getWorkingDir()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		workDir = wd
 	}
-	if root := repomap.FindGitRoot(workDir); root != "" {
-		workDir = root
+
+	root := repomap.FindGitRoot(workDir)
+	if root == "" {
+		root = workDir
 	}
-	return workDir, nil
+
+	target := workDir
+	if len(args) == 1 && args[0] != "" {
+		target = args[0]
+		if !filepath.IsAbs(target) {
+			cwd, err := getWorkingDir()
+			if err != nil {
+				return "", "", err
+			}
+			target = filepath.Join(cwd, target)
+		}
+	}
+
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve status path: %w", err)
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve git root: %w", err)
+	}
+
+	rel, err := filepath.Rel(absRoot, absTarget)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve status path relative to git root: %w", err)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." {
+		rel = ""
+	}
+	if strings.HasPrefix(rel, "../") || rel == ".." {
+		return "", "", fmt.Errorf("path %q is outside git repository %q", absTarget, absRoot)
+	}
+
+	return absRoot, rel, nil
 }
 
 func renderStatusOutput(w io.Writer, result *status.Result, updates <-chan status.AISummaryUpdate, interactive bool) error {

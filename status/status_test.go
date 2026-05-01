@@ -178,6 +178,87 @@ func TestGatherFromRepo(t *testing.T) {
 	assert.Equal(t, "go", byPath["staged.go"].FileMap.Language)
 }
 
+func TestGatherWithFolderFilter(t *testing.T) {
+	repo := initStatusRepo(t)
+
+	// Commit a baseline so each file path is tracked. Without this, git
+	// porcelain output collapses entirely-untracked directories into a
+	// single "sub/" entry rather than reporting each file individually.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "top.go"), []byte("package x\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sub", "inner.go"), []byte("package x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sub", "doc.md"), []byte("# sub\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "other"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "other", "thing.go"), []byte("package x\n"), 0o644))
+	gitRun(t, repo, "add", "top.go", "sub/inner.go", "sub/doc.md", "other/thing.go")
+	gitRun(t, repo, "commit", "-m", "baseline")
+
+	// Now modify each file so they reappear in `git status --porcelain`.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "top.go"), []byte("package x\n// top\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sub", "inner.go"), []byte("package x\n// inner\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "sub", "doc.md"), []byte("# sub\nupdated\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "other", "thing.go"), []byte("package x\n// other\n"), 0o644))
+
+	restore := stubFileMap(func(path, commit string) (*repomap.FileMap, error) {
+		return &repomap.FileMap{Path: path, Language: "go"}, nil
+	})
+	defer restore()
+
+	t.Run("subfolder prefix keeps only matching files", func(t *testing.T) {
+		result, err := Gather(repo, Options{FolderFilter: "sub"})
+		require.NoError(t, err)
+		assert.ElementsMatch(t,
+			[]string{"sub/inner.go", "sub/doc.md"},
+			pathsOf(result.Files),
+		)
+	})
+
+	t.Run("empty filter keeps everything", func(t *testing.T) {
+		result, err := Gather(repo, Options{FolderFilter: ""})
+		require.NoError(t, err)
+		assert.ElementsMatch(t,
+			[]string{"top.go", "sub/inner.go", "sub/doc.md", "other/thing.go"},
+			pathsOf(result.Files),
+		)
+	})
+
+	t.Run("dot filter keeps everything", func(t *testing.T) {
+		result, err := Gather(repo, Options{FolderFilter: "."})
+		require.NoError(t, err)
+		assert.Len(t, result.Files, 4)
+	})
+
+	t.Run("exact file path keeps only that file", func(t *testing.T) {
+		result, err := Gather(repo, Options{FolderFilter: "sub/inner.go"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sub/inner.go"}, pathsOf(result.Files))
+	})
+
+	t.Run("prefix does not match similarly named sibling", func(t *testing.T) {
+		// "sub" must not match a sibling directory like "subother/".
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, "subother"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "subother", "x.go"), []byte("package x\n"), 0o644))
+		gitRun(t, repo, "add", "subother/x.go")
+		gitRun(t, repo, "commit", "-m", "subother baseline")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "subother", "x.go"), []byte("package x\n// upd\n"), 0o644))
+
+		result, err := Gather(repo, Options{FolderFilter: "sub"})
+		require.NoError(t, err)
+		for _, f := range result.Files {
+			assert.False(t, strings.HasPrefix(f.Path, "subother/"),
+				"folder filter %q must not match sibling %q", "sub", f.Path)
+		}
+	})
+}
+
+func pathsOf(files []FileStatus) []string {
+	out := make([]string, len(files))
+	for i, f := range files {
+		out[i] = f.Path
+	}
+	return out
+}
+
 func TestGatherWithAIFileSummaries(t *testing.T) {
 	repo := initStatusRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "staged.go"), []byte("package x\n\nfunc Added() {}\n"), 0o644))

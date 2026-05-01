@@ -95,7 +95,12 @@ type Result struct {
 }
 
 type Options struct {
-	NoRepomap    bool
+	NoRepomap bool
+	// FolderFilter, when non-empty, restricts the result to files at or
+	// below this slash-separated path relative to workDir. The filter is
+	// applied before line-count, repomap, and snapshot enrichment so we
+	// don't waste work on files that will be dropped.
+	FolderFilter string
 	Agent        clickyai.Agent  `json:"-"`
 	Context      context.Context `json:"-"`
 	AIMaxWorkers int             `json:"-"`
@@ -143,6 +148,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("parse git status: %w", err)
 	}
 	files = filterGavelCache(files)
+	files = filterByFolder(files, opts.FolderFilter)
 
 	if err := enrichWithLineCounts(workDir, files); err != nil {
 		return nil, err
@@ -243,6 +249,23 @@ func filterGavelCache(files []FileStatus) []FileStatus {
 			continue
 		}
 		out = append(out, f)
+	}
+	return out
+}
+
+// filterByFolder keeps only files at or under prefix (slash-separated, relative
+// to workDir). An empty prefix is a no-op. Prefix "." is treated as empty so
+// callers can pass cwd-relative paths through filepath.Rel without a special case.
+func filterByFolder(files []FileStatus, prefix string) []FileStatus {
+	prefix = strings.Trim(filepath.ToSlash(prefix), "/")
+	if prefix == "" || prefix == "." {
+		return files
+	}
+	out := files[:0]
+	for _, f := range files {
+		if f.Path == prefix || strings.HasPrefix(f.Path, prefix+"/") {
+			out = append(out, f)
+		}
 	}
 	return out
 }
