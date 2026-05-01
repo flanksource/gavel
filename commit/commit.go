@@ -20,11 +20,16 @@ import (
 )
 
 var (
-	ErrNothingStaged        = errors.New("nothing staged to commit")
-	ErrNothingToPush        = errors.New("nothing to commit and no local commits ahead of upstream")
-	ErrLLMUnavailable       = errors.New("LLM agent unavailable")
-	ErrInvalidStage         = errors.New("invalid --stage value")
-	ErrCommitAllWithMessage = errors.New("--commit-all does not support --message")
+	ErrNothingStaged            = errors.New("nothing staged to commit")
+	ErrNothingToPush            = errors.New("nothing to commit and no local commits ahead of upstream")
+	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
+	ErrInvalidStage             = errors.New("invalid --stage value")
+	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
+	ErrInteractiveWithCommitAll = errors.New("--interactive cannot be combined with --commit-all")
+	ErrInteractiveWithMessage   = errors.New("--interactive cannot be combined with --message")
+	ErrInteractiveNonTTY        = errors.New("--interactive requires an interactive terminal")
+	ErrInteractiveCancelled     = errors.New("commit cancelled: interactive selection aborted")
+	ErrInteractiveEmpty         = errors.New("commit cancelled: no files selected in interactive prompt")
 
 	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return gavelai.NewAgent(cfg) }
 	analyzeCommitMessageWithAIFunc                  = git.AnalyzeWithAI
@@ -50,6 +55,8 @@ type Options struct {
 	WorkDir       string
 	Stage         string
 	CommitAll     bool
+	Interactive   bool
+	Summary       bool
 	MaxFiles      int
 	MaxLines      int
 	DryRun        bool
@@ -60,7 +67,28 @@ type Options struct {
 	Message       string
 	PrecommitMode string
 	CompatMode    string
-	Config        verify.CommitConfig
+	// LintFlag and LintSecretsFlag are the raw string forms of --lint and
+	// --lint-secrets. Empty = flag not provided; "true"/"false" override
+	// .gavel.yaml commit.lint.{enabled,secrets}. Strings (not *bool) so the
+	// clicky flag binding stays a plain string flag the user can set to
+	// "true" or "false".
+	LintFlag        string
+	LintSecretsFlag string
+	// Fixup, when non-empty, switches Run() to runFixup. The literal
+	// FixupAuto value triggers per-file routing by last-touching commit on
+	// base..HEAD; any other value is treated as an explicit target hash.
+	Fixup string
+	// Autosquash controls whether `git rebase -i --autosquash` runs after
+	// fixup commits are created. Defaults to true at the CLI; tests / direct
+	// callers must opt in explicitly.
+	Autosquash bool
+	Config     verify.CommitConfig
+
+	// lintGates is the resolved on/off state. Populated by Run() before
+	// dispatching into runSingleCommit / runCommitAll so the gate runs with
+	// stable inputs even when flags are mis-typed. Unexported because
+	// callers use LintFlag/LintSecretsFlag.
+	lintGates LintGates
 }
 
 type CommitResult struct {
@@ -84,6 +112,10 @@ type Result struct {
 	Staged   []string       `json:"staged,omitempty"`
 	Hooks    []HookResult   `json:"hooks,omitempty"`
 	Commits  []CommitResult `json:"commits,omitempty"`
+	// Lint is set when the pre-commit lint gate ran. Non-nil whether it
+	// passed (Violations==0) or blocked (Violations>0); the CLI uses it to
+	// render findings and run the triage flow.
+	Lint *LintGateResult `json:"-"`
 }
 
 type commitAIAnalysis struct {
@@ -99,6 +131,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.WorkDir == "" {
 		return nil, errors.New("commit.Run: WorkDir is required")
 	}
+	if err := validateInteractiveOptions(opts); err != nil {
+		return nil, err
+	}
+	if err := validateFixupOptions(opts); err != nil {
+		return nil, err
+	}
 	precommitMode, err := resolvePrecommitMode(opts.PrecommitMode, opts.Config)
 	if err != nil {
 		return nil, err
@@ -111,10 +149,19 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	opts.CompatMode = compatMode
 
+	gates, err := resolveLintGates(opts.LintFlag, opts.LintSecretsFlag, opts.Config.Lint)
+	if err != nil {
+		return nil, err
+	}
+	opts.lintGates = gates
+
 	var (
 		result *Result
 	)
-	if opts.CommitAll {
+	switch {
+	case opts.Fixup != "":
+		result, err = runFixup(ctx, opts)
+	case opts.CommitAll:
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
 		}
@@ -125,7 +172,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			opts.MaxLines = defaultMaxLines
 		}
 		result, err = runCommitAll(ctx, opts)
-	} else {
+	case opts.Interactive && !opts.DryRun:
+		result, err = runInteractiveLoop(ctx, opts)
+	default:
 		result, err = runSingleCommit(ctx, opts)
 	}
 	if err != nil {
@@ -148,8 +197,14 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 }
 
 func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageFiles(opts.WorkDir, opts.Stage); err != nil {
-		return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
+	if opts.Interactive {
+		if _, err := runInteractiveStaging(ctx, opts); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := stageFiles(opts.WorkDir, opts.Stage); err != nil {
+			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
+		}
 	}
 
 	source, err := readStagedSource(opts.WorkDir)
@@ -205,6 +260,12 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	}
 	result.Staged = source.Files
 
+	lintRes, lintErr := applyLintGate(ctx, opts.WorkDir, source.Files, opts.lintGates)
+	result.Lint = lintRes
+	if lintErr != nil {
+		return result, lintErr
+	}
+
 	analysis, err := generateCommitAnalysis(ctx, opts, source.Diff)
 	if err != nil {
 		return result, fmt.Errorf("generate commit analysis: %w", err)
@@ -233,6 +294,65 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	result.Hash = hash
 	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Message))
 	return result, nil
+}
+
+// runInteractiveLoop runs runSingleCommit repeatedly so the user can keep
+// picking subsets of changed files into separate commits without re-invoking
+// `gavel commit -i`. The loop ends when:
+//   - no candidate files remain (clean exit, returns the accumulated result),
+//   - the picker is cancelled with esc/ctrl+c (clean exit),
+//   - the picker is confirmed with no files selected (clean exit),
+//   - any other error occurs (returned to the caller).
+//
+// The first iteration still surfaces ErrNothingStaged so `gavel commit -i`
+// with no changed files behaves like the non-loop form. Subsequent
+// iterations treat "nothing left" as success.
+func runInteractiveLoop(ctx context.Context, opts Options) (*Result, error) {
+	aggregate := &Result{}
+	iteration := 0
+	for {
+		iteration++
+		single, err := runSingleCommit(ctx, opts)
+		if err != nil {
+			if isInteractiveLoopExit(err) && iteration > 1 {
+				return aggregate, nil
+			}
+			return mergeResults(aggregate, single), err
+		}
+		aggregate = mergeResults(aggregate, single)
+		fmt.Fprintf(interactiveStdout, "\n— commit %d created; checking for more changes —\n\n", iteration)
+	}
+}
+
+// isInteractiveLoopExit reports whether err is one of the "user is done"
+// sentinels that should end the loop without surfacing as a failure.
+func isInteractiveLoopExit(err error) bool {
+	return errors.Is(err, ErrNothingStaged) ||
+		errors.Is(err, ErrInteractiveCancelled) ||
+		errors.Is(err, ErrInteractiveEmpty)
+}
+
+// mergeResults folds a per-iteration single-commit Result into the
+// loop-wide aggregate. Hooks and Staged are tracked per-iteration only on
+// the most recent single result; Commits and Hash carry the latest commit so
+// pushAfterCommit can push HEAD as usual.
+func mergeResults(agg, single *Result) *Result {
+	if single == nil {
+		return agg
+	}
+	if agg == nil {
+		agg = &Result{}
+	}
+	agg.DryRun = single.DryRun
+	agg.Message = single.Message
+	agg.Hash = single.Hash
+	agg.Staged = single.Staged
+	agg.Hooks = single.Hooks
+	agg.Commits = append(agg.Commits, single.Commits...)
+	if single.Lint != nil {
+		agg.Lint = single.Lint
+	}
+	return agg
 }
 
 func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
@@ -292,6 +412,12 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 	result.Staged = source.Files
+
+	lintRes, lintErr := applyLintGate(ctx, opts.WorkDir, source.Files, opts.lintGates)
+	result.Lint = lintRes
+	if lintErr != nil {
+		return result, lintErr
+	}
 
 	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)
 	if len(groups) == 0 {

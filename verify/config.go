@@ -110,6 +110,20 @@ type CommitConfig struct {
 	Precommit     PrecommitConfig     `yaml:"precommit,omitempty" json:"precommit,omitempty"`
 	LinkedDeps    LinkedDepsConfig    `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
 	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
+	Lint          CommitLintConfig    `yaml:"lint,omitempty" json:"lint,omitempty"`
+}
+
+// CommitLintConfig controls whether `gavel commit` runs linters over the
+// staged file set before creating the commit. Two independent gates:
+//
+//   - Enabled toggles every non-secrets linter. nil = off (default), true = on.
+//   - Secrets toggles the betterleaks/secrets linter. nil = on (default —
+//     secrets are the highest-value pre-commit check), true = on, false = off.
+//
+// CLI flags --lint and --lint-secrets override these per-invocation.
+type CommitLintConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Secrets *bool `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // PrecommitConfig configures the combined pre-commit gate for commit.gitignore
@@ -461,6 +475,12 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	if override.Compatibility.Mode != "" {
 		base.Compatibility.Mode = override.Compatibility.Mode
+	}
+	if override.Lint.Enabled != nil {
+		base.Lint.Enabled = override.Lint.Enabled
+	}
+	if override.Lint.Secrets != nil {
+		base.Lint.Secrets = override.Lint.Secrets
 	}
 	return base
 }

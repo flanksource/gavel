@@ -5,28 +5,36 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 )
 
 type CommitOptions struct {
-	Stage     string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
-	CommitAll bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
-	MaxFiles  int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
-	MaxLines  int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
-	Message   string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	Model     string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
-	DryRun    bool   `flag:"dry-run" help:"Print the generated message without committing"`
-	Force     bool   `flag:"force" help:"Skip pre-commit hooks"`
-	NoCache   bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	Push      bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
-	Precommit string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
-	Compat    string `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
-	WorkDir   string `flag:"work-dir" help:"Working directory"`
+	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
+	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
+	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Summary      bool   `flag:"summary" short:"s" help:"With -i, print a gavel-status-style summary of the candidate files before the picker opens"`
+	MaxFiles     int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
+	MaxLines     int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
+	Message      string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
+	Model        string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
+	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
+	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
+	NoCache      bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
+	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	Fixup        string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
+	NoAutosquash bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
+	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
+	Compat       string `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
+	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
+	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
+	WorkDir      string `flag:"work-dir" help:"Working directory"`
 }
 
 func (o CommitOptions) Help() string {
@@ -56,6 +64,21 @@ By default this is skipped. Use --compat=prompt|fail to enable it; skip|false
 disables the compatibility AI checks entirely, and non-TTY runs auto-escalate
 prompt -> fail.
 
+The -i flag opens an interactive tree picker over every changed file
+(staged, unstaged, and untracked) — no need to git add first. Each row
+shows the file's language and repomap scope (e.g. Go · architecture,
+TypeScript · test) plus its line delta. Toggle individual files with
+space, whole folders with 'a' (selecting a folder selects all its
+descendants), every Go file with 'g', or every test-scoped file with
+'t'. Press enter to confirm; gavel resets the index and stages exactly
+the chosen paths before running the normal commit pipeline. After each
+commit, the picker reopens over the remaining changed files so you can
+build several focused commits in one session — exit any time with esc
+or ctrl+c. -i is mutually exclusive with -A and -m. Pair with -s to
+print a status-style summary of the candidate files before the picker
+opens. Combine with --dry-run to preview a single commit without
+looping.
+
 The -A flag groups staged files by their top-level directory and recursively
 splits any group that exceeds --max-files or --max-lines. An LLM still writes
 the conventional commit message for each group.
@@ -68,6 +91,9 @@ commit and no local commits ahead of upstream".
 
 Examples:
   gavel commit                          # LLM-generated message, staged changes
+  gavel commit -i                       # tree picker over all changed files; no git add needed
+  gavel commit -i -s                    # show a status summary before opening the picker
+  gavel commit -i --dry-run             # preview message for the picked subset
   gavel commit -A                       # one commit per directory, split when large
   gavel commit -A --max-files=3         # tighter file cap; triggers deeper splits
   gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
@@ -75,12 +101,23 @@ Examples:
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --force                  # skip hooks
   gavel commit --precommit=fail         # error on gitignore or linked-deps issues
+  gavel commit --lint=true              # also run every detected linter on staged files
+  gavel commit --lint-secrets=false     # skip the betterleaks secrets scan (default: on)
   gavel commit -p                       # commit (if anything staged) then push / open PR
-  gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR`
+  gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR
+  gavel commit --fixup=<hash>           # squash all staged files into <hash>, then autosquash
+  gavel commit --fixup                  # auto-route each file by last-touching commit; leftovers fall through to a normal commit
+  gavel commit --fixup --no-autosquash  # leave fixup! commits in place; user runs rebase later`
 }
 
 func init() {
-	clicky.AddNamedCommand("commit", rootCmd, CommitOptions{}, runCommit)
+	cmd := clicky.AddNamedCommand("commit", rootCmd, CommitOptions{}, runCommit)
+	// Allow `gavel commit --fixup` (no value) to mean "auto-route per file";
+	// `--fixup=<hash>` keeps explicit semantics. NoOptDefVal is the cobra
+	// hook for this; clicky's struct-tag binding doesn't surface it.
+	if f := cmd.Flags().Lookup("fixup"); f != nil {
+		f.NoOptDefVal = commitpkg.FixupAuto
+	}
 }
 
 func runCommit(opts CommitOptions) (any, error) {
@@ -102,20 +139,26 @@ func runCommit(opts CommitOptions) (any, error) {
 	}
 
 	result, err := commitpkg.Run(context.Background(), commitpkg.Options{
-		WorkDir:       workDir,
-		Stage:         opts.Stage,
-		CommitAll:     opts.CommitAll,
-		MaxFiles:      opts.MaxFiles,
-		MaxLines:      opts.MaxLines,
-		DryRun:        opts.DryRun,
-		Force:         opts.Force,
-		NoCache:       opts.NoCache,
-		Model:         opts.Model,
-		Message:       opts.Message,
-		Push:          opts.Push,
-		PrecommitMode: opts.Precommit,
-		CompatMode:    opts.Compat,
-		Config:        cfg.Commit,
+		WorkDir:         workDir,
+		Stage:           opts.Stage,
+		CommitAll:       opts.CommitAll,
+		Interactive:     opts.Interactive,
+		Summary:         opts.Summary,
+		MaxFiles:        opts.MaxFiles,
+		MaxLines:        opts.MaxLines,
+		DryRun:          opts.DryRun,
+		Force:           opts.Force,
+		NoCache:         opts.NoCache,
+		Model:           opts.Model,
+		Message:         opts.Message,
+		Push:            opts.Push,
+		Fixup:           opts.Fixup,
+		Autosquash:      !opts.NoAutosquash,
+		PrecommitMode:   opts.Precommit,
+		CompatMode:      opts.Compat,
+		LintFlag:        opts.Lint,
+		LintSecretsFlag: opts.LintSecrets,
+		Config:          cfg.Commit,
 	})
 
 	if err != nil {
@@ -144,7 +187,89 @@ func runCommit(opts CommitOptions) (any, error) {
 			exitCode = 1
 			return nil, nil
 		}
+		if errors.Is(err, commitpkg.ErrInteractiveWithCommitAll) ||
+			errors.Is(err, commitpkg.ErrInteractiveWithMessage) ||
+			errors.Is(err, commitpkg.ErrInteractiveNonTTY) ||
+			errors.Is(err, commitpkg.ErrInteractiveCancelled) ||
+			errors.Is(err, commitpkg.ErrInteractiveEmpty) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			exitCode = 1
+			return nil, nil
+		}
+		if errors.Is(err, commitpkg.ErrFixupWithCommitAll) ||
+			errors.Is(err, commitpkg.ErrFixupWithInteractive) ||
+			errors.Is(err, commitpkg.ErrFixupWithMessage) ||
+			errors.Is(err, commitpkg.ErrFixupInvalidTarget) ||
+			errors.Is(err, commitpkg.ErrFixupNoBase) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			exitCode = 1
+			return nil, nil
+		}
+		if errors.Is(err, commitpkg.ErrLintFindings) {
+			handleCommitLintFindings(workDir, result)
+			exitCode = 1
+			return nil, nil
+		}
 		return result, err
 	}
 	return result, nil
+}
+
+// handleCommitLintFindings prints the per-violation report and runs the
+// interactive triage flow so the user can append ignore rules to .gavel.yaml.
+// Exits non-zero either way; the user re-runs `gavel commit` after triaging.
+func handleCommitLintFindings(workDir string, result *commitpkg.Result) {
+	if result == nil || result.Lint == nil {
+		fmt.Fprintln(os.Stderr, "commit blocked: lint reported violations")
+		return
+	}
+	for _, lr := range result.Lint.Results {
+		if lr == nil || lr.Skipped {
+			continue
+		}
+		for _, v := range lr.Violations {
+			fmt.Fprintln(os.Stderr, formatCommitLintViolation(lr.Linter, v))
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s). Run triage to add ignore rules?\n", result.Lint.Violations)
+
+	newRules, triageErr := runTriage(result.Lint.Results, workDir)
+	if triageErr != nil {
+		fmt.Fprintf(os.Stderr, "triage failed: %v\n", triageErr)
+		return
+	}
+	if len(newRules) == 0 {
+		return
+	}
+	cfgPath := filepath.Join(workDir, ".gavel.yaml")
+	repoCfg, err := verify.LoadSingleGavelConfig(cfgPath)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", cfgPath, err)
+		return
+	}
+	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
+	if err := verify.SaveGavelConfig(workDir, repoCfg); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save %s: %v\n", cfgPath, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Saved %d new ignore rule(s) to %s. Re-run `gavel commit` to retry.\n", len(newRules), cfgPath)
+}
+
+func formatCommitLintViolation(linter string, v models.Violation) string {
+	rule := ""
+	if v.Rule != nil {
+		rule = v.Rule.Method
+	}
+	msg := ""
+	if v.Message != nil {
+		msg = *v.Message
+	}
+	loc := v.File
+	if v.Line > 0 {
+		loc = fmt.Sprintf("%s:%d", loc, v.Line)
+	}
+	if rule != "" {
+		return fmt.Sprintf("  %s [%s/%s] %s", loc, linter, rule, msg)
+	}
+	return fmt.Sprintf("  %s [%s] %s", loc, linter, msg)
 }
