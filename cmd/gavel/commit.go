@@ -19,6 +19,7 @@ type CommitOptions struct {
 	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
 	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Tree         bool   `flag:"tree" short:"t" help:"Alias for --interactive"`
 	Summary      bool   `flag:"summary" short:"s" help:"With -i, print a gavel-status-style summary of the candidate files before the picker opens"`
 	MaxFiles     int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
 	MaxLines     int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
@@ -65,13 +66,15 @@ By default this is skipped. Use --compat=prompt|fail to enable it; skip|false
 disables the compatibility AI checks entirely, and non-TTY runs auto-escalate
 prompt -> fail.
 
-The -i flag opens an interactive tree picker over every changed file
+The -i / -t flags open an interactive tree picker over every changed file
 (staged, unstaged, and untracked) — no need to git add first. Each row
 shows the file's language and repomap scope (e.g. Go · architecture,
 TypeScript · test) plus its line delta. Toggle individual files with
 space, whole folders with 'a' (selecting a folder selects all its
 descendants), every Go file with 'g', or every test-scoped file with
-'t'. Press 'i' to add the highlighted file ('f'), its containing folder
+'t'. Press '/' to filter the file tree by path, status, language, or
+scope; enter keeps the current filter and esc clears it. Press 'i' to
+add the highlighted file ('f'), its containing folder
 ('d'), or every file with its extension ('e') to .gitignore — already-
 tracked matches are unstaged with 'git rm --cached' so the new ignore
 takes effect immediately. Press enter to confirm; gavel resets the
@@ -96,6 +99,7 @@ commit and no local commits ahead of upstream".
 Examples:
   gavel commit                          # LLM-generated message, staged changes
   gavel commit -i                       # tree picker over all changed files; no git add needed
+  gavel commit -t                       # alias for the tree picker
   gavel commit -i -s                    # show a status summary before opening the picker
   gavel commit -i --dry-run             # preview message for the picked subset
   gavel commit -A                       # one commit per directory, split when large
@@ -129,7 +133,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
 		CommitAll:       opts.CommitAll,
-		Interactive:     opts.Interactive,
+		Interactive:     opts.Interactive || opts.Tree,
 		Summary:         opts.Summary,
 		MaxFiles:        opts.MaxFiles,
 		MaxLines:        opts.MaxLines,

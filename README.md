@@ -340,6 +340,7 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 
 ```bash
 gavel commit                          # LLM-generated message, staged changes
+gavel commit -t                       # choose files in an interactive tree picker
 gavel commit -A                       # split staged changes into multiple commits
 gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
@@ -349,6 +350,7 @@ gavel commit --force                  # skip hooks
 | Flag | Description |
 |------|-------------|
 | `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
+| `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
 | `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
 | `--model` | Override LLM model from `.gavel.yaml` `commit.model` |

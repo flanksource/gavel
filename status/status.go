@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/gavel/internal/prompting"
@@ -57,6 +58,9 @@ type FileStatus struct {
 	LintStatus     LintStatus
 	ResultsStale   bool
 	ConflictReason ConflictReason
+	// ModifiedAt is the working-tree mtime of the file. Zero when the file
+	// no longer exists on disk (e.g. deletions) or stat fails.
+	ModifiedAt time.Time
 }
 
 // ConflictReason explains why a FileStatus is in StateConflict. Empty when
@@ -154,6 +158,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	enrichWithModTime(workDir, files)
 	enrichWithConflictMarkers(workDir, files)
 
 	if !opts.NoRepomap {
@@ -438,6 +443,42 @@ func countFileLines(path string) int {
 		n++
 	}
 	return n
+}
+
+// enrichWithModTime stats each file's working-tree path and records the
+// resulting mtime on FileStatus.ModifiedAt. Best-effort: stat failures (file
+// is deleted, broken symlink, permission error) leave ModifiedAt zero.
+func enrichWithModTime(workDir string, files []FileStatus) {
+	for i := range files {
+		f := &files[i]
+		if f.WorkKind == KindDeleted || f.StagedKind == KindDeleted {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(workDir, f.Path))
+		if err != nil {
+			continue
+		}
+		f.ModifiedAt = info.ModTime()
+	}
+}
+
+// HumanAge returns a Starship-style relative age ("3m", "5h", "2d") for the
+// given duration. Returns "" for zero or negative durations so callers can
+// skip rendering when ModifiedAt is unavailable.
+func HumanAge(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 // Conflict-marker scanning constants.

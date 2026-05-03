@@ -488,6 +488,7 @@ This is the right command when you want:
 - An LLM-generated conventional commit message
 - AI warnings for removed functionality or compatibility issues before the commit is written
 - Hook execution before finalizing the commit
+- Interactive file selection with an in-picker `/` filter for path, status, language, or scope
 - AI-assisted splitting of a large change into multiple commits
 - Optional follow-up push behavior
 
@@ -495,6 +496,7 @@ Common workflows:
 
 ```bash
 gavel commit
+gavel commit -t
 gavel commit -A
 gavel commit -A --max=5
 gavel commit -m "chore: bump dep"

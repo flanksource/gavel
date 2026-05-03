@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -125,7 +126,29 @@ func (f FileStatus) prettyRow(pathWidth int) api.Text {
 	t = t.Append(path, "").Append(strings.Repeat(" ", pathPad+2), "")
 
 	t = t.Add(prettyLineDelta(f)).Space()
+	t = t.Add(prettyAge(f)).Space()
 	t = t.Add(f.prettyEnrichment())
+	return t
+}
+
+// prettyAge renders the working-tree mtime as a Starship-style relative age
+// chip ("3m", "5h", "2d"). Pads to a fixed 4-rune column so enrichment chips
+// stay aligned, and renders blank padding when the mtime is unavailable.
+func prettyAge(f FileStatus) api.Text {
+	t := clicky.Text("")
+	const colWidth = 4
+	if f.ModifiedAt.IsZero() {
+		return t.Append(strings.Repeat(" ", colWidth), "")
+	}
+	age := HumanAge(time.Since(f.ModifiedAt))
+	if age == "" {
+		return t.Append(strings.Repeat(" ", colWidth), "")
+	}
+	pad := max(colWidth-runeLen(age), 0)
+	t = t.Append(age, styleMuted)
+	if pad > 0 {
+		t = t.Append(strings.Repeat(" ", pad), "")
+	}
 	return t
 }
 

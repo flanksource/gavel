@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	. "github.com/onsi/ginkgo/v2"
@@ -23,6 +24,10 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 func stripANSI(s string) string {
 	return ansiEscape.ReplaceAllString(s, "")
+}
+
+func timeMinus(d time.Duration) time.Time {
+	return time.Now().Add(-d)
 }
 
 // --- Validation -----------------------------------------------------------
@@ -186,6 +191,59 @@ var _ = Describe("treeModel key handling", func() {
 		Expect(dir.Expanded).To(BeFalse())
 		Expect(visiblePathList(m)).To(Equal([]string{"a", "b", "b/y.go"}))
 	})
+
+	It("slash opens a live filter over file paths", func() {
+		m := newTreeModel([]status.FileStatus{
+			{Path: "cmd/gavel/main.go", FileMap: &repomap.FileMap{Language: "Go"}},
+			{Path: "ui/App.tsx", FileMap: &repomap.FileMap{Language: "TypeScript"}},
+			{Path: "docs/readme.md", FileMap: &repomap.FileMap{Language: "Markdown"}},
+		})
+
+		m, _ = updateKey(m, "/")
+		Expect(m.filtering).To(BeTrue())
+		m, _ = updateKey(m, "tsx")
+
+		Expect(m.filterQuery).To(Equal("tsx"))
+		Expect(visiblePathList(m)).To(Equal([]string{"ui", "ui/App.tsx"}))
+
+		m, _ = updateKey(m, "enter")
+		Expect(m.filtering).To(BeFalse())
+		Expect(m.filterQuery).To(Equal("tsx"))
+	})
+
+	It("filter matches status language and scope chips", func() {
+		m := newTreeModel([]status.FileStatus{
+			{Path: "cmd/gavel/main.go", State: status.StateStaged, FileMap: &repomap.FileMap{Language: "Go"}},
+			{Path: "ui/App_test.tsx", State: status.StateUntracked, FileMap: &repomap.FileMap{Language: "TypeScript", Scopes: []repomap.ScopeType{repomap.ScopeTypeTest}}},
+			{Path: "docs/readme.md", State: status.StateUnstaged, FileMap: &repomap.FileMap{Language: "Markdown"}},
+		})
+
+		m, _ = updateKey(m, "/")
+		m, _ = updateKey(m, "test")
+		Expect(visiblePathList(m)).To(Equal([]string{"ui", "ui/App_test.tsx"}))
+
+		m, _ = updateKey(m, "ctrl+u")
+		m, _ = updateKey(m, "markdown")
+		Expect(visiblePathList(m)).To(Equal([]string{"docs", "docs/readme.md"}))
+
+		m, _ = updateKey(m, "ctrl+u")
+		m, _ = updateKey(m, "untracked")
+		Expect(visiblePathList(m)).To(Equal([]string{"ui", "ui/App_test.tsx"}))
+	})
+
+	It("esc clears the active filter and restores the full tree", func() {
+		m := newTreeModel(files)
+		allVisible := visiblePathList(m)
+
+		m, _ = updateKey(m, "/")
+		m, _ = updateKey(m, "a/x")
+		Expect(visiblePathList(m)).To(Equal([]string{"a", "a/x.go"}))
+
+		m, _ = updateKey(m, "esc")
+		Expect(m.filtering).To(BeFalse())
+		Expect(m.filterQuery).To(BeEmpty())
+		Expect(visiblePathList(m)).To(Equal(allVisible))
+	})
 })
 
 // --- Render output -------------------------------------------------------
@@ -235,7 +293,50 @@ var _ = Describe("treeModel View rendering", func() {
 		plain := stripANSI(m.View())
 		Expect(plain).To(ContainSubstring("Select files to commit"))
 		Expect(plain).To(ContainSubstring("(0 / 3 selected)"))
+		Expect(plain).To(ContainSubstring("/=filter"))
 		Expect(plain).To(ContainSubstring("space=toggle"))
+	})
+
+	It("renders the active filter prompt and match count", func() {
+		m := newTreeModel(files)
+		m.height = 30
+		m, _ = updateKey(m, "/")
+		m, _ = updateKey(m, "test")
+
+		plain := stripANSI(m.View())
+		Expect(plain).To(ContainSubstring(`filter="test" (1 files)`))
+		Expect(plain).To(ContainSubstring("filter: test"))
+		Expect(plain).To(ContainSubstring("enter=keep"))
+		Expect(plain).To(ContainSubstring("App_test.tsx"))
+		Expect(plain).ToNot(ContainSubstring("main.go"))
+	})
+
+	It("renders a relative age chip for files with a known mtime", func() {
+		aged := []status.FileStatus{{
+			Path:       "cmd/gavel/main.go",
+			State:      status.StateUnstaged,
+			Adds:       2,
+			ModifiedAt: timeMinus(3 * time.Hour),
+		}}
+		m := newTreeModel(aged)
+		m.height = 20
+		plain := stripANSI(m.View())
+		Expect(plain).To(ContainSubstring("3h ago"),
+			"chip row should include the file's relative mtime")
+	})
+
+	It("omits the age chip when ModifiedAt is unknown", func() {
+		ghost := []status.FileStatus{{
+			Path:     "cmd/gavel/main.go",
+			State:    status.StateStaged,
+			Adds:     2,
+			WorkKind: status.KindDeleted,
+		}}
+		m := newTreeModel(ghost)
+		m.height = 20
+		plain := stripANSI(m.View())
+		Expect(plain).ToNot(ContainSubstring(" ago"),
+			"a deleted/unknown-mtime row must not render an age chip")
 	})
 })
 
@@ -566,6 +667,15 @@ func updateKey(m treeModel, key string) (treeModel, tea.Cmd) {
 		msg.Runes = nil
 	case "esc":
 		msg.Type = tea.KeyEsc
+		msg.Runes = nil
+	case "backspace":
+		msg.Type = tea.KeyBackspace
+		msg.Runes = nil
+	case "ctrl+u":
+		msg.Type = tea.KeyCtrlU
+		msg.Runes = nil
+	case "ctrl+c":
+		msg.Type = tea.KeyCtrlC
 		msg.Runes = nil
 	case " ":
 		msg.Type = tea.KeySpace

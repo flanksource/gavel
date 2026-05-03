@@ -50,7 +50,7 @@ func (o StatusOptions) Help() api.Textable {
 		Append("— list changed files grouped by scope", muted).NewLine().NewLine().
 		Append("Shows one row per file using ", "").
 		Append("Starship git_status", "italic").
-		Append(" symbols, plus line deltas, inferred scopes, and repomap findings (Kubernetes refs, architecture violations).", "").
+		Append(" symbols, plus line deltas, the working-tree age, inferred scopes, and repomap findings (Kubernetes refs, architecture violations).", "").
 		NewLine().
 		Append("By default the listing is scoped to the current working directory. Pass a ", "").
 		Append("[folder]", flagStyle).

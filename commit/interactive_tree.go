@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/flanksource/clicky"
@@ -114,6 +115,8 @@ type treeModel struct {
 	cursor          int
 	width           int
 	height          int
+	filtering       bool
+	filterQuery     string
 	cancelled       bool
 	submitted       bool
 	gitRoot         string
@@ -198,6 +201,20 @@ func sortTree(n *treeNode) {
 
 func (m *treeModel) rebuildVisible() {
 	m.visible = m.visible[:0]
+	query := normalizedFilter(m.filterQuery)
+	if query != "" {
+		for _, c := range m.root.Children {
+			appendVisibleFiltered(&m.visible, c, query)
+		}
+		if len(m.visible) == 0 {
+			m.cursor = 0
+			return
+		}
+		if m.cursor >= len(m.visible) {
+			m.cursor = len(m.visible) - 1
+		}
+		return
+	}
 	for _, c := range m.root.Children {
 		appendVisible(&m.visible, c)
 	}
@@ -213,6 +230,66 @@ func appendVisible(out *[]*treeNode, n *treeNode) {
 			appendVisible(out, c)
 		}
 	}
+}
+
+func appendVisibleFiltered(out *[]*treeNode, n *treeNode, query string) bool {
+	if nodeMatchesFilter(n, query) {
+		*out = append(*out, n)
+		if n.IsDir {
+			for _, c := range n.Children {
+				appendVisibleAll(out, c)
+			}
+		}
+		return true
+	}
+
+	if !n.IsDir {
+		return false
+	}
+
+	var childMatches []*treeNode
+	for _, c := range n.Children {
+		var visibleChild []*treeNode
+		if appendVisibleFiltered(&visibleChild, c, query) {
+			childMatches = append(childMatches, visibleChild...)
+		}
+	}
+	if len(childMatches) == 0 {
+		return false
+	}
+	*out = append(*out, n)
+	*out = append(*out, childMatches...)
+	return true
+}
+
+func appendVisibleAll(out *[]*treeNode, n *treeNode) {
+	*out = append(*out, n)
+	if n.IsDir {
+		for _, c := range n.Children {
+			appendVisibleAll(out, c)
+		}
+	}
+}
+
+func normalizedFilter(query string) string {
+	return strings.ToLower(strings.TrimSpace(query))
+}
+
+func nodeMatchesFilter(n *treeNode, query string) bool {
+	if query == "" {
+		return true
+	}
+	haystack := strings.ToLower(n.Path + " " + n.Name)
+	if n.File != nil {
+		haystack += " " + strings.ToLower(stateGlyph(*n.File))
+		if n.File.FileMap != nil {
+			haystack += " " + strings.ToLower(n.File.FileMap.Language)
+			for _, s := range n.File.FileMap.Scopes {
+				haystack += " " + strings.ToLower(string(s))
+			}
+		}
+	}
+	return strings.Contains(haystack, query)
 }
 
 // Init satisfies tea.Model.
@@ -236,10 +313,16 @@ func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ignorePrompt != nil {
 		return m.handleIgnoreKey(msg)
 	}
+	if m.filtering {
+		return m.handleFilterKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c", "esc", "q":
 		m.cancelled = true
 		return m, tea.Quit
+	case "/":
+		m.filtering = true
+		m.statusLine = ""
 	case "enter":
 		m.submitted = true
 		return m, tea.Quit
@@ -291,6 +374,44 @@ func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m treeModel) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		m.cancelled = true
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.filtering = false
+		m.filterQuery = ""
+		m.rebuildVisible()
+		return m, nil
+	case tea.KeyEnter:
+		m.filtering = false
+		return m, nil
+	case tea.KeyBackspace:
+		m.filterQuery = trimLastRune(m.filterQuery)
+		m.rebuildVisible()
+		return m, nil
+	case tea.KeyCtrlU:
+		m.filterQuery = ""
+		m.rebuildVisible()
+		return m, nil
+	}
+
+	if len(msg.Runes) > 0 {
+		m.filterQuery += string(msg.Runes)
+		m.rebuildVisible()
+	}
+	return m, nil
+}
+
+func trimLastRune(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	return string(r[:len(r)-1])
 }
 
 func (m treeModel) currentNode() *treeNode {
@@ -392,6 +513,10 @@ func (m *treeModel) applyGitIgnoreEntry(entry string) {
 	m.rebuildVisible()
 	if m.cursor >= len(m.visible) {
 		m.cursor = max(0, len(m.visible)-1)
+	}
+	if len(m.visible) == 0 {
+		m.filterQuery = ""
+		m.rebuildVisible()
 	}
 
 	switch {
@@ -603,16 +728,28 @@ func (m treeModel) View() string {
 	var b strings.Builder
 	selectedCount := len(m.selectedPaths())
 	totalLeaves := countLeaves(m.root)
+	visibleLeaves := countVisibleLeaves(m.visible)
+	filterActive := normalizedFilter(m.filterQuery) != ""
 
 	b.WriteString(styled("Select files to commit", styleHeader))
 	b.WriteString("  ")
 	b.WriteString(styled(fmt.Sprintf("(%d / %d selected)", selectedCount, totalLeaves), styleMuted))
+	if filterActive {
+		b.WriteString("  ")
+		b.WriteString(styled(fmt.Sprintf("filter=%q (%d files)", m.filterQuery, visibleLeaves), styleMuted))
+	}
 	b.WriteByte('\n')
 	if m.ignorePrompt != nil {
 		b.WriteString(renderIgnorePrompt(m.ignorePrompt.node))
+	} else if m.filtering {
+		b.WriteString(styled(
+			fmt.Sprintf("  filter: %s  type=search  backspace=delete  ctrl+u=clear  enter=keep  esc=clear",
+				m.filterQuery),
+			styleHelp,
+		))
 	} else {
 		b.WriteString(styled(
-			"  space=toggle  a=toggle folder  g=toggle Go  t=toggle tests  ctrl+a=all  i=ignore  enter=confirm  esc=cancel",
+			"  /=filter  space=toggle  a=toggle folder  g=toggle Go  t=toggle tests  ctrl+a=all  i=ignore  enter=confirm  esc=cancel",
 			styleHelp,
 		))
 	}
@@ -631,7 +768,11 @@ func (m treeModel) View() string {
 	end := min(start+pageSize, len(m.visible))
 
 	for i := start; i < end; i++ {
-		b.WriteString(renderRow(m.visible[i], i == m.cursor))
+		b.WriteString(renderRow(m.visible[i], i == m.cursor, filterActive))
+		b.WriteByte('\n')
+	}
+	if len(m.visible) == 0 {
+		b.WriteString(styled("  No files match the current filter", styleHelp))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -644,6 +785,16 @@ func countLeaves(n *treeNode) int {
 	total := 0
 	for _, c := range n.Children {
 		total += countLeaves(c)
+	}
+	return total
+}
+
+func countVisibleLeaves(nodes []*treeNode) int {
+	total := 0
+	for _, n := range nodes {
+		if !n.IsDir {
+			total++
+		}
 	}
 	return total
 }
@@ -673,7 +824,7 @@ func renderIgnorePrompt(n *treeNode) string {
 	return "  " + strings.Join(parts, "  ")
 }
 
-func renderRow(n *treeNode, isCursor bool) string {
+func renderRow(n *treeNode, isCursor bool, forceExpanded bool) string {
 	cursor := "  "
 	if isCursor {
 		cursor = styled("▶ ", styleCursor)
@@ -683,7 +834,7 @@ func renderRow(n *treeNode, isCursor bool) string {
 	name := n.Name
 	if n.IsDir {
 		expand := "▾ "
-		if !n.Expanded {
+		if !forceExpanded && !n.Expanded {
 			expand = "▸ "
 		}
 		name = expand + name + "/"
@@ -733,6 +884,11 @@ func chipsFor(f status.FileStatus) string {
 		delta := styled(fmt.Sprintf("+%d", f.Adds), styleStaged) + " " +
 			styled(fmt.Sprintf("-%d", f.Dels), styleDeleted)
 		parts = append(parts, delta)
+	}
+	if !f.ModifiedAt.IsZero() {
+		if age := status.HumanAge(time.Since(f.ModifiedAt)); age != "" {
+			parts = append(parts, styled(age+" ago", styleMuted))
+		}
 	}
 
 	separator := styled(" · ", styleMuted)
