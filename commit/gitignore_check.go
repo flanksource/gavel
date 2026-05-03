@@ -42,6 +42,10 @@ const (
 	DecisionGitIgnoreFile
 	DecisionAllow
 	DecisionAllowFolder
+	// DecisionIgnoreOnce keeps the violation in the staged set for this run
+	// only — nothing is written to .gitignore or .gavel.yaml. The commit
+	// proceeds with the violating file still staged.
+	DecisionIgnoreOnce
 )
 
 const DecisionGitIgnore = DecisionGitIgnoreFile
@@ -59,10 +63,11 @@ type CheckParams struct {
 }
 
 type CheckOutcome struct {
-	Cancelled  bool
-	Unstaged   []string
-	GitIgnored []string
-	Allowed    []string
+	Cancelled   bool
+	Unstaged    []string
+	GitIgnored  []string
+	Allowed     []string
+	IgnoredOnce []string // files the user kept staged this run only — no persisted change
 }
 
 type gitIgnoreChoice struct {
@@ -235,6 +240,11 @@ func iterateDecisions(ctx context.Context, p CheckParams, violations []Violation
 				plan.allowEntries = appendUnique(plan.allowEntries, folder+"**")
 				plan.allowGitIgnoreLines = appendUnique(plan.allowGitIgnoreLines, "!"+folder)
 			}
+		case DecisionIgnoreOnce:
+			// One-shot bypass: no .gitignore / .gavel.yaml writes, no unstage.
+			// The file stays staged for this commit only. Mark it ignored so
+			// the re-evaluate step below drops it from `remaining`.
+			plan.ignoredOnce = appendUnique(plan.ignoredOnce, v.File)
 		default:
 			return decisionPlan{}, fmt.Errorf("unknown gitignore decision %v for %q", d, v.File)
 		}
@@ -257,7 +267,7 @@ func iterateDecisions(ctx context.Context, p CheckParams, violations []Violation
 		if err != nil {
 			return decisionPlan{}, err
 		}
-		remaining = filterDecided(next, plan.unstage, plan.allowed)
+		remaining = filterDecided(next, plan.unstage, plan.allowed, plan.ignoredOnce)
 	}
 	return plan, nil
 }
@@ -272,6 +282,7 @@ type decisionPlan struct {
 	allowGitIgnoreLines []string // negation lines (`!path`, `!folder/`) added to .gitignore as overrides
 	unstage             []string
 	allowed             []string
+	ignoredOnce         []string // files the user chose to keep staged this run only — no persisted change
 	cancelled           bool
 }
 
@@ -324,13 +335,12 @@ func coveredFiles(d Decision, v Violation, remaining []Violation) []string {
 	}
 }
 
-func filterDecided(violations []Violation, unstaged, allowed []string) []Violation {
-	decided := make(map[string]struct{}, len(unstaged)+len(allowed))
-	for _, f := range unstaged {
-		decided[f] = struct{}{}
-	}
-	for _, f := range allowed {
-		decided[f] = struct{}{}
+func filterDecided(violations []Violation, unstaged, allowed, ignoredOnce []string) []Violation {
+	decided := make(map[string]struct{}, len(unstaged)+len(allowed)+len(ignoredOnce))
+	for _, group := range [][]string{unstaged, allowed, ignoredOnce} {
+		for _, f := range group {
+			decided[f] = struct{}{}
+		}
 	}
 	out := violations[:0]
 	for _, v := range violations {
@@ -403,6 +413,11 @@ func applyPlan(p CheckParams, plan decisionPlan) (CheckOutcome, error) {
 			return CheckOutcome{}, fmt.Errorf("append .gitignore allow override: %w", err)
 		}
 		outcome.GitIgnored = appendUniqueAll(outcome.GitIgnored, negated)
+	}
+
+	outcome.IgnoredOnce = plan.ignoredOnce
+	for _, f := range outcome.IgnoredOnce {
+		logger.Infof("gitignore: keeping %s staged (ignored once; no .gitignore change)", f)
 	}
 
 	return outcome, nil
@@ -552,6 +567,10 @@ func gitIgnoreChoices(v Violation) []gitIgnoreChoice {
 		})
 	}
 	choices = append(choices,
+		gitIgnoreChoice{
+			Text:     "Continue commit (ignore once, no .gitignore or .gavel.yaml change)",
+			Decision: DecisionIgnoreOnce,
+		},
 		gitIgnoreChoice{
 			Text:     "Cancel commit",
 			Decision: DecisionCancel,

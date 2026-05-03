@@ -140,7 +140,7 @@ var _ = Describe("Run with --push and nothing staged", func() {
 				return nil
 			},
 			pickPR:           choosePR,
-			generatePRPrompt: generatePRContent,
+			generatePRPrompt: GeneratePRContent,
 			aheadCommits:     loadAheadCommits,
 		}
 		defer func() { pushDepsForTest = nil }()
@@ -258,9 +258,9 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
 			aheadCommits:  loadAheadCommits,
-			generatePRPrompt: func(context.Context, clickyai.Agent, prContentInput) (prContent, error) {
+			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
 				llmCalls++
-				return prContent{
+				return PRContent{
 					Title:  "feat: add the thing",
 					Body:   "## What\n- adds the thing\n## Why\n- needed it",
 					Branch: "feat/add-the-thing",

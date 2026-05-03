@@ -9,14 +9,30 @@ import (
 	"github.com/flanksource/gavel/internal/prompting"
 )
 
-type prContentInput struct {
-	commits []CommitResult
+// PRCommitInput is the minimal commit description GeneratePRContent needs.
+// It exists so callers outside the commit package can build PR content
+// without constructing a full CommitResult.
+type PRCommitInput struct {
+	Message string
+	Files   []string
 }
 
-type prContent struct {
+type PRContentInput struct {
+	Commits []PRCommitInput
+}
+
+type PRContent struct {
 	Title  string
 	Body   string
 	Branch string
+}
+
+func commitInputsFromResults(commits []CommitResult) []PRCommitInput {
+	out := make([]PRCommitInput, len(commits))
+	for i, c := range commits {
+		out[i] = PRCommitInput{Message: c.Message, Files: c.Files}
+	}
+	return out
 }
 
 type prContentSchema struct {
@@ -38,13 +54,13 @@ Commits (in order):
 %s
 `
 
-func generatePRContent(ctx context.Context, agent clickyai.Agent, in prContentInput) (prContent, error) {
-	if len(in.commits) == 0 {
-		return prContent{}, fmt.Errorf("no commits to summarise")
+func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error) {
+	if len(in.Commits) == 0 {
+		return PRContent{}, fmt.Errorf("no commits to summarise")
 	}
 
 	var b strings.Builder
-	for i, c := range in.commits {
+	for i, c := range in.Commits {
 		fmt.Fprintf(&b, "--- commit %d ---\n%s\n", i+1, strings.TrimSpace(c.Message))
 		if len(c.Files) > 0 {
 			fmt.Fprintf(&b, "files: %s\n", strings.Join(c.Files, ", "))
@@ -62,21 +78,21 @@ func generatePRContent(ctx context.Context, agent clickyai.Agent, in prContentIn
 		StructuredOutput: schema,
 	})
 	if err != nil {
-		return prContent{}, fmt.Errorf("execute PR-content prompt: %w", err)
+		return PRContent{}, fmt.Errorf("execute PR-content prompt: %w", err)
 	}
 	if resp.Error != "" {
-		return prContent{}, fmt.Errorf("PR-content prompt returned error: %s", resp.Error)
+		return PRContent{}, fmt.Errorf("PR-content prompt returned error: %s", resp.Error)
 	}
 	if strings.TrimSpace(schema.Title) == "" {
-		return prContent{}, fmt.Errorf("PR-content prompt returned empty title (raw: %q)", resp.Result)
+		return PRContent{}, fmt.Errorf("PR-content prompt returned empty title (raw: %q)", resp.Result)
 	}
 
 	branch := sanitizeBranchName(strings.TrimSpace(schema.Branch))
 	if branch == "" {
-		return prContent{}, fmt.Errorf("PR-content prompt returned empty/invalid branch (raw: %q)", schema.Branch)
+		return PRContent{}, fmt.Errorf("PR-content prompt returned empty/invalid branch (raw: %q)", schema.Branch)
 	}
 
-	return prContent{
+	return PRContent{
 		Title:  strings.TrimSpace(schema.Title),
 		Body:   strings.TrimSpace(schema.Body),
 		Branch: branch,

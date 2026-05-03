@@ -390,6 +390,35 @@ func TestRunFileSizeCheck_Cancel(t *testing.T) {
 	assert.Contains(t, staged, "big.bin")
 }
 
+func TestRunFileSizeCheck_IgnoreOnce(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeLargeFile(t, repo, "big.bin", 2*maxFileBytes, false)
+	gitRun(t, repo, "add", "big.bin")
+
+	outcome, err := RunFileSizeCheck(context.Background(), FileSizeParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"big.bin"},
+		Decider:     staticFileSizeDecider(FileSizeDecisionIgnoreOnce),
+		SaveDir:     repo,
+		Mode:        CheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.False(t, outcome.Cancelled)
+	assert.Empty(t, outcome.Unstaged, "ignore-once must not unstage")
+	assert.Empty(t, outcome.GitIgnored, "ignore-once must not write .gitignore")
+	assert.Empty(t, outcome.Allowed, "ignore-once must not write .gavel.yaml")
+	assert.Equal(t, []string{"big.bin"}, outcome.IgnoredOnce)
+
+	_, err = os.Stat(filepath.Join(repo, ".gitignore"))
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(repo, ".gavel.yaml"))
+	assert.True(t, os.IsNotExist(err))
+
+	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
+	assert.Contains(t, staged, "big.bin", "ignore-once must keep file staged")
+}
+
 func TestRunFileSizeCheck_ExecutableSmall(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeLargeFile(t, repo, "run.sh", 15*1024, true)

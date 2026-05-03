@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
 
 // Style strings reused from status/pretty.go so the tree picker colorizes
@@ -34,18 +36,30 @@ const (
 
 func styled(s, style string) string { return clicky.Text(s, style).ANSI() }
 
+// treePickerResult captures the outcome of an interactive tree picker run.
+// Selected is the set of paths the user marked for staging. RmCached is the
+// subset of files the user just added to .gitignore that were already tracked
+// (state != untracked) — the caller must run `git rm --cached` on them so the
+// new ignore actually takes effect on subsequent git status calls.
+type treePickerResult struct {
+	Selected []string
+	RmCached []string
+}
+
 // runTreePicker is the production tree picker entry point. Tests stub
 // runTreePickerFunc instead so they can drive the model directly without
 // a real terminal.
-func runTreePicker(candidates []status.FileStatus) ([]string, error) {
+func runTreePicker(candidates []status.FileStatus, gitRoot string) (treePickerResult, error) {
 	model := newTreeModel(candidates)
+	model.gitRoot = gitRoot
+	model.appendGitIgnore = appendGitIgnore
 	if len(model.visible) == 0 {
-		return nil, ErrInteractiveEmpty
+		return treePickerResult{}, ErrInteractiveEmpty
 	}
 
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return nil, ErrInteractiveNonTTY
+		return treePickerResult{}, ErrInteractiveNonTTY
 	}
 	defer tty.Close()
 
@@ -53,15 +67,18 @@ func runTreePicker(candidates []status.FileStatus) ([]string, error) {
 	final, err := prog.Run()
 	if err != nil {
 		if errors.Is(err, tea.ErrInterrupted) {
-			return nil, ErrInteractiveCancelled
+			return treePickerResult{}, ErrInteractiveCancelled
 		}
-		return nil, fmt.Errorf("tree picker: %w", err)
+		return treePickerResult{}, fmt.Errorf("tree picker: %w", err)
 	}
 	finished := final.(treeModel)
 	if finished.cancelled {
-		return nil, ErrInteractiveCancelled
+		return treePickerResult{}, ErrInteractiveCancelled
 	}
-	return finished.selectedPaths(), nil
+	return treePickerResult{
+		Selected: finished.selectedPaths(),
+		RmCached: finished.pendingRmCached,
+	}, nil
 }
 
 // treeNode is one row in the tree. Either a directory or a file.
@@ -77,16 +94,33 @@ type treeNode struct {
 	Parent   *treeNode
 }
 
+// gitIgnoreWriter is the indirection point for tests: the tree model calls
+// it to append entries to {gitRoot}/.gitignore. Production wires this to
+// commit.appendGitIgnore.
+type gitIgnoreWriter func(gitRoot string, entries []string) ([]string, error)
+
+// ignorePromptState tracks the inline submenu opened by the `i` keybinding.
+// While non-nil, the tree model intercepts keys to apply the user's choice
+// instead of using the normal navigation handler.
+type ignorePromptState struct {
+	node *treeNode // the row that was highlighted when the user pressed `i`
+}
+
 // treeModel is the bubble-tea model + the pure state container that tests
 // drive directly via Update().
 type treeModel struct {
-	root      *treeNode
-	visible   []*treeNode
-	cursor    int
-	width     int
-	height    int
-	cancelled bool
-	submitted bool
+	root            *treeNode
+	visible         []*treeNode
+	cursor          int
+	width           int
+	height          int
+	cancelled       bool
+	submitted       bool
+	gitRoot         string
+	appendGitIgnore gitIgnoreWriter
+	ignorePrompt    *ignorePromptState
+	statusLine      string
+	pendingRmCached []string
 }
 
 func newTreeModel(files []status.FileStatus) treeModel {
@@ -199,6 +233,9 @@ func (m treeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey is split out so tests can call Update with synthetic
 // tea.KeyMsg values without spinning up a Program.
 func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.ignorePrompt != nil {
+		return m.handleIgnoreKey(msg)
+	}
 	switch msg.String() {
 	case "ctrl+c", "esc", "q":
 		m.cancelled = true
@@ -247,6 +284,11 @@ func (m treeModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+a":
 		// invert: select all if any unselected, else clear all
 		toggleNode(m.root)
+	case "i":
+		if n := m.currentNode(); n != nil {
+			m.ignorePrompt = &ignorePromptState{node: n}
+			m.statusLine = ""
+		}
 	}
 	return m, nil
 }
@@ -256,6 +298,170 @@ func (m treeModel) currentNode() *treeNode {
 		return nil
 	}
 	return m.visible[m.cursor]
+}
+
+// handleIgnoreKey runs while the inline ignore submenu is open. It applies
+// the user's chosen action to {gitRoot}/.gitignore via m.appendGitIgnore,
+// removes the matched leaves from the tree, and closes the submenu. Esc or
+// any unrelated key cancels without writing.
+func (m treeModel) handleIgnoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	node := m.ignorePrompt.node
+	m.ignorePrompt = nil
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.statusLine = ""
+	case "f":
+		if node.IsDir {
+			m.statusLine = styled("cannot ignore as file: cursor is on a folder", styleHelp)
+			break
+		}
+		m.applyGitIgnoreEntry(node.Path)
+	case "d":
+		entry := folderIgnoreEntry(node)
+		if entry == "" {
+			m.statusLine = styled("no parent folder to ignore", styleHelp)
+			break
+		}
+		m.applyGitIgnoreEntry(entry)
+	case "e":
+		ext := extensionGlob(node)
+		if ext == "" {
+			m.statusLine = styled("no extension to ignore", styleHelp)
+			break
+		}
+		m.applyGitIgnoreEntry(ext)
+	}
+	return m, nil
+}
+
+// folderIgnoreEntry returns the .gitignore folder pattern for the given node
+// (e.g. "junk/" for a node under junk/). Returns "" when the node is at the
+// repo root and therefore has no enclosing folder.
+func folderIgnoreEntry(n *treeNode) string {
+	if n.IsDir {
+		if n.Path == "" {
+			return ""
+		}
+		return strings.TrimSuffix(filepath.ToSlash(n.Path), "/") + "/"
+	}
+	dir := filepath.Dir(filepath.ToSlash(n.Path))
+	if dir == "." || dir == "" {
+		return ""
+	}
+	return dir + "/"
+}
+
+// extensionGlob returns "*<ext>" (e.g. "*.log") when the node is a file with
+// a non-empty extension. Returns "" for directories or extension-less files
+// (Makefile, LICENSE, etc.) so the caller can disable the action.
+func extensionGlob(n *treeNode) string {
+	if n.IsDir {
+		return ""
+	}
+	ext := filepath.Ext(n.Name)
+	if ext == "" || ext == "." {
+		return ""
+	}
+	return "*" + ext
+}
+
+// applyGitIgnoreEntry writes a single entry to .gitignore via the configured
+// writer, prunes leaves matched by the new pattern, schedules already-tracked
+// matches for `git rm --cached`, and updates the status line.
+func (m *treeModel) applyGitIgnoreEntry(entry string) {
+	if m.appendGitIgnore == nil {
+		m.statusLine = styled("internal: gitignore writer not wired", styleDeleted)
+		return
+	}
+	written, err := m.appendGitIgnore(m.gitRoot, []string{entry})
+	if err != nil {
+		m.statusLine = styled(fmt.Sprintf("gitignore write failed: %v", err), styleDeleted)
+		return
+	}
+
+	matched := m.collectIgnoredLeaves(entry)
+	for _, leaf := range matched {
+		if leaf.File == nil {
+			continue
+		}
+		if leaf.File.State != status.StateUntracked {
+			m.pendingRmCached = appendIfMissing(m.pendingRmCached, leaf.Path)
+		}
+	}
+	m.pruneLeaves(matched)
+	m.rebuildVisible()
+	if m.cursor >= len(m.visible) {
+		m.cursor = max(0, len(m.visible)-1)
+	}
+
+	switch {
+	case len(written) == 0:
+		m.statusLine = styled(fmt.Sprintf("already ignored: %s (%d files removed from picker)", entry, len(matched)), styleHelp)
+	default:
+		m.statusLine = styled(fmt.Sprintf("ignored: %s (%d files removed from picker)", entry, len(matched)), styleStaged)
+	}
+}
+
+// collectIgnoredLeaves returns every leaf in the tree whose path is matched
+// by the given gitignore pattern. Uses go-git's gitignore matcher so we get
+// the same semantics as the precommit gitignore check.
+func (m treeModel) collectIgnoredLeaves(pattern string) []*treeNode {
+	matcher := gitignore.NewMatcher([]gitignore.Pattern{gitignore.ParsePattern(pattern, nil)})
+	var out []*treeNode
+	var walk func(n *treeNode)
+	walk = func(n *treeNode) {
+		if !n.IsDir {
+			if matcher.Match(splitGitPath(n.Path), false) {
+				out = append(out, n)
+			}
+			return
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(m.root)
+	return out
+}
+
+// pruneLeaves removes the given leaves from the tree, then prunes any
+// directory left with no descendants.
+func (m treeModel) pruneLeaves(leaves []*treeNode) {
+	if len(leaves) == 0 {
+		return
+	}
+	mark := make(map[*treeNode]struct{}, len(leaves))
+	for _, l := range leaves {
+		mark[l] = struct{}{}
+	}
+	var clean func(n *treeNode)
+	clean = func(n *treeNode) {
+		kept := n.Children[:0]
+		for _, c := range n.Children {
+			if !c.IsDir {
+				if _, drop := mark[c]; drop {
+					continue
+				}
+				kept = append(kept, c)
+				continue
+			}
+			clean(c)
+			if len(c.Children) > 0 {
+				kept = append(kept, c)
+			}
+		}
+		n.Children = kept
+	}
+	clean(m.root)
+}
+
+func appendIfMissing(slice []string, v string) []string {
+	for _, s := range slice {
+		if s == v {
+			return slice
+		}
+	}
+	return append(slice, v)
 }
 
 func (n *treeNode) containerOrSelf() *treeNode {
@@ -402,10 +608,19 @@ func (m treeModel) View() string {
 	b.WriteString("  ")
 	b.WriteString(styled(fmt.Sprintf("(%d / %d selected)", selectedCount, totalLeaves), styleMuted))
 	b.WriteByte('\n')
-	b.WriteString(styled(
-		"  space=toggle  a=toggle folder  g=toggle Go  t=toggle tests  ctrl+a=all  enter=confirm  esc=cancel",
-		styleHelp,
-	))
+	if m.ignorePrompt != nil {
+		b.WriteString(renderIgnorePrompt(m.ignorePrompt.node))
+	} else {
+		b.WriteString(styled(
+			"  space=toggle  a=toggle folder  g=toggle Go  t=toggle tests  ctrl+a=all  i=ignore  enter=confirm  esc=cancel",
+			styleHelp,
+		))
+	}
+	if m.statusLine != "" {
+		b.WriteByte('\n')
+		b.WriteString("  ")
+		b.WriteString(m.statusLine)
+	}
 	b.WriteString("\n\n")
 
 	pageSize := max(m.height-5, 5)
@@ -431,6 +646,31 @@ func countLeaves(n *treeNode) int {
 		total += countLeaves(c)
 	}
 	return total
+}
+
+// renderIgnorePrompt builds the inline submenu shown when the user pressed
+// `i`. It dynamically dims options that don't apply to the highlighted node
+// (e.g. a top-level file has no folder; an extension-less file has no glob).
+func renderIgnorePrompt(n *treeNode) string {
+	var parts []string
+	parts = append(parts, styled("ignore", styleHeader)+":")
+	if !n.IsDir {
+		parts = append(parts, styled(fmt.Sprintf("f=file (%s)", n.Path), styleHelp))
+	} else {
+		parts = append(parts, styled("f=file (n/a — folder selected)", styleMuted))
+	}
+	if entry := folderIgnoreEntry(n); entry != "" {
+		parts = append(parts, styled(fmt.Sprintf("d=folder (%s)", entry), styleHelp))
+	} else {
+		parts = append(parts, styled("d=folder (n/a — top level)", styleMuted))
+	}
+	if ext := extensionGlob(n); ext != "" {
+		parts = append(parts, styled(fmt.Sprintf("e=ext (%s)", ext), styleHelp))
+	} else {
+		parts = append(parts, styled("e=ext (n/a — no extension)", styleMuted))
+	}
+	parts = append(parts, styled("esc=cancel", styleHelp))
+	return "  " + strings.Join(parts, "  ")
 }
 
 func renderRow(n *treeNode, isCursor bool) string {

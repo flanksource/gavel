@@ -39,7 +39,7 @@ type pushDeps struct {
 	gitPush             func(workDir, refspec string) error
 	rebaseOnto          func(workDir, upstreamBranch string) error
 	pickPR              func(header string, prs []github.PRListItem) (*github.PRListItem, error)
-	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in prContentInput) (prContent, error)
+	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error)
 	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
 	confirmProtectedRef func(branch string) bool
 }
@@ -53,7 +53,7 @@ func defaultPushDeps() pushDeps {
 		gitPush:             runGitPush,
 		rebaseOnto:          rebaseOnto,
 		pickPR:              choosePR,
-		generatePRPrompt:    generatePRContent,
+		generatePRPrompt:    GeneratePRContent,
 		aheadCommits:        loadAheadCommits,
 		confirmProtectedRef: confirmProtectedBranchPush,
 	}
@@ -237,12 +237,12 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
 	base, _ := deps.defaultBranch(ghOpts)
 
-	agent, err := buildAgent(opts)
+	agent, err := BuildAgent(opts)
 	if err != nil {
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}
 
-	prIn := prContentInput{commits: result.Commits}
+	prIn := PRContentInput{Commits: commitInputsFromResults(result.Commits)}
 	content, err := deps.generatePRPrompt(ctx, agent, prIn)
 	if err != nil {
 		return fmt.Errorf("generate PR title/body: %w", err)
@@ -308,7 +308,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 // stdout. Replaces the trailing commit re-print: the user already saw
 // "Committed <hash> ..." per commit, what they actually want at the end
 // is the PR they just opened.
-func printNewPRSummary(created *github.CreatePRResult, content prContent) {
+func printNewPRSummary(created *github.CreatePRResult, content PRContent) {
 	if created == nil {
 		return
 	}

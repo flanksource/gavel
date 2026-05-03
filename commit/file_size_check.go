@@ -65,6 +65,9 @@ const (
 	FileSizeDecisionGitIgnoreFolder
 	FileSizeDecisionAllow
 	FileSizeDecisionAllowFolder
+	// FileSizeDecisionIgnoreOnce keeps the violating file staged for this
+	// commit only — nothing is written to .gitignore or .gavel.yaml.
+	FileSizeDecisionIgnoreOnce
 )
 
 type FileSizeDecider func(ctx context.Context, v FileSizeViolation) (FileSizeDecision, error)
@@ -274,6 +277,10 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 					decided[o.File] = struct{}{}
 				}
 			}
+		case FileSizeDecisionIgnoreOnce:
+			// One-shot bypass: no .gitignore / .gavel.yaml writes, no unstage.
+			plan.ignoredOnce = appendUnique(plan.ignoredOnce, v.File)
+			decided[v.File] = struct{}{}
 		default:
 			return CheckOutcome{}, fmt.Errorf("unknown file-size decision %v for %q", d, v.File)
 		}
@@ -288,6 +295,7 @@ type fileSizePlan struct {
 	allowGitIgnoreLines []string // negation lines (`!path`, `!folder/`) added to .gitignore as overrides
 	unstage             []string
 	allowed             []string
+	ignoredOnce         []string // files kept staged this run only — no persisted change
 }
 
 // withFolderSiblings decorates v with sibling metadata used by the prompt so
@@ -346,6 +354,11 @@ func applyFileSizePlan(p FileSizeParams, plan fileSizePlan) (CheckOutcome, error
 			return CheckOutcome{}, fmt.Errorf("append .gitignore allow override: %w", err)
 		}
 		outcome.GitIgnored = appendUniqueAll(outcome.GitIgnored, negated)
+	}
+
+	outcome.IgnoredOnce = plan.ignoredOnce
+	for _, f := range outcome.IgnoredOnce {
+		logger.Infof("file-size: keeping %s staged (ignored once; no .gitignore change)", f)
 	}
 
 	return outcome, nil
@@ -414,6 +427,10 @@ func fileSizeChoices(v FileSizeViolation) []fileSizeChoice {
 		})
 	}
 	choices = append(choices,
+		fileSizeChoice{
+			Text:     "Continue commit (ignore once, no .gitignore or .gavel.yaml change)",
+			Decision: FileSizeDecisionIgnoreOnce,
+		},
 		fileSizeChoice{
 			Text:     "Cancel commit",
 			Decision: FileSizeDecisionCancel,

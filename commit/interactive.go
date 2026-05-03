@@ -18,6 +18,7 @@ var (
 	}
 	addFilesFunc      = addFiles
 	resetAllStagedFn  = resetAllStaged
+	gitRmCachedFunc   = gitRmCached
 	runTreePickerFunc = runTreePicker
 	interactiveStdout = os.Stdout
 )
@@ -64,24 +65,29 @@ func runInteractiveStaging(_ context.Context, opts Options) ([]string, error) {
 		printCandidateSummary(statusResult, candidates)
 	}
 
-	selected, err := runTreePickerFunc(candidates)
+	picked, err := runTreePickerFunc(candidates, opts.WorkDir)
 	if err != nil {
 		return nil, err
 	}
-	if len(selected) == 0 {
+	if len(picked.Selected) == 0 {
 		return nil, ErrInteractiveEmpty
 	}
 
+	if len(picked.RmCached) > 0 {
+		if err := gitRmCachedFunc(opts.WorkDir, picked.RmCached); err != nil {
+			return nil, fmt.Errorf("git rm --cached for newly-ignored files: %w", err)
+		}
+	}
 	if err := resetAllStagedFn(opts.WorkDir); err != nil {
 		return nil, fmt.Errorf("reset index before staging selection: %w", err)
 	}
-	if err := addFilesFunc(opts.WorkDir, selected); err != nil {
+	if err := addFilesFunc(opts.WorkDir, picked.Selected); err != nil {
 		return nil, fmt.Errorf("stage selected files: %w", err)
 	}
 
 	fmt.Fprintf(interactiveStdout, "selected %d of %d files; continuing with normal commit pipeline\n",
-		len(selected), len(candidates))
-	return selected, nil
+		len(picked.Selected), len(candidates))
+	return picked.Selected, nil
 }
 
 // filterCandidates drops conflict files and returns the remainder along with

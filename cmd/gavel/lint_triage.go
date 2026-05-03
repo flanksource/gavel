@@ -75,6 +75,44 @@ func collectViolationTypes(results []*linters.LinterResult) []violationType {
 	return result
 }
 
+type lintFindingsAction int
+
+const (
+	lintActionTriage lintFindingsAction = iota
+	lintActionContinueOnce
+	lintActionCancel
+)
+
+// promptLintFindingsAction asks the user how to handle lint findings: open
+// the rule-by-rule triage flow, continue this commit once without persisting
+// any ignore rules, or cancel. Tests stub this var instead of going through
+// the TUI. Non-TTY runs and selection failures default to lintActionTriage to
+// preserve the historical behaviour.
+var promptLintFindingsAction = func() lintFindingsAction {
+	prompting.Prepare()
+
+	options := []string{
+		"Triage: pick rules to ignore and write to .gavel.yaml, then re-run commit",
+		"Continue commit anyway (ignore once, no .gavel.yaml change)",
+		"Cancel commit",
+	}
+	indices, err := choose.Run(options,
+		choose.WithHeader("Lint reported violations. What now?"),
+		choose.WithLimit(1),
+	)
+	if err != nil || len(indices) == 0 {
+		return lintActionTriage
+	}
+	switch indices[0] {
+	case 1:
+		return lintActionContinueOnce
+	case 2:
+		return lintActionCancel
+	default:
+		return lintActionTriage
+	}
+}
+
 func runTriage(results []*linters.LinterResult, workDir string) ([]verify.LintIgnoreRule, error) {
 	prompting.Prepare()
 

@@ -48,8 +48,9 @@ Before hooks run, staged files are checked against commit.gitignore patterns
 (typically set in ~/.gavel.yaml). Matches trigger a per-file prompt to
 (1) append the matched pattern to the repo .gitignore, (2) append the file's
 folder, (3) append the exact file, (4) allow it via commit.allow in the repo's
-.gavel.yaml, or (5) cancel. --precommit=fail|skip|false overrides the prompt;
-non-TTY runs auto-escalate prompt -> fail.
+.gavel.yaml, (5) continue this commit once without persisting any change, or
+(6) cancel. --precommit=fail|skip|false overrides the prompt; non-TTY runs
+auto-escalate prompt -> fail.
 
 Staged go.mod / go.work / package.json files are also scanned for local
 references that escape the git root (go.mod replace, go.work use,
@@ -70,14 +71,17 @@ shows the file's language and repomap scope (e.g. Go · architecture,
 TypeScript · test) plus its line delta. Toggle individual files with
 space, whole folders with 'a' (selecting a folder selects all its
 descendants), every Go file with 'g', or every test-scoped file with
-'t'. Press enter to confirm; gavel resets the index and stages exactly
-the chosen paths before running the normal commit pipeline. After each
-commit, the picker reopens over the remaining changed files so you can
-build several focused commits in one session — exit any time with esc
-or ctrl+c. -i is mutually exclusive with -A and -m. Pair with -s to
-print a status-style summary of the candidate files before the picker
-opens. Combine with --dry-run to preview a single commit without
-looping.
+'t'. Press 'i' to add the highlighted file ('f'), its containing folder
+('d'), or every file with its extension ('e') to .gitignore — already-
+tracked matches are unstaged with 'git rm --cached' so the new ignore
+takes effect immediately. Press enter to confirm; gavel resets the
+index and stages exactly the chosen paths before running the normal
+commit pipeline. After each commit, the picker reopens over the
+remaining changed files so you can build several focused commits in
+one session — exit any time with esc or ctrl+c. -i is mutually
+exclusive with -A and -m. Pair with -s to print a status-style summary
+of the candidate files before the picker opens. Combine with --dry-run
+to preview a single commit without looping.
 
 The -A flag groups staged files by their top-level directory and recursively
 splits any group that exceeds --max-files or --max-lines. An LLM still writes
@@ -120,25 +124,8 @@ func init() {
 	}
 }
 
-func runCommit(opts CommitOptions) (any, error) {
-	workDir := opts.WorkDir
-	if workDir == "" {
-		wd, err := getWorkingDir()
-		if err != nil {
-			return nil, err
-		}
-		workDir = wd
-	}
-	if root := repomap.FindGitRoot(workDir); root != "" {
-		workDir = root
-	}
-
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", err)
-	}
-
-	result, err := commitpkg.Run(context.Background(), commitpkg.Options{
+func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig) commitpkg.Options {
+	return commitpkg.Options{
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
 		CommitAll:       opts.CommitAll,
@@ -159,7 +146,28 @@ func runCommit(opts CommitOptions) (any, error) {
 		LintFlag:        opts.Lint,
 		LintSecretsFlag: opts.LintSecrets,
 		Config:          cfg.Commit,
-	})
+	}
+}
+
+func runCommit(opts CommitOptions) (any, error) {
+	workDir := opts.WorkDir
+	if workDir == "" {
+		wd, err := getWorkingDir()
+		if err != nil {
+			return nil, err
+		}
+		workDir = wd
+	}
+	if root := repomap.FindGitRoot(workDir); root != "" {
+		workDir = root
+	}
+
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		logger.Warnf("Failed to load .gavel.yaml: %v", err)
+	}
+
+	result, err := commitpkg.Run(context.Background(), buildCommitOptions(opts, workDir, cfg))
 
 	if err != nil {
 		if errors.Is(err, commitpkg.ErrNothingStaged) {
@@ -206,22 +214,50 @@ func runCommit(opts CommitOptions) (any, error) {
 			return nil, nil
 		}
 		if errors.Is(err, commitpkg.ErrLintFindings) {
-			handleCommitLintFindings(workDir, result)
-			exitCode = 1
-			return nil, nil
+			outcome := handleCommitLintFindings(workDir, result)
+			switch outcome {
+			case lintFindingsContinueOnce:
+				retry := buildCommitOptions(opts, workDir, cfg)
+				retry.LintFlag = "false"
+				retry.LintSecretsFlag = "false"
+				logger.Infof("lint: continuing this commit with lint gate disabled (one-time bypass)")
+				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
+				if retryErr != nil {
+					return retryResult, retryErr
+				}
+				return retryResult, nil
+			default:
+				exitCode = 1
+				return nil, nil
+			}
 		}
 		return result, err
 	}
 	return result, nil
 }
 
-// handleCommitLintFindings prints the per-violation report and runs the
-// interactive triage flow so the user can append ignore rules to .gavel.yaml.
-// Exits non-zero either way; the user re-runs `gavel commit` after triaging.
-func handleCommitLintFindings(workDir string, result *commitpkg.Result) {
+type lintFindingsOutcome int
+
+const (
+	// lintFindingsBlocked is returned when the user triages or cancels.
+	// Caller should exit non-zero. Triage rules (if any) have already been
+	// written to .gavel.yaml.
+	lintFindingsBlocked lintFindingsOutcome = iota
+	// lintFindingsContinueOnce is returned when the user opts to bypass the
+	// lint gate for this commit only. Caller should re-run commit with lint
+	// flags forced off.
+	lintFindingsContinueOnce
+)
+
+// handleCommitLintFindings prints the per-violation report and asks the user
+// whether to triage (persist ignore rules), continue this commit anyway
+// (one-time bypass, no .gavel.yaml change), or cancel. Returns
+// lintFindingsContinueOnce when the caller should retry the commit with the
+// lint gate disabled; otherwise returns lintFindingsBlocked.
+func handleCommitLintFindings(workDir string, result *commitpkg.Result) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
 		fmt.Fprintln(os.Stderr, "commit blocked: lint reported violations")
-		return
+		return lintFindingsBlocked
 	}
 	for _, lr := range result.Lint.Results {
 		if lr == nil || lr.Skipped {
@@ -231,28 +267,36 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result) {
 			fmt.Fprintln(os.Stderr, formatCommitLintViolation(lr.Linter, v))
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s). Run triage to add ignore rules?\n", result.Lint.Violations)
+	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
+
+	switch promptLintFindingsAction() {
+	case lintActionContinueOnce:
+		return lintFindingsContinueOnce
+	case lintActionCancel:
+		return lintFindingsBlocked
+	}
 
 	newRules, triageErr := runTriage(result.Lint.Results, workDir)
 	if triageErr != nil {
 		fmt.Fprintf(os.Stderr, "triage failed: %v\n", triageErr)
-		return
+		return lintFindingsBlocked
 	}
 	if len(newRules) == 0 {
-		return
+		return lintFindingsBlocked
 	}
 	cfgPath := filepath.Join(workDir, ".gavel.yaml")
 	repoCfg, err := verify.LoadSingleGavelConfig(cfgPath)
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "failed to read %s: %v\n", cfgPath, err)
-		return
+		return lintFindingsBlocked
 	}
 	repoCfg.Lint.Ignore = append(repoCfg.Lint.Ignore, newRules...)
 	if err := verify.SaveGavelConfig(workDir, repoCfg); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save %s: %v\n", cfgPath, err)
-		return
+		return lintFindingsBlocked
 	}
 	fmt.Fprintf(os.Stderr, "Saved %d new ignore rule(s) to %s. Re-run `gavel commit` to retry.\n", len(newRules), cfgPath)
+	return lintFindingsBlocked
 }
 
 func formatCommitLintViolation(linter string, v models.Violation) string {

@@ -124,6 +124,26 @@ func addFiles(workDir string, files []string) error {
 	return nil
 }
 
+// gitRmCached runs `git rm --cached -- <files>` in workDir, removing the
+// listed paths from the index without touching the working tree. Used by the
+// interactive picker after the user adds an entry to .gitignore for a file
+// that was already tracked, so the new ignore actually takes effect.
+//
+// `--ignore-unmatch` keeps the call idempotent when a file has already been
+// untracked (e.g. by a previous picker iteration).
+func gitRmCached(workDir string, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	args := append([]string{"rm", "--cached", "--ignore-unmatch", "--"}, files...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git rm --cached: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func resetFiles(workDir string, files []string) error {
 	if len(files) == 0 {
 		return nil

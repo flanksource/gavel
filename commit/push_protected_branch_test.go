@@ -84,8 +84,8 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, prContentInput) (prContent, error) {
-				return prContent{
+			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+				return PRContent{
 					Title:  "feat: on main",
 					Body:   "body",
 					Branch: "feat/topic-from-main",
@@ -120,8 +120,8 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 			},
 			defaultBranch: func(github.Options) (string, error) { return "main", nil },
 			isAncestor:    func(_, _, _ string) bool { return false },
-			generatePRPrompt: func(context.Context, clickyai.Agent, prContentInput) (prContent, error) {
-				return prContent{Title: "feat: x", Branch: ""}, nil
+			generatePRPrompt: func(context.Context, clickyai.Agent, PRContentInput) (PRContent, error) {
+				return PRContent{Title: "feat: x", Branch: ""}, nil
 			},
 		})
 		Expect(err).To(MatchError(ContainSubstring(`AI did not suggest a branch name`)))

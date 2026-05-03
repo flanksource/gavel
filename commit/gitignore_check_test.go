@@ -261,6 +261,36 @@ func TestRunGitIgnoreCheck_Cancel(t *testing.T) {
 	assert.Contains(t, staged, "debug.log", "cancel must not unstage")
 }
 
+func TestRunGitIgnoreCheck_IgnoreOnce(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "debug.log", "log\n")
+	gitRun(t, repo, "add", "debug.log")
+
+	outcome, err := RunGitIgnoreCheck(context.Background(), CheckParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: []string{"debug.log"},
+		Config:      verify.CommitConfig{GitIgnore: []string{"*.log"}},
+		Decider:     staticDecider(DecisionIgnoreOnce),
+		SaveDir:     repo,
+		Mode:        IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.False(t, outcome.Cancelled)
+	assert.Empty(t, outcome.Unstaged, "ignore-once must not unstage")
+	assert.Empty(t, outcome.GitIgnored, "ignore-once must not write .gitignore")
+	assert.Empty(t, outcome.Allowed, "ignore-once must not write .gavel.yaml allow")
+	assert.Equal(t, []string{"debug.log"}, outcome.IgnoredOnce)
+
+	_, err = os.Stat(filepath.Join(repo, ".gitignore"))
+	assert.True(t, os.IsNotExist(err), "ignore-once must not write .gitignore")
+	_, err = os.Stat(filepath.Join(repo, ".gavel.yaml"))
+	assert.True(t, os.IsNotExist(err), "ignore-once must not write .gavel.yaml")
+
+	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
+	assert.Contains(t, staged, "debug.log", "ignore-once must keep file staged")
+}
+
 func TestRunGitIgnoreCheck_PreExistingGitignore(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, ".gitignore", "*.tmp\n")

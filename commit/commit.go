@@ -516,7 +516,7 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
-	agent, err := buildAgent(opts)
+	agent, err := BuildAgent(opts)
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
@@ -561,7 +561,7 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 	}, nil
 }
 
-func buildAgent(opts Options) (clickyai.Agent, error) {
+func BuildAgent(opts Options) (clickyai.Agent, error) {
 	cfg := clickyai.DefaultConfig()
 	if opts.Model != "" {
 		cfg.Model = opts.Model

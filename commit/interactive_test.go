@@ -264,8 +264,8 @@ var _ = Describe("runInteractiveStaging", func() {
 				{Path: "c.md", State: status.StateStaged},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) {
-			return []string{"a.go", "c.md"}, nil
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+			return treePickerResult{Selected: []string{"a.go", "c.md"}}, nil
 		}
 		var resetCalled bool
 		var added []string
@@ -281,6 +281,38 @@ var _ = Describe("runInteractiveStaging", func() {
 		Expect(paths).To(Equal([]string{"a.go", "c.md"}))
 	})
 
+	It("runs git rm --cached for tracked-but-now-ignored paths before staging", func() {
+		gatherStatusFunc = func(string) (*status.Result, error) {
+			return &status.Result{Files: []status.FileStatus{
+				{Path: "a.go", State: status.StateUnstaged},
+				{Path: "old.log", State: status.StateStaged},
+			}}, nil
+		}
+		var pickerGitRoot string
+		runTreePickerFunc = func(_ []status.FileStatus, gitRoot string) (treePickerResult, error) {
+			pickerGitRoot = gitRoot
+			return treePickerResult{
+				Selected: []string{"a.go"},
+				RmCached: []string{"old.log"},
+			}, nil
+		}
+		var rmPaths []string
+		var rmCalledBeforeAdd bool
+		var addCalled bool
+		gitRmCachedFunc = func(_ string, paths []string) error {
+			rmPaths = paths
+			rmCalledBeforeAdd = !addCalled
+			return nil
+		}
+		addFilesFunc = func(_ string, _ []string) error { addCalled = true; return nil }
+
+		_, err := runInteractiveStaging(context.TODO(), opts)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pickerGitRoot).To(Equal(opts.WorkDir))
+		Expect(rmPaths).To(Equal([]string{"old.log"}))
+		Expect(rmCalledBeforeAdd).To(BeTrue())
+	})
+
 	It("returns ErrInteractiveEmpty when no candidates exist", func() {
 		gatherStatusFunc = func(string) (*status.Result, error) { return &status.Result{}, nil }
 		_, err := runInteractiveStaging(context.TODO(), opts)
@@ -291,7 +323,9 @@ var _ = Describe("runInteractiveStaging", func() {
 		gatherStatusFunc = func(string) (*status.Result, error) {
 			return &status.Result{Files: []status.FileStatus{{Path: "x"}}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) { return nil, nil }
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+			return treePickerResult{}, nil
+		}
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(errors.Is(err, ErrInteractiveEmpty)).To(BeTrue())
 	})
@@ -300,7 +334,9 @@ var _ = Describe("runInteractiveStaging", func() {
 		gatherStatusFunc = func(string) (*status.Result, error) {
 			return &status.Result{Files: []status.FileStatus{{Path: "x"}}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) { return nil, ErrInteractiveCancelled }
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+			return treePickerResult{}, ErrInteractiveCancelled
+		}
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(errors.Is(err, ErrInteractiveCancelled)).To(BeTrue())
 	})
@@ -313,9 +349,9 @@ var _ = Describe("runInteractiveStaging", func() {
 			}}, nil
 		}
 		var candidatesSeen []status.FileStatus
-		runTreePickerFunc = func(c []status.FileStatus) ([]string, error) {
+		runTreePickerFunc = func(c []status.FileStatus, _ string) (treePickerResult, error) {
 			candidatesSeen = c
-			return []string{"ok.go"}, nil
+			return treePickerResult{Selected: []string{"ok.go"}}, nil
 		}
 		_, err := runInteractiveStaging(context.TODO(), opts)
 		Expect(err).ToNot(HaveOccurred())
@@ -331,7 +367,9 @@ var _ = Describe("runInteractiveStaging", func() {
 				{Path: "ignored.md", State: status.StateConflict},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) { return []string{"kept.go"}, nil }
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+			return treePickerResult{Selected: []string{"kept.go"}}, nil
+		}
 		writer, drain := newCapturedStdout()
 		previousOut := interactiveStdout
 		interactiveStdout = writer
@@ -401,10 +439,10 @@ var _ = Describe("runInteractiveLoop", func() {
 		}
 		picks := [][]string{{"a.go"}, {"b.go"}}
 		callsPicker := 0
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) {
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
 			out := picks[callsPicker]
 			callsPicker++
-			return out, nil
+			return treePickerResult{Selected: out}, nil
 		}
 		// The orchestrator stubs replace addFiles/resetAllStaged with no-ops,
 		// so we provide implementations that touch the real repo.
@@ -434,12 +472,12 @@ var _ = Describe("runInteractiveLoop", func() {
 			}}, nil
 		}
 		callsPicker := 0
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) {
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
 			callsPicker++
 			if callsPicker == 1 {
-				return []string{"a.go"}, nil
+				return treePickerResult{Selected: []string{"a.go"}}, nil
 			}
-			return nil, ErrInteractiveCancelled
+			return treePickerResult{}, ErrInteractiveCancelled
 		}
 		resetAllStagedFn = resetAllStaged
 		addFilesFunc = addFiles
@@ -462,8 +500,8 @@ var _ = Describe("runInteractiveLoop", func() {
 				{Path: "a.go", State: status.StateUntracked},
 			}}, nil
 		}
-		runTreePickerFunc = func([]status.FileStatus) ([]string, error) {
-			return nil, ErrInteractiveCancelled
+		runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) {
+			return treePickerResult{}, ErrInteractiveCancelled
 		}
 
 		_, err := Run(context.Background(), Options{
@@ -577,15 +615,18 @@ func installOrchestratorStubs() func() {
 	prevGather := gatherStatusFunc
 	prevReset := resetAllStagedFn
 	prevAdd := addFilesFunc
+	prevRm := gitRmCachedFunc
 	prevPicker := runTreePickerFunc
 	gatherStatusFunc = func(string) (*status.Result, error) { return &status.Result{}, nil }
 	resetAllStagedFn = func(string) error { return nil }
 	addFilesFunc = func(string, []string) error { return nil }
-	runTreePickerFunc = func([]status.FileStatus) ([]string, error) { return nil, nil }
+	gitRmCachedFunc = func(string, []string) error { return nil }
+	runTreePickerFunc = func([]status.FileStatus, string) (treePickerResult, error) { return treePickerResult{}, nil }
 	return func() {
 		gatherStatusFunc = prevGather
 		resetAllStagedFn = prevReset
 		addFilesFunc = prevAdd
+		gitRmCachedFunc = prevRm
 		runTreePickerFunc = prevPicker
 	}
 }

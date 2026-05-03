@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
@@ -64,4 +67,66 @@ func TestCollectViolationTypes_NilRule(t *testing.T) {
 	assert.Equal(t, "", types[0].Rule)
 	assert.Equal(t, "custom", types[0].Source)
 	assert.Equal(t, 2, types[0].Count)
+}
+
+func TestHandleCommitLintFindings_ContinueOnce(t *testing.T) {
+	repo := t.TempDir()
+	prev := promptLintFindingsAction
+	t.Cleanup(func() { promptLintFindingsAction = prev })
+	promptLintFindingsAction = func() lintFindingsAction { return lintActionContinueOnce }
+
+	msg := "boom"
+	result := &commitpkg.Result{
+		Lint: &commitpkg.LintGateResult{
+			Violations: 1,
+			Results: []*linters.LinterResult{{
+				Linter: "fake",
+				Violations: []models.Violation{{
+					Source: "fake", Rule: &models.Rule{Method: "rule1"},
+					File: "a.go", Message: &msg,
+				}},
+			}},
+		},
+	}
+
+	got := handleCommitLintFindings(repo, result)
+	assert.Equal(t, lintFindingsContinueOnce, got)
+
+	// Continue-once must NOT write any rules to .gavel.yaml.
+	_, err := os.Stat(filepath.Join(repo, ".gavel.yaml"))
+	assert.True(t, os.IsNotExist(err), "continue-once must not persist .gavel.yaml")
+}
+
+func TestHandleCommitLintFindings_Cancel(t *testing.T) {
+	repo := t.TempDir()
+	prev := promptLintFindingsAction
+	t.Cleanup(func() { promptLintFindingsAction = prev })
+	promptLintFindingsAction = func() lintFindingsAction { return lintActionCancel }
+
+	msg := "boom"
+	result := &commitpkg.Result{
+		Lint: &commitpkg.LintGateResult{
+			Violations: 1,
+			Results: []*linters.LinterResult{{
+				Linter: "fake",
+				Violations: []models.Violation{{
+					Source: "fake", File: "a.go", Message: &msg,
+				}},
+			}},
+		},
+	}
+
+	got := handleCommitLintFindings(repo, result)
+	assert.Equal(t, lintFindingsBlocked, got)
+
+	_, err := os.Stat(filepath.Join(repo, ".gavel.yaml"))
+	assert.True(t, os.IsNotExist(err), "cancel must not persist .gavel.yaml")
+}
+
+func TestHandleCommitLintFindings_NilResultBlocks(t *testing.T) {
+	got := handleCommitLintFindings(t.TempDir(), nil)
+	assert.Equal(t, lintFindingsBlocked, got)
+
+	got = handleCommitLintFindings(t.TempDir(), &commitpkg.Result{Lint: nil})
+	assert.Equal(t, lintFindingsBlocked, got)
 }
