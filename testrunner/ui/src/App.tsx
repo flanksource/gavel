@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo, useCallback, type MutableRef } from 'preact/hooks';
 import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
@@ -37,9 +37,9 @@ import { apiUrl } from './config';
 
 function applySnapshot(
   snap: Snapshot,
-  startTime: React.MutableRefObject<number | null>,
-  endTime: React.MutableRefObject<number | null>,
-  doneRef: React.MutableRefObject<boolean>,
+  startTime: MutableRef<number | null>,
+  endTime: MutableRef<number | null>,
+  doneRef: MutableRef<boolean>,
   setTests: (t: Test[]) => void,
   setLint: (l: LinterResult[] | undefined) => void,
   setLintRun: (r: boolean) => void,

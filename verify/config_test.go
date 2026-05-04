@@ -83,6 +83,36 @@ func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
 			v:     models.Violation{File: "pkg/foo.go"},
 			match: true,
 		},
+		{
+			name:  "rule glob matches prefix",
+			rule:  LintIgnoreRule{Rule: "acme-*", Source: "betterleaks"},
+			v:     models.Violation{Source: "betterleaks", Rule: &models.Rule{Method: "acme-brand-mention"}},
+			match: true,
+		},
+		{
+			name:  "rule glob does not match other prefix",
+			rule:  LintIgnoreRule{Rule: "acme-*"},
+			v:     models.Violation{Rule: &models.Rule{Method: "generic-api-key"}},
+			match: false,
+		},
+		{
+			name:  "rule glob with nil violation rule",
+			rule:  LintIgnoreRule{Rule: "acme-*"},
+			v:     models.Violation{Source: "betterleaks"},
+			match: false,
+		},
+		{
+			name:  "source glob matches",
+			rule:  LintIgnoreRule{Source: "go*"},
+			v:     models.Violation{Source: "golangci-lint", Rule: &models.Rule{Method: "errcheck"}},
+			match: true,
+		},
+		{
+			name:  "rule wildcard matches anything",
+			rule:  LintIgnoreRule{Rule: "*", Source: "betterleaks"},
+			v:     models.Violation{Source: "betterleaks", Rule: &models.Rule{Method: "anything"}},
+			match: true,
+		},
 	}
 
 	for _, tt := range tests {

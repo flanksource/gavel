@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
@@ -24,6 +25,11 @@ type VerifyConfig struct {
 	Checks ChecksConfig `yaml:"checks" json:"checks"`
 }
 
+// LintIgnoreRule suppresses lint violations matching every populated field.
+// Rule and Source accept collections.MatchItem patterns: literal strings,
+// `*` globs ("acme-*"), and `!`-prefixed negations. File uses doublestar
+// globs so directory traversal patterns ("pkg/**/*.go") behave as expected.
+// At least one of Rule/Source/File must be set; an empty rule never matches.
 type LintIgnoreRule struct {
 	Rule   string `yaml:"rule,omitempty" json:"rule,omitempty"`
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
@@ -31,11 +37,18 @@ type LintIgnoreRule struct {
 }
 
 func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
-	if r.Source != "" && r.Source != v.Source {
-		return false
+	if r.Source != "" {
+		matched, negated := collections.MatchItem(v.Source, r.Source)
+		if negated || !matched {
+			return false
+		}
 	}
 	if r.Rule != "" {
-		if v.Rule == nil || v.Rule.Method != r.Rule {
+		if v.Rule == nil {
+			return false
+		}
+		matched, negated := collections.MatchItem(v.Rule.Method, r.Rule)
+		if negated || !matched {
 			return false
 		}
 	}

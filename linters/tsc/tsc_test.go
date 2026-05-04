@@ -15,7 +15,7 @@ func TestParseViolations(t *testing.T) {
 	require.NoError(t, err)
 
 	workDir := "/workspace"
-	violations, err := parseViolations(data, workDir, io.Discard)
+	violations, err := parseViolations(data, workDir, "", io.Discard)
 	require.NoError(t, err)
 	require.Len(t, violations, 3)
 
@@ -50,7 +50,7 @@ func TestParseViolations_RulePerCode(t *testing.T) {
 		{"file":"b.ts","line":2,"column":2,"code":6133,"category":"Error","message":"y"},
 		{"file":"c.ts","line":3,"column":3,"code":2322,"category":"Warning","message":"z"}
 	]`)
-	violations, err := parseViolations(raw, "/workspace", io.Discard)
+	violations, err := parseViolations(raw, "/workspace", "", io.Discard)
 	require.NoError(t, err)
 	require.Len(t, violations, 3)
 
@@ -62,7 +62,7 @@ func TestParseViolations_RulePerCode(t *testing.T) {
 
 func TestParseViolations_EmptyInputs(t *testing.T) {
 	for _, in := range []string{"", "   ", "[]", "\n"} {
-		v, err := parseViolations([]byte(in), "/workspace", io.Discard)
+		v, err := parseViolations([]byte(in), "/workspace", "", io.Discard)
 		require.NoError(t, err, "input %q", in)
 		require.Empty(t, v, "input %q", in)
 	}
@@ -70,10 +70,37 @@ func TestParseViolations_EmptyInputs(t *testing.T) {
 
 func TestParseViolations_MalformedJSON(t *testing.T) {
 	raw := []byte("not json at all")
-	_, err := parseViolations(raw, "/workspace", io.Discard)
+	_, err := parseViolations(raw, "/workspace", "", io.Discard)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "parse tsc JSON output")
 	require.Contains(t, err.Error(), "not json at all", "raw output must appear in error for debugging")
+}
+
+// TestParseViolations_GitRootRelative confirms that when a gitRoot is supplied
+// the violation file paths are anchored to it, so reports use stable repo-root
+// paths even though tsc itself runs inside a sub-package working directory.
+func TestParseViolations_GitRootRelative(t *testing.T) {
+	raw := []byte(`[{"file":"src/App.tsx","line":1,"column":1,"code":2322,"category":"Error","message":"x"}]`)
+	gitRoot := "/repo"
+	workDir := "/repo/pr/ui"
+
+	violations, err := parseViolations(raw, workDir, gitRoot, io.Discard)
+	require.NoError(t, err)
+	require.Len(t, violations, 1)
+	require.Equal(t, "pr/ui/src/App.tsx", violations[0].File,
+		"path should be relative to git root, not tsc working dir")
+}
+
+// TestParseViolations_GitRootAbsoluteOutsideRoot ensures files that resolve
+// outside gitRoot keep their absolute path rather than receiving a "../"
+// relative path that would break path-based filters.
+func TestParseViolations_GitRootAbsoluteOutsideRoot(t *testing.T) {
+	raw := []byte(`[{"file":"/elsewhere/foo.ts","line":1,"column":1,"code":2322,"category":"Error","message":"x"}]`)
+	violations, err := parseViolations(raw, "/repo/pr/ui", "/repo", io.Discard)
+	require.NoError(t, err)
+	require.Len(t, violations, 1)
+	require.Equal(t, "/elsewhere/foo.ts", violations[0].File,
+		"files outside gitRoot keep their absolute path")
 }
 
 func TestCategoryToSeverity(t *testing.T) {
@@ -87,6 +114,21 @@ func TestCategoryToSeverity(t *testing.T) {
 	for in, want := range cases {
 		require.Equal(t, want, categoryToSeverity(in), "category %q", in)
 	}
+}
+
+// TestFormatCommand_OmitsCwdWhenSameAsProcess verifies that the log line skips
+// the (cwd=...) suffix when the linter's working dir matches the process cwd,
+// keeping logs tight in the common case while still surfacing the directory
+// when tsc is sandboxed in a sub-project.
+func TestFormatCommand_OmitsCwdWhenSameAsProcess(t *testing.T) {
+	procCwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	got := formatCommand("/usr/local/bin/node", []string{"/path/wrap.cjs"}, procCwd)
+	require.Equal(t, "/usr/local/bin/node /path/wrap.cjs", got)
+
+	withCwd := formatCommand("/usr/local/bin/node", []string{"/path/wrap.cjs"}, "/elsewhere")
+	require.Equal(t, "/usr/local/bin/node /path/wrap.cjs (cwd=/elsewhere)", withCwd)
 }
 
 func TestResolveScript_WritesAndReuses(t *testing.T) {

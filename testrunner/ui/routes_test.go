@@ -66,8 +66,8 @@ func TestBuildLintByFileLinterRuleCollapsesCheckoutPrefix(t *testing.T) {
 		Success: false,
 		Violations: []models.Violation{
 			testViolation(".shell/checkout/abc123/README.md", 4, "readme-rule"),
-			testViolation(".shell/checkout/abc123/chart/oipa/conf/cycle/cycle.ps1", 8, "cycle-rule"),
-			testViolation(".shell/checkout/abc123/chart/oipa/ci/fargate-values.yaml", 12, "yaml-rule"),
+			testViolation(".shell/checkout/abc123/chart/app/conf/cycle/cycle.ps1", 8, "cycle-rule"),
+			testViolation(".shell/checkout/abc123/chart/app/ci/fargate-values.yaml", 12, "yaml-rule"),
 		},
 	}}
 
@@ -89,11 +89,11 @@ func TestBuildLintByFileLinterRuleCollapsesCheckoutPrefix(t *testing.T) {
 	}
 
 	chart := mustChildByName(t, checkout.Children, "chart (2)")
-	oipa := mustChildByName(t, chart.Children, "oipa (2)")
-	conf := mustChildByName(t, oipa.Children, "conf (1)")
+	app := mustChildByName(t, chart.Children, "app (2)")
+	conf := mustChildByName(t, app.Children, "conf (1)")
 	cycle := mustChildByName(t, conf.Children, "cycle (1)")
 	ps1 := mustChildByName(t, cycle.Children, "cycle.ps1 (1)")
-	if ps1.Kind != "lint-file" || ps1.File != ".shell/checkout/abc123/chart/oipa/conf/cycle/cycle.ps1" {
+	if ps1.Kind != "lint-file" || ps1.File != ".shell/checkout/abc123/chart/app/conf/cycle/cycle.ps1" {
 		t.Fatalf("cycle file node = %#v", ps1)
 	}
 }

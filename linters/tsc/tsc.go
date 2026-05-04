@@ -20,12 +20,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/utils"
 )
 
 // The wrapper is named .cjs so Node always treats it as CommonJS, even when
@@ -124,11 +126,15 @@ func (t *TSC) resolveScript() (string, error) {
 }
 
 func (t *TSC) DryRunCommand() (string, []string) {
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		nodePath = "node"
+	}
 	path, err := t.resolveScript()
 	if err != nil {
-		return "node", []string{"<gavel-tsc-wrapper>"}
+		return nodePath, []string{"<gavel-tsc-wrapper>"}
 	}
-	return "node", []string{path}
+	return nodePath, []string{path}
 }
 
 func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violation, error) {
@@ -144,14 +150,19 @@ func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violatio
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "node", scriptPath)
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		return nil, fmt.Errorf("tsc wrapper failed to launch (is node installed?): %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, nodePath, scriptPath)
 	cmd.Dir = t.WorkDir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = t.WrapWriter(&stdout)
 	cmd.Stderr = t.WrapWriter(&stderr)
 
-	logger.Infof("Executing: node %s (cwd=%s)", scriptPath, t.WorkDir)
+	logger.Infof("Executing: %s", formatCommand(nodePath, []string{scriptPath}, t.WorkDir))
 
 	runErr := cmd.Run()
 	if runErr != nil {
@@ -161,12 +172,31 @@ func (t *TSC) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.Violatio
 		return nil, fmt.Errorf("tsc wrapper failed: %w\nStderr:\n%s", runErr, stderr.String())
 	}
 
-	return parseViolations(stdout.Bytes(), t.WorkDir, io.Discard)
+	gitRoot := utils.FindGitRoot(t.WorkDir)
+	if gitRoot == "" {
+		gitRoot = t.WorkDir
+	}
+	return parseViolations(stdout.Bytes(), t.WorkDir, gitRoot, io.Discard)
+}
+
+// formatCommand renders the command path, args, and cwd for logging.
+// cwd is omitted when it matches the current process working directory.
+func formatCommand(path string, args []string, cwd string) string {
+	parts := append([]string{path}, args...)
+	cmd := strings.Join(parts, " ")
+	procCwd, _ := os.Getwd()
+	if cwd != "" && cwd != procCwd {
+		return fmt.Sprintf("%s (cwd=%s)", cmd, cwd)
+	}
+	return cmd
 }
 
 // parseViolations decodes the wrapper's JSON payload into violations.
+// File paths are resolved against workDir (the tsc invocation cwd) to obtain
+// an absolute path, then re-anchored under gitRoot when the file lives inside
+// the repo so violations are reported relative to the git root.
 // extra is reserved for future diagnostic output; callers pass io.Discard.
-func parseViolations(output []byte, workDir string, _ io.Writer) ([]models.Violation, error) {
+func parseViolations(output []byte, workDir, gitRoot string, _ io.Writer) ([]models.Violation, error) {
 	trimmed := bytes.TrimSpace(output)
 	if len(trimmed) == 0 {
 		return []models.Violation{}, nil
@@ -179,7 +209,7 @@ func parseViolations(output []byte, workDir string, _ io.Writer) ([]models.Viola
 
 	violations := make([]models.Violation, 0, len(diagnostics))
 	for _, d := range diagnostics {
-		violations = append(violations, d.toViolation(workDir))
+		violations = append(violations, d.toViolation(workDir, gitRoot))
 	}
 	return violations, nil
 }
@@ -194,10 +224,20 @@ type TSCDiagnostic struct {
 	Message  string `json:"message"`
 }
 
-func (d *TSCDiagnostic) toViolation(workDir string) models.Violation {
+func (d *TSCDiagnostic) toViolation(workDir, gitRoot string) models.Violation {
 	filename := d.File
 	if filename != "" && !filepath.IsAbs(filename) {
 		filename = filepath.Join(workDir, filename)
+	}
+	if filename != "" {
+		if abs, err := filepath.Abs(filename); err == nil {
+			filename = abs
+		}
+		if gitRoot != "" {
+			if rel, err := filepath.Rel(gitRoot, filename); err == nil && !strings.HasPrefix(rel, "..") {
+				filename = rel
+			}
+		}
 	}
 
 	rule := fmt.Sprintf("TS%d", d.Code)
