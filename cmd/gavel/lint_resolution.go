@@ -38,6 +38,13 @@ func resolveLintPath(workDir, value string) string {
 	return filepath.Clean(value)
 }
 
+// normalizeLintRootArg promotes a single bare-directory positional arg to
+// opts.WorkDir, but ONLY when the arg is outside any git repository. Inside a
+// repo, project-root discovery is per-linter and is handled downstream by
+// groupFilesByGitRoot + resolveLinterInvocations (which walk up using each
+// linter's ProjectRootMarkers), and post-run scope filtering is handled by
+// FilterViolationsByUserScope. Promoting WorkDir + clearing Files would
+// destroy both signals, so we leave them alone in the in-repo case.
 func normalizeLintRootArg(opts LintOptions) (LintOptions, error) {
 	if opts.WorkDir != "" || len(opts.Files) != 1 {
 		return opts, nil
@@ -52,11 +59,13 @@ func normalizeLintRootArg(opts LintOptions) (LintOptions, error) {
 		return opts, nil
 	}
 
+	if utils.FindGitRoot(candidate) != "" {
+		return opts, nil
+	}
+
 	workDir := candidate
 	if goModRoot := utils.FindNearestGoModRoot(candidate); goModRoot != "" {
 		workDir = goModRoot
-	} else if gitRoot := utils.FindGitRoot(candidate); gitRoot != "" {
-		workDir = gitRoot
 	}
 
 	opts.WorkDir = workDir

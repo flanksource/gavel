@@ -1,11 +1,14 @@
 package linters
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFilterIgnoredViolations(t *testing.T) {
@@ -160,6 +163,136 @@ func TestFilterIgnoredViolations_AbsolutePaths(t *testing.T) {
 			filtered := FilterIgnoredViolations([]*LinterResult{result}, tt.rules)
 			assert.Equal(t, tt.wantFiltered, filtered)
 			assert.Len(t, result.Violations, tt.wantKept)
+		})
+	}
+}
+
+func TestFilterViolationsByUserScope(t *testing.T) {
+	// Build a real on-disk project so file-vs-directory detection in the
+	// scope filter has something to stat.
+	root := t.TempDir()
+	mustWrite := func(rel string) string {
+		abs := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o755))
+		require.NoError(t, os.WriteFile(abs, nil, 0o644))
+		return abs
+	}
+	targetFile := mustWrite("rules/br/AddressScreen_global.ts")
+	siblingFile := mustWrite("rules/br/Other.ts")
+	otherDirFile := mustWrite("rules/de/Thing.ts")
+	mustWrite("rules/br/nested/Deep.ts")
+
+	mkV := func(file string) models.Violation {
+		return models.Violation{Source: "tsc", File: file}
+	}
+
+	tests := []struct {
+		name        string
+		violations  []models.Violation
+		scopes      []string
+		wantKept    []string
+		wantDropped int
+	}{
+		{
+			name: "single file scope keeps only that file",
+			violations: []models.Violation{
+				mkV(targetFile),
+				mkV(siblingFile),
+				mkV(otherDirFile),
+			},
+			scopes:      []string{targetFile},
+			wantKept:    []string{targetFile},
+			wantDropped: 2,
+		},
+		{
+			name: "directory scope keeps descendants",
+			violations: []models.Violation{
+				mkV(targetFile),
+				mkV(siblingFile),
+				mkV(filepath.Join(root, "rules/br/nested/Deep.ts")),
+				mkV(otherDirFile),
+			},
+			scopes: []string{filepath.Join(root, "rules/br")},
+			wantKept: []string{
+				targetFile,
+				siblingFile,
+				filepath.Join(root, "rules/br/nested/Deep.ts"),
+			},
+			wantDropped: 1,
+		},
+		{
+			name: "relative scope resolved against workDir",
+			violations: []models.Violation{
+				mkV(targetFile),
+				mkV(otherDirFile),
+			},
+			scopes:      []string{"rules/br/AddressScreen_global.ts"},
+			wantKept:    []string{targetFile},
+			wantDropped: 1,
+		},
+		{
+			name: "relative violation paths resolved against result WorkDir",
+			violations: []models.Violation{
+				{Source: "tsc", File: "rules/br/AddressScreen_global.ts"},
+				{Source: "tsc", File: "rules/de/Thing.ts"},
+			},
+			scopes:      []string{targetFile},
+			wantKept:    []string{"rules/br/AddressScreen_global.ts"},
+			wantDropped: 1,
+		},
+		{
+			name:        "empty scopes is no-op",
+			violations:  []models.Violation{mkV(targetFile), mkV(otherDirFile)},
+			scopes:      nil,
+			wantKept:    []string{targetFile, otherDirFile},
+			wantDropped: 0,
+		},
+	}
+
+	t.Run("tsc-style: violations anchored at git root, result.WorkDir is sub-project", func(t *testing.T) {
+		// Reproduces the production bug: tsc emits paths relative to the git
+		// root, but its result.WorkDir is the tsconfig project root (a
+		// subdirectory). The filter must resolve violation paths against the
+		// caller's workDir (git root), not just result.WorkDir, or it drops
+		// every violation.
+		gitRoot := t.TempDir()
+		projectRoot := filepath.Join(gitRoot, ".generated")
+		require.NoError(t, os.MkdirAll(filepath.Join(projectRoot, "rules/br"), 0o755))
+		target := filepath.Join(projectRoot, "rules/br/AddressScreen_global.ts")
+		other := filepath.Join(projectRoot, "rules/de/Thing.ts")
+		require.NoError(t, os.MkdirAll(filepath.Dir(other), 0o755))
+		require.NoError(t, os.WriteFile(target, nil, 0o644))
+		require.NoError(t, os.WriteFile(other, nil, 0o644))
+
+		// Violation files are reported relative to gitRoot (as tsc does),
+		// while result.WorkDir is projectRoot.
+		result := &LinterResult{
+			WorkDir: projectRoot,
+			Violations: []models.Violation{
+				{Source: "tsc", File: ".generated/rules/br/AddressScreen_global.ts"},
+				{Source: "tsc", File: ".generated/rules/de/Thing.ts"},
+			},
+		}
+		dropped := FilterViolationsByUserScope(
+			[]*LinterResult{result},
+			gitRoot,
+			[]string{".generated/rules/br/AddressScreen_global.ts"},
+		)
+		assert.Equal(t, 1, dropped)
+		require.Len(t, result.Violations, 1)
+		assert.Equal(t, ".generated/rules/br/AddressScreen_global.ts", result.Violations[0].File)
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &LinterResult{WorkDir: root, Violations: tt.violations}
+			dropped := FilterViolationsByUserScope([]*LinterResult{result}, root, tt.scopes)
+			assert.Equal(t, tt.wantDropped, dropped)
+			gotFiles := make([]string, 0, len(result.Violations))
+			for _, v := range result.Violations {
+				gotFiles = append(gotFiles, v.File)
+			}
+			assert.ElementsMatch(t, tt.wantKept, gotFiles)
 		})
 	}
 }

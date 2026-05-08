@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/betterleaks"
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -405,4 +407,42 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 			t.Fatalf("expected 0 invocations for file without go.mod, got %+v", invs)
 		}
 	})
+}
+
+// TestApplyPostLintFiltersHonorsGavelIgnore is a regression for the commit
+// pre-commit lint gate: before the cascade was pushed into executeLinters,
+// runCommitLint returned raw results so a finding under a path covered by
+// .gavel.yaml lint.ignore would still block the commit.
+func TestApplyPostLintFiltersHonorsGavelIgnore(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	cfg := "lint:\n  ignore:\n  - source: betterleaks\n    file: pkg/**/*.go\n"
+	if err := os.WriteFile(filepath.Join(workDir, ".gavel.yaml"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write .gavel.yaml: %v", err)
+	}
+	target := filepath.Join(workDir, "pkg", "leak.go")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatalf("mkdir pkg: %v", err)
+	}
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	results := []*linters.LinterResult{{
+		Linter:  "betterleaks",
+		WorkDir: workDir,
+		Violations: []models.Violation{{
+			Source: "betterleaks",
+			File:   target,
+			Rule:   &models.Rule{Package: "betterleaks", Method: "aws-access-token"},
+		}},
+	}}
+
+	applyPostLintFilters(results, workDir, nil)
+
+	if got := len(results[0].Violations); got != 0 {
+		t.Fatalf("expected lint.ignore to suppress betterleaks finding under pkg/, got %d violations", got)
+	}
 }

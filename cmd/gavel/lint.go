@@ -60,6 +60,11 @@ type LintOptions struct {
 	Files        []string        `args:"true"`
 	OutputTee    io.Writer       `json:"-"`
 	Context      context.Context `json:"-"`
+
+	AIFix         bool    `flag:"ai-fix" help:"Invoke Claude to fix violations and re-lint until clean (or bounded by --ai-fix-max-iterations / --ai-fix-max-cost)"`
+	AIFixMaxIters int     `flag:"ai-fix-max-iterations" help:"Max claude→re-lint cycles" default:"3"`
+	AIFixMaxCost  float64 `flag:"ai-fix-max-cost" help:"Max cumulative USD across iterations (0 = unbounded)" default:"0"`
+	AIFixModel    string  `flag:"ai-fix-model" help:"Claude model" default:"claude-code-opus"`
 }
 
 func (o LintOptions) Pretty() api.Text {
@@ -201,12 +206,6 @@ func runLint(opts LintOptions) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if filtered := linters.FilterViolationsByGitIgnoreInResults(results); filtered > 0 {
-			logger.Infof("Filtered %d gitignored violations in %s", filtered, groupOpts.WorkDir)
-		}
-		if err := applyGroupIgnores(groupOpts.WorkDir, results); err != nil {
-			logger.Warnf("Failed to load .gavel.yaml for %s: %v", groupOpts.WorkDir, err)
-		}
 		allResults = append(allResults, results...)
 	}
 
@@ -216,6 +215,14 @@ func runLint(opts LintOptions) (any, error) {
 			return nil, fmt.Errorf("--baseline: %w", baselineErr)
 		}
 		baseline.FilterNewViolations(allResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
+	}
+
+	if opts.AIFix {
+		fixed, fixErr := runAIFix(opts, allResults)
+		if fixErr != nil {
+			return nil, fmt.Errorf("ai-fix: %w", fixErr)
+		}
+		allResults = fixed
 	}
 
 	if uiServer != nil {
@@ -316,13 +323,6 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 	if err != nil {
 		return nil, err
 	}
-
-	cfg, cfgErr := verify.LoadGavelConfig(workDir)
-	if cfgErr != nil {
-		logger.Warnf("Failed to load .gavel.yaml: %v", cfgErr)
-		return results, nil
-	}
-	linters.FilterIgnoredViolations(results, cfg.Lint.Ignore)
 	return results, nil
 }
 
@@ -566,7 +566,38 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 		}
 	}
 
+	applyPostLintFilters(allResults, opts.WorkDir, opts.Files)
 	return allResults, nil
+}
+
+// applyPostLintFilters runs the three post-filters every caller of
+// executeLinters wants in the same order: user-supplied scope (drops
+// violations outside the requested file set), gitignore (drops violations on
+// gitignored paths), then .gavel.yaml lint.ignore rules. workDir is used to
+// resolve relative scope entries and to locate the layered .gavel.yaml; each
+// result's own WorkDir is used for gitignore discovery and absolute-path
+// relativization inside FilterIgnoredViolations.
+func applyPostLintFilters(results []*linters.LinterResult, workDir string, files []string) {
+	if len(results) == 0 {
+		return
+	}
+	if dropped := linters.FilterViolationsByUserScope(results, workDir, files); dropped > 0 {
+		logger.Infof("Filtered %d violations outside requested paths in %s", dropped, workDir)
+	}
+	if filtered := linters.FilterViolationsByGitIgnoreInResults(results); filtered > 0 {
+		logger.Infof("Filtered %d gitignored violations in %s", filtered, workDir)
+	}
+	if workDir == "" {
+		return
+	}
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		logger.Warnf("Failed to load .gavel.yaml for %s: %v", workDir, err)
+		return
+	}
+	if filtered := linters.FilterIgnoredViolations(results, cfg.Lint.Ignore); filtered > 0 {
+		logger.Infof("Filtered %d ignored violations in %s", filtered, workDir)
+	}
 }
 
 // lintBaseRef returns the git ref to use for --new-from-rev computation, or

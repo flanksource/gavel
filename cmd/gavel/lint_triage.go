@@ -78,20 +78,22 @@ func collectViolationTypes(results []*linters.LinterResult) []violationType {
 type lintFindingsAction int
 
 const (
-	lintActionTriage lintFindingsAction = iota
+	lintActionAIFix lintFindingsAction = iota
+	lintActionTriage
 	lintActionContinueOnce
 	lintActionCancel
 )
 
-// promptLintFindingsAction asks the user how to handle lint findings: open
-// the rule-by-rule triage flow, continue this commit once without persisting
-// any ignore rules, or cancel. Tests stub this var instead of going through
-// the TUI. Non-TTY runs and selection failures default to lintActionTriage to
-// preserve the historical behaviour.
+// promptLintFindingsAction asks the user how to handle lint findings: invoke
+// AI fix, open the rule-by-rule triage flow, continue this commit once
+// without persisting any ignore rules, or cancel. Tests stub this var
+// instead of going through the TUI. Non-TTY runs and selection failures
+// default to lintActionTriage to preserve the historical behaviour.
 var promptLintFindingsAction = func() lintFindingsAction {
 	prompting.Prepare()
 
 	options := []string{
+		"AI Fix: invoke Claude to repair violations, then re-lint",
 		"Triage: pick rules to ignore and write to .gavel.yaml, then re-run commit",
 		"Continue commit anyway (ignore once, no .gavel.yaml change)",
 		"Cancel commit",
@@ -104,9 +106,13 @@ var promptLintFindingsAction = func() lintFindingsAction {
 		return lintActionTriage
 	}
 	switch indices[0] {
+	case 0:
+		return lintActionAIFix
 	case 1:
-		return lintActionContinueOnce
+		return lintActionTriage
 	case 2:
+		return lintActionContinueOnce
+	case 3:
 		return lintActionCancel
 	default:
 		return lintActionTriage

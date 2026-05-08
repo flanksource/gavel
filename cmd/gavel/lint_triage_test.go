@@ -130,3 +130,14 @@ func TestHandleCommitLintFindings_NilResultBlocks(t *testing.T) {
 	got = handleCommitLintFindings(t.TempDir(), &commitpkg.Result{Lint: nil})
 	assert.Equal(t, lintFindingsBlocked, got)
 }
+
+// lintActionAIFix must be the first entry in the iota so the prompt
+// presents "AI Fix" above Triage. If someone reorders the const block, the
+// commit-time prompt and runCommit's switch would silently route the user
+// to the wrong branch — this guard fails the build instead.
+func TestLintActionIotaOrder(t *testing.T) {
+	assert.Equal(t, lintFindingsAction(0), lintActionAIFix)
+	assert.Equal(t, lintFindingsAction(1), lintActionTriage)
+	assert.Equal(t, lintFindingsAction(2), lintActionContinueOnce)
+	assert.Equal(t, lintFindingsAction(3), lintActionCancel)
+}

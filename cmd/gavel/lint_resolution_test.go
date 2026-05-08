@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
+	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -52,7 +53,7 @@ func TestGroupFilesByGitRootResolvesRelativeFilesFromWorkDir(t *testing.T) {
 	}
 }
 
-func TestNormalizeLintRootArgPromotesSingleDirectoryToWorkDir(t *testing.T) {
+func TestNormalizeLintRootArgLeavesFilesAloneInsideGitRepo(t *testing.T) {
 	repo := t.TempDir()
 	subdir := filepath.Join(repo, "sub")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -71,11 +72,65 @@ func TestNormalizeLintRootArgPromotesSingleDirectoryToWorkDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeLintRootArg: %v", err)
 	}
-	if opts.WorkDir != repo {
-		t.Fatalf("WorkDir = %q, want %q", opts.WorkDir, repo)
+	if opts.WorkDir != "" {
+		t.Fatalf("WorkDir = %q, want empty (downstream resolves per linter)", opts.WorkDir)
+	}
+	if len(opts.Files) != 1 || opts.Files[0] != subdir {
+		t.Fatalf("Files = %v, want [%s]", opts.Files, subdir)
+	}
+}
+
+func TestNormalizeLintRootArgPromotesSingleDirectoryWhenNotInGitRepo(t *testing.T) {
+	root := t.TempDir()
+	subdir := filepath.Join(root, "sub")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("create subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/repo\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	opts, err := normalizeLintRootArg(LintOptions{
+		Files: []string{subdir},
+	})
+	if err != nil {
+		t.Fatalf("normalizeLintRootArg: %v", err)
+	}
+	if opts.WorkDir != root {
+		t.Fatalf("WorkDir = %q, want %q", opts.WorkDir, root)
 	}
 	if len(opts.Files) != 0 {
 		t.Fatalf("Files = %v, want []", opts.Files)
+	}
+}
+
+func TestResolveLinterInvocationsTscFindsParentTsconfig(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tsconfig.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write tsconfig.json: %v", err)
+	}
+	scope := filepath.Join(repo, "frontend", "src")
+	if err := os.MkdirAll(scope, 0o755); err != nil {
+		t.Fatalf("create scope: %v", err)
+	}
+
+	invs := resolveLinterInvocations(tsc.NewTSC(repo), LintOptions{
+		WorkDir: repo,
+		Files:   []string{filepath.Join("frontend", "src")},
+	})
+
+	if len(invs) != 1 {
+		t.Fatalf("invocations = %d, want 1: %+v", len(invs), invs)
+	}
+	if invs[0].projectRoot != repo {
+		t.Fatalf("projectRoot = %q, want %q", invs[0].projectRoot, repo)
+	}
+	want := filepath.Join("frontend", "src")
+	if len(invs[0].files) != 1 || invs[0].files[0] != want {
+		t.Fatalf("files = %v, want [%s]", invs[0].files, want)
 	}
 }
 

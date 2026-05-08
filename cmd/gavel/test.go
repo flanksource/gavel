@@ -252,9 +252,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				}
 				lintResults = append(lintResults, results...)
 			}
-			if lintErr == nil {
-				linters.FilterIgnoredViolations(lintResults, gavelCfg.Lint.Ignore)
-			}
 			if uiServer != nil {
 				uiServer.SetLintResults(lintResults)
 			}

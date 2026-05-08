@@ -230,6 +230,14 @@ func runCommit(opts CommitOptions) (any, error) {
 					return retryResult, retryErr
 				}
 				return retryResult, nil
+			case lintFindingsAIFixed:
+				retry := buildCommitOptions(opts, workDir, cfg)
+				logger.Infof("lint: ai-fix applied edits; re-running commit with lint gate enabled")
+				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
+				if retryErr != nil {
+					return retryResult, retryErr
+				}
+				return retryResult, nil
 			default:
 				exitCode = 1
 				return nil, nil
@@ -251,6 +259,10 @@ const (
 	// lint gate for this commit only. Caller should re-run commit with lint
 	// flags forced off.
 	lintFindingsContinueOnce
+	// lintFindingsAIFixed is returned when Claude was invoked, edits were
+	// applied, and the post-fix lint pass came back clean. Caller should
+	// re-run commit with the lint gate STILL ON (no bypass).
+	lintFindingsAIFixed
 )
 
 // handleCommitLintFindings prints the per-violation report and asks the user
@@ -274,6 +286,8 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result) lintFind
 	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
 
 	switch promptLintFindingsAction() {
+	case lintActionAIFix:
+		return runCommitAIFix(workDir, result)
 	case lintActionContinueOnce:
 		return lintFindingsContinueOnce
 	case lintActionCancel:
