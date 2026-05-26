@@ -10,9 +10,10 @@ import (
 	"github.com/flanksource/gavel/linters"
 )
 
-// runAIFix invokes Claude (via captain's claude_cli streaming provider) to
-// repair the violations in allResults, then re-lints with the same scope.
-// It loops until clean, MaxIterations is reached, or MaxCostUSD is hit.
+// runAIFix invokes the AI configured by `captain configure` (overlaid by any
+// `gavel lint --model=… --budget=…` flags) to repair the violations in
+// allResults, then re-lints with the same scope. It loops until clean,
+// MaxIterations is reached, or the configured BudgetUSD is hit.
 //
 // On stop reasons "max-iterations" / "max-cost" with residual violations,
 // runAIFix prints a summary to stderr but does NOT itself set exitCode —
@@ -24,14 +25,25 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		ctx = context.Background()
 	}
 
+	// Build ai.Config + ai.Request template from captain's flag/env/saved-
+	// defaults overlay. ToRequest's prompt args are empty placeholders;
+	// aifix fills SystemPrompt + Prompt per iteration.
+	aiCfg := opts.ToConfig()
+	aiProto := opts.ToRequest("", "", "")
+	// Claude CLI streaming needs --verbose + --strict-mcp-config; nothing in
+	// AIRuntimeOptions binds those, so seed them here. Non-claude backends
+	// ignore both.
+	aiProto.Verbose = true
+	aiProto.StrictMCP = true
+
 	res, err := aifix.Run(ctx, aifix.Request{
-		WorkDir:       opts.WorkDir,
-		Linters:       opts.Linters,
-		Files:         opts.Files,
-		Initial:       initial,
-		Model:         opts.AIFixModel,
-		MaxIterations: opts.AIFixMaxIters,
-		MaxCostUSD:    opts.AIFixMaxCost,
+		WorkDir:        opts.WorkDir,
+		Linters:        opts.Linters,
+		Files:          opts.Files,
+		Initial:        initial,
+		MaxIterations:  opts.AIFixMaxIters,
+		AIConfig:       aiCfg,
+		AIRequestProto: aiProto,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			rerunOpts := opts
 			rerunOpts.Context = rctx

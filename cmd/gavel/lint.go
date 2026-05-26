@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
@@ -43,7 +44,7 @@ type LintOptions struct {
 	Ignore       []string        `flag:"ignore" help:"Glob patterns to exclude from linting"`
 	Triage       bool            `flag:"triage" help:"Interactive mode to select violation types to ignore"`
 	Fix          bool            `flag:"fix" help:"Enable auto-fixing"`
-	NoCache      bool            `flag:"no-cache" help:"Disable caching/debounce"`
+	NoCache      bool            `flag:"no-lint-cache" help:"Disable linter result caching/debounce"`
 	Timeout      string          `flag:"timeout" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
 	SyncTodos    string          `flag:"sync-todos" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
 	GroupBy      string          `flag:"group-by" help:"Group synced TODOs by: file, package, message" default:"file"`
@@ -61,10 +62,15 @@ type LintOptions struct {
 	OutputTee    io.Writer       `json:"-"`
 	Context      context.Context `json:"-"`
 
-	AIFix         bool    `flag:"ai-fix" help:"Invoke Claude to fix violations and re-lint until clean (or bounded by --ai-fix-max-iterations / --ai-fix-max-cost)"`
-	AIFixMaxIters int     `flag:"ai-fix-max-iterations" help:"Max claude→re-lint cycles" default:"3"`
-	AIFixMaxCost  float64 `flag:"ai-fix-max-cost" help:"Max cumulative USD across iterations (0 = unbounded)" default:"0"`
-	AIFixModel    string  `flag:"ai-fix-model" help:"Claude model" default:"claude-code-opus"`
+	AIFix         bool `flag:"ai-fix" help:"Invoke the AI configured by 'captain configure' to fix violations and re-lint until clean (or bounded by --ai-fix-max-iterations / --budget)"`
+	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max AI→re-lint cycles" default:"3"`
+
+	// Embedded: contributes --model, --backend, --api-key, --no-cache,
+	// --budget, --debug, --max-tokens, --temperature, --permission-mode,
+	// --edit, --allowed-tools, --disallowed-tools, --mcp, --hooks,
+	// --skills, --skill-dir, --user, --project, --memory, --bare.
+	// Defaults overlay from ~/.captain.yaml via captain configure.
+	captaincli.AIRuntimeOptions
 }
 
 func (o LintOptions) Pretty() api.Text {

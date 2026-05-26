@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/ai/provider"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
@@ -21,11 +20,24 @@ type Request struct {
 	Linters       []string
 	Files         []string
 	Initial       []*linters.LinterResult
-	Model         string
 	MaxIterations int
-	MaxCostUSD    float64
 
-	// ReLint is invoked after each Claude iteration to check whether
+	// AIConfig describes which provider + model + budget aifix should use.
+	// Callers build it from captain's CLI flags + ~/.captain.yaml overlay
+	// via captaincli.AIRuntimeOptions.ToConfig() so `gavel lint --ai-fix`
+	// honours the same defaults as `captain ai prompt`. An empty Model
+	// surfaces captain's "run captain configure" error.
+	AIConfig captainai.Config
+
+	// AIRequestProto is the per-iteration request template. aifix sets
+	// SystemPrompt and Prompt on a clone of this struct each turn; all
+	// other fields (PermissionMode, NoMCP, NoHooks, NoSkills, NoUser,
+	// NoProject, NoMemory, MaxTokens, Temperature, ReasoningEffort, Edit,
+	// AllowedTools, DisallowedTools, SkillDirs, Bare, StrictMCP, Verbose)
+	// flow through unchanged so saved captain defaults reach the provider.
+	AIRequestProto captainai.Request
+
+	// ReLint is invoked after each AI iteration to check whether
 	// violations remain. It must run with the same scope (linters, files)
 	// that the AI just attempted to fix.
 	ReLint func(ctx context.Context) ([]*linters.LinterResult, error)
@@ -43,8 +55,6 @@ type Result struct {
 	Iterations   int
 }
 
-const defaultModel = "claude-code-opus"
-
 // Run executes the AI-fix loop and returns the post-fix lint results.
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if len(req.Initial) == 0 || !hasViolations(req.Initial) {
@@ -56,20 +66,22 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 
 	gavelai.NormalizeEnv()
 
-	model := req.Model
-	if model == "" {
-		model = defaultModel
+	p, err := captainai.NewProvider(req.AIConfig)
+	if err != nil {
+		return nil, err
 	}
-
-	cli := provider.NewClaudeCLI(model)
+	streamer, ok := p.(captainai.StreamingProvider)
+	if !ok {
+		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", req.AIConfig.Backend)
+	}
 
 	current := req.Initial
 	systemPrompt := buildSystemPrompt(req.WorkDir, req.Linters)
 
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
-		Provider:      cli,
+		Provider:      streamer,
 		MaxIterations: req.MaxIterations,
-		MaxCostUSD:    req.MaxCostUSD,
+		MaxCostUSD:    req.AIConfig.BudgetUSD,
 		SessionReuse:  true,
 		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
 			if iter > 0 {
@@ -85,13 +97,10 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 					return captainai.Request{}, false
 				}
 			}
-			return captainai.Request{
-				SystemPrompt:   systemPrompt,
-				Prompt:         buildPrompt(req.WorkDir, current),
-				PermissionMode: "acceptEdits",
-				StrictMCP:      true,
-				Verbose:        true,
-			}, true
+			turn := req.AIRequestProto
+			turn.SystemPrompt = systemPrompt
+			turn.Prompt = buildPrompt(req.WorkDir, current)
+			return turn, true
 		},
 		OnEvent: req.OnEvent,
 	})

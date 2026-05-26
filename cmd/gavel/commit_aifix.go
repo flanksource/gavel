@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/ai/aifix"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
@@ -31,10 +32,28 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 	requested := commitGateRequest(result.Lint.Gates)
 	ctx := context.Background()
 
+	// Default-shaped runtime options: contributes only the saved
+	// ~/.captain.yaml overlay (model, backend, budget, no* toggles,
+	// reasoningEffort, maxTokens). No CLI flags wired in for commit yet.
+	aiOpts := captaincli.AIRuntimeOptions{
+		MCP:     true,
+		Hooks:   true,
+		Skills:  true,
+		User:    true,
+		Project: true,
+		Memory:  true,
+	}
+	aiCfg := aiOpts.ToConfig()
+	aiProto := aiOpts.ToRequest("", "", "")
+	aiProto.Verbose = true
+	aiProto.StrictMCP = true
+
 	fixRes, err := aifix.Run(ctx, aifix.Request{
-		WorkDir: workDir,
-		Files:   files,
-		Initial: result.Lint.Results,
+		WorkDir:        workDir,
+		Files:          files,
+		Initial:        result.Lint.Results,
+		AIConfig:       aiCfg,
+		AIRequestProto: aiProto,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			return runCommitLint(rctx, workDir, requested, files)
 		},
