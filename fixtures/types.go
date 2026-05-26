@@ -413,6 +413,8 @@ const (
 	SectionNode
 	// TestNode represents an individual test case within a section.
 	TestNode
+	// TableNode represents a markdown table containing row-based fixture tests.
+	TableNode
 )
 
 func (nt NodeType) Pretty() api.Text {
@@ -758,9 +760,21 @@ func (nt NodeType) String() string {
 		return "section"
 	case TestNode:
 		return "test"
+	case TableNode:
+		return "table"
 	default:
 		return "unknown"
 	}
+}
+
+// FixtureOrigin records where a fixture node came from in the source markdown.
+type FixtureOrigin struct {
+	File        string `json:"file,omitempty"`
+	SectionPath string `json:"section_path,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	TableIndex  int    `json:"table_index,omitempty"`
+	RowIndex    int    `json:"row_index,omitempty"`
+	Line        int    `json:"line,omitempty"`
 }
 
 // FixtureNode represents a node in the hierarchical fixture tree structure.
@@ -774,6 +788,7 @@ type FixtureNode struct {
 	Test     *FixtureTest   `json:"test,omitempty" `   // Only populated for Test nodes
 	Results  *FixtureResult `json:"results,omitempty"` // Only populated after execution
 	Stats    *Stats         `json:"stats,omitempty"`   // Aggregated statistics for sections/files
+	Origin   *FixtureOrigin `json:"origin,omitempty"`  // Source markdown location for this node
 }
 
 func (f FixtureNode) Pretty() api.Text {
@@ -873,6 +888,8 @@ func (ftn FixtureTreeNode) Pretty() api.Text {
 		icon = "📁"
 	case SectionNode:
 		icon = "📂"
+	case TableNode:
+		icon = "▦"
 	case TestNode:
 		if ftn.fixture.Results != nil {
 			icon = ftn.fixture.Results.Status.Icon()
@@ -914,7 +931,7 @@ func (ftn FixtureTreeNode) Pretty() api.Text {
 		switch ftn.fixture.Type {
 		case FileNode:
 			style = "text-blue-600 font-bold"
-		case SectionNode:
+		case SectionNode, TableNode:
 			style = "text-blue-500"
 		default:
 			style = ""
@@ -986,10 +1003,10 @@ func (fn *FixtureNode) PruneEmptySections() {
 		// Keep if:
 		// 1. It's a TestNode (actual test)
 		// 2. It's a FileNode (file container)
-		// 3. It's a SectionNode with tests (calculated stats Total > 0)
+		// 3. It's a SectionNode/TableNode with tests (calculated stats Total > 0)
 		shouldKeep := child.Type == TestNode ||
 			child.Type == FileNode ||
-			(child.Type == SectionNode && child.GetStats().Total > 0)
+			((child.Type == SectionNode || child.Type == TableNode) && child.GetStats().Total > 0)
 
 		if shouldKeep {
 			filtered = append(filtered, child)

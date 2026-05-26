@@ -269,6 +269,10 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		Name:     filepath.Base(filePath),
 		Type:     FileNode,
 		Children: make([]*FixtureNode, 0),
+		Origin: &FixtureOrigin{
+			File: filePath,
+			Kind: "file",
+		},
 	}
 
 	// Get the directory containing the fixture file
@@ -311,8 +315,24 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 	for _, child := range contentTree.Children {
 		fileTree.AddChild(child)
 	}
+	setOriginFile(fileTree, filePath)
 
 	return fileTree, nil
+}
+
+func setOriginFile(node *FixtureNode, filePath string) {
+	if node == nil {
+		return
+	}
+	if node.Origin == nil {
+		node.Origin = &FixtureOrigin{}
+	}
+	if node.Origin.File == "" {
+		node.Origin.File = filePath
+	}
+	for _, child := range node.Children {
+		setOriginFile(child, filePath)
+	}
 }
 
 // buildSectionPath constructs a section path from the stack

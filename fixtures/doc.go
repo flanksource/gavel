@@ -77,11 +77,21 @@
 //
 // Run fixture files programmatically:
 //
-//	runner := fixtures.NewRunner()
-//	results, _ := runner.RunFixtureFile("tests/ast_queries.md")
-//	for _, result := range results {
-//	    fmt.Printf("%s: %s\n", result.Name, result.Status)
+//	import _ "github.com/flanksource/gavel/fixtures/types"
+//
+//	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+//	    Paths: []string{"tests/ast_queries.md"},
+//	})
+//	if err != nil {
+//	    t.Fatal(err)
 //	}
+//	runner.RunTesting(t)
+//
+// RunTesting mirrors markdown files, sections, tables, and table rows as nested
+// t.Run nodes when passed a *testing.T. Ginkgo specs can use runner.RunGinkgo()
+// for aggregate reporting or runner.RegisterGinkgoSpecs() during spec
+// registration to mirror fixture nodes as Describe/It nodes. Gomega users can
+// call runner.RunGomega(gomega.NewWithT(t)).
 //
 // # YAML Front-matter
 //

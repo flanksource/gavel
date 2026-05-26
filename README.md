@@ -182,6 +182,34 @@ gavel fixtures -vv tests.md                 # more verbose
 gavel fixtures --no-progress tests.md       # disable progress display
 ```
 
+The same runner can be used from Go tests. Import the default fixture types when
+using `exec` fixtures:
+
+```go
+import (
+	"testing"
+
+	"github.com/flanksource/gavel/fixtures"
+	_ "github.com/flanksource/gavel/fixtures/types"
+)
+
+func TestFixtures(t *testing.T) {
+	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
+		Paths: []string{"fixtures/**/*.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.RunTesting(t)
+}
+```
+
+`RunTesting(t)` mirrors markdown files, headings, tables, and table rows as
+nested `t.Run` nodes when passed a `*testing.T`. Use `RunGomega(gomega.NewWithT(t))`
+for aggregate Gomega assertions, `RunGinkgo()` inside an existing Ginkgo `It`,
+or `RegisterGinkgoSpecs()` during Ginkgo spec registration when fixture files,
+sections, and rows should become `Describe`/`It` nodes.
+
 Fixtures support three formats in a single markdown file:
 
 **Table format** (preferred) — each row is a test. Custom columns become template variables in `exec`/`args`:

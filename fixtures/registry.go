@@ -95,7 +95,10 @@ func (r *Registry) GetForFixture(fixture FixtureTest) (FixtureType, error) {
 	}
 
 	if !fixture.IsEmpty() {
-		return r.types["exec"], nil
+		if ft, ok := r.types["exec"]; ok {
+			return ft, nil
+		}
+		return nil, fmt.Errorf("exec fixture type not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
 	}
 	// Add more type detection logic as needed
 

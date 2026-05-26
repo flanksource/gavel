@@ -22,6 +22,7 @@ type commandBlockBuilder struct {
 	frontmatter string
 	validations []string
 	isComplete  bool
+	origin      *FixtureOrigin
 }
 
 // parseMarkdownWithGoldmarkTree parses markdown content using goldmark AST parser and returns a tree structure
@@ -52,6 +53,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 	var currentSection = rootNode
 	var standaloneCodeBlock *commandBlockBuilder // For standalone code blocks without "command:" prefix
 	var parentHeading string                     // For generating test names from context
+	var tableIndex int
 
 	// Walk the AST
 	err := ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -71,6 +73,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 						Name:     fixture.Test.Name,
 						Type:     TestNode,
 						Test:     fixture.Test,
+						Origin:   fixture.Origin,
 						Children: make([]*FixtureNode, 0),
 					})
 				}
@@ -88,6 +91,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 						Name:     fixture.Test.Name,
 						Type:     TestNode,
 						Test:     fixture.Test,
+						Origin:   fixture.Origin,
 						Children: make([]*FixtureNode, 0),
 					})
 				}
@@ -104,6 +108,11 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				currentCommand = &commandBlockBuilder{
 					name:        commandName,
 					validations: make([]string, 0),
+					origin: &FixtureOrigin{
+						Kind:        "command",
+						SectionPath: currentSection.GetSectionPath(),
+						Line:        nodeStartLine(node, source),
+					},
 				}
 				inCommandBlock = true
 				// Don't create a section node for command headings
@@ -119,9 +128,14 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 
 				// Create section node for regular headings
 				sectionNode := &FixtureNode{
-					Name:     headingText,
-					Type:     SectionNode,
-					Level:    level,
+					Name:  headingText,
+					Type:  SectionNode,
+					Level: level,
+					Origin: &FixtureOrigin{
+						Kind:        "section",
+						SectionPath: currentSection.GetSectionPath(),
+						Line:        nodeStartLine(node, source),
+					},
 					Children: make([]*FixtureNode, 0),
 				}
 
@@ -172,6 +186,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 							Name:     fixture.Test.Name,
 							Type:     TestNode,
 							Test:     fixture.Test,
+							Origin:   fixture.Origin,
 							Children: make([]*FixtureNode, 0),
 						})
 					}
@@ -190,6 +205,11 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 					language:    lang,
 					content:     codeContent,
 					validations: make([]string, 0),
+					origin: &FixtureOrigin{
+						Kind:        "standalone-code",
+						SectionPath: currentSection.GetSectionPath(),
+						Line:        nodeStartLine(node, source),
+					},
 				}
 
 			} else if !inCommandBlock && standaloneCodeBlock != nil {
@@ -222,6 +242,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 						Name:     fixture.Test.Name,
 						Type:     TestNode,
 						Test:     fixture.Test,
+						Origin:   fixture.Origin,
 						Children: make([]*FixtureNode, 0),
 					})
 				}
@@ -231,21 +252,13 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 		case *extast.Table:
 			// Handle existing table format - add tests to current section
 			if !inCommandBlock {
-				tableFixtures, err := parseTableFromAST(node, source, frontMatter, sourceDir)
+				tableIndex++
+				tableNode, err := parseTableFromAST(node, source, frontMatter, sourceDir, tableIndex, currentSection.GetSectionPath())
 				if err != nil {
 					return ast.WalkStop, err
 				}
-				// Add table fixtures to current section
-				for _, fixture := range tableFixtures {
-					if fixture.Test != nil {
-						testNode := &FixtureNode{
-							Name:     fixture.Test.Name,
-							Type:     TestNode,
-							Test:     fixture.Test,
-							Children: make([]*FixtureNode, 0),
-						}
-						currentSection.AddChild(testNode)
-					}
+				if tableNode != nil {
+					currentSection.AddChild(tableNode)
 				}
 			}
 		}
@@ -264,6 +277,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				Name:     fixture.Test.Name,
 				Type:     TestNode,
 				Test:     fixture.Test,
+				Origin:   fixture.Origin,
 				Children: make([]*FixtureNode, 0),
 			})
 		}
@@ -277,6 +291,7 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				Name:     fixture.Test.Name,
 				Type:     TestNode,
 				Test:     fixture.Test,
+				Origin:   fixture.Origin,
 				Children: make([]*FixtureNode, 0),
 			})
 		}
@@ -493,18 +508,30 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 	cmd.isComplete = true
 
 	return &FixtureNode{
-		Type: TestNode,
-		Test: &fixture,
+		Type:   TestNode,
+		Test:   &fixture,
+		Origin: cmd.origin,
 	}
 }
 
 // parseTableFromAST parses table-based fixtures from AST (existing functionality)
-func parseTableFromAST(tableNode *extast.Table, source []byte, frontMatter *FrontMatter, sourceDir string) ([]FixtureNode, error) {
-	var fixtures []FixtureNode
+func parseTableFromAST(tableAST *extast.Table, source []byte, frontMatter *FrontMatter, sourceDir string, tableIndex int, sectionPath string) (*FixtureNode, error) {
+	tableFixtureNode := &FixtureNode{
+		Name:     fmt.Sprintf("Table %d", tableIndex),
+		Type:     TableNode,
+		Children: make([]*FixtureNode, 0),
+		Origin: &FixtureOrigin{
+			Kind:        "table",
+			SectionPath: sectionPath,
+			TableIndex:  tableIndex,
+			Line:        nodeStartLine(tableAST, source),
+		},
+	}
 	var headers []string
+	rowIndex := 0
 
 	// Walk through table rows
-	for child := tableNode.FirstChild(); child != nil; child = child.NextSibling() {
+	for child := tableAST.FirstChild(); child != nil; child = child.NextSibling() {
 		if tableHead, ok := child.(*extast.TableHeader); ok {
 			// Extract headers
 			for headerChild := tableHead.FirstChild(); headerChild != nil; headerChild = headerChild.NextSibling() {
@@ -514,6 +541,7 @@ func parseTableFromAST(tableNode *extast.Table, source []byte, frontMatter *Fron
 				}
 			}
 		} else if tableRow, ok := child.(*extast.TableRow); ok {
+			rowIndex++
 			// Extract row data
 			var values []string
 			for cellChild := tableRow.FirstChild(); cellChild != nil; cellChild = cellChild.NextSibling() {
@@ -531,13 +559,49 @@ func parseTableFromAST(tableNode *extast.Table, source []byte, frontMatter *Fron
 						applyFrontMatterToFixture(fixtureNode.Test, frontMatter)
 						fixtureNode.Test.SourceDir = sourceDir
 					}
-					fixtures = append(fixtures, *fixtureNode)
+					fixtureNode.Name = fixtureNode.Test.Name
+					fixtureNode.Origin = &FixtureOrigin{
+						Kind:        "table-row",
+						SectionPath: sectionPath,
+						TableIndex:  tableIndex,
+						RowIndex:    rowIndex,
+						Line:        nodeStartLine(tableRow, source),
+					}
+					tableFixtureNode.AddChild(fixtureNode)
 				}
 			}
 		}
 	}
 
-	return fixtures, nil
+	if len(tableFixtureNode.Children) == 0 {
+		return nil, nil
+	}
+
+	return tableFixtureNode, nil
+}
+
+func nodeStartLine(node ast.Node, source []byte) int {
+	lines := node.Lines()
+	if lines == nil || lines.Len() == 0 {
+		return 0
+	}
+	return lineNumberForOffset(source, lines.At(0).Start)
+}
+
+func lineNumberForOffset(source []byte, offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	line := 1
+	for i, b := range source {
+		if i >= offset {
+			return line
+		}
+		if b == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 // applyFrontMatterToFixture applies frontmatter settings to a fixture

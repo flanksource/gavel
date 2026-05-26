@@ -77,6 +77,25 @@ func (r *Runner) SetOnResult(fn func(FixtureResult)) {
 // Run executes the fixture tests and returns the result tree.
 // The caller is responsible for formatting/printing the output.
 func (r *Runner) Run() (*FixtureNode, error) {
+	if _, err := r.prepareFixtureTree(); err != nil {
+		return nil, err
+	}
+
+	results, err := r.executeFixtures()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute fixtures: %w", err)
+	}
+
+	clicky.WaitForGlobalCompletion()
+
+	if results.Summary.HasFailures() {
+		return r.tree, fmt.Errorf("fixture tests failed")
+	}
+
+	return r.tree, nil
+}
+
+func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
 		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
 	}
@@ -93,23 +112,16 @@ func (r *Runner) Run() (*FixtureNode, error) {
 		return nil, fmt.Errorf("no fixtures found")
 	}
 
-	results, err := r.executeFixtures()
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute fixtures: %w", err)
-	}
-
-	clicky.WaitForGlobalCompletion()
-
-	if results.Summary.Failed > 0 {
-		return r.tree, fmt.Errorf("fixture tests failed")
-	}
-
 	return r.tree, nil
 }
 
 // parseFixtureFiles parses all fixture files from the provided paths and builds tree structure
 func (r *Runner) parseFixtureFiles() error {
 	var allFixtures []FixtureTest
+	r.tree = &FixtureNode{
+		Name: "Fixtures",
+		Type: SectionNode,
+	}
 
 	for _, pattern := range r.options.Paths {
 		// Expand glob patterns
@@ -135,19 +147,14 @@ func (r *Runner) parseFixtureFiles() error {
 				r.tree.AddChild(fileTree)
 			}
 
-			// Also maintain flat fixture list for backwards compatibility
-			fixtures, err := ParseMarkdownFixtures(filepath)
-			if err != nil {
-				return fmt.Errorf("failed to parse fixture file '%s': %w", filepath, err)
-			}
-
-			logger.Debugf("Parsed %d fixtures from %s", len(fixtures), filepath)
-			// Extract FixtureTest from each FixtureNode
-			for _, node := range fixtures {
+			fileFixtureCount := 0
+			fileTree.Walk(func(node *FixtureNode) {
 				if node.Test != nil {
 					allFixtures = append(allFixtures, *node.Test)
+					fileFixtureCount++
 				}
-			}
+			})
+			logger.Debugf("Parsed %d fixtures from %s", fileFixtureCount, filepath)
 		}
 	}
 
@@ -176,6 +183,30 @@ func (r *Runner) filterTests() {
 
 	logger.Infof("Filtered to %d fixtures matching '%s'", len(filtered), r.options.Filter)
 	r.fixtures = filtered
+	if r.tree != nil {
+		filterFixtureTree(r.tree, r.options.Filter)
+	}
+}
+
+func filterFixtureTree(node *FixtureNode, pattern string) bool {
+	if node == nil {
+		return false
+	}
+
+	if node.Test != nil {
+		match, err := doublestar.Match(pattern, node.Test.Name)
+		return err == nil && match
+	}
+
+	children := make([]*FixtureNode, 0, len(node.Children))
+	for _, child := range node.Children {
+		if filterFixtureTree(child, pattern) {
+			children = append(children, child)
+		}
+	}
+	node.Children = children
+
+	return node.Type == FileNode || len(node.Children) > 0
 }
 
 // executeFixtures runs all fixtures using typed task groups
