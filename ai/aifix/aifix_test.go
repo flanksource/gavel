@@ -237,6 +237,37 @@ func TestRun_NoModelErrors(t *testing.T) {
 	}
 }
 
+// TestRun_SurfacesReLintError verifies a failing ReLint between iterations
+// is reported back to the caller instead of being silently swallowed. The
+// loop must stop fast so the model isn't asked to fix stale violations.
+func TestRun_SurfacesReLintError(t *testing.T) {
+	p := &fakeStreaming{model: "rl", backend: captainai.Backend("test-relint-err")}
+	captainai.RegisterProvider(captainai.Backend("test-relint-err"), func(cfg captainai.Config) captainai.Provider {
+		return p
+	})
+	boom := errors.New("re-lint command failed: exit status 1")
+	res, err := Run(context.Background(), Request{
+		Initial:       resultsWith("fakelint", violation("a", "x", "R", 1)),
+		MaxIterations: 3,
+		AIConfig: captainai.Config{
+			Backend: captainai.Backend("test-relint-err"),
+			Model:   "rl",
+		},
+		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
+			return nil, boom
+		},
+	})
+	if err == nil {
+		t.Fatal("expected ReLint error to surface, got nil")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("err = %v, want wrap of %v", err, boom)
+	}
+	if res == nil || res.StopReason != "relint-error" {
+		t.Errorf("StopReason = %v, want relint-error; res=%+v", res, res)
+	}
+}
+
 // TestRun_NonStreamingBackendErrors guards against backends that only
 // implement buffered Execute. Aifix needs streaming for live progress, so
 // it must error rather than silently degrade to one-shot calls.

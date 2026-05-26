@@ -5,18 +5,17 @@ import (
 	"fmt"
 	"os"
 
-	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/gavel/ai/aifix"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/linters"
 )
 
 // runCommitAIFix is the lintActionAIFix branch of handleCommitLintFindings.
-// It invokes Claude to repair the findings in result.Lint and re-runs the
-// commit lint pass with the SAME gate configuration the original commit
-// used. On clean it returns lintFindingsAIFixed; on residual violations it
-// re-prompts the user (so they can pick AI Fix again, triage, bypass, or
-// cancel).
+// It invokes the AI configured by `captain configure` to repair the findings
+// in result.Lint and re-runs the commit lint pass with the SAME gate
+// configuration the original commit used. On clean it returns
+// lintFindingsAIFixed; on residual violations it re-prompts the user (so
+// they can pick AI Fix again, triage, bypass, or cancel).
 func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
 		fmt.Fprintln(os.Stderr, "ai-fix: no lint result to operate on")
@@ -32,25 +31,10 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 	requested := commitGateRequest(result.Lint.Gates)
 	ctx := context.Background()
 
-	// Default-shaped runtime options: contributes only the saved
-	// ~/.captain.yaml overlay (model, backend, budget, no* toggles,
-	// reasoningEffort, maxTokens). No CLI flags wired in for commit yet.
-	aiOpts := captaincli.AIRuntimeOptions{
-		MCP:     true,
-		Hooks:   true,
-		Skills:  true,
-		User:    true,
-		Project: true,
-		Memory:  true,
-	}
-	aiCfg := aiOpts.ToConfig()
-	aiProto := aiOpts.ToRequest("", "", "")
-	aiProto.Verbose = true
-	aiProto.StrictMCP = true
+	aiCfg, aiProto := buildAIFixRequest(defaultAIRuntimeOptions())
 
 	fixRes, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        workDir,
-		Files:          files,
 		Initial:        result.Lint.Results,
 		AIConfig:       aiCfg,
 		AIRequestProto: aiProto,
@@ -124,7 +108,7 @@ func countViolations(results []*linters.LinterResult) int {
 
 // commitGateRequest mirrors applyLintGate's mapping of gate booleans onto
 // the runCommitLint linterNames argument. Keeping this in sync ensures the
-// re-lint Claude triggered runs over the same linter set as the original
+// AI-triggered re-lint runs over the same linter set as the original
 // commit gate.
 func commitGateRequest(gates commitpkg.LintGates) []string {
 	switch {

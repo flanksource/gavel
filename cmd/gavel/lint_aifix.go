@@ -25,21 +25,11 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		ctx = context.Background()
 	}
 
-	// Build ai.Config + ai.Request template from captain's flag/env/saved-
-	// defaults overlay. ToRequest's prompt args are empty placeholders;
-	// aifix fills SystemPrompt + Prompt per iteration.
-	aiCfg := opts.ToConfig()
-	aiProto := opts.ToRequest("", "", "")
-	// Claude CLI streaming needs --verbose + --strict-mcp-config; nothing in
-	// AIRuntimeOptions binds those, so seed them here. Non-claude backends
-	// ignore both.
-	aiProto.Verbose = true
-	aiProto.StrictMCP = true
+	aiCfg, aiProto := buildAIFixRequest(opts.AIRuntimeOptions)
 
 	res, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        opts.WorkDir,
 		Linters:        opts.Linters,
-		Files:          opts.Files,
 		Initial:        initial,
 		MaxIterations:  opts.AIFixMaxIters,
 		AIConfig:       aiCfg,
