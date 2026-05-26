@@ -1,6 +1,7 @@
-// Package aifix drives Claude (via captain's claude_cli provider) to fix
-// linter violations and re-lint until the result is clean, max-iterations is
-// reached, or the cumulative cost cap is hit.
+// Package aifix drives an AI provider (via captain's streaming providers —
+// claude_cli, codex_cli, gemini_cli) to fix linter violations and re-lint
+// until the result is clean, max-iterations is reached, or the cumulative
+// cost cap is hit. Provider selection is determined by AIConfig.Backend.
 package aifix
 
 import (
@@ -18,7 +19,6 @@ import (
 type Request struct {
 	WorkDir       string
 	Linters       []string
-	Files         []string
 	Initial       []*linters.LinterResult
 	MaxIterations int
 
@@ -78,6 +78,11 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	current := req.Initial
 	systemPrompt := buildSystemPrompt(req.WorkDir, req.Linters)
 
+	// captainai.LoopOptions.BuildRequest cannot return an error, so park
+	// any ReLint failure in this closure variable and surface it once the
+	// loop unwinds. Returning continue=false ensures we stop fast instead
+	// of asking the model to "fix" stale violations.
+	var relintErr error
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
 		Provider:      streamer,
 		MaxIterations: req.MaxIterations,
@@ -85,11 +90,9 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		SessionReuse:  true,
 		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
 			if iter > 0 {
-				next, relErr := req.ReLint(ctx)
-				if relErr != nil {
-					// Surface as a continue=false (condition-met) so the
-					// loop returns; the caller compares len(violations)
-					// in current to detect partial success vs failure.
+				next, e := req.ReLint(ctx)
+				if e != nil {
+					relintErr = e
 					return captainai.Request{}, false
 				}
 				current = next
@@ -111,6 +114,14 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			TotalCostUSD: loopTotal(loopRes),
 			Iterations:   loopIters(loopRes),
 		}, err
+	}
+	if relintErr != nil {
+		return &Result{
+			FinalResults: current,
+			StopReason:   "relint-error",
+			TotalCostUSD: loopTotal(loopRes),
+			Iterations:   loopIters(loopRes),
+		}, fmt.Errorf("aifix: re-lint between iterations failed: %w", relintErr)
 	}
 
 	return &Result{

@@ -84,6 +84,13 @@ func (o LintOptions) Pretty() api.Text {
 	if o.Fix {
 		t = t.Append("Fix: on", "text-green-500").Space()
 	}
+	if o.AIFix {
+		label := "AIFix: on"
+		if o.Model != "" {
+			label = fmt.Sprintf("AIFix: %s", o.Model)
+		}
+		t = t.Append(label, "text-green-500").Space()
+	}
 	if o.Timeout != "" {
 		t = t.Append("Timeout: ", "text-muted").Append(o.Timeout, "text-blue-500").Space()
 	}
