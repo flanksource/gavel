@@ -35,6 +35,7 @@ type RunOptions struct {
 	Evaluator      *CELEvaluator
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
+	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
 }
 
 // FixtureGroup represents a logical grouping of fixture tests with summary statistics.

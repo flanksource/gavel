@@ -124,6 +124,15 @@ type CommitConfig struct {
 	LinkedDeps    LinkedDepsConfig    `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
 	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
 	Lint          CommitLintConfig    `yaml:"lint,omitempty" json:"lint,omitempty"`
+	Tidy          CommitTidyConfig    `yaml:"tidy,omitempty" json:"tidy,omitempty"`
+}
+
+// CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every
+// Go module in the repo before committing and stages any go.mod / go.sum
+// updates into the in-flight commit. Enabled is on by default (nil = on);
+// set to false to disable. CLI flag --tidy overrides per-invocation.
+type CommitTidyConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // CommitLintConfig controls whether `gavel commit` runs linters over the

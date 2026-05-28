@@ -13,10 +13,10 @@ import (
 	"github.com/flanksource/clicky/api"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/internal/ttyrender"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 type StatusOptions struct {
@@ -127,7 +127,7 @@ func runStatus(opts StatusOptions) (any, error) {
 	prompting.Prepare()
 	result.PrepareAISummaries()
 	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers)
-	if err := renderStatusOutput(os.Stdout, result, updates, isTerminalWriter(os.Stdout)); err != nil {
+	if err := renderStatusOutput(os.Stdout, result, updates, ttyrender.IsTerminal(os.Stdout)); err != nil {
 		return nil, err
 	}
 
@@ -206,33 +206,16 @@ func renderStatusOutput(w io.Writer, result *status.Result, updates <-chan statu
 		return err
 	}
 
-	renderState := statusRenderState{}
-	if err := renderState.write(w, formatStatusResult(result)); err != nil {
+	state := ttyrender.State{}
+	if err := state.Write(w, formatStatusResult(result)); err != nil {
 		return err
 	}
 	for update := range updates {
 		result.ApplyAISummaryUpdate(update)
-		if err := renderState.write(w, formatStatusResult(result)); err != nil {
+		if err := state.Write(w, formatStatusResult(result)); err != nil {
 			return err
 		}
 	}
-	return nil
-}
-
-type statusRenderState struct {
-	lines int
-}
-
-func (s *statusRenderState) write(w io.Writer, rendered string) error {
-	if s.lines > 0 {
-		if _, err := fmt.Fprintf(w, "\x1b[%dA\x1b[J", s.lines); err != nil {
-			return err
-		}
-	}
-	if _, err := io.WriteString(w, rendered); err != nil {
-		return err
-	}
-	s.lines = countRenderedLines(rendered)
 	return nil
 }
 
@@ -242,20 +225,4 @@ func formatStatusResult(result *status.Result) string {
 		rendered += "\n"
 	}
 	return rendered
-}
-
-func countRenderedLines(rendered string) int {
-	if rendered == "" {
-		return 0
-	}
-	lines := strings.Count(rendered, "\n")
-	if strings.HasSuffix(rendered, "\n") {
-		return lines
-	}
-	return lines + 1
-}
-
-func isTerminalWriter(w io.Writer) bool {
-	file, ok := w.(*os.File)
-	return ok && term.IsTerminal(int(file.Fd()))
 }

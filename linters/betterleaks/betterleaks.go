@@ -122,7 +122,8 @@ func (b *Betterleaks) Run(ctx commonsContext.Context, _ *clicky.Task) ([]models.
 	cmd := exec.CommandContext(ctx, "betterleaks", args...)
 	cmd.Dir = b.WorkDir
 
-	logger.Infof("Executing: betterleaks %s", strings.Join(args, " "))
+	logger.V(1).Infof("Executing: betterleaks")
+	logger.V(2).Infof("Executing: betterleaks %s", strings.Join(args, " "))
 	output, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		return nil, fmt.Errorf("betterleaks execution failed: %w\nOutput:\n%s", runErr, string(output))

@@ -208,7 +208,7 @@ func TestCELFailureMessageIncludesContext(t *testing.T) {
 	result := exp.Evaluate(fixture, exec.ExecResult{
 		Stdout:   "goodbye world",
 		ExitCode: 0,
-	})
+	}, EvaluateOptions{})
 
 	assert.Equal(t, task.StatusFAIL, result.Status)
 	assert.Contains(t, result.Error, "CEL expression evaluated to false")
@@ -229,7 +229,7 @@ func TestExitCodeFailureIncludesOutput(t *testing.T) {
 		Stdout:   "some output here",
 		Stderr:   "error: something went wrong",
 		ExitCode: 1,
-	})
+	}, EvaluateOptions{})
 
 	assert.Equal(t, task.StatusFAIL, result.Status)
 	assert.Contains(t, result.Error, "expected exit code 0, got 1")

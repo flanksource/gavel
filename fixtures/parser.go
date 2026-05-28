@@ -117,12 +117,14 @@ func parseTableRow(headers, values []string) *FixtureNode {
 					fixture.Expected.Count = &count
 				}
 			}
-		case "expected output", "output":
+		case "expected output", "output", "stdout":
 			fixture.Expected.Stdout = value
 		case "expected format", "format":
 			fixture.Expected.Format = value
 		case "expected error", "error":
 			fixture.Expected.Error = value
+		case "stderr":
+			fixture.Expected.Stderr = value
 		case "expected matches", "matches":
 			fixture.Expected.Output = value
 		case "expected results", "results":
@@ -316,6 +318,13 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		fileTree.AddChild(child)
 	}
 	setOriginFile(fileTree, filePath)
+
+	// Expand any @-glob references in row cells (stdout/stderr) into
+	// one row per matched file. Runs after frontmatter `files:`
+	// expansion so the two mechanisms compose.
+	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
+		return nil, fmt.Errorf("expand row globs: %w", err)
+	}
 
 	return fileTree, nil
 }

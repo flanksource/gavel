@@ -22,6 +22,11 @@ type stagedSource struct {
 	Files   []string
 	Diff    string
 	Changes []stagedChange
+	// PendingRestores carries deferred working-tree edits that must be applied
+	// AFTER the commit subprocess succeeds — currently only the linked-deps
+	// "upgrade" path uses it to re-add `replace` directives that were dropped
+	// from the committed snapshot.
+	PendingRestores []pendingRestore
 }
 
 func (s stagedSource) GitPaths() []string {

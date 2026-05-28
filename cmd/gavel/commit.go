@@ -35,6 +35,7 @@ type CommitOptions struct {
 	Compat       string `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
 	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
 	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
+	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
 	WorkDir      string `flag:"work-dir" help:"Working directory"`
 }
 
@@ -149,6 +150,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		CompatMode:      opts.Compat,
 		LintFlag:        opts.Lint,
 		LintSecretsFlag: opts.LintSecrets,
+		TidyFlag:        opts.Tidy,
 		Config:          cfg.Commit,
 	}
 }

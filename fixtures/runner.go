@@ -33,6 +33,7 @@ type RunnerOptions struct {
 	ExecutablePath string              // Path to the current executable (for fixtures to use)
 	OnResult       func(FixtureResult) // Called after each fixture completes
 	OnParsed       func(*FixtureNode)  // Called after fixture files are parsed, before execution
+	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -382,6 +383,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		NoCache:        false,
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
+		UpdateGolden:   r.options.UpdateGolden,
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},

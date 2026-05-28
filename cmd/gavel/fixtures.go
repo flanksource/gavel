@@ -12,6 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	fixturesUpdateGolden bool
+)
+
 var fixturesCmd = &cobra.Command{
 	Use:          "fixtures [fixture-files...]",
 	Short:        "Run fixture-based tests from markdown tables and command blocks",
@@ -215,6 +219,7 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		MaxWorkers:     clicky.Flags.MaxConcurrent,
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: executablePath,
+		UpdateGolden:   fixturesUpdateGolden,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
@@ -235,5 +240,7 @@ func init() {
 	fixturesCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
 		fmt.Fprintln(os.Stderr, fixturesHelp().ANSI())
 	})
+	fixturesCmd.Flags().BoolVar(&fixturesUpdateGolden, "update-golden", false,
+		"Rewrite @file stdout/stderr expectations with actual output instead of failing on mismatch")
 	rootCmd.AddCommand(fixturesCmd)
 }
