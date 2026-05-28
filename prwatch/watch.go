@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/internal/ttyrender"
 )
 
 type WatchOptions struct {
@@ -21,6 +22,11 @@ type WatchOptions struct {
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
 	logger.Debugf("starting watch (pr=%d, interval=%s, follow=%t)", opts.PRNumber, opts.Interval, opts.Follow)
+
+	var (
+		render ttyrender.State
+		isTTY  = ttyrender.IsTerminal(os.Stderr)
+	)
 
 	for {
 		pr, err := github.FetchPR(opts.Options, opts.PRNumber)
@@ -50,15 +56,30 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			return result, 0
 		}
 
-		fmt.Fprint(os.Stderr, result.Pretty().ANSI()+"\n")
-		if pr.StatusCheckRollup.AllComplete() {
+		done := pr.StatusCheckRollup.AllComplete()
+		frame := result.Pretty().ANSI()
+		if !strings.HasSuffix(frame, "\n") {
+			frame += "\n"
+		}
+		if !done {
+			frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
+		}
+
+		if isTTY {
+			if err := render.Write(os.Stderr, frame); err != nil {
+				logger.Warnf("render: %v", err)
+			}
+		} else {
+			fmt.Fprint(os.Stderr, frame)
+		}
+
+		if done {
 			if pr.StatusCheckRollup.HasFailure() {
 				return result, 1
 			}
 			return result, 0
 		}
 
-		fmt.Fprintf(os.Stderr, "Polling in %s...\n\n", opts.Interval)
 		time.Sleep(opts.Interval)
 	}
 }

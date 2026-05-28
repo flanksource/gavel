@@ -74,6 +74,11 @@ type Options struct {
 	// "true" or "false".
 	LintFlag        string
 	LintSecretsFlag string
+	// TidyFlag is the raw string form of --tidy. Empty = flag not provided;
+	// "true"/"false" override .gavel.yaml commit.tidy.enabled. String (not
+	// *bool) so the clicky flag binding stays a plain string flag the user
+	// can set to "true" or "false".
+	TidyFlag string
 	// Fixup, when non-empty, switches Run() to runFixup. The literal
 	// FixupAuto value triggers per-file routing by last-touching commit on
 	// base..HEAD; any other value is treated as an explicit target hash.
@@ -239,6 +244,14 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyGoModTidy(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
@@ -293,6 +306,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	}
 	result.Hash = hash
 	logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Message))
+	restoreLocalReplaces(opts.WorkDir, source.PendingRestores)
 	return result, nil
 }
 
@@ -392,6 +406,14 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyGoModTidy(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {
@@ -465,6 +487,8 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		result.Commits[i].Hash = hash
 		logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Commits[i].Message))
 	}
+
+	restoreLocalReplaces(opts.WorkDir, source.PendingRestores)
 
 	return result, nil
 }

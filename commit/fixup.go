@@ -101,6 +101,14 @@ func runFixup(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
+	source, err = applyGoModTidy(ctx, opts, source)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Files) == 0 {
+		return nil, ErrNothingStaged
+	}
+
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
 
 	if !opts.Force {

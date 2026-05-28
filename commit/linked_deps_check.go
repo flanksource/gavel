@@ -28,11 +28,12 @@ const (
 )
 
 type LinkedDepViolation struct {
-	File     string        // path relative to git root, e.g. "services/api/go.mod"
-	Kind     LinkedDepKind // what produced the violation
-	Name     string        // module or dep name
-	Target   string        // raw right-hand side as written by the user
-	Resolved string        // absolutized target, for display
+	File       string        // path relative to git root, e.g. "services/api/go.mod"
+	Kind       LinkedDepKind // what produced the violation
+	Name       string        // module or dep name
+	Target     string        // raw right-hand side as written by the user
+	Resolved   string        // absolutized target, for display
+	OldVersion string        // go.mod replace Old.Version, "" when unpinned; only set for LinkedDepKindGoModReplace
 }
 
 type LinkedDepDecision int
@@ -41,9 +42,18 @@ const (
 	LinkedDepDecisionCancel LinkedDepDecision = iota
 	LinkedDepDecisionIgnore
 	LinkedDepDecisionUnstage
+	LinkedDepDecisionUpgrade
 )
 
-type LinkedDepDecider func(ctx context.Context, v LinkedDepViolation) (LinkedDepDecision, error)
+// LinkedDepChoice carries the decider's decision plus any data needed to act
+// on it. UpgradeVersion is populated only when Decision == LinkedDepDecisionUpgrade
+// and is the tagged version (e.g. "v1.4.2") to pin in the require line.
+type LinkedDepChoice struct {
+	Decision       LinkedDepDecision
+	UpgradeVersion string
+}
+
+type LinkedDepDecider func(ctx context.Context, v LinkedDepViolation) (LinkedDepChoice, error)
 
 type LinkedDepsParams struct {
 	WorkDir     string
@@ -287,11 +297,12 @@ func evaluateGoModBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, 
 			continue
 		}
 		out = append(out, LinkedDepViolation{
-			File:     rel,
-			Kind:     LinkedDepKindGoModReplace,
-			Name:     r.Old.Path,
-			Target:   r.New.Path,
-			Resolved: resolved,
+			File:       rel,
+			Kind:       LinkedDepKindGoModReplace,
+			Name:       r.Old.Path,
+			Target:     r.New.Path,
+			Resolved:   resolved,
+			OldVersion: r.Old.Version,
 		})
 	}
 	return out, nil
@@ -468,33 +479,57 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 	}
 
 	unstage := make(map[string]struct{})
+	upgrades := make(map[string][]goModUpgrade) // keyed by violation.File
 	for _, v := range violations {
-		d, err := decider(ctx, v)
+		choice, err := decider(ctx, v)
 		if err != nil {
 			return CheckOutcome{}, fmt.Errorf("linked-deps prompt: %w", err)
 		}
-		switch d {
+		switch choice.Decision {
 		case LinkedDepDecisionCancel:
 			return CheckOutcome{Cancelled: true}, nil
 		case LinkedDepDecisionIgnore:
 			continue
 		case LinkedDepDecisionUnstage:
 			unstage[v.File] = struct{}{}
+		case LinkedDepDecisionUpgrade:
+			upgrades[v.File] = append(upgrades[v.File], goModUpgrade{
+				OldPath:    v.Name,
+				OldVersion: v.OldVersion,
+				OldTarget:  v.Target,
+				NewVersion: choice.UpgradeVersion,
+			})
 		}
 	}
 
-	if len(unstage) == 0 {
-		return CheckOutcome{}, nil
+	outcome := CheckOutcome{}
+
+	if len(unstage) > 0 {
+		files := make([]string, 0, len(unstage))
+		for f := range unstage {
+			files = append(files, f)
+		}
+		if err := resetFiles(p.WorkDir, files); err != nil {
+			return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
+		}
+		outcome.Unstaged = files
 	}
 
-	files := make([]string, 0, len(unstage))
-	for f := range unstage {
-		files = append(files, f)
+	if len(upgrades) > 0 {
+		gitRoot := rootOrWorkDir(p)
+		for file, ups := range upgrades {
+			if err := applyGoModReplaceUpgrade(p.WorkDir, gitRoot, file, ups); err != nil {
+				return outcome, fmt.Errorf("apply go.mod upgrade for %s: %w", file, err)
+			}
+			outcome.Upgraded = append(outcome.Upgraded, file)
+			outcome.PendingRestores = append(outcome.PendingRestores, pendingRestore{
+				GoModFile: file,
+				Replaces:  ups,
+			})
+		}
 	}
-	if err := resetFiles(p.WorkDir, files); err != nil {
-		return CheckOutcome{}, fmt.Errorf("unstage: %w", err)
-	}
-	return CheckOutcome{Unstaged: files}, nil
+
+	return outcome, nil
 }
 
 func evaluateLinkedDepsForCheck(p LinkedDepsParams) ([]LinkedDepViolation, error) {
@@ -531,25 +566,62 @@ func formatLinkedDepsError(violations []LinkedDepViolation) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-func runPromptLinkedDepDecider(_ context.Context, v LinkedDepViolation) (LinkedDepDecision, error) {
+func runPromptLinkedDepDecider(ctx context.Context, v LinkedDepViolation) (LinkedDepChoice, error) {
 	header := fmt.Sprintf("%s in %s: %q -> %s (outside git root)",
 		v.Kind, v.File, v.Name, v.Resolved)
+
+	// Top-level loop: redraws the menu when the Upgrade sub-flow is declined
+	// or the version lookup fails.
+	for {
+		items, decisions := buildLinkedDepMenu(v)
+		idx, ok := promptSelectIndex(header, items)
+		if !ok {
+			return LinkedDepChoice{Decision: LinkedDepDecisionCancel}, nil
+		}
+		picked := decisions[idx]
+		if picked != LinkedDepDecisionUpgrade {
+			return LinkedDepChoice{Decision: picked}, nil
+		}
+
+		logger.Infof("Resolving latest tagged version for %s …", v.Name)
+		version, err := lookupLatestGoVersion(ctx, v.Name)
+		if err != nil {
+			logger.Warnf("upgrade lookup failed for %s: %v — choose another action", v.Name, err)
+			continue
+		}
+
+		confirm := fmt.Sprintf("Upgrade %s from %s to %s?", v.Name, v.Target, version)
+		confirmItems := []string{
+			fmt.Sprintf("Yes, upgrade to %s", version),
+			"No, choose different action",
+		}
+		cIdx, cOk := promptSelectIndex(confirm, confirmItems)
+		if !cOk || cIdx == 1 {
+			continue
+		}
+		return LinkedDepChoice{Decision: LinkedDepDecisionUpgrade, UpgradeVersion: version}, nil
+	}
+}
+
+// buildLinkedDepMenu returns the menu items and a parallel slice mapping each
+// item index to the decision it represents. The "Upgrade" item is included
+// only for go.mod replace violations (filtered by file name to exclude
+// go.work replace blocks, which produce the same Kind but cannot be rewritten
+// the same way).
+func buildLinkedDepMenu(v LinkedDepViolation) ([]string, []LinkedDepDecision) {
 	items := []string{
 		fmt.Sprintf("Unstage %s (drop the edit from this commit)", v.File),
-		"Ignore and keep it in this commit",
-		"Cancel commit",
 	}
-	idx, ok := promptSelectIndex(header, items)
-	if !ok {
-		return LinkedDepDecisionCancel, nil
+	decisions := []LinkedDepDecision{LinkedDepDecisionUnstage}
+
+	if v.Kind == LinkedDepKindGoModReplace && filepath.Base(v.File) == "go.mod" {
+		items = append(items, fmt.Sprintf("Upgrade %s to latest tagged version (drop replace, pin require)", v.Name))
+		decisions = append(decisions, LinkedDepDecisionUpgrade)
 	}
-	if idx == 0 {
-		return LinkedDepDecisionUnstage, nil
-	}
-	if idx == 1 {
-		return LinkedDepDecisionIgnore, nil
-	}
-	return LinkedDepDecisionCancel, nil
+
+	items = append(items, "Ignore and keep it in this commit", "Cancel commit")
+	decisions = append(decisions, LinkedDepDecisionIgnore, LinkedDepDecisionCancel)
+	return items, decisions
 }
 
 // applyLinkedDepsCheck runs the check and, if any file was unstaged, re-reads
@@ -573,12 +645,15 @@ func applyLinkedDepsCheck(ctx context.Context, opts Options, source stagedSource
 	if outcome.Cancelled {
 		return source, ErrLinkedDepsCancelled
 	}
-	if len(outcome.Unstaged) == 0 {
+	if len(outcome.Unstaged) == 0 && len(outcome.Upgraded) == 0 {
+		// PendingRestores is empty in this branch; nothing to carry over.
 		return source, nil
 	}
 	refreshed, err := readStagedSource(opts.WorkDir)
 	if err != nil {
-		return source, fmt.Errorf("re-read staged source after linked-deps unstage: %w", err)
+		return source, fmt.Errorf("re-read staged source after linked-deps changes: %w", err)
 	}
+	refreshed.PendingRestores = append(refreshed.PendingRestores, source.PendingRestores...)
+	refreshed.PendingRestores = append(refreshed.PendingRestores, outcome.PendingRestores...)
 	return refreshed, nil
 }

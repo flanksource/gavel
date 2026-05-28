@@ -117,7 +117,10 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	result.Actual = p
-	return fixture.Expected.Evaluate(result, *p)
+	return fixture.Expected.Evaluate(result, *p, fixtures.EvaluateOptions{
+		SourceDir:    fixture.SourceDir,
+		UpdateGolden: opts.UpdateGolden,
+	})
 }
 
 func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {

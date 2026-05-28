@@ -80,6 +80,7 @@ After manual changes, reload with `/reload-plugins`.
 |-------|-------------|
 | [gavel-fixture-tester](gavel-fixture-tester/SKILL.md) | Create and run fixture-based tests using markdown files with command blocks, tables, and CEL assertions |
 | [gavel-runner](gavel-runner/SKILL.md) | Run gavel test and lint, focus on a subset, re-run only failures, filter noise with baselines, and pull JSON/markdown results from finished or live runs |
+| [gavel-ci-migrator](gavel-ci-migrator/SKILL.md) | Migrate a repo's GitHub Actions lint/test workflows to the `flanksource/gavel` composite action — discover existing jobs, ask the user per-workflow whether to replace or add alongside, rewrite YAML, and verify with actionlint |
 
 ### gavel-fixture-tester
 
@@ -116,6 +117,23 @@ gavel test --ui
 
 See [gavel-runner/SKILL.md](gavel-runner/SKILL.md) for the full reference and `jq`/`curl` recipes.
 
+### gavel-ci-migrator
+
+Move a repo's lint/test pipelines onto the [`flanksource/gavel` GitHub Action](../../README.md#github-action):
+
+- **Discover** existing `golangci-lint`, `go test`, `make lint|test`, `ginkgo`, `gotestsum` jobs across `.github/workflows/`
+- **Propose** per-workflow disposition via `AskUserQuestion` — replace, add alongside, or skip; pin the action to `@main`, `@v<tag>`, or `source`
+- **Apply** the smallest-blast-radius YAML rewrite — keeps unrelated steps, sets `fetch-depth: 0`, scopes `permissions:` correctly, removes redundant artifact uploads
+- **Verify** with `actionlint` (if installed) and `git diff` — never auto-commits
+
+```text
+"switch CI to gavel"
+"replace golangci-lint-action with gavel"
+"migrate workflows to flanksource/gavel"
+```
+
+See [gavel-ci-migrator/SKILL.md](gavel-ci-migrator/SKILL.md) for detection cues, canonical replacement snippets, and edge cases (matrix collapse, monorepos, coverage uploads).
+
 ## Prerequisites
 
 - [Gavel](https://github.com/flanksource/gavel) installed for running fixture tests (`go install github.com/flanksource/gavel/cmd/gavel@latest`)
@@ -130,6 +148,8 @@ See [gavel-runner/SKILL.md](gavel-runner/SKILL.md) for the full reference and `j
 │   ├── gavel-fixture-tester/
 │   │   └── SKILL.md             # Skill instructions (agentskills.io format)
 │   ├── gavel-runner/
+│   │   └── SKILL.md             # Skill instructions (agentskills.io format)
+│   ├── gavel-ci-migrator/
 │   │   └── SKILL.md             # Skill instructions (agentskills.io format)
 │   └── README.md
 .claude-plugin/

@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -31,7 +32,19 @@ type Expectations struct {
 	Properties map[string]interface{} `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
-func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) FixtureResult {
+// EvaluateOptions carries optional context for Expectations.Evaluate.
+// It is a separate struct so future fields (e.g. an io.Writer for logs)
+// can be added without breaking call sites.
+type EvaluateOptions struct {
+	// SourceDir is the directory of the fixture markdown file, used to
+	// resolve @-prefixed file references in Stdout/Stderr expectations.
+	SourceDir string
+	// UpdateGolden, when true, causes mismatched @file expectations to
+	// be overwritten with the actual output instead of failing the test.
+	UpdateGolden bool
+}
+
+func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
 
 	fixture.Stdout = p.Stdout
 	fixture.Stderr = p.Stderr
@@ -54,11 +67,18 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult) Fixture
 			expectedExitCode, p.ExitCode,
 			truncateForError(p.Stdout), truncateForError(p.Stderr))
 	}
-	if e.Stdout != "" && p.Stdout != e.Stdout {
-		return fixture.Failf("expected stdout:\n%s\n got:\n%s", e.Stdout, p.Stdout)
+	if fixture.Metadata == nil {
+		fixture.Metadata = map[string]interface{}{}
 	}
-	if e.Stderr != "" && p.Stderr != e.Stderr {
-		return fixture.Failf("expected stderr:\n%s\n got:\n%s", e.Stderr, p.Stderr)
+	if updated, failed := evaluateStream(&fixture, e.Stdout, p.Stdout, "stdout", opts); failed {
+		return fixture
+	} else if updated {
+		fixture.Metadata["golden_updated_stdout"] = true
+	}
+	if updated, failed := evaluateStream(&fixture, e.Stderr, p.Stderr, "stderr", opts); failed {
+		return fixture
+	} else if updated {
+		fixture.Metadata["golden_updated_stderr"] = true
 	}
 	if e.CEL != "" {
 		// Use RunExpression for CEL expressions, not RunTemplate
@@ -187,4 +207,38 @@ func truncateForError(s string) string {
 		return s[:200] + "..."
 	}
 	return s
+}
+
+// evaluateStream compares an expected value (literal or @file) against
+// got. Returns (updated=true) when the @file was rewritten under
+// UpdateGolden mode; returns (failed=true) when the fixture should
+// stop and be marked failed (fixture.Failf has already been called).
+// If expected is empty, the stream is not checked.
+func evaluateStream(fixture *FixtureResult, expected, got, label string, opts EvaluateOptions) (updated, failed bool) {
+	if expected == "" {
+		return false, false
+	}
+	ref, err := ResolveFileRef(opts.SourceDir, expected)
+	if err != nil {
+		*fixture = fixture.Errorf(err, "load expected %s", label)
+		return false, true
+	}
+	wantText, wantLabel := ref.Raw, label+" (expected)"
+	if ref.IsFile {
+		wantText, wantLabel = ref.Contents, ref.Path
+	}
+	diff := UnifiedDiff(wantText, got, wantLabel, label)
+	if diff == "" {
+		return false, false
+	}
+	if opts.UpdateGolden && ref.IsFile {
+		if err := WriteGolden(ref.Path, got); err != nil {
+			*fixture = fixture.Errorf(err, "update golden %s", ref.Path)
+			return false, true
+		}
+		logger.Infof("golden updated: %s", ref.Path)
+		return true, false
+	}
+	*fixture = fixture.Failf("%s differs:\n%s", label, diff)
+	return false, true
 }

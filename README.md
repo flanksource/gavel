@@ -861,12 +861,13 @@ gavel git analyze --verbose            # show skip reasons
 
 ## Agent Skills
 
-Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents two complementary capabilities: writing data-driven tests *and* driving the everyday test+lint loop. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents three complementary capabilities: writing data-driven tests, driving the everyday test+lint loop, *and* migrating CI pipelines onto the gavel composite action. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
 
 | Skill | What it teaches the agent |
 |-------|---------------------------|
 | [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
 | [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
+| [`gavel-ci-migrator`](.agents/skills/gavel-ci-migrator/SKILL.md) | **Migrate CI** — discover existing `golangci-lint` / `go test` / `make lint|test` jobs in `.github/workflows/`, ask per-workflow whether to replace with `flanksource/gavel@…` or add alongside, rewrite YAML with the right `permissions:` and `fetch-depth: 0`, and verify with `actionlint`. Never auto-commits. |
 
 ### Install
 
@@ -878,7 +879,7 @@ Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents t
 /plugin install gavel-skills@flanksource-gavel
 ```
 
-After installation, both skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, and `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results.
+After installation, all three skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results, and `gavel-ci-migrator` when you ask it to *switch CI to gavel* or *replace golangci-lint-action / `go test` jobs* with the gavel action.
 
 **For any agent (via the open Skills CLI):**
 

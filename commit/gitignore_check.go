@@ -68,6 +68,14 @@ type CheckOutcome struct {
 	GitIgnored  []string
 	Allowed     []string
 	IgnoredOnce []string // files the user kept staged this run only — no persisted change
+	// Upgraded lists go.mod files rewritten by the linked-deps "upgrade" path:
+	// a local replace was dropped and the require pinned to the latest tagged
+	// version. The file (and its go.sum sibling) has already been re-staged.
+	Upgraded []string
+	// PendingRestores describes work to perform AFTER the commit succeeds:
+	// re-apply the local replace directives that were dropped, as unstaged
+	// edits to the working tree. Empty when no upgrade path ran.
+	PendingRestores []pendingRestore
 }
 
 type gitIgnoreChoice struct {
