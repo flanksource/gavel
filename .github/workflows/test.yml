@@ -28,24 +28,16 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build test UI
-        run: cd testrunner/ui && npm ci && npm run build
-
-      - name: Install dependencies
-        run: |
-          go mod download
-          go mod tidy
-
-      - name: Verify dependencies
-        run: go mod verify
-
       - name: Install Task
         uses: arduino/setup-task@v2
         with:
           version: 3.x
 
+      - name: Build gavel
+        run: make build
+
       - name: Run tests
-        run: make test
+        run: ./gavel test
         env:
           CGO_ENABLED: 1
 
