@@ -78,38 +78,20 @@ jobs:
             testrunner/ui/package-lock.json
             pr/ui/package-lock.json
 
-      - name: Build testrunner UI
-        run: |
-          cd testrunner/ui
-          npm ci
-          npm run build
-
-      - name: Build PR UI
-        run: |
-          cd pr/ui
-          npm ci
-          npm run build
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
 
       - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
-          TAG: ${{ needs.tag.outputs.tag }}
-        run: |
-          mkdir -p dist
-          build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          go build -trimpath \
-            -ldflags "-s -w -X main.version=${TAG} -X main.commit=${{ github.sha }} -X main.date=${build_date}" \
-            -o dist/gavel \
-            ./cmd/gavel
+        run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
 
       - name: Archive binary
         id: archive
         run: |
-          cd dist
+          mkdir -p dist
           archive_name="gavel_${{ matrix.goos }}_${{ matrix.goarch }}"
-          tar -czf "${archive_name}.tar.gz" gavel
+          cp ".bin/${archive_name}" dist/gavel
+          tar -czf "dist/${archive_name}.tar.gz" -C dist gavel
           echo "path=dist/${archive_name}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4

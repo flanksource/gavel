@@ -58,12 +58,17 @@ tasks:
     generates:
       - ./{{.BINARY_NAME}}
 
-  build:linux-amd64:
-    desc: Build the linux-amd64 binary
+  build:cross:
+    desc: |
+      Cross-compile the binary for a given GOOS/GOARCH.
+      Pass the target via CLI vars: `task build:cross GOOS=darwin GOARCH=arm64`.
+      Defaults to linux/amd64. Output: .bin/{{.BINARY_NAME}}_<goos>_<goarch>.
     deps:
       - test-ui
       - pr-ui
     vars:
+      GOOS: '{{.GOOS | default "linux"}}'
+      GOARCH: '{{.GOARCH | default "amd64"}}'
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
       COMMIT:
@@ -71,14 +76,14 @@ tasks:
       DATE:
         sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
       LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
-      OUTPUT: .bin/{{.BINARY_NAME}}-linux-amd64
+      OUTPUT: .bin/{{.BINARY_NAME}}_{{.GOOS}}_{{.GOARCH}}
     env:
-      GOOS: linux
-      GOARCH: amd64
+      GOOS: "{{.GOOS}}"
+      GOARCH: "{{.GOARCH}}"
       CGO_ENABLED: 0
     cmds:
       - mkdir -p .bin
-      - go build -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
+      - go build -trimpath -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
     sources:
       - ./**/*.go
       - go.mod
@@ -110,9 +115,10 @@ tasks:
       Reinstalls the systemd unit via `gavel ssh install --force`, which
       reloads and restarts the service.
     deps:
-      - build:linux-amd64
+      - task: build:cross
+        vars: { GOOS: linux, GOARCH: amd64 }
     vars:
-      BINARY_LOCAL: .bin/{{.BINARY_NAME}}-linux-amd64
+      BINARY_LOCAL: .bin/{{.BINARY_NAME}}_linux_amd64
       TARGET: "{{.CLI_ARGS}}"
     preconditions:
       - sh: test -n "{{.TARGET}}"
