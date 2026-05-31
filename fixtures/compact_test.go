@@ -126,6 +126,115 @@ func TestFirstNonBlankFixtureLine(t *testing.T) {
 	}
 }
 
+func TestDisplayOptionsForVerbosity(t *testing.T) {
+	base := DisplayOptions{
+		ShowStdout: OutputOnFailure,
+		ShowStderr: OutputOnFailure,
+	}
+
+	v1 := DisplayOptionsForVerbosity(1, base, false, false)
+	if !v1.ShowPassed {
+		t.Fatal("-v should show passed fixture rows")
+	}
+	if v1.ShowCommand {
+		t.Fatal("-v should not show command details yet")
+	}
+
+	v2 := DisplayOptionsForVerbosity(2, base, false, false)
+	if !v2.ShowCommand {
+		t.Fatal("-vv should show command details")
+	}
+
+	v3 := DisplayOptionsForVerbosity(3, base, false, false)
+	if v3.ShowStdout != OutputAlways || v3.ShowStderr != OutputAlways || !v3.ShowCELVars {
+		t.Fatalf("-vvv should show streams and CEL variables, got %+v", v3)
+	}
+
+	explicit := DisplayOptionsForVerbosity(3, base, true, false)
+	if explicit.ShowStdout != OutputOnFailure {
+		t.Fatalf("explicit --show-stdout should override -vvv, got %s", explicit.ShowStdout)
+	}
+}
+
+func TestApplyDisplayOptionsHidesPassedByDefault(t *testing.T) {
+	root := &FixtureNode{
+		Name: "root",
+		Type: SectionNode,
+		Children: []*FixtureNode{{
+			Name: "file.md",
+			Type: FileNode,
+			Children: []*FixtureNode{{
+				Name: "pass",
+				Type: TestNode,
+				Results: &FixtureResult{
+					Status: task.StatusPASS,
+					Test:   FixtureTest{Name: "pass"},
+				},
+			}, {
+				Name: "fail",
+				Type: TestNode,
+				Results: &FixtureResult{
+					Status: task.StatusFAIL,
+					Test:   FixtureTest{Name: "fail"},
+					Stdout: "failed output",
+				},
+			}},
+		}},
+	}
+
+	root.ApplyDisplayOptions(DisplayOptions{
+		ShowStdout: OutputOnFailure,
+		ShowStderr: OutputOnFailure,
+	})
+
+	file := root.Children[0]
+	if len(file.Children) != 1 {
+		t.Fatalf("expected only failing child to remain, got %d", len(file.Children))
+	}
+	if file.Children[0].Name != "fail" {
+		t.Fatalf("expected failing child to remain, got %s", file.Children[0].Name)
+	}
+	if file.Children[0].Results.Display == nil {
+		t.Fatal("visible result should carry display options")
+	}
+}
+
+func TestFixtureResultPrettyHonorsDisplayOptions(t *testing.T) {
+	hiddenPass := FixtureResult{
+		Status:  task.StatusPASS,
+		Test:    FixtureTest{Name: "hidden pass"},
+		Display: &DisplayOptions{ShowStdout: OutputOnFailure, ShowStderr: OutputOnFailure},
+	}
+	if got := strings.TrimSpace(stripFixtureANSI(hiddenPass.Pretty().String())); got != "" {
+		t.Fatalf("hidden passing result should render empty text, got %q", got)
+	}
+
+	result := FixtureResult{
+		Status:  task.StatusPASS,
+		Test:    FixtureTest{Name: "visible pass"},
+		Command: "bash -c echo hi",
+		Stdout:  "hello",
+		Display: &DisplayOptions{
+			ShowPassed:  true,
+			ShowCommand: false,
+			ShowStdout:  OutputNever,
+			ShowStderr:  OutputOnFailure,
+		},
+	}
+
+	hidden := stripFixtureANSI(result.Pretty().String())
+	if strings.Contains(hidden, "bash -c") || strings.Contains(hidden, "hello") {
+		t.Fatalf("display options should hide command/stdout, got %q", hidden)
+	}
+
+	result.Display.ShowCommand = true
+	result.Display.ShowStdout = OutputAlways
+	shown := stripFixtureANSI(result.Pretty().String())
+	if !strings.Contains(shown, "bash -c") || !strings.Contains(shown, "hello") {
+		t.Fatalf("display options should show command/stdout, got %q", shown)
+	}
+}
+
 func TestFixtureFailureSnippetPriority(t *testing.T) {
 	// Error wins over stderr/stdout/CEL.
 	r := FixtureResult{

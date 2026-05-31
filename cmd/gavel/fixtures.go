@@ -9,11 +9,15 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
 
 var (
 	fixturesUpdateGolden bool
+	fixturesShowPassed   bool
+	fixturesShowStdout   string
+	fixturesShowStderr   string
 )
 
 var fixturesCmd = &cobra.Command{
@@ -24,7 +28,7 @@ var fixturesCmd = &cobra.Command{
 	SilenceUsage: true,
 }
 
-func fixturesHelp() api.Text {
+func fixturesHelp(cmd *cobra.Command) api.Text {
 	h := func(title string) api.Text { return clicky.Text("\n"+title, "font-bold text-cyan-400").NewLine() }
 	sh := func(title string) api.Text { return clicky.Text("  "+title, "font-bold text-blue-400").NewLine() }
 	code := func(s string) api.Text { return clicky.Text(s, "text-green-400") }
@@ -37,6 +41,12 @@ func fixturesHelp() api.Text {
 		NewLine().
 		Append("Fixtures are markdown files that define test cases using tables or command blocks.").NewLine().
 		Append("Each file can have optional YAML front-matter for global configuration.").NewLine()
+
+	t = t.Add(h("USAGE")).
+		Add(code("  gavel fixtures [flags] <fixture-file-or-glob> [fixture-file-or-glob...]")).NewLine().
+		Add(h("ARGUMENTS")).
+		Add(kv("fixture-files", "One or more markdown fixture files or doublestar glob patterns. At least one is required.")).
+		Append("    ").Add(dim("Quote globs when you want Gavel to expand them instead of your shell.")).NewLine()
 
 	// File structure
 	t = t.Add(h("FILE STRUCTURE")).
@@ -193,9 +203,12 @@ func fixturesHelp() api.Text {
 	t = t.Add(h("EXAMPLES")).
 		Add(code("  gavel fixtures tests.md")).Add(dim("                  # Run a single fixture file")).NewLine().
 		Add(code("  gavel fixtures fixtures/**/*.md")).Add(dim("          # Run with glob")).NewLine().
-		Add(code("  gavel fixtures -v tests.md")).Add(dim("               # Verbose output")).NewLine().
-		Add(code("  gavel fixtures -vv tests.md")).Add(dim("              # More verbose")).NewLine().
-		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine()
+		Add(code("  gavel fixtures -v tests.md")).Add(dim("               # Show passed fixtures")).NewLine().
+		Add(code("  gavel fixtures -vv tests.md")).Add(dim("              # Also show commands")).NewLine().
+		Add(code("  gavel fixtures -vvv tests.md")).Add(dim("             # Also show stdout/stderr")).NewLine().
+		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
+		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
+		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
 	return t
 }
@@ -220,6 +233,11 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: executablePath,
 		UpdateGolden:   fixturesUpdateGolden,
+		Display: lo.ToPtr(fixtures.DisplayOptionsForVerbosity(clicky.Flags.LevelCount, fixtures.DisplayOptions{
+			ShowPassed: fixturesShowPassed,
+			ShowStdout: fixtures.ParseOutputMode(fixturesShowStdout),
+			ShowStderr: fixtures.ParseOutputMode(fixturesShowStderr),
+		}, cmd.Flags().Changed("show-stdout"), cmd.Flags().Changed("show-stderr"))),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create fixture runner: %w", err)
@@ -238,9 +256,14 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 
 func init() {
 	fixturesCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		fmt.Fprintln(os.Stderr, fixturesHelp().ANSI())
+		fmt.Fprintln(os.Stderr, fixturesHelp(cmd).ANSI())
 	})
 	fixturesCmd.Flags().BoolVar(&fixturesUpdateGolden, "update-golden", false,
 		"Rewrite @file stdout/stderr expectations with actual output instead of failing on mismatch")
+	fixturesCmd.Flags().BoolVar(&fixturesShowPassed, "show-passed", false, "Show passed fixture results in output")
+	fixturesCmd.Flags().StringVar(&fixturesShowStdout, "show-stdout", string(fixtures.OutputOnFailure),
+		"When to show stdout: Never, OnFailure, Always")
+	fixturesCmd.Flags().StringVar(&fixturesShowStderr, "show-stderr", string(fixtures.OutputOnFailure),
+		"When to show stderr: Never, OnFailure, Always")
 	rootCmd.AddCommand(fixturesCmd)
 }

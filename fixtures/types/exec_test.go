@@ -1,6 +1,9 @@
 package types
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/flanksource/gavel/fixtures"
@@ -98,4 +101,36 @@ func TestResolveWorkDir(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestExecFixtureTemplatesCWDBeforeResolvingWorkDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	sourceDir := filepath.Join(root, "fixtures")
+	if err := os.Mkdir(sourceDir, 0755); err != nil {
+		t.Fatalf("create source dir: %v", err)
+	}
+
+	expectedExit := 0
+	result := (&ExecFixture{}).Run(context.Background(), fixtures.FixtureTest{
+		Name:      "templated cwd",
+		SourceDir: sourceDir,
+		ExecFixtureBase: fixtures.ExecFixtureBase{
+			Exec: "pwd",
+			CWD:  "$GIT_ROOT_DIR",
+		},
+		Expected: fixtures.Expectations{ExitCode: &expectedExit},
+	}, fixtures.RunOptions{WorkDir: root})
+
+	expectedPWD, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("eval symlinks: %v", err)
+	}
+
+	assert.Equal(t, root, result.CWD)
+	assert.Equal(t, expectedPWD+"\n", result.Stdout)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Equal(t, root, result.Test.TemplateVars["CWD"])
 }

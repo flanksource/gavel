@@ -18,7 +18,6 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
-	"github.com/samber/lo"
 )
 
 // RunnerOptions configures the fixture runner
@@ -34,6 +33,7 @@ type RunnerOptions struct {
 	OnResult       func(FixtureResult) // Called after each fixture completes
 	OnParsed       func(*FixtureNode)  // Called after fixture files are parsed, before execution
 	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Display        *DisplayOptions     // Optional result visibility controls for CLI rendering
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -284,8 +284,12 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		}
 	}
 
-	r.tree.Stats = lo.ToPtr(r.tree.GetStats())
+	r.tree.UpdateStatsRecursive()
 	results.Summary = *r.tree.Stats
+
+	if r.options.Display != nil {
+		r.tree.ApplyDisplayOptions(*r.options.Display)
+	}
 
 	// Prune empty sections from the tree
 	r.tree.PruneEmptySections()
@@ -393,6 +397,9 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 	// Run the fixture test
 	result := fixtureType.Run(ctx, fixture, opts)
 	result.Duration = time.Since(start)
+	if r.options.Display != nil {
+		result.Display = r.options.Display
+	}
 
 	return result, nil
 }

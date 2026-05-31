@@ -8,6 +8,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@flanksource/clicky-ui": "^0.2.1",
+    "@tanstack/react-query": "^5.66.8",
     "preact": "^10.25.0"
   },
   "devDependencies": {
