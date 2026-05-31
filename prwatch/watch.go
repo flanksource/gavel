@@ -96,17 +96,19 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 		seen[runID] = true
 
 		// FetchRunJobs short-circuits via the persistent github cache when
-		// the run is already completed — no need for a per-iteration map.
-		run, err := github.FetchRunJobs(opts.Options, runID)
+		// the run is already completed — and atomically attaches failed-job
+		// logs before caching when opts.Logs is set, so a previously
+		// log-less cache entry can't suppress --logs.
+		run, err := github.FetchRunJobs(opts.Options, runID, github.RunLogOptions{
+			FetchLogs: opts.Logs,
+			TailLines: opts.TailLogs,
+		})
 		if err != nil {
 			logger.Warnf("failed to fetch run %d: %v", runID, err)
 			continue
 		}
 
-		if run.Conclusion == "failure" {
-			if opts.Logs {
-				github.FetchAndAttachLogs(opts.Options, run, opts.TailLogs)
-			}
+		if github.RunHasFailedJob(run) {
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}

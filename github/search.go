@@ -517,14 +517,11 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 			}
 			run, ok := runCache[runID]
 			if !ok {
-				run, err = FetchRunJobs(opts, runID)
+				run, err = FetchRunJobs(opts, runID, RunLogOptions{FetchLogs: fetchLogs, TailLines: 20})
 				if err != nil {
 					logger.Warnf("failed to fetch run %d: %v", runID, err)
 					runCache[runID] = nil
 					continue
-				}
-				if fetchLogs {
-					FetchAndAttachLogs(opts, run, 20)
 				}
 				runCache[runID] = run
 			}
@@ -532,7 +529,7 @@ func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
 				continue
 			}
 			for _, job := range run.Jobs {
-				if !strings.EqualFold(job.Conclusion, "failure") {
+				if !IsFailureConclusion(job.Conclusion) {
 					continue
 				}
 				for _, step := range job.Steps {

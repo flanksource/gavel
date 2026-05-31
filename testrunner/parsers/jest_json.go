@@ -91,10 +91,10 @@ type jestReport struct {
 //
 // Examples handled:
 //
-//	    at /repo/src/sum.test.ts:8:17
-//	    at Object.<anonymous> (src/sum.test.ts:8:17)
-//	    ❯ src/sum.test.ts:8:17
-//	    at node:internal/timers:42:17
+//	at /repo/src/sum.test.ts:8:17
+//	at Object.<anonymous> (src/sum.test.ts:8:17)
+//	❯ src/sum.test.ts:8:17
+//	at node:internal/timers:42:17
 var vitestStackFrameRe = regexp.MustCompile(`([^\s()]+\.[A-Za-z]{1,4}):(\d+):(\d+)`)
 
 // extractStackLocation pulls the first user-code file:line out of a Vitest
@@ -190,10 +190,10 @@ func (p *JestJSON) Parse(output io.Reader) ([]Test, error) {
 
 func (p *JestJSON) toTest(a jestAssertion, relFile, setupMessage, consoleText, rawFileMessage string) Test {
 	t := Test{
-		Name:      a.Title,
-		Suite:     append([]string{}, a.AncestorTitles...),
-		File:      relFile,
-		Line:      a.Location.Line,
+		Name:  a.Title,
+		Suite: append([]string{}, a.AncestorTitles...),
+		File:  relFile,
+		Line:  a.Location.Line,
 		// Multiply in float64 space so sub-millisecond durations (common
 		// in Vitest output, e.g. 0.6406...ms) survive as nanoseconds
 		// rather than being truncated to 0.

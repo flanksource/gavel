@@ -99,6 +99,9 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if result == nil {
 		return nil, nil
 	}
+	if opts.Logs && !resultHasFailedRun(result) {
+		logger.Infof("--logs had no effect: no failed jobs found (logs are only shown for failed jobs)")
+	}
 	if opts.SyncTodos != "" {
 		if err := prwatch.SyncTodos(result, opts.SyncTodos); err != nil {
 			logger.Warnf("failed to sync todos: %v", err)
@@ -127,6 +130,15 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	}
 
 	return result, nil
+}
+
+func resultHasFailedRun(result *prwatch.PRWatchResult) bool {
+	for _, run := range result.Runs {
+		if github.RunHasFailedJob(run) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseStatusArgs(args []string) (repo string, prNumber int, err error) {

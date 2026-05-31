@@ -9,10 +9,10 @@ import (
 
 func TestExtractStackLocation(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      string
-		want    string
-		wantLn  int
+		name   string
+		in     string
+		want   string
+		wantLn int
 	}{
 		{
 			name:   "vitest caret frame",
@@ -174,7 +174,7 @@ func TestJestJSON_VitestRealReport(t *testing.T) {
 	// The fixture has three top-level describe blocks; assertion counts
 	// match the real run.
 	wantSuites := map[string]int{
-		"formatCount":              16,
+		"formatCount":               16,
 		"collapseSingleChildChains": 7,
 		"groupLintByLinterRuleFile": 2,
 	}

@@ -12,14 +12,14 @@ import (
 
 func TestIsGlobRef(t *testing.T) {
 	cases := map[string]bool{
-		"@foo/*.md":     true,
-		"@foo/bar.md":   false,
-		"@a/[abc].txt":  true,
-		"@dir/?.md":     true,
-		"plain":         false,
-		`\@literal`:     false,
-		"@":             false,
-		"@foo/**/*.md":  true,
+		"@foo/*.md":    true,
+		"@foo/bar.md":  false,
+		"@a/[abc].txt": true,
+		"@dir/?.md":    true,
+		"plain":        false,
+		`\@literal`:    false,
+		"@":            false,
+		"@foo/**/*.md": true,
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, isGlobRef(in), "isGlobRef(%q)", in)

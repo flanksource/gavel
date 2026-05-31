@@ -221,7 +221,17 @@ func (s restStep) toStep() Step {
 	}
 }
 
-func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
+// RunLogOptions controls whether FetchRunJobs eagerly fetches and attaches
+// failed-job logs before persisting the run to the immutable cache. Attaching
+// logs before caching keeps "fetch + cache" atomic: a run cached with
+// FetchLogs=false can never hide logs from a later FetchLogs=true caller,
+// because that caller re-enriches the cached payload (see FetchRunJobs).
+type RunLogOptions struct {
+	FetchLogs bool
+	TailLines int
+}
+
+func FetchRunJobs(opts Options, runID int64, logOpts RunLogOptions) (*WorkflowRun, error) {
 	token, err := opts.token()
 	if err != nil {
 		return nil, err
@@ -232,11 +242,17 @@ func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
 	}
 
 	// Phase 3 short-circuit: completed runs are immutable, so once we've
-	// stored one we never have to talk to GitHub again.
+	// stored one we never have to talk to GitHub again — except that a run
+	// cached without logs must still be enriched (and re-cached) when the
+	// caller now wants logs, otherwise --logs would be a silent no-op.
 	if payload := cache.Shared().GetCompletedRunPayload(runID); payload != nil {
 		var cached WorkflowRun
 		if err := json.Unmarshal(payload, &cached); err == nil {
 			logger.Tracef("github cache hit for completed run %d", runID)
+			if logOpts.FetchLogs && !runHasFailureLogs(&cached) {
+				FetchAndAttachLogs(opts, &cached, logOpts.TailLines)
+				persistCompletedRun(repo, runID, &cached)
+			}
 			return &cached, nil
 		}
 		logger.Warnf("github cache: corrupt completed run %d, refetching", runID)
@@ -274,28 +290,63 @@ func FetchRunJobs(opts Options, runID int64) (*WorkflowRun, error) {
 		result.DatabaseID, result.Name, result.Status, result.Conclusion, len(result.Jobs),
 		runResp.FromCache && jobsResp.FromCache)
 
+	// Attach logs BEFORE persisting so the cached payload always reflects the
+	// logs-requested intent of this call. Gate on failed JOBS, not the run
+	// conclusion — an in-progress run can already have failed jobs worth logs.
+	if logOpts.FetchLogs && RunHasFailedJob(result) {
+		FetchAndAttachLogs(opts, result, logOpts.TailLines)
+	}
+
 	// Persist completed runs into the immutable cache. Subsequent calls
 	// (including from new processes) will short-circuit at the top of this
 	// function.
 	if result.Status == "completed" {
-		if payload, err := cache.MarshalJSON(result); err == nil {
-			cache.Shared().PutCompletedRun(repo, runID, result.Status, result.Conclusion, payload)
-		}
+		persistCompletedRun(repo, runID, result)
 	}
 
 	return result, nil
 }
 
+func persistCompletedRun(repo string, runID int64, run *WorkflowRun) {
+	payload, err := cache.MarshalJSON(run)
+	if err != nil {
+		logger.Warnf("github cache: marshal run %d failed: %v", runID, err)
+		return
+	}
+	cache.Shared().PutCompletedRun(repo, runID, run.Status, run.Conclusion, payload)
+}
+
 func FetchAndAttachLogs(opts Options, run *WorkflowRun, tailLines int) {
 	for i := range run.Jobs {
 		job := &run.Jobs[i]
-		if !strings.EqualFold(job.Conclusion, "failure") {
+		if !IsFailureConclusion(job.Conclusion) {
 			continue
 		}
 		if err := FetchJobLogs(opts, job, tailLines); err != nil {
 			logger.Warnf("failed to fetch logs for job %d (%s): %v", job.DatabaseID, job.Name, err)
 		}
 	}
+}
+
+// runHasFailureLogs reports whether any failed job in the run already carries
+// attached log output. Used to decide whether a cached run satisfies a
+// logs-requested fetch or must be enriched.
+func runHasFailureLogs(run *WorkflowRun) bool {
+	for i := range run.Jobs {
+		job := &run.Jobs[i]
+		if !IsFailureConclusion(job.Conclusion) {
+			continue
+		}
+		if job.Logs != "" {
+			return true
+		}
+		for _, step := range job.Steps {
+			if step.Logs != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FetchJobLogs fetches logs for a single job from the GitHub API and attaches them

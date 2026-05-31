@@ -149,4 +149,3 @@ func fileChanged(before []byte, beforeExists bool, after []byte, afterExists boo
 	}
 	return false
 }
-
