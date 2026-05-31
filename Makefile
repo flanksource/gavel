@@ -21,7 +21,7 @@ deps: ensure-task
 		if [ ! -d "$$dir/node_modules" ]; then \
 			echo "Installing $$dir dependencies"; \
 			command -v npm >/dev/null 2>&1 || { echo "npm is required to install $$dir dependencies"; exit 1; }; \
-			( cd "$$dir" && npm ci ); \
+			( cd "$$dir" && npm install ); \
 		fi; \
 	done
 

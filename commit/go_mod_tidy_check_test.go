@@ -272,12 +272,12 @@ func TestApplyGoModTidy_GoSumCreated(t *testing.T) {
 
 func TestFileChanged(t *testing.T) {
 	cases := []struct {
-		name                                   string
-		before                                 []byte
-		bExists                                bool
-		after                                  []byte
-		aExists                                bool
-		want                                   bool
+		name    string
+		before  []byte
+		bExists bool
+		after   []byte
+		aExists bool
+		want    bool
 	}{
 		{"both absent", nil, false, nil, false, false},
 		{"absent -> present", nil, false, []byte("x"), true, true},

@@ -940,7 +940,7 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	runCh := make(chan runResult, len(runIDs))
 	for _, id := range runIDs {
 		go func(runID int64) {
-			run, err := github.FetchRunJobs(opts, runID)
+			run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
 			if err != nil {
 				logger.Warnf("failed to fetch run %d: %v", runID, err)
 				runCh <- runResult{runID, nil}
@@ -1003,7 +1003,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 			continue
 		}
 		seen[runID] = true
-		run, err := github.FetchRunJobs(opts, runID)
+		run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
 		if err != nil {
 			logger.Warnf("failed to fetch run %d: %v", runID, err)
 			continue
@@ -1102,7 +1102,7 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := jobLogsResponse{JobID: jobID}
 
-	run, err := github.FetchRunJobs(opts, runID)
+	run, err := github.FetchRunJobs(opts, runID, github.RunLogOptions{})
 	if err != nil {
 		logger.Warnf("failed to fetch run %d: %v", runID, err)
 		resp.Error = err.Error()
