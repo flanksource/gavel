@@ -491,9 +491,19 @@ func TestExecutionRootLabelPrefersProjectMetadata(t *testing.T) {
 func TestRunnerNoTests(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	_, err := Run(RunOptions{WorkDir: tmpDir})
-	if err == nil {
-		t.Error("expected error for no tests")
+	// A directory with no detectable test frameworks is a successful no-op,
+	// not an error: a multi-root run where one root has no tests must not fail
+	// the whole run (see refactor 6686a89). Run returns an empty test tree.
+	result, err := Run(RunOptions{WorkDir: tmpDir})
+	if err != nil {
+		t.Fatalf("no-tests dir should not error, got %v", err)
+	}
+	tests, ok := result.([]parsers.Test)
+	if !ok {
+		t.Fatalf("expected []parsers.Test, got %T", result)
+	}
+	if len(tests) != 0 {
+		t.Errorf("expected no tests, got %d", len(tests))
 	}
 }
 

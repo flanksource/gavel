@@ -346,8 +346,12 @@ func TestSnapshotIncludesVirtualTaskTests(t *testing.T) {
 	}
 
 	release <- struct{}{}
-	if _, err := task.GetResult(); err != nil {
-		t.Fatalf("task get result: %v", err)
+	// WaitFor (not GetResult) blocks until the worker has actually settled the
+	// task, so the snapshot below sees Running=false and the global registry is
+	// quiescent before this test's cleanup — otherwise a still-finishing task
+	// leaks into the next test's registry.
+	if wait := task.WaitFor(); wait.Status != clickytask.StatusSuccess {
+		t.Fatalf("task status = %q, want success", wait.Status)
 	}
 
 	resp = doRequest(t, handler, http.MethodGet, "/api/tests", nil)

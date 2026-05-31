@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1017,10 +1018,11 @@ func subprocessTimeoutArgs(framework Framework, subTimeout time.Duration) []stri
 // supervisePackage wraps the package's parent context with the per-package
 // timeout (and the global --timeout) and starts a goroutine that kills the
 // running process when either deadline fires. Returns the derived context,
-// a cancel func, and a pointer to the timedOut flag that the supervisor sets
-// when it had to kill the subprocess.
-func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, pkgPath string) (commonsCtx.Context, context.CancelFunc, *bool) {
-	timedOut := new(bool)
+// a cancel func, and an atomic timedOut flag that the supervisor sets when it
+// had to kill the subprocess (atomic because the supervisor goroutine writes
+// it while the caller reads it).
+func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *exec.Process, pkgPath string) (commonsCtx.Context, context.CancelFunc, *atomic.Bool) {
+	timedOut := new(atomic.Bool)
 
 	// Compose: parent (clicky task ctx) ∧ o.Context (global --timeout) ∧ per-package deadline.
 	base := context.Context(parent)
@@ -1052,7 +1054,7 @@ func (o *TestOrchestrator) supervisePackage(parent commonsCtx.Context, process *
 		if !process.IsRunning() {
 			return
 		}
-		*timedOut = true
+		timedOut.Store(true)
 		logger.Warnf("test package %s exceeded deadline — capturing diagnostics before killing tree", pkgPath)
 		captureGlobalDiagnostics()
 		if err := process.KillTree(); err != nil {
@@ -1248,7 +1250,7 @@ func (o *TestOrchestrator) runPackageTest(
 	runDuration := time.Since(runStart)
 	stopSampler()
 	cancelPkg()
-	timedOut := timedOutPtr != nil && *timedOutPtr
+	timedOut := timedOutPtr != nil && timedOutPtr.Load()
 	if ginkgoStream != nil {
 		ginkgoStream.Flush()
 	}

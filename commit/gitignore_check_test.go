@@ -466,26 +466,28 @@ func TestAppendGitIgnore_SkipsDuplicate(t *testing.T) {
 }
 
 func TestGitIgnoreChoices(t *testing.T) {
-	t.Run("nested file offers pattern, ignore-folder, ignore-file, allow, allow-folder, cancel", func(t *testing.T) {
+	t.Run("nested file offers pattern, ignore-folder, ignore-file, allow, allow-folder, ignore-once, cancel", func(t *testing.T) {
 		choices := gitIgnoreChoices(Violation{File: "logs/debug.log", Pattern: "*.log"})
-		require.Len(t, choices, 6)
+		require.Len(t, choices, 7)
 		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
 		assert.Equal(t, DecisionGitIgnoreFolder, choices[1].Decision)
 		assert.Equal(t, DecisionGitIgnoreFile, choices[2].Decision)
 		assert.Equal(t, DecisionAllow, choices[3].Decision)
 		assert.Equal(t, DecisionAllowFolder, choices[4].Decision)
-		assert.Equal(t, DecisionCancel, choices[5].Decision)
+		assert.Equal(t, DecisionIgnoreOnce, choices[5].Decision)
+		assert.Equal(t, DecisionCancel, choices[6].Decision)
 		assert.Contains(t, choices[1].Text, `"logs/"`)
 		assert.Contains(t, choices[4].Text, `"logs/"`)
 	})
 
 	t.Run("root file omits both folder options", func(t *testing.T) {
 		choices := gitIgnoreChoices(Violation{File: "debug.log", Pattern: "*.log"})
-		require.Len(t, choices, 4)
+		require.Len(t, choices, 5)
 		assert.Equal(t, DecisionGitIgnorePattern, choices[0].Decision)
 		assert.Equal(t, DecisionGitIgnoreFile, choices[1].Decision)
 		assert.Equal(t, DecisionAllow, choices[2].Decision)
-		assert.Equal(t, DecisionCancel, choices[3].Decision)
+		assert.Equal(t, DecisionIgnoreOnce, choices[3].Decision)
+		assert.Equal(t, DecisionCancel, choices[4].Decision)
 	})
 }
 

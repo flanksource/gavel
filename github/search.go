@@ -255,7 +255,7 @@ func buildSearchQueryBase(searchOpts PRSearchOptions) []string {
 	return parts
 }
 
-func buildSearchQuery(opts Options, searchOpts PRSearchOptions) (string, error) {
+func buildSearchQuery(opts Options, searchOpts PRSearchOptions, baseURL string) (string, error) {
 	parts := buildSearchQueryBase(searchOpts)
 
 	if searchOpts.All {
@@ -265,7 +265,7 @@ func buildSearchQuery(opts Options, searchOpts PRSearchOptions) (string, error) 
 			// the local git remote — makes `--all` work from any directory
 			// (CI, tmp checkouts, a fresh daemon bind-mount) and falls
 			// back to the user's own login for solo developers.
-			resolved, err := ResolveDefaultOrg(opts, searchOpts.IgnoredOrgs)
+			resolved, err := resolveDefaultOrg(opts, baseURL, searchOpts.IgnoredOrgs)
 			if err != nil {
 				return "", fmt.Errorf("cannot determine default org (use --org): %w", err)
 			}
@@ -305,7 +305,7 @@ func SearchPRs(opts Options, searchOpts PRSearchOptions) (PRSearchResults, *Rate
 		return searchMultipleRepos(token, searchOpts)
 	}
 
-	queryString, err := buildSearchQuery(opts, searchOpts)
+	queryString, err := buildSearchQuery(opts, searchOpts, githubAPIBase())
 	if err != nil {
 		return nil, nil, err
 	}
