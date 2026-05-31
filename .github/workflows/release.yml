@@ -26,6 +26,36 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            testrunner/ui/package-lock.json
+            pr/ui/package-lock.json
+
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      # Build and commit the embedded UI bundles (testui.js / prui.js) so the
+      # release tag carries them. They are gitignored build output, so without
+      # this step a downstream module fetching gavel by tag/SHA fails its
+      # `//go:embed dist/*.js` with "no matching files found".
+      - name: Build and commit embedded UI bundles
+        run: |
+          task test-ui
+          task pr-ui
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f testrunner/ui/dist/testui.js pr/ui/dist/prui.js
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(embed): rebuild UI bundles for release"
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "UI bundles unchanged"
+          fi
+
       - uses: flanksource/deps@v1.0.23
         with:
           tools: |
