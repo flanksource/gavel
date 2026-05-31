@@ -327,6 +327,10 @@ func initCommitRepo(t *testing.T) string {
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test User")
 	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	// Isolate from the developer's global excludes (~/.config/git/ignore),
+	// which commonly lists .env etc. and would otherwise make `git add .env`
+	// fail with "paths are ignored" in gitignore-check tests.
+	gitRun(t, dir, "config", "core.excludesFile", "/dev/null")
 	writeFile(t, dir, "README.md", "# test\n")
 	gitRun(t, dir, "add", "README.md")
 	gitRun(t, dir, "commit", "-m", "initial commit")

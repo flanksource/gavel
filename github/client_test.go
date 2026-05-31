@@ -290,6 +290,7 @@ func TestTokenResolution(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITHUB_TOKEN", tc.envGitHub)
 			t.Setenv("GH_TOKEN", tc.envGH)
+			t.Setenv("HOME", t.TempDir()) // isolate ~/.config/gavel/auth.json
 			opts := Options{Token: tc.token}
 			result, err := opts.token()
 			if tc.hasErr {

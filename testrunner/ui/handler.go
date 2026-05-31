@@ -17,12 +17,16 @@ import (
 )
 
 type Server struct {
-	mu                  sync.RWMutex
-	tests               []parsers.Test
-	lint                []*linters.LinterResult
-	lintRun             bool
-	benchCmp            *bench.BenchComparison
-	done                bool
+	mu       sync.RWMutex
+	tests    []parsers.Test
+	lint     []*linters.LinterResult
+	lintRun  bool
+	benchCmp *bench.BenchComparison
+	done     bool
+	// replayed marks a server hydrated from a static JSON snapshot
+	// (LoadSnapshot). Its results are fixed, so snapshot() must not consult
+	// the process-global clicky task registry — there is no live run behind it.
+	replayed            bool
 	metadata            *SnapshotMetadata
 	git                 *SnapshotGit
 	embeddedDiagnostics *DiagnosticsSnapshot
@@ -148,6 +152,7 @@ func (s *Server) LoadSnapshot(snapshot Snapshot) {
 	s.git = cloneSnapshotGit(snapshot.Git)
 	s.embeddedDiagnostics = cloneDiagnosticsSnapshot(snapshot.Diagnostics)
 	s.done = !snapshot.Status.Running
+	s.replayed = true
 	s.stopRequested = snapshot.Status.Stopped
 	s.stopMessage = snapshot.Status.StopMessage
 	if snapshot.Git != nil && snapshot.Git.Root != "" {
@@ -335,14 +340,22 @@ func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) snapshot() Snapshot {
 	tests := s.tests
-	taskTests := virtualTaskTests()
-	if len(taskTests) > 0 {
-		merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
-		merged = append(merged, taskTests...)
-		merged = append(merged, s.tests...)
-		tests = merged
+	// Virtual task tests surface live (running/pending) clicky tasks while a
+	// run is in progress. A server replayed from a JSON snapshot has its
+	// results fixed in s.tests with no live run behind it, so consulting the
+	// process-global task registry would only leak phantom tasks (and pollute
+	// replay tests that share that registry).
+	running := !s.done
+	if !s.replayed {
+		taskTests := virtualTaskTests()
+		if len(taskTests) > 0 {
+			merged := make([]parsers.Test, 0, len(taskTests)+len(s.tests))
+			merged = append(merged, taskTests...)
+			merged = append(merged, s.tests...)
+			tests = merged
+		}
+		running = running || !tasksDone()
 	}
-	running := !s.done || !tasksDone()
 	stopped := s.stopRequested && !running
 	stopMessage := ""
 	if stopped {

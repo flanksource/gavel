@@ -50,6 +50,11 @@ func newPRCreateFixture(t *testing.T) *prCreateFixture {
 
 	runCmd(t, root, "git", "init", "--bare", "-b", "main", bare)
 	runCmd(t, root, "git", "init", "-b", "main", repo)
+	// Persist an identity in the repo's local config so git operations spawned
+	// by production code (e.g. gitCherryPick, which doesn't inject GIT_AUTHOR_*)
+	// can author commits even on a CI runner with no global git identity.
+	runCmd(t, repo, "git", "config", "user.email", "test@example.com")
+	runCmd(t, repo, "git", "config", "user.name", "test")
 	runCmd(t, repo, "git", "remote", "add", "origin", bare)
 
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {

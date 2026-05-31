@@ -1,12 +1,43 @@
 package github
 
 import (
+	nethttp "net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// orgsResolveTo returns a stub GitHub API URL whose /user/orgs lists the given
+// org, so the `All: true` query path resolves deterministically instead of
+// hitting the real api.github.com with the developer's own token.
+func orgsResolveTo(t *testing.T, org string) string {
+	t.Helper()
+	mux := nethttp.NewServeMux()
+	mux.HandleFunc("/user/orgs", func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		_, _ = w.Write([]byte(`[{"login":"` + org + `","avatar_url":""}]`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// orgsUnresolvable returns a stub GitHub API URL whose org and user probes both
+// fail, so ResolveDefaultOrg errors and the `All` path has no org to scope to.
+func orgsUnresolvable(t *testing.T) string {
+	t.Helper()
+	mux := nethttp.NewServeMux()
+	fail := func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		nethttp.Error(w, "unauth", nethttp.StatusUnauthorized)
+	}
+	mux.HandleFunc("/user/orgs", fail)
+	mux.HandleFunc("/user", fail)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
 
 func TestBuildSearchQuery(t *testing.T) {
 	since := time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)
@@ -15,8 +46,11 @@ func TestBuildSearchQuery(t *testing.T) {
 		name       string
 		opts       Options
 		searchOpts PRSearchOptions
-		expect     string
-		hasErr     bool
+		// baseURL stubs the GitHub API for cases that resolve a default org.
+		// "" means the case never touches the network (repo/explicit-org paths).
+		baseURL func(t *testing.T) string
+		expect  string
+		hasErr  bool
 	}{
 		{
 			name:       "default single repo",
@@ -26,8 +60,9 @@ func TestBuildSearchQuery(t *testing.T) {
 		},
 		{
 			name:       "all repos in org",
-			opts:       Options{Repo: "flanksource/gavel"},
+			opts:       Options{Token: "tok", Repo: "flanksource/gavel"},
 			searchOpts: PRSearchOptions{Author: "@me", Since: since, State: "open", All: true},
+			baseURL:    func(t *testing.T) string { return orgsResolveTo(t, "flanksource") },
 			expect:     "is:pr author:@me is:open updated:>2026-03-31 org:flanksource",
 		},
 		{
@@ -68,14 +103,19 @@ func TestBuildSearchQuery(t *testing.T) {
 		},
 		{
 			name:       "all without repo or org fails",
-			opts:       Options{WorkDir: "/tmp"},
+			opts:       Options{Token: "tok", WorkDir: "/tmp"},
 			searchOpts: PRSearchOptions{All: true},
+			baseURL:    orgsUnresolvable,
 			hasErr:     true,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := buildSearchQuery(tc.opts, tc.searchOpts)
+			var baseURL string
+			if tc.baseURL != nil {
+				baseURL = tc.baseURL(t)
+			}
+			result, err := buildSearchQuery(tc.opts, tc.searchOpts, baseURL)
 			if tc.hasErr {
 				assert.Error(t, err)
 				return

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	clickytask "github.com/flanksource/clicky/task"
+	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/stretchr/testify/assert"
@@ -123,6 +125,45 @@ func TestLoadResults_MergesMultipleSnapshots(t *testing.T) {
 	assert.True(t, got.Status.DiagnosticsAvailable)
 	require.NotNil(t, got.Diagnostics)
 	assert.Equal(t, 42, got.Diagnostics.Root.PID)
+}
+
+// TestLoadResults_IgnoresGlobalTaskPollution pins the contract that a replayed
+// snapshot serves exactly the loaded tests, even when the process-global clicky
+// task registry holds stray running tasks left by a concurrent/earlier run.
+// This was the cause of the flaky CI failures where /api/tests returned 5
+// items (2 loaded + 3 leaked "Running linters" groups) instead of 2.
+func TestLoadResults_IgnoresGlobalTaskPollution(t *testing.T) {
+	clicky.ClearGlobalTasks()
+	t.Cleanup(clicky.ClearGlobalTasks)
+
+	// Simulate registry pollution from another run: a lint group with a task
+	// that stays running for the duration of this test.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	group := clicky.StartGroup[string](testui.LintTaskGroupName, clickytask.WithConcurrency(1))
+	group.Add("stray", func(_ commonsContext.Context, task *clickytask.Task) (string, error) {
+		task.SetName("golangci-lint run")
+		<-release
+		task.Success()
+		return "ok", nil
+	})
+	time.Sleep(50 * time.Millisecond) // let the task reach running state
+
+	dir := t.TempDir()
+	path := writeSnapshot(t, dir)
+
+	srv := testui.NewServer()
+	require.NoError(t, loadResults(srv, path))
+
+	handler := srv.Handler()
+	req, _ := http.NewRequest("GET", "/api/tests", nil)
+	rw := &recordingResponse{header: http.Header{}}
+	handler.ServeHTTP(rw, req)
+
+	var got testui.Snapshot
+	require.NoError(t, json.Unmarshal(rw.body, &got))
+	require.Len(t, got.Tests, 2, "replayed snapshot must not merge global task registry")
+	assert.False(t, got.Status.Running, "replayed snapshot is a finished run")
 }
 
 // recordingResponse is a minimal http.ResponseWriter for in-process tests
