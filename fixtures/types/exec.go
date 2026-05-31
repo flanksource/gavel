@@ -16,6 +16,7 @@ import (
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
 )
 
@@ -37,20 +38,22 @@ func (e *ExecFixture) Name() string {
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
-	// Compute root dirs from the base working directory (before CWD expansion)
-	baseDir := ResolveWorkDir(fixture, opts)
-	gitRoot := repomap.FindGitRoot(baseDir)
-	goRoot := findGoModRoot(baseDir)
+	// Compute root dirs from the fixture source directory first. The CWD
+	// itself may reference these auto-injected vars, so it must be templated
+	// before we resolve the final working directory.
+	sourceDir := ResolveSourceDir(fixture, opts)
+	gitRoot := repomap.FindGitRoot(sourceDir)
+	goRoot := findGoModRoot(sourceDir)
 	rootDir := gitRoot
 	if rootDir == "" {
 		rootDir = goRoot
 	}
 	if rootDir == "" {
-		rootDir = baseDir
+		rootDir = sourceDir
 	}
 
 	if gitRoot != goRoot {
-		logger.V(3).Infof("Directories: base=%s git=%s go=%s root=%s", baseDir, gitRoot, goRoot, rootDir)
+		logger.V(3).Infof("Directories: source=%s git=%s go=%s root=%s", sourceDir, gitRoot, goRoot, rootDir)
 	}
 
 	// Inject auto-injected vars into TemplateVars so they're available
@@ -58,7 +61,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if fixture.TemplateVars == nil {
 		fixture.TemplateVars = make(map[string]any)
 	}
-	fixture.TemplateVars["workDir"] = baseDir
+	fixture.TemplateVars["workDir"] = sourceDir
 	fixture.TemplateVars["executablePath"] = opts.ExecutablePath
 	fixture.TemplateVars["GIT_ROOT_DIR"] = gitRoot
 	fixture.TemplateVars["GO_ROOT_DIR"] = goRoot
@@ -66,7 +69,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	fixture.TemplateVars["GOOS"] = runtime.GOOS
 	fixture.TemplateVars["GOARCH"] = runtime.GOARCH
 	fixture.TemplateVars["GOPATH"] = os.Getenv("GOPATH")
-	fixture.TemplateVars["CWD"] = baseDir
+	fixture.TemplateVars["CWD"] = sourceDir
 
 	result := fixtures.FixtureResult{
 		Test:     fixture,
@@ -76,17 +79,24 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	templateData := fixture.AsMap()
+	templatedCWD, err := templateString(fixture.ExecBase().CWD, templateData)
+	if err != nil {
+		return result.Errorf(err, "failed to template cwd")
+	}
+	workDir := ResolveWorkDirFromCWD(templatedCWD, sourceDir, opts)
+
+	fixture.TemplateVars["workDir"] = workDir
+	fixture.TemplateVars["CWD"] = workDir
+	result.Test = fixture
+	templateData = fixture.AsMap()
 
 	exec, err := fixture.ExecBase().Template(templateData)
 	if err != nil {
 		return result.Errorf(err, "failed to template exec base")
 	}
+	exec.CWD = templatedCWD
 
-	// ResolveWorkDir already joined SourceDir with the merged CWD, so baseDir
-	// is the fully resolved working directory. Re-applying exec.CWD here
-	// would double-apply the relative path (e.g. ".. .." gets joined twice),
-	// leaving the child process in the wrong directory.
-	workDir := baseDir
+	result.CWD = workDir
 
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
@@ -177,13 +187,27 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.E
 // Priority: test-level CWD > file-level frontmatter CWD > SourceDir > opts.WorkDir
 // Relative CWD paths are resolved from SourceDir (fixture file location) or opts.WorkDir.
 func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
+	baseDir := ResolveSourceDir(fixture, opts)
+
+	// Get the merged CWD (file-level frontmatter + test-level override)
+	cwd := fixture.ExecBase().CWD
+	result := ResolveWorkDirFromCWD(cwd, baseDir, opts)
+	logger.V(4).Infof("ResolveWorkDir: opts.WorkDir=%s sourceDir=%s cwd=%s → %s", opts.WorkDir, fixture.SourceDir, cwd, result)
+	return result
+}
+
+func ResolveSourceDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
 	baseDir := opts.WorkDir
 	if fixture.SourceDir != "" {
 		baseDir = fixture.SourceDir
 	}
+	if baseDir == "" {
+		baseDir, _ = os.Getwd()
+	}
+	return baseDir
+}
 
-	// Get the merged CWD (file-level frontmatter + test-level override)
-	cwd := fixture.ExecBase().CWD
+func ResolveWorkDirFromCWD(cwd, baseDir string, opts fixtures.RunOptions) string {
 	var result string
 	if cwd == "" || cwd == "." {
 		result = baseDir
@@ -192,8 +216,13 @@ func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) stri
 	} else {
 		result = filepath.Join(baseDir, cwd)
 	}
-	logger.V(4).Infof("ResolveWorkDir: opts.WorkDir=%s sourceDir=%s cwd=%s → %s", opts.WorkDir, fixture.SourceDir, cwd, result)
+	logger.V(4).Infof("ResolveWorkDir: opts.WorkDir=%s baseDir=%s cwd=%s → %s", opts.WorkDir, baseDir, cwd, result)
 	return result
+}
+
+func templateString(value string, data map[string]any) (string, error) {
+	value = fixtures.ExpandVars(value, data)
+	return gomplate.RunTemplate(data, gomplate.Template{Template: value})
 }
 
 // GetRequiredFields returns required fields

@@ -38,6 +38,77 @@ type RunOptions struct {
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
 }
 
+// OutputMode controls when captured command output is shown in rendered
+// fixture results.
+type OutputMode string
+
+const (
+	OutputNever     OutputMode = "Never"
+	OutputOnFailure OutputMode = "OnFailure"
+	OutputAlways    OutputMode = "Always"
+)
+
+func (o OutputMode) ShouldShow(failed bool) bool {
+	switch o {
+	case OutputAlways, "true":
+		return true
+	case OutputNever, "false":
+		return false
+	default:
+		return failed
+	}
+}
+
+func ParseOutputMode(value string) OutputMode {
+	switch value {
+	case "", "OnFailure", "onfailure", "on-failure":
+		return OutputOnFailure
+	case "Always", "always", "true":
+		return OutputAlways
+	case "Never", "never", "false":
+		return OutputNever
+	default:
+		return OutputMode(value)
+	}
+}
+
+// DisplayOptions controls which fixture results and captured fields are
+// included in human-facing command output.
+type DisplayOptions struct {
+	ShowPassed  bool
+	ShowCommand bool
+	ShowCELVars bool
+	ShowStdout  OutputMode
+	ShowStderr  OutputMode
+}
+
+// DisplayOptionsForVerbosity layers fixture-specific display affordances on
+// top of the global logging verbosity count.
+func DisplayOptionsForVerbosity(level int, base DisplayOptions, stdoutExplicit, stderrExplicit bool) DisplayOptions {
+	if base.ShowStdout == "" {
+		base.ShowStdout = OutputOnFailure
+	}
+	if base.ShowStderr == "" {
+		base.ShowStderr = OutputOnFailure
+	}
+	if level >= 1 {
+		base.ShowPassed = true
+	}
+	if level >= 2 {
+		base.ShowCommand = true
+	}
+	if level >= 3 {
+		base.ShowCELVars = true
+		if !stdoutExplicit {
+			base.ShowStdout = OutputAlways
+		}
+		if !stderrExplicit {
+			base.ShowStderr = OutputAlways
+		}
+	}
+	return base
+}
+
 // FixtureGroup represents a logical grouping of fixture tests with summary statistics.
 type FixtureGroup struct {
 	Name     string

@@ -12,6 +12,7 @@ import {
   hasTimeoutArgs,
   timeoutArgValue,
 } from '../utils';
+import { Clicky } from '@flanksource/clicky-ui/clicky';
 import { JsonView } from './JsonView';
 import { AnsiHtml } from './AnsiHtml';
 import { ProgressBar } from './ProgressBar';
@@ -363,6 +364,12 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       {t.attempts && t.attempts.length > 0 && (
         <Section title={t.attempts.length > 1 ? `Attempts (${t.attempts.length})` : 'Attempt'}>
           <TestAttempts test={t} />
+        </Section>
+      )}
+
+      {t.detail && (
+        <Section title="Source">
+          <Clicky data={t.detail} />
         </Section>
       )}
 

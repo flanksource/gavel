@@ -449,6 +449,7 @@ type FixtureResult struct {
 	ExitCode int                    `json:"exit_code,omitempty" pretty:"label=Exit Code,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty" pretty:"label=Metadata,omitempty"`
 	Start    *time.Time             `json:"start,omitempty" pretty:"label=Start Time,omitempty"`
+	Display  *DisplayOptions        `json:"-"`
 }
 
 func (f FixtureResult) Failf(format string, args ...interface{}) FixtureResult {
@@ -489,11 +490,15 @@ func (f FixtureResult) String() string {
 }
 
 func (f FixtureResult) Pretty() api.Text {
+	if f.Display != nil && !f.Display.ShowPassed && isPassingStatus(f.Status) {
+		return clicky.Text("")
+	}
+
 	// In CI / --no-progress mode, emit a single compact line per fixture.
 	// Passing fixtures are skipped entirely (they're already counted in
 	// the parent Stats rollup); failing fixtures show only the error or
 	// first line of stderr/stdout so the whole block fits on one line.
-	if clicky.Flags.NoProgress {
+	if clicky.Flags.NoProgress && !f.hasExpandedDisplay() {
 		return f.compactLine()
 	}
 
@@ -509,7 +514,7 @@ func (f FixtureResult) Pretty() api.Text {
 		t = t.Space().Append(f.Error, "text-red-600")
 	}
 
-	if len(f.CELVars) > 0 {
+	if len(f.CELVars) > 0 && f.showCELVars() {
 		t = t.NewLine().Add(api.Collapsed{
 			Label:   "variables",
 			Content: clicky.Map(f.CELVars, "max-w-[100ch]"),
@@ -518,7 +523,7 @@ func (f FixtureResult) Pretty() api.Text {
 
 	isFailed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
 
-	if f.Command != "" {
+	if f.Command != "" && f.showCommand() {
 		cmd := f.Command
 		if f.CWD != "" {
 			cmd += " (cwd: " + relativePath(f.CWD) + ")"
@@ -526,7 +531,7 @@ func (f FixtureResult) Pretty() api.Text {
 		t = t.NewLine().Append("$ "+cmd, "text-gray-500")
 	}
 
-	if f.Stdout != "" {
+	if f.Stdout != "" && f.showStdout(isFailed) {
 		label := "stdout"
 		if isFailed {
 			label = "stdout (failed)"
@@ -536,7 +541,7 @@ func (f FixtureResult) Pretty() api.Text {
 			Content: clicky.Text(f.Stdout, "font-mono text-xs whitespace-pre-wrap"),
 		})
 	}
-	if f.Stderr != "" {
+	if f.Stderr != "" && f.showStderr(isFailed) {
 		t = t.NewLine().Add(api.Collapsed{
 			Label:   "stderr",
 			Content: clicky.Text(f.Stderr, "text-red-500 font-mono text-xs whitespace-pre-wrap"),
@@ -544,6 +549,39 @@ func (f FixtureResult) Pretty() api.Text {
 	}
 
 	return t
+}
+
+func (f FixtureResult) showCommand() bool {
+	return f.Display == nil || f.Display.ShowCommand
+}
+
+func (f FixtureResult) showCELVars() bool {
+	return f.Display == nil || f.Display.ShowCELVars
+}
+
+func (f FixtureResult) showStdout(failed bool) bool {
+	if f.Display == nil {
+		return true
+	}
+	return f.Display.ShowStdout.ShouldShow(failed)
+}
+
+func (f FixtureResult) showStderr(failed bool) bool {
+	if f.Display == nil {
+		return true
+	}
+	return f.Display.ShowStderr.ShouldShow(failed)
+}
+
+func (f FixtureResult) hasExpandedDisplay() bool {
+	if f.Display == nil {
+		return false
+	}
+	failed := isFailureStatus(f.Status)
+	return (f.Command != "" && f.Display.ShowCommand) ||
+		(len(f.CELVars) > 0 && f.Display.ShowCELVars) ||
+		(f.Stdout != "" && f.Display.ShowStdout.ShouldShow(failed)) ||
+		(f.Stderr != "" && f.Display.ShowStderr.ShouldShow(failed))
 }
 
 // compactLine renders a fixture result as a single one-line summary
@@ -664,6 +702,17 @@ func (f FixtureNode) GetStats() Stats {
 func (fn *FixtureNode) UpdateStats() {
 	stats := fn.GetStats()
 	fn.Stats = &stats
+}
+
+// UpdateStatsRecursive calculates Stats for every node in this subtree.
+func (fn *FixtureNode) UpdateStatsRecursive() {
+	if fn == nil {
+		return
+	}
+	for _, child := range fn.Children {
+		child.UpdateStatsRecursive()
+	}
+	fn.UpdateStats()
 }
 
 func (s Stats) IsOK() bool {
@@ -811,6 +860,43 @@ func (f FixtureNode) GetChildren() []api.TreeNode {
 		nodes[i] = child.Tree()
 	}
 	return nodes
+}
+
+// ApplyDisplayOptions annotates visible result nodes with display controls and
+// prunes passing result rows unless ShowPassed is enabled.
+func (fn *FixtureNode) ApplyDisplayOptions(opts DisplayOptions) {
+	if fn == nil {
+		return
+	}
+	if opts.ShowStdout == "" {
+		opts.ShowStdout = OutputOnFailure
+	}
+	if opts.ShowStderr == "" {
+		opts.ShowStderr = OutputOnFailure
+	}
+	filtered := make([]*FixtureNode, 0, len(fn.Children))
+	for _, child := range fn.Children {
+		child.ApplyDisplayOptions(opts)
+		if child.Results != nil {
+			if !opts.ShowPassed && isPassingStatus(child.Results.Status) {
+				continue
+			}
+			child.Results.Display = &opts
+		}
+		filtered = append(filtered, child)
+	}
+	fn.Children = filtered
+	if fn.Results != nil {
+		fn.Results.Display = &opts
+	}
+}
+
+func isPassingStatus(status task.Status) bool {
+	return status == task.StatusPASS || status == task.StatusSuccess
+}
+
+func isFailureStatus(status task.Status) bool {
+	return status == task.StatusFAIL || status == task.StatusERR || status == task.StatusFailed
 }
 
 // FixtureTree represents the complete hierarchical structure of parsed fixtures.
