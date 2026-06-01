@@ -209,10 +209,18 @@ var (
 var _ = BeforeSuite(func() {
 	suiteSrv = testui.NewServer()
 	suiteURL, suiteSrvCleanup = startServer(suiteSrv)
+	DeferCleanup(func() {
+		if suiteSrvCleanup != nil {
+			suiteSrvCleanup()
+		}
+	})
 
 	tmpDir, err := os.MkdirTemp("", "testui-chrome-*")
 	Expect(err).ToNot(HaveOccurred())
-	DeferCleanup(os.RemoveAll, tmpDir)
+	// Registered before the browser teardown below so it runs last (LIFO):
+	// Chrome must fully exit and release its user-data-dir lock before the
+	// directory can be removed, otherwise RemoveAll races the lockfile.
+	DeferCleanup(func() { removeChromeUserDataDir(tmpDir) })
 
 	suiteAllocCtx, suiteAllocCancel = chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
@@ -227,19 +235,28 @@ var _ = BeforeSuite(func() {
 	// Warm up the browser so the first tab is ready.
 	suiteBrowserCtx, suiteBrowserDone = chromedp.NewContext(suiteAllocCtx)
 	Expect(chromedp.Run(suiteBrowserCtx)).To(Succeed())
+	DeferCleanup(func() {
+		if suiteBrowserDone != nil {
+			suiteBrowserDone()
+		}
+		if suiteAllocCancel != nil {
+			suiteAllocCancel()
+		}
+	})
 })
 
-var _ = AfterSuite(func() {
-	if suiteBrowserDone != nil {
-		suiteBrowserDone()
+// removeChromeUserDataDir deletes Chrome's user-data dir, retrying briefly to
+// absorb the window where a just-killed Chrome still holds its SingletonLock
+// open. A leftover temp dir is not worth failing the suite, so give up quietly
+// after the grace period.
+func removeChromeUserDataDir(dir string) {
+	for i := 0; i < 20; i++ {
+		if err := os.RemoveAll(dir); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	if suiteAllocCancel != nil {
-		suiteAllocCancel()
-	}
-	if suiteSrvCleanup != nil {
-		suiteSrvCleanup()
-	}
-})
+}
 
 var _ = Describe("Test UI E2E", func() {
 	var (

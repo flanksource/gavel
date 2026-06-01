@@ -84,25 +84,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-
-      - name: Build UIs
-        run: task test-ui pr-ui
-
       - name: Check go mod tidy
         run: |
           go mod tidy
-          if [ -n "$(git status --porcelain)" ]; then
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
             echo "go mod tidy resulted in changes:"
-            git diff
+            git diff go.mod go.sum
             echo "Please run 'go mod tidy' and commit the changes"
             exit 1
           fi
