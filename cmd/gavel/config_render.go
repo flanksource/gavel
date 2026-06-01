@@ -315,7 +315,7 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 				continue
 			}
 
-			key, omit := yamlFieldName(field)
+			key := yamlFieldName(field)
 			if key == "" || key == "-" {
 				continue
 			}
@@ -332,9 +332,6 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 
 			childNode, ok := buildYAMLNode(v.Field(i), childMeta, nextParent)
 			if !ok {
-				if omit {
-					continue
-				}
 				continue
 			}
 
@@ -421,24 +418,20 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 	}
 }
 
-func yamlFieldName(field reflect.StructField) (string, bool) {
+// yamlFieldName returns the YAML key for a struct field. Emptiness is handled
+// uniformly by buildYAMLNode/isEmptyConfigValue, so the omitempty tag option is
+// not consulted here.
+func yamlFieldName(field reflect.StructField) string {
 	tag := field.Tag.Get("yaml")
 	if tag == "" {
-		return field.Name, false
+		return field.Name
 	}
 
-	parts := strings.Split(tag, ",")
-	name := parts[0]
-	omitEmpty := false
-	for _, part := range parts[1:] {
-		if part == "omitempty" {
-			omitEmpty = true
-		}
-	}
+	name := strings.Split(tag, ",")[0]
 	if name == "" {
 		name = field.Name
 	}
-	return name, omitEmpty
+	return name
 }
 
 func shouldAnnotate(source, parent *configSourceRef) bool {

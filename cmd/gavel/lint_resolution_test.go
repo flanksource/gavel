@@ -203,7 +203,7 @@ func TestResolveLinterExecutableUsesInstalledGolangciBinary(t *testing.T) {
 	}
 }
 
-func TestApplyGroupIgnoresUsesGroupConfig(t *testing.T) {
+func TestApplyPostLintFiltersUsesGroupConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -235,17 +235,13 @@ func TestApplyGroupIgnoresUsesGroupConfig(t *testing.T) {
 	}
 
 	resultsA := makeResults("pkg/foo.go")
-	if err := applyGroupIgnores(rootA, resultsA); err != nil {
-		t.Fatalf("applyGroupIgnores rootA: %v", err)
-	}
+	applyPostLintFilters(resultsA, rootA, nil)
 	if len(resultsA[0].Violations) != 0 {
 		t.Fatalf("expected rootA ignore to filter pkg/foo.go, got %v", resultsA[0].Violations)
 	}
 
 	resultsB := makeResults("pkg/foo.go")
-	if err := applyGroupIgnores(rootB, resultsB); err != nil {
-		t.Fatalf("applyGroupIgnores rootB: %v", err)
-	}
+	applyPostLintFilters(resultsB, rootB, nil)
 	if len(resultsB[0].Violations) != 1 {
 		t.Fatalf("expected rootB config to leave pkg/foo.go alone, got %v", resultsB[0].Violations)
 	}

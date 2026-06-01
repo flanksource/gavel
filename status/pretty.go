@@ -436,15 +436,6 @@ func prettyTestLintBadges(f FileStatus) api.Text {
 	return t
 }
 
-func containsScope(scopes []string, lang string) bool {
-	for _, s := range scopes {
-		if strings.EqualFold(s, lang) {
-			return true
-		}
-	}
-	return false
-}
-
 func longestPath(files []FileStatus) int {
 	maxLen := 0
 	for _, f := range files {

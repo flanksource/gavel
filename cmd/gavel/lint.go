@@ -168,7 +168,7 @@ func runLint(opts LintOptions) (any, error) {
 			uiServer.BeginRun("initial")
 			uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 				clicky.ClearGlobalTasks()
-				rerunCtx, cancelRerun := newStopContext(nil, 0)
+				rerunCtx, cancelRerun := newStopContext(opts.Context, 0)
 				defer cancelRerun()
 				uiServer.SetStopFunc(cancelRerun)
 				uiServer.BeginRun("rerun")
@@ -337,17 +337,6 @@ func executeLintRerun(base LintOptions, req testui.RerunRequest) ([]*linters.Lin
 		return nil, err
 	}
 	return results, nil
-}
-
-func applyGroupIgnores(workDir string, results []*linters.LinterResult) error {
-	cfg, err := verify.LoadGavelConfig(workDir)
-	if err != nil {
-		return err
-	}
-	if filtered := linters.FilterIgnoredViolations(results, cfg.Lint.Ignore); filtered > 0 {
-		logger.Infof("Filtered %d ignored violations in %s", filtered, workDir)
-	}
-	return nil
 }
 
 func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, cliExplicit bool, explicitEnabled bool, hasConfig bool) (bool, string) {
@@ -736,7 +725,7 @@ func displayLintDryRun(opts LintOptions) error {
 				continue
 			}
 			hasDirectConfig := hasDirectMatchingFiles(inv.projectRoot, linterConfigPatterns(linter.Name()))
-			executable, reason, err := resolveLinterExecutable(nil, linter, lintGitRoot(opts.WorkDir), hasDirectConfig, true)
+			executable, reason, err := resolveLinterExecutable(opts.Context, linter, lintGitRoot(opts.WorkDir), hasDirectConfig, true)
 			if err != nil {
 				return err
 			}

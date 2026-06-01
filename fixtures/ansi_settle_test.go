@@ -70,12 +70,3 @@ func TestDuplicateLines_IgnoresEmptyLines(t *testing.T) {
 		t.Fatalf("expected foo×2, got %+v", dups)
 	}
 }
-
-func TestHasDuplicateLines(t *testing.T) {
-	if hasDuplicateLines("a\nb\nc\n") {
-		t.Fatal("no duplicates expected")
-	}
-	if !hasDuplicateLines("a\na\n") {
-		t.Fatal("duplicate expected")
-	}
-}

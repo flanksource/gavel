@@ -188,7 +188,6 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		// has ahead of upstream.
 		if opts.Push && errors.Is(err, ErrNothingStaged) {
 			result = &Result{DryRun: opts.DryRun, PushOnly: true}
-			err = nil
 		} else {
 			return result, err
 		}
@@ -556,10 +555,10 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 			return commitAIAnalysis{}, err
 		}
 		out := models.AIAnalysisOutput{
-			Type:    analyzed.Commit.CommitType,
-			Scope:   analyzed.Commit.Scope,
-			Subject: analyzed.Commit.Subject,
-			Body:    analyzed.Commit.Body,
+			Type:    analyzed.CommitType,
+			Scope:   analyzed.Scope,
+			Subject: analyzed.Subject,
+			Body:    analyzed.Body,
 		}
 		message = strings.TrimSpace(out.String())
 		analysis = analyzed

@@ -79,7 +79,7 @@ func runBenchRun(cmd *cobra.Command, args []string) error {
 		pattern = "."
 	}
 
-	runCtx, cancelRun := newStopContext(nil, benchRunGlobalTimeout)
+	runCtx, cancelRun := newStopContext(cmd.Context(), benchRunGlobalTimeout)
 	defer cancelRun()
 
 	opts := testrunner.RunOptions{

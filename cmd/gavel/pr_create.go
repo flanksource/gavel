@@ -246,9 +246,7 @@ func splitBaseRef(base string) (string, string) {
 		// strip a single remote prefix; "origin/main" -> "main", but
 		// "feature/foo" stays "feature/foo" if no remote of that name exists.
 		// Heuristic: only strip "origin/" since gavel pushes there exclusively.
-		if strings.HasPrefix(branch, "origin/") {
-			branch = strings.TrimPrefix(branch, "origin/")
-		}
+		branch = strings.TrimPrefix(branch, "origin/")
 	}
 	return branch, base
 }
