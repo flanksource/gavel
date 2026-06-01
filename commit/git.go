@@ -271,24 +271,6 @@ func commitMessage(workDir, hash string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// mergeBase returns the merge base between HEAD and ref. Empty string with
-// nil error when the merge base cannot be computed (e.g. ref doesn't exist
-// or shares no history); callers decide whether to fall back to another ref.
-func mergeBase(workDir, ref string) (string, error) {
-	cmd := exec.Command("git", "merge-base", "HEAD", ref)
-	if workDir != "" {
-		cmd.Dir = workDir
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
-			return "", nil
-		}
-		return "", fmt.Errorf("git merge-base HEAD %s: %w", ref, err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // lastTouchingCommit returns the most recent commit on base..HEAD that
 // touched file. Empty string with nil error means no in-range commit
 // modified that file (caller should treat the file as a "leftover").

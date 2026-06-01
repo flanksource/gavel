@@ -284,11 +284,6 @@ func duplicateLines(raw string) []DupLine {
 	return dups
 }
 
-// hasDuplicateLines is the CEL-friendly boolean companion to duplicateLines.
-func hasDuplicateLines(raw string) bool {
-	return len(duplicateLines(raw)) > 0
-}
-
 // finalText exposes settleANSI under a name that reads well in CEL.
 func finalText(raw string) string {
 	return settleANSI(raw)

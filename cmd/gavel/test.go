@@ -49,7 +49,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.LintTimeout = testDurationFlags.LintTimeout
 	opts.TestTimeout = testDurationFlags.TestTimeout
 
-	runCtx, cancelRun := newStopContext(nil, opts.Timeout)
+	runCtx, cancelRun := newStopContext(opts.Context, opts.Timeout)
 	defer cancelRun()
 	opts.Context = runCtx
 
@@ -182,7 +182,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		opts.Updates = attachRecorderTee(recorder, opts, runStarted, attachUIUpdates())
 		uiServer.SetRerunFunc(func(req testui.RerunRequest, output *testui.RerunOutputBuffer) error {
 			clicky.ClearGlobalTasks()
-			rerunCtx, cancelRerun := newStopContext(nil, opts.Timeout)
+			rerunCtx, cancelRerun := newStopContext(opts.Context, opts.Timeout)
 			defer cancelRerun()
 			uiServer.SetStopFunc(cancelRerun)
 			uiServer.BeginRun("rerun")
@@ -539,30 +539,6 @@ func finishHookTest(idx int, dur time.Duration, output string, runErr error) {
 	}
 }
 
-// printFailureDetails writes per-test failure details to stdout for failed
-// tests in the tree, honouring --show-stdout / --show-stderr. Called from
-// the --ui path right after tests complete so UI users still see the same
-// CLI-side failure dump non-UI runs get via printTestRunDetails. Skips
-// entirely when nothing failed so passing runs stay quiet.
-func printFailureDetails(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode) {
-	failed := collectLeaves(tests, func(t parsers.Test) bool {
-		return t.Failed && !t.TimedOut
-	})
-	if len(failed) == 0 {
-		return
-	}
-	fmt.Println(clicky.MustFormat(clicky.Text("Test failures", "bold text-red-600")))
-	for _, t := range failed {
-		if !showStdout.ShouldShow(true) {
-			t.Stdout = ""
-		}
-		if !showStderr.ShouldShow(true) {
-			t.Stderr = ""
-		}
-		fmt.Println(clicky.MustFormat(t.Pretty()))
-	}
-}
-
 // printTestRunDetails writes a three-section breakdown of everything the
 // user needs to see at the end of a run: failures, timeouts, and skips.
 // Each section is elided when empty so passing runs stay quiet. Called from
@@ -652,13 +628,6 @@ func collectLeaves(tests []parsers.Test, pred func(parsers.Test) bool) []parsers
 		walk(t)
 	}
 	return out
-}
-
-// collectFailed is kept for the existing test_failure_print_test.go
-// call site and back-compat with any external callers that relied on the
-// leaf-only, failed-only predicate.
-func collectFailed(tests []parsers.Test) []parsers.Test {
-	return collectLeaves(tests, func(t parsers.Test) bool { return t.Failed })
 }
 
 // publishHookSnapshotToUI flushes the current hookTests slice to the UI

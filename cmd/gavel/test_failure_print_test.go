@@ -7,7 +7,7 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-func TestCollectFailedReturnsLeafFailuresOnly(t *testing.T) {
+func TestCollectLeavesReturnsLeafFailuresOnly(t *testing.T) {
 	tree := []parsers.Test{{
 		Name: "pkg",
 		Children: []parsers.Test{
@@ -19,7 +19,7 @@ func TestCollectFailedReturnsLeafFailuresOnly(t *testing.T) {
 		Failed: true,
 	}}
 
-	got := collectFailed(tree)
+	got := collectLeaves(tree, func(t parsers.Test) bool { return t.Failed })
 	if len(got) != 2 {
 		t.Fatalf("want 2 failing leaves, got %d", len(got))
 	}
@@ -32,10 +32,10 @@ func TestCollectFailedReturnsLeafFailuresOnly(t *testing.T) {
 	}
 }
 
-func TestPrintFailureDetailsRespectsShowStdoutOnFailure(t *testing.T) {
-	// Exercise the filter contract: OnFailure keeps stdout on a failing
-	// test (the bug), Never drops it. Since printFailureDetails operates
-	// on a copy via range, we test the filter itself via ShouldShow.
+func TestOutputModeShouldShowContract(t *testing.T) {
+	// Exercise the OutputMode filter contract that the failure-detail
+	// printers rely on: OnFailure keeps streams for a failing test and
+	// drops them for a passing one; Always always shows; Never never does.
 	if !testrunner.OutputOnFailure.ShouldShow(true) {
 		t.Error("OnFailure must show streams for failing tests")
 	}

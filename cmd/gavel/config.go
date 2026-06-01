@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"github.com/flanksource/clicky/api"
 	gaveldocs "github.com/flanksource/gavel"
 	"github.com/flanksource/gavel/verify"
-	"github.com/ghodss/yaml"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -176,53 +174,6 @@ func shouldShowFlagDefault(f *pflag.Flag) bool {
 		return false
 	}
 	return true
-}
-
-func configOriginLabel(origin string) string {
-	switch origin {
-	case "user-home":
-		return "user home"
-	case "git-root":
-		return "git root"
-	case "parent-directory":
-		return "parent directory"
-	case "target-directory":
-		return "target directory"
-	default:
-		return origin
-	}
-}
-
-func mustMarshalYAML(v any) string {
-	data, err := yaml.Marshal(v)
-	if err != nil {
-		return fmt.Sprintf("marshal error: %v\n", err)
-	}
-
-	s := strings.TrimRight(string(data), "\n")
-	if s == "" {
-		return "{}\n"
-	}
-	return s + "\n"
-}
-
-func prettyYAML(v any) string {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return mustMarshalYAML(v)
-	}
-
-	var parsed any
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return mustMarshalYAML(v)
-	}
-
-	pruned := pruneEmpty(parsed)
-	if pruned == nil {
-		return "{}\n"
-	}
-
-	return mustMarshalYAML(pruned)
 }
 
 func pruneEmpty(v any) any {

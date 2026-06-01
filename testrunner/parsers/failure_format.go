@@ -544,7 +544,7 @@ func parseTestify(msg string) *FailureDetail {
 	if traceIdx < 0 || errorIdx < 0 || testIdx < 0 {
 		return nil
 	}
-	if !(traceIdx < errorIdx && errorIdx < testIdx) {
+	if traceIdx >= errorIdx || errorIdx >= testIdx {
 		return nil
 	}
 

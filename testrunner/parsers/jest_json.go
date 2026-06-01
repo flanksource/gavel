@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,8 +115,8 @@ func extractStackLocation(message string) (string, int) {
 		if strings.Contains(file, "node_modules") || strings.HasPrefix(file, "node:") {
 			continue
 		}
-		var line int
-		fmt.Sscanf(m[2], "%d", &line)
+		// m[2] is `\d+` per vitestStackFrameRe, so Atoi cannot fail here.
+		line, _ := strconv.Atoi(m[2])
 		return file, line
 	}
 	return "", 0
