@@ -406,10 +406,12 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		clicky.WaitForGlobalCompletion()
 		printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
 		printTestRunSummary(fullSummary, lintResults)
-		// Return nil rather than the snapshot so clicky doesn't also render
-		// Snapshot.Pretty() — a single-line duplicate of the summary above.
-		// The snapshot is already persisted to disk for PR/status consumers.
-		return nil, nil
+		// For pretty (terminal) output, return nil so clicky doesn't also
+		// render Snapshot.Pretty() — a one-line duplicate of the summary
+		// already printed above. For a serialized format (--format json=...,
+		// yaml, etc.) return the snapshot so clicky writes the real
+		// {"tests":..,"lint":..} document instead of a bare `null`.
+		return testRunReturnValue(snapshot), nil
 	}
 	return result, nil
 }
@@ -628,6 +630,20 @@ func collectLeaves(tests []parsers.Test, pred func(parsers.Test) bool) []parsers
 		walk(t)
 	}
 	return out
+}
+
+// testRunReturnValue decides what runTests hands back to clicky on a clean
+// run. Pretty (terminal) output already got the details + summary printed
+// explicitly, so returning nil avoids a duplicate Snapshot.Pretty() line. A
+// serialized format (--format json=file, yaml, …) instead needs the snapshot
+// itself so clicky writes the real {"tests":..,"lint":..} document that
+// `gavel summary` and the GitHub Action consume — returning nil there yields a
+// bare `null` file.
+func testRunReturnValue(snapshot testui.Snapshot) any {
+	if clicky.Flags.ResolveFormat() == "pretty" {
+		return nil
+	}
+	return snapshot
 }
 
 // publishHookSnapshotToUI flushes the current hookTests slice to the UI
