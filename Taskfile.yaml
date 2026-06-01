@@ -14,8 +14,8 @@ tasks:
     desc: Build the test UI frontend bundle (Preact + Vite)
     dir: testrunner/ui
     cmds:
-      - npm install
-      - npm run build
+      - pnpm install --frozen-lockfile
+      - pnpm run build
     sources:
       - testrunner/ui/src/**/*
       - testrunner/ui/package.json

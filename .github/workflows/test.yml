@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Enable pnpm
+        run: corepack enable
+
       - name: Install Task
         uses: arduino/setup-task@v2
         with:
@@ -35,6 +38,11 @@ jobs:
 
       - name: Build gavel
         run: make build
+
+      - name: Install JS test deps
+        run: |
+          pnpm install --frozen-lockfile --dir testrunner/ui
+          npm ci --prefix site
 
       - name: Run tests
         run: ./gavel test
