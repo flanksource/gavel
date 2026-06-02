@@ -1,6 +1,8 @@
 package status
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,8 +32,17 @@ func enrichWithSnapshot(workDir string, result *Result) error {
 	}
 
 	snap, err := loadSnapshotFunc(workDir, pointer)
-	if err != nil || snap == nil {
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Stale pointer: last.json references a snapshot whose dirty-state
+			// hash no longer matches any file on disk. Enrichment is optional —
+			// proceed without prior test/lint tags rather than aborting commit.
+			return nil
+		}
 		return err
+	}
+	if snap == nil {
+		return nil
 	}
 
 	result.ResultsSHA = pointer.SHA

@@ -2,14 +2,20 @@ commit:
   allow:
   - .agents/skills/README.md
   - .agents/skills/gavel-runner/SKILL.md
+  - testrunner/ui/dist/testui.js
   compatibility: {}
   linkedDeps: {}
+  lint: {}
   precommit: {}
+  tidy: {}
 fixtures: {}
 lint:
   ignore:
   - file: .shell/checkout/8d512cac74b933d1f8d97629ab79966828d2e0789c66a463d8a78e7d40ccc42f/**
   - file: linters/betterleaks/testdata/betterleaks-output.json
+    source: betterleaks
+  - file: testrunner/ui/dist/testui.js
+    rule: omar-oracle-mention
     source: betterleaks
 pre:
 - name: deps

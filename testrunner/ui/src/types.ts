@@ -1,5 +1,3 @@
-import type { ClickyDocument } from '@flanksource/clicky-ui/clicky';
-
 export interface Test {
   name: string;
   package?: string;
@@ -25,9 +23,9 @@ export interface Test {
   summary?: TestSummary;
   attempts?: TestAttempt[];
   context?: GoTestContext | GinkgoContext | FixtureContext | TaskContext;
-  // detail is a rich clicky document (e.g. a test's source + normalized input as
-  // syntax-highlighted code blocks) rendered via <Clicky data={detail} />.
-  detail?: ClickyDocument;
+  // detail is provider-owned structured JSON. Legacy snapshots may still carry
+  // a ClickyDocument shape and are detected by the detail panel.
+  detail?: unknown;
   failure_detail?: FailureDetail;
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.

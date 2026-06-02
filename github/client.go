@@ -494,6 +494,7 @@ func parseLogSections(raw string) map[string]string {
 	sections := make(map[string]string)
 	var currentStep string
 	var buf strings.Builder
+	afterEndGroup := false
 
 	for _, line := range strings.Split(raw, "\n") {
 		cleaned := logTimestampPrefix.ReplaceAllString(line, "")
@@ -504,17 +505,24 @@ func parseLogSections(raw string) map[string]string {
 			}
 			currentStep = strings.TrimPrefix(cleaned, "##[group]")
 			buf.Reset()
+			afterEndGroup = false
 			continue
 		}
 		if strings.HasPrefix(cleaned, "##[endgroup]") {
-			if currentStep != "" {
-				sections[currentStep] = buf.String()
-				currentStep = ""
-				buf.Reset()
-			}
+			// GitHub emits run-step command output after ##[endgroup],
+			// so keep accumulating until we hit the terminal error line.
+			afterEndGroup = true
 			continue
 		}
 		if currentStep != "" {
+			if afterEndGroup && strings.HasPrefix(cleaned, "##[error]Process completed") {
+				buf.WriteString("\n")
+				buf.WriteString(actionsAnnotation.ReplaceAllString(cleaned, ""))
+				sections[currentStep] = buf.String()
+				currentStep = ""
+				buf.Reset()
+				continue
+			}
 			cleaned = actionsAnnotation.ReplaceAllString(cleaned, "")
 			if buf.Len() > 0 {
 				buf.WriteByte('\n')

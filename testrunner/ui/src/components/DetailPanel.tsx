@@ -45,6 +45,22 @@ interface Props {
   failingOnlyRouteState?: RouteState;
 }
 
+function isLegacyClickyDocument(value: unknown): value is { version: unknown; node: unknown } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'version' in value &&
+    'node' in value
+  );
+}
+
+function DetailValue({ value }: { value: unknown }) {
+  if (isLegacyClickyDocument(value)) {
+    return <Clicky data={value as any} />;
+  }
+  return <JsonView data={value} />;
+}
+
 function taskMeta(t: Test): { duration?: string; status?: string; type?: string } | null {
   if (t.framework !== 'task' || !t.context || typeof t.context !== 'object') return null;
   const ctx = t.context as Record<string, any>;
@@ -368,8 +384,8 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       )}
 
       {t.detail && (
-        <Section title="Source">
-          <Clicky data={t.detail} />
+        <Section title="Detail">
+          <DetailValue value={t.detail} />
         </Section>
       )}
 

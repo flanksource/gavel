@@ -2,54 +2,53 @@ package parsers
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/clicky/formatters"
 )
 
-// TestDetailLiveBuildAndRoundTrip exercises the live builder path
-// (test.Detail().Add(...)) and the snapshot reload contract: a Test whose Detail
-// was built incrementally must survive json.Marshal → json.Unmarshal →
-// json.Marshal unchanged, so reloaded .gavel snapshots keep the rich view.
-func TestDetailLiveBuildAndRoundTrip(t *testing.T) {
-	source := api.Text{Content: "source"}.NewLine().Add(api.CodeBlock("yaml", "kind: TestPlan\n"))
+type providerDetail struct {
+	Source string `json:"source,omitempty"`
+	Result string `json:"result,omitempty"`
+}
 
-	in := Test{Name: "doc-1", Passed: true}
-	in.Detail().
-		Add(api.Collapsed{Label: "source", Content: source}).
-		Add(api.Collapsed{Label: "result", Content: api.Text{Content: "POL-1"}})
+func (d providerDetail) Pretty() api.Text {
+	return clicky.Text("provider detail: " + d.Source + " -> " + d.Result)
+}
+
+func TestDetailUsesProviderJSON(t *testing.T) {
+	in := Test{
+		Name:   "doc-1",
+		Passed: true,
+		Detail: providerDetail{
+			Source: "kind: TestPlan\n",
+			Result: "POL-123",
+		},
+	}
 
 	raw, err := json.Marshal(in)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-
-	var out Test
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if !strings.Contains(string(raw), `"detail":{"source":"kind: TestPlan\n","result":"POL-123"}`) {
+		t.Fatalf("detail should marshal as provider JSON, got %s", raw)
 	}
-	if out.DetailDoc == nil {
-		t.Fatal("Detail dropped on round-trip")
-	}
-
-	// Re-marshalling the reloaded Test must be byte-stable with the original
-	// detail JSON, proving the verbatim re-emit path.
-	reMarshaled, err := json.Marshal(out)
-	if err != nil {
-		t.Fatalf("re-marshal: %v", err)
-	}
-	if string(reMarshaled) != string(raw) {
-		t.Fatalf("re-marshal not byte-stable:\n first: %s\n again: %s", raw, reMarshaled)
-	}
-
-	if !hasKind(out.DetailDoc.doc.Node, "code") {
-		t.Fatal("reloaded Detail lost its code block")
+	if strings.Contains(string(raw), `"node"`) || strings.Contains(string(raw), `"version"`) {
+		t.Fatalf("detail should not marshal as a ClickyDocument, got %s", raw)
 	}
 }
 
-// TestDetailOmittedWhenNil keeps the field invisible for tests that never touch
-// Detail().
+func TestRenderDetailUsesPretty(t *testing.T) {
+	rendered := RenderDetail(providerDetail{Source: "source", Result: "result"}).String()
+	if !strings.Contains(rendered, "provider detail: source -> result") {
+		t.Fatalf("RenderDetail should use Pretty(), got %q", rendered)
+	}
+}
+
+// TestDetailOmittedWhenNil keeps the field invisible for tests that never set
+// provider-owned detail.
 func TestDetailOmittedWhenNil(t *testing.T) {
 	raw, err := json.Marshal(Test{Name: "doc-1", Passed: true})
 	if err != nil {
@@ -60,29 +59,6 @@ func TestDetailOmittedWhenNil(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, present := generic["detail"]; present {
-		t.Fatalf("untouched Detail should be omitted, got %s", raw)
+		t.Fatalf("unset Detail should be omitted, got %s", raw)
 	}
-}
-
-func hasKind(node formatters.ClickyNode, kind string) bool {
-	if node.Kind == kind {
-		return true
-	}
-	for _, c := range node.Children {
-		if hasKind(c, kind) {
-			return true
-		}
-	}
-	for _, c := range node.Items {
-		if hasKind(c, kind) {
-			return true
-		}
-	}
-	if node.Content != nil && hasKind(*node.Content, kind) {
-		return true
-	}
-	if node.Label != nil && hasKind(*node.Label, kind) {
-		return true
-	}
-	return false
 }

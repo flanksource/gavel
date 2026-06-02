@@ -89,13 +89,10 @@ type Test struct {
 	Children          Tests        `json:"children,omitempty"`
 	Summary           *TestSummary `json:"summary,omitempty"`
 	Context           any          `json:"context,omitempty"`
-	// DetailDoc is an optional rich (clicky) document rendered by the web UI's
-	// <Clicky data={detail} /> pane — e.g. a test's source + normalized input as
-	// syntax-highlighted code blocks, or a live per-step trace. It is live-mutable
-	// during a run via the Detail() accessor (test.Detail().Add(…)) and marshals
-	// to the structured clicky JSON, round-tripping through snapshot save/load.
-	// Nil for tests that supply none; use Detail() to lazily allocate it.
-	DetailDoc *Detail          `json:"detail,omitempty"`
+	// Detail is provider-owned structured detail for a test. Providers should
+	// assign a JSON-marshallable value here; values may also implement api.Pretty
+	// for rich terminal/clicky rendering.
+	Detail    any              `json:"detail,omitempty"`
 	Benchmark *BenchmarkResult `json:"benchmark,omitempty"`
 	// Attempts is the per-run execution history for this test. A fresh run
 	// appends a TestAttempt to the tail; reruns (via the UI) append further
