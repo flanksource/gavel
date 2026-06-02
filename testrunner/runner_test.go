@@ -94,6 +94,16 @@ func writeGoTestPackageWithStdout(t *testing.T, repoRoot, pkgDir, modulePath, ma
 	}
 }
 
+func TestPackageConcurrency(t *testing.T) {
+	if got := (&TestOrchestrator{RunOptions: RunOptions{Concurrency: 2}}).packageConcurrency(); got != 2 {
+		t.Fatalf("explicit concurrency = %d, want 2", got)
+	}
+	got := (&TestOrchestrator{}).packageConcurrency()
+	if got < 1 || got > 4 {
+		t.Fatalf("default concurrency = %d, want between 1 and 4", got)
+	}
+}
+
 func TestGroupPathsByGitRoot(t *testing.T) {
 	// Create two fake git repos in temp dirs
 	repoA := t.TempDir()

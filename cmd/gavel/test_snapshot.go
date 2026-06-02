@@ -94,6 +94,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"dry_run":        opts.DryRun,
 		"recursive":      opts.Recursive,
 		"nodes":          opts.Nodes,
+		"concurrency":    opts.Concurrency,
 		"ui":             opts.UI,
 		"addr":           opts.Addr,
 		"diagnostics":    opts.Diagnostics,
