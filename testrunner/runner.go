@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -119,6 +120,7 @@ type RunOptions struct {
 	DryRun        bool                  `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
+	Concurrency   int                   `json:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
 	Addr          string                `json:"addr,omitempty" flag:"addr" default:"localhost"`               // Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.
 	Diagnostics   bool                  `json:"diagnostics,omitempty" flag:"diagnostics"`                     // Capture a final diagnostics snapshot and embed it in JSON results / detached UI handoff artifacts.
@@ -201,6 +203,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if opts.TestTimeout > 0 {
 		text = text.Space().Append("TestTimeout: ", "text-muted").Append(opts.TestTimeout.String(), "text-blue-500")
+	}
+	if opts.Concurrency > 0 {
+		text = text.Space().Append("Concurrency: ", "text-muted").Append(fmt.Sprintf("%d", opts.Concurrency), "text-blue-500")
 	}
 	return text
 }
@@ -671,6 +676,16 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 // framework that exists but wasn't detected in this workdir is also an error,
 // so `gavel test --framework jest` in a repo without jest fails loudly instead
 // of silently running nothing.
+func (o *TestOrchestrator) packageConcurrency() int {
+	if o.Concurrency > 0 {
+		return o.Concurrency
+	}
+	if n := runtime.NumCPU(); n < 4 {
+		return n
+	}
+	return 4
+}
+
 func filterFrameworks(detected []Framework, requested []string) ([]Framework, error) {
 	detectedSet := make(map[Framework]bool, len(detected))
 	for _, fw := range detected {
@@ -892,8 +907,10 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		o.streamer.SetPackageOutline(outline)
 	}
 
-	// Create task group to orchestrate parallel package test execution
-	group := task.StartGroup[packageResult]("Running tests across packages")
+	// Create task group to orchestrate parallel package test execution.
+	// Keep package fanout bounded; CI runners can OOM when every package starts
+	// a Go/Ginkgo subprocess at once.
+	group := task.StartGroup[packageResult]("Running tests across packages", task.WithConcurrency(o.packageConcurrency()))
 
 	// Launch a task for each package per framework
 	for _, fw := range frameworks {
