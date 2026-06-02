@@ -25,6 +25,10 @@ inputs:
     description: Path (relative to working-directory) for the JSON artifact.
     required: false
     default: "gavel-results.json"
+  html-file:
+    description: Path (relative to working-directory) for the HTML artifact.
+    required: false
+    default: "gavel-results.html"
   artifact-name:
     description: Name of the uploaded artifact bundle.
     required: false
@@ -55,6 +59,9 @@ outputs:
   json-path:
     description: Absolute path to the JSON artifact.
     value: ${{ steps.run.outputs.json_path }}
+  html-path:
+    description: Absolute path to the HTML artifact.
+    value: ${{ steps.run.outputs.html_path }}
   log-path:
     description: Absolute path to the captured gavel stderr log (gavel.log). Always present, even when gavel crashes before writing JSON.
     value: ${{ steps.run.outputs.log_path }}
@@ -117,10 +124,11 @@ runs:
       env:
         GAVEL_ARGS: ${{ inputs.args }}
         JSON_FILE: ${{ inputs.json-file }}
+        HTML_FILE: ${{ inputs.html-file }}
         GAVEL_LOG_FILE: gavel.log
       run: |
         set +e
-        rm -f "${JSON_FILE}" "${GAVEL_LOG_FILE}"
+        rm -f "${JSON_FILE}" "${HTML_FILE}" "${GAVEL_LOG_FILE}"
 
         # --show-passed is only defined on `gavel test` / `gavel lint`. Other
         # subcommands (e.g. `fixtures`) reject unknown flags and fail at parse
@@ -133,7 +141,7 @@ runs:
             *) first_subcmd="$tok"; break ;;
           esac
         done
-        extra_flags=("--no-progress" "--no-color" "--format" "json=${JSON_FILE}")
+        extra_flags=("--no-progress" "--no-color" "--format" "json=${JSON_FILE},html=${HTML_FILE}")
         case "$first_subcmd" in
           test|lint) extra_flags=("--show-passed" "${extra_flags[@]}") ;;
         esac
@@ -154,6 +162,7 @@ runs:
         {
           echo "exit_code=$code"
           echo "json_path=$(pwd)/${JSON_FILE}"
+          echo "html_path=$(pwd)/${HTML_FILE}"
           echo "log_path=$(pwd)/${GAVEL_LOG_FILE}"
         } >> "$GITHUB_OUTPUT"
         echo "gavel exited with $code"
@@ -166,6 +175,7 @@ runs:
         name: ${{ inputs.artifact-name }}
         path: |
           ${{ inputs.working-directory }}/${{ inputs.json-file }}
+          ${{ inputs.working-directory }}/${{ inputs.html-file }}
           ${{ inputs.working-directory }}/gavel.log
         if-no-files-found: warn
 
