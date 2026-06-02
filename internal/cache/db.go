@@ -7,13 +7,21 @@ import (
 
 	commonsLogger "github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/models"
-	// Pure-Go SQLite gorm dialector (backed by modernc.org/sqlite) so gavel —
-	// and its consumers like oipa-cli — build without CGO. Matches the modernc
-	// driver already used by linter_stats.go / migration_manager.go.
+	// Pure-Go SQLite gorm dialector backed by modernc.org/sqlite (via the
+	// clarkmcc/gorm-sqlite fork, see the go.mod replace). It imports
+	// modernc.org/sqlite directly rather than vendoring its own copy, so the
+	// "sqlite" database/sql driver is registered exactly once even when another
+	// modernc consumer (e.g. clicky) is linked into the same binary. Keeps the
+	// build CGO-free (no mattn/go-sqlite3).
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	// Registers the "sqlite" database/sql driver that the dialector above opens
+	// against. The clarkmcc fork does not register it itself, and registration
+	// is shared (idempotent within a single linked copy) with other modernc
+	// consumers such as clicky.
+	_ "modernc.org/sqlite"
 )
 
 // DB wraps GORM DB with mutex synchronization for write operations

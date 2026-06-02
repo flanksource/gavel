@@ -25,7 +25,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/flanksource/deps v1.0.28
 	github.com/ghodss/yaml v1.0.0
-	github.com/glebarez/sqlite v1.11.0
+	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.5
@@ -53,6 +53,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.0
+	modernc.org/sqlite v1.47.0
 )
 
 require (
@@ -159,7 +160,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.5 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
@@ -361,7 +361,6 @@ require (
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.47.0 // indirect
 	mvdan.cc/sh/v3 v3.13.0 // indirect
 	sigs.k8s.io/gateway-api v1.5.1 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
@@ -383,3 +382,5 @@ require (
 // replace github.com/flanksource/repomap => ../repomap
 
 // replace github.com/flanksource/gomplate => ../gomplate
+
+replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
