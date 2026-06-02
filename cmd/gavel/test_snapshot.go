@@ -86,6 +86,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 		"starting_paths": append([]string(nil), opts.StartingPaths...),
 		"extra_args":     append([]string(nil), opts.ExtraArgs...),
 		"show_passed":    opts.ShowPassed,
+		"ignore":         append([]string(nil), opts.Ignore...),
 		"show_stdout":    string(opts.ShowStdout),
 		"show_stderr":    string(opts.ShowStderr),
 		"todos_dir":      opts.TodosDir,

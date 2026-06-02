@@ -112,6 +112,7 @@ type RunOptions struct {
 	StartingPaths []string              `json:"starting_paths,omitempty" args:"true"`                         // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
 	ExtraArgs     []string              `json:"extra_args,omitempty" flag:"extra-args"`                       // Additional arguments to pass to test runners (e.g., ["--focus", "TestName"])
 	ShowPassed    bool                  `json:"show_passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
+	Ignore        []string              `json:"ignore,omitempty" flag:"ignore"`                               // Glob patterns for test packages/paths to exclude from discovery.
 	ShowStdout    OutputMode            `json:"show_stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
 	ShowStderr    OutputMode            `json:"show_stderr,omitempty" flag:"show-stderr" default:"OnFailure"` // When to show stderr: false|Never, OnFailure (default), true|Always
 	TodosDir      string                `json:"todos_dir,omitempty" flag:"todos-dir" default:".todos"`        // Directory to store TODO files (default: .todos/)
@@ -157,6 +158,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if len(opts.ExtraArgs) > 0 {
 		text = text.Space().Append("ExtraArgs: ", "text-muted").Append(clicky.CompactList(opts.ExtraArgs), "text-blue-500")
+	}
+	if len(opts.Ignore) > 0 {
+		text = text.Space().Append("Ignore: ", "text-muted").Append(clicky.CompactList(opts.Ignore), "text-blue-500")
 	}
 	if opts.SyncTodos {
 		text = text.Space().Append("SyncTodos: ", "text-muted").Append(icons.Check, "text-green-500")
@@ -676,6 +680,40 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 // framework that exists but wasn't detected in this workdir is also an error,
 // so `gavel test --framework jest` in a repo without jest fails loudly instead
 // of silently running nothing.
+func filterIgnoredPackages(packages []string, ignore []string) []string {
+	if len(ignore) == 0 {
+		return packages
+	}
+	out := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if packageIgnored(pkg, ignore) {
+			logger.V(1).Infof("Ignoring test package %s", pkg)
+			continue
+		}
+		out = append(out, pkg)
+	}
+	return out
+}
+
+func packageIgnored(pkg string, ignore []string) bool {
+	pkg = filepath.ToSlash(strings.TrimPrefix(pkg, "./"))
+	for _, pattern := range ignore {
+		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
+		if pattern == "" {
+			continue
+		}
+		pattern = strings.TrimPrefix(pattern, "./")
+		pattern = strings.TrimSuffix(pattern, "/")
+		candidates := []string{pattern, pattern + "/**"}
+		for _, candidate := range candidates {
+			if ok, _ := doublestar.Match(candidate, pkg); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (o *TestOrchestrator) packageConcurrency() int {
 	if o.Concurrency > 0 {
 		return o.Concurrency
@@ -816,7 +854,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			return nil, fmt.Errorf("failed to discover packages for %s: %w", fw, err)
 		}
 
-		packagesByFramework[fw] = packages
+		packagesByFramework[fw] = filterIgnoredPackages(packages, o.Ignore)
 	}
 
 	for framework, items := range packagesByFramework {
