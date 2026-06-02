@@ -26,7 +26,7 @@ export function FilterBar({ filters, onChange, counts, frameworks }: Props) {
   const hasActiveFilters = filters.status.size > 0 || filters.framework.size > 0;
 
   return (
-    <div class="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap">
       {STATUS_DEFS.map(sf => {
         const count = (counts as any)[sf.key] as number;
         if (count === 0) return null;
@@ -34,12 +34,12 @@ export function FilterBar({ filters, onChange, counts, frameworks }: Props) {
         return (
           <button
             key={sf.key}
-            class={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, sf.activeBg, sf.activeBorder)}`}
+            className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, sf.activeBg, sf.activeBorder)}`}
             onClick={() => onChange({ ...filters, status: cycleFilterState(filters.status, sf.key) })}
             title={triStateTitle(sf.label, mode)}
           >
             <span
-              class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sf.badge}`}
+              className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sf.badge}`}
               title={String(count)}
             >
               {formatCount(count)}
@@ -52,19 +52,19 @@ export function FilterBar({ filters, onChange, counts, frameworks }: Props) {
 
       {frameworks.length > 1 && (
         <>
-          <span class="text-gray-300 mx-0.5">|</span>
+          <span className="text-gray-300 mx-0.5">|</span>
           {frameworks.map(fw => {
             const icon = frameworkIcon(fw);
             const mode = filters.framework.get(fw);
             return (
               <button
                 key={fw}
-                class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, 'bg-gray-100', 'border-gray-400')}`}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, 'bg-gray-100', 'border-gray-400')}`}
                 onClick={() => onChange({ ...filters, framework: cycleFilterState(filters.framework, fw) })}
                 title={triStateTitle(fw, mode)}
               >
                 <StateMarker mode={mode} />
-                {icon && <iconify-icon icon={icon} class="text-sm" />}
+                {icon && <iconify-icon icon={icon} className="text-sm" />}
                 {fw}
               </button>
             );
@@ -74,7 +74,7 @@ export function FilterBar({ filters, onChange, counts, frameworks }: Props) {
 
       {hasActiveFilters && (
         <button
-          class="text-xs text-gray-400 hover:text-gray-600 ml-1"
+          className="text-xs text-gray-400 hover:text-gray-600 ml-1"
           onClick={() => onChange({ status: new Map(), framework: new Map() })}
         >
           Clear
@@ -101,7 +101,7 @@ function triStateTitle(label: string, mode: FilterMode | undefined): string {
 }
 
 function StateMarker({ mode }: { mode: FilterMode | undefined }) {
-  if (mode === 'include') return <iconify-icon icon="codicon:add" class="text-xs" />;
-  if (mode === 'exclude') return <iconify-icon icon="codicon:remove" class="text-xs" />;
-  return <span class="w-2 h-2 rounded-full bg-current opacity-30" />;
+  if (mode === 'include') return <iconify-icon icon="codicon:add" className="text-xs" />;
+  if (mode === 'exclude') return <iconify-icon icon="codicon:remove" className="text-xs" />;
+  return <span className="w-2 h-2 rounded-full bg-current opacity-30" />;
 }

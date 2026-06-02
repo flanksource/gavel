@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'preact/hooks';
+import { useState, useRef, useCallback, type ReactNode } from 'react';
 import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail } from '../types';
 import {
   statusIcon,
@@ -105,9 +105,9 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
   if (!t) {
     return (
-      <div class="flex items-center justify-center h-full text-gray-400 text-sm">
-        <div class="text-center">
-          <iconify-icon icon="codicon:list-tree" class="text-4xl mb-2 block" />
+      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+        <div className="text-center">
+          <iconify-icon icon="codicon:list-tree" className="text-4xl mb-2 block" />
           Select a test to view details
         </div>
       </div>
@@ -128,20 +128,20 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
   const canCopyAIPrompt = canExportNode && !!failingOnlyRouteState && hasFailingContent;
 
   return (
-    <div class="h-full overflow-y-auto p-5 space-y-4">
+    <div className="h-full overflow-y-auto p-5 space-y-4">
       {/* Header */}
-      <div class="flex items-start gap-2">
-        <iconify-icon icon={statusIcon(t)} class={`${statusColor(t)} text-2xl shrink-0 mt-0.5`} />
-        <div class="min-w-0 flex-1">
-          <div class="flex items-start justify-between gap-2">
-            <h2 class="text-lg font-bold text-gray-900 break-words">{t.name}</h2>
-            <div class="flex items-center gap-1 shrink-0">
+      <div className="flex items-start gap-2">
+        <iconify-icon icon={statusIcon(t)} className={`${statusColor(t)} text-2xl shrink-0 mt-0.5`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <h2 className="text-lg font-bold text-gray-900 break-words">{t.name}</h2>
+            <div className="flex items-center gap-1 shrink-0">
               {canExportNode && nodeRouteState && (
                 <DownloadMenu routeState={nodeRouteState} align="right" title="Download this node as JSON or Markdown" />
               )}
               {canExportNode && (
                 <button
-                  class={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                  className={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
                     copyState === 'error'
                       ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
                       : copyState === 'copied'
@@ -158,7 +158,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
               )}
               {canRerun && (
                 <button
-                  class="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                   onClick={() => onRerun!(t)}
                   disabled={rerunBusy}
                   title="Rerun this test or subtree"
@@ -169,7 +169,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
               )}
               {canStop && (
                 <button
-                  class="text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="text-xs px-2 py-1 rounded bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                   onClick={() => onStop!(t)}
                   disabled={stopBusy}
                   title="Stop this running task"
@@ -180,26 +180,26 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
               )}
             </div>
           </div>
-          <div class="flex items-center gap-2 mt-1 flex-wrap">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             {fwIcon && (
-              <span class="inline-flex items-center gap-1 text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600">
-                <iconify-icon icon={fwIcon} class="text-sm" />
+              <span className="inline-flex items-center gap-1 text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600">
+                <iconify-icon icon={fwIcon} className="text-sm" />
                 {fw}
               </span>
             )}
             {t.duration ? (
-              <span class="text-xs text-gray-500">
-                <iconify-icon icon="codicon:clock" class="mr-0.5" />
+              <span className="text-xs text-gray-500">
+                <iconify-icon icon="codicon:clock" className="mr-0.5" />
                 {formatDuration(t.duration)}
               </span>
             ) : task?.duration ? (
-              <span class="text-xs text-gray-500">
-                <iconify-icon icon="codicon:clock" class="mr-0.5" />
+              <span className="text-xs text-gray-500">
+                <iconify-icon icon="codicon:clock" className="mr-0.5" />
                 {task.duration}
               </span>
             ) : null}
             {t.file && (
-              <span class="text-xs text-gray-500 font-mono">
+              <span className="text-xs text-gray-500 font-mono">
                 {t.file}{t.line ? `:${t.line}` : ''}
               </span>
             )}
@@ -221,7 +221,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {runMeta && (
         <Section title="Run">
-          <div class="grid grid-cols-4 gap-3 text-sm">
+          <div className="grid grid-cols-4 gap-3 text-sm">
             <MetaCard
               label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'}
               value={runMeta.started ? formatRunTimestamp(runMeta.started) : 'Pending'}
@@ -233,8 +233,8 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
                   ? formatRunDuration(runMeta.started, runMeta.ended)
                   : runMeta.started
                     ? (
-                      <span class="inline-flex items-center gap-1">
-                        <iconify-icon icon="svg-spinners:ring-resize" class="text-blue-500" />
+                      <span className="inline-flex items-center gap-1">
+                        <iconify-icon icon="svg-spinners:ring-resize" className="text-blue-500" />
                         {formatRunDuration(runMeta.started, undefined)}
                       </span>
                     )
@@ -246,7 +246,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
               value={
                 runMeta.exit_code !== undefined
                   ? (
-                    <span class={runMeta.exit_code === 0 ? 'text-green-700' : 'text-red-700'}>
+                    <span className={runMeta.exit_code === 0 ? 'text-green-700' : 'text-red-700'}>
                       {runMeta.exit_code}
                     </span>
                   )
@@ -257,35 +257,35 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
               label="Timeout"
               value={
                 runMeta.timed_out
-                  ? <span class="text-amber-700 inline-flex items-center gap-1"><iconify-icon icon="mdi:clock-alert-outline" />triggered</span>
+                  ? <span className="text-amber-700 inline-flex items-center gap-1"><iconify-icon icon="mdi:clock-alert-outline" />triggered</span>
                   : runMeta.ended ? 'ok' : '—'
               }
             />
           </div>
           {(runMeta.pid || runMeta.command || (runMeta.frameworks && runMeta.frameworks.length > 0)) && (
-            <div class="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-600">
+            <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-600">
               {runMeta.pid !== undefined && runMeta.pid > 0 && (
-                <div class="flex gap-2">
-                  <span class="text-gray-400 w-20">PID</span>
-                  <span class="font-mono">{runMeta.pid}</span>
+                <div className="flex gap-2">
+                  <span className="text-gray-400 w-20">PID</span>
+                  <span className="font-mono">{runMeta.pid}</span>
                 </div>
               )}
               {runMeta.frameworks && runMeta.frameworks.length > 0 && (
-                <div class="flex gap-2">
-                  <span class="text-gray-400 w-20">Frameworks</span>
+                <div className="flex gap-2">
+                  <span className="text-gray-400 w-20">Frameworks</span>
                   <span>{runMeta.frameworks.join(', ')}</span>
                 </div>
               )}
               {runMeta.command && (
-                <div class="flex gap-2">
-                  <span class="text-gray-400 w-20">Command</span>
-                  <span class="font-mono truncate" title={runMeta.command}>{runMeta.command}</span>
+                <div className="flex gap-2">
+                  <span className="text-gray-400 w-20">Command</span>
+                  <span className="font-mono truncate" title={runMeta.command}>{runMeta.command}</span>
                 </div>
               )}
             </div>
           )}
           {hasTimeoutArgs(runMeta.args) && (
-            <div class="mt-3 grid grid-cols-3 gap-3 text-sm">
+            <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
               {timeoutArgValue(runMeta.args, 'timeout') && (
                 <MetaCard label="Global timeout" value={timeoutArgValue(runMeta.args, 'timeout')!} />
               )}
@@ -302,8 +302,8 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {/* Summary for containers */}
       {s && s.total > 0 && (
-        <div class="space-y-3 border rounded-lg p-3 bg-gray-50">
-          <div class="flex gap-4 text-sm">
+        <div className="space-y-3 border rounded-lg p-3 bg-gray-50">
+          <div className="flex gap-4 text-sm">
             <Stat label="Total" value={s.total} color="text-gray-700" />
             <Stat label="Passed" value={s.passed} color="text-green-600" />
             <Stat label="Failed" value={s.failed} color="text-red-600" />
@@ -326,14 +326,14 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       {/* Suite path */}
       {t.suite && t.suite.length > 0 && (
         <Section title="Suite">
-          <span class="text-sm text-gray-700">{t.suite.join(' > ')}</span>
+          <span className="text-sm text-gray-700">{t.suite.join(' > ')}</span>
         </Section>
       )}
 
       {/* Package */}
       {t.package_path && (
         <Section title="Package">
-          <span class="text-sm text-gray-700 font-mono">{t.package_path}</span>
+          <span className="text-sm text-gray-700 font-mono">{t.package_path}</span>
         </Section>
       )}
 
@@ -349,7 +349,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         <Section title="Error">
           <AnsiHtml
             text={t.message}
-            class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto block"
+            className="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3 max-h-64 overflow-y-auto block"
           />
         </Section>
       ) : null}
@@ -357,17 +357,17 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       {/* Command */}
       {t.command && (
         <Section title="Command">
-          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
-            <span class="text-gray-400">$ </span>{t.command}
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
+            <span className="text-gray-400">$ </span>{t.command}
           </pre>
         </Section>
       )}
 
       {task && (task.status || task.type) && (
         <Section title="Task">
-          <div class="flex gap-4 text-sm text-gray-700">
-            {task.type && <span>type: <span class="font-mono">{task.type}</span></span>}
-            {task.status && <span>status: <span class="font-mono">{task.status}</span></span>}
+          <div className="flex gap-4 text-sm text-gray-700">
+            {task.type && <span>type: <span className="font-mono">{task.type}</span></span>}
+            {task.status && <span>status: <span className="font-mono">{task.status}</span></span>}
           </div>
         </Section>
       )}
@@ -383,7 +383,7 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
         </Section>
       )}
 
-      {t.detail && (
+      {t.detail != null && (
         <Section title="Detail">
           <DetailValue value={t.detail} />
         </Section>
@@ -391,20 +391,20 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
 
       {t.stdout && (
         <Section title="stdout">
-          <AnsiHtml text={t.stdout} class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto" />
+          <AnsiHtml text={t.stdout} className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto" />
         </Section>
       )}
 
       {t.stderr && (
         <Section title="stderr">
-          <AnsiHtml text={t.stderr} class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto" />
+          <AnsiHtml text={t.stderr} className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto" />
         </Section>
       )}
 
       {/* Children list for containers */}
       {hasChildren && (
         <Section title={isLint ? 'Tree' : 'Tests'}>
-          <div class="space-y-0.5">
+          <div className="space-y-0.5">
             {t.children!.map((child, i) => (
               <ChildRow key={i} test={child} />
             ))}
@@ -433,55 +433,55 @@ function FailureDetailView({ detail: d, rawMessage }: { detail: FailureDetail; r
   const showRawFallback = !!rawMessage && rawMessage !== d.summary && rawMessage.includes('\n');
 
   return (
-    <div class="space-y-2">
+    <div className="space-y-2">
       {d.summary && (
-        <div class="text-sm text-red-700 font-mono bg-red-50 rounded p-2">
+        <div className="text-sm text-red-700 font-mono bg-red-50 rounded p-2">
           {d.summary}
         </div>
       )}
 
       {d.kind === 'gomega' && (d.actual || d.expected) && (
-        <div class="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {d.actual !== undefined && (
             <div>
-              <div class="text-xs font-semibold text-gray-500 mb-1">Actual</div>
-              <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+              <div className="text-xs font-semibold text-gray-500 mb-1">Actual</div>
+              <pre className="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
             </div>
           )}
           {d.expected !== undefined && (
             <div>
-              <div class="text-xs font-semibold text-gray-500 mb-1">
+              <div className="text-xs font-semibold text-gray-500 mb-1">
                 Expected{d.matcher ? ` (${d.matcher})` : ''}
               </div>
-              <pre class="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.expected}</pre>
+              <pre className="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.expected}</pre>
             </div>
           )}
         </div>
       )}
 
       {d.kind === 'panic' && d.stack && (
-        <details class="bg-gray-50 rounded p-2">
-          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Stack trace</summary>
-          <pre class="text-xs font-mono text-gray-800 whitespace-pre-wrap mt-2 max-h-80 overflow-y-auto">{d.stack}</pre>
+        <details className="bg-gray-50 rounded p-2">
+          <summary className="text-xs font-semibold text-gray-500 cursor-pointer">Stack trace</summary>
+          <pre className="text-xs font-mono text-gray-800 whitespace-pre-wrap mt-2 max-h-80 overflow-y-auto">{d.stack}</pre>
         </details>
       )}
 
       {d.kind === 'go_test' && d.actual && (
-        <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
+        <pre className="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-64 overflow-y-auto">{d.actual}</pre>
       )}
 
       {d.location && (
-        <div class="text-xs text-gray-500 font-mono">
-          <iconify-icon icon="codicon:location" class="mr-0.5" />{d.location}
+        <div className="text-xs text-gray-500 font-mono">
+          <iconify-icon icon="codicon:location" className="mr-0.5" />{d.location}
         </div>
       )}
 
       {showRawFallback && (
-        <details class="bg-gray-50 rounded p-2">
-          <summary class="text-xs font-semibold text-gray-500 cursor-pointer">Full message</summary>
+        <details className="bg-gray-50 rounded p-2">
+          <summary className="text-xs font-semibold text-gray-500 cursor-pointer">Full message</summary>
           <AnsiHtml
             text={rawMessage!}
-            class="text-xs text-gray-700 font-mono whitespace-pre-wrap mt-2 max-h-64 overflow-y-auto block"
+            className="text-xs text-gray-700 font-mono whitespace-pre-wrap mt-2 max-h-64 overflow-y-auto block"
           />
         </details>
       )}
@@ -496,13 +496,13 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
     <>
       {ctx.command && (
         <Section title="Command">
-          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
-            <span class="text-gray-400">$ </span>{ctx.command}
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-3">
+            <span className="text-gray-400">$ </span>{ctx.command}
           </pre>
-          <div class="flex gap-4 mt-1 text-xs text-gray-500">
-            {ctx.cwd && <span><iconify-icon icon="codicon:folder" class="mr-0.5" />{ctx.cwd}</span>}
+          <div className="flex gap-4 mt-1 text-xs text-gray-500">
+            {ctx.cwd && <span><iconify-icon icon="codicon:folder" className="mr-0.5" />{ctx.cwd}</span>}
             {ctx.exit_code !== undefined && ctx.exit_code !== 0 && (
-              <span class="text-red-500">exit code: {ctx.exit_code}</span>
+              <span className="text-red-500">exit code: {ctx.exit_code}</span>
             )}
           </div>
         </Section>
@@ -510,7 +510,7 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
 
       {ctx.cel_expression && (
         <Section title="CEL Expression">
-          <pre class="text-sm whitespace-pre-wrap font-mono bg-purple-50 text-purple-800 rounded p-3">
+          <pre className="text-sm whitespace-pre-wrap font-mono bg-purple-50 text-purple-800 rounded p-3">
             {ctx.cel_expression}
           </pre>
         </Section>
@@ -518,7 +518,7 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
 
       {ctx.cel_vars && Object.keys(ctx.cel_vars).length > 0 && (
         <Section title="CEL Variables">
-          <div class="bg-gray-50 rounded p-2 max-h-80 overflow-y-auto">
+          <div className="bg-gray-50 rounded p-2 max-h-80 overflow-y-auto">
             <JsonView data={filterCelVars(ctx.cel_vars)} />
           </div>
         </Section>
@@ -526,16 +526,16 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
 
       {hasComparison && (
         <Section title="Expected vs Actual">
-          <div class="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div>
-              <div class="text-xs font-semibold text-gray-500 mb-1">Expected</div>
-              <pre class="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
+              <div className="text-xs font-semibold text-gray-500 mb-1">Expected</div>
+              <pre className="text-sm font-mono bg-green-50 text-green-800 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
                 {typeof ctx.expected === 'object' ? JSON.stringify(ctx.expected, null, 2) : String(ctx.expected)}
               </pre>
             </div>
             <div>
-              <div class="text-xs font-semibold text-gray-500 mb-1">Actual</div>
-              <pre class="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
+              <div className="text-xs font-semibold text-gray-500 mb-1">Actual</div>
+              <pre className="text-sm font-mono bg-red-50 text-red-800 rounded p-2 whitespace-pre-wrap max-h-40 overflow-y-auto">
                 {typeof ctx.actual === 'object' ? JSON.stringify(ctx.actual, null, 2) : String(ctx.actual)}
               </pre>
             </div>
@@ -566,14 +566,14 @@ function GinkgoDetail({
     <>
       {showSuite && (
         <Section title="Suite">
-          {showDescription && <div class="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
-          {ctx.suite_path && <div class="text-xs text-gray-500 font-mono mt-0.5">{ctx.suite_path}</div>}
+          {showDescription && <div className="text-sm text-gray-700 font-medium">{ctx.suite_description}</div>}
+          {ctx.suite_path && <div className="text-xs text-gray-500 font-mono mt-0.5">{ctx.suite_path}</div>}
         </Section>
       )}
 
       {showLocation && (
         <Section title="Failure Location">
-          <span class="text-sm text-red-600 font-mono">{ctx.failure_location}</span>
+          <span className="text-sm text-red-600 font-mono">{ctx.failure_location}</span>
         </Section>
       )}
     </>
@@ -585,22 +585,22 @@ function GoTestDetail({ ctx }: { ctx: GoTestContext }) {
     <>
       {ctx.parent_test && (
         <Section title="Parent Test">
-          <span class="text-sm text-gray-700 font-mono">{ctx.parent_test}</span>
+          <span className="text-sm text-gray-700 font-mono">{ctx.parent_test}</span>
         </Section>
       )}
       {ctx.import_path && (
         <Section title="Import Path">
-          <span class="text-sm text-gray-700 font-mono">{ctx.import_path}</span>
+          <span className="text-sm text-gray-700 font-mono">{ctx.import_path}</span>
         </Section>
       )}
     </>
   );
 }
 
-function Section({ title, children }: { title: string; children: any }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{title}</h3>
+      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{title}</h3>
       {children}
     </div>
   );
@@ -608,18 +608,18 @@ function Section({ title, children }: { title: string; children: any }) {
 
 function Stat({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div class="text-center">
-      <div class={`text-lg font-bold ${color}`}>{value}</div>
-      <div class="text-xs text-gray-500">{label}</div>
+    <div className="text-center">
+      <div className={`text-lg font-bold ${color}`}>{value}</div>
+      <div className="text-xs text-gray-500">{label}</div>
     </div>
   );
 }
 
 function MetaCard({ label, value }: { label: string; value: any }) {
   return (
-    <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-      <div class="text-xs uppercase tracking-wide text-gray-500">{label}</div>
-      <div class="mt-1 text-sm font-medium text-gray-800">{value}</div>
+    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+      <div className="text-xs uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="mt-1 text-sm font-medium text-gray-800">{value}</div>
     </div>
   );
 }
@@ -631,31 +631,31 @@ function ViolationDetail({ v }: { v: Violation }) {
   return (
     <>
       <Section title="Severity">
-        <span class={`inline-block text-xs font-semibold uppercase rounded px-2 py-0.5 ${sevColor}`}>
+        <span className={`inline-block text-xs font-semibold uppercase rounded px-2 py-0.5 ${sevColor}`}>
           {v.severity || 'info'}
         </span>
       </Section>
       {v.file && (
         <Section title="Location">
-          <span class="text-sm font-mono text-gray-700">
+          <span className="text-sm font-mono text-gray-700">
             {v.file}{v.line ? `:${v.line}` : ''}{v.column ? `:${v.column}` : ''}
           </span>
         </Section>
       )}
       {v.rule?.method && (
         <Section title="Rule">
-          <span class="text-sm font-mono text-gray-700">{v.rule.method}</span>
-          {v.rule.description && <div class="text-xs text-gray-500 mt-0.5">{v.rule.description}</div>}
+          <span className="text-sm font-mono text-gray-700">{v.rule.method}</span>
+          {v.rule.description && <div className="text-xs text-gray-500 mt-0.5">{v.rule.description}</div>}
         </Section>
       )}
       {v.message && (
         <Section title="Message">
-          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3">{v.message}</pre>
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3">{v.message}</pre>
         </Section>
       )}
       {v.code && (
         <Section title="Code">
-          <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 overflow-x-auto">{v.code}</pre>
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 overflow-x-auto">{v.code}</pre>
         </Section>
       )}
     </>
@@ -689,26 +689,26 @@ function LinterDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       {lr && (
         <>
           <Section title="Status">
-            <div class="flex gap-3 text-sm">
-              <span class={lr.skipped ? 'text-gray-500' : lr.timed_out ? 'text-amber-600' : lr.success ? 'text-green-600' : 'text-red-600'}>
+            <div className="flex gap-3 text-sm">
+              <span className={lr.skipped ? 'text-gray-500' : lr.timed_out ? 'text-amber-600' : lr.success ? 'text-green-600' : 'text-red-600'}>
                 {lr.skipped ? 'skipped' : lr.timed_out ? 'timed out' : lr.success ? 'success' : 'failed'}
               </span>
-              <span class="text-gray-500">{(lr.violations || []).length} violations</span>
-              {lr.file_count !== undefined && <span class="text-gray-500">{lr.file_count} files</span>}
-              {lr.rule_count !== undefined && <span class="text-gray-500">{lr.rule_count} rules</span>}
+              <span className="text-gray-500">{(lr.violations || []).length} violations</span>
+              {lr.file_count !== undefined && <span className="text-gray-500">{lr.file_count} files</span>}
+              {lr.rule_count !== undefined && <span className="text-gray-500">{lr.rule_count} rules</span>}
             </div>
           </Section>
           {lr.command && (
             <Section title="Command">
-              <pre class="text-xs text-gray-800 whitespace-pre-wrap break-all font-mono bg-gray-50 rounded p-3">{formatLinterCommand(lr)}</pre>
+              <pre className="text-xs text-gray-800 whitespace-pre-wrap break-all font-mono bg-gray-50 rounded p-3">{formatLinterCommand(lr)}</pre>
               {workDir && (
-                <div class="mt-1 text-xs text-gray-500 font-mono">cwd: {workDir}</div>
+                <div className="mt-1 text-xs text-gray-500 font-mono">cwd: {workDir}</div>
               )}
             </Section>
           )}
           {linter && (
             <Section title="Actions">
-              <div class="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 <IgnoreButton
                   label={`Disable ${linter} entirely`}
                   title="Add {source} to .gavel.yaml"
@@ -721,25 +721,25 @@ function LinterDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
           )}
           {lr.error && (
             <Section title="Error">
-              <pre class="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3">{lr.error}</pre>
+              <pre className="text-sm text-red-700 whitespace-pre-wrap font-mono bg-red-50 rounded p-3">{lr.error}</pre>
             </Section>
           )}
           {lr.raw_output && (
             <Section title="Raw output">
-              <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto">{lr.raw_output}</pre>
+              <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-80 overflow-y-auto">{lr.raw_output}</pre>
             </Section>
           )}
         </>
       )}
       {noFileViolations.length > 0 && (
         <Section title="Violations Without File">
-          <div class="space-y-3">
+          <div className="space-y-3">
             {groupViolationsByRule(noFileViolations).map(({ rule, violations }) => (
-              <div key={rule} class="border border-gray-200 rounded p-3 bg-gray-50">
-                <div class="text-sm font-mono text-gray-700 mb-2">
-                  {rule} <span class="text-xs text-gray-400">({violations.length})</span>
+              <div key={rule} className="border border-gray-200 rounded p-3 bg-gray-50">
+                <div className="text-sm font-mono text-gray-700 mb-2">
+                  {rule} <span className="text-xs text-gray-400">({violations.length})</span>
                 </div>
-                <div class="space-y-2">
+                <div className="space-y-2">
                   {violations.map((v, i) => (
                     <ViolationRow
                       key={i}
@@ -786,32 +786,32 @@ function FolderLintDetail({ t, lint, onIgnore, ignoreBusy }: LintDetailProps & {
   return (
     <>
       <Section title="Folder">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-mono text-gray-700">{folderDisplay}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-mono text-gray-700">{folderDisplay}</span>
           {t.target_path !== undefined && (
-            <span class="text-xs text-gray-400">{pattern}</span>
+            <span className="text-xs text-gray-400">{pattern}</span>
           )}
         </div>
       </Section>
       <ActionList actions={actions} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       {scopedRule ? (
         <Section title="Scope">
-          <div class="space-y-1 text-sm text-gray-700">
-            <div><span class="text-gray-500">Linter:</span> <span class="font-mono">{scopedLinter}</span></div>
-            <div><span class="text-gray-500">Rule:</span> <span class="font-mono">{scopedRule}</span></div>
+          <div className="space-y-1 text-sm text-gray-700">
+            <div><span className="text-gray-500">Linter:</span> <span className="font-mono">{scopedLinter}</span></div>
+            <div><span className="text-gray-500">Rule:</span> <span className="font-mono">{scopedRule}</span></div>
           </div>
         </Section>
       ) : (
         <Section title="Linters">
-          <div class="space-y-1">
+          <div className="space-y-1">
             {linterStats.map(({ linter, count }) => (
-              <div key={linter} class="flex items-center justify-between text-sm text-gray-700">
-                <span class="font-mono">{linter}</span>
-                <span class="text-xs text-gray-400">{count} violations</span>
+              <div key={linter} className="flex items-center justify-between text-sm text-gray-700">
+                <span className="font-mono">{linter}</span>
+                <span className="text-xs text-gray-400">{count} violations</span>
               </div>
             ))}
             {linterStats.length === 0 && (
-              <div class="text-sm text-gray-400">No violations found under this folder.</div>
+              <div className="text-sm text-gray-400">No violations found under this folder.</div>
             )}
           </div>
         </Section>
@@ -824,7 +824,7 @@ function ActionList({ actions, onIgnore, ignoreBusy }: { actions: LintAction[]; 
   if (!onIgnore || actions.length === 0) return null;
   return (
     <Section title="Actions">
-      <div class="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         {actions.map(a => (
           <IgnoreButton
             key={a.key}
@@ -869,12 +869,12 @@ function IgnoreButton({
     : `${base} border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100`;
   return (
     <button
-      class={cls}
+      className={cls}
       title={title}
       disabled={disabled}
       onClick={(e) => { e.stopPropagation(); void onIgnore(req); }}
     >
-      <iconify-icon icon="codicon:eye-closed" class="text-xs" />
+      <iconify-icon icon="codicon:eye-closed" className="text-xs" />
       {label}
     </button>
   );
@@ -890,15 +890,15 @@ function FileViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
   return (
     <>
       <Section title="File">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-mono text-gray-700">{file}</span>
-          {vs.length > 0 && <span class="text-xs text-gray-400">({vs.length} violations)</span>}
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-mono text-gray-700">{file}</span>
+          {vs.length > 0 && <span className="text-xs text-gray-400">({vs.length} violations)</span>}
         </div>
       </Section>
       <ActionList actions={actions} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
       {vs.length > 0 && (
         <Section title="Violations">
-          <div class="space-y-2">
+          <div className="space-y-2">
             {vs.map((v, i) => (
               <ViolationRow
                 key={i}
@@ -929,16 +929,16 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
   return (
     <>
       <Section title="Rule">
-        <span class="text-sm font-mono text-gray-700">{rule}</span>
-        <span class="text-xs text-gray-400 ml-2">({total} violations)</span>
+        <span className="text-sm font-mono text-gray-700">{rule}</span>
+        <span className="text-xs text-gray-400 ml-2">({total} violations)</span>
       </Section>
       {file && (
         <Section title="File">
-          <span class="text-sm font-mono text-gray-700">{file}</span>
+          <span className="text-sm font-mono text-gray-700">{file}</span>
         </Section>
       )}
       <Section title="Actions">
-        <div class="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {file && (
             <IgnoreButton
               label={`Ignore ${rule} in this file`}
@@ -967,7 +967,7 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       </Section>
       {vs.length > 0 && (
         <Section title="Violations">
-          <div class="space-y-2">
+          <div className="space-y-2">
             {vs.map((v, i) => (
               <ViolationRow
                 key={i}
@@ -985,7 +985,7 @@ function RuleViolationsDetail({ t, onIgnore, ignoreBusy }: LintDetailProps) {
       )}
       {noFileViolations.length > 0 && (
         <Section title="Violations Without File">
-          <div class="space-y-2">
+          <div className="space-y-2">
             {noFileViolations.map((v, i) => (
               <ViolationRow
                 key={i}
@@ -1020,25 +1020,25 @@ function ViolationRow({
     : sev === 'warning' ? 'codicon:warning' : 'codicon:info';
   const rule = v.rule?.method || '';
   return (
-    <div class="border border-gray-200 rounded p-2 bg-white">
-      <div class="flex items-start gap-2">
-        <iconify-icon icon={sevIcon} class={`${sevColor} text-base shrink-0 mt-0.5`} />
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2 flex-wrap text-xs text-gray-500 font-mono">
+    <div className="border border-gray-200 rounded p-2 bg-white">
+      <div className="flex items-start gap-2">
+        <iconify-icon icon={sevIcon} className={`${sevColor} text-base shrink-0 mt-0.5`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500 font-mono">
             {showFile && v.file && <span>{v.file}</span>}
             <span>
               :{v.line || 0}{v.column ? `:${v.column}` : ''}
             </span>
-            {rule && <span class="text-gray-700">[{rule}]</span>}
+            {rule && <span className="text-gray-700">[{rule}]</span>}
           </div>
           {v.message && (
-            <div class="text-sm text-gray-800 whitespace-pre-wrap mt-0.5">{v.message}</div>
+            <div className="text-sm text-gray-800 whitespace-pre-wrap mt-0.5">{v.message}</div>
           )}
           {v.code && (
-            <pre class="text-xs font-mono bg-gray-50 rounded p-2 mt-1 overflow-x-auto">{v.code}</pre>
+            <pre className="text-xs font-mono bg-gray-50 rounded p-2 mt-1 overflow-x-auto">{v.code}</pre>
           )}
           {rule && file && (
-            <div class="mt-1.5">
+            <div className="mt-1.5">
               <IgnoreButton
                 label="Ignore this violation"
                 title="Add {source, rule, file} to .gavel.yaml"
@@ -1057,10 +1057,10 @@ function ViolationRow({
 
 function ChildRow({ test: t }: { test: Test }) {
   return (
-    <div class="flex items-center gap-1.5 py-0.5 text-sm">
-      <iconify-icon icon={statusIcon(t)} class={`${statusColor(t)} text-base`} />
-      <span class={`truncate ${t.failed ? 'text-red-700' : 'text-gray-700'}`}>{t.name}</span>
-      {t.duration ? <span class="text-xs text-gray-400 ml-auto">{formatDuration(t.duration)}</span> : null}
+    <div className="flex items-center gap-1.5 py-0.5 text-sm">
+      <iconify-icon icon={statusIcon(t)} className={`${statusColor(t)} text-base`} />
+      <span className={`truncate ${t.failed ? 'text-red-700' : 'text-gray-700'}`}>{t.name}</span>
+      {t.duration ? <span className="text-xs text-gray-400 ml-auto">{formatDuration(t.duration)}</span> : null}
     </div>
   );
 }

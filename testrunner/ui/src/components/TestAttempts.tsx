@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'react';
 import type { Test, TestAttempt } from '../types';
 import { formatDuration, formatRunTimestamp } from '../utils';
 import { apiUrl } from '../config';
@@ -70,19 +70,19 @@ export function TestAttempts({ test }: Props) {
   const isLive = !!a.pending || (!a.passed && !a.failed && !a.skipped && !a.timed_out);
 
   return (
-    <div class="space-y-3">
+    <div className="space-y-3">
       {attempts.length > 1 && (
-        <div class="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1">
           {attempts.map((att, i) => (
             <button
               key={i}
-              class={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ${i === selected ? 'border-blue-300 bg-blue-50 text-blue-800 font-medium' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+              className={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ${i === selected ? 'border-blue-300 bg-blue-50 text-blue-800 font-medium' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
               onClick={() => setSelected(i)}
               title={att.started ? formatRunTimestamp(att.started) : ''}
             >
-              <iconify-icon icon={attemptIcon(att)} class={attemptColor(att)} />
+              <iconify-icon icon={attemptIcon(att)} className={attemptColor(att)} />
               <span>Attempt {att.sequence}</span>
-              {att.run_kind === 'rerun' && <span class="opacity-60">rerun</span>}
+              {att.run_kind === 'rerun' && <span className="opacity-60">rerun</span>}
             </button>
           ))}
         </div>
@@ -91,8 +91,8 @@ export function TestAttempts({ test }: Props) {
       <AttemptMetrics attempt={a} live={isLive} />
       {a.stack_trace && (
         <section>
-          <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Stack trace</div>
-          <AnsiHtml text={a.stack_trace} class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-[32rem] overflow-y-auto" />
+          <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Stack trace</div>
+          <AnsiHtml text={a.stack_trace} className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded p-3 max-h-[32rem] overflow-y-auto" />
         </section>
       )}
     </div>
@@ -147,14 +147,14 @@ function AttemptMetrics({ attempt, live }: { attempt: TestAttempt; live: boolean
 
   return (
     <section>
-      <div class="flex items-center gap-2 mb-1">
-        <div class="text-xs uppercase tracking-wide text-gray-500">Process metrics</div>
-        {live && <iconify-icon icon="svg-spinners:pulse" class="text-xs text-blue-500" />}
+      <div className="flex items-center gap-2 mb-1">
+        <div className="text-xs uppercase tracking-wide text-gray-500">Process metrics</div>
+        {live && <iconify-icon icon="svg-spinners:pulse" className="text-xs text-blue-500" />}
       </div>
       {!hasAny ? (
-        <div class="text-xs text-gray-400 italic">No metrics captured for this attempt.</div>
+        <div className="text-xs text-gray-400 italic">No metrics captured for this attempt.</div>
       ) : (
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
           {shown.pid > 0 && (
             <MetricCell label="PID" value={String(shown.pid)} />
           )}
@@ -172,7 +172,7 @@ function AttemptMetrics({ attempt, live }: { attempt: TestAttempt; live: boolean
         </div>
       )}
       {error && (
-        <div class="text-[11px] text-gray-400 mt-1 italic">{error}</div>
+        <div className="text-[11px] text-gray-400 mt-1 italic">{error}</div>
       )}
     </section>
   );
@@ -180,9 +180,9 @@ function AttemptMetrics({ attempt, live }: { attempt: TestAttempt; live: boolean
 
 function MetricCell({ label, value }: { label: string; value: string }) {
   return (
-    <div class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1">
-      <div class="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
-      <div class="text-xs font-medium text-gray-800 truncate">{value}</div>
+    <div className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1">
+      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="text-xs font-medium text-gray-800 truncate">{value}</div>
     </div>
   );
 }

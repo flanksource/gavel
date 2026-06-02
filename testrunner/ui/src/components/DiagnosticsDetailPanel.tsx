@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
-import type { ComponentChildren } from 'preact';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ProcessNode, RunMeta } from '../types';
 import { formatBytes, processLabel, processStateColor, processStateIcon } from '../utils';
 import { countGoroutinesByState, parseGoroutineDump, type ParsedGoroutine, type ParsedGoroutineFrame } from '../stacktrace';
@@ -36,9 +35,9 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
 
   if (!process) {
     return (
-      <div class="flex items-center justify-center h-full text-gray-400 text-sm">
-        <div class="text-center">
-          <iconify-icon icon="codicon:server-process" class="text-4xl mb-2 block" />
+      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+        <div className="text-center">
+          <iconify-icon icon="codicon:server-process" className="text-4xl mb-2 block" />
           Select a process to view diagnostics
         </div>
       </div>
@@ -46,18 +45,18 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
   }
 
   return (
-    <div class="h-full min-h-0 flex flex-col gap-3 p-4">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2">
-            <iconify-icon icon={process.is_root ? 'codicon:server-process' : 'codicon:debug-alt'} class="text-2xl text-blue-600 shrink-0" />
-            <h2 class="text-lg font-bold text-gray-900 break-words">{processLabel(process)}</h2>
+    <div className="h-full min-h-0 flex flex-col gap-3 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <iconify-icon icon={process.is_root ? 'codicon:server-process' : 'codicon:debug-alt'} className="text-2xl text-blue-600 shrink-0" />
+            <h2 className="text-lg font-bold text-gray-900 break-words">{processLabel(process)}</h2>
           </div>
-          <div class="mt-1 flex items-center gap-2 flex-wrap text-xs text-gray-500">
-            <span class="font-mono">pid {process.pid}</span>
-            {process.ppid ? <span class="font-mono">ppid {process.ppid}</span> : null}
+          <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-gray-500">
+            <span className="font-mono">pid {process.pid}</span>
+            {process.ppid ? <span className="font-mono">ppid {process.ppid}</span> : null}
             {process.status ? (
-              <span class={`inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 ${processStateColor(process.status)}`}>
+              <span className={`inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 ${processStateColor(process.status)}`}>
                 <iconify-icon icon={processStateIcon(process.status)} />
                 {process.status}
               </span>
@@ -68,7 +67,7 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
 
       {runMeta && (
         <Section title="Run">
-          <div class="grid grid-cols-2 gap-2 text-sm">
+          <div className="grid grid-cols-2 gap-2 text-sm">
             <Metric label={runMeta.kind === 'rerun' ? `Rerun #${runMeta.sequence}` : 'Initial run'} value={runMeta.started ? new Date(runMeta.started).toLocaleString() : 'Unavailable'} />
             <Metric label="Finished" value={runMeta.ended ? new Date(runMeta.ended).toLocaleString() : 'In progress'} />
           </div>
@@ -77,14 +76,14 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
 
       {process.command && (
         <Section title="Command">
-          <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-2 break-all">
+          <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-blue-50 rounded p-2 break-all">
             {process.command}
           </pre>
         </Section>
       )}
 
       <Section title="Metrics">
-        <div class="grid grid-cols-2 gap-2 text-sm">
+        <div className="grid grid-cols-2 gap-2 text-sm">
           <Metric label="CPU" value={`${(process.cpu_percent || 0).toFixed(1)}%`} />
           <Metric label="RSS" value={formatBytes(process.rss)} />
           <Metric label="Virtual memory" value={formatBytes(process.vms)} />
@@ -93,16 +92,16 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
       </Section>
 
       <Section title="Stack" grow>
-        <div class="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
           {!stack?.text ? (
-            <div class="h-full min-h-[14rem] flex flex-col justify-center gap-3 p-3">
-              <div class="space-y-1.5">
-                <div class={`h-3 w-40 rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
-                <div class={`h-3 w-full rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
-                <div class={`h-3 w-5/6 rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
+            <div className="h-full min-h-[14rem] flex flex-col justify-center gap-3 p-3">
+              <div className="space-y-1.5">
+                <div className={`h-3 w-40 rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
+                <div className={`h-3 w-full rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
+                <div className={`h-3 w-5/6 rounded ${collectBusy ? 'animate-pulse bg-gray-200' : 'bg-gray-200/70'}`} />
               </div>
-              <div class="flex items-center justify-between gap-3">
-                <div class="text-sm text-gray-500">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm text-gray-500">
                   {stack?.error
                     ? stack.error
                     : collectBusy
@@ -111,7 +110,7 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                 </div>
                 {onCollectStack && (
                   <button
-                    class="shrink-0 text-[11px] px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                    className="shrink-0 text-[11px] px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                     onClick={() => onCollectStack(process.pid)}
                     disabled={collectBusy}
                     title="Collect the latest stack trace"
@@ -123,10 +122,10 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
               </div>
             </div>
           ) : parsed.length === 0 ? (
-            <div class="h-full min-h-0 flex flex-col">
-              <div class="flex items-center justify-between gap-2 px-1 py-1 text-[11px] text-gray-500">
-                <div class="flex items-center gap-2">
-                  <span class={`px-2 py-0.5 rounded-full ${
+            <div className="h-full min-h-0 flex flex-col">
+              <div className="flex items-center justify-between gap-2 px-1 py-1 text-[11px] text-gray-500">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded-full ${
                     stack.status === 'ready'
                       ? 'bg-green-100 text-green-700'
                       : stack.status === 'unsupported'
@@ -139,7 +138,7 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                 </div>
                 {onCollectStack && (
                   <button
-                    class="shrink-0 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                    className="shrink-0 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                     onClick={() => onCollectStack(process.pid)}
                     disabled={collectBusy}
                     title="Refresh stack trace"
@@ -150,18 +149,18 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                 )}
               </div>
               {stack.error && (
-                <div class="mt-2 text-xs text-red-700 whitespace-pre-wrap">
+                <div className="mt-2 text-xs text-red-700 whitespace-pre-wrap">
                   {stack.error}
                 </div>
               )}
-              <pre class="flex-1 min-h-0 overflow-auto py-1 text-[11px] text-gray-700 whitespace-pre-wrap font-mono leading-4">{stack.text}</pre>
+              <pre className="flex-1 min-h-0 overflow-auto py-1 text-[11px] text-gray-700 whitespace-pre-wrap font-mono leading-4">{stack.text}</pre>
             </div>
           ) : (
-            <div class="h-full min-h-0 flex flex-col">
-              <div class="px-1 py-1.5 space-y-2">
-                <div class="flex items-center justify-between gap-2 text-[11px] text-gray-500 flex-wrap">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class={`px-2 py-0.5 rounded-full ${
+            <div className="h-full min-h-0 flex flex-col">
+              <div className="px-1 py-1.5 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-[11px] text-gray-500 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`px-2 py-0.5 rounded-full ${
                       stack.status === 'ready'
                         ? 'bg-green-100 text-green-700'
                         : stack.status === 'unsupported'
@@ -175,7 +174,7 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                   </div>
                   {onCollectStack && (
                     <button
-                      class="shrink-0 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                      className="shrink-0 text-[11px] px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                       onClick={() => onCollectStack(process.pid)}
                       disabled={collectBusy}
                       title="Refresh stack trace"
@@ -185,17 +184,17 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                     </button>
                   )}
                 </div>
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <div class="relative min-w-[14rem] flex-1">
-                    <iconify-icon icon="codicon:search" class="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs" />
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="relative min-w-[14rem] flex-1">
+                    <iconify-icon icon="codicon:search" className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs" />
                     <input
-                      class="w-full rounded-md border border-gray-200 bg-gray-50 py-1 pl-7 pr-2 text-xs text-gray-700 outline-none focus:border-blue-400 focus:bg-white"
+                      className="w-full rounded-md border border-gray-200 bg-gray-50 py-1 pl-7 pr-2 text-xs text-gray-700 outline-none focus:border-blue-400 focus:bg-white"
                       placeholder="Filter by goroutine id, function, or file"
                       value={search}
                       onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
                     />
                   </div>
-                  <label class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
+                  <label className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
                     <input
                       type="checkbox"
                       checked={hideRuntimeOnly}
@@ -205,7 +204,7 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                   </label>
                   {(search || selectedStates.size > 0 || !hideRuntimeOnly) && (
                     <button
-                      class="text-[11px] text-gray-500 hover:text-gray-700"
+                      className="text-[11px] text-gray-500 hover:text-gray-700"
                       onClick={() => {
                         setSearch('');
                         setSelectedStates(new Set());
@@ -216,13 +215,13 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                     </button>
                   )}
                 </div>
-                <div class="flex items-center gap-1 flex-wrap">
+                <div className="flex items-center gap-1 flex-wrap">
                   {Array.from(stateCounts.entries()).sort((a, b) => b[1] - a[1]).map(([state, count]) => {
                     const active = selectedStates.has(state);
                     return (
                       <button
                         key={state}
-                        class={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
                           active
                             ? 'border-blue-400 bg-blue-50 text-blue-700'
                             : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-white'
@@ -236,22 +235,22 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
                           });
                         }}
                       >
-                        <span class={`h-2 w-2 rounded-full ${goroutineStateDot(state)}`} />
+                        <span className={`h-2 w-2 rounded-full ${goroutineStateDot(state)}`} />
                         {state}
-                        <span class="text-[10px] opacity-70">{count}</span>
+                        <span className="text-[10px] opacity-70">{count}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
               {stack.error && (
-                <div class="mt-2 text-xs text-red-700 whitespace-pre-wrap">
+                <div className="mt-2 text-xs text-red-700 whitespace-pre-wrap">
                   {stack.error}
                 </div>
               )}
-              <div class="flex-1 min-h-0 overflow-auto py-1 space-y-1">
+              <div className="flex-1 min-h-0 overflow-auto py-1 space-y-1">
                 {filtered.length === 0 && (
-                  <div class="py-3 text-center text-xs text-gray-500">
+                  <div className="py-3 text-center text-xs text-gray-500">
                     No goroutines match the current filters.
                   </div>
                 )}
@@ -272,10 +271,10 @@ export function DiagnosticsDetailPanel({ process, collectBusy, onCollectStack, r
   );
 }
 
-function Section({ title, children, grow }: { title: string; children: ComponentChildren; grow?: boolean }) {
+function Section({ title, children, grow }: { title: string; children: ReactNode; grow?: boolean }) {
   return (
-    <section class={grow ? 'flex min-h-0 flex-1 flex-col' : ''}>
-      <div class="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">{title}</div>
+    <section className={grow ? 'flex min-h-0 flex-1 flex-col' : ''}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">{title}</div>
       {children}
     </section>
   );
@@ -283,9 +282,9 @@ function Section({ title, children, grow }: { title: string; children: Component
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div class="border rounded-lg bg-gray-50 px-2.5 py-2">
-      <div class="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
-      <div class="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
+    <div className="border rounded-lg bg-gray-50 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="text-xs font-medium text-gray-800 mt-0.5">{value}</div>
     </div>
   );
 }
@@ -301,20 +300,20 @@ function GoroutineCard({ goroutine, search, hideRuntimeOnly }: {
   const defaultOpen = goroutine.state === 'running' || !!search;
 
   return (
-    <details class="border-0 bg-transparent" open={defaultOpen}>
-      <summary class="cursor-pointer list-none px-0 py-1">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="font-mono text-xs font-semibold text-gray-900">g{goroutine.id}</span>
-          <span class={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${goroutineStateBadge(goroutine.state)}`}>
-            <span class={`h-2 w-2 rounded-full ${goroutineStateDot(goroutine.state)}`} />
+    <details className="border-0 bg-transparent" open={defaultOpen}>
+      <summary className="cursor-pointer list-none px-0 py-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-xs font-semibold text-gray-900">g{goroutine.id}</span>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${goroutineStateBadge(goroutine.state)}`}>
+            <span className={`h-2 w-2 rounded-full ${goroutineStateDot(goroutine.state)}`} />
             {goroutine.rawState}
           </span>
-          <span class="text-[11px] text-gray-500">{frames.length}f</span>
-          {goroutine.userFrameCount > 0 && <span class="text-[11px] text-gray-500">{goroutine.userFrameCount}u</span>}
-          {goroutine.topFunction && <span class="truncate text-[11px] text-gray-600">{goroutine.topFunction}</span>}
+          <span className="text-[11px] text-gray-500">{frames.length}f</span>
+          {goroutine.userFrameCount > 0 && <span className="text-[11px] text-gray-500">{goroutine.userFrameCount}u</span>}
+          {goroutine.topFunction && <span className="truncate text-[11px] text-gray-600">{goroutine.topFunction}</span>}
         </div>
       </summary>
-      <div class="pl-3 py-1 space-y-0.5">
+      <div className="pl-3 py-1 space-y-0.5">
         {frames.map((frame, index) => (
           <FrameRow key={`${goroutine.id}-${index}`} frame={frame} />
         ))}
@@ -325,13 +324,13 @@ function GoroutineCard({ goroutine, search, hideRuntimeOnly }: {
 
 function FrameRow({ frame }: { frame: ParsedGoroutineFrame }) {
   return (
-    <div class={`${frame.runtime ? 'text-gray-500' : 'text-gray-800'}`}>
-      <div class="flex items-start gap-1.5">
-        <iconify-icon icon={frame.kind === 'created_by' ? 'codicon:debug-restart' : frame.runtime ? 'codicon:debug-step-over' : 'codicon:symbol-method'} class="shrink-0 mt-0.5 text-[11px]" />
-        <div class="min-w-0">
-          <div class="break-all font-mono text-[11px] font-semibold leading-4">
+    <div className={`${frame.runtime ? 'text-gray-500' : 'text-gray-800'}`}>
+      <div className="flex items-start gap-1.5">
+        <iconify-icon icon={frame.kind === 'created_by' ? 'codicon:debug-restart' : frame.runtime ? 'codicon:debug-step-over' : 'codicon:symbol-method'} className="shrink-0 mt-0.5 text-[11px]" />
+        <div className="min-w-0">
+          <div className="break-all font-mono text-[11px] font-semibold leading-4">
             {frame.displayName}
-            {frame.location && <span class="ml-2 text-[10px] font-normal opacity-80">{frame.location}</span>}
+            {frame.location && <span className="ml-2 text-[10px] font-normal opacity-80">{frame.location}</span>}
           </div>
         </div>
       </div>

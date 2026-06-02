@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'react';
 import type { Test } from '../types';
 import { statusIcon, statusColor, formatCount, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName, isLintNode, lintNodeCount, lintBadgeColor } from '../utils';
 
@@ -53,7 +53,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
   return (
     <div>
       <div
-        class={`flex items-center gap-1.5 py-1 px-2 cursor-pointer text-sm ${rowBg}`}
+        className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer text-sm ${rowBg}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={(e) => {
           e.stopPropagation();
@@ -64,44 +64,44 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
         {hasChildren ? (
           <iconify-icon
             icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-            class="text-gray-400 text-xs shrink-0 w-3"
+            className="text-gray-400 text-xs shrink-0 w-3"
           />
         ) : (
-          <span class="w-3 shrink-0" />
+          <span className="w-3 shrink-0" />
         )}
 
-        <iconify-icon icon={statusIcon(t)} class={`${isLint ? 'text-gray-500' : statusColor(t)} text-base shrink-0`} />
+        <iconify-icon icon={statusIcon(t)} className={`${isLint ? 'text-gray-500' : statusColor(t)} text-base shrink-0`} />
 
         {fwIcon && !isLint && (
-          <iconify-icon icon={fwIcon} class="text-sm shrink-0 opacity-60" />
+          <iconify-icon icon={fwIcon} className="text-sm shrink-0 opacity-60" />
         )}
 
-        <span class={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
+        <span className={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
           {humanizeName(t.name, fw)}
         </span>
 
-        <span class="flex-1" />
+        <span className="flex-1" />
 
         {t.timed_out && (
-          <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 shrink-0 flex items-center gap-1">
-            <iconify-icon icon="ion:hourglass-outline" class="text-sm" />
+          <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 shrink-0 flex items-center gap-1">
+            <iconify-icon icon="ion:hourglass-outline" className="text-sm" />
             timed out
           </span>
         )}
 
         {(() => {
           const dur = t.duration || (hasChildren ? totalDuration(t) : 0);
-          return dur > 0 ? <span class="text-xs text-gray-400 shrink-0">{formatDuration(dur)}</span> : null;
+          return dur > 0 ? <span className="text-xs text-gray-400 shrink-0">{formatDuration(dur)}</span> : null;
         })()}
 
         {isLint && lintCount > 0 && (
-          <span class="flex items-center gap-1 shrink-0">
+          <span className="flex items-center gap-1 shrink-0">
             <Badge count={lintCount} color={lintBadgeColor(t)} />
           </span>
         )}
 
         {!isLint && s && s.total > 0 && (
-          <span class="flex items-center gap-1 shrink-0">
+          <span className="flex items-center gap-1 shrink-0">
             {s.passed > 0 && <Badge count={s.passed} color="bg-green-500" />}
             {s.failed > 0 && <Badge count={s.failed} color="bg-red-500" />}
             {s.skipped > 0 && <Badge count={s.skipped} color="bg-yellow-400" />}
@@ -111,23 +111,23 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
 
         {canStop && (
           <button
-            class="text-gray-400 hover:text-orange-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
+            className="text-gray-400 hover:text-orange-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
             onClick={(e) => { e.stopPropagation(); onStop!(t); }}
             disabled={stopBusy}
             title="Stop"
           >
-            <iconify-icon icon="codicon:debug-stop" class="text-sm" />
+            <iconify-icon icon="codicon:debug-stop" className="text-sm" />
           </button>
         )}
 
         {onRerun && t.framework !== 'task' && t.kind !== 'violation' && (
           <button
-            class="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
+            className="text-gray-400 hover:text-blue-600 disabled:opacity-30 disabled:hover:text-gray-400 shrink-0 px-1"
             onClick={(e) => { e.stopPropagation(); onRerun(t); }}
             disabled={rerunBusy}
             title="Rerun"
           >
-            <iconify-icon icon="codicon:refresh" class="text-sm" />
+            <iconify-icon icon="codicon:refresh" className="text-sm" />
           </button>
         )}
       </div>
@@ -142,7 +142,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
 function Badge({ count, color }: { count: number; color: string }) {
   return (
     <span
-      class={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${color}`}
+      className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${color}`}
       title={String(count)}
     >
       {formatCount(count)}

@@ -12,7 +12,7 @@ interface Props {
 export function LintView({ lint, tree, expandAll, selected, onSelect }: Props) {
   if (tree.length === 0) {
     return (
-      <div class="p-8 text-center text-gray-400 text-sm">
+      <div className="p-8 text-center text-gray-400 text-sm">
         {(lint || []).length === 0 ? 'No lint results' : 'No violations match the current filters'}
       </div>
     );

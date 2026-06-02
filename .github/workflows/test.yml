@@ -46,6 +46,28 @@ jobs:
         env:
           CGO_ENABLED: 1
 
+  gavel-npm:
+    name: "@flanksource/gavel library"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: testrunner/ui
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: testrunner/ui/package-lock.json
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build:lib
+
   build:
     name: Build
     runs-on: ubuntu-latest

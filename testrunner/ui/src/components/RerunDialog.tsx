@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnsiHtml } from './AnsiHtml';
 import { apiUrl } from '../config';
 
@@ -82,28 +82,28 @@ export function RerunDialog({ open, onClose }: Props) {
       : 'text-red-400';
 
   return (
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
-        class="bg-gray-900 rounded-lg shadow-2xl flex flex-col w-[90vw] max-w-5xl h-[80vh]"
-        onClick={(e: Event) => e.stopPropagation()}
+        className="bg-gray-900 rounded-lg shadow-2xl flex flex-col w-[90vw] max-w-5xl h-[80vh]"
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-          <div class="flex items-center gap-2 min-w-0">
-            <iconify-icon icon={statusIcon} class={`text-xl ${statusColor}`} />
-            <span class="text-sm font-mono text-gray-300 truncate">{command || 'rerun'}</span>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+          <div className="flex items-center gap-2 min-w-0">
+            <iconify-icon icon={statusIcon} className={`text-xl ${statusColor}`} />
+            <span className="text-sm font-mono text-gray-300 truncate">{command || 'rerun'}</span>
             {status !== 'running' && (
-              <span class={`text-xs px-2 py-0.5 rounded ${status === 'success' ? 'bg-green-900 text-green-300' : status === 'canceled' ? 'bg-orange-900 text-orange-300' : 'bg-red-900 text-red-300'}`}>
+              <span className={`text-xs px-2 py-0.5 rounded ${status === 'success' ? 'bg-green-900 text-green-300' : status === 'canceled' ? 'bg-orange-900 text-orange-300' : 'bg-red-900 text-red-300'}`}>
                 {status}
               </span>
             )}
           </div>
           <button
             onClick={onClose}
-            class="text-gray-400 hover:text-gray-200 p-1"
+            className="text-gray-400 hover:text-gray-200 p-1"
             title="Close (rerun continues in background)"
           >
-            <iconify-icon icon="mdi:close" class="text-xl" />
+            <iconify-icon icon="mdi:close" className="text-xl" />
           </button>
         </div>
 
@@ -111,13 +111,13 @@ export function RerunDialog({ open, onClose }: Props) {
         <pre
           ref={scrollRef}
           onScroll={handleScroll}
-          class="flex-1 overflow-auto p-4 text-sm font-mono text-gray-200 leading-relaxed"
+          className="flex-1 overflow-auto p-4 text-sm font-mono text-gray-200 leading-relaxed"
         >
           {lines.length === 0 && status === 'running' && (
-            <span class="text-gray-500">Waiting for output...</span>
+            <span className="text-gray-500">Waiting for output...</span>
           )}
           {lines.map((line, i) => (
-            <div key={i} class={line.stream === 'stderr' ? 'bg-red-950/30' : ''}>
+            <div key={i} className={line.stream === 'stderr' ? 'bg-red-950/30' : ''}>
               <AnsiHtml text={line.text} />
             </div>
           ))}

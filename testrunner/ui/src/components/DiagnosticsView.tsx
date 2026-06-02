@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'react';
 import type { ProcessNode } from '../types';
 import { countProcesses, formatBytes, processLabel, processStateColor, processStateIcon } from '../utils';
 
@@ -12,9 +12,9 @@ interface Props {
 export function DiagnosticsView({ root, selectedPid, expandAll, onSelect }: Props) {
   if (!root) {
     return (
-      <div class="p-8 text-center text-gray-400">
-        <iconify-icon icon="svg-spinners:ring-resize" class="text-3xl text-blue-500" />
-        <p class="mt-2">Waiting for process diagnostics...</p>
+      <div className="p-8 text-center text-gray-400">
+        <iconify-icon icon="svg-spinners:ring-resize" className="text-3xl text-blue-500" />
+        <p className="mt-2">Waiting for process diagnostics...</p>
       </div>
     );
   }
@@ -29,7 +29,7 @@ export function DiagnosticsView({ root, selectedPid, expandAll, onSelect }: Prop
         onSelect={onSelect}
       />
       {countProcesses(root) === 0 && (
-        <div class="p-8 text-center text-gray-400 text-sm">No processes available</div>
+        <div className="p-8 text-center text-gray-400 text-sm">No processes available</div>
       )}
     </div>
   );
@@ -64,7 +64,7 @@ function DiagnosticsTreeNode({ node, depth, selectedPid, expandAll, onSelect }: 
   return (
     <div>
       <div
-        class={`flex items-center gap-1.5 py-1 px-2 cursor-pointer text-sm ${rowBg}`}
+        className={`flex items-center gap-1.5 py-1 px-2 cursor-pointer text-sm ${rowBg}`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={(e) => {
           e.stopPropagation();
@@ -75,28 +75,28 @@ function DiagnosticsTreeNode({ node, depth, selectedPid, expandAll, onSelect }: 
         {hasChildren ? (
           <iconify-icon
             icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-            class="text-gray-400 text-xs shrink-0 w-3"
+            className="text-gray-400 text-xs shrink-0 w-3"
           />
         ) : (
-          <span class="w-3 shrink-0" />
+          <span className="w-3 shrink-0" />
         )}
         <iconify-icon
           icon={node.is_root ? 'codicon:server-process' : 'codicon:debug-alt'}
-          class={`text-base shrink-0 ${node.is_root ? 'text-blue-600' : 'text-gray-400'}`}
+          className={`text-base shrink-0 ${node.is_root ? 'text-blue-600' : 'text-gray-400'}`}
         />
-        <span class={`truncate ${selected ? 'font-semibold text-blue-900' : 'font-medium text-gray-800'}`}>
+        <span className={`truncate ${selected ? 'font-semibold text-blue-900' : 'font-medium text-gray-800'}`}>
           {processLabel(node)}
         </span>
-        <span class="text-xs text-gray-400 shrink-0">pid {node.pid}</span>
-        <span class="flex-1" />
+        <span className="text-xs text-gray-400 shrink-0">pid {node.pid}</span>
+        <span className="flex-1" />
         {node.status && (
-          <span class={`inline-flex items-center gap-1 text-xs shrink-0 ${processStateColor(node.status)}`}>
+          <span className={`inline-flex items-center gap-1 text-xs shrink-0 ${processStateColor(node.status)}`}>
             <iconify-icon icon={processStateIcon(node.status)} />
             {node.status}
           </span>
         )}
-        <span class="text-xs text-gray-400 shrink-0">{cpu.toFixed(1)}%</span>
-        <span class="text-xs text-gray-400 shrink-0">{formatBytes(node.rss)}</span>
+        <span className="text-xs text-gray-400 shrink-0">{cpu.toFixed(1)}%</span>
+        <span className="text-xs text-gray-400 shrink-0">{formatBytes(node.rss)}</span>
       </div>
 
       {open && hasChildren && node.children!.map(child => (

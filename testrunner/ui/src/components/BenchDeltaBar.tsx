@@ -21,11 +21,11 @@ export function BenchDeltaBar({ delta, threshold }: Props) {
   const fontWeight = sig ? 'font-semibold' : '';
 
   return (
-    <div class="flex items-center gap-2 w-full">
-      <div class="relative flex-1 h-4 bg-gray-100 rounded overflow-hidden min-w-[80px]">
-        <div class="absolute top-0 bottom-0 left-1/2 w-px bg-gray-400" />
+    <div className="flex items-center gap-2 w-full">
+      <div className="relative flex-1 h-4 bg-gray-100 rounded overflow-hidden min-w-[80px]">
+        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-gray-400" />
         <div
-          class={`absolute top-0 bottom-0 ${color}`}
+          className={`absolute top-0 bottom-0 ${color}`}
           style={
             pct >= 0
               ? { left: '50%', width: `${width / 2}%` }
@@ -33,7 +33,7 @@ export function BenchDeltaBar({ delta, threshold }: Props) {
           }
         />
       </div>
-      <span class={`text-xs tabular-nums w-16 text-right ${textColor} ${fontWeight}`}>
+      <span className={`text-xs tabular-nums w-16 text-right ${textColor} ${fontWeight}`}>
         {pct >= 0 ? '+' : ''}
         {pct.toFixed(2)}%
       </span>

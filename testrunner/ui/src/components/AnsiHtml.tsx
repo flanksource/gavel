@@ -11,12 +11,24 @@ const ANSI_COLORS: Record<string, string> = {
 
 interface Props {
   text: string;
-  class?: string;
+  className?: string;
 }
 
 interface Span {
   text: string;
-  style: string;
+  style: Record<string, string>;
+}
+
+// Parse a single "prop:value" CSS declaration into a React style entry.
+function cssToStyle(decls: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const decl of decls) {
+    const [prop, value] = decl.split(':');
+    if (!prop || value === undefined) continue;
+    const key = prop.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    out[key] = value.trim();
+  }
+  return out;
 }
 
 function parseAnsi(raw: string): Span[] {
@@ -28,7 +40,7 @@ function parseAnsi(raw: string): Span[] {
 
   while ((match = re.exec(raw)) !== null) {
     if (match.index > last) {
-      spans.push({ text: raw.slice(last, match.index), style: styles.join(';') });
+      spans.push({ text: raw.slice(last, match.index), style: cssToStyle(styles) });
     }
     const codes = match[1].split(';').filter(Boolean);
     for (const code of codes) {
@@ -42,18 +54,18 @@ function parseAnsi(raw: string): Span[] {
   }
 
   if (last < raw.length) {
-    spans.push({ text: raw.slice(last), style: styles.join(';') });
+    spans.push({ text: raw.slice(last), style: cssToStyle(styles) });
   }
 
   return spans;
 }
 
-export function AnsiHtml({ text, class: className }: Props) {
+export function AnsiHtml({ text, className }: Props) {
   const spans = parseAnsi(text);
   return (
-    <pre class={className}>
+    <pre className={className}>
       {spans.map((s, i) =>
-        s.style ? <span key={i} style={s.style}>{s.text}</span> : s.text
+        Object.keys(s.style).length ? <span key={i} style={s.style}>{s.text}</span> : s.text
       )}
     </pre>
   );

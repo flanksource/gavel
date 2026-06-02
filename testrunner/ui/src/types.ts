@@ -247,3 +247,16 @@ export interface FailureDetail {
   location?: string;
   stack?: string;
 }
+
+// RerunRequest mirrors the Go testui.RerunRequest payload accepted by
+// POST /api/rerun.
+export interface RerunRequest {
+  package_paths?: string[];
+  work_dir?: string;
+  test_name?: string;
+  suite?: string[];
+  framework?: string;
+  lint?: boolean;
+  lint_files?: string[];
+  lint_linters?: string[];
+}

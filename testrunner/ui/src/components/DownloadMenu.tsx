@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'react';
 import { downloadCurrentView } from '../export';
 import type { RouteState } from '../routes';
 import { buildExportRoute } from '../routes';
@@ -47,9 +47,9 @@ export function DownloadMenu({ routeState, align = 'right', variant = 'neutral',
   const mdURL = buildExportRoute(routeState, 'md');
 
   return (
-    <div class="relative" ref={wrapperRef}>
+    <div className="relative" ref={wrapperRef}>
       <button
-        class={triggerClass[variant]}
+        className={triggerClass[variant]}
         onClick={() => setOpen(v => !v)}
         title={title || 'Download as JSON or Markdown'}
         aria-haspopup="menu"
@@ -61,11 +61,11 @@ export function DownloadMenu({ routeState, align = 'right', variant = 'neutral',
       </button>
       {open && (
         <div
-          class={`absolute mt-1 ${align === 'right' ? 'right-0' : 'left-0'} bg-white border border-gray-200 rounded shadow-md z-20 min-w-32 py-1`}
+          className={`absolute mt-1 ${align === 'right' ? 'right-0' : 'left-0'} bg-white border border-gray-200 rounded shadow-md z-20 min-w-32 py-1`}
           role="menu"
         >
           <button
-            class="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
             onClick={() => select('json')}
             title={jsonURL}
             role="menuitem"
@@ -74,7 +74,7 @@ export function DownloadMenu({ routeState, align = 'right', variant = 'neutral',
             JSON
           </button>
           <button
-            class="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
+            className="w-full text-left text-xs px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2 text-gray-700"
             onClick={() => select('md')}
             title={mdURL}
             role="menuitem"

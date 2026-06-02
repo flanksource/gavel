@@ -1,9 +1,8 @@
-import { useState, useRef, useCallback } from 'preact/hooks';
-import type { ComponentChildren } from 'preact';
+import { useState, useRef, useCallback, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
 
 interface Props {
-  left: ComponentChildren;
-  right: ComponentChildren;
+  left: ReactNode;
+  right: ReactNode;
   defaultSplit?: number;
   minLeft?: number;
   minRight?: number;
@@ -14,7 +13,7 @@ export function SplitPane({ left, right, defaultSplit = 50, minLeft = 20, minRig
   const dragging = useRef(false);
   const container = useRef<HTMLDivElement>(null);
 
-  const onMouseDown = useCallback((e: MouseEvent) => {
+  const onMouseDown = useCallback((e: ReactMouseEvent) => {
     e.preventDefault();
     dragging.current = true;
 
@@ -40,15 +39,15 @@ export function SplitPane({ left, right, defaultSplit = 50, minLeft = 20, minRig
   }, [minLeft, minRight]);
 
   return (
-    <div ref={container} class="flex flex-1 overflow-hidden min-h-0">
-      <div style={{ width: `${split}%` }} class="overflow-y-auto bg-white min-h-0">
+    <div ref={container} className="flex flex-1 overflow-hidden min-h-0">
+      <div style={{ width: `${split}%` }} className="overflow-y-auto bg-white min-h-0">
         {left}
       </div>
       <div
-        class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize shrink-0 transition-colors"
+        className="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize shrink-0 transition-colors"
         onMouseDown={onMouseDown}
       />
-      <div style={{ width: `${100 - split}%` }} class="overflow-hidden bg-white min-h-0">
+      <div style={{ width: `${100 - split}%` }} className="overflow-hidden bg-white min-h-0">
         {right}
       </div>
     </div>

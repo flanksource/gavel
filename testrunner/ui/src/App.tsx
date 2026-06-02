@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, type MutableRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react';
 import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
@@ -37,9 +37,9 @@ import { apiUrl } from './config';
 
 function applySnapshot(
   snap: Snapshot,
-  startTime: MutableRef<number | null>,
-  endTime: MutableRef<number | null>,
-  doneRef: MutableRef<boolean>,
+  startTime: MutableRefObject<number | null>,
+  endTime: MutableRefObject<number | null>,
+  doneRef: MutableRefObject<boolean>,
   setTests: (t: Test[]) => void,
   setLint: (l: LinterResult[] | undefined) => void,
   setLintRun: (r: boolean) => void,
@@ -695,20 +695,20 @@ export function App() {
   const backTo = typeof window !== 'undefined' ? (window as any).__gavelBackTo as string | undefined : undefined;
 
   return (
-    <div class="bg-gray-100 h-screen flex flex-col">
+    <div className="bg-gray-100 h-screen flex flex-col">
       {backTo && (
-        <div class="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
-          <a href={backTo} class="text-blue-300 hover:text-white flex items-center gap-1 no-underline">
+        <div className="bg-gray-800 text-white px-4 py-1.5 flex items-center gap-2 text-sm shrink-0">
+          <a href={backTo} className="text-blue-300 hover:text-white flex items-center gap-1 no-underline">
             <iconify-icon icon="codicon:arrow-left" />
             Back to PR
           </a>
         </div>
       )}
-      <div class="border-b bg-white px-6 py-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <h1 class="text-xl font-bold text-gray-900">
-              <iconify-icon icon="codicon:beaker" class="mr-1.5 text-blue-600" />
+      <div className="border-b bg-white px-6 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-gray-900">
+              <iconify-icon icon="codicon:beaker" className="mr-1.5 text-blue-600" />
               {activeTab === 'lint'
                 ? 'Lint Results'
                 : activeTab === 'bench'
@@ -718,44 +718,44 @@ export function App() {
                     : 'Test Results'}
             </h1>
             {hasContent && (
-              <div class="flex gap-1">
+              <div className="flex gap-1">
                 <button
-                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
                   onClick={() => setExpandAll(true)}
                   title="Expand all"
                 >
-                  <iconify-icon icon="codicon:expand-all" class="mr-0.5" />
+                  <iconify-icon icon="codicon:expand-all" className="mr-0.5" />
                   Expand
                 </button>
                 <button
-                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
                   onClick={() => setExpandAll(false)}
                   title="Collapse all"
                 >
-                  <iconify-icon icon="codicon:collapse-all" class="mr-0.5" />
+                  <iconify-icon icon="codicon:collapse-all" className="mr-0.5" />
                   Collapse
                 </button>
               </div>
             )}
             {canGlobalStop && (
               <button
-                class="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={onStopAll}
                 disabled={stopBusyKey !== null}
                 title="Stop the active run"
               >
-                <iconify-icon icon="codicon:debug-stop" class="mr-0.5" />
+                <iconify-icon icon="codicon:debug-stop" className="mr-0.5" />
                 {stopBusyKey === '__global__' ? 'Stopping...' : 'Stop'}
               </button>
             )}
-            <span class="text-sm text-gray-400">{status}</span>
+            <span className="text-sm text-gray-400">{status}</span>
           </div>
-          <div class="flex items-center gap-3">
+          <div className="flex items-center gap-3">
             {canExportCurrentView && (
-              <div class="flex gap-1">
+              <div className="flex gap-1">
                 <DownloadMenu routeState={wholeResultRouteState} align="right" title="Download the whole result as JSON or Markdown" />
                 <button
-                  class={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
+                  className={`text-xs px-2 py-1 rounded border transition-colors flex items-center gap-1 ${
                     copyState === 'error'
                       ? 'border-red-300 text-red-700 bg-red-50 hover:bg-red-100'
                       : copyState === 'copied'
@@ -775,7 +775,7 @@ export function App() {
         </div>
 
         {showTabs && (
-          <div class="mt-2 flex items-center gap-1 border-b border-gray-200 -mx-6 px-6">
+          <div className="mt-2 flex items-center gap-1 border-b border-gray-200 -mx-6 px-6">
             <TabButton
               active={activeTab === 'tests'}
               onClick={() => onTabChange('tests')}
@@ -818,12 +818,12 @@ export function App() {
         )}
 
         {activeTab === 'tests' && displayedTests.length > 0 && (
-          <div class="mt-2">
+          <div className="mt-2">
             <FilterBar filters={filters} onChange={onTestFiltersChange} counts={totals} frameworks={frameworks} />
           </div>
         )}
         {activeTab === 'lint' && lintRun && (
-          <div class="mt-2">
+          <div className="mt-2">
             <LintFilterBar
               lint={lint}
               grouping={lintGrouping}
@@ -845,13 +845,13 @@ export function App() {
                   <TestNode key={i} test={t} depth={0} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusyKey !== null} />
                 ))}
                 {displayedTests.length === 0 && !done && (
-                  <div class="p-8 text-center text-gray-400">
-                    <iconify-icon icon="svg-spinners:ring-resize" class="text-3xl text-blue-500" />
-                    <p class="mt-2">Waiting for test results...</p>
+                  <div className="p-8 text-center text-gray-400">
+                    <iconify-icon icon="svg-spinners:ring-resize" className="text-3xl text-blue-500" />
+                    <p className="mt-2">Waiting for test results...</p>
                   </div>
                 )}
                 {filteredTests.length === 0 && displayedTests.length > 0 && (
-                  <div class="p-8 text-center text-gray-400 text-sm">
+                  <div className="p-8 text-center text-gray-400 text-sm">
                     No tests match the current filters
                   </div>
                 )}
@@ -896,17 +896,17 @@ function TabButton({ active, onClick, icon, label, count, countColor }: {
 }) {
   return (
     <button
-      class={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border-b-2 -mb-px transition-colors ${
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border-b-2 -mb-px transition-colors ${
         active
           ? 'border-blue-500 text-blue-700 font-semibold'
           : 'border-transparent text-gray-500 hover:text-gray-800'
       }`}
       onClick={onClick}
     >
-      <iconify-icon icon={icon} class="text-base" />
+      <iconify-icon icon={icon} className="text-base" />
       {label}
       {count > 0 && (
-        <span class={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${countColor}`}>
+        <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold text-white ${countColor}`}>
           {count}
         </span>
       )}

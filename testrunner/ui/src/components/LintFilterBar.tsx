@@ -38,25 +38,25 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange, onGrou
   const hasActive = filters.severity.size > 0 || filters.linter.size > 0;
 
   return (
-    <div class="flex items-center gap-1.5 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap">
       {GROUPING_OPTIONS.map(opt => {
         const active = opt.key === grouping;
         return (
           <button
             key={opt.key}
-            class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${active
+            className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${active
               ? 'bg-blue-50 border-blue-300 text-gray-900 font-medium'
               : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
             onClick={() => onGroupingChange(opt.key)}
             title={`Group by ${opt.label}`}
           >
-            <iconify-icon icon={opt.icon} class="text-sm" />
+            <iconify-icon icon={opt.icon} className="text-sm" />
             {opt.label}
           </button>
         );
       })}
 
-      <span class="text-gray-300 mx-0.5">|</span>
+      <span className="text-gray-300 mx-0.5">|</span>
 
       {SEVERITY_DEFS.map(sd => {
         const count = severityCounts[sd.key];
@@ -65,18 +65,18 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange, onGrou
         return (
           <button
             key={sd.key}
-            class={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, sd.activeBg, sd.activeBorder)}`}
+            className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, sd.activeBg, sd.activeBorder)}`}
             onClick={() => onFiltersChange({ ...filters, severity: cycleFilterState(filters.severity, sd.key) })}
             title={triStateTitle(sd.label, mode)}
           >
             <span
-              class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sd.badge}`}
+              className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${sd.badge}`}
               title={String(count)}
             >
               {formatCount(count)}
             </span>
             <StateMarker mode={mode} />
-            <iconify-icon icon={sd.icon} class="text-sm" />
+            <iconify-icon icon={sd.icon} className="text-sm" />
             {sd.label}
           </button>
         );
@@ -84,20 +84,20 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange, onGrou
 
       {linters.length > 1 && (
         <>
-          <span class="text-gray-300 mx-0.5">|</span>
+          <span className="text-gray-300 mx-0.5">|</span>
           {linters.map(linter => {
             const count = linterCounts[linter] || 0;
             const mode = filters.linter.get(linter);
             return (
               <button
                 key={linter}
-                class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, 'bg-gray-100', 'border-gray-400')}`}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${triStateClasses(mode, 'bg-gray-100', 'border-gray-400')}`}
                 onClick={() => onFiltersChange({ ...filters, linter: cycleFilterState(filters.linter, linter) })}
                 title={triStateTitle(linter, mode)}
               >
                 <StateMarker mode={mode} />
-                <span class="text-[10px] text-gray-500" title={String(count)}>{formatCount(count)}</span>
-                <iconify-icon icon={lintToolIcon(linter)} class="text-sm" />
+                <span className="text-[10px] text-gray-500" title={String(count)}>{formatCount(count)}</span>
+                <iconify-icon icon={lintToolIcon(linter)} className="text-sm" />
                 {linter}
               </button>
             );
@@ -107,7 +107,7 @@ export function LintFilterBar({ lint, grouping, filters, onFiltersChange, onGrou
 
       {hasActive && (
         <button
-          class="text-xs text-gray-400 hover:text-gray-600 ml-1"
+          className="text-xs text-gray-400 hover:text-gray-600 ml-1"
           onClick={() => onFiltersChange({ severity: new Map(), linter: new Map() })}
         >
           Clear
@@ -134,7 +134,7 @@ function triStateTitle(label: string, mode: FilterMode | undefined): string {
 }
 
 function StateMarker({ mode }: { mode: FilterMode | undefined }) {
-  if (mode === 'include') return <iconify-icon icon="codicon:add" class="text-xs" />;
-  if (mode === 'exclude') return <iconify-icon icon="codicon:remove" class="text-xs" />;
-  return <span class="w-2 h-2 rounded-full bg-current opacity-30" />;
+  if (mode === 'include') return <iconify-icon icon="codicon:add" className="text-xs" />;
+  if (mode === 'exclude') return <iconify-icon icon="codicon:remove" className="text-xs" />;
+  return <span className="w-2 h-2 rounded-full bg-current opacity-30" />;
 }
