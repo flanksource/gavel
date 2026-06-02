@@ -159,7 +159,7 @@ tasks:
     cmds:
       - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
     env:
-      CGO_ENABLED: 1
+      CGO_ENABLED: 0
 
   test:unit:
     desc: Run unit tests only
@@ -172,6 +172,8 @@ tasks:
       - go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/hack/' | grep -v '/vendor/')
       - go tool cover -html=coverage.out -o coverage.html
       - echo "Coverage report generated at coverage.html"
+    env:
+      CGO_ENABLED: 0
 
   lint:
     desc: Run linters

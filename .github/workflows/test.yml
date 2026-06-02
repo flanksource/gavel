@@ -44,7 +44,7 @@ jobs:
       - name: Run tests
         run: ./gavel test
         env:
-          CGO_ENABLED: 1
+          CGO_ENABLED: 0
 
   gavel-npm:
     name: "@flanksource/gavel library"
