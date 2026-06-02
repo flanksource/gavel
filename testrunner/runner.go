@@ -1569,7 +1569,9 @@ func (o *TestOrchestrator) augmentBenchArgs(r runners.Runner, pkgPath string, ex
 
 	pattern := strings.TrimSpace(o.Bench)
 	switch pattern {
-	case "", "false":
+	case "false":
+		return extraArgs
+	case "":
 		// Auto-enable only when the package has benchmarks but no runnable tests.
 		if gt.PackageHasBenchmarks(pkgPath) && !gt.PackageHasGoTests(pkgPath) {
 			pattern = "."
