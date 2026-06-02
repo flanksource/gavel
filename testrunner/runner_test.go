@@ -94,6 +94,26 @@ func writeGoTestPackageWithStdout(t *testing.T, repoRoot, pkgDir, modulePath, ma
 	}
 }
 
+func TestPackageIgnored(t *testing.T) {
+	cases := []struct {
+		pkg     string
+		ignore  []string
+		ignored bool
+	}{
+		{pkg: "./bench", ignore: []string{"bench"}, ignored: true},
+		{pkg: "./bench", ignore: []string{"bench/"}, ignored: true},
+		{pkg: "./bench/foo", ignore: []string{"bench"}, ignored: true},
+		{pkg: "./pkg/bench", ignore: []string{"bench"}, ignored: false},
+		{pkg: "./pkg/bench", ignore: []string{"pkg/**"}, ignored: true},
+		{pkg: "./connection", ignore: []string{"bench"}, ignored: false},
+	}
+	for _, tc := range cases {
+		if got := packageIgnored(tc.pkg, tc.ignore); got != tc.ignored {
+			t.Fatalf("packageIgnored(%q, %v) = %v, want %v", tc.pkg, tc.ignore, got, tc.ignored)
+		}
+	}
+}
+
 func TestPackageConcurrency(t *testing.T) {
 	if got := (&TestOrchestrator{RunOptions: RunOptions{Concurrency: 2}}).packageConcurrency(); got != 2 {
 		t.Fatalf("explicit concurrency = %d, want 2", got)
