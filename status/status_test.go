@@ -2,6 +2,8 @@ package status
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -559,6 +561,47 @@ func TestGatherNoSnapshot(t *testing.T) {
 	assert.False(t, result.ResultsStale)
 	assert.Empty(t, result.ResultsSHA)
 	assert.Equal(t, 0, result.Files[0].TestStatus.Failed)
+}
+
+func TestGatherStalePointerMissingSnapshotFile(t *testing.T) {
+	repo := initStatusRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
+	gitRun(t, repo, "add", "a.go")
+
+	restore := stubSnapshot(func(string) (string, string, error) {
+		return "newsha", "ab12cd34", nil
+	}, func(string, string) (*snapshots.Pointer, error) {
+		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
+	}, func(string, *snapshots.Pointer) (*testui.Snapshot, error) {
+		return nil, fmt.Errorf("read snapshot .gavel/sha-oldsha-deadbeef.json: %w", os.ErrNotExist)
+	})
+	defer restore()
+
+	result, err := Gather(repo, Options{NoRepomap: true})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Files[0].TestStatus.Failed)
+	assert.Equal(t, 0, result.Files[0].TestStatus.Passed)
+	assert.False(t, result.Files[0].ResultsStale)
+}
+
+func TestGatherSnapshotLoadErrorPropagates(t *testing.T) {
+	repo := initStatusRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
+	gitRun(t, repo, "add", "a.go")
+
+	wantErr := errors.New("decode snapshot: invalid JSON")
+	restore := stubSnapshot(func(string) (string, string, error) {
+		return "newsha", "ab12cd34", nil
+	}, func(string, string) (*snapshots.Pointer, error) {
+		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
+	}, func(string, *snapshots.Pointer) (*testui.Snapshot, error) {
+		return nil, wantErr
+	})
+	defer restore()
+
+	_, err := Gather(repo, Options{NoRepomap: true})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
 }
 
 func TestPrettyShowsTestLintBadgesAndStaleBanner(t *testing.T) {

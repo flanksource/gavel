@@ -38,10 +38,10 @@ jobs:
         with:
           version: 3.x
 
-      # Build and commit the embedded UI bundles (testui.js / prui.js) so the
-      # release tag carries them. They are gitignored build output, so without
-      # this step a downstream module fetching gavel by tag/SHA fails its
-      # `//go:embed dist/*.js` with "no matching files found".
+      # Build and force-commit the embedded UI bundles (testui.js / prui.js)
+      # so the release tag carries them. They are gitignored, so without this
+      # step a downstream `go get` by tag/SHA fails with
+      # `//go:embed dist/*.js`: "no matching files found".
       - name: Build and commit embedded UI bundles
         run: |
           task test-ui

@@ -497,6 +497,49 @@ func TestParseLogSections(t *testing.T) {
 	assert.Contains(t, sections["Run tests"], "exit status 1")
 }
 
+func TestParseLogSectionsRunStep(t *testing.T) {
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run vp install\n" +
+		"2024-01-15T10:00:01.0000000Z \x1b[36;1mvp install\x1b[0m\n" +
+		"2024-01-15T10:00:02.0000000Z shell: /usr/bin/bash -e {0}\n" +
+		"2024-01-15T10:00:03.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:04.0000000Z Scope: all 5 workspace projects\n" +
+		"2024-01-15T10:00:05.0000000Z  ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\"\n" +
+		"2024-01-15T10:00:06.0000000Z ##[error]Process completed with exit code 1.\n" +
+		"2024-01-15T10:00:07.0000000Z ##[group]Post Run actions/checkout@v4\n" +
+		"2024-01-15T10:00:08.0000000Z Cleaning up\n" +
+		"2024-01-15T10:00:09.0000000Z ##[endgroup]"
+
+	sections := parseLogSections(raw)
+	require.Contains(t, sections, "Run vp install")
+	assert.Contains(t, sections["Run vp install"], "ERR_PNPM_OUTDATED_LOCKFILE")
+	assert.Contains(t, sections["Run vp install"], "Scope: all 5 workspace projects")
+	assert.Contains(t, sections["Run vp install"], "Process completed with exit code 1.")
+	assert.NotContains(t, sections["Run vp install"], "Cleaning up",
+		"post-checkout content belongs to a different section")
+	require.Contains(t, sections, "Post Run actions/checkout@v4")
+	assert.Contains(t, sections["Post Run actions/checkout@v4"], "Cleaning up")
+}
+
+func TestParseLogSectionsRunStepLastGroup(t *testing.T) {
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run vp install\n" +
+		"2024-01-15T10:00:01.0000000Z vp install\n" +
+		"2024-01-15T10:00:02.0000000Z shell: /usr/bin/bash -e {0}\n" +
+		"2024-01-15T10:00:03.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:04.0000000Z ERR_PNPM_OUTDATED_LOCKFILE\n" +
+		"2024-01-15T10:00:05.0000000Z ##[error]Process completed with exit code 1.\n" +
+		"2024-01-15T10:00:06.0000000Z Post job cleanup.\n" +
+		"2024-01-15T10:00:07.0000000Z [command]/usr/bin/git version\n" +
+		"2024-01-15T10:00:08.0000000Z Cleaning up orphan processes"
+
+	sections := parseLogSections(raw)
+	require.Contains(t, sections, "Run vp install")
+	assert.Contains(t, sections["Run vp install"], "ERR_PNPM_OUTDATED_LOCKFILE")
+	assert.NotContains(t, sections["Run vp install"], "Post job cleanup",
+		"post-job cleanup should not leak into step logs")
+	assert.NotContains(t, sections["Run vp install"], "orphan processes",
+		"post-job cleanup should not leak into step logs")
+}
+
 func TestAttachLogsToSteps(t *testing.T) {
 	job := &Job{
 		Name: "test", Conclusion: "failure",

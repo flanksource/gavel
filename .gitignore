@@ -72,13 +72,7 @@ out.*
 .jscpd.json
 .container-sandbox.yaml
 testrunner/ui/dist/
-# Embedded UI bundles are committed so `go:embed` works for downstream
-# consumers fetching this module by tag/SHA (the dist/ dirs are otherwise
-# gitignored build output).
-!testrunner/ui/dist/
-!testrunner/ui/dist/testui.js
-!pr/ui/dist/
-!pr/ui/dist/prui.js
+pr/ui/dist/
 .tmp/
 .claude
 /*.json
