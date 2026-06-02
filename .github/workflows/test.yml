@@ -23,7 +23,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js
+      - name: Set up Node.js and TypeScript
         uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -36,13 +36,57 @@ jobs:
       - name: Build gavel
         run: make build
 
-      - name: Install JS test deps
+      # Node + TypeScript for the jest/vitest/playwright test frameworks and
+      # the tsc lint check live in these UI projects' devDependencies.
+      - name: Install JS deps
         run: |
           npm install --prefix testrunner/ui
+          npm install --prefix pr/ui
           npm ci --prefix site
 
       - name: Run tests
         run: ./gavel test
+        env:
+          CGO_ENABLED: 0
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js and TypeScript
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Build gavel
+        run: make build
+
+      # Node + TypeScript for the tsc / eslint linters live in these UI
+      # projects' devDependencies; install them so gavel lint can run them.
+      - name: Install JS deps
+        run: |
+          npm install --prefix testrunner/ui
+          npm install --prefix pr/ui
+          npm ci --prefix site
+
+      - name: Run linters
+        run: ./gavel lint
         env:
           CGO_ENABLED: 0
 
