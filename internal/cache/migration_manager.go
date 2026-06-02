@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
-	_ "modernc.org/sqlite"
 )
 
 // MigrationManager coordinates migrations across all cache systems

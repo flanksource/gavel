@@ -36,6 +36,31 @@ tasks:
     generates:
       - pr/ui/dist/prui.js
 
+  ui:publish:
+    desc: |
+      Publish the @flanksource/gavel React library to npm (manual initial publish).
+      Uses the version already in testrunner/ui/package.json — it does NOT bump;
+      the release workflow auto patch-bumps subsequent publishes. Requires NPM_TOKEN.
+    dir: testrunner/ui
+    vars:
+      VERSION:
+        sh: node -p "require('./package.json').version"
+    preconditions:
+      - sh: test -n "$NPM_TOKEN"
+        msg: "NPM_TOKEN must be set to publish (export NPM_TOKEN=...)"
+      - sh: 'test -z "$(npm view @flanksource/gavel@{{.VERSION}} version 2>/dev/null)"'
+        msg: "@flanksource/gavel@{{.VERSION}} is already published; bump testrunner/ui/package.json first"
+    env:
+      NODE_AUTH_TOKEN: "$NPM_TOKEN"
+    cmds:
+      - npm ci
+      - npm run check
+      - npm test
+      - npm run build:lib
+      # No --provenance here: it requires a CI OIDC provider (the release
+      # workflow supplies that). Manual local publishes omit it.
+      - npm publish --access public
+
   build:
     desc: Build the binary
     deps:

@@ -7,8 +7,11 @@ import (
 
 	commonsLogger "github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/models"
+	// Pure-Go SQLite gorm dialector (backed by modernc.org/sqlite) so gavel —
+	// and its consumers like oipa-cli — build without CGO. Matches the modernc
+	// driver already used by linter_stats.go / migration_manager.go.
+	"github.com/glebarez/sqlite"
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
