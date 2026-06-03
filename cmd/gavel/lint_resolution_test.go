@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	deps "github.com/flanksource/deps"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/tsc"
@@ -192,6 +193,39 @@ func TestResolveLinterExecutableUsesInstalledGolangciBinary(t *testing.T) {
 	}
 
 	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != installed {
+		t.Fatalf("command = %q, want %q", got, installed)
+	}
+}
+
+func TestResolveLinterExecutableReinstallsInvalidGolangciBinary(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+
+	installed := filepath.Join(repo, ".gavel", executableFileName("golangci-lint"))
+	if err := os.MkdirAll(filepath.Dir(installed), 0o755); err != nil {
+		t.Fatalf("mkdir .gavel: %v", err)
+	}
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\nexit 126\n"), 0o755); err != nil {
+		t.Fatalf("write stale golangci: %v", err)
+	}
+
+	oldInstall := installGolangciLint
+	installGolangciLint = func(ctx context.Context, packageName, version string, opts ...deps.InstallOption) (*deps.InstallResult, error) {
+		if err := os.WriteFile(installed, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			return nil, err
+		}
+		return &deps.InstallResult{BinDir: filepath.Dir(installed)}, nil
+	}
+	t.Cleanup(func() { installGolangciLint = oldInstall })
+
+	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, true, false)
 	if err != nil {
 		t.Fatalf("resolveLinterExecutable: %v", err)
 	}
