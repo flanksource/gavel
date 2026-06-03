@@ -15,6 +15,9 @@ import (
 
 func init() {
 	formatters.RegisterFormatter("html", func(data interface{}, options formatters.FormatOptions) (string, error) {
+		if items, ok := data.([]interface{}); ok && len(items) == 1 {
+			data = items[0]
+		}
 		switch v := data.(type) {
 		case testui.Snapshot:
 			return renderGavelHTMLReport(v), nil
