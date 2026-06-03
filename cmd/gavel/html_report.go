@@ -179,8 +179,21 @@ func collectHTMLPackageSummaries(tests []parsers.Test) []htmlPackageSummary {
 func collectHTMLLintFailures(results []*linters.LinterResult) [][4]string {
 	var rows [][4]string
 	for _, r := range results {
-		if r == nil || r.Skipped {
+		if r == nil {
 			continue
+		}
+		if r.Error != "" {
+			status := "error"
+			if r.Skipped {
+				status = "skipped"
+			} else if r.TimedOut {
+				status = "timed out"
+			}
+			loc := r.CommandLine()
+			if loc == "" {
+				loc = r.WorkDir
+			}
+			rows = append(rows, [4]string{r.Linter, status, loc, r.Error})
 		}
 		for _, v := range r.Violations {
 			rule := ""
