@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/bench"
@@ -313,20 +314,40 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, req routeR
 }
 
 func pageHTML() string {
-	return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Test Results</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
-</head>
-<body>
-    <div id="root"></div>
-    <script>` + bundleJS + `</script>
-</body>
-</html>`
+	return renderHTML(
+		api.HtmlElement{Tag: "", Content: "<!DOCTYPE html>\n"},
+		api.HtmlElement{
+			Tag:        "html",
+			Attributes: map[string]string{"lang": "en"},
+			Content: renderHTML(
+				api.HtmlElement{
+					Tag: "head",
+					Content: renderHTML(
+						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"charset": "UTF-8"}},
+						api.HtmlElement{Tag: "meta", Attributes: map[string]string{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}},
+						api.HtmlElement{Tag: "title", Content: "Test Results"},
+						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://cdn.tailwindcss.com"}},
+						api.HtmlElement{Tag: "script", Attributes: map[string]string{"src": "https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"}},
+					),
+				},
+				api.HtmlElement{
+					Tag: "body",
+					Content: renderHTML(
+						api.HtmlElement{Tag: "div", Attributes: map[string]string{"id": "root"}},
+						api.HtmlElement{Tag: "script", Content: bundleJS},
+					),
+				},
+			),
+		},
+	)
+}
+
+func renderHTML(elements ...api.Textable) string {
+	var b strings.Builder
+	for _, element := range elements {
+		b.WriteString(element.HTML())
+	}
+	return b.String()
 }
 
 func (s *Server) handleJSON(w http.ResponseWriter, _ *http.Request) {
