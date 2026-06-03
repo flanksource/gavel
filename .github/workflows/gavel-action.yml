@@ -24,9 +24,31 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - uses: arduino/setup-task@v2
         with:
           version: 3.x
+
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: site
+
+      - name: Install golangci-lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=v2.11.4
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL "https://github.com/golangci/golangci-lint/releases/download/${version}/golangci-lint-${version#v}-linux-amd64.tar.gz" -o "$tmp/golangci-lint.tar.gz"
+          tar -xzf "$tmp/golangci-lint.tar.gz" -C "$tmp"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp/golangci-lint-${version#v}-linux-amd64/golangci-lint" "$HOME/.local/bin/golangci-lint"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/golangci-lint" version
 
       - name: Build gavel from source
         run: |
