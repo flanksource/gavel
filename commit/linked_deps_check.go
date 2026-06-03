@@ -68,6 +68,12 @@ var (
 	interactiveLinkedDepDecider = runPromptLinkedDepDecider
 )
 
+// autoUnstageLinkedDepDecider answers every linked-dep violation with the
+// default action (Unstage), without prompting. Used by `gavel commit -y`.
+func autoUnstageLinkedDepDecider(_ context.Context, _ LinkedDepViolation) (LinkedDepChoice, error) {
+	return LinkedDepChoice{Decision: LinkedDepDecisionUnstage}, nil
+}
+
 // EvaluateLinkedDeps inspects the staged blob of each manifest in stagedFiles
 // and returns every local reference whose resolved filesystem target escapes
 // gitRoot. stagedFiles MUST be repo-relative paths as reported by
@@ -632,13 +638,17 @@ func applyLinkedDepsCheck(ctx context.Context, opts Options, source stagedSource
 		return source, nil
 	}
 
-	outcome, err := RunLinkedDepsCheck(ctx, LinkedDepsParams{
+	params := LinkedDepsParams{
 		WorkDir:     opts.WorkDir,
 		GitRoot:     opts.WorkDir,
 		StagedFiles: source.Files,
 		Changes:     source.Changes,
 		Mode:        opts.PrecommitMode,
-	})
+	}
+	if opts.AssumeYes {
+		params.Decider = autoUnstageLinkedDepDecider
+	}
+	outcome, err := RunLinkedDepsCheck(ctx, params)
 	if err != nil {
 		return source, err
 	}

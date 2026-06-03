@@ -16,7 +16,7 @@ import (
 // configuration the original commit used. On clean it returns
 // lintFindingsAIFixed; on residual violations it re-prompts the user (so
 // they can pick AI Fix again, triage, bypass, or cancel).
-func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcome {
+func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
 		fmt.Fprintln(os.Stderr, "ai-fix: no lint result to operate on")
 		return lintFindingsBlocked
@@ -66,12 +66,19 @@ func runCommitAIFix(workDir string, result *commitpkg.Result) lintFindingsOutcom
 		}
 	}
 
+	// Under -y the AI fix already ran once; recursing would re-trigger AI fix
+	// indefinitely with no human to break the loop. Block instead so the
+	// caller exits non-zero with the residual violations printed above.
+	if assumeYes {
+		return lintFindingsBlocked
+	}
+
 	stub := &commitpkg.Result{Lint: &commitpkg.LintGateResult{
 		Results:    fixRes.FinalResults,
 		Violations: residual,
 		Gates:      result.Lint.Gates,
 	}}
-	return handleCommitLintFindings(workDir, stub)
+	return handleCommitLintFindings(workDir, stub, false)
 }
 
 func uniqueViolationFiles(results []*linters.LinterResult) []string {

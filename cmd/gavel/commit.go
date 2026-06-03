@@ -37,6 +37,7 @@ type CommitOptions struct {
 	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
 	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
 	WorkDir      string `flag:"work-dir" help:"Working directory"`
+	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
 }
 
 func (o CommitOptions) Help() string {
@@ -109,6 +110,7 @@ Examples:
   gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --force                  # skip hooks
+  gavel commit -y                       # auto-unstage linked-dep replacements, auto-AI-fix lint findings
   gavel commit --precommit=fail         # error on gitignore or linked-deps issues
   gavel commit --lint=true              # also run every detected linter on staged files
   gavel commit --lint-secrets=false     # skip the betterleaks secrets scan (default: on)
@@ -151,6 +153,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		LintFlag:        opts.Lint,
 		LintSecretsFlag: opts.LintSecrets,
 		TidyFlag:        opts.Tidy,
+		AssumeYes:       opts.Yes,
 		Config:          cfg.Commit,
 	}
 }
@@ -220,7 +223,7 @@ func runCommit(opts CommitOptions) (any, error) {
 			return nil, nil
 		}
 		if errors.Is(err, commitpkg.ErrLintFindings) {
-			outcome := handleCommitLintFindings(workDir, result)
+			outcome := handleCommitLintFindings(workDir, result, opts.Yes)
 			switch outcome {
 			case lintFindingsContinueOnce:
 				retry := buildCommitOptions(opts, workDir, cfg)
@@ -272,7 +275,7 @@ const (
 // (one-time bypass, no .gavel.yaml change), or cancel. Returns
 // lintFindingsContinueOnce when the caller should retry the commit with the
 // lint gate disabled; otherwise returns lintFindingsBlocked.
-func handleCommitLintFindings(workDir string, result *commitpkg.Result) lintFindingsOutcome {
+func handleCommitLintFindings(workDir string, result *commitpkg.Result, assumeYes bool) lintFindingsOutcome {
 	if result == nil || result.Lint == nil {
 		fmt.Fprintln(os.Stderr, "commit blocked: lint reported violations")
 		return lintFindingsBlocked
@@ -287,9 +290,13 @@ func handleCommitLintFindings(workDir string, result *commitpkg.Result) lintFind
 	}
 	fmt.Fprintf(os.Stderr, "\ncommit blocked: %d lint violation(s)\n", result.Lint.Violations)
 
+	if assumeYes {
+		return runCommitAIFix(workDir, result, true)
+	}
+
 	switch promptLintFindingsAction() {
 	case lintActionAIFix:
-		return runCommitAIFix(workDir, result)
+		return runCommitAIFix(workDir, result, false)
 	case lintActionContinueOnce:
 		return lintFindingsContinueOnce
 	case lintActionCancel:

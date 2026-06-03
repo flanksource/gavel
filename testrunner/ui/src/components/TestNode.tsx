@@ -82,6 +82,13 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
 
         <span className="flex-1" />
 
+        {t.progress && t.progress.total > 0 && !t.passed && !t.failed && (
+          <span className="text-xs text-blue-600 shrink-0 flex items-center gap-1">
+            {t.progress.phase && <span>{t.progress.phase}</span>}
+            <span className="tabular-nums">{t.progress.done}/{t.progress.total}</span>
+          </span>
+        )}
+
         {t.timed_out && (
           <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 shrink-0 flex items-center gap-1">
             <iconify-icon icon="ion:hourglass-outline" className="text-sm" />

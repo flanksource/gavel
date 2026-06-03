@@ -27,6 +27,9 @@ export interface Test {
   // a ClickyDocument shape and are detected by the detail panel.
   detail?: unknown;
   failure_detail?: FailureDetail;
+  // progress is live in-flight progress for a still-running node (e.g. an
+  // intake step being consumed). Cleared on completion.
+  progress?: { phase?: string; done: number; total: number };
 
   // Synthetic node markers (frontend-only). Used to render lint results as tree nodes.
   kind?: 'lint-root' | 'lint-folder' | 'linter' | 'violation' | 'lint-file' | 'lint-rule' | 'lint-rule-group';

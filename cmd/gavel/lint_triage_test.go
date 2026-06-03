@@ -89,7 +89,7 @@ func TestHandleCommitLintFindings_ContinueOnce(t *testing.T) {
 		},
 	}
 
-	got := handleCommitLintFindings(repo, result)
+	got := handleCommitLintFindings(repo, result, false)
 	assert.Equal(t, lintFindingsContinueOnce, got)
 
 	// Continue-once must NOT write any rules to .gavel.yaml.
@@ -116,18 +116,47 @@ func TestHandleCommitLintFindings_Cancel(t *testing.T) {
 		},
 	}
 
-	got := handleCommitLintFindings(repo, result)
+	got := handleCommitLintFindings(repo, result, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 
 	_, err := os.Stat(filepath.Join(repo, ".gavel.yaml"))
 	assert.True(t, os.IsNotExist(err), "cancel must not persist .gavel.yaml")
 }
 
+// With assumeYes the lint-findings prompt must never open; the AI-fix path is
+// taken directly. We use a violation with no file so runCommitAIFix bails at
+// its "no files reported violations" guard before invoking any AI, which keeps
+// the test hermetic while still proving the prompt was bypassed.
+func TestHandleCommitLintFindings_AssumeYesSkipsPrompt(t *testing.T) {
+	prev := promptLintFindingsAction
+	t.Cleanup(func() { promptLintFindingsAction = prev })
+	promptLintFindingsAction = func() lintFindingsAction {
+		t.Fatal("prompt must not be called when assumeYes is set")
+		return lintActionCancel
+	}
+
+	msg := "boom"
+	result := &commitpkg.Result{
+		Lint: &commitpkg.LintGateResult{
+			Violations: 1,
+			Results: []*linters.LinterResult{{
+				Linter: "fake",
+				Violations: []models.Violation{{
+					Source: "fake", File: "", Message: &msg,
+				}},
+			}},
+		},
+	}
+
+	got := handleCommitLintFindings(t.TempDir(), result, true)
+	assert.Equal(t, lintFindingsBlocked, got)
+}
+
 func TestHandleCommitLintFindings_NilResultBlocks(t *testing.T) {
-	got := handleCommitLintFindings(t.TempDir(), nil)
+	got := handleCommitLintFindings(t.TempDir(), nil, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 
-	got = handleCommitLintFindings(t.TempDir(), &commitpkg.Result{Lint: nil})
+	got = handleCommitLintFindings(t.TempDir(), &commitpkg.Result{Lint: nil}, false)
 	assert.Equal(t, lintFindingsBlocked, got)
 }
 

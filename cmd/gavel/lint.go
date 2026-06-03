@@ -64,6 +64,7 @@ type LintOptions struct {
 
 	AIFix         bool `flag:"ai-fix" help:"Invoke the AI configured by 'captain configure' to fix violations and re-lint until clean (or bounded by --ai-fix-max-iterations / --budget)"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max AI→re-lint cycles" default:"3"`
+	Yes           bool `flag:"yes" short:"y" help:"Assume yes: auto-AI-fix lint violations (implies --ai-fix). Does not enable --triage."`
 
 	// Embedded: contributes --model, --backend, --api-key, --no-cache,
 	// --budget, --debug, --max-tokens, --temperature, --permission-mode,
@@ -115,6 +116,7 @@ Examples:
   gavel lint --linters=golangci-lint,ruff
   gavel lint --fix
   gavel lint --triage
+  gavel lint -y                      # auto-AI-fix violations (implies --ai-fix)
   gavel lint ./pkg/...`
 }
 
@@ -126,6 +128,10 @@ func init() {
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
 	}
 }
+
+// resolveAIFix reports whether the AI fix loop should run: either --ai-fix was
+// passed explicitly, or -y/--yes opted into auto-fixing lint violations.
+func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
 func runLint(opts LintOptions) (any, error) {
 	var err error
@@ -230,7 +236,7 @@ func runLint(opts LintOptions) (any, error) {
 		baseline.FilterNewViolations(allResults, baseline.ExtractViolationKeys(baselineSnap.Lint))
 	}
 
-	if opts.AIFix {
+	if resolveAIFix(opts) {
 		fixed, fixErr := runAIFix(opts, allResults)
 		if fixErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", fixErr)

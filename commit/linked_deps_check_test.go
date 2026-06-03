@@ -266,6 +266,43 @@ func TestRunLinkedDepsCheck_Unstage(t *testing.T) {
 	assert.Contains(t, body, "replace foo => ../../escaping")
 }
 
+func TestAutoUnstageLinkedDepDecider(t *testing.T) {
+	choice, err := autoUnstageLinkedDepDecider(context.Background(), LinkedDepViolation{})
+	require.NoError(t, err)
+	assert.Equal(t, LinkedDepDecisionUnstage, choice.Decision)
+}
+
+// applyLinkedDepsCheck with AssumeYes must unstage the offending manifest
+// without ever consulting the interactive decider. We poison the decider so
+// any prompt path fails the test loudly.
+func TestApplyLinkedDepsCheck_AssumeYesUnstagesWithoutPrompt(t *testing.T) {
+	prev := interactiveLinkedDepDecider
+	t.Cleanup(func() { interactiveLinkedDepDecider = prev })
+	interactiveLinkedDepDecider = func(_ context.Context, _ LinkedDepViolation) (LinkedDepChoice, error) {
+		t.Fatal("interactive decider must not run when AssumeYes is set")
+		return LinkedDepChoice{}, nil
+	}
+
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "go.mod", "module example.com/app\n\ngo 1.22\n\nreplace foo => ../../escaping\n")
+	gitRun(t, repo, "add", "go.mod")
+
+	source, err := readStagedSource(repo)
+	require.NoError(t, err)
+	require.Contains(t, source.Files, "go.mod")
+
+	result, err := applyLinkedDepsCheck(context.Background(), Options{
+		AssumeYes:     true,
+		PrecommitMode: IgnoreCheckModePrompt,
+		WorkDir:       repo,
+	}, source)
+	require.NoError(t, err)
+	assert.NotContains(t, result.Files, "go.mod")
+
+	staged := gitOutput(t, repo, "diff", "--cached", "--name-only")
+	assert.NotContains(t, staged, "go.mod")
+}
+
 func TestRunLinkedDepsCheck_IgnoreKeepsFileStaged(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, "go.mod", "module example.com/app\n\ngo 1.22\n\nreplace foo => ../../escaping\n")

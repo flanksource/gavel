@@ -67,6 +67,9 @@ type Options struct {
 	Message       string
 	PrecommitMode string
 	CompatMode    string
+	// AssumeYes auto-answers precommit triage prompts with their default
+	// action: linked-dep violations auto-unstage. Set by `gavel commit -y`.
+	AssumeYes bool
 	// LintFlag and LintSecretsFlag are the raw string forms of --lint and
 	// --lint-secrets. Empty = flag not provided; "true"/"false" override
 	// .gavel.yaml commit.lint.{enabled,secrets}. Strings (not *bool) so the
