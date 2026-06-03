@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	deps "github.com/flanksource/deps"
@@ -95,6 +96,8 @@ func golangciInstalledPath(gitRoot string) string {
 	return filepath.Join(lintToolBinDir(gitRoot), executableFileName("golangci-lint"))
 }
 
+var installGolangciLint = deps.InstallWithContext
+
 func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
 	if path, err := exec.LookPath(linter.Name()); err == nil {
 		return path, "", nil
@@ -103,7 +106,15 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	if linter.Name() == "golangci-lint" {
 		installed := golangciInstalledPath(gitRoot)
 		if info, err := os.Stat(installed); err == nil && !info.IsDir() {
-			return installed, "", nil
+			if dryRun || validateExecutable(ctx, installed) == nil {
+				return installed, "", nil
+			}
+			logger.Warnf("Ignoring stale golangci-lint binary at %s; it could not be executed", installed)
+			if hasDirectConfig {
+				_ = os.Remove(installed)
+			} else {
+				return "", "not found on PATH", nil
+			}
 		}
 		if hasDirectConfig {
 			if dryRun {
@@ -116,7 +127,7 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			result, err := deps.InstallWithContext(ctx, "golangci/golangci-lint", "stable", deps.WithBinDir(binDir))
+			result, err := installGolangciLint(ctx, "golangci/golangci-lint", "stable", deps.WithBinDir(binDir))
 			if err != nil {
 				return "", "", fmt.Errorf("install golangci-lint in %s: %w", binDir, err)
 			}
@@ -132,4 +143,13 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 	}
 
 	return "", "not found on PATH", nil
+}
+
+func validateExecutable(ctx context.Context, path string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(checkCtx, path, "--version").Run()
 }
