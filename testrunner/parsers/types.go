@@ -105,6 +105,18 @@ type Test struct {
 	// it to show side-by-side diffs and a short summary; Message stays as the
 	// canonical raw form so consumers that want the original still see it.
 	FailureDetail *FailureDetail `json:"failure_detail,omitempty"`
+	// Progress carries live in-flight progress for a still-running node (e.g. an
+	// intake step being consumed). Providers set it on each progress tick and
+	// clear it (nil) on completion. Renderers show it inline on the running row.
+	Progress *TestProgress `json:"progress,omitempty"`
+}
+
+// TestProgress is the live phase + count of a still-running test node. Phase is
+// a human label (e.g. "Process"); Done/Total drive an "X/Y" display.
+type TestProgress struct {
+	Phase string `json:"phase,omitempty"`
+	Done  int    `json:"done"`
+	Total int    `json:"total"`
 }
 
 // TestAttempt records one execution of a test: when it ran, on what pid,
