@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"html"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -58,63 +58,68 @@ func renderGavelHTMLReport(s testui.Snapshot) string {
 		totalDuration += pkg.Duration
 	}
 
-	var b strings.Builder
-	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Gavel results</title>")
-	b.WriteString(`<style>
-		body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;color:#172033;background:#f7f8fb}
-		h1{margin-bottom:.25rem}.muted{color:#667085}.cards{display:flex;gap:1rem;flex-wrap:wrap;margin:1.5rem 0}.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1rem 1.25rem;box-shadow:0 1px 2px rgba(16,24,40,.04);min-width:8rem}.metric{font-size:1.6rem;font-weight:700}.ok{color:#15803d}.fail{color:#b91c1c}.skip{color:#a16207}.pending{color:#475569}
-		table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)}th,td{padding:.75rem .9rem;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#f2f4f7;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:#475467}tr:last-child td{border-bottom:0}.num{text-align:right;font-variant-numeric:tabular-nums}.status{font-weight:700}.package{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-		details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}.trace{margin:.75rem 0 0 0;background:#101828;color:#f9fafb;border-radius:8px;padding:1rem;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem}.failure-title{font-weight:700;margin:.5rem 0 .25rem}.lint{margin-top:2rem}.badge{display:inline-block;border-radius:999px;padding:.15rem .5rem;font-size:.75rem;font-weight:700;background:#eef2ff;color:#3730a3}
-	</style>`)
-	b.WriteString("</head><body>")
-	b.WriteString("<h1>Gavel results</h1>")
+	body := []api.Textable{el("h1", nil, txt("Gavel results"))}
 	if s.Git != nil && s.Git.SHA != "" {
-		b.WriteString(fmt.Sprintf("<div class=\"muted\">%s @ %s</div>", esc(s.Git.Repo), esc(shortSHA(s.Git.SHA))))
+		body = append(body, el("div", attrs("class", "muted"), txt(s.Git.Repo+" @ "+shortSHA(s.Git.SHA))))
 	}
-	b.WriteString("<div class=\"cards\">")
-	metric(&b, "Passed", totalPassed, "ok")
-	metric(&b, "Failed", totalFailed, "fail")
-	metric(&b, "Skipped", totalSkipped, "skip")
-	metric(&b, "Pending", totalPending, "pending")
-	b.WriteString(fmt.Sprintf("<div class=\"card\"><div class=\"muted\">Duration</div><div class=\"metric\">%s</div></div>", esc(formatHTMLDuration(totalDuration))))
-	b.WriteString("</div>")
 
-	b.WriteString("<h2>Packages</h2><table><thead><tr><th>Status</th><th>Package</th><th>Framework</th><th class=\"num\">Pass</th><th class=\"num\">Fail</th><th class=\"num\">Skip</th><th class=\"num\">Duration</th></tr></thead><tbody>")
-	for _, pkg := range pkgs {
-		status, cls := packageStatus(pkg)
-		b.WriteString("<tr>")
-		b.WriteString(fmt.Sprintf("<td class=\"status %s\">%s</td>", cls, status))
-		b.WriteString("<td class=\"package\">")
-		if len(pkg.Failures) > 0 {
-			b.WriteString("<details><summary>")
-			b.WriteString(esc(pkg.Package))
-			b.WriteString(" <span class=\"badge\">details</span></summary>")
-			for _, failure := range pkg.Failures {
-				b.WriteString("<div class=\"failure-title\">")
-				b.WriteString(esc(testDisplayName(failure)))
-				b.WriteString("</div><pre class=\"trace\">")
-				b.WriteString(esc(testTrace(failure)))
-				b.WriteString("</pre>")
-			}
-			b.WriteString("</details>")
-		} else {
-			b.WriteString(esc(pkg.Package))
-		}
-		b.WriteString("</td>")
-		b.WriteString(fmt.Sprintf("<td>%s</td><td class=\"num ok\">%d</td><td class=\"num fail\">%d</td><td class=\"num skip\">%d</td><td class=\"num\">%s</td>", esc(pkg.Framework), pkg.Passed, pkg.Failed, pkg.Skipped, esc(formatHTMLDuration(pkg.Duration))))
-		b.WriteString("</tr>")
-	}
-	b.WriteString("</tbody></table>")
+	body = append(body, el("div", attrs("class", "cards"),
+		metricCard("Passed", totalPassed, "ok"),
+		metricCard("Failed", totalFailed, "fail"),
+		metricCard("Skipped", totalSkipped, "skip"),
+		metricCard("Pending", totalPending, "pending"),
+		el("div", attrs("class", "card"),
+			el("div", attrs("class", "muted"), txt("Duration")),
+			el("div", attrs("class", "metric"), txt(formatHTMLDuration(totalDuration))),
+		),
+	))
+
+	body = append(body,
+		el("h2", nil, txt("Packages")),
+		el("table", nil,
+			el("thead", nil,
+				el("tr", nil,
+					el("th", nil, txt("Status")),
+					el("th", nil, txt("Package")),
+					el("th", nil, txt("Framework")),
+					el("th", attrs("class", "num"), txt("Pass")),
+					el("th", attrs("class", "num"), txt("Fail")),
+					el("th", attrs("class", "num"), txt("Skip")),
+					el("th", attrs("class", "num"), txt("Duration")),
+				),
+			),
+			el("tbody", nil, packageRows(pkgs)...),
+		),
+	)
 
 	if len(lintFailures) > 0 {
-		b.WriteString("<div class=\"lint\"><h2>Lint</h2><table><thead><tr><th>Linter</th><th>Rule</th><th>File</th><th>Message</th></tr></thead><tbody>")
-		for _, row := range lintFailures {
-			b.WriteString("<tr><td>" + esc(row[0]) + "</td><td>" + esc(row[1]) + "</td><td class=\"package\">" + esc(row[2]) + "</td><td>" + esc(row[3]) + "</td></tr>")
-		}
-		b.WriteString("</tbody></table></div>")
+		body = append(body, el("div", attrs("class", "lint"),
+			el("h2", nil, txt("Lint")),
+			el("table", nil,
+				el("thead", nil,
+					el("tr", nil,
+						el("th", nil, txt("Linter")),
+						el("th", nil, txt("Rule")),
+						el("th", nil, txt("File")),
+						el("th", nil, txt("Message")),
+					),
+				),
+				el("tbody", nil, lintRows(lintFailures)...),
+			),
+		))
 	}
-	b.WriteString("</body></html>")
-	return b.String()
+
+	return renderHTML(
+		raw("<!doctype html>"),
+		el("html", nil,
+			el("head", nil,
+				el("meta", attrs("charset", "utf-8")),
+				el("title", nil, txt("Gavel results")),
+				el("style", nil, raw(reportCSS)),
+			),
+			el("body", nil, body...),
+		),
+	)
 }
 
 func collectHTMLPackageSummaries(tests []parsers.Test) []htmlPackageSummary {
@@ -196,8 +201,62 @@ func collectHTMLLintFailures(results []*linters.LinterResult) [][4]string {
 	return rows
 }
 
-func metric(b *strings.Builder, label string, value int, cls string) {
-	b.WriteString(fmt.Sprintf("<div class=\"card\"><div class=\"muted\">%s</div><div class=\"metric %s\">%d</div></div>", label, cls, value))
+const reportCSS = `
+	body{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;color:#172033;background:#f7f8fb}
+	h1{margin-bottom:.25rem}.muted{color:#667085}.cards{display:flex;gap:1rem;flex-wrap:wrap;margin:1.5rem 0}.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1rem 1.25rem;box-shadow:0 1px 2px rgba(16,24,40,.04);min-width:8rem}.metric{font-size:1.6rem;font-weight:700}.ok{color:#15803d}.fail{color:#b91c1c}.skip{color:#a16207}.pending{color:#475569}
+	table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04)}th,td{padding:.75rem .9rem;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top}th{background:#f2f4f7;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:#475467}tr:last-child td{border-bottom:0}.num{text-align:right;font-variant-numeric:tabular-nums}.status{font-weight:700}.package{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+	details summary{cursor:pointer;list-style:none}details summary::-webkit-details-marker{display:none}.trace{margin:.75rem 0 0 0;background:#101828;color:#f9fafb;border-radius:8px;padding:1rem;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem}.failure-title{font-weight:700;margin:.5rem 0 .25rem}.lint{margin-top:2rem}.badge{display:inline-block;border-radius:999px;padding:.15rem .5rem;font-size:.75rem;font-weight:700;background:#eef2ff;color:#3730a3}
+`
+
+func packageRows(pkgs []htmlPackageSummary) []api.Textable {
+	rows := make([]api.Textable, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		status, cls := packageStatus(pkg)
+		rows = append(rows, el("tr", nil,
+			el("td", attrs("class", "status "+cls), txt(status)),
+			el("td", attrs("class", "package"), packageCell(pkg)),
+			el("td", nil, txt(pkg.Framework)),
+			el("td", attrs("class", "num ok"), txt(fmt.Sprintf("%d", pkg.Passed))),
+			el("td", attrs("class", "num fail"), txt(fmt.Sprintf("%d", pkg.Failed))),
+			el("td", attrs("class", "num skip"), txt(fmt.Sprintf("%d", pkg.Skipped))),
+			el("td", attrs("class", "num"), txt(formatHTMLDuration(pkg.Duration))),
+		))
+	}
+	return rows
+}
+
+func packageCell(pkg htmlPackageSummary) api.Textable {
+	if len(pkg.Failures) == 0 {
+		return txt(pkg.Package)
+	}
+	content := []api.Textable{el("summary", nil, txt(pkg.Package), txt(" "), el("span", attrs("class", "badge"), txt("details")))}
+	for _, failure := range pkg.Failures {
+		content = append(content,
+			el("div", attrs("class", "failure-title"), txt(testDisplayName(failure))),
+			el("pre", attrs("class", "trace"), txt(testTrace(failure))),
+		)
+	}
+	return el("details", nil, content...)
+}
+
+func lintRows(rows [][4]string) []api.Textable {
+	out := make([]api.Textable, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, el("tr", nil,
+			el("td", nil, txt(row[0])),
+			el("td", nil, txt(row[1])),
+			el("td", attrs("class", "package"), txt(row[2])),
+			el("td", nil, txt(row[3])),
+		))
+	}
+	return out
+}
+
+func metricCard(label string, value int, cls string) api.Textable {
+	return el("div", attrs("class", "card"),
+		el("div", attrs("class", "muted"), txt(label)),
+		el("div", attrs("class", "metric "+cls), txt(fmt.Sprintf("%d", value))),
+	)
 }
 
 func packageStatus(pkg htmlPackageSummary) (string, string) {
@@ -253,7 +312,44 @@ func testTrace(t parsers.Test) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func esc(s string) string { return html.EscapeString(s) }
+func renderHTML(elements ...api.Textable) string {
+	var b strings.Builder
+	for _, element := range elements {
+		b.WriteString(element.HTML())
+	}
+	// api.HtmlElement currently renders an extra space for tags with no
+	// attributes (for example, <h2 >). Normalize it so generated reports remain
+	// clean and existing fixture-free checks keep matching exact headings.
+	return strings.ReplaceAll(b.String(), " >", ">")
+}
+
+func el(tag string, attributes map[string]string, children ...api.Textable) api.HtmlElement {
+	return api.HtmlElement{Tag: tag, Attributes: attributes, Content: renderHTML(children...), Fallback: api.Text{Content: renderPlain(children...)}}
+}
+
+func raw(content string) api.HtmlElement {
+	return api.HtmlElement{Tag: "", Content: content, Fallback: api.Text{Content: content}}
+}
+
+func txt(content string) api.Text {
+	return api.Text{Content: content}
+}
+
+func attrs(keyValues ...string) map[string]string {
+	attributes := make(map[string]string, len(keyValues)/2)
+	for i := 0; i+1 < len(keyValues); i += 2 {
+		attributes[keyValues[i]] = keyValues[i+1]
+	}
+	return attributes
+}
+
+func renderPlain(elements ...api.Textable) string {
+	var b strings.Builder
+	for _, element := range elements {
+		b.WriteString(element.String())
+	}
+	return b.String()
+}
 
 func shortSHA(s string) string {
 	if len(s) > 12 {
