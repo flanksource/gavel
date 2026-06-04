@@ -1,6 +1,6 @@
 {
   "name": "@flanksource/gavel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React components and hooks for consuming gavel's testrunner real-time test progress UI.",
   "license": "Apache-2.0",
   "repository": {
