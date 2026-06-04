@@ -14,6 +14,10 @@ export interface Test {
   failed?: boolean;
   passed?: boolean;
   pending?: boolean;
+  // running marks a node whose execution has started but not yet finished —
+  // distinct from pending (queued/not-yet-started). Renderers show running with
+  // an active spinner and pending with a static hollow icon.
+  running?: boolean;
   timed_out?: boolean;
   task_id?: string;
   can_stop?: boolean;
@@ -103,6 +107,7 @@ export interface TestSummary {
   Failed: number;
   Skipped: number;
   Pending: number;
+  Running?: number;
   Duration: number;
 }
 

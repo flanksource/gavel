@@ -48,6 +48,9 @@ type Snapshot struct {
 	Diagnostics *DiagnosticsSnapshot    `json:"diagnostics,omitempty"`
 }
 
+// Pretty is the root label of the tree clicky renders for serialized formats
+// (html, markdown, …). GetChildren hangs the Tests/Lint sections beneath it, so
+// this stays the overall roll-up while each section carries its own counts.
 func (s Snapshot) Pretty() api.Text {
 	return parsers.Tests(s.Tests).Sum().Pretty()
 }

@@ -78,3 +78,4 @@ pr/ui/dist/
 /*.json
 .gavel/
 .vitest/
+testrunner/ui/dist/testui.js

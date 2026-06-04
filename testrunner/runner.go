@@ -142,7 +142,7 @@ type RunOptions struct {
 	Updates       chan<- []parsers.Test `json:"-"`                                                            // Channel for streaming test result updates to UI
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind       string                `json:"run_kind,omitempty"`                                           // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
-	SummaryOut    *parsers.TestSummary  `json:"-"`                                                            // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning. Lets CLI callers print an end-of-run summary without losing the passed-test counts that the returned tree filters out.
+	SummaryOut    *parsers.TestSummary  `json:"-"`                                                            // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -589,27 +589,13 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	if err != nil {
 		return nil, err
 	}
+	// Return the complete, unmutated tree. --show-passed / --show-stdout /
+	// --show-stderr are presentation concerns applied at pretty-print time
+	// (cmd/gavel/test.go), never here — filtering or clearing stdout/stderr at
+	// the runner level would make the JSON/UI snapshot lossy.
 	tests := []parsers.Test{}
-	showAll := opts.UI || opts.ShowPassed
 	for _, result := range results {
-		for _, test := range result.Tests {
-			// Keep everything non-passing so the CLI can enumerate failures,
-			// timeouts, and skips in the end-of-run details block. Showing
-			// the full tree when --ui or --show-passed still wins.
-			keep := showAll || test.Failed || test.TimedOut || test.Skipped || test.Pending
-			if !keep {
-				continue
-			}
-			if !opts.UI {
-				if !opts.ShowStdout.ShouldShow(test.Failed) {
-					test.Stdout = ""
-				}
-				if !opts.ShowStderr.ShouldShow(test.Failed) {
-					test.Stderr = ""
-				}
-			}
-			tests = append(tests, test)
-		}
+		tests = append(tests, result.Tests...)
 	}
 
 	// Build hierarchical tree from flat test results
