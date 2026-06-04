@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     # Auto patch-bump and publish the React library on every push to main, but
     # skip the runs triggered by our own bump commit so it does not loop.
-    if: ${{ !contains(github.event.head_commit.message, 'chore(release): @flanksource/gavel') }}
+    if: "${{ !contains(github.event.head_commit.message, 'chore(release): @flanksource/gavel') }}"
     permissions:
       contents: write
       id-token: write
