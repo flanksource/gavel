@@ -39,6 +39,10 @@ jobs:
           cache: npm
           cache-dependency-path: testrunner/ui/package-lock.json
 
+      # OIDC trusted publishing (same mechanism as @flanksource/clicky-ui)
+      # needs npm >= 11.5.1; the Node 22 bundled npm is too old.
+      - run: npm install -g npm@latest
+
       - run: npm ci
       - run: npm run check
       - run: npm test
@@ -51,10 +55,13 @@ jobs:
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # Authenticate via the GitHub Actions OIDC identity (id-token: write)
+      # configured as a trusted publisher for @flanksource/gavel on npmjs.com —
+      # no NPM_TOKEN secret required.
       - name: Publish to npm
         run: npm publish --access public --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
 
       - name: Commit and tag the version bump
         env:
