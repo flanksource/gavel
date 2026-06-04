@@ -1,0 +1,68 @@
+name: Publish npm library
+
+# Publish @flanksource/gavel to npm whenever the React library source under
+# testrunner/ui/ changes on main. The job's own version-bump commit touches
+# testrunner/ui/package.json, but pushes made with GITHUB_TOKEN do not trigger
+# new workflow runs, so the path filter is loop-safe without a commit-message
+# guard.
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "testrunner/ui/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  publish-gavel-npm:
+    name: Publish @flanksource/gavel to npm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: testrunner/ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: testrunner/ui/package-lock.json
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build:lib
+
+      - name: Patch-bump version
+        id: bump
+        run: |
+          npm version patch --no-git-tag-version
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Commit and tag the version bump
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): @flanksource/gavel@${VERSION}"
+          git tag "gavel-npm-v${VERSION}"
+          git push origin "HEAD:${{ github.ref_name }}" --follow-tags
