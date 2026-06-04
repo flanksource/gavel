@@ -313,9 +313,10 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		clicky.StopCapturingOutput()
 		clicky.WaitForGlobalCompletion()
 		if tests, ok := result.([]parsers.Test); ok {
-			printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
+			printTestRunResults(tests, opts, fullSummary, lintResults)
+		} else if isPrettyFormat() {
+			printTestRunSummary(fullSummary, lintResults)
 		}
-		printTestRunSummary(fullSummary, lintResults)
 		return result, err
 	}
 	if tests, ok := result.([]parsers.Test); ok {
@@ -352,8 +353,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 					logger.Warnf("Detached UI handoff failed: %v", err)
 				}
 				clicky.StopCapturingOutput()
-				printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
-				printTestRunSummary(fullSummary, lintResults)
+				printTestRunResults(tests, opts, fullSummary, lintResults)
 				return nil, nil
 			}
 			// Release the stdout/stderr capture before we block on SIGINT:
@@ -368,8 +368,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			// stdout/stderr for live inspection; the terminal render is
 			// gated by --show-stdout / --show-stderr so CI logs don't get
 			// flooded unless the user opts in.
-			printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
-			printTestRunSummary(fullSummary, lintResults)
+			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
 			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
@@ -404,8 +403,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		// details + summary, not after.
 		clicky.StopCapturingOutput()
 		clicky.WaitForGlobalCompletion()
-		printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr)
-		printTestRunSummary(fullSummary, lintResults)
+		printTestRunResults(tests, opts, fullSummary, lintResults)
 		// For pretty (terminal) output, return nil so clicky doesn't also
 		// render Snapshot.Pretty() — a one-line duplicate of the summary
 		// already printed above. For a serialized format (--format json=...,
@@ -546,7 +544,7 @@ func finishHookTest(idx int, dur time.Duration, output string, runErr error) {
 // Each section is elided when empty so passing runs stay quiet. Called from
 // every non-UI exit path so the user sees what went wrong without having
 // to scroll back through the streaming task pane.
-func printTestRunDetails(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode) {
+func printTestRunDetails(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode, showPassed bool) {
 	failed := collectLeaves(tests, func(t parsers.Test) bool {
 		return t.Failed && !t.TimedOut
 	})
@@ -571,9 +569,36 @@ func printTestRunDetails(tests []parsers.Test, showStdout, showStderr testrunner
 		}
 	}
 
+	// --show-passed surfaces passing leaves in the terminal. The runner now
+	// always returns them; without the flag they stay elided so passing runs
+	// remain quiet. stdout/stderr for passes follow the same --show-stdout /
+	// --show-stderr gates (failed=false), matching the failure sections.
+	if showPassed {
+		printSection("Passed tests", "text-green-600", passingLeavesForDisplay(tests, showStdout, showStderr), false)
+	}
+
 	printSection("Test failures", "text-red-600", failed, true)
 	printSection("Test timeouts", "text-amber-600", timedOut, true)
 	printSection("Skipped tests", "text-yellow-500", skipped, false)
+}
+
+// passingLeavesForDisplay returns the passing leaf tests to render under
+// --show-passed, with stdout/stderr masked per --show-stdout / --show-stderr
+// (evaluated as failed=false). Split out so the gating is unit-testable without
+// capturing printTestRunDetails' stdout.
+func passingLeavesForDisplay(tests []parsers.Test, showStdout, showStderr testrunner.OutputMode) []parsers.Test {
+	passed := collectLeaves(tests, func(t parsers.Test) bool {
+		return t.Passed && !t.Failed && !t.TimedOut && !t.Skipped && !t.Pending
+	})
+	for i := range passed {
+		if !showStdout.ShouldShow(false) {
+			passed[i].Stdout = ""
+		}
+		if !showStderr.ShouldShow(false) {
+			passed[i].Stderr = ""
+		}
+	}
+	return passed
 }
 
 // printTestRunSummary writes the end-of-run summary block that mirrors
@@ -640,10 +665,30 @@ func collectLeaves(tests []parsers.Test, pred func(parsers.Test) bool) []parsers
 // `gavel summary` and the GitHub Action consume — returning nil there yields a
 // bare `null` file.
 func testRunReturnValue(snapshot testui.Snapshot) any {
-	if clicky.Flags.ResolveFormat() == "pretty" {
+	if isPrettyFormat() {
 		return nil
 	}
 	return snapshot
+}
+
+// isPrettyFormat reports whether the run targets terminal (pretty) output. The
+// eager printTestRunDetails / printTestRunSummary calls only belong on the
+// pretty path; for a serialized format (markdown, html, json, yaml, …) the
+// returned Snapshot tree is the sole output, so printing the section breakdown
+// would emit free-floating, unattached lines above the document clicky renders.
+func isPrettyFormat() bool {
+	return clicky.Flags.ResolveFormat() == "pretty"
+}
+
+// printTestRunResults emits the terminal breakdown + summary, but only for
+// pretty output. Serialized formats get the structured Snapshot tree instead,
+// so this is a no-op there to keep the rendered document clean.
+func printTestRunResults(tests []parsers.Test, opts testrunner.RunOptions, summary parsers.TestSummary, lintResults []*linters.LinterResult) {
+	if !isPrettyFormat() {
+		return
+	}
+	printTestRunDetails(tests, opts.ShowStdout, opts.ShowStderr, opts.ShowPassed)
+	printTestRunSummary(summary, lintResults)
 }
 
 // publishHookSnapshotToUI flushes the current hookTests slice to the UI

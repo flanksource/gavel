@@ -75,6 +75,12 @@ type Test struct {
 	Failed      bool          `json:"failed,omitempty"`
 	Passed      bool          `json:"passed,omitempty"`
 	Pending     bool          `json:"pending,omitempty"`
+	// Running marks a node whose execution has started but not yet finished.
+	// It is distinct from Pending, which means queued/not-yet-started. A
+	// provider sets Running when it begins a node and clears it on the
+	// terminal Passed/Failed/Skipped transition; renderers show Running with
+	// an active spinner and Pending with a static hollow icon.
+	Running bool `json:"running,omitempty"`
 	Cached      bool          `json:"cached,omitempty"`    // True when this result came from gavel's run-cache, not a fresh run
 	TimedOut    bool          `json:"timed_out,omitempty"` // True when the test package subprocess was killed by the --test-timeout or --timeout supervisor
 	TaskID      string        `json:"task_id,omitempty"`
@@ -442,6 +448,8 @@ func (tr Test) Sum() TestSummary {
 		summary.Skipped = 1
 	} else if tr.Passed {
 		summary.Passed = 1
+	} else if tr.Running {
+		summary.Running = 1
 	} else if tr.Pending {
 		summary.Pending = 1
 	} else {
@@ -455,6 +463,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Failed += childSummary.Failed
 		summary.Skipped += childSummary.Skipped
 		summary.Pending += childSummary.Pending
+		summary.Running += childSummary.Running
 		summary.Duration += childSummary.Duration
 	}
 
@@ -579,6 +588,7 @@ type TestSummary struct {
 	Failed   int
 	Skipped  int
 	Pending  int
+	Running  int
 	Duration time.Duration
 }
 
@@ -594,6 +604,12 @@ func (s TestSummary) Pretty() api.Text {
 	if s.Skipped > 0 {
 		t = t.Add(clicky.KeyValue(" skipped", s.Skipped, "text-yellow-500")).Append(" ")
 	}
+	if s.Running > 0 {
+		t = t.Add(clicky.KeyValue(" running", s.Running, "text-blue-500")).Append(" ")
+	}
+	if s.Pending > 0 {
+		t = t.Add(clicky.KeyValue(" queued", s.Pending, "muted")).Append(" ")
+	}
 	t = t.Add(clicky.KeyValue(" total", s.Total, "muted"))
 	t = t.Add(clicky.KeyValue(" duration", s.Duration, "muted"))
 	return t
@@ -606,6 +622,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Failed:   tr.Failed + other.Failed,
 		Skipped:  tr.Skipped + other.Skipped,
 		Pending:  tr.Pending + other.Pending,
+		Running:  tr.Running + other.Running,
 		Duration: tr.Duration + other.Duration,
 	}
 }

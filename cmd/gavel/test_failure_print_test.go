@@ -32,6 +32,33 @@ func TestCollectLeavesReturnsLeafFailuresOnly(t *testing.T) {
 	}
 }
 
+func TestPassingLeavesForDisplaySelectsPassesAndMasksStdout(t *testing.T) {
+	tree := []parsers.Test{{
+		Name: "pkg",
+		Children: []parsers.Test{
+			{Name: "passing", Passed: true, Stdout: "hello", Stderr: "warn"},
+			{Name: "failing", Failed: true, Stdout: "boom"},
+			{Name: "skipped", Skipped: true},
+		},
+	}}
+
+	// Default OnFailure: passing leaf is selected but its streams are masked,
+	// since a pass evaluates ShouldShow(false) == false.
+	masked := passingLeavesForDisplay(tree, testrunner.OutputOnFailure, testrunner.OutputOnFailure)
+	if len(masked) != 1 || masked[0].Name != "passing" {
+		t.Fatalf("want only the passing leaf, got %+v", masked)
+	}
+	if masked[0].Stdout != "" || masked[0].Stderr != "" {
+		t.Errorf("OnFailure must mask streams for a passing test, got stdout=%q stderr=%q", masked[0].Stdout, masked[0].Stderr)
+	}
+
+	// Always: the passing leaf keeps its captured streams.
+	kept := passingLeavesForDisplay(tree, testrunner.OutputAlways, testrunner.OutputAlways)
+	if len(kept) != 1 || kept[0].Stdout != "hello" || kept[0].Stderr != "warn" {
+		t.Fatalf("Always must keep passing streams, got %+v", kept)
+	}
+}
+
 func TestOutputModeShouldShowContract(t *testing.T) {
 	// Exercise the OutputMode filter contract that the failure-detail
 	// printers rely on: OnFailure keeps streams for a failing test and

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,44 @@ func collectPackagePaths(tests []parsers.Test, seen map[string]bool) {
 		if len(test.Children) > 0 {
 			collectPackagePaths(test.Children, seen)
 		}
+	}
+}
+
+// collectLeavesMatching returns every leaf node (no children) satisfying pred,
+// mirroring cmd/gavel's collectLeaves so runner tests can assert on individual
+// test identities rather than suite-level rollups.
+func collectLeavesMatching(tests []parsers.Test, pred func(parsers.Test) bool) []parsers.Test {
+	var out []parsers.Test
+	for _, t := range tests {
+		if len(t.Children) == 0 {
+			if pred(t) {
+				out = append(out, t)
+			}
+			continue
+		}
+		out = append(out, collectLeavesMatching(t.Children, pred)...)
+	}
+	return out
+}
+
+// writeGoTestPackageWithStdout writes a single-package Go module whose passing
+// test prints a known marker to stdout, letting tests assert that the runner
+// preserves captured stdout in the returned tree.
+func writeGoTestPackageWithStdout(t *testing.T, repoRoot, pkgDir, modulePath, marker string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("create git dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "go.mod"), []byte("module "+modulePath+"\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	fullPkgDir := filepath.Join(repoRoot, pkgDir)
+	if err := os.MkdirAll(fullPkgDir, 0o755); err != nil {
+		t.Fatalf("create package dir: %v", err)
+	}
+	content := fmt.Sprintf("package sample\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc TestPass(t *testing.T) {\n\tfmt.Println(%q)\n}\n", marker)
+	if err := os.WriteFile(filepath.Join(fullPkgDir, "sample_test.go"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
 	}
 }
 
@@ -418,7 +457,6 @@ func TestRunMultiRootWrapsExecutionRootsInFinalTree(t *testing.T) {
 	result, err := Run(RunOptions{
 		WorkDir:       parent,
 		StartingPaths: []string{filepath.Join(repoA, "pkg1"), filepath.Join(repoB, "pkg2")},
-		ShowPassed:    true,
 	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -486,6 +524,64 @@ func TestExecutionRootLabelPrefersProjectMetadata(t *testing.T) {
 			t.Fatalf("executionRootLabel() = %q, want ./tools/", got)
 		}
 	})
+}
+
+// The runner always returns the complete tree — passing tests included —
+// regardless of any --show-* flag. Those flags are presentation concerns
+// applied at pretty-print time, so they must never prune the runner's output
+// (which also feeds the JSON and UI snapshots). This is the regression guard
+// for "--show-* fields should not affect --json output".
+func TestRunSingleRootKeepsPassingTests(t *testing.T) {
+	repo := t.TempDir()
+	writeGoTestPackage(t, repo, "pkg1", "example.com/repo")
+
+	result, err := Run(RunOptions{
+		WorkDir:       repo,
+		StartingPaths: []string{filepath.Join(repo, "pkg1")},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	tests, ok := result.([]parsers.Test)
+	if !ok {
+		t.Fatalf("Run returned %T, want []parsers.Test", result)
+	}
+
+	passing := collectLeavesMatching(tests, func(tt parsers.Test) bool { return tt.Passed })
+	if len(passing) == 0 {
+		t.Fatalf("runner must keep passing tests in the returned tree with no --show-* flags, got none: %+v", tests)
+	}
+}
+
+// With the default --show-stdout=OnFailure, a passing test's stdout must still
+// survive in the runner's returned tree: --show-stdout governs terminal
+// rendering only and must not strip stdout from the JSON/UI snapshot.
+func TestRunSingleRootPreservesPassingStdout(t *testing.T) {
+	repo := t.TempDir()
+	const marker = "gavel-stdout-marker-7f3a"
+	writeGoTestPackageWithStdout(t, repo, "pkg1", "example.com/repo", marker)
+
+	result, err := Run(RunOptions{
+		WorkDir:       repo,
+		StartingPaths: []string{filepath.Join(repo, "pkg1")},
+		ShowStdout:    OutputOnFailure,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	tests, ok := result.([]parsers.Test)
+	if !ok {
+		t.Fatalf("Run returned %T, want []parsers.Test", result)
+	}
+
+	passing := collectLeavesMatching(tests, func(tt parsers.Test) bool {
+		return tt.Passed && strings.Contains(tt.Stdout, marker)
+	})
+	if len(passing) == 0 {
+		t.Fatalf("passing test stdout must be preserved with --show-stdout=OnFailure; no leaf contained %q: %+v", marker, tests)
+	}
 }
 
 func TestRunnerNoTests(t *testing.T) {

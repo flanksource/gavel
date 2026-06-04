@@ -10,7 +10,7 @@ export interface Filters {
 interface Props {
   filters: Filters;
   onChange: (f: Filters) => void;
-  counts: { passed: number; failed: number; skipped: number; pending: number; timedout: number };
+  counts: { passed: number; failed: number; skipped: number; pending: number; running: number; timedout: number };
   frameworks: string[];
 }
 
@@ -19,7 +19,8 @@ const STATUS_DEFS: { key: string; label: string; badge: string; activeBg: string
   { key: 'timedout', label: 'Timed out', badge: 'bg-amber-500', activeBg: 'bg-amber-50', activeBorder: 'border-amber-300' },
   { key: 'passed', label: 'Passed', badge: 'bg-green-500', activeBg: 'bg-green-50', activeBorder: 'border-green-300' },
   { key: 'skipped', label: 'Skipped', badge: 'bg-yellow-400', activeBg: 'bg-yellow-50', activeBorder: 'border-yellow-300' },
-  { key: 'pending', label: 'Pending', badge: 'bg-blue-400', activeBg: 'bg-blue-50', activeBorder: 'border-blue-300' },
+  { key: 'running', label: 'Running', badge: 'bg-blue-500', activeBg: 'bg-blue-50', activeBorder: 'border-blue-300' },
+  { key: 'pending', label: 'Queued', badge: 'bg-gray-400', activeBg: 'bg-gray-50', activeBorder: 'border-gray-300' },
 ];
 
 export function FilterBar({ filters, onChange, counts, frameworks }: Props) {

@@ -274,7 +274,7 @@ export function App() {
   }, [tests, snapshotStatus.running, lintRun]);
 
   const totals = useMemo(() => {
-    const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
+    const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
     for (const test of displayedTests) {
       const s = sumNonTaskTests(test);
       t.total += s.total;
@@ -282,6 +282,7 @@ export function App() {
       t.failed += s.failed;
       t.skipped += s.skipped;
       t.pending += s.pending;
+      t.running += s.running;
       t.timedout += s.timedout;
     }
     return t;

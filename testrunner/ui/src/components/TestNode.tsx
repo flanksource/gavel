@@ -76,7 +76,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
           <iconify-icon icon={fwIcon} className="text-sm shrink-0 opacity-60" />
         )}
 
-        <span className={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.pending ? 'text-blue-600' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
+        <span className={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.running ? 'text-blue-600' : t.pending ? 'text-gray-400' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
           {humanizeName(t.name, fw)}
         </span>
 
@@ -112,7 +112,8 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
             {s.passed > 0 && <Badge count={s.passed} color="bg-green-500" />}
             {s.failed > 0 && <Badge count={s.failed} color="bg-red-500" />}
             {s.skipped > 0 && <Badge count={s.skipped} color="bg-yellow-400" />}
-            {s.pending > 0 && <Badge count={s.pending} color="bg-blue-400" />}
+            {s.running > 0 && <Badge count={s.running} color="bg-blue-500" />}
+            {s.pending > 0 && <Badge count={s.pending} color="bg-gray-400" />}
           </span>
         )}
 

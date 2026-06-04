@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
-  const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, timedout: 0 };
+  const totals = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
   for (const t of tests) {
     const s = sumNonTaskTests(t);
     totals.total += s.total;
@@ -19,6 +19,7 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
     totals.failed += s.failed;
     totals.skipped += s.skipped;
     totals.pending += s.pending;
+    totals.running += s.running;
     totals.timedout += s.timedout;
   }
   const now = done && endTime ? endTime : Date.now();
@@ -72,7 +73,8 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
         {totals.failed > 0 && <><Sep /><span className="text-red-600">{totals.failed} failed</span></>}
         {totals.timedout > 0 && <><Sep /><span className="text-amber-600">{totals.timedout} timed out</span></>}
         {totals.skipped > 0 && <><Sep /><span className="text-yellow-600">{totals.skipped} skipped</span></>}
-        {totals.pending > 0 && <><Sep /><span className="text-blue-500">{totals.pending} pending</span></>}
+        {totals.running > 0 && <><Sep /><span className="text-blue-500">{totals.running} running</span></>}
+        {totals.pending > 0 && <><Sep /><span className="text-gray-400">{totals.pending} queued</span></>}
         {elapsed && (
           <>
             <Sep />
@@ -93,7 +95,8 @@ export function Summary({ tests, startTime, endTime, done, runMeta }: Props) {
               { count: totals.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: totals.failed, color: 'bg-red-500', label: 'failed' },
               { count: totals.timedout, color: 'bg-amber-500', label: 'timed out' },
-              { count: totals.pending, color: 'bg-blue-300', label: 'pending' },
+              { count: totals.running, color: 'bg-blue-400', label: 'running' },
+              { count: totals.pending, color: 'bg-gray-300', label: 'queued' },
             ]}
             total={totals.total}
             height="h-2.5"
