@@ -563,9 +563,13 @@ func executeLinters(opts LintOptions) ([]*linters.LinterResult, error) {
 
 	// Wait for the entire group (handles dynamically queued tasks and the
 	// concurrency semaphore correctly) before harvesting individual results.
-	group.WaitFor()
-	for _, task := range lintTasks {
+	logger.V(1).Infof("gavel test trace: lint group.WaitFor start tasks=%d", len(lintTasks))
+	waitResult := group.WaitFor()
+	logger.V(1).Infof("gavel test trace: lint group.WaitFor done status=%s err=%v", waitResult.Status, waitResult.Error)
+	for i, task := range lintTasks {
+		logger.V(1).Infof("gavel test trace: lint task.GetResult start index=%d name=%s", i, task.Name())
 		result, err := task.GetResult()
+		logger.V(1).Infof("gavel test trace: lint task.GetResult done index=%d result_nil=%v err=%v", i, result == nil, err)
 		if err != nil {
 			return nil, err
 		}

@@ -655,7 +655,9 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 		}
 	}
 
+	logger.V(1).Infof("gavel test trace: orchestrator detectAndRun start frameworks=%v", frameworks)
 	results, err := o.detectAndRun(frameworks, o.StartingPaths, o.ExtraArgs)
+	logger.V(1).Infof("gavel test trace: orchestrator detectAndRun done suites=%d err=%v", len(results), err)
 	failed := results.Failed()
 	// Safe as Info again: clicky's task renderer installs a serializing
 	// logger writer while active, so this line waits on the same mutex
@@ -986,7 +988,13 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	}
 
 	// Wait for all tasks to complete and collect results
+	packageCount := 0
+	for _, packages := range packagesByFramework {
+		packageCount += len(packages)
+	}
+	logger.V(1).Infof("gavel test trace: test package group.GetResults start packages=%d", packageCount)
 	resultMap, err := group.GetResults()
+	logger.V(1).Infof("gavel test trace: test package group.GetResults done results=%d err=%v", len(resultMap), err)
 	if err != nil {
 		return nil, fmt.Errorf("test execution failed: %w", err)
 	}

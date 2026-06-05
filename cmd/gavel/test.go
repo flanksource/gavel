@@ -229,9 +229,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	var lintErr error
 	var wg sync.WaitGroup
 	if opts.Lint {
+		logger.V(1).Infof("gavel test trace: starting lint goroutine")
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer func() {
+				logger.V(1).Infof("gavel test trace: lint goroutine exited")
+				wg.Done()
+			}()
 			workDir := opts.WorkDir
 			if workDir == "" {
 				workDir, _ = os.Getwd()
@@ -241,11 +245,13 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				lintTimeout = 5 * time.Minute
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
+				logger.V(1).Infof("gavel test trace: executeLinters start dir=%s timeout=%s", dir, lintTimeout)
 				results, err := executeLinters(LintOptions{
 					WorkDir: dir,
 					Timeout: lintTimeout.String(),
 					Context: opts.Context,
 				})
+				logger.V(1).Infof("gavel test trace: executeLinters done dir=%s results=%d err=%v", dir, len(results), err)
 				if err != nil {
 					lintErr = err
 					break
@@ -264,7 +270,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	var fullSummary parsers.TestSummary
 	opts.SummaryOut = &fullSummary
 
+	logger.V(1).Infof("gavel test trace: testrunner.Run start")
 	result, err := testrunner.Run(opts)
+	logger.V(1).Infof("gavel test trace: testrunner.Run done result_type=%T err=%v", result, err)
 
 	// Post-hooks run after tests, regardless of pass/fail. A failing post
 	// hook does NOT mask the main exit code — it's logged as a warning.
@@ -275,7 +283,9 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	}
 
 	// Wait for lint to finish
+	logger.V(1).Infof("gavel test trace: waiting for lint goroutine")
 	wg.Wait()
+	logger.V(1).Infof("gavel test trace: lint goroutine wait complete results=%d err=%v", len(lintResults), lintErr)
 
 	if lintErr != nil {
 		logger.Warnf("Linting failed: %v", lintErr)
@@ -381,15 +391,23 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			<-sig
 			return nil, nil
 		}
+		logger.V(1).Infof("gavel test trace: build final snapshot start tests=%d lint=%d diagnostics=%v", len(tests), len(lintResults), opts.Diagnostics)
 		snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
+		logger.V(1).Infof("gavel test trace: build final snapshot done")
+		logger.V(1).Infof("gavel test trace: snapshots.Save start")
 		if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
+			logger.V(1).Infof("gavel test trace: snapshots.Save done err=%v", err)
 			logger.Warnf("persist snapshot: %v", err)
 		} else {
+			logger.V(1).Infof("gavel test trace: snapshots.Save done path=%s", path)
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
+		logger.V(1).Infof("gavel test trace: snapshots.SavePerRun start")
 		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+			logger.V(1).Infof("gavel test trace: snapshots.SavePerRun done err=%v", err)
 			logger.Warnf("persist per-run snapshot: %v", err)
 		} else {
+			logger.V(1).Infof("gavel test trace: snapshots.SavePerRun done path=%s", path)
 			logger.V(1).Infof("wrote per-run snapshot to %s", path)
 		}
 		runSucceeded = true
@@ -401,14 +419,21 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		// Drain the clicky task pane first so its final ✓/✗/⚠ lines land
 		// above the details block — the user wants task state before test
 		// details + summary, not after.
+		logger.V(1).Infof("gavel test trace: StopCapturingOutput start")
 		clicky.StopCapturingOutput()
+		logger.V(1).Infof("gavel test trace: StopCapturingOutput done")
+		logger.V(1).Infof("gavel test trace: WaitForGlobalCompletion start")
 		clicky.WaitForGlobalCompletion()
+		logger.V(1).Infof("gavel test trace: WaitForGlobalCompletion done")
+		logger.V(1).Infof("gavel test trace: printTestRunResults start")
 		printTestRunResults(tests, opts, fullSummary, lintResults)
+		logger.V(1).Infof("gavel test trace: printTestRunResults done")
 		// For pretty (terminal) output, return nil so clicky doesn't also
 		// render Snapshot.Pretty() — a one-line duplicate of the summary
 		// already printed above. For a serialized format (--format json=...,
 		// yaml, etc.) return the snapshot so clicky writes the real
 		// {"tests":..,"lint":..} document instead of a bare `null`.
+		logger.V(1).Infof("gavel test trace: returning from runTests")
 		return testRunReturnValue(snapshot), nil
 	}
 	return result, nil
