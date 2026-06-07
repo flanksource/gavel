@@ -83,7 +83,7 @@ func (s *Server) handleTestEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := applyTestEdit(target, req)
 	if err == nil {
-		resp.File = displayEditFile(root, target)
+		resp.File = target.displayPath()
 		s.tests = applyEditToTests(s.tests, req)
 	}
 	s.mu.Unlock()
@@ -138,7 +138,9 @@ func (s *Server) resolveTestEditRootLocked(workDir string) string {
 	}
 	if workDir != "" {
 		if root := cleanExistingRoot(workDir); root != "" {
-			return root
+			if allowed := s.allowedTestEditRootLocked(root); allowed != "" {
+				return allowed
+			}
 		}
 		return ""
 	}
@@ -154,6 +156,20 @@ func (s *Server) resolveTestEditRootLocked(workDir string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Server) allowedTestEditRootLocked(root string) string {
+	if s.gitRoot != "" {
+		if trusted := cleanExistingRoot(s.gitRoot); trusted != "" && root == trusted {
+			return trusted
+		}
+	}
+	if s.git != nil && s.git.Root != "" {
+		if trusted := cleanExistingRoot(s.git.Root); trusted != "" && root == trusted {
+			return trusted
+		}
+	}
+	return testWorkDirRoot(s.tests, root)
 }
 
 func cleanExistingRoot(path string) string {
@@ -180,7 +196,32 @@ func testsHaveWorkDir(tests []parsers.Test) bool {
 	return false
 }
 
-func resolveTestEditFile(root string, req TestEditRequest) (string, error) {
+func testsHaveWorkDirRoot(tests []parsers.Test, root string) bool {
+	return testWorkDirRoot(tests, root) != ""
+}
+
+func testWorkDirRoot(tests []parsers.Test, root string) string {
+	for _, test := range tests {
+		if test.WorkDir != "" {
+			if trusted := cleanExistingRoot(test.WorkDir); trusted != "" && trusted == root {
+				return trusted
+			}
+		}
+		if trusted := testWorkDirRoot(test.Children, root); trusted != "" {
+			return trusted
+		}
+	}
+	return ""
+}
+
+type testEditTarget struct {
+	root string
+	rel  string
+	abs  string
+}
+
+func resolveTestEditFile(root string, req TestEditRequest) (testEditTarget, error) {
+	var target testEditTarget
 	base := root
 	if req.WorkDir != "" {
 		base = req.WorkDir
@@ -189,51 +230,114 @@ func resolveTestEditFile(root string, req TestEditRequest) (string, error) {
 		base = filepath.Clean(abs)
 	}
 
-	file := filepath.Clean(req.File)
-	if filepath.IsAbs(file) {
-		file = filepath.Clean(file)
-	} else {
-		file = filepath.Join(base, file)
-	}
-	if !pathInside(root, file) {
+	rel, err := testEditRelativePath(root, base, req.File)
+	if err != nil {
 		if req.WorkDir != "" && !filepath.IsAbs(req.File) {
-			alt := filepath.Join(root, filepath.Clean(req.File))
-			if pathInside(root, alt) {
-				file = alt
-			}
+			rel, err = testEditRelativePath(root, root, req.File)
 		}
 	}
-	if !pathInside(root, file) {
-		return "", fmt.Errorf("file %q is outside edit root", req.File)
+	if err != nil {
+		return target, fmt.Errorf("file %q is outside edit root", req.File)
 	}
-	info, err := os.Stat(file)
+
+	target = testEditTarget{
+		root: filepath.Clean(root),
+		rel:  rel,
+		abs:  filepath.Join(root, rel),
+	}
+	info, err := target.stat()
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", os.ErrNotExist
+			return target, os.ErrNotExist
 		}
-		return "", err
+		return target, err
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("file %q is a directory", req.File)
+		return target, fmt.Errorf("file %q is a directory", req.File)
 	}
-	return file, nil
+	return target, nil
 }
 
-func pathInside(root, path string) bool {
-	root, _ = filepath.Abs(root)
-	path, _ = filepath.Abs(path)
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+func testEditRelativePath(root, base, file string) (string, error) {
+	root, err := filepath.Abs(root)
 	if err != nil {
-		return false
+		return "", err
 	}
-	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
+	base, err = filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	baseRel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(base))
+	if err != nil {
+		return "", err
+	}
+	if baseRel != "." && !filepath.IsLocal(baseRel) {
+		return "", fmt.Errorf("base is outside root")
+	}
+
+	var rel string
+	file = filepath.Clean(file)
+	if filepath.IsAbs(file) {
+		rel, err = filepath.Rel(filepath.Clean(root), file)
+	} else {
+		rel = filepath.Clean(filepath.Join(baseRel, file))
+	}
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("file is outside root")
+	}
+	return rel, nil
 }
 
-func displayEditFile(root, target string) string {
-	if rel, err := filepath.Rel(root, target); err == nil {
-		return filepath.ToSlash(rel)
+func (t testEditTarget) displayPath() string {
+	return filepath.ToSlash(t.rel)
+}
+
+func (t testEditTarget) openRoot() (*os.Root, error) {
+	return os.OpenRoot(t.root)
+}
+
+func (t testEditTarget) stat() (os.FileInfo, error) {
+	root, err := t.openRoot()
+	if err != nil {
+		return nil, err
 	}
-	return target
+	defer root.Close()
+	return root.Stat(t.rel)
+}
+
+func (t testEditTarget) readFile() ([]byte, error) {
+	root, err := t.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(t.rel)
+}
+
+func (t testEditTarget) remove() error {
+	root, err := t.openRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Remove(t.rel)
+}
+
+func (t testEditTarget) writeFilePreserveMode(data []byte) error {
+	root, err := t.openRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	mode := os.FileMode(0o644)
+	if info, err := root.Stat(t.rel); err == nil {
+		mode = info.Mode().Perm()
+	}
+	return root.WriteFile(t.rel, data, mode)
 }
 
 func writeTestEditError(w http.ResponseWriter, err error) {
@@ -247,10 +351,10 @@ func writeTestEditError(w http.ResponseWriter, err error) {
 	}
 }
 
-func applyTestEdit(path string, req TestEditRequest) (TestEditResponse, error) {
+func applyTestEdit(target testEditTarget, req TestEditRequest) (TestEditResponse, error) {
 	resp := TestEditResponse{Action: req.Action, Scope: req.Scope}
 	if req.Scope == testEditScopeFile && req.Action == testEditActionDelete {
-		if err := os.Remove(path); err != nil {
+		if err := target.remove(); err != nil {
 			return resp, err
 		}
 		resp.Changed = true
@@ -261,24 +365,24 @@ func applyTestEdit(path string, req TestEditRequest) (TestEditResponse, error) {
 
 	switch parsers.Framework(req.Framework) {
 	case parsers.GoTest:
-		return editGoTestFile(path, req)
+		return editGoTestFile(target, req)
 	case parsers.Ginkgo:
-		return editGinkgoFile(path, req)
+		return editGinkgoFile(target, req)
 	case parsers.Vitest:
-		return editVitestFile(path, req)
+		return editVitestFile(target, req)
 	default:
 		return resp, fmt.Errorf("framework %q is not editable", req.Framework)
 	}
 }
 
-func editGoTestFile(path string, req TestEditRequest) (TestEditResponse, error) {
+func editGoTestFile(target testEditTarget, req TestEditRequest) (TestEditResponse, error) {
 	resp := TestEditResponse{Action: req.Action, Scope: req.Scope}
-	src, err := os.ReadFile(path)
+	src, err := target.readFile()
 	if err != nil {
 		return resp, err
 	}
 	fset := token.NewFileSet()
-	file, err := goparser.ParseFile(fset, path, src, goparser.ParseComments)
+	file, err := goparser.ParseFile(fset, target.abs, src, goparser.ParseComments)
 	if err != nil {
 		return resp, fmt.Errorf("parse go test file: %w", err)
 	}
@@ -295,11 +399,11 @@ func editGoTestFile(path string, req TestEditRequest) (TestEditResponse, error) 
 			}
 		}
 		if edited == 0 {
-			return resp, fmt.Errorf("%w: no tests found in %s", errEditAmbiguous, filepath.Base(path))
+			return resp, fmt.Errorf("%w: no tests found in %s", errEditAmbiguous, filepath.Base(target.rel))
 		}
 		resp.Edited = edited
 		resp.Changed = true
-		return writeFormattedGo(path, fset, file, resp)
+		return writeFormattedGo(target, fset, file, resp)
 	}
 
 	parent, subtests := splitGoTestName(req.TestName)
@@ -315,12 +419,12 @@ func editGoTestFile(path string, req TestEditRequest) (TestEditResponse, error) 
 			}
 			resp.Edited = 1
 			resp.Changed = true
-			return writeFormattedGo(path, fset, file, resp)
+			return writeFormattedGo(target, fset, file, resp)
 		case testEditActionDelete:
 			file.Decls = removeDecl(file.Decls, fn)
 			resp.Removed = 1
 			resp.Changed = true
-			return writeFormattedGo(path, fset, file, resp)
+			return writeFormattedGo(target, fset, file, resp)
 		}
 	}
 
@@ -343,7 +447,7 @@ func editGoTestFile(path string, req TestEditRequest) (TestEditResponse, error) 
 				resp.Removed = 1
 			}
 			resp.Changed = true
-			return writeFormattedGo(path, fset, file, resp)
+			return writeFormattedGo(target, fset, file, resp)
 		}
 		body = lit.Body
 		tName = testParamNameFromFuncLit(lit, tName)
@@ -485,25 +589,25 @@ func removeDecl(decls []ast.Decl, target ast.Decl) []ast.Decl {
 	return decls
 }
 
-func writeFormattedGo(path string, fset *token.FileSet, file *ast.File, resp TestEditResponse) (TestEditResponse, error) {
+func writeFormattedGo(target testEditTarget, fset *token.FileSet, file *ast.File, resp TestEditResponse) (TestEditResponse, error) {
 	var buf bytes.Buffer
 	if err := format.Node(&buf, fset, file); err != nil {
 		return resp, fmt.Errorf("format go source: %w", err)
 	}
-	if err := writeFilePreserveMode(path, buf.Bytes()); err != nil {
+	if err := target.writeFilePreserveMode(buf.Bytes()); err != nil {
 		return resp, err
 	}
 	return resp, nil
 }
 
-func editGinkgoFile(path string, req TestEditRequest) (TestEditResponse, error) {
+func editGinkgoFile(target testEditTarget, req TestEditRequest) (TestEditResponse, error) {
 	resp := TestEditResponse{Action: req.Action, Scope: req.Scope}
-	src, err := os.ReadFile(path)
+	src, err := target.readFile()
 	if err != nil {
 		return resp, err
 	}
 	fset := token.NewFileSet()
-	file, err := goparser.ParseFile(fset, path, src, goparser.ParseComments)
+	file, err := goparser.ParseFile(fset, target.abs, src, goparser.ParseComments)
 	if err != nil {
 		return resp, fmt.Errorf("parse ginkgo file: %w", err)
 	}
@@ -528,10 +632,10 @@ func editGinkgoFile(path string, req TestEditRequest) (TestEditResponse, error) 
 		}
 		resp.Edited = changed
 		resp.Changed = true
-		return writeFormattedGo(path, fset, file, resp)
+		return writeFormattedGo(target, fset, file, resp)
 	}
 
-	var target *ast.CallExpr
+	var targetCall *ast.CallExpr
 	matches := 0
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -551,10 +655,10 @@ func editGinkgoFile(path string, req TestEditRequest) (TestEditResponse, error) 
 			return true
 		}
 		matches++
-		target = call
+		targetCall = call
 		return true
 	})
-	if target == nil || matches == 0 {
+	if targetCall == nil || matches == 0 {
 		return resp, fmt.Errorf("%w: ginkgo spec not found", errEditAmbiguous)
 	}
 	if matches > 1 {
@@ -562,18 +666,18 @@ func editGinkgoFile(path string, req TestEditRequest) (TestEditResponse, error) 
 	}
 	switch req.Action {
 	case testEditActionSkip:
-		if !makeGinkgoPending(target) {
+		if !makeGinkgoPending(targetCall) {
 			return resp, fmt.Errorf("%w: unsupported ginkgo call", errEditAmbiguous)
 		}
 		resp.Edited = 1
 	case testEditActionDelete:
-		if !deleteGinkgoStmt(file, target) {
+		if !deleteGinkgoStmt(file, targetCall) {
 			return resp, fmt.Errorf("%w: unable to delete ginkgo call", errEditAmbiguous)
 		}
 		resp.Removed = 1
 	}
 	resp.Changed = true
-	return writeFormattedGo(path, fset, file, resp)
+	return writeFormattedGo(target, fset, file, resp)
 }
 
 func isGinkgoLeafCall(call *ast.CallExpr) bool {
@@ -652,9 +756,9 @@ func deleteGinkgoStmt(file *ast.File, target *ast.CallExpr) bool {
 	return deleted
 }
 
-func editVitestFile(path string, req TestEditRequest) (TestEditResponse, error) {
+func editVitestFile(target testEditTarget, req TestEditRequest) (TestEditResponse, error) {
 	resp := TestEditResponse{Action: req.Action, Scope: req.Scope}
-	srcBytes, err := os.ReadFile(path)
+	srcBytes, err := target.readFile()
 	if err != nil {
 		return resp, err
 	}
@@ -689,19 +793,11 @@ func editVitestFile(path string, req TestEditRequest) (TestEditResponse, error) 
 			resp.Removed++
 		}
 	}
-	if err := writeFilePreserveMode(path, []byte(src)); err != nil {
+	if err := target.writeFilePreserveMode([]byte(src)); err != nil {
 		return resp, err
 	}
 	resp.Changed = true
 	return resp, nil
-}
-
-func writeFilePreserveMode(path string, data []byte) error {
-	mode := os.FileMode(0o644)
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	}
-	return os.WriteFile(path, data, mode)
 }
 
 type vitestCallRange struct {

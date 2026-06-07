@@ -94,6 +94,39 @@ func TestTestEditEndpointRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestTestEditEndpointRejectsUnknownWorkDir(t *testing.T) {
+	repo := testEditRepo(t)
+	other := testEditRepo(t)
+	writeTestFile(t, filepath.Join(other, "foo_test.go"), `package foo
+
+import "testing"
+
+func TestAlpha(t *testing.T) {}
+`)
+
+	srv, handler := newTestServer(t)
+	srv.SetResults([]parsers.Test{{
+		Name:      "TestAlpha",
+		Framework: parsers.GoTest,
+		WorkDir:   repo,
+		File:      "foo_test.go",
+		Line:      5,
+		Passed:    true,
+	}})
+
+	resp := postTestEdit(t, handler, testui.TestEditRequest{
+		Action:    "skip",
+		Scope:     "test",
+		Framework: parsers.GoTest.String(),
+		WorkDir:   other,
+		File:      "foo_test.go",
+		TestName:  "TestAlpha",
+	})
+	if resp.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestTestEditSkipsGinkgoFile(t *testing.T) {
 	repo := testEditRepo(t)
 	path := filepath.Join(repo, "spec_test.go")
