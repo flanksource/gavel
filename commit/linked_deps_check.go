@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/utils"
 	"golang.org/x/mod/modfile"
+	"gopkg.in/yaml.v3"
 )
 
 var ErrLinkedDepsCancelled = errors.New("commit cancelled: staged manifest references a path outside the git root")
@@ -25,6 +26,9 @@ const (
 	LinkedDepKindPkgJSONLink    LinkedDepKind = "package.json link:"
 	LinkedDepKindPkgJSONPortal  LinkedDepKind = "package.json portal:"
 	LinkedDepKindPkgJSONRelPath LinkedDepKind = "package.json relative path"
+	LinkedDepKindPnpmLockFile   LinkedDepKind = "pnpm-lock.yaml file:"
+	LinkedDepKindPnpmLockLink   LinkedDepKind = "pnpm-lock.yaml link:"
+	LinkedDepKindPnpmLockPortal LinkedDepKind = "pnpm-lock.yaml portal:"
 )
 
 type LinkedDepViolation struct {
@@ -114,6 +118,12 @@ func EvaluateLinkedDeps(workDir, gitRoot string, stagedFiles, deletedFiles []str
 				return nil, err
 			}
 			violations = append(violations, vs...)
+		case "pnpm-lock.yaml":
+			vs, err := evaluatePnpmLock(workDir, gitRoot, rel)
+			if err != nil {
+				return nil, err
+			}
+			violations = append(violations, vs...)
 		}
 	}
 	return violations, nil
@@ -161,7 +171,7 @@ func missingHeadBlob(stderr string) bool {
 
 func isLinkedDepsManifest(path string) bool {
 	switch filepath.Base(path) {
-	case "go.mod", "go.work", "package.json":
+	case "go.mod", "go.work", "package.json", "pnpm-lock.yaml":
 		return true
 	default:
 		return false
@@ -176,6 +186,8 @@ func evaluateManifestLinkedDeps(gitRoot, rel string, blob []byte) ([]LinkedDepVi
 		return evaluateGoWorkBlob(gitRoot, rel, blob)
 	case "package.json":
 		return evaluatePackageJSONBlob(gitRoot, rel, blob)
+	case "pnpm-lock.yaml":
+		return evaluatePnpmLockBlob(gitRoot, rel, blob)
 	default:
 		return nil, nil
 	}
@@ -435,6 +447,152 @@ func classifyPkgDep(raw string) (LinkedDepKind, string, bool) {
 		return LinkedDepKindPkgJSONRelPath, raw, true
 	}
 	return "", "", false
+}
+
+func evaluatePnpmLock(workDir, gitRoot, rel string) ([]LinkedDepViolation, error) {
+	blob, err := readStagedBlob(workDir, rel)
+	if err != nil {
+		return nil, err
+	}
+	return evaluatePnpmLockBlob(gitRoot, rel, blob)
+}
+
+func evaluatePnpmLockBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolation, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(blob, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", rel, err)
+	}
+
+	manifestDir := filepath.Join(gitRoot, filepath.Dir(rel))
+	seen := map[linkedDepViolationKey]struct{}{}
+	var out []LinkedDepViolation
+	walkPnpmLockNode(&doc, nil, func(raw string, path []string) {
+		kind, target, refPath, ok := classifyPnpmLockRef(raw)
+		if !ok {
+			return
+		}
+		resolved := resolveFrom(manifestDir, refPath)
+		if utils.IsWithin(resolved, gitRoot) {
+			return
+		}
+		v := LinkedDepViolation{
+			File:     rel,
+			Kind:     kind,
+			Name:     pnpmLockRefName(raw, path),
+			Target:   target,
+			Resolved: resolved,
+		}
+		key := linkedDepViolationKey{
+			Kind:     v.Kind,
+			Name:     v.Name,
+			Target:   v.Target,
+			Resolved: v.Resolved,
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, v)
+	})
+	return out, nil
+}
+
+func walkPnpmLockNode(node *yaml.Node, path []string, visit func(raw string, path []string)) {
+	if node == nil {
+		return
+	}
+	switch node.Kind {
+	case yaml.DocumentNode:
+		for _, child := range node.Content {
+			walkPnpmLockNode(child, path, visit)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+			nextPath := appendPathSegment(path, key.Value)
+			visit(key.Value, path)
+			walkPnpmLockNode(value, nextPath, visit)
+		}
+	case yaml.SequenceNode:
+		for i, child := range node.Content {
+			walkPnpmLockNode(child, appendPathSegment(path, fmt.Sprintf("[%d]", i)), visit)
+		}
+	case yaml.ScalarNode:
+		visit(node.Value, path)
+	}
+}
+
+func appendPathSegment(path []string, segment string) []string {
+	next := make([]string, 0, len(path)+1)
+	next = append(next, path...)
+	next = append(next, segment)
+	return next
+}
+
+func classifyPnpmLockRef(raw string) (LinkedDepKind, string, string, bool) {
+	schemes := []struct {
+		prefix string
+		kind   LinkedDepKind
+	}{
+		{prefix: "file:", kind: LinkedDepKindPnpmLockFile},
+		{prefix: "link:", kind: LinkedDepKindPnpmLockLink},
+		{prefix: "portal:", kind: LinkedDepKindPnpmLockPortal},
+	}
+
+	for _, scheme := range schemes {
+		offset := 0
+		for {
+			idx := strings.Index(raw[offset:], scheme.prefix)
+			if idx < 0 {
+				break
+			}
+			idx += offset
+			if idx != 0 && raw[idx-1] != '@' {
+				offset = idx + len(scheme.prefix)
+				continue
+			}
+			refPath := trimPnpmLockRefPath(raw[idx+len(scheme.prefix):])
+			if refPath == "" {
+				offset = idx + len(scheme.prefix)
+				continue
+			}
+			return scheme.kind, scheme.prefix + refPath, refPath, true
+		}
+	}
+	return "", "", "", false
+}
+
+func trimPnpmLockRefPath(path string) string {
+	path = strings.TrimSpace(path)
+	cut := len(path)
+	for _, marker := range []string{"(", ")"} {
+		if i := strings.Index(path, marker); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return strings.TrimSpace(path[:cut])
+}
+
+func pnpmLockRefName(raw string, path []string) string {
+	if len(path) >= 2 {
+		switch path[len(path)-1] {
+		case "specifier", "version":
+			return path[len(path)-2]
+		}
+	}
+	for _, marker := range []string{"@file:", "@link:", "@portal:"} {
+		if idx := strings.Index(raw, marker); idx > 0 {
+			name := strings.TrimPrefix(raw[:idx], "/")
+			if name != "" {
+				return name
+			}
+		}
+	}
+	if len(path) > 0 {
+		return path[len(path)-1]
+	}
+	return raw
 }
 
 func resolveFrom(manifestDir, target string) string {

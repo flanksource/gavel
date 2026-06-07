@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, type ReactNode } from 'react';
-import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail } from '../types';
+import type { Test, FixtureContext, GinkgoContext, GoTestContext, Violation, LinterResult, RunMeta, FailureDetail, TestEditAction, TestEditScope } from '../types';
 import {
   statusIcon,
   statusColor,
@@ -40,6 +40,9 @@ interface Props {
   stopBusy?: boolean;
   onIgnore?: (req: IgnoreRequest) => Promise<void> | void;
   ignoreBusy?: boolean;
+  onTestEdit?: (t: Test, action: TestEditAction, scope: TestEditScope) => Promise<void> | void;
+  testEditBusy?: boolean;
+  testEditSupported?: boolean;
   runMeta?: RunMeta;
   nodeRouteState?: RouteState;
   failingOnlyRouteState?: RouteState;
@@ -71,7 +74,7 @@ function taskMeta(t: Test): { duration?: string; status?: string; type?: string 
   };
 }
 
-export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, runMeta, nodeRouteState, failingOnlyRouteState }: Props) {
+export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBusy, onIgnore, ignoreBusy, onTestEdit, testEditBusy, testEditSupported, runMeta, nodeRouteState, failingOnlyRouteState }: Props) {
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
@@ -126,6 +129,15 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
   const canExportNode = !!nodeRouteState && !!t.route_path && !isLint && t.kind !== 'violation' && t.framework !== 'task';
   const hasFailingContent = !!t.failed || !!t.timed_out || (s ? s.failed > 0 || s.timedout > 0 : false);
   const canCopyAIPrompt = canExportNode && !!failingOnlyRouteState && hasFailingContent;
+  const canEditTest = !!testEditSupported && !!onTestEdit && !isLint && t.framework !== 'task' && editableFramework(t.framework) && !!t.file;
+  const confirmTestEdit = (action: TestEditAction, scope: TestEditScope) => {
+    if (!onTestEdit) return;
+    const verb = action === 'skip' ? 'Skip' : 'Delete';
+    const scopeLabel = scope === 'file' ? 'file' : 'test';
+    const target = scope === 'file' ? (t.file || 'file') : (t.name || 'test');
+    if (typeof window !== 'undefined' && !window.confirm(`${verb} ${scopeLabel} ${target}?`)) return;
+    void onTestEdit(t, action, scope);
+  };
 
   return (
     <div className="h-full overflow-y-auto p-5 space-y-4">
@@ -208,6 +220,38 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
       </div>
 
       {t.kind === 'violation' && t.violation && <ViolationDetail v={t.violation} />}
+      {canEditTest && (
+        <Section title="Source Actions">
+          <div className="flex flex-wrap gap-1.5">
+            <TestEditButton
+              icon="codicon:circle-slash"
+              label="Skip Test"
+              disabled={testEditBusy}
+              onClick={() => confirmTestEdit('skip', 'test')}
+            />
+            <TestEditButton
+              icon="codicon:trash"
+              label="Delete Test"
+              variant="danger"
+              disabled={testEditBusy}
+              onClick={() => confirmTestEdit('delete', 'test')}
+            />
+            <TestEditButton
+              icon="codicon:file"
+              label="Skip File"
+              disabled={testEditBusy}
+              onClick={() => confirmTestEdit('skip', 'file')}
+            />
+            <TestEditButton
+              icon="codicon:trash"
+              label="Delete File"
+              variant="danger"
+              disabled={testEditBusy}
+              onClick={() => confirmTestEdit('delete', 'file')}
+            />
+          </div>
+        </Section>
+      )}
       {t.kind === 'linter' && <LinterDetail t={t} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />}
       {t.kind === 'lint-folder' && (
         <FolderLintDetail t={t} lint={lint} onIgnore={onIgnore} ignoreBusy={ignoreBusy} />
@@ -307,12 +351,14 @@ export function DetailPanel({ test: t, lint, onRerun, rerunBusy, onStop, stopBus
             <Stat label="Total" value={s.total} color="text-gray-700" />
             <Stat label="Passed" value={s.passed} color="text-green-600" />
             <Stat label="Failed" value={s.failed} color="text-red-600" />
+            {s.warned > 0 && <Stat label="Warned" value={s.warned} color="text-amber-600" />}
             {s.skipped > 0 && <Stat label="Skipped" value={s.skipped} color="text-yellow-600" />}
             {s.pending > 0 && <Stat label="Pending" value={s.pending} color="text-blue-600" />}
           </div>
           <ProgressBar
             segments={[
               { count: s.passed, color: 'bg-green-500', label: 'passed' },
+              { count: s.warned, color: 'bg-amber-400', label: 'warned' },
               { count: s.skipped, color: 'bg-yellow-400', label: 'skipped' },
               { count: s.failed, color: 'bg-red-500', label: 'failed' },
               { count: s.pending, color: 'bg-blue-300', label: 'pending' },
@@ -875,6 +921,40 @@ function IgnoreButton({
       onClick={(e) => { e.stopPropagation(); void onIgnore(req); }}
     >
       <iconify-icon icon="codicon:eye-closed" className="text-xs" />
+      {label}
+    </button>
+  );
+}
+
+function editableFramework(framework?: string): boolean {
+  return framework === 'go test' || framework === 'ginkgo' || framework === 'vitest';
+}
+
+function TestEditButton({
+  icon,
+  label,
+  disabled,
+  onClick,
+  variant,
+}: {
+  icon: string;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+  variant?: 'danger';
+}) {
+  const base = 'text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1';
+  const cls = variant === 'danger'
+    ? `${base} border-red-300 bg-red-50 text-red-700 hover:bg-red-100`
+    : `${base} border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100`;
+  return (
+    <button
+      className={cls}
+      title={label}
+      disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+    >
+      <iconify-icon icon={icon} className="text-xs" />
       {label}
     </button>
   );

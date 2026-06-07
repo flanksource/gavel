@@ -13,6 +13,10 @@ export interface Test {
   skipped?: boolean;
   failed?: boolean;
   passed?: boolean;
+  // warned marks a node that completed with a non-blocking warning — amber,
+  // shown to the operator but never a failure (a warned child never fails its
+  // parent). Distinct from failed.
+  warned?: boolean;
   pending?: boolean;
   // running marks a node whose execution has started but not yet finished —
   // distinct from pending (queued/not-yet-started). Renderers show running with
@@ -105,6 +109,7 @@ export interface TestSummary {
   Total: number;
   Passed: number;
   Failed: number;
+  Warned?: number;
   Skipped: number;
   Pending: number;
   Running?: number;
@@ -146,6 +151,7 @@ export interface SnapshotStatus {
   lint_run?: boolean;
   diagnostics_available?: boolean;
   stop_supported?: boolean;
+  test_edit_supported?: boolean;
   stopped?: boolean;
   stop_message?: string;
 }
@@ -267,4 +273,29 @@ export interface RerunRequest {
   lint?: boolean;
   lint_files?: string[];
   lint_linters?: string[];
+}
+
+export type TestEditAction = 'skip' | 'delete';
+export type TestEditScope = 'test' | 'file';
+
+export interface TestEditRequest {
+  action: TestEditAction;
+  scope: TestEditScope;
+  framework?: string;
+  work_dir?: string;
+  package_path?: string;
+  file?: string;
+  line?: number;
+  test_name?: string;
+  suite?: string[];
+}
+
+export interface TestEditResponse {
+  file: string;
+  action: TestEditAction;
+  scope: TestEditScope;
+  changed: boolean;
+  edited?: number;
+  removed?: number;
+  message?: string;
 }

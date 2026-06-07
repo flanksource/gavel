@@ -1,4 +1,4 @@
-import type { Test, LinterResult, Violation, Severity, ProcessNode } from './types';
+import type { Test, TestSummary, LinterResult, Violation, Severity, ProcessNode } from './types';
 import type { FilterState } from './filterState';
 import { matchesFilterState } from './filterState';
 
@@ -947,6 +947,7 @@ export function statusIcon(t: Test): string {
   if (t.running) return 'svg-spinners:ring-resize';
   if (t.pending) return 'codicon:circle-large-outline';
   if (t.failed) return 'codicon:error';
+  if (t.warned) return 'codicon:warning';
   if (t.skipped) return 'codicon:circle-slash';
   if (t.passed) return 'codicon:pass-filled';
   if (t.children && t.children.length > 0) {
@@ -954,6 +955,7 @@ export function statusIcon(t: Test): string {
     if (hasTimedOutDescendant(t)) return 'ion:hourglass-outline';
     if (s.failed > 0 && s.passed > 0) return 'codicon:warning';
     if (s.failed > 0) return 'codicon:error';
+    if (s.warned > 0) return 'codicon:warning';
     if (s.running > 0) return 'svg-spinners:ring-resize';
     if (s.pending > 0) return 'codicon:circle-large-outline';
     return 'codicon:pass-filled';
@@ -988,6 +990,7 @@ export function statusColor(t: Test): string {
   if (t.running) return 'text-blue-500';
   if (t.pending) return 'text-gray-400';
   if (t.failed) return 'text-red-600';
+  if (t.warned) return 'text-amber-600';
   if (t.skipped) return 'text-yellow-600';
   if (t.passed) return 'text-green-600';
   if (t.children && t.children.length > 0) {
@@ -995,6 +998,7 @@ export function statusColor(t: Test): string {
     if (hasTimedOutDescendant(t)) return 'text-amber-600';
     if (s.failed > 0 && s.passed > 0) return 'text-orange-500';
     if (s.failed > 0) return 'text-red-600';
+    if (s.warned > 0) return 'text-amber-600';
     if (s.running > 0) return 'text-blue-500';
     if (s.pending > 0) return 'text-gray-400';
     return 'text-green-600';
@@ -1121,83 +1125,77 @@ function compactWithUnit(value: number, unit: string): string {
   return `${rounded}${unit}`;
 }
 
-export function sum(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number; running: number; timedout: number } {
-  if (t.summary) {
-    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0, running: t.summary.Running || 0, timedout: 0 };
-  }
-  if (!t.children || t.children.length === 0) {
-    const isTimedOut = !!t.timed_out;
-    const counted = isTimedOut || t.passed || t.failed || t.skipped || t.pending || t.running;
-    return {
-      total: counted ? 1 : 0,
-      passed: !isTimedOut && t.passed ? 1 : 0,
-      failed: !isTimedOut && t.failed ? 1 : 0,
-      skipped: !isTimedOut && t.skipped ? 1 : 0,
-      pending: !isTimedOut && t.pending ? 1 : 0,
-      running: !isTimedOut && t.running ? 1 : 0,
-      timedout: isTimedOut ? 1 : 0,
-    };
-  }
-  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
-  for (const c of t.children) {
-    const s = sum(c);
-    r.total += s.total;
-    r.passed += s.passed;
-    r.failed += s.failed;
-    r.skipped += s.skipped;
-    r.pending += s.pending;
-    r.running += s.running;
-    r.timedout += s.timedout;
-  }
+// StatusCounts is the tallied verdict breakdown a Test subtree rolls up to.
+// warned is amber and orthogonal to a real failure — a warned-only leaf counts
+// in total + warned, never in failed.
+export type StatusCounts = {
+  total: number;
+  passed: number;
+  failed: number;
+  warned: number;
+  skipped: number;
+  pending: number;
+  running: number;
+  timedout: number;
+};
+
+const emptyCounts = (): StatusCounts => ({ total: 0, passed: 0, failed: 0, warned: 0, skipped: 0, pending: 0, running: 0, timedout: 0 });
+
+const addCounts = (r: StatusCounts, s: StatusCounts) => {
+  r.total += s.total;
+  r.passed += s.passed;
+  r.failed += s.failed;
+  r.warned += s.warned;
+  r.skipped += s.skipped;
+  r.pending += s.pending;
+  r.running += s.running;
+  r.timedout += s.timedout;
+};
+
+const countsFromSummary = (summary: TestSummary): StatusCounts => ({
+  total: summary.Total,
+  passed: summary.Passed,
+  failed: summary.Failed,
+  warned: summary.Warned || 0,
+  skipped: summary.Skipped,
+  pending: summary.Pending || 0,
+  running: summary.Running || 0,
+  timedout: 0,
+});
+
+const countsFromLeaf = (t: Test): StatusCounts => {
+  const isTimedOut = !!t.timed_out;
+  const counted = isTimedOut || t.passed || t.failed || t.warned || t.skipped || t.pending || t.running;
+  return {
+    total: counted ? 1 : 0,
+    passed: !isTimedOut && t.passed ? 1 : 0,
+    failed: !isTimedOut && t.failed ? 1 : 0,
+    warned: !isTimedOut && t.warned ? 1 : 0,
+    skipped: !isTimedOut && t.skipped ? 1 : 0,
+    pending: !isTimedOut && t.pending ? 1 : 0,
+    running: !isTimedOut && t.running ? 1 : 0,
+    timedout: isTimedOut ? 1 : 0,
+  };
+};
+
+export function sum(t: Test): StatusCounts {
+  if (t.summary) return countsFromSummary(t.summary);
+  if (!t.children || t.children.length === 0) return countsFromLeaf(t);
+  const r = emptyCounts();
+  for (const c of t.children) addCounts(r, sum(c));
   return r;
 }
 
-export function sumNonTaskTests(t: Test): { total: number; passed: number; failed: number; skipped: number; pending: number; running: number; timedout: number } {
+export function sumNonTaskTests(t: Test): StatusCounts {
   if (t.framework === 'task') {
-    if (!t.children || t.children.length === 0) {
-      return { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
-    }
-    const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
-    for (const c of t.children) {
-      const s = sumNonTaskTests(c);
-      r.total += s.total;
-      r.passed += s.passed;
-      r.failed += s.failed;
-      r.skipped += s.skipped;
-      r.pending += s.pending;
-      r.running += s.running;
-      r.timedout += s.timedout;
-    }
+    const r = emptyCounts();
+    for (const c of t.children || []) addCounts(r, sumNonTaskTests(c));
     return r;
   }
-
-  if (t.summary) {
-    return { total: t.summary.Total, passed: t.summary.Passed, failed: t.summary.Failed, skipped: t.summary.Skipped, pending: t.summary.Pending || 0, running: t.summary.Running || 0, timedout: 0 };
-  }
-  if (!t.children || t.children.length === 0) {
-    const isTimedOut = !!t.timed_out;
-    const counted = isTimedOut || t.passed || t.failed || t.skipped || t.pending || t.running;
-    return {
-      total: counted ? 1 : 0,
-      passed: !isTimedOut && t.passed ? 1 : 0,
-      failed: !isTimedOut && t.failed ? 1 : 0,
-      skipped: !isTimedOut && t.skipped ? 1 : 0,
-      pending: !isTimedOut && t.pending ? 1 : 0,
-      running: !isTimedOut && t.running ? 1 : 0,
-      timedout: isTimedOut ? 1 : 0,
-    };
-  }
-  const r = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
-  for (const c of t.children) {
-    const s = sumNonTaskTests(c);
-    r.total += s.total;
-    r.passed += s.passed;
-    r.failed += s.failed;
-    r.skipped += s.skipped;
-    r.pending += s.pending;
-    r.running += s.running;
-    r.timedout += s.timedout;
-  }
+  if (t.summary) return countsFromSummary(t.summary);
+  if (!t.children || t.children.length === 0) return countsFromLeaf(t);
+  const r = emptyCounts();
+  for (const c of t.children) addCounts(r, sumNonTaskTests(c));
   return r;
 }
 
@@ -1231,6 +1229,7 @@ export function testStatus(t: Test): string | null {
   if (t.running) return 'running';
   if (t.pending) return 'pending';
   if (t.failed) return 'failed';
+  if (t.warned) return 'warned';
   if (t.skipped) return 'skipped';
   if (t.passed) return 'passed';
   return null;

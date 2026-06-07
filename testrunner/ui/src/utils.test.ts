@@ -5,11 +5,62 @@ import {
   formatCount,
   groupLintByLinterRuleFile,
   isLintOnlyPhase,
+  statusColor,
+  statusIcon,
   stripTestTaskGroup,
+  sum,
+  testStatus,
   TEST_TASK_GROUP_NAME,
   LINT_TASK_GROUP_NAME,
 } from './utils';
 import type { LinterResult, Test } from './types';
+
+describe('warned verdict', () => {
+  it('sum tallies a warned leaf in total + warned, not passed or failed', () => {
+    const s = sum({ name: 'trace', warned: true } as Test);
+    expect(s.total).toBe(1);
+    expect(s.warned).toBe(1);
+    expect(s.passed).toBe(0);
+    expect(s.failed).toBe(0);
+  });
+
+  it('sum rolls a warned child up to the parent without failing it', () => {
+    const s = sum({
+      name: 'step',
+      children: [
+        { name: 'activity', passed: true },
+        { name: 'trace', warned: true },
+      ],
+    } as Test);
+    expect(s.warned).toBe(1);
+    expect(s.passed).toBe(1);
+    expect(s.failed).toBe(0);
+  });
+
+  it('statusIcon + statusColor render amber for a warned leaf', () => {
+    const t = { name: 'trace', warned: true } as Test;
+    expect(statusIcon(t)).toBe('codicon:warning');
+    expect(statusColor(t)).toBe('text-amber-600');
+  });
+
+  it('statusColor renders amber for a container whose only non-pass child is warned', () => {
+    const t = {
+      name: 'step',
+      children: [
+        { name: 'activity', passed: true },
+        { name: 'trace', warned: true },
+      ],
+    } as Test;
+    expect(statusColor(t)).toBe('text-amber-600');
+  });
+
+  it('a failed+warned leaf still reads as failed — a warning never masks a failure', () => {
+    const t = { name: 'x', failed: true, warned: true } as Test;
+    expect(statusIcon(t)).toBe('codicon:error');
+    expect(statusColor(t)).toBe('text-red-600');
+    expect(testStatus(t)).toBe('failed');
+  });
+});
 
 describe('formatCount', () => {
   const cases: Array<[number, string]> = [

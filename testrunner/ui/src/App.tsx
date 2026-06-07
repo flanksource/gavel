@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react';
-import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta } from './types';
+import type { Test, Snapshot, SnapshotStatus, LinterResult, BenchComparison, DiagnosticsSnapshot, ProcessNode, ProcessDetails, RunMeta, TestEditAction, TestEditScope } from './types';
 import { Summary } from './components/Summary';
 import { TestNode } from './components/TestNode';
 import { DetailPanel, type IgnoreRequest } from './components/DetailPanel';
@@ -149,6 +149,7 @@ export function App() {
   const [rerunBusy, setRerunBusy] = useState(false);
   const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
   const [ignoreBusy, setIgnoreBusy] = useState(false);
+  const [testEditBusy, setTestEditBusy] = useState(false);
   const [stackBusyPID, setStackBusyPID] = useState<number | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [copyError, setCopyError] = useState('');
@@ -177,6 +178,13 @@ export function App() {
       if (mode === 'replace') window.history.replaceState({}, '', url);
       else window.history.pushState({}, '', url);
     }
+  }, []);
+
+  const refreshSnapshot = useCallback(async () => {
+    const res = await fetch(apiUrl('/api/tests'));
+    if (!res.ok) throw new Error(`Snapshot request failed (${res.status})`);
+    const snap: Snapshot = await res.json();
+    applySnapshot(snap, startTime, endTime, doneRef, setTests, setLint, setLintRun, setBench, setDiagnosticsAvailable, setDiagnostics, setSnapshotStatus, setRunMeta, setDone, setStatus);
   }, []);
 
   useEffect(() => {
@@ -274,12 +282,13 @@ export function App() {
   }, [tests, snapshotStatus.running, lintRun]);
 
   const totals = useMemo(() => {
-    const t = { total: 0, passed: 0, failed: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
+    const t = { total: 0, passed: 0, failed: 0, warned: 0, skipped: 0, pending: 0, running: 0, timedout: 0 };
     for (const test of displayedTests) {
       const s = sumNonTaskTests(test);
       t.total += s.total;
       t.passed += s.passed;
       t.failed += s.failed;
+      t.warned += s.warned;
       t.skipped += s.skipped;
       t.pending += s.pending;
       t.running += s.running;
@@ -607,6 +616,48 @@ export function App() {
     }
   }, [ignoreBusy, routeState, commitRoute]);
 
+  const onTestEdit = useCallback(async (t: Test, action: TestEditAction, scope: TestEditScope) => {
+    if (testEditBusy || !snapshotStatus.test_edit_supported) return;
+    const target = scope === 'file' ? (t.file || 'file') : (t.name || 'test');
+    const verb = action === 'skip' ? 'Skip' : 'Delete';
+    const scopeLabel = scope === 'file' ? 'file' : 'test';
+
+    setTestEditBusy(true);
+    setStatus(action === 'skip' ? `Skipping ${target}...` : `Deleting ${target}...`);
+    try {
+      const res = await fetch(apiUrl('/api/tests/edit'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          scope,
+          framework: t.framework || '',
+          work_dir: t.work_dir || '',
+          package_path: t.package_path || '',
+          file: t.file || '',
+          line: t.line || 0,
+          test_name: t.name || '',
+          suite: t.suite || [],
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setStatus(`Test edit failed: ${text.trim()}`);
+        return;
+      }
+      const result = await res.json();
+      setStatus(result?.message || `${verb} ${scopeLabel} saved`);
+      if (action === 'delete') {
+        commitRoute({ ...routeState, selectedPath: '' }, 'replace');
+      }
+      await refreshSnapshot();
+    } catch (e: any) {
+      setStatus(`Test edit error: ${e?.message || e}`);
+    } finally {
+      setTestEditBusy(false);
+    }
+  }, [testEditBusy, snapshotStatus.test_edit_supported, routeState, commitRoute, refreshSnapshot]);
+
   const onCollectStack = useCallback(async (pid: number) => {
     if (stackBusyPID !== null) return;
     setStackBusyPID(pid);
@@ -880,7 +931,7 @@ export function App() {
         }
         right={activeTab === 'diagnostics'
           ? <DiagnosticsDetailPanel process={selectedProcess} onCollectStack={onCollectStack} collectBusy={stackBusyPID === selectedProcess?.pid} runMeta={runMeta} />
-          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
+          : <DetailPanel test={selected} lint={lint} onRerun={onRerun} rerunBusy={rerunBusy} onStop={onStop} stopBusy={stopBusyKey !== null} onIgnore={onIgnore} ignoreBusy={ignoreBusy} onTestEdit={onTestEdit} testEditBusy={testEditBusy} testEditSupported={snapshotStatus.test_edit_supported !== false} runMeta={runMeta} nodeRouteState={nodeRouteState} failingOnlyRouteState={failingOnlyRouteState} />}
       />
       <RerunDialog open={rerunDialogOpen} onClose={() => setRerunDialogOpen(false)} />
     </div>

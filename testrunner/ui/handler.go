@@ -212,6 +212,15 @@ func (s *Server) MarkDone() {
 	s.notify()
 }
 
+// Done reports whether the current run has finished (terminal snapshot). Used
+// by MultiServer to decide which runs are safe to evict — a running run is
+// never reclaimed.
+func (s *Server) Done() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.done
+}
+
 func (s *Server) StreamFrom(ch <-chan []parsers.Test) {
 	s.streamFrom(ch, false)
 }
@@ -264,6 +273,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/rerun/stream", s.handleRerunStream)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/lint/ignore", s.handleLintIgnore)
+	mux.HandleFunc("/api/tests/edit", s.handleTestEdit)
 	mux.HandleFunc("/api/benchmarks", s.handleBenchJSON)
 	return mux
 }
@@ -390,6 +400,7 @@ func (s *Server) snapshot() Snapshot {
 			LintRun:              s.lintRun,
 			DiagnosticsAvailable: s.diag != nil || s.embeddedDiagnostics != nil,
 			StopSupported:        s.stopFn != nil,
+			TestEditSupported:    s.testEditSupportedLocked(),
 			Stopped:              stopped,
 			StopMessage:          stopMessage,
 		},

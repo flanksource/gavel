@@ -74,7 +74,12 @@ type Test struct {
 	Skipped     bool          `json:"skipped,omitempty"`
 	Failed      bool          `json:"failed,omitempty"`
 	Passed      bool          `json:"passed,omitempty"`
-	Pending     bool          `json:"pending,omitempty"`
+	// Warned marks a node that completed with a non-blocking warning — a
+	// problem the operator should see (amber) but which is not a failure.
+	// Distinct from Failed: a warned child never flips its parent to Failed
+	// (see propagateFailureStatusRecursive), and renderers show it amber.
+	Warned  bool `json:"warned,omitempty"`
+	Pending bool `json:"pending,omitempty"`
 	// Running marks a node whose execution has started but not yet finished.
 	// It is distinct from Pending, which means queued/not-yet-started. A
 	// provider sets Running when it begins a node and clears it on the
@@ -444,6 +449,8 @@ func (tr Test) Sum() TestSummary {
 	}
 	if tr.Failed {
 		summary.Failed = 1
+	} else if tr.Warned {
+		summary.Warned = 1
 	} else if tr.Skipped {
 		summary.Skipped = 1
 	} else if tr.Passed {
@@ -461,6 +468,7 @@ func (tr Test) Sum() TestSummary {
 		summary.Total += childSummary.Total
 		summary.Passed += childSummary.Passed
 		summary.Failed += childSummary.Failed
+		summary.Warned += childSummary.Warned
 		summary.Skipped += childSummary.Skipped
 		summary.Pending += childSummary.Pending
 		summary.Running += childSummary.Running
@@ -586,6 +594,7 @@ type TestSummary struct {
 	Total    int
 	Passed   int
 	Failed   int
+	Warned   int
 	Skipped  int
 	Pending  int
 	Running  int
@@ -600,6 +609,9 @@ func (s TestSummary) Pretty() api.Text {
 	}
 	if s.Failed > 0 {
 		t = t.Add(clicky.KeyValue(" failed", s.Failed, "text-red-500")).Append(" ")
+	}
+	if s.Warned > 0 {
+		t = t.Add(clicky.KeyValue(" warned", s.Warned, "text-amber-500")).Append(" ")
 	}
 	if s.Skipped > 0 {
 		t = t.Add(clicky.KeyValue(" skipped", s.Skipped, "text-yellow-500")).Append(" ")
@@ -620,6 +632,7 @@ func (tr TestSummary) Add(other TestSummary) TestSummary {
 		Total:    tr.Total + other.Total,
 		Passed:   tr.Passed + other.Passed,
 		Failed:   tr.Failed + other.Failed,
+		Warned:   tr.Warned + other.Warned,
 		Skipped:  tr.Skipped + other.Skipped,
 		Pending:  tr.Pending + other.Pending,
 		Running:  tr.Running + other.Running,
@@ -669,6 +682,7 @@ func (tr Test) Filter(filter TestFilter) Test {
 		Line:              tr.Line,
 		Duration:          tr.Duration,
 		Failed:            tr.Failed,
+		Warned:            tr.Warned,
 		Skipped:           tr.Skipped,
 		Passed:            tr.Passed,
 		Stdout:            tr.Stdout,

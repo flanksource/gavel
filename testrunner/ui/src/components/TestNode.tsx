@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import type { Test } from '../types';
 import { statusIcon, statusColor, formatCount, formatDuration, sum, hasFailed, frameworkIcon, totalDuration, humanizeName, isLintNode, lintNodeCount, lintBadgeColor } from '../utils';
 
@@ -12,6 +12,11 @@ interface Props {
   onStop?: (t: Test) => void;
   rerunBusy?: boolean;
   stopBusy?: boolean;
+  // leadingIcon lets the host render a per-node decoration (e.g. a domain-kind
+  // icon) just before the node name, returning null for nodes it doesn't
+  // decorate. It is threaded down the tree so every depth gets the same hook.
+  // Kept generic — gavel has no knowledge of the host's kinds.
+  leadingIcon?: (test: Test) => ReactNode;
 }
 
 function resolveFramework(t: Test): string | undefined {
@@ -23,7 +28,7 @@ function resolveFramework(t: Test): string | undefined {
   return undefined;
 }
 
-export function TestNode({ test: t, depth, expandAll, selected, onSelect, onRerun, onStop, rerunBusy, stopBusy }: Props) {
+export function TestNode({ test: t, depth, expandAll, selected, onSelect, onRerun, onStop, rerunBusy, stopBusy, leadingIcon }: Props) {
   const hasChildren = (t.children?.length ?? 0) > 0;
   const failed = hasFailed(t);
   const defaultOpen = failed || depth < 1;
@@ -75,6 +80,8 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
         {fwIcon && !isLint && (
           <iconify-icon icon={fwIcon} className="text-sm shrink-0 opacity-60" />
         )}
+
+        {leadingIcon && !isLint ? leadingIcon(t) : null}
 
         <span className={`truncate ${isLint ? 'text-gray-800' : isStoppedTask ? 'text-orange-700' : t.running ? 'text-blue-600' : t.pending ? 'text-gray-400' : t.failed ? 'text-red-700' : t.skipped ? 'text-yellow-700' : 'text-gray-800'} ${isSelected ? 'font-semibold' : 'font-medium'}`}>
           {humanizeName(t.name, fw)}
@@ -141,7 +148,7 @@ export function TestNode({ test: t, depth, expandAll, selected, onSelect, onReru
       </div>
 
       {open && hasChildren && t.children!.map((child, i) => (
-        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusy} />
+        <TestNode key={i} test={child} depth={depth + 1} expandAll={expandAll} selected={selected} onSelect={onSelect} onRerun={onRerun} onStop={onStop} rerunBusy={rerunBusy} stopBusy={stopBusy} leadingIcon={leadingIcon} />
       ))}
     </div>
   );
