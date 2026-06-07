@@ -34,6 +34,7 @@ type SnapshotStatus struct {
 	LintRun              bool   `json:"lint_run,omitempty"`
 	DiagnosticsAvailable bool   `json:"diagnostics_available,omitempty"`
 	StopSupported        bool   `json:"stop_supported,omitempty"`
+	TestEditSupported    bool   `json:"test_edit_supported"`
 	Stopped              bool   `json:"stopped,omitempty"`
 	StopMessage          string `json:"stop_message,omitempty"`
 }

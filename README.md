@@ -106,6 +106,7 @@ gavel test --bench .                                  # run benchmarks alongside
 gavel test --fixtures                                 # discover and run *.fixture.md files
 gavel test --format "json=out.json,html=report.html"  # write multiple output formats
 gavel test --dry-run                                  # show what would run without executing
+gavel test history                                    # show local test duration/pass history
 ```
 
 | Flag | Description |
@@ -132,6 +133,18 @@ gavel test --dry-run                                  # show what would run with
 | `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
 | `--extra-args` | Additional arguments passed through to test runners |
 | `--work-dir` | Working directory to run tests in |
+
+#### `gavel test history`
+
+Show a package/file/suite outline of executable tests from completed `.gavel/run-*.json` snapshots.
+
+```bash
+gavel test history
+gavel test history ./pkg/foo
+gavel test history pkg/foo/foo_test.go --format json
+```
+
+Each leaf row shows min/avg/max duration, execution count, pass rate, last passed, last failed, and the date the test first appeared in local history. Optional paths filter by package or file relative to `--cwd`.
 
 #### `gavel lint`
 

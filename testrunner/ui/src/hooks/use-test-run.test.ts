@@ -77,6 +77,13 @@ describe('useTestRun (SSE transport)', () => {
     expect(fetch).toHaveBeenCalledWith('/results/x/api/tests', expect.anything());
   });
 
+  it('scopes the stream under <baseUrl>/<runId> when runId is set', async () => {
+    renderHook(() => useTestRun({ baseUrl: '/live', runId: 'run a/b' }));
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    expect(FakeEventSource.last().url).toBe('/live/run%20a%2Fb/api/tests/stream');
+    expect(fetch).toHaveBeenCalledWith('/live/run%20a%2Fb/api/tests', expect.anything());
+  });
+
   it('exposes tests and status from streamed message frames', async () => {
     const { result } = renderHook(() => useTestRun());
     await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
@@ -145,6 +152,33 @@ describe('useTestRun (SSE transport)', () => {
     expect(fetch).toHaveBeenCalledWith(
       '/api/stop',
       expect.objectContaining({ body: JSON.stringify({ scope: 'global' }) }),
+    );
+  });
+
+  it('editTest() POSTs the body to <baseUrl>/api/tests/edit', async () => {
+    const { result } = renderHook(() => useTestRun({ baseUrl: '/b' }));
+    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    await act(async () => {
+      await result.current.editTest({
+        action: 'skip',
+        scope: 'test',
+        framework: 'vitest',
+        file: 'sum.test.ts',
+        test_name: 'works',
+      });
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      '/b/api/tests/edit',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'skip',
+          scope: 'test',
+          framework: 'vitest',
+          file: 'sum.test.ts',
+          test_name: 'works',
+        }),
+      }),
     );
   });
 });

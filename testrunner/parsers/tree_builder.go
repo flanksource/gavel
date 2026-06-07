@@ -410,6 +410,17 @@ func propagateFailureStatusRecursive(test *Test) {
 			break
 		}
 	}
+
+	// A warned child raises the parent to Warned — but only when the parent is
+	// not Failed, so amber never masks red. The Failed loop above runs first.
+	if !test.Failed {
+		for _, child := range test.Children {
+			if child.Warned {
+				test.Warned = true
+				break
+			}
+		}
+	}
 }
 
 // clearFileOnDescendants clears the File field on all descendant tests,

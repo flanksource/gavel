@@ -169,7 +169,7 @@ func (p *GinkgoJSON) specReportToTest(spec ginkgoSpecReport, suite ginkgoSuiteRe
 				test.FailureDetail.Location = ctx.FailureLocation
 			}
 		}
-	case "skipped":
+	case "skipped", "pending":
 		test.Skipped = true
 	}
 

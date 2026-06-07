@@ -80,6 +80,7 @@ gavel
 |-- test
 |   |-- ginkgo
 |   |-- go
+|   |-- history
 |   |-- jest
 |   |-- playwright
 |   `-- vitest
@@ -292,6 +293,8 @@ gavel test --ui --detach --auto-stop=30m --idle-timeout=5m
 gavel test --bench .
 gavel test --fixtures
 gavel test --sync-todos
+gavel test history
+gavel test history ./pkg/foo
 ```
 
 The UI path is worth calling out separately:
@@ -306,6 +309,8 @@ Framework pinning is available in two forms:
 - `gavel test go`, `gavel test ginkgo`, `gavel test jest`, `gavel test vitest`, `gavel test playwright`
 
 Use the framework subcommands when you want the full `test` flag surface but do not want auto-detection to choose runners for you.
+
+`gavel test history` reads completed run snapshots from `.gavel/run-*.json` and shows a package/file/suite outline of executable tests. Leaf rows include execution count, pass rate, min/avg/max duration, last passed, last failed, and the date the test first appeared in local history. Optional paths filter by package or file relative to `--cwd`.
 
 ### `gavel lint`
 

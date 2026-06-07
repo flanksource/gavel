@@ -234,6 +234,36 @@ func TestGinkgoJSONParseSkippedTests(t *testing.T) {
 	}
 }
 
+func TestGinkgoJSONParsePendingTestsAsSkipped(t *testing.T) {
+	suites := []ginkgoSuiteReport{{
+		SuitePath:        "/path/to/pkg",
+		SuiteDescription: "Test Suite",
+		SpecReports: []ginkgoSpecReport{{
+			ContainerHierarchyTexts: []string{"Some Tests"},
+			LeafNodeText:            "should be pending",
+			LeafNodeLocation: ginkgoLocation{
+				FileName:   "/path/to/pkg/test_test.go",
+				LineNumber: 100,
+			},
+			State: "pending",
+		}},
+	}}
+	data, err := json.Marshal(suites)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	tests, err := NewGinkgoJSON("").Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(tests))
+	}
+	if !tests[0].Skipped || tests[0].Failed {
+		t.Fatalf("pending spec should be skipped, got %+v", tests[0])
+	}
+}
+
 func TestGinkgoJSONParseMultipleTests(t *testing.T) {
 	suites := []ginkgoSuiteReport{
 		{

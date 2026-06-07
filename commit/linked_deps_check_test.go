@@ -236,6 +236,92 @@ func TestEvaluateLinkedDeps_PackageJSON(t *testing.T) {
 	})
 }
 
+func TestEvaluateLinkedDeps_PnpmLock(t *testing.T) {
+	t.Run("file specifier escaping repo is a violation", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      '@flanksource/clicky-ui':
+        specifier: file:../clicky-ui/packages/ui
+        version: file:../clicky-ui/packages/ui(@types/react@19.2.14)(react@19.2.5)
+`)
+		gitRun(t, repo, "add", "pnpm-lock.yaml")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		require.Len(t, vs, 1)
+		assert.Equal(t, "pnpm-lock.yaml", vs[0].File)
+		assert.Equal(t, LinkedDepKindPnpmLockFile, vs[0].Kind)
+		assert.Equal(t, "@flanksource/clicky-ui", vs[0].Name)
+		assert.Equal(t, "file:../clicky-ui/packages/ui", vs[0].Target)
+		assert.NotContains(t, vs[0].Resolved, "react@19.2.5", "peer suffix must not be treated as part of the path")
+	})
+
+	t.Run("poisoned package key escaping repo is a violation", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+packages:
+  '@flanksource/gavel@file:../gavel/testrunner/ui(@types/react@19.2.14)':
+    resolution:
+      directory: ../gavel/testrunner/ui
+      type: directory
+`)
+		gitRun(t, repo, "add", "pnpm-lock.yaml")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		require.Len(t, vs, 1)
+		assert.Equal(t, LinkedDepKindPnpmLockFile, vs[0].Kind)
+		assert.Equal(t, "@flanksource/gavel", vs[0].Name)
+		assert.Equal(t, "file:../gavel/testrunner/ui", vs[0].Target)
+	})
+
+	t.Run("in-repo link is clean", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFileInDir(t, repo, "packages/shared/package.json", `{"name":"shared"}`)
+		writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      shared:
+        specifier: workspace:*
+        version: link:packages/shared
+`)
+		gitRun(t, repo, "add", "pnpm-lock.yaml", "packages/shared/package.json")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"pnpm-lock.yaml", "packages/shared/package.json"}, nil)
+		require.NoError(t, err)
+		assert.Empty(t, vs)
+	})
+
+	t.Run("registry versions are clean", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      '@flanksource/gavel':
+        specifier: 0.1.2
+        version: 0.1.2(@types/react@19.2.14)(react@19.2.5)
+
+packages:
+  '@flanksource/gavel@0.1.2':
+    resolution: {integrity: sha512-fake}
+`)
+		gitRun(t, repo, "add", "pnpm-lock.yaml")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		assert.Empty(t, vs)
+	})
+}
+
 func staticLinkedDepDecider(d LinkedDepDecision) LinkedDepDecider {
 	return func(context.Context, LinkedDepViolation) (LinkedDepChoice, error) {
 		return LinkedDepChoice{Decision: d}, nil
@@ -681,6 +767,53 @@ replace github.com/flanksource/commons => ../../commons
 		Changes:     source.Changes,
 		Decider: func(context.Context, LinkedDepViolation) (LinkedDepChoice, error) {
 			t.Fatal("pre-existing HEAD violation should not prompt")
+			return LinkedDepChoice{Decision: LinkedDepDecisionCancel}, nil
+		},
+		Mode: IgnoreCheckModePrompt,
+	})
+	require.NoError(t, err)
+	assert.False(t, outcome.Cancelled)
+	assert.Empty(t, outcome.Unstaged)
+}
+
+func TestRunLinkedDepsCheck_IgnoresPnpmLockViolationsAlreadyPresentOnHEAD(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      local-ui:
+        specifier: file:../ui
+        version: file:../ui
+`)
+	gitRun(t, repo, "add", "pnpm-lock.yaml")
+	gitRun(t, repo, "commit", "-m", "seed existing poisoned pnpm lock")
+
+	writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      local-ui:
+        specifier: file:../ui
+        version: file:../ui
+      lodash:
+        specifier: ^4.17.21
+        version: 4.17.21
+`)
+	gitRun(t, repo, "add", "pnpm-lock.yaml")
+
+	source, err := readStagedSource(repo)
+	require.NoError(t, err)
+
+	outcome, err := RunLinkedDepsCheck(context.Background(), LinkedDepsParams{
+		WorkDir:     repo,
+		GitRoot:     repo,
+		StagedFiles: source.Files,
+		Changes:     source.Changes,
+		Decider: func(context.Context, LinkedDepViolation) (LinkedDepChoice, error) {
+			t.Fatal("pre-existing HEAD pnpm-lock violation should not prompt")
 			return LinkedDepChoice{Decision: LinkedDepDecisionCancel}, nil
 		},
 		Mode: IgnoreCheckModePrompt,

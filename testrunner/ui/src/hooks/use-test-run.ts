@@ -7,6 +7,7 @@ import type {
   Snapshot,
   SnapshotStatus,
   Test,
+  TestEditRequest,
 } from '../types';
 import { isLintOnlyPhase } from '../utils';
 
@@ -22,6 +23,11 @@ export interface UseTestRunOptions {
   /** Alias for baseUrl kept for parity with useTaskRun. Defaults to
    *  window.__gavelBasePath ?? "". */
   basePath?: string;
+  /** Scope every request to a specific run id, hitting
+   *  `${base}/${runId}/api/...` instead of `${base}/api/...`. Set when the host
+   *  serves many concurrent runs (gavel MultiServer); omit for a single-run
+   *  server mounted at the root. */
+  runId?: string;
   /** Disable the subscription entirely (e.g. before a target is known). */
   enabled?: boolean;
   /** Poll interval (ms) for the fallback transport. */
@@ -43,6 +49,7 @@ export interface UseTestRunResult {
   error: string | undefined;
   rerun: (body?: RerunRequest) => Promise<void>;
   stop: (taskId?: string) => Promise<void>;
+  editTest: (body: TestEditRequest) => Promise<void>;
   /** Reconnect the stream / restart polling. */
   refetch: () => void;
 }
@@ -80,11 +87,15 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
   const {
     baseUrl,
     basePath,
+    runId,
     enabled = true,
     pollMs = DEFAULT_POLL_MS,
     forcePoll = false,
   } = options;
-  const base = baseUrl ?? basePath ?? defaultBase();
+  const root = baseUrl ?? basePath ?? defaultBase();
+  // When a run id is supplied, every endpoint is scoped under it so the host can
+  // route to that run's isolated stream; otherwise hit the root single-run paths.
+  const base = runId ? `${root}/${encodeURIComponent(runId)}` : root;
 
   const [snapshot, setSnapshot] = useState<Snapshot | undefined>(undefined);
   const [statusText, setStatusText] = useState('Loading...');
@@ -190,6 +201,22 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     [base],
   );
 
+  const editTest = useCallback(
+    async (body: TestEditRequest) => {
+      const res = await fetch(`${base}/api/tests/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setError(`Test edit failed: ${(await res.text()).trim()}`);
+        return;
+      }
+      setStreamToken((n) => n + 1);
+    },
+    [base],
+  );
+
   const refetch = useCallback(() => setStreamToken((n) => n + 1), []);
 
   return {
@@ -204,6 +231,7 @@ export function useTestRun(options: UseTestRunOptions = {}): UseTestRunResult {
     error,
     rerun,
     stop,
+    editTest,
     refetch,
   };
 }

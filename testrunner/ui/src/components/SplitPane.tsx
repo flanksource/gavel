@@ -40,14 +40,14 @@ export function SplitPane({ left, right, defaultSplit = 50, minLeft = 20, minRig
 
   return (
     <div ref={container} className="flex flex-1 overflow-hidden min-h-0">
-      <div style={{ width: `${split}%` }} className="overflow-y-auto bg-white min-h-0">
+      <div style={{ width: `${split}%` }} className="flex flex-col overflow-hidden bg-white min-h-0">
         {left}
       </div>
       <div
         className="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize shrink-0 transition-colors"
         onMouseDown={onMouseDown}
       />
-      <div style={{ width: `${100 - split}%` }} className="overflow-hidden bg-white min-h-0">
+      <div style={{ width: `${100 - split}%` }} className="flex flex-col overflow-hidden bg-white min-h-0">
         {right}
       </div>
     </div>
