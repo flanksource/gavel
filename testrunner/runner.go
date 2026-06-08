@@ -120,6 +120,7 @@ type RunOptions struct {
 	WorkDir       string                `json:"work_dir,omitempty" flag:"work-dir"`                           // Working directory to run tests in
 	DryRun        bool                  `json:"dry_run,omitempty" flag:"dry-run"`                             // Show what tests would be executed without running them
 	Recursive     bool                  `json:"recursive,omitempty" flag:"recursive" default:"true"`          // Recursively discover test packages in subdirectories
+	PreBuild      bool                  `json:"pre_build,omitempty" flag:"pre-build" default:"true"`          // Compile all Go test binaries once before the timed run so per-package timeouts cover execution, not cold compilation. Disable with --pre-build=false.
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	Concurrency   int                   `json:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
@@ -927,6 +928,15 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
 		return o.displayDryRun(packagesByFramework, extraArgs), nil
+	}
+
+	// Compile all Go test binaries up front so the per-package timeout below
+	// covers execution only. Heavy packages otherwise compile from a cold
+	// cache under concurrency and blow their deadline before any test runs.
+	if o.PreBuild {
+		if err := o.preBuildGoPackages(goPackagesToWarm(packagesByFramework)); err != nil {
+			return nil, err
+		}
 	}
 
 	// Send pending package outline to UI before execution
