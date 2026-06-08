@@ -47,6 +47,16 @@ jobs:
           npm install --prefix pr/ui
           npm ci --prefix site
 
+      # Compile every test binary up front so the per-package timeout in
+      # `gavel test` covers execution only. The heaviest packages (ai, ai/aifix
+      # pull in ~2k transitive deps) otherwise compile from a cold cache while
+      # 16 packages run concurrently on a 2-core runner, blowing the 5m
+      # per-package deadline before a single test executes.
+      - name: Warm test build cache
+        run: go test -count=0 ./...
+        env:
+          CGO_ENABLED: 0
+
       - name: Run tests
         run: ./gavel test
         env:
