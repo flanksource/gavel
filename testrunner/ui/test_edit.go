@@ -196,10 +196,6 @@ func testsHaveWorkDir(tests []parsers.Test) bool {
 	return false
 }
 
-func testsHaveWorkDirRoot(tests []parsers.Test, root string) bool {
-	return testWorkDirRoot(tests, root) != ""
-}
-
 func testWorkDirRoot(tests []parsers.Test, root string) string {
 	for _, test := range tests {
 		if test.WorkDir != "" {
