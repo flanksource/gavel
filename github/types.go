@@ -274,7 +274,7 @@ func prettyLogTail(logTail string) api.Text {
 func (r WorkflowRun) Pretty() api.Text {
 	text := clicky.Text("  ", "").
 		Add(StatusIcon(strings.ToUpper(r.Status), strings.ToUpper(r.Conclusion))).
-		Append(" "+r.Name, "font-bold")
+		Append(" "+r.Name, "")
 	for _, job := range r.Jobs {
 		text = text.NewLine().Add(job.Pretty())
 	}
@@ -282,8 +282,8 @@ func (r WorkflowRun) Pretty() api.Text {
 }
 
 func (pr PRInfo) Pretty() api.Text {
-	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "font-bold").
-		Append(pr.Title, "font-bold")
+	title := clicky.Text(fmt.Sprintf("PR #%d: ", pr.Number), "").
+		Append(pr.Title, "")
 
 	meta := clicky.Text("  ", "").
 		Append(pr.BaseRefName, "text-cyan-600").

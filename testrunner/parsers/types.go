@@ -296,6 +296,16 @@ func (t Test) Pretty() api.Text {
 		})
 	}
 
+	// Surface the provider-owned Detail inline beneath the summary line. On a
+	// failure always (so the rich body — e.g. an activity trace's Input Fields /
+	// Errors block — reaches the terminal, not just the JSON report); on a
+	// passing node only at -vv (logger.V(2)) so green runs stay scannable.
+	if t.Detail != nil && (t.Failed || logger.V(2).Enabled()) {
+		if body := RenderDetail(t.Detail); !body.IsEmpty() {
+			s = s.NewLine().Add(api.Collapsed{Label: "detail", Content: body})
+		}
+	}
+
 	return s
 }
 
