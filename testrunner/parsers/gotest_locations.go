@@ -42,7 +42,7 @@ func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 				locations[fn.Name.Name] = TestLocation{
 					File:              pos.Filename,
 					Line:              pos.Line,
-					IsGinkgoBootstrap: containsRunSpecs(fn),
+					IsGinkgoBootstrap: ContainsRunSpecs(fn),
 				}
 			}
 			return true
@@ -53,9 +53,9 @@ func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 	return locations, err
 }
 
-// containsRunSpecs checks if a function body contains a call to RunSpecs,
+// ContainsRunSpecs checks if a function body contains a call to RunSpecs,
 // which indicates a Ginkgo bootstrap test function.
-func containsRunSpecs(fn *ast.FuncDecl) bool {
+func ContainsRunSpecs(fn *ast.FuncDecl) bool {
 	if fn.Body == nil {
 		return false
 	}

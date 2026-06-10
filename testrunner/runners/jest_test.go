@@ -160,7 +160,7 @@ func TestDetectPackageManager(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(tmp, tc.file), []byte(""), 0o644); err != nil {
 				t.Fatalf("write lockfile: %v", err)
 			}
-			cmd, pre := detectPackageManager(tmp)
+			cmd, pre := DetectPackageManager(tmp)
 			if cmd != tc.cmd {
 				t.Errorf("cmd = %q, want %q", cmd, tc.cmd)
 			}
@@ -171,7 +171,7 @@ func TestDetectPackageManager(t *testing.T) {
 	}
 	t.Run("no lockfile", func(t *testing.T) {
 		tmp := t.TempDir()
-		cmd, pre := detectPackageManager(tmp)
+		cmd, pre := DetectPackageManager(tmp)
 		if cmd != "npx" || pre != nil {
 			t.Errorf("cmd,pre = %q,%v; want npx,nil", cmd, pre)
 		}
