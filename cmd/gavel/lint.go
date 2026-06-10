@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
 	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/tsc"
@@ -105,7 +106,7 @@ func (o LintOptions) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd, betterleaks.
+Supports: golangci-lint, ruff, eslint, oxlint, pyright, markdownlint, vale, jscpd, betterleaks.
 
 Examples:
   gavel lint
@@ -373,6 +374,7 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(golangci.NewGolangciLint(workDir))
 	registry.Register(ruff.NewRuff(workDir))
 	registry.Register(eslint.NewESLint(workDir))
+	registry.Register(oxlint.NewOxlint(workDir))
 	registry.Register(pyright.NewPyright(workDir))
 	registry.Register(tsc.NewTSC(workDir))
 	registry.Register(markdownlint.NewMarkdownlint(workDir))

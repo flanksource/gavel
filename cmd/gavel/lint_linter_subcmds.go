@@ -20,6 +20,7 @@ var lintSubcommands = []struct {
 	{"golangci", "golangci-lint", "Alias for golangci-lint"},
 	{"ruff", "ruff", "Run only ruff (Python)"},
 	{"eslint", "eslint", "Run only eslint"},
+	{"oxlint", "oxlint", "Run only oxlint (JS/TS)"},
 	{"pyright", "pyright", "Run only pyright (Python types)"},
 	{"tsc", "tsc", "Run only tsc (TypeScript compile check)"},
 	{"typescript", "tsc", "Alias for tsc"},

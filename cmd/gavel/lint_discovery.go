@@ -37,6 +37,12 @@ var linterDirectConfigPatterns = map[string][]string{
 		".markdownlint.yml",
 		".markdownlint-cli2.*",
 	},
+	"oxlint": {
+		".oxlintrc.json",
+		".oxlintrc.jsonc",
+		"oxlint.json",
+		"oxlintrc.json",
+	},
 	"pyright": {
 		"pyrightconfig.json",
 		"pyproject.toml",
