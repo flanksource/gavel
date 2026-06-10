@@ -94,14 +94,14 @@ func hasNpmDep(pkg *pkgJSON, name string) bool {
 	return ok
 }
 
-// detectPackageManager returns the command + prefix args used to invoke a
+// DetectPackageManager returns the command + prefix args used to invoke a
 // node tool from dir. It walks up looking for lockfiles and falls back to npx.
 //   - pnpm-lock.yaml    → ("pnpm", ["exec"])
 //   - yarn.lock         → ("yarn", nil)
 //   - package-lock.json → ("npm", ["exec", "--"])
 //   - bun.lockb         → ("bun", ["x"])
 //   - none              → ("npx", nil)
-func detectPackageManager(dir string) (string, []string) {
+func DetectPackageManager(dir string) (string, []string) {
 	cur, _ := filepath.Abs(dir)
 	for {
 		if _, err := os.Stat(filepath.Join(cur, "pnpm-lock.yaml")); err == nil {
