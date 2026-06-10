@@ -39,6 +39,7 @@ type Entry struct {
 	DuplicationPct float64           `json:"duplication_pct,omitempty"`
 	Description    string            `json:"description,omitempty"`
 	AISummary      string            `json:"ai_summary,omitempty"`
+	Error          string            `json:"error,omitempty"` // collection failed for this package/file
 	History        *history.Entry    `json:"history,omitempty"`
 	Children       []*Entry          `json:"children,omitempty"`
 
@@ -52,12 +53,14 @@ type Report struct {
 }
 
 // Leaves returns every executable (non-container) entry in the report,
-// depth-first.
+// depth-first. Error rows (a package whose tests could not be collected) are
+// not tests and are excluded, so they never count toward totals or get history,
+// duplication, or AI annotations; they still render in the tree.
 func (r *Report) Leaves() []*Entry {
 	var leaves []*Entry
 	var walk func(*Entry)
 	walk = func(e *Entry) {
-		if !e.Container {
+		if !e.Container && e.Error == "" {
 			leaves = append(leaves, e)
 		}
 		for _, child := range e.Children {
