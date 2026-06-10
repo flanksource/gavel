@@ -94,6 +94,9 @@ func fileNode(file string, entries []*Entry) *outlineGroup {
 }
 
 func countLeaves(e *Entry) int {
+	if e.Error != "" {
+		return 0
+	}
 	if len(e.Children) == 0 && !e.Container {
 		return 1
 	}
@@ -118,6 +121,10 @@ func (n *entryNode) GetChildren() []api.TreeNode {
 
 func (n *entryNode) Pretty() api.Text {
 	e := n.entry
+	if e.Error != "" {
+		t := clicky.Text(e.Name, "bold text-red-600")
+		return t.Space().Append("— "+e.Error, "text-red-600")
+	}
 	if e.Container {
 		t := clicky.Text(e.Name, "bold text-muted")
 		return appendBadges(t, e)

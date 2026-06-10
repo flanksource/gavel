@@ -1,6 +1,7 @@
 package outline
 
 import (
+	"fmt"
 	"os"
 
 	. "github.com/onsi/gomega"
@@ -38,5 +39,35 @@ var _ = Describe("parseVitestList", func() {
 	It("uses the location line when present", func() {
 		Expect(entries[3].Line).To(Equal(12))
 		Expect(entries[3].Suite).To(Equal([]string{"located suite"}))
+	})
+})
+
+var _ = Describe("vitestErrorEntry", func() {
+	It("anchors a collection failure on the package's package.json", func() {
+		entry := vitestErrorEntry("./site", fmt.Errorf("boom"))
+		Expect(entry.Framework).To(Equal(parsers.Vitest))
+		Expect(entry.File).To(Equal("site/package.json"))
+		Expect(entry.Error).NotTo(BeEmpty())
+	})
+
+	It("surfaces the module-resolution cause, stripped of ANSI color", func() {
+		raw := fmt.Errorf("vitest list in /abs/site failed: exit status 1\n" +
+			"Output:\nvitest.config.ts (1:1) \x1b[33m[UNRESOLVED] \x1b[0mCould not resolve 'vitest/config'")
+		Expect(vitestErrorEntry("./site", raw).Error).
+			To(Equal("vitest.config.ts (1:1) [UNRESOLVED] Could not resolve 'vitest/config'"))
+	})
+
+	It("falls back to the first line when no known cause is present", func() {
+		Expect(vitestErrorEntry("ui", fmt.Errorf("exit status 1\nmore detail")).Error).
+			To(Equal("exit status 1"))
+	})
+
+	It("is excluded from report leaves so it is not counted as a test", func() {
+		report := &Report{Entries: []*Entry{
+			{Framework: parsers.Vitest, Name: "real test"},
+			vitestErrorEntry("./site", fmt.Errorf("boom")),
+		}}
+		Expect(report.Leaves()).To(HaveLen(1))
+		Expect(report.Leaves()[0].Name).To(Equal("real test"))
 	})
 })
