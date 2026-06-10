@@ -32,6 +32,8 @@ type PRListOptions struct {
 	Org         string   `flag:"org" help:"GitHub org for --all (auto-detected from git remote)"`
 	Limit       int      `flag:"limit" help:"Maximum PRs to return" default:"50"`
 	Status      bool     `flag:"status" help:"Show GitHub Actions check status counts"`
+	CI          bool     `flag:"ci" help:"List default-branch (main) CI status across the org's repos pushed within --since (incl. private; needs repo scope)"`
+	FailedOnly  bool     `flag:"failed-only" help:"With --ci, show only repos whose default branch is currently failing"`
 	Logs        bool     `flag:"logs" help:"Fetch failed job log tails (requires --status -v, uses extra API quota)"`
 	URL         bool     `flag:"url" help:"Show PR URL instead of number"`
 	UI          bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
@@ -157,6 +159,10 @@ func runPRList(opts PRListOptions) (any, error) {
 		return nil, runPRUI(opts)
 	}
 
+	if opts.CI {
+		return runOrgBranchStatus(opts)
+	}
+
 	ghOpts, searchOpts, err := buildPRSearchOpts(opts)
 	if err != nil {
 		return nil, err
@@ -171,6 +177,42 @@ func runPRList(opts PRListOptions) (any, error) {
 		results = filterByBot(results, false)
 	}
 
+	return results, nil
+}
+
+// runOrgBranchStatus drives `gavel pr list --ci`: it reports default-branch CI
+// status across an org's repos pushed within the --since window. Org is taken
+// from --org or resolved the same way `--all` resolves it, so it works from any
+// directory. Reuses --since/--failed-only so the recency filter matches the PR
+// list's age semantics.
+func runOrgBranchStatus(opts PRListOptions) (any, error) {
+	var since time.Time
+	if opts.Since != "" {
+		var err error
+		since, err = parseSince(opts.Since)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	ghOpts := github.Options{}
+	org := opts.Org
+	if org == "" {
+		resolved, err := github.ResolveDefaultOrg(ghOpts, ui.LoadSettings().IgnoredOrgs)
+		if err != nil {
+			return nil, fmt.Errorf("cannot determine org for --ci (use --org): %w", err)
+		}
+		org = resolved
+	}
+
+	results, _, err := github.FetchOrgDefaultBranchStatus(ghOpts, github.OrgStatusOptions{
+		Org:        org,
+		Since:      since,
+		FailedOnly: opts.FailedOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 

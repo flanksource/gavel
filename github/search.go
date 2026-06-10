@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -383,58 +382,18 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 		query = prSearchQueryWithStatus
 	}
 
-	body := map[string]any{
-		"query": query,
-		"variables": map[string]any{
-			"query": queryString,
-			"first": limit,
-		},
-	}
-
-	ctx := context.Background()
-	client := newClient(token)
-
 	logger.Tracef("searching PRs via GraphQL: %s", queryString)
-	start := time.Now()
-	resp, err := client.R(ctx).
-		Header("Content-Type", "application/json").
-		Post("https://api.github.com/graphql", body)
-	if err != nil {
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-			Duration: time.Since(start), Error: err.Error(),
-		})
-		return nil, nil, fmt.Errorf("GraphQL request: %w", err)
-	}
-	rl := ParseRateLimit(resp.Header)
-	if !resp.IsOK() {
-		respBody, _ := resp.AsString()
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-			StatusCode: resp.StatusCode, Duration: time.Since(start),
-			SizeBytes: len(respBody),
-			Error:     fmt.Sprintf("status %d", resp.StatusCode),
-		})
-		return nil, rl, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
-	}
-
-	respBody, _ := resp.AsString()
-	activity.Shared().Record(activity.Entry{
-		Method: "POST", URL: "/graphql", Kind: activity.KindSearch,
-		StatusCode: resp.StatusCode, Duration: time.Since(start),
-		SizeBytes: len(respBody),
+	respBody, rl, err := postGraphQL(token, graphqlEndpoint(), activity.KindSearch, query, map[string]any{
+		"query": queryString,
+		"first": limit,
 	})
+	if err != nil {
+		return nil, rl, err
+	}
 
 	var result searchResponse
-	if err := json.Unmarshal([]byte(respBody), &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, rl, fmt.Errorf("parse search response: %w", err)
-	}
-	if len(result.Errors) > 0 {
-		msgs := make([]string, len(result.Errors))
-		for i, e := range result.Errors {
-			msgs[i] = e.Message
-		}
-		return nil, rl, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 
 	var items PRSearchResults
@@ -472,30 +431,7 @@ func computeCheckSummary(node searchPRNode) *CheckSummary {
 	if len(node.Commits.Nodes) == 0 {
 		return nil
 	}
-	rollup := node.Commits.Nodes[0].Commit.StatusCheckRollup
-	if rollup == nil {
-		return nil
-	}
-
-	var cs CheckSummary
-	for _, check := range rollup.Contexts.Nodes {
-		sc := check.toStatusCheck()
-		switch {
-		case sc.Status == "COMPLETED" && (sc.Conclusion == "SUCCESS" || sc.Conclusion == "NEUTRAL" || sc.Conclusion == "SKIPPED"):
-			cs.Passed++
-		case sc.Status == "COMPLETED" && (sc.Conclusion == "FAILURE" || sc.Conclusion == "TIMED_OUT" || sc.Conclusion == "STARTUP_FAILURE"):
-			cs.Failed++
-			cs.Failures = append(cs.Failures, FailedCheck{
-				Name:       sc.Name,
-				DetailsURL: sc.DetailsURL,
-			})
-		case sc.Status == "IN_PROGRESS":
-			cs.Running++
-		default:
-			cs.Pending++
-		}
-	}
-	return &cs
+	return summarizeRollup(node.Commits.Nodes[0].Commit.StatusCheckRollup)
 }
 
 func enrichFailedChecks(opts Options, items PRSearchResults, fetchLogs bool) {
@@ -617,7 +553,7 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 		if len(parts) == 2 {
 			repoName = parts[1]
 		}
-		text = text.Append(" "+repoName, "text-cyan-600")
+		text = text.Append(" "+repoName, "font-bold text-cyan-600")
 	}
 
 	if item.ShowURL {
@@ -655,6 +591,10 @@ func (item PRListItem) prettyWithIndent(indent string, showRepo bool) api.Text {
 	return text
 }
 
+// prListDivider is the horizontal rule drawn between PR entries so each PR reads
+// as a distinct block rather than a run-on list.
+const prListDivider = "  ────────────────"
+
 func (r PRSearchResults) Pretty() api.Text {
 	if len(r) == 0 {
 		return clicky.Text("No pull requests found", "text-gray-500")
@@ -662,7 +602,10 @@ func (r PRSearchResults) Pretty() api.Text {
 
 	if !r.hasMultipleRepos() {
 		text := clicky.Text(fmt.Sprintf("Pull Requests (%d)", len(r)), "font-bold")
-		for _, item := range r {
+		for i, item := range r {
+			if i > 0 {
+				text = text.NewLine().Append(prListDivider, "text-gray-500")
+			}
 			text = text.NewLine().Add(item.Pretty())
 		}
 		return text
@@ -676,7 +619,10 @@ func (r PRSearchResults) Pretty() api.Text {
 			repoName = parts[1]
 		}
 		text = text.NewLine().Append(fmt.Sprintf("\n  %s (%d)", repoName, len(g.items)), "font-bold text-cyan-600")
-		for _, item := range g.items {
+		for i, item := range g.items {
+			if i > 0 {
+				text = text.NewLine().Append(prListDivider, "text-gray-500")
+			}
 			text = text.NewLine().Add(item.prettyWithIndent("      ", false))
 		}
 	}

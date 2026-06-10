@@ -70,8 +70,9 @@ func (n *PRViewNode) Pretty() api.Text {
 	text := clicky.Text("")
 	icon, style := prStateIconStyle(n.State, n.IsDraft)
 	text = text.Append(icon, style)
-	text = text.Space().Append(fmt.Sprintf("%s#%d", n.Repo, n.Number), "text-muted")
-	text = text.Space().Append(n.Title, "bold")
+	text = text.Space().Append(n.Repo, "bold").
+		Append(fmt.Sprintf("#%d", n.Number), "text-muted")
+	text = text.Space().Append(n.Title, "")
 	if n.Author != "" {
 		text = text.Space().Append("@"+n.Author, "text-muted")
 	}

@@ -110,10 +110,6 @@ func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent
 	go func() {
 		defer close(updates)
 
-		previousNoRender := clickytask.IsNoRender()
-		clickytask.SetNoRender(true)
-		defer clickytask.SetNoRender(previousNoRender)
-
 		batch := clickytask.Batch[aiSummaryResult]{
 			Name:        "status ai summaries",
 			Items:       items,

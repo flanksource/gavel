@@ -369,16 +369,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// replace github.com/flanksource/commons-db => ../commons-db
-
-// replace github.com/carlos7ags/folio => ../folio
-
-// replace github.com/flanksource/commons => ../commons
-
-// replace github.com/flanksource/repomap => ../repomap
-
-// replace github.com/flanksource/repomap => ../repomap
-
-// replace github.com/flanksource/gomplate => ../gomplate
-
 replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
