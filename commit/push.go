@@ -42,6 +42,7 @@ type pushDeps struct {
 	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error)
 	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
 	confirmProtectedRef func(branch string) bool
+	enableAutoMerge     func(github.Options, string, string) error
 }
 
 func defaultPushDeps() pushDeps {
@@ -56,6 +57,7 @@ func defaultPushDeps() pushDeps {
 		generatePRPrompt:    GeneratePRContent,
 		aheadCommits:        loadAheadCommits,
 		confirmProtectedRef: confirmProtectedBranchPush,
+		enableAutoMerge:     github.EnableAutoMerge,
 	}
 }
 
@@ -147,6 +149,10 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
 	if err != nil {
 		return err
+	}
+
+	if opts.AutoMerge && target.kind != pushTargetNewPR {
+		logger.Warnf("--auto-merge only applies to newly opened PRs; pushing to an existing PR, auto-merge not changed")
 	}
 
 	switch target.kind {
@@ -267,6 +273,9 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		if content.Body != "" {
 			fmt.Fprintf(dryRunOutput, "body:\n%s\n", content.Body)
 		}
+		if opts.AutoMerge {
+			fmt.Fprintf(dryRunOutput, "would enable auto-merge (%s) on the new PR\n", opts.MergeType)
+		}
 		return nil
 	}
 
@@ -300,6 +309,14 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("create PR: %w", err)
 	}
 	logger.Infof("Opened PR #%d against %s: %s", created.Number, created.Base, created.URL)
+
+	if opts.AutoMerge {
+		if err := deps.enableAutoMerge(ghOpts, created.NodeID, opts.MergeType); err != nil {
+			return fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
+		}
+		logger.Infof("Enabled auto-merge (%s) on PR #%d", opts.MergeType, created.Number)
+	}
+
 	printNewPRSummary(created, content)
 	return nil
 }

@@ -324,5 +324,8 @@ func pushAfterCommitForTest(ctx context.Context, opts Options, result *Result, d
 	if deps.confirmProtectedRef != nil {
 		d.confirmProtectedRef = deps.confirmProtectedRef
 	}
+	if deps.enableAutoMerge != nil {
+		d.enableAutoMerge = deps.enableAutoMerge
+	}
 	return pushWithDeps(ctx, opts, result, d)
 }

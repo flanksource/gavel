@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -29,6 +30,8 @@ type CommitOptions struct {
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
 	NoCache      bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
 	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	AutoMerge    bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
+	MergeType    string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
 	Fixup        string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
 	NoAutosquash bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
 	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
@@ -98,6 +101,13 @@ opened (or pushed to a matching open PR). When neither staged changes nor
 ahead-of-upstream commits exist, gavel exits non-zero with "nothing to
 commit and no local commits ahead of upstream".
 
+Add --auto-merge to enable GitHub auto-merge on a PR that -p opens (so it
+merges once required checks pass). --merge-type sets the method
+(rebase|squash|merge; default rebase). Auto-merge only applies to PRs this
+run opens; when -p instead pushes to an existing PR, --auto-merge is ignored
+with a warning. If GitHub rejects enabling auto-merge (repo disallows it, the
+chosen method isn't enabled, no branch protection), gavel exits non-zero.
+
 Examples:
   gavel commit                          # LLM-generated message, staged changes
   gavel commit -i                       # tree picker over all changed files; no git add needed
@@ -116,6 +126,8 @@ Examples:
   gavel commit --lint-secrets=false     # skip the betterleaks secrets scan (default: on)
   gavel commit -p                       # commit (if anything staged) then push / open PR
   gavel commit -p                       # with nothing staged: skip commit, push HEAD, open PR
+  gavel commit -p --auto-merge          # open PR and enable auto-merge (rebase) once checks pass
+  gavel commit -p --auto-merge --merge-type=squash  # auto-merge with a squash merge
   gavel commit --fixup=<hash>           # squash all staged files into <hash>, then autosquash
   gavel commit --fixup                  # auto-route each file by last-touching commit; leftovers fall through to a normal commit
   gavel commit --fixup --no-autosquash  # leave fixup! commits in place; user runs rebase later`
@@ -146,6 +158,8 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Model:           opts.Model,
 		Message:         opts.Message,
 		Push:            opts.Push,
+		AutoMerge:       opts.AutoMerge,
+		MergeType:       opts.MergeType,
 		Fixup:           opts.Fixup,
 		Autosquash:      !opts.NoAutosquash,
 		PrecommitMode:   opts.Precommit,
@@ -169,6 +183,12 @@ func runCommit(opts CommitOptions) (any, error) {
 	}
 	if root := repomap.FindGitRoot(workDir); root != "" {
 		workDir = root
+	}
+
+	if opts.Push && opts.AutoMerge {
+		if _, err := github.MergeMethodFor(opts.MergeType); err != nil {
+			return nil, err
+		}
 	}
 
 	cfg, err := verify.LoadGavelConfig(workDir)
