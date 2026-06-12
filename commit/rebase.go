@@ -24,7 +24,7 @@ func runGitFetch(workDir, ref string) error {
 // (clean, err). clean == false with err == nil means the rebase started but
 // hit a conflict (caller is responsible for aborting).
 func runGitRebase(workDir, upstream, strategyOpt string) (bool, error) {
-	args := []string{"rebase"}
+	args := []string{"rebase", "--autostash"}
 	if strategyOpt != "" {
 		args = append(args, "-X"+strategyOpt)
 	}
