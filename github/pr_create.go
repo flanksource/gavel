@@ -21,6 +21,7 @@ type CreatePRResult struct {
 	URL    string `json:"html_url"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
+	NodeID string `json:"node_id"` // GraphQL global node ID, required to enable auto-merge
 	Base   string `json:"-"`
 }
 

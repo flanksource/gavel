@@ -52,17 +52,22 @@ const (
 )
 
 type Options struct {
-	WorkDir       string
-	Stage         string
-	CommitAll     bool
-	Interactive   bool
-	Summary       bool
-	MaxFiles      int
-	MaxLines      int
-	DryRun        bool
-	Force         bool
-	NoCache       bool
-	Push          bool
+	WorkDir     string
+	Stage       string
+	CommitAll   bool
+	Interactive bool
+	Summary     bool
+	MaxFiles    int
+	MaxLines    int
+	DryRun      bool
+	Force       bool
+	NoCache     bool
+	Push        bool
+	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
+	// it merges once required checks pass. Only applies to PRs this run opens.
+	AutoMerge bool
+	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
+	MergeType     string
 	Model         string
 	Message       string
 	PrecommitMode string
