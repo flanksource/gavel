@@ -5,6 +5,9 @@ import _ "embed"
 //go:embed dist/prui.js
 var bundleJS string
 
+//go:embed dist/prui.css
+var bundleCSS string
+
 //go:embed brand/gavel-icon.svg
 var faviconSVG string
 

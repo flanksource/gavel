@@ -48,6 +48,37 @@ export interface SearchConfig {
   ignoredOrgs?: string[];
 }
 
+// Project associates one or more repos with a local workspace directory where
+// Gavel discovers a Procfile. Mirrors pr/ui.Project / projectInfo.
+export interface Project {
+  name: string;
+  dir: string;
+  repos: string[];
+  hasProcfile?: boolean;
+}
+
+// ProcProcess mirrors procfile.ProcState — one supervised process.
+export interface ProcProcess {
+  name: string;
+  command: string;
+  pid?: number;
+  status: string;
+  started?: string;
+  restarts: number;
+  exitCode?: number;
+  logFile: string;
+}
+
+// ProcStatus mirrors pr/ui.procStatus — a project's Procfile supervision state.
+// hasProcfile=false is the normal "no Procfile here" state, not an error.
+export interface ProcStatus {
+  hasProcfile: boolean;
+  running: boolean;
+  supervisorPid?: number;
+  processes?: ProcProcess[];
+  error?: string;
+}
+
 export interface RateLimit {
   limit: number;
   remaining: number;

@@ -1,15 +1,17 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'preact/hooks';
-import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary } from './types';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, type Filters } from './components/FilterBar';
-import { SplitPane } from './components/SplitPane';
+import { SplitPane, Button } from '@flanksource/clicky-ui/components';
 import { RepoSelector } from './components/RepoSelector';
 import { SearchControls } from './components/SearchControls';
 import { ActivityView } from './components/ActivityView';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
+import { AddProjectDialog } from './components/AddProjectDialog';
+import { ProjectsBar } from './components/ProjectsBar';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import {
   annotateRoutePaths,
@@ -19,6 +21,7 @@ import {
   type RouteState,
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
+import { loadUIState, saveUIState, filtersFromStored } from './storage';
 
 type Tab = 'prs' | 'activity';
 
@@ -70,6 +73,13 @@ export function App() {
     ? parseRoute(window.location)
     : { selectedPath: '', filters: { state: new Set(), checks: new Set(), repos: new Set(), authors: new Set() } };
 
+  // Hydrate org/search config and filters from localStorage. URL query params
+  // (if present) win for filters so deep links still work.
+  const stored = typeof window !== 'undefined' ? loadUIState() : {};
+  const hasUrlFilters = typeof window !== 'undefined' && window.location.search.length > 1;
+  const initialFilters = hasUrlFilters ? initialRoute.filters : (filtersFromStored(stored.filters) ?? initialRoute.filters);
+  const initialConfig: SearchConfig = { ...defaultConfig, ...(stored.config || {}) };
+
   const [rawPrs, setRawPrs] = useState<PRItem[]>([]);
   const [unread, setUnread] = useState<Record<string, boolean>>({});
   const [fetchedAt, setFetchedAt] = useState('');
@@ -78,15 +88,19 @@ export function App() {
   const [selected, setSelected] = useState<PRItem | null>(null);
   const [detail, setDetail] = useState<PRDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [filters, setFilters] = useState<Filters>(initialRoute.filters);
+  const [filters, setFilters] = useState<Filters>(initialFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
-  const [config, setConfig] = useState<SearchConfig>(defaultConfig);
+  const [config, setConfig] = useState<SearchConfig>(initialConfig);
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>('prs');
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [editProject, setEditProject] = useState<Project | null>(null);
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
@@ -143,7 +157,10 @@ export function App() {
     setError(snap.error);
     setPaused(snap.paused);
     if (snap.rateLimit) setRateLimit(snap.rateLimit);
-    if (snap.config) setConfig(snap.config);
+    // The server doesn't persist org/all (only repos/author/etc), so after a
+    // server restart its config carries empty org/all — keep the locally
+    // restored values in that case rather than clobbering them.
+    if (snap.config) setConfig(prev => ({ ...snap.config, org: snap.config.org || prev.org, all: snap.config.all || prev.all }));
     if (snap.syncStatus) setSyncStatus(snap.syncStatus);
     if (snap.gavelResults) {
       setGavelResultsMap(prev => ({ ...prev, ...snap.gavelResults }));
@@ -163,6 +180,57 @@ export function App() {
       loadPR(target);
     }
   }, [selectedPath, prs]);
+
+  const fetchProjects = useCallback(() => {
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then((ps: Project[]) => setProjects(ps || []))
+      .catch(() => {});
+  }, []);
+
+  const fetchProcStatus = useCallback(() => {
+    fetch('/api/proc/status')
+      .then(r => r.json())
+      .then((m: Record<string, ProcStatus>) => setProcStatus(m || {}))
+      .catch(() => {});
+  }, []);
+
+  const onProcChanged = useCallback(() => {
+    fetchProjects();
+    fetchProcStatus();
+  }, [fetchProjects, fetchProcStatus]);
+
+  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  // Poll process status only while projects are configured and the tab is
+  // visible — this is the sole driver of the sidebar's per-repo proc badges
+  // and is intentionally decoupled from the GitHub PR poller.
+  useEffect(() => {
+    if (projects.length === 0) { setProcStatus({}); return; }
+    fetchProcStatus();
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchProcStatus();
+    }, 3000);
+    return () => clearInterval(id);
+  }, [projects.length, fetchProcStatus]);
+
+  const projectsByRepo = useMemo(() => {
+    const m: Record<string, Project> = {};
+    for (const p of projects) for (const r of p.repos || []) m[r] = p;
+    return m;
+  }, [projects]);
+
+  // Projects whose repos have no PRs in the current list get pinned above it so
+  // their controls stay reachable (a local dir with no open PRs still shows).
+  const standaloneProjects = useMemo(() => {
+    const reposWithPRs = new Set(prs.map(p => p.repo));
+    return projects.filter(p => !(p.repos || []).some(r => reposWithPRs.has(r)));
+  }, [projects, prs]);
+
+  const openAdd = useCallback(() => { setEditProject(null); setAddOpen(true); }, []);
+  const openEdit = useCallback((p: Project) => { setEditProject(p); setAddOpen(true); }, []);
+
+  useEffect(() => { saveUIState(config, filters); }, [config, filters]);
 
   const markSeen = useCallback((pr: PRItem) => {
     const key = prKey(pr);
@@ -304,12 +372,12 @@ export function App() {
   );
 
   return (
-    <div class="bg-gray-100 h-screen flex flex-col">
-      <div class="border-b bg-white px-6 py-3">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3 flex-wrap">
-            <h1 class="shrink-0 flex items-center">
-              <img src="/brand/gavel-logo.svg" alt="gavel" class="h-7" />
+    <div className="bg-gray-100 h-screen flex flex-col">
+      <div className="border-b bg-white px-6 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="shrink-0 flex items-center">
+              <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />
             </h1>
             <TabBar active={activeTab} onChange={setActiveTab} />
             {activeTab === 'prs' && (
@@ -329,11 +397,14 @@ export function App() {
                   copyState={copyState}
                   copyError={copyError}
                 />
+                <Button variant="outline" size="sm" onClick={openAdd} title="Add a local workspace directory">
+                  <iconify-icon icon="codicon:add" className="mr-1" /> Add dir
+                </Button>
               </>
             )}
           </div>
-          <div class="flex items-start gap-3">
-            <div class="pt-0.5"><OrgChooser config={config} onChange={updateConfig} /></div>
+          <div className="flex items-start gap-3">
+            <div className="pt-0.5"><OrgChooser config={config} onChange={updateConfig} /></div>
             <Summary
               prs={prs}
               fetchedAt={fetchedAt}
@@ -345,21 +416,26 @@ export function App() {
               onPause={handlePause}
               networkBusy={detailLoading}
             />
-            <div class="pt-1.5"><StatusIndicator /></div>
+            <div className="pt-1.5"><StatusIndicator /></div>
           </div>
         </div>
       </div>
 
       {activeTab === 'prs' ? (
         <SplitPane
-          left={<PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} />}
+          left={
+            <>
+              <ProjectsBar projects={standaloneProjects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} />
+              <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
+            </>
+          }
           right={
             selected ? (
               <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
             ) : (
-              <div class="flex items-center justify-center h-full text-gray-400 text-sm">
-                <div class="text-center">
-                  <iconify-icon icon="codicon:git-pull-request" class="text-4xl mb-2" />
+              <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+                <div className="text-center">
+                  <iconify-icon icon="codicon:git-pull-request" className="text-4xl mb-2" />
                   <p>Select a PR to view details</p>
                 </div>
               </div>
@@ -369,6 +445,8 @@ export function App() {
       ) : (
         <ActivityView />
       )}
+
+      <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
     </div>
   );
 }
@@ -379,18 +457,18 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
     { id: 'activity', label: 'Activity', icon: 'codicon:pulse' },
   ];
   return (
-    <div class="flex gap-1 border-b border-transparent">
+    <div className="flex gap-1 border-b border-transparent">
       {tabs.map(t => (
         <button
           key={t.id}
           onClick={() => onChange(t.id)}
-          class={`px-3 py-1.5 text-sm rounded-md transition ${
+          className={`px-3 py-1.5 text-sm rounded-md transition ${
             active === t.id
               ? 'bg-blue-50 text-blue-700 font-medium'
               : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          <iconify-icon icon={t.icon} class="mr-1" />
+          <iconify-icon icon={t.icon} className="mr-1" />
           {t.label}
         </button>
       ))}
@@ -406,25 +484,25 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   copyError: string;
 }) {
   return (
-    <div class="flex items-center gap-1">
+    <div className="flex items-center gap-1">
       <button
-        class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
         onClick={onJSON}
         title="Download current view as JSON"
       >
-        <iconify-icon icon="codicon:json" class="mr-0.5" />
+        <iconify-icon icon="codicon:json" className="mr-0.5" />
         JSON
       </button>
       <button
-        class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
         onClick={onMarkdown}
         title="Download current view as Markdown"
       >
-        <iconify-icon icon="codicon:markdown" class="mr-0.5" />
+        <iconify-icon icon="codicon:markdown" className="mr-0.5" />
         Markdown
       </button>
       <button
-        class={`text-xs px-2 py-1 rounded border transition-colors ${
+        className={`text-xs px-2 py-1 rounded border transition-colors ${
           copyState === 'copied'
             ? 'border-green-300 bg-green-50 text-green-700'
             : copyState === 'error'
@@ -436,7 +514,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
       >
         <iconify-icon
           icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'}
-          class="mr-0.5"
+          className="mr-0.5"
         />
         {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
       </button>

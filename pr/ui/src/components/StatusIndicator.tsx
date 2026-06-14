@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useState } from 'react';
 import type { HealthStatus, Severity } from '../types';
 
 // Colored dot in the PR UI header that polls /api/status. Overall severity
@@ -40,15 +40,15 @@ export function StatusIndicator() {
   // While waiting for the first response, show a muted dot rather than
   // flashing a red one.
   if (!health && !fetchErr) {
-    return <div class="w-2.5 h-2.5 rounded-full bg-gray-300" title="Loading status..." />;
+    return <div className="w-2.5 h-2.5 rounded-full bg-gray-300" title="Loading status..." />;
   }
 
   // Fetch failure — treat as down; the daemon responded with an error or
   // the endpoint is unreachable.
   if (fetchErr) {
     return (
-      <div class="relative group">
-        <div class="w-2.5 h-2.5 rounded-full bg-red-500" />
+      <div className="relative group">
+        <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
         <Tooltip title="Status unavailable" body={fetchErr} />
       </div>
     );
@@ -57,12 +57,12 @@ export function StatusIndicator() {
   // Non-null here because of the early returns above.
   const h = health!;
   return (
-    <div class="relative group">
-      <div class={`w-2.5 h-2.5 rounded-full ${DOT_CLASS[h.overall]}`} />
+    <div className="relative group">
+      <div className={`w-2.5 h-2.5 rounded-full ${DOT_CLASS[h.overall]}`} />
       <Tooltip
         title={DOT_LABEL[h.overall]}
         body={
-          <div class="flex flex-col gap-1">
+          <div className="flex flex-col gap-1">
             <ComponentLine label="Database" c={h.database} />
             <ComponentLine label="GitHub" c={h.github} />
           </div>
@@ -76,20 +76,20 @@ export function StatusIndicator() {
 // the header so it opens downward and leftward against the viewport edge.
 function Tooltip({ title, body }: { title: string; body: any }) {
   return (
-    <div class="hidden group-hover:block absolute right-0 top-5 z-50 w-64 bg-white border border-gray-200 rounded shadow-lg p-3 text-xs">
-      <div class="font-semibold text-gray-800 mb-1">{title}</div>
-      <div class="text-gray-600">{body}</div>
+    <div className="hidden group-hover:block absolute right-0 top-5 z-50 w-64 bg-white border border-gray-200 rounded shadow-lg p-3 text-xs">
+      <div className="font-semibold text-gray-800 mb-1">{title}</div>
+      <div className="text-gray-600">{body}</div>
     </div>
   );
 }
 
 function ComponentLine({ label, c }: { label: string; c: { severity: Severity; message: string } }) {
   return (
-    <div class="flex items-start gap-2">
-      <div class={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${DOT_CLASS[c.severity]}`} />
+    <div className="flex items-start gap-2">
+      <div className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${DOT_CLASS[c.severity]}`} />
       <div>
-        <span class="font-medium text-gray-700">{label}:</span>{' '}
-        <span class="text-gray-600">{c.message}</span>
+        <span className="font-medium text-gray-700">{label}:</span>{' '}
+        <span className="text-gray-600">{c.message}</span>
       </div>
     </div>
   );

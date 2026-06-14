@@ -251,6 +251,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
+	mux.HandleFunc("/api/proc/start", s.handleProcControl)
+	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
+	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
+	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }
@@ -322,7 +328,7 @@ func pageHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>gavel · PR Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <style>` + bundleCSS + `</style>
     <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
     <style>
         @keyframes gavel-progress-slide {

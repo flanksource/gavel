@@ -19,14 +19,14 @@ export function ProgressBar({ segments, total, height = 'h-2' }: Props) {
     .join(', ');
 
   return (
-    <div class={`w-full bg-gray-200 rounded-full ${height} flex overflow-hidden`} title={tooltip}>
+    <div className={`w-full bg-gray-200 rounded-full ${height} flex overflow-hidden`} title={tooltip}>
       {segments.map((seg, i) => {
         if (seg.count === 0) return null;
         const pct = (seg.count / total) * 100;
         return (
           <div
             key={i}
-            class={`${seg.color} ${height} transition-all duration-300`}
+            className={`${seg.color} ${height} transition-all duration-300`}
             style={{ width: `${pct}%` }}
             title={`${seg.count} ${seg.label}`}
           />

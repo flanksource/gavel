@@ -50,7 +50,7 @@ function borderColor(pr: PRItem, selected: boolean, gavel?: GavelResultsSummary)
 function GavelBadges({ g }: { g: GavelResultsSummary }) {
   if (g.error) {
     return (
-      <span class="inline-flex items-center text-yellow-600" title={`gavel: ${g.error}`}>
+      <span className="inline-flex items-center text-yellow-600" title={`gavel: ${g.error}`}>
         <iconify-icon icon="codicon:warning" />
       </span>
     );
@@ -98,11 +98,11 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
   }
   if (items.length === 0) return null;
   return (
-    <span class="inline-flex items-center gap-1" aria-label="gavel results">
+    <span className="inline-flex items-center gap-1" aria-label="gavel results">
       {items.map((it, i) => (
-        <span key={i} class={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
-          <iconify-icon icon={it.icon} class="text-[12px]" />
-          <span class="text-[11px] font-medium">{it.count}</span>
+        <span key={i} className={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
+          <iconify-icon icon={it.icon} className="text-[12px]" />
+          <span className="text-[11px] font-medium">{it.count}</span>
         </span>
       ))}
     </span>
@@ -115,57 +115,57 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
 
   return (
     <div
-      class={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected, gavelResults)} ${
+      className={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected, gavelResults)} ${
         selected ? 'bg-blue-50' : unread ? 'hover:bg-gray-50' : 'hover:bg-gray-50'
       }`}
       onClick={onClick}
     >
-      <div class="flex items-center gap-2">
+      <div className="flex items-center gap-2">
         <span
-          class={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${unread ? 'bg-blue-600' : 'bg-transparent'}`}
+          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${unread ? 'bg-blue-600' : 'bg-transparent'}`}
           title={unread ? 'Unread — updated since last view' : ''}
           aria-label={unread ? 'unread' : ''}
         />
-        <iconify-icon icon={status.icon} class={`text-sm ${status.color} shrink-0`} title={status.title} />
-        <span class="text-xs text-gray-400">#{pr.number}</span>
-        <span class={`text-sm truncate flex-1 ${unread ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>{pr.title}</span>
+        <iconify-icon icon={status.icon} className={`text-sm ${status.color} shrink-0`} title={status.title} />
+        <span className="text-xs text-gray-400">#{pr.number}</span>
+        <span className={`text-sm truncate flex-1 ${unread ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>{pr.title}</span>
         {hasConflict && (
-          <span class="text-xs text-red-500" title="Merge conflicts">
-            <iconify-icon icon="octicon:git-merge-16" class="text-red-500" />
+          <span className="text-xs text-red-500" title="Merge conflicts">
+            <iconify-icon icon="octicon:git-merge-16" className="text-red-500" />
           </span>
         )}
         {pr.isCurrent && (
-          <span class="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded" title="Current branch">
+          <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded" title="Current branch">
             current
           </span>
         )}
         {pr.isDraft && (
-          <span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">draft</span>
+          <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">draft</span>
         )}
       </div>
 
-      <div class="flex items-center gap-2 mt-1 text-xs text-gray-500">
-        <span class="text-cyan-600">{pr.source}</span>
+      <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+        <span className="text-cyan-600">{pr.source}</span>
         <span>→</span>
-        <span class="text-cyan-600">{pr.target}</span>
+        <span className="text-cyan-600">{pr.target}</span>
 
         {pr.isCurrent && (pr.ahead ?? 0) + (pr.behind ?? 0) > 0 && (
-          <span class="text-yellow-600">↑{pr.ahead ?? 0}↓{pr.behind ?? 0}</span>
+          <span className="text-yellow-600">↑{pr.ahead ?? 0}↓{pr.behind ?? 0}</span>
         )}
 
         {pr.reviewDecision && (
-          <span class={`${reviewColor(pr.reviewDecision)} font-medium`}>
+          <span className={`${reviewColor(pr.reviewDecision)} font-medium`}>
             {pr.reviewDecision.replace(/_/g, ' ')}
           </span>
         )}
 
-        {hasConflict && <span class="text-red-500 font-medium">CONFLICTS</span>}
+        {hasConflict && <span className="text-red-500 font-medium">CONFLICTS</span>}
 
         {pr.checkStatus && <span>{checkSummaryText(pr.checkStatus)}</span>}
 
         {gavelResults && <GavelBadges g={gavelResults} />}
 
-        <span class="ml-auto inline-flex items-center gap-1.5 text-gray-400">
+        <span className="ml-auto inline-flex items-center gap-1.5 text-gray-400">
           {syncStatus && <SyncIndicator status={syncStatus} />}
           {pr.author && (
             <Avatar
