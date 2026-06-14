@@ -1,0 +1,5 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* clicky-ui's prebuilt styles: shadcn :root design tokens + component utilities. */
+@import "@flanksource/clicky-ui/styles.css";

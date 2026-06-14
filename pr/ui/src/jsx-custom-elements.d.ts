@@ -1,13 +1,14 @@
 // Declares runtime custom elements used in JSX so tsc --noEmit doesn't fail.
-// These elements are registered at runtime by their own scripts (e.g.
-// @iconify/iconify-icon) and have no compile-time Preact component type.
+// <iconify-icon> is registered at runtime by the iconify-icon script and has no
+// compile-time React component type. React 19 maps `className` to the `class`
+// attribute on custom elements, so components use `className` here as usual.
 
-import type { JSX } from 'preact';
+import 'react';
 
-declare module 'preact' {
+declare module 'react' {
   namespace JSX {
     interface IntrinsicElements {
-      'iconify-icon': JSX.HTMLAttributes<HTMLElement> & {
+      'iconify-icon': React.HTMLAttributes<HTMLElement> & {
         icon?: string;
         width?: string | number;
         height?: string | number;

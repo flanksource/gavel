@@ -1,3 +1,6 @@
+import { FilterBar as ClickyFilterBar } from '@flanksource/clicky-ui/components';
+import type { FilterBarFilter, MultiSelectOption } from '@flanksource/clicky-ui/components';
+
 export interface Filters {
   state: Set<string>;
   checks: Set<string>;
@@ -23,125 +26,47 @@ interface Props {
   authors: string[];
 }
 
-function toggleSet(set: Set<string>, key: string): Set<string> {
-  const next = new Set(set);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  return next;
+const STATE_DEFS: { key: string; label: string }[] = [
+  { key: 'open', label: 'Open' },
+  { key: 'merged', label: 'Merged' },
+  { key: 'closed', label: 'Closed' },
+  { key: 'draft', label: 'Draft' },
+];
+
+const CHECK_DEFS: { key: string; label: string }[] = [
+  { key: 'failing', label: 'Failing' },
+  { key: 'passing', label: 'Passing' },
+  { key: 'running', label: 'Running' },
+];
+
+function shortName(repo: string): string {
+  return repo.includes('/') ? repo.split('/')[1] : repo;
 }
 
-const STATE_DEFS: { key: string; label: string; badge: string; activeBg: string; activeBorder: string }[] = [
-  { key: 'open', label: 'Open', badge: 'bg-green-500', activeBg: 'bg-green-50', activeBorder: 'border-green-300' },
-  { key: 'merged', label: 'Merged', badge: 'bg-purple-500', activeBg: 'bg-purple-50', activeBorder: 'border-purple-300' },
-  { key: 'closed', label: 'Closed', badge: 'bg-red-500', activeBg: 'bg-red-50', activeBorder: 'border-red-300' },
-  { key: 'draft', label: 'Draft', badge: 'bg-gray-400', activeBg: 'bg-gray-50', activeBorder: 'border-gray-300' },
-];
-
-const CHECK_DEFS: { key: string; label: string; badge: string; activeBg: string; activeBorder: string }[] = [
-  { key: 'failing', label: 'Failing', badge: 'bg-red-500', activeBg: 'bg-red-50', activeBorder: 'border-red-300' },
-  { key: 'passing', label: 'Passing', badge: 'bg-green-500', activeBg: 'bg-green-50', activeBorder: 'border-green-300' },
-  { key: 'running', label: 'Running', badge: 'bg-yellow-400', activeBg: 'bg-yellow-50', activeBorder: 'border-yellow-300' },
-];
-
+// FilterBar wraps clicky-ui's FilterBar but keeps the project's Set-based
+// Filters contract so App.tsx, routes.ts and utils (filterPRs/computeCounts +
+// URL sync) are untouched. Each facet is a `select-multi` whose option labels
+// carry the live result count.
 export function FilterBar({ filters, onChange, counts, repos, authors }: Props) {
-  const hasActiveFilters = filters.state.size > 0 || filters.checks.size > 0
-    || filters.repos.size > 0 || filters.authors.size > 0;
+  const setFacet = (key: keyof Filters, values: string[]) =>
+    onChange({ ...filters, [key]: new Set(values) });
 
-  return (
-    <div class="flex items-center gap-1.5 flex-wrap">
-      {STATE_DEFS.map(sf => {
-        const count = (counts as any)[sf.key] as number;
-        if (count === 0) return null;
-        const active = filters.state.has(sf.key);
-        return (
-          <Pill key={sf.key} active={active} badge={sf.badge} activeBg={sf.activeBg} activeBorder={sf.activeBorder}
-            count={count} label={sf.label}
-            onClick={() => onChange({ ...filters, state: toggleSet(filters.state, sf.key) })} />
-        );
-      })}
+  const c = counts as Record<string, number>;
+  const stateOpts: MultiSelectOption[] = STATE_DEFS
+    .filter(d => c[d.key] > 0)
+    .map(d => ({ value: d.key, label: `${d.label} (${c[d.key]})` }));
+  const checkOpts: MultiSelectOption[] = CHECK_DEFS
+    .filter(d => c[d.key] > 0)
+    .map(d => ({ value: d.key, label: `${d.label} (${c[d.key]})` }));
+  const repoOpts: MultiSelectOption[] = repos.map(r => ({ value: r, label: shortName(r) }));
+  const authorOpts: MultiSelectOption[] = authors.map(a => ({ value: a, label: `@${a}` }));
 
-      <Sep />
+  const fb: FilterBarFilter[] = [];
+  if (stateOpts.length) fb.push({ key: 'state', kind: 'select-multi', label: 'State', options: stateOpts, value: [...filters.state], onChange: (v) => setFacet('state', v) });
+  if (checkOpts.length) fb.push({ key: 'checks', kind: 'select-multi', label: 'Checks', options: checkOpts, value: [...filters.checks], onChange: (v) => setFacet('checks', v) });
+  if (repos.length > 1) fb.push({ key: 'repos', kind: 'select-multi', label: 'Repos', options: repoOpts, value: [...filters.repos], onChange: (v) => setFacet('repos', v) });
+  if (authors.length > 1) fb.push({ key: 'authors', kind: 'select-multi', label: 'Authors', options: authorOpts, value: [...filters.authors], onChange: (v) => setFacet('authors', v) });
 
-      {CHECK_DEFS.map(cf => {
-        const count = (counts as any)[cf.key] as number;
-        if (count === 0) return null;
-        const active = filters.checks.has(cf.key);
-        return (
-          <Pill key={cf.key} active={active} badge={cf.badge} activeBg={cf.activeBg} activeBorder={cf.activeBorder}
-            count={count} label={cf.label}
-            onClick={() => onChange({ ...filters, checks: toggleSet(filters.checks, cf.key) })} />
-        );
-      })}
-
-      {repos.length > 1 && (
-        <>
-          <Sep />
-          {repos.map(repo => {
-            const short = repo.includes('/') ? repo.split('/')[1] : repo;
-            const active = filters.repos.has(repo);
-            return (
-              <button key={repo}
-                class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                  active ? 'bg-cyan-50 border-cyan-300 font-medium text-cyan-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-                }`}
-                onClick={() => onChange({ ...filters, repos: toggleSet(filters.repos, repo) })}
-              >
-                <iconify-icon icon="codicon:repo" class="text-[10px]" />
-                {short}
-              </button>
-            );
-          })}
-        </>
-      )}
-
-      {authors.length > 1 && (
-        <>
-          <Sep />
-          {authors.map(author => {
-            const active = filters.authors.has(author);
-            return (
-              <button key={author}
-                class={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                  active ? 'bg-blue-50 border-blue-300 font-medium text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-                }`}
-                onClick={() => onChange({ ...filters, authors: toggleSet(filters.authors, author) })}
-              >
-                @{author}
-              </button>
-            );
-          })}
-        </>
-      )}
-
-      {hasActiveFilters && (
-        <button class="text-xs text-gray-400 hover:text-gray-600 ml-1"
-          onClick={() => onChange(emptyFilters())}>
-          Clear
-        </button>
-      )}
-    </div>
-  );
-}
-
-function Sep() {
-  return <span class="text-gray-300 mx-0.5">|</span>;
-}
-
-function Pill({ active, badge, activeBg, activeBorder, count, label, onClick }: {
-  active: boolean; badge: string; activeBg: string; activeBorder: string;
-  count: number; label: string; onClick: () => void;
-}) {
-  return (
-    <button
-      class={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border transition-colors ${
-        active ? `${activeBg} ${activeBorder} font-medium` : 'border-gray-200 text-gray-500 hover:bg-gray-50'
-      }`}
-      onClick={onClick}
-    >
-      <span class={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold text-white ${badge}`}>
-        {count}
-      </span>
-      {label}
-    </button>
-  );
+  if (fb.length === 0) return null;
+  return <ClickyFilterBar overflowMode="wrap" filters={fb} />;
 }

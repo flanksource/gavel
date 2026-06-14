@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Org, SearchConfig } from '../types';
 
 interface Props {
@@ -89,7 +90,7 @@ export function OrgChooser({ config, onChange }: Props) {
     setOpen(false);
   }
 
-  function hideOrg(login: string, e: MouseEvent) {
+  function hideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation(); // don't also select it
     const next = Array.from(new Set([...ignoredOrgs, login]));
     const patch: Partial<SearchConfig> = { ignoredOrgs: next };
@@ -103,83 +104,83 @@ export function OrgChooser({ config, onChange }: Props) {
     onChange(patch);
   }
 
-  function unhideOrg(login: string, e: MouseEvent) {
+  function unhideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation();
     onChange({ ignoredOrgs: ignoredOrgs.filter(o => o !== login) });
   }
 
   return (
-    <div class="relative" ref={rootRef}>
+    <div className="relative" ref={rootRef}>
       <button
-        class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
         onClick={() => setOpen(!open)}
         title="Switch GitHub org / scope"
       >
         {activeOrgMeta?.avatarUrl ? (
-          <img src={activeOrgMeta.avatarUrl} alt={activeOrg} class="w-4 h-4 rounded-sm" />
+          <img src={activeOrgMeta.avatarUrl} alt={activeOrg} className="w-4 h-4 rounded-sm" />
         ) : (
-          <iconify-icon icon="codicon:organization" class="text-sm" />
+          <iconify-icon icon="codicon:organization" className="text-sm" />
         )}
-        <span class="font-medium">{label}</span>
-        <iconify-icon icon="codicon:chevron-down" class="text-[10px]" />
+        <span className="font-medium">{label}</span>
+        <iconify-icon icon="codicon:chevron-down" className="text-[10px]" />
       </button>
 
       {open && (
-        <div class="absolute top-full right-0 mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 text-sm">
+        <div className="absolute top-full right-0 mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 text-sm">
           <button
-            class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
               !config.all ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
             }`}
             onClick={chooseMe}
           >
-            <iconify-icon icon="codicon:person" class="text-base" />
-            <span class="flex-1">@me (my PRs)</span>
-            {!config.all && <iconify-icon icon="codicon:check" class="text-xs" />}
+            <iconify-icon icon="codicon:person" className="text-base" />
+            <span className="flex-1">@me (my PRs)</span>
+            {!config.all && <iconify-icon icon="codicon:check" className="text-xs" />}
           </button>
 
           <button
-            class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
               config.all && !activeOrg ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
             }`}
             onClick={chooseAllOrgs}
           >
-            <iconify-icon icon="codicon:globe" class="text-base" />
-            <span class="flex-1">All orgs (default)</span>
-            {config.all && !activeOrg && <iconify-icon icon="codicon:check" class="text-xs" />}
+            <iconify-icon icon="codicon:globe" className="text-base" />
+            <span className="flex-1">All orgs (default)</span>
+            {config.all && !activeOrg && <iconify-icon icon="codicon:check" className="text-xs" />}
           </button>
 
-          <div class="border-t border-gray-100 my-1" />
+          <div className="border-t border-gray-100 my-1" />
 
-          {loading && <div class="px-3 py-2 text-xs text-gray-400">Loading orgs…</div>}
-          {err && <div class="px-3 py-2 text-xs text-red-500">{err}</div>}
+          {loading && <div className="px-3 py-2 text-xs text-gray-400">Loading orgs…</div>}
+          {err && <div className="px-3 py-2 text-xs text-red-500">{err}</div>}
           {!loading && !err && visibleOrgs.length === 0 && hiddenOrgs.length === 0 && (
-            <div class="px-3 py-2 text-xs text-gray-400">No orgs — token has no org memberships</div>
+            <div className="px-3 py-2 text-xs text-gray-400">No orgs — token has no org memberships</div>
           )}
           {visibleOrgs.map(o => {
             const selected = config.all && config.org === o.login;
             return (
               <div
                 key={o.login}
-                class={`group flex items-center gap-2 px-3 py-1.5 transition-colors ${
+                className={`group flex items-center gap-2 px-3 py-1.5 transition-colors ${
                   selected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
                 }`}
               >
                 <button
-                  class="flex-1 flex items-center gap-2 text-left"
+                  className="flex-1 flex items-center gap-2 text-left"
                   onClick={() => chooseOrg(o.login)}
                 >
                   {o.avatarUrl
-                    ? <img src={o.avatarUrl} alt={o.login} class="w-4 h-4 rounded-sm shrink-0" />
-                    : <iconify-icon icon="codicon:organization" class="text-base" />}
-                  <span class="flex-1 truncate">{o.login}</span>
-                  {selected && <iconify-icon icon="codicon:check" class="text-xs" />}
+                    ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0" />
+                    : <iconify-icon icon="codicon:organization" className="text-base" />}
+                  <span className="flex-1 truncate">{o.login}</span>
+                  {selected && <iconify-icon icon="codicon:check" className="text-xs" />}
                 </button>
                 <button
-                  class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
-                  <iconify-icon icon="codicon:eye-closed" class="text-xs" />
+                  <iconify-icon icon="codicon:eye-closed" className="text-xs" />
                 </button>
               </div>
             );
@@ -187,29 +188,29 @@ export function OrgChooser({ config, onChange }: Props) {
 
           {hiddenOrgs.length > 0 && (
             <>
-              <div class="border-t border-gray-100 my-1" />
+              <div className="border-t border-gray-100 my-1" />
               <button
-                class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50"
                 onClick={() => setShowHidden(v => !v)}
               >
-                <iconify-icon icon={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} class="text-[10px]" />
-                <span class="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
+                <iconify-icon icon={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
+                <span className="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
               </button>
               {showHidden && hiddenOrgs.map(o => (
                 <div
                   key={o.login}
-                  class="group flex items-center gap-2 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50"
+                  className="group flex items-center gap-2 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50"
                 >
                   {o.avatarUrl
-                    ? <img src={o.avatarUrl} alt={o.login} class="w-4 h-4 rounded-sm shrink-0 opacity-60" />
-                    : <iconify-icon icon="codicon:organization" class="text-base" />}
-                  <span class="flex-1 truncate">{o.login}</span>
+                    ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
+                    : <iconify-icon icon="codicon:organization" className="text-base" />}
+                  <span className="flex-1 truncate">{o.login}</span>
                   <button
-                    class="text-gray-400 hover:text-blue-600 transition-colors"
+                    className="text-gray-400 hover:text-blue-600 transition-colors"
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >
-                    <iconify-icon icon="codicon:eye" class="text-xs" />
+                    <iconify-icon icon="codicon:eye" className="text-xs" />
                   </button>
                 </div>
               ))}

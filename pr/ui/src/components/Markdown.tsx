@@ -2,7 +2,7 @@ import { Marked, Renderer } from 'marked';
 
 interface Props {
   text: string;
-  class?: string;
+  className?: string;
 }
 
 const renderer = new Renderer();
@@ -81,7 +81,7 @@ const marked = new Marked({
   breaks: true,
 });
 
-export function Markdown({ text, class: cls }: Props) {
+export function Markdown({ text, className: cls }: Props) {
   const html = marked.parse(text) as string;
-  return <div class={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }

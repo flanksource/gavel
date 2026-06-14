@@ -22,53 +22,53 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused,
     : nextFetchIn;
 
   return (
-    <div class="flex flex-col items-end gap-1">
-      <div class="flex gap-3 text-sm text-gray-500 items-center">
-        <span class="font-medium text-gray-700">{prs.length} PRs</span>
-        {counts.open > 0 && <><Sep /><span class="text-green-600">{counts.open} open</span></>}
-        {counts.failing > 0 && <><Sep /><span class="text-red-600">{counts.failing} failing</span></>}
-        {counts.running > 0 && <><Sep /><span class="text-yellow-600">{counts.running} running</span></>}
-        {counts.merged > 0 && <><Sep /><span class="text-purple-600">{counts.merged} merged</span></>}
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex gap-3 text-sm text-gray-500 items-center">
+        <span className="font-medium text-gray-700">{prs.length} PRs</span>
+        {counts.open > 0 && <><Sep /><span className="text-green-600">{counts.open} open</span></>}
+        {counts.failing > 0 && <><Sep /><span className="text-red-600">{counts.failing} failing</span></>}
+        {counts.running > 0 && <><Sep /><span className="text-yellow-600">{counts.running} running</span></>}
+        {counts.merged > 0 && <><Sep /><span className="text-purple-600">{counts.merged} merged</span></>}
         <Sep />
-        <span class="text-gray-400" title={`Refreshes every ${nextFetchIn}s`}>
-          <iconify-icon icon="codicon:clock" class="mr-0.5" />
+        <span className="text-gray-400" title={`Refreshes every ${nextFetchIn}s`}>
+          <iconify-icon icon="codicon:clock" className="mr-0.5" />
           {ago}
           {paused
-            ? <span class="text-yellow-500 ml-1">(paused)</span>
-            : countdown > 0 && <span class="text-gray-300 ml-1">({countdown}s)</span>
+            ? <span className="text-yellow-500 ml-1">(paused)</span>
+            : countdown > 0 && <span className="text-gray-300 ml-1">({countdown}s)</span>
           }
         </span>
         <button
           onClick={onPause}
-          class={`transition-colors ${paused ? 'text-yellow-500 hover:text-green-600' : 'text-gray-400 hover:text-yellow-500'}`}
+          className={`transition-colors ${paused ? 'text-yellow-500 hover:text-green-600' : 'text-gray-400 hover:text-yellow-500'}`}
           title={paused ? 'Resume polling' : 'Pause polling'}
         >
           <iconify-icon icon={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
         </button>
         <button
           onClick={onRefresh}
-          class={`transition-colors ${networkBusy ? 'text-blue-500' : 'text-gray-400 hover:text-blue-600'}`}
+          className={`transition-colors ${networkBusy ? 'text-blue-500' : 'text-gray-400 hover:text-blue-600'}`}
           title={networkBusy ? 'Loading...' : 'Refresh now'}
         >
           <iconify-icon icon={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
         </button>
         {rateLimit && (
           <span
-            class={`text-xs ${rateLimit.remaining < 100 ? 'text-red-500' : 'text-gray-400'}`}
+            className={`text-xs ${rateLimit.remaining < 100 ? 'text-red-500' : 'text-gray-400'}`}
             title={`API: ${rateLimit.used}/${rateLimit.limit} used (${rateLimit.resource}), resets ${new Date(rateLimit.reset * 1000).toLocaleTimeString()}`}
           >
             {rateLimit.remaining}/{rateLimit.limit}
           </span>
         )}
         {error && (
-          <span class="text-red-500 text-xs" title={error}>
-            <iconify-icon icon="codicon:warning" class="mr-0.5" />
+          <span className="text-red-500 text-xs" title={error}>
+            <iconify-icon icon="codicon:warning" className="mr-0.5" />
             Error
           </span>
         )}
       </div>
       {prs.length > 0 && (
-        <div class="w-64">
+        <div className="w-64">
           <ProgressBar
             segments={[
               { count: counts.passing, color: 'bg-green-500', label: 'passing' },
@@ -85,7 +85,7 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused,
 }
 
 function Sep() {
-  return <span class="text-gray-300">|</span>;
+  return <span className="text-gray-300">|</span>;
 }
 
 function timeAgoShort(iso: string): string {
