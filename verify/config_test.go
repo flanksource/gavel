@@ -527,6 +527,72 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 	})
 }
 
+func TestMergeProcfileConfig(t *testing.T) {
+	t.Run("scalar overrides win when set", func(t *testing.T) {
+		base := ProcfileConfig{Path: "Procfile", RestartPolicy: "no", MaxRestarts: 3}
+		out := MergeProcfileConfig(base, ProcfileConfig{RestartPolicy: "always", MaxRestarts: 9})
+		assert.Equal(t, "Procfile", out.Path)
+		assert.Equal(t, "always", out.RestartPolicy)
+		assert.Equal(t, 9, out.MaxRestarts)
+	})
+
+	t.Run("empty override preserves base scalars", func(t *testing.T) {
+		base := ProcfileConfig{Path: "Procfile.dev", RestartPolicy: "on-failure", MaxRestarts: 2}
+		out := MergeProcfileConfig(base, ProcfileConfig{})
+		assert.Equal(t, "Procfile.dev", out.Path)
+		assert.Equal(t, "on-failure", out.RestartPolicy)
+		assert.Equal(t, 2, out.MaxRestarts)
+	})
+
+	t.Run("env merges key-by-key with override winning", func(t *testing.T) {
+		base := ProcfileConfig{Env: map[string]string{"A": "1", "B": "2"}}
+		override := ProcfileConfig{Env: map[string]string{"B": "20", "C": "3"}}
+		out := MergeProcfileConfig(base, override)
+		assert.Equal(t, map[string]string{"A": "1", "B": "20", "C": "3"}, out.Env)
+	})
+
+	t.Run("per-process overrides merge without dropping base processes", func(t *testing.T) {
+		ten := 10
+		base := ProcfileConfig{Processes: map[string]ProcProcessConfig{
+			"web":    {RestartPolicy: "always", Env: map[string]string{"PORT": "3000"}},
+			"worker": {RestartPolicy: "no"},
+		}}
+		override := ProcfileConfig{Processes: map[string]ProcProcessConfig{
+			"web": {MaxRestarts: &ten, Env: map[string]string{"PORT": "4000", "DEBUG": "1"}},
+		}}
+		out := MergeProcfileConfig(base, override)
+
+		assert.Equal(t, "always", out.Processes["web"].RestartPolicy, "base policy kept when override omits it")
+		require.NotNil(t, out.Processes["web"].MaxRestarts)
+		assert.Equal(t, 10, *out.Processes["web"].MaxRestarts)
+		assert.Equal(t, map[string]string{"PORT": "4000", "DEBUG": "1"}, out.Processes["web"].Env)
+		assert.Equal(t, "no", out.Processes["worker"].RestartPolicy, "untouched process survives the merge")
+	})
+}
+
+func TestLoadGavelConfig_WithProcfile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`procfile:
+  restartPolicy: on-failure
+  maxRestarts: 5
+  env:
+    RAILS_ENV: development
+  processes:
+    web:
+      restartPolicy: always
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "on-failure", cfg.Procfile.RestartPolicy)
+	assert.Equal(t, 5, cfg.Procfile.MaxRestarts)
+	assert.Equal(t, "development", cfg.Procfile.Env["RAILS_ENV"])
+	assert.Equal(t, "always", cfg.Procfile.Processes["web"].RestartPolicy)
+}
+
 func TestLoadSingleGavelConfig(t *testing.T) {
 	t.Run("reads one file without layering", func(t *testing.T) {
 		dir := t.TempDir()
