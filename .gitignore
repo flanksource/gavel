@@ -76,6 +76,7 @@ pr/ui/dist/
 .tmp/
 .claude
 /*.json
+!/gavel.schema.json
 .gavel/
 .vitest/
 testrunner/ui/dist/testui.js

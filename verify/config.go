@@ -208,6 +208,33 @@ type GavelConfig struct {
 	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty"`
 	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
 	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
+}
+
+// ProcfileConfig configures `gavel proc` — how Procfile-managed processes are
+// run and supervised. Every field is optional. Restart policy values are "no"
+// (default — never restart), "on-failure" (restart only on a non-zero exit),
+// and "always" (restart on any exit).
+type ProcfileConfig struct {
+	// Path overrides Procfile discovery. Relative paths resolve against the
+	// directory of the .gavel.yaml that declared them.
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	// RestartPolicy is the default policy applied to every process.
+	RestartPolicy string `yaml:"restartPolicy,omitempty" json:"restartPolicy,omitempty"`
+	// MaxRestarts caps automatic restarts per process (0 = unlimited).
+	MaxRestarts int `yaml:"maxRestarts,omitempty" json:"maxRestarts,omitempty"`
+	// Env is injected into every process on top of the parent environment and
+	// any sibling .env file.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Processes holds per-process overrides keyed by Procfile process name.
+	Processes map[string]ProcProcessConfig `yaml:"processes,omitempty" json:"processes,omitempty"`
+}
+
+// ProcProcessConfig overrides ProcfileConfig defaults for a single process.
+type ProcProcessConfig struct {
+	RestartPolicy string            `yaml:"restartPolicy,omitempty" json:"restartPolicy,omitempty"`
+	MaxRestarts   *int              `yaml:"maxRestarts,omitempty" json:"maxRestarts,omitempty"`
+	Env           map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 }
 
 // SecretsConfig turns the betterleaks linter on/off and optionally points at
@@ -386,7 +413,58 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Pre = append(base.Pre, override.Pre...)
 	base.Post = append(base.Post, override.Post...)
 	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
+	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
 	return base
+}
+
+// MergeProcfileConfig merges override onto base. Scalars are last-write-wins
+// (a non-empty/non-zero override replaces the base); Env and Processes maps are
+// merged key-by-key so a repo config can add to a home default without
+// discarding it.
+func MergeProcfileConfig(base, override ProcfileConfig) ProcfileConfig {
+	if override.Path != "" {
+		base.Path = override.Path
+	}
+	if override.RestartPolicy != "" {
+		base.RestartPolicy = override.RestartPolicy
+	}
+	if override.MaxRestarts != 0 {
+		base.MaxRestarts = override.MaxRestarts
+	}
+	base.Env = mergeStringMap(base.Env, override.Env)
+	if len(override.Processes) > 0 {
+		if base.Processes == nil {
+			base.Processes = make(map[string]ProcProcessConfig, len(override.Processes))
+		}
+		for name, op := range override.Processes {
+			bp := base.Processes[name]
+			if op.RestartPolicy != "" {
+				bp.RestartPolicy = op.RestartPolicy
+			}
+			if op.MaxRestarts != nil {
+				bp.MaxRestarts = op.MaxRestarts
+			}
+			bp.Env = mergeStringMap(bp.Env, op.Env)
+			base.Processes[name] = bp
+		}
+	}
+	return base
+}
+
+// mergeStringMap returns base with override's keys layered on top. A nil result
+// is returned only when both inputs are empty.
+func mergeStringMap(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return base
+	}
+	merged := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
 }
 
 func MergeGavelConfig(base, override GavelConfig) GavelConfig {

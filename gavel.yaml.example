@@ -1,4 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json
 # Example `.gavel.yaml` for Gavel.
+# See SCHEMA.md and gavel.schema.json for the full field reference.
 #
 # You can place `.gavel.yaml` in any of these locations:
 #   1. ~/.gavel.yaml
@@ -159,3 +161,34 @@ secrets:
   configs:
     - ".betterleaks.toml"
     - "security/custom-gitleaks.toml"
+
+procfile:
+  # Settings for `gavel proc`, which runs the processes declared in a Procfile
+  # (Heroku/foreman format: one `name: command` per line).
+
+  # Override Procfile discovery. Relative paths resolve from this file's dir.
+  # If omitted, the nearest `Procfile` up to the git root is used.
+  path: Procfile
+
+  # Default restart policy for every process:
+  #   no          never restart (default)
+  #   on-failure  restart only on a non-zero exit
+  #   always      restart on any exit
+  restartPolicy: on-failure
+
+  # Cap automatic restarts per process (0 = unlimited).
+  maxRestarts: 5
+
+  # Environment injected into every process, on top of the parent environment
+  # and any sibling .env file. Env maps merge key-by-key across layers.
+  env:
+    RAILS_ENV: development
+
+  # Per-process overrides keyed by Procfile process name.
+  processes:
+    web:
+      restartPolicy: always
+    worker:
+      maxRestarts: 10
+      env:
+        WORKER_CONCURRENCY: "4"
