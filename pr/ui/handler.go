@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -18,9 +19,6 @@ type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
-	Author      string   `json:"author,omitempty"`
-	Any         bool     `json:"any,omitempty"`
-	Bots        bool     `json:"bots,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -51,6 +49,12 @@ type Server struct {
 	// (keyed by "repo#number"). Populated as a side-effect of detail
 	// fetches so sidebar badges light up lazily without extra traffic.
 	gavelCache map[string]*GavelResultsSummary
+
+	// knownBots is the set of bot author logins learned from fetch results.
+	// The poller excludes them at the source (`-author:`) unless includeBots
+	// is set, keeping the default fetch lean without a hardcoded bot list.
+	knownBots   map[string]struct{}
+	includeBots bool
 
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
@@ -85,7 +89,16 @@ type snapshot struct {
 	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
 	Config      SearchConfig           `json:"config"`
-	RateLimit   *github.RateLimit      `json:"rateLimit,omitempty"`
+	// Viewer is the authenticated GitHub login, surfaced so the UI can resolve
+	// the @me author filter client-side. Empty until the auth probe completes.
+	Viewer string `json:"viewer,omitempty"`
+	// BotsAvailable is true once any bot author has been learned, so the UI can
+	// keep showing the @bots chip even while bots are excluded from the fetch.
+	BotsAvailable bool `json:"botsAvailable,omitempty"`
+	// IncludeBots mirrors the server's current bot-fetch state so the UI only
+	// posts a change (and triggers a refetch) when the @bots chip disagrees.
+	IncludeBots bool              `json:"includeBots,omitempty"`
+	RateLimit   *github.RateLimit `json:"rateLimit,omitempty"`
 	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
 	// newer than the recorded SeenAt (or that have never been seen). PRs
 	// marked as read are omitted to keep the map sparse on the wire.
@@ -106,6 +119,7 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		refreshCh:   make(chan struct{}, 1),
 		detailCache: NewDetailCache(),
 		gavelCache:  make(map[string]*GavelResultsSummary),
+		knownBots:   make(map[string]struct{}),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
@@ -164,11 +178,54 @@ func (s *Server) SetConfig(cfg SearchConfig) {
 	s.mu.Unlock()
 }
 
+// KnownBots returns the learned bot author logins, sorted for a stable query.
+func (s *Server) KnownBots() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.knownBots))
+	for login := range s.knownBots {
+		out = append(out, login)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IncludeBots reports whether the poller should fetch bot-authored PRs (the UI
+// sets this when the @bots author chip is not excluding them).
+func (s *Server) IncludeBots() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.includeBots
+}
+
+// SetIncludeBots toggles bot fetching and requests an immediate refetch so the
+// change is reflected without waiting for the next poll tick.
+func (s *Server) SetIncludeBots(include bool) {
+	s.mu.Lock()
+	changed := s.includeBots != include
+	s.includeBots = include
+	s.mu.Unlock()
+	if changed {
+		select {
+		case s.refreshCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
 	s.mu.Lock()
 	s.prs = prs
 	s.fetchedAt = time.Now()
 	s.err = nil
+	// Learn bot authors from whatever came back so subsequent fetches can
+	// exclude them at the source. New bots leak through for one cycle (the UI
+	// hides them client-side) before being caught here.
+	for _, pr := range prs {
+		if github.IsBotAuthor(pr.Author) {
+			s.knownBots[pr.Author] = struct{}{}
+		}
+	}
 	subs := s.subscribers
 	s.mu.Unlock()
 	s.notify()
@@ -234,6 +291,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/prs/bots", s.handleBots)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
@@ -328,6 +386,9 @@ func pageHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>gavel · PR Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
     <style>` + bundleCSS + `</style>
     <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
     <style>
@@ -340,7 +401,7 @@ func pageHTML() string {
         }
     </style>
 </head>
-<body>
+<body class="bg-background text-foreground">
     <div id="root"></div>
     <script>` + bundleJS + `</script>
 </body>
@@ -352,12 +413,15 @@ func pageHTML() string {
 // populated by withUnread() outside the lock.
 func (s *Server) snapshotLocked() snapshot {
 	snap := snapshot{
-		PRs:         s.prs,
-		FetchedAt:   s.fetchedAt,
-		NextFetchIn: int(s.interval.Seconds()),
-		Paused:      s.paused,
-		Config:      s.config,
-		RateLimit:   s.rateLimit,
+		PRs:           s.prs,
+		FetchedAt:     s.fetchedAt,
+		NextFetchIn:   int(s.interval.Seconds()),
+		Paused:        s.paused,
+		Config:        s.config,
+		Viewer:        s.auth.Login,
+		BotsAvailable: len(s.knownBots) > 0,
+		IncludeBots:   s.includeBots,
+		RateLimit:     s.rateLimit,
 	}
 	if s.err != nil {
 		snap.Error = s.err.Error()
@@ -585,6 +649,26 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
 }
 
+// handleBots sets whether the poller fetches bot-authored PRs. The UI calls it
+// when the @bots author chip switches between excluding and showing bots; a
+// change triggers an immediate refetch.
+func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Include bool `json:"include"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetIncludeBots(body.Include)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"includeBots":%v}`, body.Include)
+}
+
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -615,9 +699,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
-			Author:      cfg.Author,
-			Any:         cfg.Any,
-			Bots:        cfg.Bots,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {

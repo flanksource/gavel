@@ -28,13 +28,19 @@ type procStatus struct {
 	Running       bool                 `json:"running"`
 	SupervisorPID int                  `json:"supervisorPid,omitempty"`
 	Processes     []procfile.ProcState `json:"processes,omitempty"`
-	Error         string               `json:"error,omitempty"`
+	// Profiles are the profiles declared in the Procfile; Profile is the active
+	// one (running supervisor's, else the .gavel.yaml default).
+	Profiles []string `json:"profiles,omitempty"`
+	Profile  string   `json:"profile,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
-// procControl is the request body for the start/stop/restart endpoints.
+// procControl is the request body for the start/stop/restart endpoints. Profile
+// applies only when start spawns a new daemon (which set of processes auto-start).
 type procControl struct {
 	Project string   `json:"project"`
 	Names   []string `json:"names,omitempty"`
+	Profile string   `json:"profile,omitempty"`
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -124,21 +130,24 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var action func(string, string, []string) (*procfile.StatusReport, error)
+	// body.Profile is honoured when start/restart spawns a fresh daemon (it
+	// chooses which processes auto-start); it's ignored when acting on a process
+	// by name on an already-running daemon.
+	var actErr error
 	switch path.Base(r.URL.Path) {
 	case "start":
-		action = procfile.Start
+		_, actErr = procfile.Start(dir, "", body.Names, body.Profile)
 	case "stop":
-		action = procfile.Stop
+		_, actErr = procfile.Stop(dir, "", body.Names)
 	case "restart":
-		action = procfile.Restart
+		_, actErr = procfile.Restart(dir, "", body.Names, body.Profile)
 	default:
 		http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
 		return
 	}
 
-	if _, err := action(dir, "", body.Names); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err)
+	if actErr != nil {
+		writeJSONError(w, http.StatusInternalServerError, actErr)
 		return
 	}
 	json.NewEncoder(w).Encode(projectStatus(p)) //nolint:errcheck
@@ -201,6 +210,8 @@ func projectStatus(p Project) procStatus {
 		Running:       rep.Running,
 		SupervisorPID: rep.SupervisorPID,
 		Processes:     rep.Processes,
+		Profiles:      rep.Profiles,
+		Profile:       rep.Profile,
 	}
 }
 

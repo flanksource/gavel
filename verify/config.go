@@ -12,7 +12,80 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
+	yamlv3 "gopkg.in/yaml.v3"
 )
+
+// RestartPolicy is the supervisor restart policy for a process. It accepts a
+// bool (true→on-failure, false→no) or an enum string (no|on-failure|always)
+// from both .gavel.yaml (JSON via ghodss/yaml) and the Procfile (yaml.v3). The
+// empty value means "unset" so the resolver applies the default (no).
+type RestartPolicy string
+
+const (
+	RestartNo        RestartPolicy = "no"
+	RestartOnFailure RestartPolicy = "on-failure"
+	RestartAlways    RestartPolicy = "always"
+)
+
+func (p RestartPolicy) String() string { return string(p) }
+
+// restartPolicyFromString validates an enum string, mapping "" to unset.
+func restartPolicyFromString(s string) (RestartPolicy, error) {
+	switch RestartPolicy(s) {
+	case "", RestartNo, RestartOnFailure, RestartAlways:
+		return RestartPolicy(s), nil
+	default:
+		return "", fmt.Errorf("invalid restart policy %q (want no, on-failure, always, or a bool)", s)
+	}
+}
+
+func (p *RestartPolicy) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*p = ""
+		return nil
+	}
+	if bytes.Equal(data, []byte("true")) {
+		*p = RestartOnFailure
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*p = RestartNo
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	v, err := restartPolicyFromString(s)
+	if err != nil {
+		return err
+	}
+	*p = v
+	return nil
+}
+
+func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
+	var b bool
+	if err := node.Decode(&b); err == nil {
+		if b {
+			*p = RestartOnFailure
+		} else {
+			*p = RestartNo
+		}
+		return nil
+	}
+	var s string
+	if err := node.Decode(&s); err != nil {
+		return err
+	}
+	v, err := restartPolicyFromString(s)
+	if err != nil {
+		return err
+	}
+	*p = v
+	return nil
+}
 
 type ChecksConfig struct {
 	Disabled           []string `yaml:"disabled" json:"disabled"`
@@ -211,30 +284,29 @@ type GavelConfig struct {
 	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
 }
 
-// ProcfileConfig configures `gavel proc` — how Procfile-managed processes are
-// run and supervised. Every field is optional. Restart policy values are "no"
-// (default — never restart), "on-failure" (restart only on a non-zero exit),
-// and "always" (restart on any exit).
+// ProcfileConfig configures `gavel proc` — global defaults for the processes
+// declared in the Procfile (per-process settings live in the Procfile itself).
+// Every field is optional.
 type ProcfileConfig struct {
 	// Path overrides Procfile discovery. Relative paths resolve against the
 	// directory of the .gavel.yaml that declared them.
 	Path string `yaml:"path,omitempty" json:"path,omitempty"`
-	// RestartPolicy is the default policy applied to every process.
-	RestartPolicy string `yaml:"restartPolicy,omitempty" json:"restartPolicy,omitempty"`
+	// Profile is the default active profile: a Procfile entry with `profiles`
+	// auto-starts only when one of them is active. `gavel proc --profile` overrides.
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	// AutoRestart is the default restart policy for every process (bool or enum).
+	AutoRestart RestartPolicy `yaml:"autoRestart,omitempty" json:"autoRestart,omitempty"`
 	// MaxRestarts caps automatic restarts per process (0 = unlimited).
 	MaxRestarts int `yaml:"maxRestarts,omitempty" json:"maxRestarts,omitempty"`
 	// Env is injected into every process on top of the parent environment and
 	// any sibling .env file.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-	// Processes holds per-process overrides keyed by Procfile process name.
-	Processes map[string]ProcProcessConfig `yaml:"processes,omitempty" json:"processes,omitempty"`
-}
-
-// ProcProcessConfig overrides ProcfileConfig defaults for a single process.
-type ProcProcessConfig struct {
-	RestartPolicy string            `yaml:"restartPolicy,omitempty" json:"restartPolicy,omitempty"`
-	MaxRestarts   *int              `yaml:"maxRestarts,omitempty" json:"maxRestarts,omitempty"`
-	Env           map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Mem caps resident memory per process (e.g. "512Mi", "2g"). Empty disables
+	// the limit. A process whose tree exceeds it is killed.
+	Mem string `yaml:"mem,omitempty" json:"mem,omitempty"`
+	// CPU caps sustained CPU per process as a percentage (100 = one full core).
+	// 0 disables the limit. A process that stays above it is killed.
+	CPU float64 `yaml:"cpu,omitempty" json:"cpu,omitempty"`
 }
 
 // SecretsConfig turns the betterleaks linter on/off and optionally points at
@@ -418,36 +490,28 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 }
 
 // MergeProcfileConfig merges override onto base. Scalars are last-write-wins
-// (a non-empty/non-zero override replaces the base); Env and Processes maps are
-// merged key-by-key so a repo config can add to a home default without
-// discarding it.
+// (a non-empty/non-zero override replaces the base); Env is merged key-by-key so
+// a repo config can add to a home default without discarding it.
 func MergeProcfileConfig(base, override ProcfileConfig) ProcfileConfig {
 	if override.Path != "" {
 		base.Path = override.Path
 	}
-	if override.RestartPolicy != "" {
-		base.RestartPolicy = override.RestartPolicy
+	if override.Profile != "" {
+		base.Profile = override.Profile
+	}
+	if override.AutoRestart != "" {
+		base.AutoRestart = override.AutoRestart
 	}
 	if override.MaxRestarts != 0 {
 		base.MaxRestarts = override.MaxRestarts
 	}
-	base.Env = mergeStringMap(base.Env, override.Env)
-	if len(override.Processes) > 0 {
-		if base.Processes == nil {
-			base.Processes = make(map[string]ProcProcessConfig, len(override.Processes))
-		}
-		for name, op := range override.Processes {
-			bp := base.Processes[name]
-			if op.RestartPolicy != "" {
-				bp.RestartPolicy = op.RestartPolicy
-			}
-			if op.MaxRestarts != nil {
-				bp.MaxRestarts = op.MaxRestarts
-			}
-			bp.Env = mergeStringMap(bp.Env, op.Env)
-			base.Processes[name] = bp
-		}
+	if override.Mem != "" {
+		base.Mem = override.Mem
 	}
+	if override.CPU != 0 {
+		base.CPU = override.CPU
+	}
+	base.Env = mergeStringMap(base.Env, override.Env)
 	return base
 }
 

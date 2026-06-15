@@ -9,6 +9,7 @@ import (
 
 type ProcRestartOptions struct {
 	Procfile string   `json:"procfile,omitempty" flag:"procfile" help:"Path to the Procfile (default: nearest Procfile up to the git root)"`
+	Profile  string   `json:"profile,omitempty" flag:"profile" help:"Active profile when starting a daemon that isn't running (default: .gavel.yaml procfile.profile)"`
 	Names    []string `json:"-" args:"true"`
 }
 
@@ -33,7 +34,7 @@ func runProcRestart(opts ProcRestartOptions) (any, error) {
 		return nil, err
 	}
 
-	report, err := restartProcs(workDir, opts.Procfile, opts.Names)
+	report, err := restartProcs(workDir, opts.Procfile, opts.Names, opts.Profile)
 	if err != nil {
 		return nil, err
 	}
@@ -45,13 +46,13 @@ func runProcRestart(opts ProcRestartOptions) (any, error) {
 // task when a daemon is already running (so the user sees "Stopping…" before the
 // per-process readiness view). When nothing is running, restart is a plain start
 // and no stop task is shown.
-func restartProcs(workDir, pf string, names []string) (*procfile.StatusReport, error) {
+func restartProcs(workDir, pf string, names []string, profile string) (*procfile.StatusReport, error) {
 	st, err := procfile.Status(workDir, pf)
 	if err != nil {
 		return nil, err
 	}
 	if !st.Running {
-		return procfile.Restart(workDir, pf, names)
+		return procfile.Restart(workDir, pf, names, profile)
 	}
 
 	// The task returns an empty string (not the report) so clicky renders a
@@ -60,7 +61,7 @@ func restartProcs(workDir, pf string, names []string) (*procfile.StatusReport, e
 	var report *procfile.StatusReport
 	t := clicky.StartTask[string]("Stopping processes",
 		func(_ commonsCtx.Context, _ *task.Task) (string, error) {
-			r, err := procfile.Restart(workDir, pf, names)
+			r, err := procfile.Restart(workDir, pf, names, profile)
 			report = r
 			return "", err
 		})

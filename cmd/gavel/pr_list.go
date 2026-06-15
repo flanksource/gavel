@@ -229,32 +229,20 @@ func runPRUI(opts PRListOptions) error {
 
 	searchOpts.Status = true
 
-	author := searchOpts.Author
-	isAny := opts.Any
-	isBots := opts.Bots
+	// The UI always fetches every author (including bots) and narrows the list
+	// client-side via the Authors filter (which carries @me / @bots chips), so
+	// there is no server-side author or bot scoping here.
+	searchOpts.Author = ""
 
 	saved := ui.LoadSettings()
 	if len(searchOpts.Repos) == 0 && len(saved.Repos) > 0 {
 		searchOpts.Repos = saved.Repos
-	}
-	if saved.Author != "" {
-		author = saved.Author
-	}
-	if saved.Any {
-		isAny = true
-		author = ""
-	}
-	if saved.Bots {
-		isBots = true
 	}
 
 	srv := ui.NewServer(interval, ghOpts, ui.SearchConfig{
 		Repos:       searchOpts.Repos,
 		All:         searchOpts.All,
 		Org:         searchOpts.Org,
-		Author:      author,
-		Any:         isAny,
-		Bots:        isBots,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
 
@@ -280,26 +268,20 @@ func runPRUI(opts PRListOptions) error {
 			so.Repos = cfg.Repos
 			so.All = false
 		}
-		if cfg.Any {
-			so.Author = ""
-		} else if cfg.Author != "" {
-			so.Author = cfg.Author
-		}
 		// Propagate IgnoredOrgs so ResolveDefaultOrg skips hidden orgs
 		// when --all is set without an explicit --org.
 		so.IgnoredOrgs = cfg.IgnoredOrgs
 		if cfg.Org != "" {
 			so.Org = cfg.Org
 		}
-		so.ShowAuthor = so.Author != "@me"
-		results, rl, err := github.SearchPRs(ghOpts, so)
-		if err != nil {
-			return nil, rl, err
+		so.ShowAuthor = true
+		// Drop known bots at the source unless the user asked to see them via
+		// the @bots author chip. The bot set is learned from prior fetches, so
+		// it tracks newly-appearing bots without a hardcoded list.
+		if !srv.IncludeBots() {
+			so.ExcludeAuthors = srv.KnownBots()
 		}
-		if !cfg.Bots {
-			results = filterByBot(results, false)
-		}
-		return results, rl, nil
+		return github.SearchPRs(ghOpts, so)
 	}
 
 	poller := ui.NewPoller(srv, searchFn, interval)
@@ -347,16 +329,10 @@ func runPRUI(opts PRListOptions) error {
 	return nil
 }
 
-func isBot(author string) bool {
-	return strings.HasSuffix(author, "[bot]") || strings.HasSuffix(author, "bot")
-}
-
 func filterByBot(items github.PRSearchResults, botsOnly bool) github.PRSearchResults {
 	var filtered github.PRSearchResults
 	for _, item := range items {
-		if botsOnly && isBot(item.Author) {
-			filtered = append(filtered, item)
-		} else if !botsOnly && !isBot(item.Author) {
+		if github.IsBotAuthor(item.Author) == botsOnly {
 			filtered = append(filtered, item)
 		}
 	}

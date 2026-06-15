@@ -272,8 +272,29 @@
     },
     "procfile": {
       "additionalProperties": false,
-      "description": "Settings for `gavel proc`, which runs the processes declared in a Procfile (Heroku/foreman `name: command` format).",
+      "description": "Global defaults for `gavel proc`. Per-process settings live in the Procfile, whose entries are either `name: command` or `name:` with command/default/autoRestart/cpu/mem/profiles/env/maxRestarts. This section holds only defaults + the active profile.",
       "properties": {
+        "autoRestart": {
+          "default": "no",
+          "description": "Default restart policy for every process. Accepts a bool (true=on-failure, false=no) or an enum: no (never restart), on-failure (restart only on a non-zero exit), or always (restart on any exit).",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "no",
+                "on-failure",
+                "always"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "cpu": {
+          "description": "Default sustained CPU cap per process, as a percentage (100 = one full core). 0 disables it. A process that stays above it is killed.",
+          "type": "number"
+        },
         "env": {
           "additionalProperties": {
             "type": "string"
@@ -286,49 +307,16 @@
           "description": "Cap on automatic restarts per process. 0 means unlimited.",
           "type": "integer"
         },
+        "mem": {
+          "description": "Default resident-memory cap per process (e.g. \"512Mi\", \"2g\"). Empty disables it. A process whose group exceeds it is killed.",
+          "type": "string"
+        },
         "path": {
           "description": "Override Procfile discovery. Relative paths resolve against the .gavel.yaml directory. If omitted, the nearest Procfile up to the git root is used.",
           "type": "string"
         },
-        "processes": {
-          "additionalProperties": {
-            "additionalProperties": false,
-            "description": "Overrides for a single process.",
-            "properties": {
-              "env": {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "description": "Environment injected into this process.",
-                "type": "object"
-              },
-              "maxRestarts": {
-                "description": "Cap on automatic restarts for this process. 0 means unlimited.",
-                "type": "integer"
-              },
-              "restartPolicy": {
-                "description": "Restart policy for this process, overriding the procfile default.",
-                "enum": [
-                  "no",
-                  "on-failure",
-                  "always"
-                ],
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          "description": "Per-process overrides keyed by Procfile process name.",
-          "type": "object"
-        },
-        "restartPolicy": {
-          "default": "no",
-          "description": "Default restart policy for every process: no (never), on-failure (only on a non-zero exit), or always (any exit).",
-          "enum": [
-            "no",
-            "on-failure",
-            "always"
-          ],
+        "profile": {
+          "description": "Default active profile. A Procfile entry with `profiles` auto-starts only when one of them is the active profile; `gavel proc --profile \u003cname\u003e` overrides this.",
           "type": "string"
         }
       },

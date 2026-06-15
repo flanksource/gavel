@@ -58,24 +58,24 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
   return (
     <div className="mb-3">
       <div
-        className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5"
+        className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
         onClick={() => setExpanded(!expanded)}
       >
         <iconify-icon
           icon={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          className="text-gray-400 text-[10px]"
+          className="text-muted-foreground text-[10px]"
         />
         <span className={statusColor(run.status, run.conclusion)}>
           {statusIcon(run.status, run.conclusion)}
         </span>
         <span>{run.name}</span>
-        {summary && <span className="text-gray-400 text-xs font-normal">· {summary}</span>}
+        {summary && <span className="text-muted-foreground text-xs font-normal">· {summary}</span>}
         {run.url && (
           <a
             href={run.url}
             target="_blank"
             rel="noopener"
-            className="text-gray-400 hover:text-blue-500"
+            className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
             <iconify-icon icon="codicon:link-external" className="text-xs" />
@@ -146,20 +146,20 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
   return (
     <div className="ml-4 mt-1">
       <div
-        className={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1' : ''}`}
+        className={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-muted rounded px-1 -mx-1' : ''}`}
         onClick={failed && !hasSteps ? toggleJobFallback : undefined}
       >
         <span className={statusColor(job.status, job.conclusion)}>
           {statusIcon(job.status, job.conclusion)}
         </span>
-        <span className={failed ? 'text-red-700 font-medium' : 'text-gray-700'}>{job.name}</span>
-        {duration && <span className="text-gray-400">{duration}</span>}
+        <span className={failed ? 'text-red-700 font-medium' : 'text-foreground'}>{job.name}</span>
+        {duration && <span className="text-muted-foreground">{duration}</span>}
         {job.url && (
           <a
             href={job.url}
             target="_blank"
             rel="noopener"
-            className="text-gray-400 hover:text-blue-500"
+            className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
             <iconify-icon icon="codicon:link-external" className="text-[10px]" />
@@ -176,12 +176,12 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         return (
           <div key={step.number} className="ml-4 mt-0.5 text-xs">
             <div
-              className="cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 inline-flex items-center gap-1"
+              className="cursor-pointer hover:bg-muted rounded px-1 -mx-1 inline-flex items-center gap-1"
               onClick={() => toggleStep(step.number)}
             >
               <iconify-icon
                 icon={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-                className="text-gray-400 text-[9px]"
+                className="text-muted-foreground text-[9px]"
               />
               <span className={statusColor(step.status, step.conclusion)}>
                 {statusIcon(step.status, step.conclusion)}
@@ -192,13 +192,13 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
             {isOpen && loaded && logs && (
               <>
                 {isFallback && (
-                  <div className="ml-4 mt-0.5 text-[10px] text-gray-400 italic">Showing job log tail (step-level logs unavailable)</div>
+                  <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground italic">Showing job log tail (step-level logs unavailable)</div>
                 )}
-                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-gray-50'} borderClass={isFallback ? 'border-red-100' : 'border-gray-100'} />
+                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-muted'} borderClass={isFallback ? 'border-red-100' : 'border-border'} />
               </>
             )}
             {isOpen && loaded && !logs && !error && (
-              <div className="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this step.</div>
+              <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this step.</div>
             )}
             {isOpen && error && (
               <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
@@ -210,7 +210,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         <LogViewer logs={jobLogs} bgClass="bg-red-50" borderClass="border-red-100" />
       )}
       {failed && !hasSteps && expandedJobFallback && loaded && !jobLogs && !error && (
-        <div className="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this job.</div>
+        <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this job.</div>
       )}
       {failed && !hasSteps && expandedJobFallback && error && (
         <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>

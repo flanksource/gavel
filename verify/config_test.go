@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	yamlv3 "gopkg.in/yaml.v3"
 )
 
 func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
@@ -527,21 +529,54 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 	})
 }
 
+func TestRestartPolicyUnmarshal(t *testing.T) {
+	jsonCases := map[string]RestartPolicy{
+		`"on-failure"`: RestartOnFailure,
+		`"always"`:     RestartAlways,
+		`"no"`:         RestartNo,
+		`true`:         RestartOnFailure,
+		`false`:        RestartNo,
+		`null`:         "",
+	}
+	for in, want := range jsonCases {
+		var p RestartPolicy
+		require.NoError(t, json.Unmarshal([]byte(in), &p), in)
+		assert.Equal(t, want, p, in)
+	}
+	var bad RestartPolicy
+	assert.Error(t, json.Unmarshal([]byte(`"maybe"`), &bad), "invalid enum is a loud error")
+
+	yamlCases := map[string]RestartPolicy{
+		"on-failure": RestartOnFailure,
+		"always":     RestartAlways,
+		"no":         RestartNo, // YAML 1.2 string "no"
+		"true":       RestartOnFailure,
+		"false":      RestartNo,
+	}
+	for in, want := range yamlCases {
+		var p RestartPolicy
+		require.NoError(t, yamlv3.Unmarshal([]byte(in), &p), in)
+		assert.Equal(t, want, p, in)
+	}
+}
+
 func TestMergeProcfileConfig(t *testing.T) {
-	t.Run("scalar overrides win when set", func(t *testing.T) {
-		base := ProcfileConfig{Path: "Procfile", RestartPolicy: "no", MaxRestarts: 3}
-		out := MergeProcfileConfig(base, ProcfileConfig{RestartPolicy: "always", MaxRestarts: 9})
+	t.Run("scalar overrides win when set, omitted keep base", func(t *testing.T) {
+		base := ProcfileConfig{Path: "Procfile", AutoRestart: RestartNo, MaxRestarts: 3, Profile: "dev"}
+		out := MergeProcfileConfig(base, ProcfileConfig{AutoRestart: RestartAlways, MaxRestarts: 9})
 		assert.Equal(t, "Procfile", out.Path)
-		assert.Equal(t, "always", out.RestartPolicy)
+		assert.Equal(t, RestartAlways, out.AutoRestart)
 		assert.Equal(t, 9, out.MaxRestarts)
+		assert.Equal(t, "dev", out.Profile, "omitted profile override keeps base")
 	})
 
 	t.Run("empty override preserves base scalars", func(t *testing.T) {
-		base := ProcfileConfig{Path: "Procfile.dev", RestartPolicy: "on-failure", MaxRestarts: 2}
+		base := ProcfileConfig{Path: "Procfile.dev", AutoRestart: RestartOnFailure, MaxRestarts: 2, Profile: "prod"}
 		out := MergeProcfileConfig(base, ProcfileConfig{})
 		assert.Equal(t, "Procfile.dev", out.Path)
-		assert.Equal(t, "on-failure", out.RestartPolicy)
+		assert.Equal(t, RestartOnFailure, out.AutoRestart)
 		assert.Equal(t, 2, out.MaxRestarts)
+		assert.Equal(t, "prod", out.Profile)
 	})
 
 	t.Run("env merges key-by-key with override winning", func(t *testing.T) {
@@ -551,22 +586,17 @@ func TestMergeProcfileConfig(t *testing.T) {
 		assert.Equal(t, map[string]string{"A": "1", "B": "20", "C": "3"}, out.Env)
 	})
 
-	t.Run("per-process overrides merge without dropping base processes", func(t *testing.T) {
-		ten := 10
-		base := ProcfileConfig{Processes: map[string]ProcProcessConfig{
-			"web":    {RestartPolicy: "always", Env: map[string]string{"PORT": "3000"}},
-			"worker": {RestartPolicy: "no"},
-		}}
-		override := ProcfileConfig{Processes: map[string]ProcProcessConfig{
-			"web": {MaxRestarts: &ten, Env: map[string]string{"PORT": "4000", "DEBUG": "1"}},
-		}}
-		out := MergeProcfileConfig(base, override)
+	t.Run("resource limits + profile override when set and persist when omitted", func(t *testing.T) {
+		base := ProcfileConfig{Mem: "256Mi", CPU: 50, Profile: "dev"}
+		out := MergeProcfileConfig(base, ProcfileConfig{Mem: "1Gi", Profile: "prod"})
+		assert.Equal(t, "1Gi", out.Mem, "non-empty override wins")
+		assert.Equal(t, 50.0, out.CPU, "omitted override keeps base")
+		assert.Equal(t, "prod", out.Profile)
 
-		assert.Equal(t, "always", out.Processes["web"].RestartPolicy, "base policy kept when override omits it")
-		require.NotNil(t, out.Processes["web"].MaxRestarts)
-		assert.Equal(t, 10, *out.Processes["web"].MaxRestarts)
-		assert.Equal(t, map[string]string{"PORT": "4000", "DEBUG": "1"}, out.Processes["web"].Env)
-		assert.Equal(t, "no", out.Processes["worker"].RestartPolicy, "untouched process survives the merge")
+		kept := MergeProcfileConfig(base, ProcfileConfig{})
+		assert.Equal(t, "256Mi", kept.Mem)
+		assert.Equal(t, 50.0, kept.CPU)
+		assert.Equal(t, "dev", kept.Profile)
 	})
 }
 
@@ -575,22 +605,22 @@ func TestLoadGavelConfig_WithProcfile(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
 	cfgData := []byte(`procfile:
-  restartPolicy: on-failure
+  profile: dev
+  autoRestart: on-failure
   maxRestarts: 5
+  mem: 512Mi
   env:
     RAILS_ENV: development
-  processes:
-    web:
-      restartPolicy: always
 `)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
 
 	cfg, err := LoadGavelConfig(dir)
 	require.NoError(t, err)
-	assert.Equal(t, "on-failure", cfg.Procfile.RestartPolicy)
+	assert.Equal(t, RestartOnFailure, cfg.Procfile.AutoRestart)
 	assert.Equal(t, 5, cfg.Procfile.MaxRestarts)
+	assert.Equal(t, "dev", cfg.Procfile.Profile)
+	assert.Equal(t, "512Mi", cfg.Procfile.Mem)
 	assert.Equal(t, "development", cfg.Procfile.Env["RAILS_ENV"])
-	assert.Equal(t, "always", cfg.Procfile.Processes["web"].RestartPolicy)
 }
 
 func TestLoadSingleGavelConfig(t *testing.T) {

@@ -10,8 +10,9 @@ interface Props {
 // OrgChooser shows the currently-selected org (or "@me" when no org is
 // selected) and lets the user switch between org-wide browsing and
 // personal-only browsing. Selecting an org writes `{ org, all: true }`;
-// selecting @me clears to `{ org: '', all: false }` so SearchControls'
-// @me/all/bots buttons stay in control of that scope.
+// selecting @me clears to `{ org: '', all: false }`, scoping the fetch to the
+// local repo. Author/bot narrowing is handled client-side by the Authors
+// filter, not here.
 //
 // Orgs are fetched lazily on first open via /api/orgs?include-ignored=1 —
 // the server caches the underlying list for 5 minutes, so the dropdown
@@ -112,7 +113,7 @@ export function OrgChooser({ config, onChange }: Props) {
   return (
     <div className="relative" ref={rootRef}>
       <button
-        className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+        className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={() => setOpen(!open)}
         title="Switch GitHub org / scope"
       >
@@ -126,10 +127,10 @@ export function OrgChooser({ config, onChange }: Props) {
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 text-sm">
+        <div className="absolute top-full right-0 mt-1 w-72 bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
           <button
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-              !config.all ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+              !config.all ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseMe}
           >
@@ -140,7 +141,7 @@ export function OrgChooser({ config, onChange }: Props) {
 
           <button
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-              config.all && !activeOrg ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+              config.all && !activeOrg ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseAllOrgs}
           >
@@ -149,12 +150,12 @@ export function OrgChooser({ config, onChange }: Props) {
             {config.all && !activeOrg && <iconify-icon icon="codicon:check" className="text-xs" />}
           </button>
 
-          <div className="border-t border-gray-100 my-1" />
+          <div className="border-t border-border my-1" />
 
-          {loading && <div className="px-3 py-2 text-xs text-gray-400">Loading orgs…</div>}
+          {loading && <div className="px-3 py-2 text-xs text-muted-foreground">Loading orgs…</div>}
           {err && <div className="px-3 py-2 text-xs text-red-500">{err}</div>}
           {!loading && !err && visibleOrgs.length === 0 && hiddenOrgs.length === 0 && (
-            <div className="px-3 py-2 text-xs text-gray-400">No orgs — token has no org memberships</div>
+            <div className="px-3 py-2 text-xs text-muted-foreground">No orgs — token has no org memberships</div>
           )}
           {visibleOrgs.map(o => {
             const selected = config.all && config.org === o.login;
@@ -162,7 +163,7 @@ export function OrgChooser({ config, onChange }: Props) {
               <div
                 key={o.login}
                 className={`group flex items-center gap-2 px-3 py-1.5 transition-colors ${
-                  selected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+                  selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
                 }`}
               >
                 <button
@@ -176,7 +177,7 @@ export function OrgChooser({ config, onChange }: Props) {
                   {selected && <iconify-icon icon="codicon:check" className="text-xs" />}
                 </button>
                 <button
-                  className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
@@ -188,9 +189,9 @@ export function OrgChooser({ config, onChange }: Props) {
 
           {hiddenOrgs.length > 0 && (
             <>
-              <div className="border-t border-gray-100 my-1" />
+              <div className="border-t border-border my-1" />
               <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 onClick={() => setShowHidden(v => !v)}
               >
                 <iconify-icon icon={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
@@ -199,14 +200,14 @@ export function OrgChooser({ config, onChange }: Props) {
               {showHidden && hiddenOrgs.map(o => (
                 <div
                   key={o.login}
-                  className="group flex items-center gap-2 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50"
+                  className="group flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 >
                   {o.avatarUrl
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
                     : <iconify-icon icon="codicon:organization" className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
                   <button
-                    className="text-gray-400 hover:text-blue-600 transition-colors"
+                    className="text-muted-foreground hover:text-primary transition-colors"
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >

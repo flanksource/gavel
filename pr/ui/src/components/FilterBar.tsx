@@ -1,18 +1,22 @@
 import { FilterBar as ClickyFilterBar } from '@flanksource/clicky-ui/components';
 import type { FilterBarFilter, MultiSelectOption } from '@flanksource/clicky-ui/components';
 
+export type FilterMode = 'include' | 'exclude';
+
+// Facets are tri-state: a key maps to 'include' or 'exclude'; absent = neutral.
+// This is exactly clicky-ui's FilterBar `kind:"multi"` value shape.
 export interface Filters {
-  state: Set<string>;
-  checks: Set<string>;
-  repos: Set<string>;
-  authors: Set<string>;
+  state: Record<string, FilterMode>;
+  checks: Record<string, FilterMode>;
+  repos: Record<string, FilterMode>;
+  authors: Record<string, FilterMode>;
 }
 
 export const emptyFilters = (): Filters => ({
-  state: new Set(),
-  checks: new Set(),
-  repos: new Set(),
-  authors: new Set(),
+  state: {},
+  checks: {},
+  repos: {},
+  authors: {},
 });
 
 interface Props {
@@ -43,13 +47,21 @@ function shortName(repo: string): string {
   return repo.includes('/') ? repo.split('/')[1] : repo;
 }
 
-// FilterBar wraps clicky-ui's FilterBar but keeps the project's Set-based
-// Filters contract so App.tsx, routes.ts and utils (filterPRs/computeCounts +
-// URL sync) are untouched. Each facet is a `select-multi` whose option labels
-// carry the live result count.
+// authorLabel renders the synthetic @me / @bots keys verbatim and prefixes real
+// logins with "@".
+function authorLabel(author: string): string {
+  if (author === '@me') return '@me';
+  if (author === '@bots') return 'bots';
+  return `@${author}`;
+}
+
+// FilterBar wraps clicky-ui's FilterBar with tri-state (include/exclude) facets.
+// The project's record-based Filters contract flows straight through to each
+// `kind:"multi"` filter's `value`/`onChange`, and on to filterPRs / routes /
+// storage unchanged.
 export function FilterBar({ filters, onChange, counts, repos, authors }: Props) {
-  const setFacet = (key: keyof Filters, values: string[]) =>
-    onChange({ ...filters, [key]: new Set(values) });
+  const setFacet = (key: keyof Filters, value: Record<string, FilterMode>) =>
+    onChange({ ...filters, [key]: value });
 
   const c = counts as Record<string, number>;
   const stateOpts: MultiSelectOption[] = STATE_DEFS
@@ -59,13 +71,13 @@ export function FilterBar({ filters, onChange, counts, repos, authors }: Props) 
     .filter(d => c[d.key] > 0)
     .map(d => ({ value: d.key, label: `${d.label} (${c[d.key]})` }));
   const repoOpts: MultiSelectOption[] = repos.map(r => ({ value: r, label: shortName(r) }));
-  const authorOpts: MultiSelectOption[] = authors.map(a => ({ value: a, label: `@${a}` }));
+  const authorOpts: MultiSelectOption[] = authors.map(a => ({ value: a, label: authorLabel(a) }));
 
   const fb: FilterBarFilter[] = [];
-  if (stateOpts.length) fb.push({ key: 'state', kind: 'select-multi', label: 'State', options: stateOpts, value: [...filters.state], onChange: (v) => setFacet('state', v) });
-  if (checkOpts.length) fb.push({ key: 'checks', kind: 'select-multi', label: 'Checks', options: checkOpts, value: [...filters.checks], onChange: (v) => setFacet('checks', v) });
-  if (repos.length > 1) fb.push({ key: 'repos', kind: 'select-multi', label: 'Repos', options: repoOpts, value: [...filters.repos], onChange: (v) => setFacet('repos', v) });
-  if (authors.length > 1) fb.push({ key: 'authors', kind: 'select-multi', label: 'Authors', options: authorOpts, value: [...filters.authors], onChange: (v) => setFacet('authors', v) });
+  if (stateOpts.length) fb.push({ key: 'state', kind: 'multi', label: 'State', options: stateOpts, value: filters.state, onChange: (v) => setFacet('state', v) });
+  if (checkOpts.length) fb.push({ key: 'checks', kind: 'multi', label: 'Checks', options: checkOpts, value: filters.checks, onChange: (v) => setFacet('checks', v) });
+  if (repos.length > 1) fb.push({ key: 'repos', kind: 'multi', label: 'Repos', icon: 'codicon:repo', options: repoOpts, value: filters.repos, onChange: (v) => setFacet('repos', v) });
+  if (authors.length > 1) fb.push({ key: 'authors', kind: 'multi', label: 'Authors', icon: 'codicon:person', options: authorOpts, value: filters.authors, onChange: (v) => setFacet('authors', v) });
 
   if (fb.length === 0) return null;
   return <ClickyFilterBar overflowMode="wrap" filters={fb} />;

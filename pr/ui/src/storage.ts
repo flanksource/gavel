@@ -1,13 +1,17 @@
 import type { SearchConfig } from './types';
-import type { Filters } from './components/FilterBar';
+import type { Filters, FilterMode } from './components/FilterBar';
 
 const KEY = 'gavel.pr-ui.v1';
 
+// Each facet persists as a map of option key -> include/exclude (tri-state),
+// matching the in-memory Filters shape.
+type StoredFacet = Record<string, FilterMode>;
+
 interface StoredFilters {
-  state: string[];
-  checks: string[];
-  repos: string[];
-  authors: string[];
+  state: StoredFacet;
+  checks: StoredFacet;
+  repos: StoredFacet;
+  authors: StoredFacet;
 }
 
 interface Stored {
@@ -30,10 +34,10 @@ export function saveUIState(config: SearchConfig, filters: Filters): void {
   const stored: Stored = {
     config,
     filters: {
-      state: [...filters.state],
-      checks: [...filters.checks],
-      repos: [...filters.repos],
-      authors: [...filters.authors],
+      state: filters.state,
+      checks: filters.checks,
+      repos: filters.repos,
+      authors: filters.authors,
     },
   };
   try {
@@ -46,9 +50,9 @@ export function saveUIState(config: SearchConfig, filters: Filters): void {
 export function filtersFromStored(s: Stored['filters']): Filters | null {
   if (!s) return null;
   return {
-    state: new Set(s.state || []),
-    checks: new Set(s.checks || []),
-    repos: new Set(s.repos || []),
-    authors: new Set(s.authors || []),
+    state: s.state || {},
+    checks: s.checks || {},
+    repos: s.repos || {},
+    authors: s.authors || {},
   };
 }

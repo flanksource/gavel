@@ -3,15 +3,15 @@ import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus,
 import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
-import { FilterBar, type Filters } from './components/FilterBar';
-import { SplitPane, Button } from '@flanksource/clicky-ui/components';
-import { RepoSelector } from './components/RepoSelector';
-import { SearchControls } from './components/SearchControls';
+import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
+import { SplitPane, AppShell } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectsBar } from './components/ProjectsBar';
+import { ProcessManager } from './components/ProcessManager';
+import { ThemeToggle } from './components/ThemeToggle';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import {
   annotateRoutePaths,
@@ -25,7 +25,7 @@ import { loadUIState, saveUIState, filtersFromStored } from './storage';
 
 type Tab = 'prs' | 'activity';
 
-const defaultConfig: SearchConfig = { repos: [], author: '@me' };
+const defaultConfig: SearchConfig = { repos: [] };
 
 // aggregateShards rolls per-shard summaries into one badge for the sidebar,
 // where there is only room for a single number per PR. Returns null if the
@@ -71,16 +71,22 @@ function aggregateShards(shards: GavelResultsSummary[]): GavelResultsSummary | n
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
-    : { selectedPath: '', filters: { state: new Set(), checks: new Set(), repos: new Set(), authors: new Set() } };
+    : { selectedPath: '', filters: emptyFilters() };
 
   // Hydrate org/search config and filters from localStorage. URL query params
   // (if present) win for filters so deep links still work.
   const stored = typeof window !== 'undefined' ? loadUIState() : {};
   const hasUrlFilters = typeof window !== 'undefined' && window.location.search.length > 1;
-  const initialFilters = hasUrlFilters ? initialRoute.filters : (filtersFromStored(stored.filters) ?? initialRoute.filters);
+  // First-run default hides bots (the daemon now fetches them so the @bots
+  // author chip can toggle them back on). URL params and stored filters win.
+  const defaultFilters: Filters = { ...emptyFilters(), authors: { '@bots': 'exclude' } };
+  const initialFilters = hasUrlFilters ? initialRoute.filters : (filtersFromStored(stored.filters) ?? defaultFilters);
   const initialConfig: SearchConfig = { ...defaultConfig, ...(stored.config || {}) };
 
   const [rawPrs, setRawPrs] = useState<PRItem[]>([]);
+  const [viewer, setViewer] = useState('');
+  const [botsAvailable, setBotsAvailable] = useState(false);
+  const [includeBotsServer, setIncludeBotsServer] = useState(false);
   const [unread, setUnread] = useState<Record<string, boolean>>({});
   const [fetchedAt, setFetchedAt] = useState('');
   const [nextFetchIn, setNextFetchIn] = useState(60);
@@ -94,6 +100,7 @@ export function App() {
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>('prs');
+  const [query, setQuery] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
@@ -151,6 +158,9 @@ export function App() {
 
   function applySnapshot(snap: Snapshot) {
     setRawPrs(snap.prs || []);
+    if (snap.viewer) setViewer(snap.viewer);
+    setBotsAvailable(!!snap.botsAvailable);
+    setIncludeBotsServer(!!snap.includeBots);
     setUnread(snap.unread || {});
     setFetchedAt(snap.fetchedAt);
     setNextFetchIn(snap.nextFetchIn);
@@ -375,46 +385,71 @@ export function App() {
 
   const counts = useMemo(() => computeCounts(prs), [prs]);
   const reposList = useMemo(() => collectRepos(prs), [prs]);
-  const authors = useMemo(() => collectAuthors(prs), [prs]);
+  const authors = useMemo(() => collectAuthors(prs, viewer, botsAvailable), [prs, viewer, botsAvailable]);
+
+  // The @bots chip drives whether the daemon fetches bot PRs at all: when it's
+  // not excluding bots, ask the server to include them (and refetch). Excluding
+  // bots lets the server drop them at the source. Converges since the snapshot
+  // echoes the server's includeBots back into includeBotsServer.
+  useEffect(() => {
+    const wantBots = (filters.authors['@bots'] ?? '') !== 'exclude';
+    if (wantBots === includeBotsServer) return;
+    fetch('/api/prs/bots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include: wantBots }),
+    }).catch(() => {});
+  }, [filters.authors, includeBotsServer]);
   const filtered = useMemo(
-    () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors),
-    [prs, filters],
+    () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors, viewer),
+    [prs, filters, viewer],
   );
+  // Free-text search over title / branches / #number / repo, applied on top of
+  // the structured (tri-state) facet filters.
+  const searched = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return filtered;
+    return filtered.filter(pr =>
+      pr.title.toLowerCase().includes(q) ||
+      String(pr.number).includes(q) ||
+      pr.repo.toLowerCase().includes(q) ||
+      (pr.source || '').toLowerCase().includes(q) ||
+      (pr.target || '').toLowerCase().includes(q));
+  }, [filtered, query]);
 
   return (
-    <div className="bg-gray-100 h-screen flex flex-col">
-      <div className="border-b bg-white px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="shrink-0 flex items-center">
-              <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />
-            </h1>
-            <TabBar active={activeTab} onChange={setActiveTab} />
-            {activeTab === 'prs' && (
-              <>
-                <RepoSelector
-                  repos={config.repos || []}
-                  allOrg={config.all}
-                  org={config.org}
-                  onChange={(repos) => updateConfig({ repos })}
-                />
-                <SearchControls config={config} onChange={updateConfig} />
-                <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
-                <ExportButtons
-                  onJSON={onDownloadJSON}
-                  onMarkdown={onDownloadMarkdown}
-                  onCopy={onCopyForAgent}
-                  copyState={copyState}
-                  copyError={copyError}
-                />
-                <Button variant="outline" size="sm" onClick={openAdd} title="Add a local workspace directory">
-                  <iconify-icon icon="codicon:add" className="mr-1" /> Add dir
-                </Button>
-              </>
-            )}
-          </div>
-          <div className="flex items-start gap-3">
-            <div className="pt-0.5"><OrgChooser config={config} onChange={updateConfig} /></div>
+    <>
+      <AppShell
+        brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
+        nav={<TabBar active={activeTab} onChange={setActiveTab} />}
+        search={
+          activeTab === 'prs' ? (
+            <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
+              <iconify-icon icon="codicon:search" className="text-muted-foreground text-sm shrink-0" />
+              <input
+                value={query}
+                onChange={(e) => setQuery((e.target as HTMLInputElement).value)}
+                placeholder="Search pull requests, branches, #id…"
+                aria-label="Search pull requests"
+                className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="text-muted-foreground hover:text-foreground shrink-0"
+                  aria-label="Clear search"
+                >
+                  <iconify-icon icon="codicon:close" className="text-xs" />
+                </button>
+              )}
+            </div>
+          ) : undefined
+        }
+        actions={
+          <>
+            <ProcessManager projects={projects} procStatus={procStatus} onProcChanged={onProcChanged} />
+            <OrgChooser config={config} onChange={updateConfig} />
             <Summary
               prs={prs}
               fetchedAt={fetchedAt}
@@ -426,38 +461,63 @@ export function App() {
               onPause={handlePause}
               networkBusy={detailLoading}
             />
-            <div className="pt-1.5"><StatusIndicator /></div>
-          </div>
-        </div>
-      </div>
-
-      {activeTab === 'prs' ? (
-        <SplitPane
-          left={
-            <>
-              <ProjectsBar projects={standaloneProjects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} />
-              <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
-            </>
-          }
-          right={
-            selected ? (
-              <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
-            ) : (
-              <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-                <div className="text-center">
-                  <iconify-icon icon="codicon:git-pull-request" className="text-4xl mb-2" />
-                  <p>Select a PR to view details</p>
+            <ThemeToggle />
+            <StatusIndicator />
+          </>
+        }
+        toolbar={
+          activeTab === 'prs' ? (
+            <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
+          ) : undefined
+        }
+        bodyHeader={
+          activeTab === 'prs' ? (
+            <span className="text-xs text-muted-foreground">
+              {searched.length} pull request{searched.length !== 1 ? 's' : ''}
+            </span>
+          ) : undefined
+        }
+        bodyActions={
+          activeTab === 'prs' ? (
+            <ExportButtons
+              onJSON={onDownloadJSON}
+              onMarkdown={onDownloadMarkdown}
+              onCopy={onCopyForAgent}
+              copyState={copyState}
+              copyError={copyError}
+            />
+          ) : undefined
+        }
+        contentClassName="overflow-hidden"
+      >
+        {activeTab === 'prs' ? (
+          <SplitPane
+            left={
+              <>
+                <ProjectsBar projects={standaloneProjects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} />
+                <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
+              </>
+            }
+            right={
+              selected ? (
+                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
+              ) : (
+                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                  <div className="text-center">
+                    <iconify-icon icon="codicon:git-pull-request" className="text-4xl mb-2" />
+                    <p>Select a PR to view details</p>
+                  </div>
                 </div>
-              </div>
-            )
-          }
-        />
-      ) : (
-        <ActivityView />
-      )}
+              )
+            }
+          />
+        ) : (
+          <ActivityView />
+        )}
+      </AppShell>
 
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
-    </div>
+    </>
   );
 }
 
@@ -474,8 +534,8 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
           onClick={() => onChange(t.id)}
           className={`px-3 py-1.5 text-sm rounded-md transition ${
             active === t.id
-              ? 'bg-blue-50 text-blue-700 font-medium'
-              : 'text-gray-600 hover:bg-gray-100'
+              ? 'bg-primary/10 text-primary font-medium'
+              : 'text-muted-foreground hover:bg-muted'
           }`}
         >
           <iconify-icon icon={t.icon} className="mr-1" />
@@ -496,7 +556,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   return (
     <div className="flex items-center gap-1">
       <button
-        className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={onJSON}
         title="Download current view as JSON"
       >
@@ -504,7 +564,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         JSON
       </button>
       <button
-        className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-200 transition-colors"
+        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={onMarkdown}
         title="Download current view as Markdown"
       >

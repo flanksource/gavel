@@ -84,11 +84,11 @@ interface Props {
 
 export function PRDetailPanel({ pr, detail, loading }: Props) {
   return (
-    <div className="p-4 bg-white h-full overflow-y-auto">
+    <div className="p-4 bg-card h-full overflow-y-auto">
       <PRHeader pr={pr} detail={detail} />
 
       {loading && !detail && (
-        <div className="flex items-center gap-2 text-sm text-gray-400 mt-4">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground mt-4">
           <iconify-icon icon="svg-spinners:ring-resize" className="text-blue-500" />
           Loading details...
         </div>
@@ -126,7 +126,7 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
         <CommentsSection comments={detail.comments.filter(c => !isDeploymentComment(c))} />
       )}
 
-      <div className="pt-3 mt-3 border-t border-gray-100">
+      <div className="pt-3 mt-3 border-t border-border">
         <a href={pr.url} target="_blank" rel="noopener"
           className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline">
           <iconify-icon icon="codicon:link-external" />
@@ -152,8 +152,8 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
           title={pr.repo}
         />
         <div className="flex-1 min-w-0">
-          <h2 className="text-base font-semibold text-gray-900">{pr.title}</h2>
-          <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+          <h2 className="text-base font-semibold text-foreground">{pr.title}</h2>
+          <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
             <a href={pr.url} target="_blank" rel="noopener" className="text-blue-600 hover:underline">
               {pr.repo}#{pr.number}
             </a>
@@ -182,7 +182,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-3">
         <div>
           <span className="text-cyan-600 font-mono text-xs">{pr.source}</span>
-          <span className="text-gray-400 mx-1">→</span>
+          <span className="text-muted-foreground mx-1">→</span>
           <span className="text-cyan-600 font-mono text-xs">{pr.target}</span>
         </div>
         <div className="flex gap-2">
@@ -191,7 +191,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
           </span>
           {(pr.reviewDecision || info?.reviewDecision) && (
             <>
-              <span className="text-gray-300">|</span>
+              <span className="text-muted-foreground/50">|</span>
               <span className={reviewColor(pr.reviewDecision || info?.reviewDecision || '')}>
                 {(pr.reviewDecision || info?.reviewDecision || '').replace(/_/g, ' ')}
               </span>
@@ -201,7 +201,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
             const m = pr.mergeable || info?.mergeable || '';
             return (
               <>
-                <span className="text-gray-300">|</span>
+                <span className="text-muted-foreground/50">|</span>
                 <span className={m === 'MERGEABLE' ? 'text-green-600' : m === 'CONFLICTING' ? 'text-red-600' : 'text-yellow-600'}>
                   {m === 'CONFLICTING' && <iconify-icon icon="codicon:git-merge" className="mr-0.5" />}
                   {m}
@@ -221,9 +221,9 @@ function CommentView({ comment }: { comment: PRComment }) {
   const title = extractTitle(comment.body);
 
   return (
-    <div className={`text-xs border-b border-gray-50 ${resolved ? 'opacity-50' : ''}`}>
+    <div className={`text-xs border-b border-border ${resolved ? 'opacity-50' : ''}`}>
       <div
-        className="flex items-start gap-1.5 py-1.5 cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1"
+        className="flex items-start gap-1.5 py-1.5 cursor-pointer hover:bg-muted rounded px-1 -mx-1"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="shrink-0 mt-0.5">{severityIcon(comment.severity)}</span>
@@ -234,13 +234,13 @@ function CommentView({ comment }: { comment: PRComment }) {
                 {comment.line ? `:${comment.line}` : ''}
               </span>
             )}
-            {resolved && <span className="text-gray-400 text-[10px]">({comment.isOutdated ? 'outdated' : 'resolved'})</span>}
+            {resolved && <span className="text-muted-foreground text-[10px]">({comment.isOutdated ? 'outdated' : 'resolved'})</span>}
           </div>
-          <div className={`mt-0.5 ${resolved ? 'line-through text-gray-400' : 'text-gray-700'}`}>
+          <div className={`mt-0.5 ${resolved ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
             {title.length > 120 ? title.slice(0, 117) + '...' : title}
           </div>
         </div>
-        <span className="inline-flex items-center gap-1 text-gray-400 shrink-0">
+        <span className="inline-flex items-center gap-1 text-muted-foreground shrink-0">
           <Avatar
             src={comment.avatarUrl}
             alt={comment.author}
@@ -253,7 +253,7 @@ function CommentView({ comment }: { comment: PRComment }) {
         </span>
         <iconify-icon
           icon={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
-          className="text-gray-400 shrink-0 text-[10px] mt-1"
+          className="text-muted-foreground shrink-0 text-[10px] mt-1"
         />
       </div>
       {expanded && (
@@ -265,7 +265,7 @@ function CommentView({ comment }: { comment: PRComment }) {
           )}
           {comment.botType
             ? <BotCommentBody comment={comment} />
-            : <Markdown text={comment.body} className="text-xs text-gray-700" />}
+            : <Markdown text={comment.body} className="text-xs text-foreground" />}
         </div>
       )}
     </div>
@@ -314,9 +314,9 @@ function parseVercelProjects(body: string): VercelProject[] {
 const deployStatusConfig: Record<string, { icon: string; color: string; label: string }> = {
   DEPLOYED:  { icon: 'codicon:pass',           color: 'text-green-600', label: 'Deployed' },
   BUILDING:  { icon: 'svg-spinners:ring-resize', color: 'text-yellow-600', label: 'Building' },
-  QUEUED:    { icon: 'codicon:clock',           color: 'text-gray-500',  label: 'Queued' },
+  QUEUED:    { icon: 'codicon:clock',           color: 'text-muted-foreground',  label: 'Queued' },
   ERROR:     { icon: 'codicon:error',           color: 'text-red-600',   label: 'Error' },
-  CANCELED:  { icon: 'codicon:circle-slash',    color: 'text-gray-500',  label: 'Canceled' },
+  CANCELED:  { icon: 'codicon:circle-slash',    color: 'text-muted-foreground',  label: 'Canceled' },
 };
 
 function DeploymentRow({ project }: { project: VercelProject }) {
@@ -328,7 +328,7 @@ function DeploymentRow({ project }: { project: VercelProject }) {
     <div className="relative" ref={ref}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
     >
-      <div className="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-gray-50 text-sm transition-colors">
+      <div className="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-muted text-sm transition-colors">
         <iconify-icon icon={st.icon} className={`${st.color} text-xs`} />
         <a href={project.previewUrl} target="_blank" rel="noopener"
           className="text-blue-600 hover:underline font-medium flex-1 truncate"
@@ -336,7 +336,7 @@ function DeploymentRow({ project }: { project: VercelProject }) {
           {project.name}
         </a>
         <a href={project.inspectorUrl} target="_blank" rel="noopener"
-          className="text-gray-400 hover:text-gray-600 p-0.5 rounded hover:bg-gray-100 transition-colors"
+          className="text-muted-foreground hover:text-muted-foreground p-0.5 rounded hover:bg-muted transition-colors"
           title="Build output"
           onClick={(e) => e.stopPropagation()}
         >
@@ -344,25 +344,25 @@ function DeploymentRow({ project }: { project: VercelProject }) {
         </a>
       </div>
       {hover && (
-        <div className="absolute left-0 top-full z-50 mt-0.5 w-72 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs">
+        <div className="absolute left-0 top-full z-50 mt-0.5 w-72 bg-popover border border-border rounded-lg shadow-lg p-3 text-xs">
           <div className="flex items-center gap-1.5 mb-2">
             <iconify-icon icon="simple-icons:vercel" className="text-sm" />
-            <span className="font-semibold text-gray-900">{project.name}</span>
+            <span className="font-semibold text-foreground">{project.name}</span>
             <span className={`ml-auto inline-flex items-center gap-1 ${st.color}`}>
               <iconify-icon icon={st.icon} className="text-[10px]" />
               {st.label}
             </span>
           </div>
-          <div className="space-y-1.5 text-gray-600">
+          <div className="space-y-1.5 text-muted-foreground">
             <div className="flex items-center gap-1.5">
-              <iconify-icon icon="codicon:link-external" className="text-gray-400 text-[10px] shrink-0" />
+              <iconify-icon icon="codicon:link-external" className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.previewUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 {project.previewUrl.replace(/^https?:\/\//, '')}
               </a>
             </div>
             <div className="flex items-center gap-1.5">
-              <iconify-icon icon="codicon:server-process" className="text-gray-400 text-[10px] shrink-0" />
+              <iconify-icon icon="codicon:server-process" className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.inspectorUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 Build output
@@ -404,7 +404,7 @@ const SEVERITY_DEFS = [
   { key: 'critical', icon: '🔴', label: 'Critical', color: 'border-red-300 bg-red-50' },
   { key: 'major', icon: '🟠', label: 'Major', color: 'border-orange-300 bg-orange-50' },
   { key: 'minor', icon: '🟡', label: 'Minor', color: 'border-yellow-300 bg-yellow-50' },
-  { key: 'nitpick', icon: '🧹', label: 'Nitpick', color: 'border-gray-300 bg-gray-50' },
+  { key: 'nitpick', icon: '🧹', label: 'Nitpick', color: 'border-border bg-muted' },
 ];
 
 function CommentsSection({ comments }: { comments: PRComment[] }) {
@@ -456,7 +456,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
           return (
             <button key={sf.key}
               className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition-colors ${
-                active ? `${sf.color} font-medium` : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                active ? `${sf.color} font-medium` : 'border-border text-muted-foreground hover:bg-muted'
               }`}
               onClick={() => toggleSeverity(sf.key)}
             >
@@ -468,7 +468,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
         {severityCounts[''] > 0 && (
           <button
             className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition-colors ${
-              severityFilter.has('') ? 'border-gray-300 bg-gray-50 font-medium' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+              severityFilter.has('') ? 'border-border bg-muted font-medium' : 'border-border text-muted-foreground hover:bg-muted'
             }`}
             onClick={() => toggleSeverity('')}
           >
@@ -478,10 +478,10 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
         )}
         {severityCounts._outdated > 0 && (
           <>
-            <span className="text-gray-300 mx-0.5">|</span>
+            <span className="text-muted-foreground/50 mx-0.5">|</span>
             <button
               className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border transition-colors ${
-                showOutdated ? 'border-gray-300 bg-gray-50 font-medium' : 'border-gray-200 text-gray-400 hover:bg-gray-50'
+                showOutdated ? 'border-border bg-muted font-medium' : 'border-border text-muted-foreground hover:bg-muted'
               }`}
               onClick={() => setShowOutdated(!showOutdated)}
             >
@@ -491,7 +491,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
           </>
         )}
         {severityFilter.size > 0 && (
-          <button className="text-[11px] text-gray-400 hover:text-gray-600 ml-0.5"
+          <button className="text-[11px] text-muted-foreground hover:text-muted-foreground ml-0.5"
             onClick={() => setSeverityFilter(new Set())}>
             Clear
           </button>
@@ -501,7 +501,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
         <CommentView key={c.id} comment={c} />
       ))}
       {filtered.length === 0 && (
-        <div className="text-xs text-gray-400 py-2">No comments match filters</div>
+        <div className="text-xs text-muted-foreground py-2">No comments match filters</div>
       )}
     </Section>
   );
@@ -522,7 +522,7 @@ function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
     fail: href ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100' : 'bg-red-50 border-red-200 text-red-700',
     warn: href ? 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100' : 'bg-yellow-50 border-yellow-200 text-yellow-700',
     info: href ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100' : 'bg-blue-50 border-blue-200 text-blue-700',
-    neutral: href ? 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100' : 'bg-gray-50 border-gray-200 text-gray-600',
+    neutral: href ? 'bg-muted border-border text-muted-foreground hover:bg-muted' : 'bg-muted border-border text-muted-foreground',
   }[tone];
   const body = (
     <>
@@ -602,13 +602,13 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
       }}
     >
       {headerCards.length > 0 ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
           {headerCards.map((c, i) => (
             <MetricCard key={i} {...c} />
           ))}
         </div>
       ) : (
-        <div className="text-xs text-gray-400 py-1">
+        <div className="text-xs text-muted-foreground py-1">
           {multi
             ? `${shards.length} shard${shards.length !== 1 ? 's' : ''} reported but produced no test, lint, or bench data.`
             : 'No test, lint, or bench data in this artifact.'}
@@ -623,21 +623,21 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         <div className="mt-3">
           <button
             type="button"
-            className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-gray-500 hover:text-gray-700"
+            className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
             onClick={() => setBreakdownOpen(o => !o)}
             aria-expanded={breakdownOpen}
           >
             <iconify-icon
               icon={breakdownOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-              className="text-gray-400"
+              className="text-muted-foreground"
             />
             <span className="font-semibold">Per-shard breakdown</span>
-            <span className="text-gray-400 normal-case tracking-normal">
+            <span className="text-muted-foreground normal-case tracking-normal">
               ({shards.length} shard{shards.length !== 1 ? 's' : ''})
             </span>
           </button>
           {breakdownOpen && (
-            <div className="mt-2 divide-y divide-gray-100 border border-gray-100 rounded">
+            <div className="mt-2 divide-y divide-border border border-border rounded">
               {shards.map(s => (
                 <GavelShardRow key={s.stickyId || s.artifactId} results={s} pr={pr} />
               ))}
@@ -766,7 +766,7 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
     items.push({ icon: 'codicon:error', color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
   }
   if (g.testsSkipped > 0) {
-    items.push({ icon: 'codicon:debug-step-over', color: 'text-gray-500', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
+    items.push({ icon: 'codicon:debug-step-over', color: 'text-muted-foreground', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
   }
   if (g.lintViolations > 0) {
     items.push({ icon: 'codicon:warning', color: 'text-yellow-600', count: g.lintViolations, title: `${g.lintViolations} lint` });
@@ -797,32 +797,32 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
     <div>
       <button
         type="button"
-        className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 text-left"
+        className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-muted text-left"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
         <iconify-icon
           icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          className="text-gray-400 text-[12px] shrink-0"
+          className="text-muted-foreground text-[12px] shrink-0"
         />
-        <span className="text-xs font-mono text-gray-700 truncate">{label}</span>
+        <span className="text-xs font-mono text-foreground truncate">{label}</span>
         <ShardSummaryBadges g={results} />
       </button>
       {open && (
         <div className="px-2 pb-3 pt-1">
           {results.error ? (
-            <div className="text-xs text-gray-400 py-1">
+            <div className="text-xs text-muted-foreground py-1">
               <iconify-icon icon="codicon:warning" className="text-yellow-500 mr-1" />
               {results.error}
             </div>
           ) : cards.length === 0 ? (
-            <div className="text-xs text-gray-400 py-1">
+            <div className="text-xs text-muted-foreground py-1">
               No test, lint, or bench data in this artifact.{' '}
               <a className="text-blue-600 hover:underline" href={link('tests')}>Open results</a>
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
                 {cards.map((c, i) => (
                   <MetricCard key={i} {...c} />
                 ))}
@@ -847,14 +847,14 @@ function FailureList({ title, icon, iconColor, total, children }: {
   const shown = rows.length;
   return (
     <div className="mt-3">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
         <iconify-icon icon={icon} className={iconColor} />
         <span className="font-semibold">{title}</span>
-        <span className="text-gray-400 normal-case tracking-normal">
+        <span className="text-muted-foreground normal-case tracking-normal">
           showing {shown} of {total}
         </span>
       </div>
-      <div className="divide-y divide-gray-100 border border-gray-100 rounded">
+      <div className="divide-y divide-border border border-border rounded">
         {rows}
       </div>
     </div>
@@ -868,15 +868,15 @@ function FailureHeader({ f, withChevron }: { f: TestFailure; withChevron: boolea
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
       {withChevron && (
-        <iconify-icon icon="codicon:chevron-right" className="text-gray-400 mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
+        <iconify-icon icon="codicon:chevron-right" className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
       )}
       <iconify-icon icon="codicon:error" className="text-red-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="font-medium text-gray-800 truncate" title={f.name}>
-          {f.suite ? <span className="text-gray-400">{f.suite} › </span> : null}
+        <div className="font-medium text-foreground truncate" title={f.name}>
+          {f.suite ? <span className="text-muted-foreground">{f.suite} › </span> : null}
           {f.name}
         </div>
-        <div className="text-[11px] text-gray-500 truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
+        <div className="text-[11px] text-muted-foreground truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
           {location && <span>{location}</span>}
           {location && plainMsg && <span className="mx-1">·</span>}
           {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
@@ -892,11 +892,11 @@ function TestFailureRow({ f }: { f: TestFailure }) {
   const detailsHtml = ansiToHtml(f.details!);
   return (
     <details className="group">
-      <summary className="list-none cursor-pointer hover:bg-gray-50">
+      <summary className="list-none cursor-pointer hover:bg-muted">
         <FailureHeader f={f} withChevron={true} />
       </summary>
       <pre
-        className="text-[11px] font-mono text-gray-100 bg-[#1e1e1e] px-3 py-2 overflow-x-auto whitespace-pre-wrap border-t border-gray-200"
+        className="text-[11px] font-mono text-gray-100 bg-[#1e1e1e] px-3 py-2 overflow-x-auto whitespace-pre-wrap border-t border-border"
         dangerouslySetInnerHTML={{ __html: detailsHtml }}
       />
     </details>
@@ -911,11 +911,11 @@ function LintViolationRow({ v }: { v: LintViolation }) {
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
       <iconify-icon icon="codicon:warning" className="text-yellow-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="font-medium text-gray-800 truncate">
-          <span className="text-gray-400">{v.linter}</span>
-          {v.rule && <span className="ml-1 text-gray-500">({v.rule})</span>}
+        <div className="font-medium text-foreground truncate">
+          <span className="text-muted-foreground">{v.linter}</span>
+          {v.rule && <span className="ml-1 text-muted-foreground">({v.rule})</span>}
         </div>
-        <div className="text-[11px] text-gray-500 truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
+        <div className="text-[11px] text-muted-foreground truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
           {location && <span>{location}</span>}
           {location && plainMsg && <span className="mx-1">·</span>}
           {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
@@ -934,8 +934,8 @@ interface SectionActions {
 function Section({ title, children, actions }: { title: string; children: any; actions?: SectionActions }) {
   return (
     <div className="mt-4">
-      <div className="flex items-center justify-between mb-2 border-b border-gray-100 pb-1">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{title}</h3>
+      <div className="flex items-center justify-between mb-2 border-b border-border pb-1">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{title}</h3>
         {actions && <SectionActionsBar actions={actions} title={title} />}
       </div>
       {children}
@@ -954,12 +954,12 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
   };
 
   return (
-    <div className="flex items-center gap-1 text-gray-400">
+    <div className="flex items-center gap-1 text-muted-foreground">
       {actions.text && (
         <button
           type="button"
           title={copied === 'text' ? 'Copied!' : `Copy ${title} as text`}
-          className={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'text' ? 'text-green-600' : ''}`}
+          className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'text' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('text', actions.text!()); }}
         >
           <iconify-icon icon={copied === 'text' ? 'codicon:check' : 'codicon:copy'} className="text-sm" />
@@ -969,7 +969,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
         <button
           type="button"
           title={copied === 'markdown' ? 'Copied!' : `Copy ${title} as Markdown`}
-          className={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'markdown' ? 'text-green-600' : ''}`}
+          className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'markdown' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('markdown', actions.markdown!()); }}
         >
           <iconify-icon icon={copied === 'markdown' ? 'codicon:check' : 'codicon:markdown'} className="text-sm" />
@@ -979,7 +979,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
         <button
           type="button"
           title={copied === 'json' ? 'Copied!' : `Copy ${title} as JSON`}
-          className={`p-0.5 rounded hover:bg-gray-100 hover:text-gray-700 ${copied === 'json' ? 'text-green-600' : ''}`}
+          className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'json' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('json', JSON.stringify(actions.json!(), null, 2)); }}
         >
           <iconify-icon icon={copied === 'json' ? 'codicon:check' : 'codicon:json'} className="text-sm" />
