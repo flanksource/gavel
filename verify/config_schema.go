@@ -204,46 +204,40 @@ func secretsSchema() map[string]any {
 }
 
 func procfileSchema() map[string]any {
-	restartPolicy := func(desc string) map[string]any {
-		return map[string]any{
-			"type":        "string",
-			"description": desc,
-			"enum":        []any{"no", "on-failure", "always"},
-		}
+	autoRestart := map[string]any{
+		"description": "Default restart policy for every process. Accepts a bool " +
+			"(true=on-failure, false=no) or an enum: no (never restart), on-failure " +
+			"(restart only on a non-zero exit), or always (restart on any exit).",
+		"default": "no",
+		"oneOf": []any{
+			map[string]any{"type": "boolean"},
+			map[string]any{"type": "string", "enum": []any{"no", "on-failure", "always"}},
+		},
 	}
-	defaultPolicy := restartPolicy(
-		"Default restart policy for every process: no (never), on-failure (only on a non-zero exit), " +
-			"or always (any exit).")
-	defaultPolicy["default"] = "no"
 	return object(
-		"Settings for `gavel proc`, which runs the processes declared in a Procfile "+
-			"(Heroku/foreman `name: command` format).",
+		"Global defaults for `gavel proc`. Per-process settings live in the Procfile, whose "+
+			"entries are either `name: command` or `name:` with command/default/autoRestart/cpu/mem/"+
+			"profiles/env/maxRestarts. This section holds only defaults + the active profile.",
 		map[string]any{
 			"path": stringProp(
 				"Override Procfile discovery. Relative paths resolve against the .gavel.yaml directory. " +
 					"If omitted, the nearest Procfile up to the git root is used."),
-			"restartPolicy": defaultPolicy,
+			"profile": stringProp(
+				"Default active profile. A Procfile entry with `profiles` auto-starts only when one of " +
+					"them is the active profile; `gavel proc --profile <name>` overrides this."),
+			"autoRestart": autoRestart,
 			"maxRestarts": intWithDefault(
 				"Cap on automatic restarts per process. 0 means unlimited.", 0),
 			"env": mapObject(
 				"Environment injected into every process, on top of the parent environment and any sibling "+
 					".env file. Merged key-by-key across layers.",
 				map[string]any{"type": "string"}),
-			"processes": mapObject(
-				"Per-process overrides keyed by Procfile process name.",
-				object(
-					"Overrides for a single process.",
-					map[string]any{
-						"restartPolicy": restartPolicy(
-							"Restart policy for this process, overriding the procfile default."),
-						"maxRestarts": intProp(
-							"Cap on automatic restarts for this process. 0 means unlimited."),
-						"env": mapObject(
-							"Environment injected into this process.",
-							map[string]any{"type": "string"}),
-					},
-				),
-			),
+			"mem": stringProp(
+				"Default resident-memory cap per process (e.g. \"512Mi\", \"2g\"). Empty disables it. " +
+					"A process whose group exceeds it is killed."),
+			"cpu": numberProp(
+				"Default sustained CPU cap per process, as a percentage (100 = one full core). " +
+					"0 disables it. A process that stays above it is killed."),
 		},
 	)
 }
@@ -301,6 +295,10 @@ func boolProp(desc string) map[string]any {
 
 func intProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
+}
+
+func numberProp(desc string) map[string]any {
+	return map[string]any{"type": "number", "description": desc}
 }
 
 func intWithDefault(desc string, def int) map[string]any {

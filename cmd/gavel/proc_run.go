@@ -7,6 +7,7 @@ import (
 
 type ProcRunOptions struct {
 	Procfile string   `json:"procfile,omitempty" flag:"procfile" help:"Path to the Procfile (default: nearest Procfile up to the git root)"`
+	Profile  string   `json:"profile,omitempty" flag:"profile" help:"Active profile; entries with 'profiles' auto-start only when it matches (default: .gavel.yaml procfile.profile)"`
 	Detached bool     `json:"-" flag:"detached" help:"Internal: supervise without multiplexing output (used by 'proc start')"`
 	Names    []string `json:"-" args:"true"`
 }
@@ -33,5 +34,5 @@ func runProcRun(opts ProcRunOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nil, procfile.Run(workDir, opts.Procfile, opts.Names, !opts.Detached)
+	return nil, procfile.Run(workDir, opts.Procfile, opts.Names, opts.Profile, !opts.Detached)
 }

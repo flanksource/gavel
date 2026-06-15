@@ -63,7 +63,7 @@ func awaitProcReady(ctx commonsCtx.Context, t *task.Task, workDir, pf, name stri
 		switch ps.Status {
 		case procfile.StatusCrashed:
 			return ps, fmt.Errorf("%s crashed (exit %s)", name, exitCodeStr(ps.ExitCode))
-		case procfile.StatusExited:
+		case procfile.StatusExited, procfile.StatusStopped:
 			t.Warning()
 			return ps, nil
 		case procfile.StatusRunning:
@@ -113,13 +113,19 @@ func procReadyLabel(ps procfile.ProcState) string {
 }
 
 // trackedProcNames returns the process names to follow during a start/restart:
-// names when non-empty (preserving its order), otherwise every process in procs.
+// names when non-empty (preserving its order), otherwise every process that is
+// actually starting. Registered-but-stopped entries (default:false or an
+// inactive profile) are skipped so the readiness view doesn't wait on processes
+// that were never meant to start.
 func trackedProcNames(procs []procfile.ProcState, names []string) []string {
 	if len(names) > 0 {
 		return names
 	}
 	out := make([]string, 0, len(procs))
 	for _, p := range procs {
+		if p.Status == procfile.StatusStopped {
+			continue
+		}
 		out = append(out, p.Name)
 	}
 	return out

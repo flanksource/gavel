@@ -40,7 +40,7 @@ export function StatusIndicator() {
   // While waiting for the first response, show a muted dot rather than
   // flashing a red one.
   if (!health && !fetchErr) {
-    return <div className="w-2.5 h-2.5 rounded-full bg-gray-300" title="Loading status..." />;
+    return <div className="w-2.5 h-2.5 rounded-full bg-muted-foreground/40" title="Loading status..." />;
   }
 
   // Fetch failure — treat as down; the daemon responded with an error or
@@ -76,9 +76,9 @@ export function StatusIndicator() {
 // the header so it opens downward and leftward against the viewport edge.
 function Tooltip({ title, body }: { title: string; body: any }) {
   return (
-    <div className="hidden group-hover:block absolute right-0 top-5 z-50 w-64 bg-white border border-gray-200 rounded shadow-lg p-3 text-xs">
-      <div className="font-semibold text-gray-800 mb-1">{title}</div>
-      <div className="text-gray-600">{body}</div>
+    <div className="hidden group-hover:block absolute right-0 top-5 z-50 w-64 bg-popover border border-border rounded shadow-lg p-3 text-xs">
+      <div className="font-semibold text-foreground mb-1">{title}</div>
+      <div className="text-muted-foreground">{body}</div>
     </div>
   );
 }
@@ -88,8 +88,8 @@ function ComponentLine({ label, c }: { label: string; c: { severity: Severity; m
     <div className="flex items-start gap-2">
       <div className={`w-1.5 h-1.5 rounded-full mt-1 shrink-0 ${DOT_CLASS[c.severity]}`} />
       <div>
-        <span className="font-medium text-gray-700">{label}:</span>{' '}
-        <span className="text-gray-600">{c.message}</span>
+        <span className="font-medium text-foreground">{label}:</span>{' '}
+        <span className="text-muted-foreground">{c.message}</span>
       </div>
     </div>
   );

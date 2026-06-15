@@ -1,4 +1,4 @@
-import type { PRItem, CheckSummary } from './types';
+import type { PRItem, CheckSummary, Project, ProcStatus, ProcProcess } from './types';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -192,42 +192,101 @@ export function collectRepos(prs: PRItem[]): string[] {
   return [...seen].sort();
 }
 
-export function collectAuthors(prs: PRItem[]): string[] {
-  const seen = new Set<string>();
+// Synthetic author-filter keys. @me collapses the viewer's own PRs and @bots
+// collapses every bot account into a single chip so they're controlled as one,
+// rather than listing each bot login individually.
+export const ME_KEY = '@me';
+export const BOT_KEY = '@bots';
+
+// isBotAuthor mirrors cmd/gavel.isBot — GitHub bot accounts end in "[bot]" and
+// some legacy integrations just suffix "bot".
+export function isBotAuthor(author: string): boolean {
+  return author.endsWith('[bot]') || author.endsWith('bot');
+}
+
+// authorCategories returns the author-filter keys a PR belongs to: bots map to
+// @bots, the viewer's own PRs to @me, everyone else to their login.
+export function authorCategories(pr: PRItem, viewer: string): string[] {
+  if (isBotAuthor(pr.author)) return [BOT_KEY];
+  if (viewer && pr.author === viewer) return [ME_KEY];
+  return pr.author ? [pr.author] : [];
+}
+
+// collectAuthors builds the author-filter option keys: @me and @bots come first,
+// then the remaining human authors sorted. @bots stays available when the server
+// reports known bots (botsAvailable) even though they're excluded from the fetch.
+export function collectAuthors(prs: PRItem[], viewer: string, botsAvailable: boolean): string[] {
+  const humans = new Set<string>();
+  let hasMe = false;
+  let hasBots = botsAvailable;
   for (const pr of prs) {
-    if (pr.author) seen.add(pr.author);
+    if (!pr.author) continue;
+    if (isBotAuthor(pr.author)) { hasBots = true; continue; }
+    if (viewer && pr.author === viewer) { hasMe = true; continue; }
+    humans.add(pr.author);
   }
-  return [...seen].sort();
+  const out: string[] = [];
+  if (hasMe) out.push(ME_KEY);
+  if (hasBots) out.push(BOT_KEY);
+  out.push(...[...humans].sort());
+  return out;
+}
+
+// FacetModes maps an option key to whether it is included or excluded. Keys
+// absent from the map are neutral. Mirrors clicky-ui's FilterBar `kind:"multi"`
+// value shape so the tri-state chips bind directly to it.
+export type FacetModes = Record<string, 'include' | 'exclude'>;
+
+// passFacet applies tri-state include/exclude semantics to the category set a PR
+// belongs to for one facet: any matching exclude rejects; if any include is set,
+// at least one must match.
+function passFacet(modes: FacetModes, cats: string[]): boolean {
+  let hasInclude = false;
+  let included = false;
+  for (const key in modes) {
+    if (modes[key] === 'exclude') {
+      if (cats.includes(key)) return false;
+    } else {
+      hasInclude = true;
+      if (cats.includes(key)) included = true;
+    }
+  }
+  return !hasInclude || included;
+}
+
+function stateCategories(pr: PRItem): string[] {
+  const c: string[] = [];
+  if (pr.state === 'OPEN' && !pr.isDraft) c.push('open');
+  if (pr.state === 'MERGED') c.push('merged');
+  if (pr.state === 'CLOSED') c.push('closed');
+  if (pr.isDraft) c.push('draft');
+  return c;
+}
+
+function checkCategories(pr: PRItem): string[] {
+  const cs = pr.checkStatus;
+  if (!cs) return [];
+  const c: string[] = [];
+  if (cs.failed > 0) c.push('failing');
+  if (cs.failed === 0 && cs.running === 0) c.push('passing');
+  if (cs.running > 0) c.push('running');
+  return c;
 }
 
 export function filterPRs(
   prs: PRItem[],
-  stateFilter: Set<string>,
-  checksFilter: Set<string>,
-  repoFilter: Set<string>,
-  authorFilter: Set<string>,
+  stateFilter: FacetModes,
+  checksFilter: FacetModes,
+  repoFilter: FacetModes,
+  authorFilter: FacetModes,
+  viewer: string,
 ): PRItem[] {
-  return prs.filter(pr => {
-    if (stateFilter.size > 0) {
-      const matches =
-        (stateFilter.has('open') && pr.state === 'OPEN' && !pr.isDraft) ||
-        (stateFilter.has('merged') && pr.state === 'MERGED') ||
-        (stateFilter.has('closed') && pr.state === 'CLOSED') ||
-        (stateFilter.has('draft') && pr.isDraft);
-      if (!matches) return false;
-    }
-    if (checksFilter.size > 0) {
-      const cs = pr.checkStatus;
-      const matches =
-        (checksFilter.has('failing') && cs && cs.failed > 0) ||
-        (checksFilter.has('passing') && cs && cs.failed === 0 && cs.running === 0) ||
-        (checksFilter.has('running') && cs && cs.running > 0);
-      if (!matches) return false;
-    }
-    if (repoFilter.size > 0 && !repoFilter.has(pr.repo)) return false;
-    if (authorFilter.size > 0 && !authorFilter.has(pr.author)) return false;
-    return true;
-  });
+  return prs.filter(pr =>
+    passFacet(stateFilter, stateCategories(pr)) &&
+    passFacet(checksFilter, checkCategories(pr)) &&
+    passFacet(repoFilter, [pr.repo]) &&
+    passFacet(authorFilter, authorCategories(pr, viewer)),
+  );
 }
 
 export function statusIcon(status: string, conclusion: string): string {
@@ -254,6 +313,43 @@ export function statusColor(status: string, conclusion: string): string {
   }
   if (status === 'in_progress' || status === 'IN_PROGRESS') return 'text-yellow-600';
   return 'text-gray-400';
+}
+
+// FlatProc is one supervised process tagged with its owning project, the row
+// shape the process-manager table renders.
+export interface FlatProc {
+  project: Project;
+  proc: ProcProcess;
+}
+
+// flattenProcesses gathers every supervised process across projects that have a
+// Procfile, tagged with its project. It iterates projects (not the procStatus
+// map, which is keyed by both project name and repo) so each process appears
+// once.
+export function flattenProcesses(projects: Project[], procStatus: Record<string, ProcStatus>): FlatProc[] {
+  const out: FlatProc[] = [];
+  for (const project of projects) {
+    const st = procStatus[project.name];
+    if (!st?.hasProcfile || !st.processes) continue;
+    for (const proc of st.processes) {
+      out.push({ project, proc });
+    }
+  }
+  return out;
+}
+
+// humanizeBytes renders a byte count compactly (e.g. "1.5 GB"). Non-positive
+// input renders as an em dash.
+export function humanizeBytes(n?: number): string {
+  if (!n || n <= 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i > 0 && v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
 export function severityIcon(severity?: string): string {

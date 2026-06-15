@@ -163,18 +163,21 @@ secrets:
     - "security/custom-gitleaks.toml"
 
 procfile:
-  # Settings for `gavel proc`, which runs the processes declared in a Procfile
-  # (Heroku/foreman format: one `name: command` per line).
+  # Global defaults for `gavel proc`. Per-process settings (command, default,
+  # autoRestart, cpu, mem, profiles, env, maxRestarts) live in the Procfile
+  # itself — this section only holds defaults and the active profile.
 
   # Override Procfile discovery. Relative paths resolve from this file's dir.
   # If omitted, the nearest `Procfile` up to the git root is used.
   path: Procfile
 
-  # Default restart policy for every process:
-  #   no          never restart (default)
-  #   on-failure  restart only on a non-zero exit
-  #   always      restart on any exit
-  restartPolicy: on-failure
+  # Default active profile. A Procfile entry with `profiles` auto-starts only
+  # when one of them is active; `gavel proc --profile <name>` overrides this.
+  profile: dev
+
+  # Default restart policy for every process. A bool (true=on-failure,
+  # false=no) or an enum: no (never), on-failure (non-zero exit), always.
+  autoRestart: on-failure
 
   # Cap automatic restarts per process (0 = unlimited).
   maxRestarts: 5
@@ -184,11 +187,26 @@ procfile:
   env:
     RAILS_ENV: development
 
-  # Per-process overrides keyed by Procfile process name.
-  processes:
-    web:
-      restartPolicy: always
-    worker:
-      maxRestarts: 10
-      env:
-        WORKER_CONCURRENCY: "4"
+  # Default resource limits per process. Both are off unless set. A process
+  # whose process group exceeds a limit is killed (and restarted per policy).
+  #   mem  resident-memory cap (e.g. "512Mi", "2g")
+  #   cpu  sustained CPU percentage (100 = one full core)
+  mem: 2Gi
+  cpu: 400
+
+# Per-process settings live in the Procfile (YAML). A string entry is the
+# command (started by default, runs in every profile); an object entry adds
+# default/autoRestart/cpu/mem/profiles/env/maxRestarts:
+#
+#   web: npm start
+#   worker:
+#     command: rake jobs:work
+#     default: false            # registered but not auto-started
+#     autoRestart: on-failure   # bool or no|on-failure|always
+#     cpu: 100
+#     mem: 512Mi
+#     maxRestarts: 10
+#     env: { WORKER_CONCURRENCY: "4" }
+#   mailcatcher:
+#     command: mailcatcher
+#     profiles: [dev]           # only runs when the dev profile is active

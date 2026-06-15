@@ -28,7 +28,7 @@ function prStatusIcon(pr: PRItem, gavel?: GavelResultsSummary): { icon: string; 
   }
   if (pr.state === 'MERGED') return { icon: 'octicon:git-merge-16', color: 'text-purple-600', title: 'Merged' };
   if (pr.state === 'CLOSED') return { icon: 'octicon:git-pull-request-closed-16', color: 'text-red-600', title: 'Closed' };
-  if (pr.isDraft) return { icon: 'octicon:git-pull-request-draft-16', color: 'text-gray-400', title: 'Draft' };
+  if (pr.isDraft) return { icon: 'octicon:git-pull-request-draft-16', color: 'text-muted-foreground', title: 'Draft' };
   if (pr.checkStatus) {
     if (pr.checkStatus.failed > 0) return { icon: 'octicon:x-circle-fill-16', color: 'text-red-600', title: `${pr.checkStatus.failed} checks failed` };
     if (pr.checkStatus.running > 0) return { icon: 'octicon:dot-fill-16', color: 'text-yellow-600', title: `${pr.checkStatus.running} checks running` };
@@ -38,7 +38,7 @@ function prStatusIcon(pr: PRItem, gavel?: GavelResultsSummary): { icon: string; 
 }
 
 function borderColor(pr: PRItem, selected: boolean, gavel?: GavelResultsSummary): string {
-  if (selected) return 'border-blue-500';
+  if (selected) return 'border-primary';
   if (pr.isDraft || pr.state === 'MERGED' || pr.state === 'CLOSED') return 'border-transparent';
   if (pr.checkStatus?.failed) return 'border-red-400';
   if (gavel && gavel.testsFailed > 0) return 'border-red-400';
@@ -75,7 +75,7 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
   if (g.testsSkipped > 0) {
     items.push({
       icon: 'codicon:debug-step-over',
-      color: 'text-gray-500',
+      color: 'text-muted-foreground',
       count: g.testsSkipped,
       title: `${g.testsSkipped} skipped`,
     });
@@ -116,19 +116,28 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
   return (
     <div
       className={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected, gavelResults)} ${
-        selected ? 'bg-blue-50' : unread ? 'hover:bg-gray-50' : 'hover:bg-gray-50'
+        selected ? 'bg-primary/10' : 'hover:bg-muted'
       }`}
       onClick={onClick}
     >
       <div className="flex items-center gap-2">
         <span
-          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${unread ? 'bg-blue-600' : 'bg-transparent'}`}
+          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${unread ? 'bg-primary' : 'bg-transparent'}`}
           title={unread ? 'Unread — updated since last view' : ''}
           aria-label={unread ? 'unread' : ''}
         />
         <iconify-icon icon={status.icon} className={`text-sm ${status.color} shrink-0`} title={status.title} />
-        <span className="text-xs text-gray-400">#{pr.number}</span>
-        <span className={`text-sm truncate flex-1 ${unread ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>{pr.title}</span>
+        <a
+          href={pr.url}
+          target="_blank"
+          rel="noopener"
+          onClick={(e) => e.stopPropagation()}
+          className="text-xs text-muted-foreground hover:text-foreground hover:underline shrink-0"
+          title={`Open #${pr.number} on GitHub`}
+        >
+          #{pr.number}
+        </a>
+        <span className={`text-sm truncate flex-1 ${unread ? 'font-semibold text-foreground' : 'font-medium text-foreground'}`}>{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
             <iconify-icon icon="octicon:git-merge-16" className="text-red-500" />
@@ -140,14 +149,20 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
           </span>
         )}
         {pr.isDraft && (
-          <span className="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">draft</span>
+          <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded">draft</span>
         )}
       </div>
 
-      <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-        <span className="text-cyan-600">{pr.source}</span>
+      <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
+          <iconify-icon icon="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+          {pr.source}
+        </span>
         <span>→</span>
-        <span className="text-cyan-600">{pr.target}</span>
+        <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
+          <iconify-icon icon="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+          {pr.target}
+        </span>
 
         {pr.isCurrent && (pr.ahead ?? 0) + (pr.behind ?? 0) > 0 && (
           <span className="text-yellow-600">↑{pr.ahead ?? 0}↓{pr.behind ?? 0}</span>
@@ -165,13 +180,13 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
 
         {gavelResults && <GavelBadges g={gavelResults} />}
 
-        <span className="ml-auto inline-flex items-center gap-1.5 text-gray-400">
+        <span className="ml-auto inline-flex items-center gap-1.5 text-muted-foreground">
           {syncStatus && <SyncIndicator status={syncStatus} />}
           {pr.author && (
             <Avatar
               src={pr.authorAvatarUrl}
               alt={pr.author}
-              size={16}
+              size={20}
               href={`https://github.com/${pr.author}`}
               title={`@${pr.author}`}
             />

@@ -40,9 +40,6 @@ export interface SearchConfig {
   repos: string[];
   all?: boolean;
   org?: string;
-  author?: string;
-  any?: boolean;
-  bots?: boolean;
   // GitHub org logins the user has chosen to hide from the chooser and
   // exclude from default-org resolution. Persists across daemon restarts.
   ignoredOrgs?: string[];
@@ -68,6 +65,23 @@ export interface ProcProcess {
   exitCode?: number;
   logFile: string;
   ports?: number[];
+  // Live resource sample of the process group. openFiles is -1 where the
+  // platform cannot report it. All omitted/zero for a stopped process.
+  cpuPercent?: number;
+  memoryRss?: number;
+  openFiles?: number;
+  // Per-process breakdown of the process group (leader + descendants).
+  tree?: ProcNode[];
+}
+
+// ProcNode mirrors procfile.ProcNode — one process in a supervised group's tree.
+export interface ProcNode {
+  pid: number;
+  ppid: number;
+  command: string;
+  cpuPercent?: number;
+  memoryRss?: number;
+  openFiles?: number;
 }
 
 // ProcStatus mirrors pr/ui.procStatus — a project's Procfile supervision state.
@@ -77,6 +91,10 @@ export interface ProcStatus {
   running: boolean;
   supervisorPid?: number;
   processes?: ProcProcess[];
+  // profiles declared in the Procfile; profile is the active one (running
+  // supervisor's, else the .gavel.yaml default).
+  profiles?: string[];
+  profile?: string;
   error?: string;
 }
 
@@ -96,6 +114,15 @@ export interface Snapshot {
   paused: boolean;
   error?: string;
   config: SearchConfig;
+  // Login of the authenticated GitHub user, used to resolve the @me author
+  // filter client-side. Empty until the auth probe completes.
+  viewer?: string;
+  // True once the server has learned of any bot author, so the @bots chip stays
+  // available even while bots are excluded from the fetch.
+  botsAvailable?: boolean;
+  // The server's current bot-fetch state; the UI only posts a change when the
+  // @bots chip disagrees with this.
+  includeBots?: boolean;
   rateLimit?: RateLimit;
   // Sparse map keyed by `${repo}#${number}`. A PR is unread iff its key
   // appears here. Absent key = read. Server omits the field entirely when

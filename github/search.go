@@ -165,6 +165,16 @@ type PRSearchOptions struct {
 	ShowURL     bool     // show PR URL instead of #number
 	ShowAuthor  bool     // show author name (when not filtered to @me)
 	IgnoredOrgs []string // orgs to skip when ResolveDefaultOrg picks a default for --all
+	// ExcludeAuthors emits a `-author:<login>` qualifier per entry so the
+	// search drops those authors at the source (used to keep bot-authored PRs
+	// out of the default fetch).
+	ExcludeAuthors []string
+}
+
+// IsBotAuthor reports whether a PR author login belongs to a bot — GitHub App
+// bots end in "[bot]"; some integration accounts just use a "bot" suffix.
+func IsBotAuthor(login string) bool {
+	return strings.HasSuffix(login, "[bot]") || strings.HasSuffix(login, "bot")
 }
 
 type searchResponse struct {
@@ -234,6 +244,10 @@ func buildSearchQueryBase(searchOpts PRSearchOptions) []string {
 
 	if searchOpts.Author != "" {
 		parts = append(parts, "author:"+searchOpts.Author)
+	}
+
+	for _, login := range searchOpts.ExcludeAuthors {
+		parts = append(parts, "-author:"+login)
 	}
 
 	switch searchOpts.State {

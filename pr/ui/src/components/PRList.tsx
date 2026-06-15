@@ -59,7 +59,7 @@ function RepoIcon({ repo, homepageUrl, size }: RepoIconProps) {
 export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, procStatus, onProcChanged, onProcEdit }: Props) {
   if (prs.length === 0) {
     return (
-      <div className="p-6 text-center text-gray-400">
+      <div className="p-6 text-center text-muted-foreground">
         <iconify-icon icon="codicon:git-pull-request" className="text-3xl mb-2" />
         <p>No pull requests found</p>
       </div>
@@ -69,11 +69,11 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
   const orgs = groupByOrg(prs);
 
   return (
-    <div className="divide-y divide-gray-100">
+    <div className="divide-y divide-border">
       {orgs.map(og => (
         <div key={og.org || '_'}>
           {og.org && (
-            <div className="px-3 py-1.5 bg-gray-100 sticky top-0 border-b border-gray-200 flex items-center gap-2 z-20">
+            <div className="px-3 py-1.5 bg-muted sticky top-0 border-b border-border flex items-center gap-2 z-20">
               <Avatar
                 src={og.orgAvatarUrl}
                 alt={og.org}
@@ -83,13 +83,13 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 title={og.org}
                 colorKey={og.org}
               />
-              <span className="text-sm font-semibold text-gray-800 truncate flex-1">{og.org}</span>
-              <span className="text-xs text-gray-500 shrink-0">{og.itemCount}</span>
+              <span className="text-sm font-semibold text-foreground truncate flex-1">{og.org}</span>
+              <span className="text-xs text-muted-foreground shrink-0">{og.itemCount}</span>
             </div>
           )}
           {og.repos.map(group => (
             <div key={group.repo}>
-              <div className="pl-6 pr-3 py-1.5 bg-gray-50 sticky top-9 border-b border-gray-200 flex items-center gap-2 z-10">
+              <div className="pl-6 pr-3 py-1.5 bg-muted sticky top-9 border-b border-border flex items-center gap-2 z-10">
                 <a
                   href={`https://github.com/${group.repo}`}
                   target="_blank"
@@ -99,7 +99,16 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 >
                   <RepoIcon repo={group.repo} homepageUrl={group.repoHomepageUrl} size={20} />
                 </a>
-                <span className="text-sm font-medium text-gray-700 truncate flex-1">{group.repoShort}</span>
+                <a
+                  href={`https://github.com/${group.repo}`}
+                  target="_blank"
+                  rel="noopener"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-sm font-medium text-foreground truncate flex-1 hover:underline"
+                  title={group.repo}
+                >
+                  {group.repoShort}
+                </a>
                 {onProcChanged && (
                   <ProcControl
                     repo={group.repo}
@@ -109,7 +118,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                     onEdit={onProcEdit}
                   />
                 )}
-                <span className="text-xs text-gray-400 font-normal shrink-0">{group.items.length}</span>
+                <span className="text-xs text-muted-foreground font-normal shrink-0">{group.items.length}</span>
               </div>
               {group.items.map(pr => (
                 <PRRow

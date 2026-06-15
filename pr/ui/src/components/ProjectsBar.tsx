@@ -8,24 +8,26 @@ interface Props {
   procStatus: Record<string, ProcStatus>;
   onChanged: () => void;
   onEdit: (project: Project) => void;
+  /** Opens the add-workspace-directory dialog. */
+  onAdd: () => void;
 }
 
 // ProjectsBar pins projects that aren't represented by a repo group in the PR
 // list (e.g. a local directory with no open PRs) so their Procfile controls are
-// still reachable.
-export function ProjectsBar({ projects, procStatus, onChanged, onEdit }: Props) {
-  if (projects.length === 0) return null;
+// still reachable. The section is always shown so its "Add directory" action
+// stays available even when there are no standalone projects yet.
+export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: Props) {
   return (
-    <div className="border-b border-gray-200">
-      <div className="px-3 py-1 bg-gray-100 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+    <div className="border-b border-border">
+      <div className="px-3 py-1 bg-muted text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
         Projects
       </div>
       {projects.map(p => {
         const key = p.repos[0] || p.name;
         return (
-          <div key={p.name} className="pl-6 pr-3 py-1.5 flex items-center gap-2 hover:bg-gray-50">
-            <iconify-icon icon="codicon:folder" className="text-gray-400 shrink-0" />
-            <span className="text-sm font-medium text-gray-700 truncate flex-1" title={p.dir}>{p.name}</span>
+          <div key={p.name} className="pl-6 pr-3 py-1.5 flex items-center gap-2 hover:bg-muted">
+            <iconify-icon icon="codicon:folder" className="text-muted-foreground shrink-0" />
+            <span className="text-sm font-medium text-foreground truncate flex-1" title={p.dir}>{p.name}</span>
             <ProcControl
               repo={key}
               project={p}
@@ -36,6 +38,17 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit }: Props) 
           </div>
         );
       })}
+      <div className="p-2">
+        <button
+          type="button"
+          onClick={onAdd}
+          title="Add a local workspace directory"
+          className="w-full flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <iconify-icon icon="codicon:add" />
+          Add directory
+        </button>
+      </div>
     </div>
   );
 }

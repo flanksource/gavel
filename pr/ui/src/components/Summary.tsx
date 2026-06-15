@@ -23,38 +23,38 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused,
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex gap-3 text-sm text-gray-500 items-center">
-        <span className="font-medium text-gray-700">{prs.length} PRs</span>
+      <div className="flex gap-3 text-sm text-muted-foreground items-center">
+        <span className="font-medium text-foreground">{prs.length} PRs</span>
         {counts.open > 0 && <><Sep /><span className="text-green-600">{counts.open} open</span></>}
         {counts.failing > 0 && <><Sep /><span className="text-red-600">{counts.failing} failing</span></>}
         {counts.running > 0 && <><Sep /><span className="text-yellow-600">{counts.running} running</span></>}
         {counts.merged > 0 && <><Sep /><span className="text-purple-600">{counts.merged} merged</span></>}
         <Sep />
-        <span className="text-gray-400" title={`Refreshes every ${nextFetchIn}s`}>
+        <span className="text-muted-foreground" title={`Refreshes every ${nextFetchIn}s`}>
           <iconify-icon icon="codicon:clock" className="mr-0.5" />
           {ago}
           {paused
             ? <span className="text-yellow-500 ml-1">(paused)</span>
-            : countdown > 0 && <span className="text-gray-300 ml-1">({countdown}s)</span>
+            : countdown > 0 && <span className="text-muted-foreground/50 ml-1">({countdown}s)</span>
           }
         </span>
         <button
           onClick={onPause}
-          className={`transition-colors ${paused ? 'text-yellow-500 hover:text-green-600' : 'text-gray-400 hover:text-yellow-500'}`}
+          className={`transition-colors ${paused ? 'text-yellow-500 hover:text-green-600' : 'text-muted-foreground hover:text-yellow-500'}`}
           title={paused ? 'Resume polling' : 'Pause polling'}
         >
           <iconify-icon icon={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
         </button>
         <button
           onClick={onRefresh}
-          className={`transition-colors ${networkBusy ? 'text-blue-500' : 'text-gray-400 hover:text-blue-600'}`}
+          className={`transition-colors ${networkBusy ? 'text-blue-500' : 'text-muted-foreground hover:text-blue-600'}`}
           title={networkBusy ? 'Loading...' : 'Refresh now'}
         >
           <iconify-icon icon={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
         </button>
         {rateLimit && (
           <span
-            className={`text-xs ${rateLimit.remaining < 100 ? 'text-red-500' : 'text-gray-400'}`}
+            className={`text-xs ${rateLimit.remaining < 100 ? 'text-red-500' : 'text-muted-foreground'}`}
             title={`API: ${rateLimit.used}/${rateLimit.limit} used (${rateLimit.resource}), resets ${new Date(rateLimit.reset * 1000).toLocaleTimeString()}`}
           >
             {rateLimit.remaining}/{rateLimit.limit}
@@ -85,7 +85,7 @@ export function Summary({ prs, fetchedAt, error, nextFetchIn, onRefresh, paused,
 }
 
 function Sep() {
-  return <span className="text-gray-300">|</span>;
+  return <span className="text-muted-foreground/50">|</span>;
 }
 
 function timeAgoShort(iso: string): string {

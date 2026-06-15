@@ -67,16 +67,16 @@ export function ActivityView() {
   const avgMs = stats.total > 0 ? stats.totalNs / stats.total / 1e6 : 0;
 
   return (
-    <div className="bg-gray-50 h-full overflow-y-auto p-6">
+    <div className="bg-muted h-full overflow-y-auto p-6">
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">
+          <h2 className="text-lg font-semibold text-foreground">
             <iconify-icon icon="codicon:pulse" className="mr-1.5 text-blue-600" />
             HTTP Activity
           </h2>
           <button
             onClick={handleReset}
-            className="text-xs px-3 py-1.5 bg-white border border-gray-200 rounded hover:bg-gray-50 text-gray-700"
+            className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground"
             title="Clear all recorded activity"
           >
             <iconify-icon icon="codicon:trash" className="mr-1" />
@@ -96,29 +96,29 @@ export function ActivityView() {
             label="Cache hit rate"
             value={`${hitRate.toFixed(1)}%`}
             sub={`${stats.cacheHits.toLocaleString()} / ${stats.total.toLocaleString()}`}
-            subClass="text-gray-500"
+            subClass="text-muted-foreground"
             icon="codicon:database"
           />
           <KPI
             label="Bandwidth"
             value={formatBytes(stats.totalBytes)}
             sub={stats.total > 0 ? `${formatBytes(stats.totalBytes / stats.total)} avg` : '—'}
-            subClass="text-gray-500"
+            subClass="text-muted-foreground"
             icon="codicon:cloud-download"
           />
           <KPI
             label="Avg latency"
             value={`${avgMs.toFixed(0)} ms`}
             sub={`${(stats.totalNs / 1e9).toFixed(1)}s total`}
-            subClass="text-gray-500"
+            subClass="text-muted-foreground"
             icon="codicon:watch"
           />
         </div>
 
         {cache && <CachePanel cache={cache} />}
 
-        <div className="bg-white border border-gray-200 rounded-md mb-4 p-3">
-          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">By kind</div>
+        <div className="bg-card border border-border rounded-md mb-4 p-3">
+          <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">By kind</div>
           <div className="flex gap-2 flex-wrap">
             <KindChip kind="" label="All" active={kindFilter === ''} onClick={() => setKindFilter('')} count={stats.total} />
             {Object.entries(stats.byKind).map(([kind, ks]) => (
@@ -135,9 +135,9 @@ export function ActivityView() {
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
+        <div className="bg-card border border-border rounded-md overflow-hidden">
           <table className="w-full text-xs">
-            <thead className="bg-gray-50 text-gray-500 uppercase">
+            <thead className="bg-muted text-muted-foreground uppercase">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Time</th>
                 <th className="px-3 py-2 text-left font-medium">Kind</th>
@@ -152,7 +152,7 @@ export function ActivityView() {
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                     No requests recorded yet. Interact with the PR dashboard to generate activity.
                   </td>
                 </tr>
@@ -170,12 +170,12 @@ export function ActivityView() {
 
 function KPI({ label, value, sub, subClass, icon }: { label: string; value: string; sub: string; subClass: string; icon: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-md p-3">
-      <div className="flex items-center gap-1.5 text-xs text-gray-500">
+    <div className="bg-card border border-border rounded-md p-3">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <iconify-icon icon={icon} />
         {label}
       </div>
-      <div className="text-2xl font-semibold text-gray-900 mt-1">{value}</div>
+      <div className="text-2xl font-semibold text-foreground mt-1">{value}</div>
       <div className={`text-xs mt-0.5 ${subClass}`}>{sub}</div>
     </div>
   );
@@ -184,13 +184,13 @@ function KPI({ label, value, sub, subClass, icon }: { label: string; value: stri
 function KindChip({ kind, label, active, onClick, count, stats }: {
   kind: string; label: string; active: boolean; onClick: () => void; count: number; stats?: ActivityKindStats;
 }) {
-  const colorClass = kind ? KIND_COLORS[kind] || 'bg-gray-100 text-gray-700' : 'bg-gray-100 text-gray-700';
+  const colorClass = kind ? KIND_COLORS[kind] || 'bg-muted text-foreground' : 'bg-muted text-foreground';
   const avgMs = stats && stats.total > 0 ? stats.totalNs / stats.total / 1e6 : 0;
   const hitRate = stats && stats.total > 0 ? (stats.cacheHits / stats.total) * 100 : 0;
   return (
     <button
       onClick={onClick}
-      className={`text-xs px-2.5 py-1 rounded border ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-gray-200'} ${colorClass} hover:opacity-90`}
+      className={`text-xs px-2.5 py-1 rounded border ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-border'} ${colorClass} hover:opacity-90`}
     >
       <span className="font-semibold">{label}</span>
       <span className="ml-1 opacity-70">{count}</span>
@@ -209,30 +209,30 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
     ? 'text-red-600'
     : entry.statusCode === 304
       ? 'text-blue-600'
-      : 'text-gray-700';
+      : 'text-foreground';
   return (
-    <tr className={`border-t border-gray-100 ${entry.error ? 'bg-red-50' : ''}`}>
-      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{timeAgo(entry.timestamp)}</td>
+    <tr className={`border-t border-border ${entry.error ? 'bg-red-50' : ''}`}>
+      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">{timeAgo(entry.timestamp)}</td>
       <td className="px-3 py-1.5">
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${KIND_COLORS[entry.kind] || 'bg-gray-100 text-gray-700'}`}>
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${KIND_COLORS[entry.kind] || 'bg-muted text-foreground'}`}>
           {KIND_LABELS[entry.kind] || entry.kind}
         </span>
       </td>
-      <td className="px-3 py-1.5 font-mono text-gray-600">{entry.method}</td>
-      <td className="px-3 py-1.5 font-mono text-gray-700 truncate max-w-md" title={entry.url}>
+      <td className="px-3 py-1.5 font-mono text-muted-foreground">{entry.method}</td>
+      <td className="px-3 py-1.5 font-mono text-foreground truncate max-w-md" title={entry.url}>
         {entry.url}
         {entry.error && <div className="text-red-600 text-[10px]">{entry.error}</div>}
       </td>
       <td className={`px-3 py-1.5 text-right ${statusClass}`}>{entry.statusCode || '—'}</td>
-      <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">{ms.toFixed(0)} ms</td>
-      <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">{formatBytes(entry.sizeBytes)}</td>
+      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{ms.toFixed(0)} ms</td>
+      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{formatBytes(entry.sizeBytes)}</td>
       <td className="px-3 py-1.5 text-center">
         {entry.fromCache ? (
           <span className="text-green-600" title="Served from cache (304)">
             <iconify-icon icon="codicon:check" />
           </span>
         ) : (
-          <span className="text-gray-300">—</span>
+          <span className="text-muted-foreground/50">—</span>
         )}
       </td>
     </tr>
@@ -242,11 +242,11 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
 function CachePanel({ cache }: { cache: CacheStatus }) {
   const totalRows = Object.values(cache.counts || {}).reduce((a, b) => a + b, 0);
   return (
-    <div className={`bg-white border rounded-md mb-4 p-3 ${cache.enabled ? 'border-gray-200' : 'border-amber-300 bg-amber-50'}`}>
+    <div className={`bg-card border rounded-md mb-4 p-3 ${cache.enabled ? 'border-border' : 'border-amber-300 bg-amber-50'}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <iconify-icon icon="codicon:database" className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
-          <span className="text-xs font-semibold text-gray-500 uppercase">Cache</span>
+          <span className="text-xs font-semibold text-muted-foreground uppercase">Cache</span>
           <span className={`text-xs px-2 py-0.5 rounded ${cache.enabled ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
             {cache.enabled ? 'ENABLED' : 'DISABLED'}
           </span>
@@ -261,37 +261,37 @@ function CachePanel({ cache }: { cache: CacheStatus }) {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
         <div>
-          <div className="text-gray-500">Driver</div>
-          <div className="font-mono text-gray-800">{cache.driver}</div>
+          <div className="text-muted-foreground">Driver</div>
+          <div className="font-mono text-foreground">{cache.driver}</div>
         </div>
         <div>
-          <div className="text-gray-500">DSN source</div>
-          <div className="font-mono text-gray-800">
-            {cache.dsnSource || <span className="text-gray-400">—</span>}
+          <div className="text-muted-foreground">DSN source</div>
+          <div className="font-mono text-foreground">
+            {cache.dsnSource || <span className="text-muted-foreground">—</span>}
           </div>
           {cache.dsnMasked && (
-            <div className="font-mono text-gray-500 text-[10px] truncate" title={cache.dsnMasked}>
+            <div className="font-mono text-muted-foreground text-[10px] truncate" title={cache.dsnMasked}>
               {cache.dsnMasked}
             </div>
           )}
         </div>
         <div>
-          <div className="text-gray-500">Retention</div>
-          <div className="font-mono text-gray-800">{formatDuration(cache.retentionSec)}</div>
+          <div className="text-muted-foreground">Retention</div>
+          <div className="font-mono text-foreground">{formatDuration(cache.retentionSec)}</div>
         </div>
       </div>
 
       {cache.enabled && Object.keys(cache.counts || {}).length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-100">
+        <div className="mt-3 pt-3 border-t border-border">
           <div className="flex items-center justify-between mb-1.5">
-            <div className="text-xs text-gray-500">Rows</div>
-            <div className="text-xs text-gray-500">{totalRows.toLocaleString()} total</div>
+            <div className="text-xs text-muted-foreground">Rows</div>
+            <div className="text-xs text-muted-foreground">{totalRows.toLocaleString()} total</div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {Object.entries(cache.counts).map(([table, n]) => (
-              <div key={table} className="bg-gray-50 rounded px-2 py-1.5">
-                <div className="text-[10px] text-gray-500 font-mono truncate" title={table}>{table}</div>
-                <div className="text-sm font-semibold text-gray-800 tabular-nums">{n.toLocaleString()}</div>
+              <div key={table} className="bg-muted rounded px-2 py-1.5">
+                <div className="text-[10px] text-muted-foreground font-mono truncate" title={table}>{table}</div>
+                <div className="text-sm font-semibold text-foreground tabular-nums">{n.toLocaleString()}</div>
               </div>
             ))}
           </div>
