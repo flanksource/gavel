@@ -24,3 +24,11 @@ func (s *Supervisor) RestartProc(name string) {
 		s.restartProc(m)
 	}
 }
+
+// StartProc starts the named (registered) process, exercising the same path as a
+// control-socket start request, for external tests.
+func (s *Supervisor) StartProc(name string) {
+	if m, ok := s.byName[name]; ok {
+		s.startProc(m)
+	}
+}

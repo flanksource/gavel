@@ -1,11 +1,13 @@
-// Package procfile parses Heroku/foreman-style Procfiles and supervises the
-// processes they declare. A Procfile is a list of `name: command` lines; the
-// supervisor runs each command via clicky.Exec, captures its output to a
-// per-process log, and applies a configurable restart policy.
+// Package procfile parses Procfiles and supervises the processes they declare.
+// A Procfile is YAML: each top-level key is a process name whose value is either
+// a command string (`web: npm start`) or a mapping with `command` plus optional
+// `default`, `autoRestart`, `cpu`, `mem`, `profiles`, `env`, and `maxRestarts`.
+// Declaration order is preserved. The supervisor runs each command via clicky's
+// SupervisedProcess, captures output to a per-process log, and applies the
+// configured restart policy, resource limits, and profile/default selection.
 package procfile
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -13,57 +15,127 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
+	yamlv3 "gopkg.in/yaml.v3"
 )
 
 // DefaultFilename is the conventional Procfile name discovered up the tree.
 const DefaultFilename = "Procfile"
 
-// Entry is a single `name: command` definition from a Procfile.
+// Entry is a single process definition from a Procfile.
 type Entry struct {
-	Name    string `json:"name" yaml:"name"`
-	Command string `json:"command" yaml:"command"`
+	Name    string
+	Command string
+	// Default reports whether the process starts as part of the default set
+	// (nil means true). default:false makes it start only on explicit request.
+	Default *bool
+	// AutoRestart overrides the global restart policy for this process.
+	AutoRestart verify.RestartPolicy
+	// CPU / Mem override the global resource limits for this process.
+	CPU float64
+	Mem string
+	// Profiles gate auto-start: empty runs in every profile; otherwise the
+	// process auto-starts only when one of these is the active profile.
+	Profiles []string
+	// Env is injected into this process on top of the global/.env layers.
+	Env map[string]string
+	// MaxRestarts overrides the global cap (nil = use global).
+	MaxRestarts *int
 }
 
-// Parse reads Procfile entries from r. Blank lines and `#` comments are
-// skipped. Each remaining line must be `name: command`: the name is everything
-// before the first colon, the command everything after. A malformed line, an
-// invalid or empty name, an empty command, or a duplicate name is a loud error
-// — Procfiles are small and hand-edited, so silently dropping a process would
-// hide a real mistake.
+// procEntry is the YAML object form of an entry (the value when it is a mapping
+// rather than a bare command string).
+type procEntry struct {
+	Command     string               `yaml:"command"`
+	Default     *bool                `yaml:"default"`
+	AutoRestart verify.RestartPolicy `yaml:"autoRestart"`
+	CPU         float64              `yaml:"cpu"`
+	Mem         string               `yaml:"mem"`
+	Profiles    stringOrSlice        `yaml:"profiles"`
+	Env         map[string]string    `yaml:"env"`
+	MaxRestarts *int                 `yaml:"maxRestarts"`
+}
+
+// stringOrSlice decodes a YAML scalar or sequence of strings into a slice, so
+// `profiles: dev` and `profiles: [dev, ci]` are both accepted.
+type stringOrSlice []string
+
+func (s *stringOrSlice) UnmarshalYAML(node *yamlv3.Node) error {
+	var one string
+	if err := node.Decode(&one); err == nil {
+		*s = []string{one}
+		return nil
+	}
+	var many []string
+	if err := node.Decode(&many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
+}
+
+// Parse reads Procfile entries from r as YAML, preserving declaration order. A
+// malformed document, a non-mapping top level, an invalid or duplicate name, an
+// object entry missing its command, or an empty document is a loud error —
+// Procfiles are small and hand-edited, so silently dropping a process would hide
+// a real mistake.
 func Parse(r io.Reader) ([]Entry, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read Procfile: %w", err)
+	}
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("invalid Procfile: %w", err)
+	}
+	if doc.Kind == 0 || len(doc.Content) == 0 {
+		return nil, fmt.Errorf("no process definitions found in Procfile")
+	}
+	root := doc.Content[0]
+	if root.Kind != yamlv3.MappingNode {
+		return nil, fmt.Errorf("invalid Procfile: expected a mapping of `name: command` entries")
+	}
+
 	var entries []Entry
-	seen := map[string]int{}
-	scanner := bufio.NewScanner(r)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		raw := strings.TrimSpace(scanner.Text())
-		if raw == "" || strings.HasPrefix(raw, "#") {
-			continue
-		}
-		name, command, ok := strings.Cut(raw, ":")
-		if !ok {
-			return nil, fmt.Errorf("invalid Procfile: line %d: expected \"name: command\", got %q", lineNo, raw)
-		}
-		name = strings.TrimSpace(name)
-		command = strings.TrimSpace(command)
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		name := root.Content[i].Value
+		val := root.Content[i+1]
 		if name == "" {
-			return nil, fmt.Errorf("invalid Procfile: line %d: empty process name", lineNo)
+			return nil, fmt.Errorf("invalid Procfile: empty process name")
 		}
 		if !isValidName(name) {
-			return nil, fmt.Errorf("invalid Procfile: line %d: invalid process name %q (use letters, digits, _ or -)", lineNo, name)
+			return nil, fmt.Errorf("invalid Procfile: invalid process name %q (use letters, digits, _ or -)", name)
 		}
-		if command == "" {
-			return nil, fmt.Errorf("invalid Procfile: line %d: process %q has no command", lineNo, name)
+		if seen[name] {
+			return nil, fmt.Errorf("invalid Procfile: duplicate process name %q", name)
 		}
-		if prev, dup := seen[name]; dup {
-			return nil, fmt.Errorf("invalid Procfile: line %d: duplicate process name %q (first defined on line %d)", lineNo, name, prev)
+		seen[name] = true
+
+		e := Entry{Name: name}
+		switch val.Kind {
+		case yamlv3.ScalarNode:
+			e.Command = strings.TrimSpace(val.Value)
+		case yamlv3.MappingNode:
+			var obj procEntry
+			if err := val.Decode(&obj); err != nil {
+				return nil, fmt.Errorf("invalid Procfile: process %q: %w", name, err)
+			}
+			e.Command = strings.TrimSpace(obj.Command)
+			e.Default = obj.Default
+			e.AutoRestart = obj.AutoRestart
+			e.CPU = obj.CPU
+			e.Mem = obj.Mem
+			e.Profiles = []string(obj.Profiles)
+			e.Env = obj.Env
+			e.MaxRestarts = obj.MaxRestarts
+		default:
+			return nil, fmt.Errorf("invalid Procfile: process %q: expected a command string or a mapping", name)
 		}
-		seen[name] = lineNo
-		entries = append(entries, Entry{Name: name, Command: command})
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read Procfile: %w", err)
+		if e.Command == "" {
+			return nil, fmt.Errorf("invalid Procfile: process %q has no command", name)
+		}
+		entries = append(entries, e)
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("no process definitions found in Procfile")

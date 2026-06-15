@@ -47,7 +47,7 @@ func loadConfig(root string) (verify.ProcfileConfig, error) {
 // Run builds and runs the supervisor inline (the `gavel proc run` form). With
 // foreground=true it multiplexes process output to stdout; the detached daemon
 // started by Start re-execs this with foreground=false.
-func Run(workDir, pfOverride string, names []string, foreground bool) error {
+func Run(workDir, pfOverride string, names []string, profile string, foreground bool) error {
 	root, pf, err := resolveTarget(workDir, pfOverride)
 	if err != nil {
 		return err
@@ -56,7 +56,7 @@ func Run(workDir, pfOverride string, names []string, foreground bool) error {
 	if err != nil {
 		return err
 	}
-	sup, err := NewSupervisor(Options{Root: root, Procfile: pf, Names: names, Foreground: foreground, Config: cfg})
+	sup, err := NewSupervisor(Options{Root: root, Procfile: pf, Names: names, Profile: profile, Foreground: foreground, Config: cfg})
 	if err != nil {
 		return err
 	}
@@ -64,16 +64,35 @@ func Run(workDir, pfOverride string, names []string, foreground bool) error {
 }
 
 // Start launches the supervisor as a detached background daemon and waits for it
-// to come up. It refuses to start a second daemon for the same root.
-func Start(workDir, pfOverride string, names []string) (*StatusReport, error) {
+// to come up. When a daemon is already running, named processes are started on
+// it via the control socket (so separate/profiled processes can be started on
+// demand); with no names it reports the already-running error.
+func Start(workDir, pfOverride string, names []string, profile string) (*StatusReport, error) {
 	root, pf, err := resolveTarget(workDir, pfOverride)
 	if err != nil {
 		return nil, err
 	}
-	return startFor(root, pf, names)
+	dir, err := StateDir(root)
+	if err != nil {
+		return nil, err
+	}
+	st, err := ReadState(dir)
+	if err != nil {
+		return nil, err
+	}
+	if st.Running() {
+		if len(names) == 0 {
+			return nil, fmt.Errorf("gavel proc is already running (supervisor pid %d) — use `gavel proc restart`", st.SupervisorPID)
+		}
+		if _, err := sendControl(root, ctrlRequest{Action: actionStart, Names: names}); err != nil {
+			return nil, err
+		}
+		return statusFor(root, pf)
+	}
+	return startFor(root, pf, names, profile)
 }
 
-func startFor(root, pf string, names []string) (*StatusReport, error) {
+func startFor(root, pf string, names []string, profile string) (*StatusReport, error) {
 	dir, err := StateDir(root)
 	if err != nil {
 		return nil, err
@@ -83,7 +102,14 @@ func startFor(root, pf string, names []string) (*StatusReport, error) {
 	} else if st.Running() {
 		return nil, fmt.Errorf("gavel proc is already running (supervisor pid %d) — use `gavel proc restart`", st.SupervisorPID)
 	}
-	if err := spawnDetached(root, pf, names, dir); err != nil {
+	// Resolve the effective profile so the detached child supervises the same set
+	// even if the flag was omitted (flag wins, else the .gavel.yaml default).
+	if profile == "" {
+		if cfg, err := loadConfig(root); err == nil {
+			profile = cfg.Profile
+		}
+	}
+	if err := spawnDetached(root, pf, profile, names, dir); err != nil {
 		return nil, err
 	}
 	if err := waitRunning(dir, 5*time.Second); err != nil {
@@ -95,7 +121,7 @@ func startFor(root, pf string, names []string) (*StatusReport, error) {
 // spawnDetached re-execs `gavel proc run --detached` in a new session with its
 // stdout/stderr redirected to supervisor.log. cmd.Dir is the project root so the
 // child rediscovers the same Procfile and state directory.
-func spawnDetached(root, pf string, names []string, dir string) error {
+func spawnDetached(root, pf, profile string, names []string, dir string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve gavel binary: %w", err)
@@ -103,6 +129,9 @@ func spawnDetached(root, pf string, names []string, dir string) error {
 	bin, _ := filepath.Abs(exe)
 
 	args := []string{"proc", "run", "--detached", "--procfile", pf}
+	if profile != "" {
+		args = append(args, "--profile", profile)
+	}
 	args = append(args, names...)
 
 	logPath := SupervisorLogPath(dir)
@@ -177,7 +206,7 @@ func Stop(workDir, pfOverride string, names []string) (*StatusReport, error) {
 
 // Restart restarts the named processes (or all) on a running supervisor, or
 // starts the daemon when none is running.
-func Restart(workDir, pfOverride string, names []string) (*StatusReport, error) {
+func Restart(workDir, pfOverride string, names []string, profile string) (*StatusReport, error) {
 	root, pf, err := resolveTarget(workDir, pfOverride)
 	if err != nil {
 		return nil, err
@@ -191,7 +220,7 @@ func Restart(workDir, pfOverride string, names []string) (*StatusReport, error) 
 		return nil, err
 	}
 	if !st.Running() {
-		return startFor(root, pf, names)
+		return startFor(root, pf, names, profile)
 	}
 	if _, err := sendControl(root, ctrlRequest{Action: actionRestart, Names: names}); err != nil {
 		return nil, err

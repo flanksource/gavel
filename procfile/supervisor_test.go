@@ -34,6 +34,32 @@ func newSupervisor(procfile string, cfg verify.ProcfileConfig) (*pf.Supervisor, 
 	return sup, dir
 }
 
+// newSupervisorWith starts a supervisor for the given Procfile + options (Root
+// and Procfile are filled in). The caller is responsible for Shutdown.
+func newSupervisorWith(procfile string, opts pf.Options) (*pf.Supervisor, string) {
+	root := GinkgoT().TempDir()
+	Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte(procfile), 0o644)).To(Succeed())
+	dir, err := pf.StateDir(root)
+	Expect(err).NotTo(HaveOccurred())
+	opts.Root = root
+	opts.Procfile = filepath.Join(root, "Procfile")
+	sup, err := pf.NewSupervisor(opts)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(sup.Start()).To(Succeed())
+	return sup, dir
+}
+
+// liveProc reads a process's live state straight off the supervisor (clicky owns
+// status/ports/metrics; state.json is only the out-of-process fallback).
+func liveProc(sup *pf.Supervisor, name string) (pf.ProcState, bool) {
+	return sup.State().Process(name)
+}
+
+func statusOf(sup *pf.Supervisor, name string) string {
+	p, _ := liveProc(sup, name)
+	return p.Status
+}
+
 // waitFor polls cond up to timeout, failing the spec if it never holds.
 func waitFor(timeout time.Duration, cond func() bool) {
 	EventuallyWithOffset(1, cond, timeout, 25*time.Millisecond).Should(BeTrue())
@@ -64,8 +90,7 @@ var _ = Describe("Supervisor", func() {
 
 		var pid int
 		waitFor(3*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("ticker")
+			p, ok := liveProc(sup, "ticker")
 			if ok && p.Status == pf.StatusRunning && p.PID > 0 {
 				pid = p.PID
 				return true
@@ -139,13 +164,36 @@ var _ = Describe("Supervisor", func() {
 		}
 		port := freePort()
 		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
-		sup, dir := newSupervisor(listen, verify.ProcfileConfig{})
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
 		defer sup.Shutdown()
 
 		waitFor(10*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("srv")
+			p, ok := liveProc(sup, "srv")
 			return ok && containsInt(p.Ports, port)
+		})
+	})
+
+	It("detects every port a single process listens on", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		p1 := freePort()
+		p2 := freePort()
+		for p2 == p1 {
+			p2 = freePort()
+		}
+		// One process binds two TCP ports; both must surface in ProcState.Ports.
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; ss=[socket.socket(),socket.socket()]; [(s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1), s.bind(("127.0.0.1",p)), s.listen()) for s,p in zip(ss,(%d,%d))]; time.sleep(60)'`+"\n", py, p1, p2)
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(10*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && containsInt(p.Ports, p1) && containsInt(p.Ports, p2)
 		})
 	})
 
@@ -161,14 +209,13 @@ var _ = Describe("Supervisor", func() {
 		// Sleep before binding so the pre-listen window is long enough to observe
 		// the gated "starting" status after a restart.
 		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; time.sleep(1); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
-		sup, dir := newSupervisor(listen, verify.ProcfileConfig{})
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
 		defer sup.Shutdown()
 
 		// First start is not gated (never listened yet): it reaches running, then
 		// the port appears once it binds.
 		waitFor(10*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("srv")
+			p, ok := liveProc(sup, "srv")
 			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
 		})
 
@@ -176,42 +223,37 @@ var _ = Describe("Supervisor", func() {
 
 		// Now a known server: it holds at "starting" with no port until it rebinds.
 		waitFor(5*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("srv")
+			p, ok := liveProc(sup, "srv")
 			return ok && p.Status == pf.StatusStarting && len(p.Ports) == 0
 		})
 
 		// And only flips to running once the port is detected again.
 		waitFor(10*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("srv")
+			p, ok := liveProc(sup, "srv")
 			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
 		})
 	})
 
 	It("does not restart a process under the default 'no' policy", func() {
-		sup, dir := newSupervisor("once: sh -c 'exit 1'\n", verify.ProcfileConfig{})
+		sup, _ := newSupervisor("once: sh -c 'exit 1'\n", verify.ProcfileConfig{})
 		defer sup.Shutdown()
 
 		waitFor(3*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("once")
+			p, ok := liveProc(sup, "once")
 			return ok && p.Status == pf.StatusCrashed
 		})
-		st, _ := pf.ReadState(dir)
-		p, _ := st.Process("once")
+		p, _ := liveProc(sup, "once")
 		Expect(p.Restarts).To(Equal(0))
 	})
 
 	It("restarts a failing process up to maxRestarts under on-failure", func() {
-		cfg := verify.ProcfileConfig{RestartPolicy: pf.RestartOnFailure, MaxRestarts: 2}
-		sup, dir := newSupervisor("flaky: sh -c 'exit 1'\n", cfg)
+		cfg := verify.ProcfileConfig{AutoRestart: verify.RestartOnFailure, MaxRestarts: 2}
+		sup, _ := newSupervisor("flaky: sh -c 'exit 1'\n", cfg)
 		defer sup.Shutdown()
 
 		// Restarts honour a 500ms backoff, so 2 retries take ~1.5s.
 		waitFor(8*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
-			p, ok := st.Process("flaky")
+			p, ok := liveProc(sup, "flaky")
 			return ok && p.Status == pf.StatusCrashed && p.Restarts == 2
 		})
 	})
@@ -221,9 +263,8 @@ var _ = Describe("Supervisor", func() {
 
 		var pids []int
 		waitFor(3*time.Second, func() bool {
-			st, _ := pf.ReadState(dir)
 			pids = nil
-			for _, p := range st.Processes {
+			for _, p := range sup.State().Processes {
 				if p.Status == pf.StatusRunning && p.PID > 0 {
 					pids = append(pids, p.PID)
 				}
@@ -239,5 +280,49 @@ var _ = Describe("Supervisor", func() {
 		}
 		Expect(pf.StatePath(dir)).NotTo(BeAnExistingFile())
 		Expect(pf.SupervisorPidPath(dir)).NotTo(BeAnExistingFile())
+	})
+})
+
+var _ = Describe("Supervisor profiles and defaults", func() {
+	// web: default, no profile (always). mailcatcher: dev-profile only.
+	// worker: default:false (registered, not auto-started).
+	const procfile = `web: sh -c 'sleep 30'
+mailcatcher:
+  command: sh -c 'sleep 30'
+  profiles: [dev]
+worker:
+  command: sh -c 'sleep 30'
+  default: false
+`
+
+	It("auto-starts only the default, in-profile processes", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		// mailcatcher (inactive profile) and worker (default:false) stay registered-but-stopped.
+		Consistently(func() string { return statusOf(sup, "mailcatcher") }, "750ms", "150ms").Should(Equal(pf.StatusStopped))
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
+	})
+
+	It("auto-starts a profiled process when its profile is active", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{Profile: "dev"})
+		defer sup.Shutdown()
+
+		waitFor(4*time.Second, func() bool {
+			return statusOf(sup, "web") == pf.StatusRunning && statusOf(sup, "mailcatcher") == pf.StatusRunning
+		})
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped), "default:false stays stopped")
+	})
+
+	It("starts a default:false process on demand by name", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
+
+		sup.StartProc("worker")
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "worker") == pf.StatusRunning })
 	})
 })
