@@ -16,3 +16,11 @@ func SetShellForHome(f func(home string) string) (restore func()) {
 	shellForHome = f
 	return func() { shellForHome = prev }
 }
+
+// RestartProc triggers a restart of the named process, exercising the same path
+// as a control-socket restart request, for external tests.
+func (s *Supervisor) RestartProc(name string) {
+	if m, ok := s.byName[name]; ok {
+		s.restartProc(m)
+	}
+}

@@ -202,17 +202,27 @@ export function App() {
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
 
+  // True while any process is mid-transition (starting/restarting) so the poller
+  // can refresh faster and the start/restart progress shows promptly.
+  const anyProcTransitioning = useMemo(
+    () => Object.values(procStatus).some(
+      s => s.processes?.some(p => p.status === 'starting' || p.status === 'restarting')),
+    [procStatus],
+  );
+
   // Poll process status only while projects are configured and the tab is
   // visible — this is the sole driver of the sidebar's per-repo proc badges
-  // and is intentionally decoupled from the GitHub PR poller.
+  // and is intentionally decoupled from the GitHub PR poller. While a process is
+  // transitioning, poll every 1s so the UI tracks the start/restart progress;
+  // otherwise the steady-state 3s cadence.
   useEffect(() => {
     if (projects.length === 0) { setProcStatus({}); return; }
     fetchProcStatus();
     const id = setInterval(() => {
       if (document.visibilityState === 'visible') fetchProcStatus();
-    }, 3000);
+    }, anyProcTransitioning ? 1000 : 3000);
     return () => clearInterval(id);
-  }, [projects.length, fetchProcStatus]);
+  }, [projects.length, fetchProcStatus, anyProcTransitioning]);
 
   const projectsByRepo = useMemo(() => {
     const m: Record<string, Project> = {};

@@ -67,6 +67,7 @@ export interface ProcProcess {
   restarts: number;
   exitCode?: number;
   logFile: string;
+  ports?: number[];
 }
 
 // ProcStatus mirrors pr/ui.procStatus — a project's Procfile supervision state.

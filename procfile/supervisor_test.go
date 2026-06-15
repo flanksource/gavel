@@ -1,7 +1,10 @@
 package procfile_test
 
 import (
+	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -34,6 +37,24 @@ func newSupervisor(procfile string, cfg verify.ProcfileConfig) (*pf.Supervisor, 
 // waitFor polls cond up to timeout, failing the spec if it never holds.
 func waitFor(timeout time.Duration, cond func() bool) {
 	EventuallyWithOffset(1, cond, timeout, 25*time.Millisecond).Should(BeTrue())
+}
+
+// freePort binds an ephemeral TCP port, then releases it so a supervised process
+// can claim it. A small reuse race is acceptable for a test.
+func freePort() int {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	Expect(err).NotTo(HaveOccurred())
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func containsInt(xs []int, x int) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }
 
 var _ = Describe("Supervisor", func() {
@@ -105,6 +126,66 @@ var _ = Describe("Supervisor", func() {
 				}
 			}
 			return false
+		})
+	})
+
+	It("detects the TCP port a supervised process listens on", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		port := freePort()
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
+		sup, dir := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(10*time.Second, func() bool {
+			st, _ := pf.ReadState(dir)
+			p, ok := st.Process("srv")
+			return ok && containsInt(p.Ports, port)
+		})
+	})
+
+	It("stays 'starting' until the port is re-detected on restart", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		port := freePort()
+		// Sleep before binding so the pre-listen window is long enough to observe
+		// the gated "starting" status after a restart.
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; time.sleep(1); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
+		sup, dir := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		// First start is not gated (never listened yet): it reaches running, then
+		// the port appears once it binds.
+		waitFor(10*time.Second, func() bool {
+			st, _ := pf.ReadState(dir)
+			p, ok := st.Process("srv")
+			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
+		})
+
+		sup.RestartProc("srv")
+
+		// Now a known server: it holds at "starting" with no port until it rebinds.
+		waitFor(5*time.Second, func() bool {
+			st, _ := pf.ReadState(dir)
+			p, ok := st.Process("srv")
+			return ok && p.Status == pf.StatusStarting && len(p.Ports) == 0
+		})
+
+		// And only flips to running once the port is detected again.
+		waitFor(10*time.Second, func() bool {
+			st, _ := pf.ReadState(dir)
+			p, ok := st.Process("srv")
+			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
 		})
 	})
 

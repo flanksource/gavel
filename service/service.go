@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -71,58 +72,13 @@ func LogFile() (string, error) {
 
 // TailLog returns the last n lines of LogFile. A missing logfile is treated
 // as "no log yet" and returns an empty slice (no error) so `system status`
-// can be run before `system start`. Lines are returned without trailing
-// newlines, in original order (oldest first).
-//
-// For large logs we read the tail in 8KiB chunks from the end rather than
-// loading the whole file — the daemon log can grow to many MB over time.
+// can be run before `system start`.
 func TailLog(n int) ([]string, error) {
-	if n <= 0 {
-		return nil, nil
-	}
 	path, err := LogFile()
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", path, err)
-	}
-	size := info.Size()
-	if size == 0 {
-		return nil, nil
-	}
-
-	const chunk = 8 * 1024
-	var (
-		buf  []byte
-		off  = size
-		seen int
-	)
-	for off > 0 && seen <= n {
-		read := min(int64(chunk), off)
-		off -= read
-		tmp := make([]byte, read)
-		if _, err := f.ReadAt(tmp, off); err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
-		}
-		buf = append(tmp, buf...)
-		seen = strings.Count(string(buf), "\n")
-	}
-
-	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines, nil
+	return utils.TailFile(path, n)
 }
 
 // BinaryPath returns the absolute path to the current gavel binary. Service
@@ -213,18 +169,9 @@ func writePid(pf string, pid int) error {
 	return os.WriteFile(pf, []byte(strconv.Itoa(pid)+"\n"), 0o644)
 }
 
-// processAlive returns true if signal 0 can be delivered to pid (i.e. the
-// process exists and belongs to the current user). EPERM — "exists but not
-// ours" — is rare for a user-owned pidfile and we treat it as "not ours".
+// processAlive reports whether pid is a live process owned by the current user.
 func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
+	return utils.ProcessAlive(pid)
 }
 
 // StartOptions configures the detached Start().

@@ -2,6 +2,7 @@ package procfile
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -91,6 +92,9 @@ func (r StatusReport) Pretty() api.Text {
 		if up := uptime(p.Started, p.Status); up != "" {
 			t = t.Append("up ", "text-muted").Append(up).Space()
 		}
+		if len(p.Ports) > 0 {
+			t = t.Append(PortsLabel(p.Ports), "text-blue-500").Space()
+		}
 		if p.Restarts > 0 {
 			t = t.Append("restarts ", "text-muted").Append(p.Restarts)
 		}
@@ -108,6 +112,18 @@ func (r ListReport) Pretty() api.Text {
 			Append(p.Command, "text-muted").NewLine()
 	}
 	return t
+}
+
+// PortsLabel renders a process's listening ports as space-separated
+// `http://localhost:PORT` URLs — terminals auto-linkify the scheme-qualified
+// form, so the ports are click-to-open. Shared by the status table and the CLI
+// start/restart progress view so both spell ports the same way.
+func PortsLabel(ports []int) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = fmt.Sprintf("http://localhost:%d", p)
+	}
+	return strings.Join(parts, " ")
 }
 
 func statusIcon(status string) api.Text {
