@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/clicky"
 	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -27,6 +28,14 @@ const (
 // stopGrace is how long a process is given to exit after SIGTERM before the
 // supervisor escalates to SIGKILL of its whole process group.
 const stopGrace = 5 * time.Second
+
+// Port-detection cadence: after a process starts, poll for the TCP ports it is
+// listening on every portPollInterval until they appear, the process exits, or
+// portDetectTimeout elapses (a process that never binds, e.g. a worker).
+const (
+	portPollInterval  = 300 * time.Millisecond
+	portDetectTimeout = 30 * time.Second
+)
 
 // Options configures a Supervisor.
 type Options struct {
@@ -53,15 +62,18 @@ type managed struct {
 	logPath     string
 	colorIdx    int
 
-	mu       sync.Mutex
-	proc     *cexec.Process
-	desired  bool
-	active   bool
-	status   string
-	started  *time.Time
-	restarts int
-	exitCode *int
-	gen      int
+	mu          sync.Mutex
+	proc        *cexec.Process
+	desired     bool
+	active      bool
+	status      string
+	started     *time.Time
+	restarts    int
+	exitCode    *int
+	ports       []int
+	expectsPort bool // sticky: this process has listened on a port before, so a
+	// (re)start is only "running" once a port is detected again.
+	gen int
 }
 
 // Supervisor runs and watches the processes from a Procfile. It is the sole
@@ -250,6 +262,7 @@ func (s *Supervisor) restartProc(m *managed) {
 	}
 	m.gen++
 	m.restarts = 0
+	m.status = StatusRestarting
 	p := m.proc
 	m.mu.Unlock()
 	if p != nil {
@@ -291,13 +304,21 @@ func (s *Supervisor) runLoop(m *managed) {
 		m.mu.Lock()
 		m.proc = proc
 		m.started = &now
-		m.status = StatusRunning
+		// A process known to listen on a port stays "starting" until watchPorts
+		// re-detects it (so a restart isn't "running" while the server is still
+		// booting); one that has never listened goes straight to "running".
+		if m.expectsPort {
+			m.status = StatusStarting
+		} else {
+			m.status = StatusRunning
+		}
 		m.mu.Unlock()
 
 		runDone := make(chan struct{})
 		go func() { proc.Run(); close(runDone) }()
 		awaitStart(proc, runDone)
 		s.persist() // pid is now captured
+		go s.watchPorts(m, proc, myGen)
 
 		<-runDone
 		_ = logFD.Close()
@@ -307,6 +328,7 @@ func (s *Supervisor) runLoop(m *managed) {
 		code := res.ExitCode
 		m.exitCode = &code
 		m.proc = nil
+		m.ports = nil
 		genChanged := m.gen != myGen
 		desired := m.desired
 		restarts := m.restarts
@@ -354,6 +376,62 @@ func awaitStart(proc *cexec.Process, runDone <-chan struct{}) {
 			return
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// watchPorts polls for the TCP ports the process group led by proc is listening
+// on and records the first non-empty set on m, so `proc status` and the
+// start/restart progress view can surface "listening on :PORT". It stops at the
+// first detection, when the process exits, on shutdown, or after
+// portDetectTimeout. gen guards a restart: a stale watcher from an old run won't
+// clobber the ports of the current one.
+func (s *Supervisor) watchPorts(m *managed, proc *cexec.Process, gen int) {
+	deadline := time.Now().Add(portDetectTimeout)
+	for time.Now().Before(deadline) {
+		if s.isStopping() || !proc.IsRunning() {
+			return
+		}
+		ports, err := utils.ListeningPorts(proc.Pid())
+		if err != nil {
+			logger.Warnf("detect ports for %s: %v", m.entry.Name, err)
+			break
+		}
+		if len(ports) > 0 {
+			m.mu.Lock()
+			// m.proc == proc rules out a write landing after the process already
+			// exited (runLoop nils m.proc under the same lock); m.gen == gen rules
+			// out a stale watcher from a previous run after a restart.
+			fresh := m.gen == gen && m.proc == proc
+			if fresh {
+				m.ports = ports
+				m.expectsPort = true
+				if m.status == StatusStarting {
+					m.status = StatusRunning
+				}
+			}
+			m.mu.Unlock()
+			if fresh {
+				s.persist()
+			}
+			return
+		}
+		select {
+		case <-time.After(portPollInterval):
+		case <-s.done:
+			return
+		}
+	}
+	// The port never came up within the window (or lsof failed). Don't leave a
+	// known server wedged in "starting" forever — promote it to "running" so it
+	// stays usable; the next start will wait again.
+	m.mu.Lock()
+	flipped := m.gen == gen && m.proc == proc && m.status == StatusStarting
+	if flipped {
+		m.status = StatusRunning
+	}
+	m.mu.Unlock()
+	if flipped {
+		s.persist()
 	}
 }
 
@@ -484,6 +562,7 @@ func (m *managed) snapshot() ProcState {
 		Restarts: m.restarts,
 		ExitCode: m.exitCode,
 		LogFile:  m.logPath,
+		Ports:    append([]int(nil), m.ports...),
 	}
 }
 

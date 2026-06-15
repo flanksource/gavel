@@ -32,5 +32,10 @@ func runProcStart(opts ProcStartOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return procfile.Start(workDir, opts.Procfile, opts.Names)
+	report, err := procfile.Start(workDir, opts.Procfile, opts.Names)
+	if err != nil {
+		return nil, err
+	}
+	renderProcReadiness(workDir, opts.Procfile, "Starting processes", report, opts.Names)
+	return procfile.Status(workDir, opts.Procfile)
 }

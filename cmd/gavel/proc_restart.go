@@ -2,6 +2,8 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/task"
+	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -30,5 +32,43 @@ func runProcRestart(opts ProcRestartOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return procfile.Restart(workDir, opts.Procfile, opts.Names)
+
+	report, err := restartProcs(workDir, opts.Procfile, opts.Names)
+	if err != nil {
+		return nil, err
+	}
+	renderProcReadiness(workDir, opts.Procfile, "Restarting processes", report, opts.Names)
+	return procfile.Status(workDir, opts.Procfile)
+}
+
+// restartProcs performs the stop+restart, surfacing the stop as its own live
+// task when a daemon is already running (so the user sees "Stopping…" before the
+// per-process readiness view). When nothing is running, restart is a plain start
+// and no stop task is shown.
+func restartProcs(workDir, pf string, names []string) (*procfile.StatusReport, error) {
+	st, err := procfile.Status(workDir, pf)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Running {
+		return procfile.Restart(workDir, pf, names)
+	}
+
+	// The task returns an empty string (not the report) so clicky renders a
+	// single "✓ Stopped processes" line rather than pretty-printing the whole
+	// status table inline — the readiness view and final status do that.
+	var report *procfile.StatusReport
+	t := clicky.StartTask[string]("Stopping processes",
+		func(_ commonsCtx.Context, _ *task.Task) (string, error) {
+			r, err := procfile.Restart(workDir, pf, names)
+			report = r
+			return "", err
+		})
+	if _, err := t.GetResult(); err != nil {
+		t.Failed()
+		return nil, err
+	}
+	t.SetName("Stopped processes")
+	t.Success()
+	return report, nil
 }

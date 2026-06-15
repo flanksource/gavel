@@ -52,8 +52,17 @@ export function ProcControl({ repo, project, status, onChanged, onEdit }: Props)
   const total = procs.length;
   const running = procs.filter(p => p.status === 'running').length;
   const allRunning = total > 0 && running === total;
+  // A process is mid-(re)start: "restarting" (stopping) then "starting" (booting,
+  // waiting for its port to come up). Drives the spinner + label below.
+  const restarting = procs.some(p => p.status === 'restarting');
+  const transitioning = restarting || procs.some(p => p.status === 'starting');
+  // "active" = something to stop/restart, including a process mid-transition, so
+  // the Stop/Restart buttons don't flicker away while a restart is in flight.
+  const active = running > 0 || transitioning;
   // Show the running/total count only when process states differ ("mixed").
   const mixed = new Set(procs.map(p => p.status)).size > 1;
+  // Distinct listening ports across all processes, surfaced as quick-open links.
+  const ports = Array.from(new Set(procs.flatMap(p => p.ports ?? []))).sort((a, b) => a - b);
 
   async function control(action: 'start' | 'stop' | 'restart') {
     if (!project) return;
@@ -82,12 +91,38 @@ export function ProcControl({ repo, project, status, onChanged, onEdit }: Props)
 
   return (
     <span className="inline-flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-      <span className={`inline-block w-2 h-2 rounded-full ${dotColor(procs)}`} title={`${running}/${total} running`} />
-      {mixed && <span className="text-[10px] tabular-nums text-muted-foreground mr-0.5">{running}/{total}</span>}
+      {transitioning ? (
+        <span className="inline-flex items-center gap-0.5 mr-0.5" title={`${running}/${total} running`}>
+          <iconify-icon icon="svg-spinners:ring-resize" className="text-yellow-500 text-xs" />
+          <span className="text-[10px] text-muted-foreground">{restarting ? 'restarting' : 'starting'}…</span>
+        </span>
+      ) : (
+        <>
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${dotColor(procs)}`}
+            title={`${running}/${total} running${ports.length ? ` · ${ports.map(p => `:${p}`).join(' ')}` : ''}`}
+          />
+          {mixed && <span className="text-[10px] tabular-nums text-muted-foreground mr-0.5">{running}/{total}</span>}
+        </>
+      )}
 
-      {!allRunning && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => control('start')} />}
-      {running > 0 && <IconBtn icon="codicon:debug-restart" title="Restart" disabled={busy} onClick={() => control('restart')} />}
-      {running > 0 && <IconBtn icon="codicon:debug-stop" title="Stop" disabled={busy} onClick={() => control('stop')} />}
+      {ports.map(port => (
+        <a
+          key={port}
+          href={`http://localhost:${port}`}
+          target="_blank"
+          rel="noreferrer"
+          title={`Open localhost:${port}`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-[10px] tabular-nums text-blue-500 hover:underline mr-0.5"
+        >
+          :{port}
+        </a>
+      ))}
+
+      {!allRunning && !transitioning && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => control('start')} />}
+      {active && <IconBtn icon="codicon:debug-restart" title="Restart" disabled={busy} onClick={() => control('restart')} />}
+      {active && <IconBtn icon="codicon:debug-stop" title="Stop" disabled={busy} onClick={() => control('stop')} />}
       <IconBtn icon="codicon:output" title="Logs" onClick={openLogs} />
       {onEdit && <IconBtn icon="codicon:gear" title="Edit directory" onClick={() => onEdit(project)} />}
 

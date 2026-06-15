@@ -38,6 +38,9 @@ type ProcState struct {
 	Restarts int        `json:"restarts"`
 	ExitCode *int       `json:"exitCode,omitempty"`
 	LogFile  string     `json:"logFile"`
+	// Ports are the TCP ports the process (and its process group) is listening
+	// on, detected after start. Empty for processes that bind no port.
+	Ports []int `json:"ports,omitempty"`
 }
 
 // State is the supervisor-owned snapshot persisted to .gavel/proc/state.json.
