@@ -41,6 +41,27 @@ type ProcState struct {
 	// Ports are the TCP ports the process (and its process group) is listening
 	// on, detected after start. Empty for processes that bind no port.
 	Ports []int `json:"ports,omitempty"`
+	// CPUPercent, MemoryRSS and OpenFiles are the latest resource sample of the
+	// process group, taken live by the supervisor. OpenFiles is -1 on platforms
+	// that cannot report it. All zero for a stopped process.
+	CPUPercent float64 `json:"cpuPercent,omitempty"`
+	MemoryRSS  uint64  `json:"memoryRss,omitempty"`
+	OpenFiles  int     `json:"openFiles,omitempty"`
+	// Tree is the per-process breakdown of the process group behind the
+	// aggregate fields above (the leader and its descendants). Empty for a
+	// stopped process or a supervisor that predates resource sampling.
+	Tree []ProcNode `json:"tree,omitempty"`
+}
+
+// ProcNode is one process within a supervised process group's tree, with its
+// own resource sample. OpenFiles is -1 where the platform cannot report it.
+type ProcNode struct {
+	PID        int     `json:"pid"`
+	PPID       int     `json:"ppid"`
+	Command    string  `json:"command"`
+	CPUPercent float64 `json:"cpuPercent,omitempty"`
+	MemoryRSS  uint64  `json:"memoryRss,omitempty"`
+	OpenFiles  int     `json:"openFiles,omitempty"`
 }
 
 // State is the supervisor-owned snapshot persisted to .gavel/proc/state.json.
@@ -50,6 +71,7 @@ type State struct {
 	Procfile      string      `json:"procfile"`
 	SupervisorPID int         `json:"supervisorPid"`
 	Socket        string      `json:"socket,omitempty"`
+	Profile       string      `json:"profile,omitempty"`
 	Started       *time.Time  `json:"started,omitempty"`
 	Processes     []ProcState `json:"processes"`
 }

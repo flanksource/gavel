@@ -2,9 +2,11 @@ package procfile
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -19,6 +21,12 @@ type Report struct {
 	Running       bool        `json:"running"`
 	SupervisorPID int         `json:"supervisorPid,omitempty"`
 	Processes     []ProcState `json:"processes"`
+	// Profiles is the set of profiles declared across the Procfile entries
+	// (sorted, deduped). Empty when no entry declares a profile.
+	Profiles []string `json:"profiles,omitempty"`
+	// Profile is the active profile: the running supervisor's, or the .gavel.yaml
+	// default when not running (i.e. what the next start would use).
+	Profile string `json:"profile,omitempty"`
 }
 
 // StatusReport renders the full per-process status table.
@@ -49,6 +57,15 @@ func gather(root, pf string) (Report, error) {
 		}
 	}
 
+	// Active profile: the running supervisor's (from the socket), or the
+	// .gavel.yaml default when not running (what the next start would use).
+	profile := st.Profile
+	if !running {
+		if cfg, err := loadConfig(root); err == nil {
+			profile = cfg.Profile
+		}
+	}
+
 	byName := make(map[string]ProcState, len(st.Processes))
 	for _, p := range st.Processes {
 		byName[p.Name] = p
@@ -64,7 +81,35 @@ func gather(root, pf string) (Report, error) {
 		}
 		procs = append(procs, ProcState{Name: e.Name, Command: e.Command, Status: StatusStopped, LogFile: LogPath(dir, e.Name)})
 	}
-	return Report{Root: root, Procfile: pf, Running: running, SupervisorPID: st.SupervisorPID, Processes: procs}, nil
+	return Report{
+		Root:          root,
+		Procfile:      pf,
+		Running:       running,
+		SupervisorPID: st.SupervisorPID,
+		Processes:     procs,
+		Profiles:      availableProfiles(entries),
+		Profile:       profile,
+	}, nil
+}
+
+// availableProfiles returns the sorted, deduped set of profiles declared across
+// the Procfile entries. Empty when no entry declares a profile.
+func availableProfiles(entries []Entry) []string {
+	seen := map[string]struct{}{}
+	for _, e := range entries {
+		for _, p := range e.Profiles {
+			seen[p] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (r Report) header() api.Text {
@@ -96,7 +141,18 @@ func (r StatusReport) Pretty() api.Text {
 			t = t.Append(PortsLabel(p.Ports), "text-blue-500").Space()
 		}
 		if p.Restarts > 0 {
-			t = t.Append("restarts ", "text-muted").Append(p.Restarts)
+			t = t.Append("restarts ", "text-muted").Append(p.Restarts).Space()
+		}
+		if p.Status == StatusRunning {
+			if p.CPUPercent > 0 {
+				t = t.Append("cpu ", "text-muted").Append(fmt.Sprintf("%.0f%% ", p.CPUPercent))
+			}
+			if p.MemoryRSS > 0 {
+				t = t.Append("mem ", "text-muted").Append(humanize.Bytes(p.MemoryRSS)).Space()
+			}
+			if p.OpenFiles > 0 {
+				t = t.Append("fds ", "text-muted").Append(p.OpenFiles)
+			}
 		}
 		t = t.NewLine()
 	}

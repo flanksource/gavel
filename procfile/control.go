@@ -45,6 +45,7 @@ func (s *Supervisor) State() State {
 		Procfile:      s.procfile,
 		SupervisorPID: os.Getpid(),
 		Socket:        s.socket,
+		Profile:       s.profile,
 		Started:       s.started,
 	}
 	for _, m := range s.procs {

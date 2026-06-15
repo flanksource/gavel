@@ -9,16 +9,16 @@ import (
 	. "github.com/onsi/gomega"
 
 	pf "github.com/flanksource/gavel/procfile"
+	"github.com/flanksource/gavel/verify"
 )
 
 var _ = Describe("Parse", func() {
-	It("parses name: command lines, skipping blanks and comments", func() {
+	It("parses string entries, preserving order and ignoring comments", func() {
 		src := strings.Join([]string{
 			"# a comment",
 			"",
 			"web: bundle exec rails server",
-			"  worker:   bundle exec rake jobs:work  ",
-			"# trailing comment",
+			"worker: bundle exec rake jobs:work",
 		}, "\n")
 
 		entries, err := pf.Parse(strings.NewReader(src))
@@ -36,14 +36,60 @@ var _ = Describe("Parse", func() {
 		Expect(entries[0].Command).To(Equal("psql postgres://localhost:5432/app"))
 	})
 
-	It("fails on a line without a colon", func() {
-		_, err := pf.Parse(strings.NewReader("web bundle exec rails"))
-		Expect(err).To(MatchError(ContainSubstring("expected \"name: command\"")))
+	It("parses the object form with all fields", func() {
+		src := `worker:
+  command: rake jobs:work
+  default: false
+  autoRestart: on-failure
+  cpu: 100
+  mem: 512Mi
+  maxRestarts: 10
+  env:
+    WORKER_CONCURRENCY: "4"
+`
+		entries, err := pf.Parse(strings.NewReader(src))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entries).To(HaveLen(1))
+		e := entries[0]
+		Expect(e.Name).To(Equal("worker"))
+		Expect(e.Command).To(Equal("rake jobs:work"))
+		Expect(e.Default).NotTo(BeNil())
+		Expect(*e.Default).To(BeFalse())
+		Expect(e.AutoRestart).To(Equal(verify.RestartOnFailure))
+		Expect(e.CPU).To(Equal(100.0))
+		Expect(e.Mem).To(Equal("512Mi"))
+		Expect(e.MaxRestarts).NotTo(BeNil())
+		Expect(*e.MaxRestarts).To(Equal(10))
+		Expect(e.Env).To(Equal(map[string]string{"WORKER_CONCURRENCY": "4"}))
 	})
 
-	It("fails on an empty process name", func() {
-		_, err := pf.Parse(strings.NewReader(": something"))
-		Expect(err).To(MatchError(ContainSubstring("empty process name")))
+	It("accepts autoRestart as a bool (true => on-failure)", func() {
+		entries, err := pf.Parse(strings.NewReader("web:\n  command: serve\n  autoRestart: true\n"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entries[0].AutoRestart).To(Equal(verify.RestartOnFailure))
+	})
+
+	It("accepts profiles as a scalar or a list", func() {
+		one, err := pf.Parse(strings.NewReader("a:\n  command: x\n  profiles: dev\n"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(one[0].Profiles).To(Equal([]string{"dev"}))
+
+		many, err := pf.Parse(strings.NewReader("a:\n  command: x\n  profiles: [dev, ci]\n"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(many[0].Profiles).To(Equal([]string{"dev", "ci"}))
+	})
+
+	It("preserves declaration order across mixed string and object forms", func() {
+		src := "z: run-z\na:\n  command: run-a\nm: run-m\n"
+		entries, err := pf.Parse(strings.NewReader(src))
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{entries[0].Name, entries[1].Name, entries[2].Name}).
+			To(Equal([]string{"z", "a", "m"}))
+	})
+
+	It("fails when the top level is not a mapping", func() {
+		_, err := pf.Parse(strings.NewReader("just a bare string"))
+		Expect(err).To(MatchError(ContainSubstring("expected a mapping")))
 	})
 
 	It("fails on an invalid process name", func() {
@@ -51,8 +97,13 @@ var _ = Describe("Parse", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid process name")))
 	})
 
-	It("fails when a command is empty", func() {
-		_, err := pf.Parse(strings.NewReader("web:   "))
+	It("fails when a string command is empty", func() {
+		_, err := pf.Parse(strings.NewReader("web:"))
+		Expect(err).To(MatchError(ContainSubstring("has no command")))
+	})
+
+	It("fails when an object entry has no command", func() {
+		_, err := pf.Parse(strings.NewReader("web:\n  cpu: 10\n"))
 		Expect(err).To(MatchError(ContainSubstring("has no command")))
 	})
 
@@ -64,6 +115,11 @@ var _ = Describe("Parse", func() {
 	It("fails when there are no process definitions", func() {
 		_, err := pf.Parse(strings.NewReader("# only comments\n\n"))
 		Expect(err).To(MatchError(ContainSubstring("no process definitions")))
+	})
+
+	It("fails on malformed YAML", func() {
+		_, err := pf.Parse(strings.NewReader("web: [unterminated"))
+		Expect(err).To(MatchError(ContainSubstring("invalid Procfile")))
 	})
 })
 
