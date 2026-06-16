@@ -81,3 +81,4 @@ pr/ui/dist/
 .vitest/
 testrunner/ui/dist/testui.js
 .handoff/
+pr/ui/dist/prui.js
