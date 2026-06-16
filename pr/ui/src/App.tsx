@@ -12,6 +12,7 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
+import { SettingsButton } from './components/SettingsButton';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import {
   annotateRoutePaths,
@@ -463,6 +464,7 @@ export function App() {
             />
             <ThemeToggle />
             <StatusIndicator />
+            <SettingsButton />
           </>
         }
         toolbar={

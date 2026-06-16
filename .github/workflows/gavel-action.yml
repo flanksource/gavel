@@ -28,8 +28,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - uses: arduino/setup-task@v2
         with:

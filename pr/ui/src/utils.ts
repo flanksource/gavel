@@ -196,7 +196,7 @@ export function collectRepos(prs: PRItem[]): string[] {
 // collapses every bot account into a single chip so they're controlled as one,
 // rather than listing each bot login individually.
 export const ME_KEY = '@me';
-export const BOT_KEY = '@bots';
+export const AUTOMATED_AUTHOR_KEY = '@bots';
 
 // isBotAuthor mirrors cmd/gavel.isBot — GitHub bot accounts end in "[bot]" and
 // some legacy integrations just suffix "bot".
@@ -204,10 +204,17 @@ export function isBotAuthor(author: string): boolean {
   return author.endsWith('[bot]') || author.endsWith('bot');
 }
 
+// isBotPR reports whether a PR is bot-authored, trusting the server's App flag
+// (covers App bots like renovate whose login lacks a bot suffix) and falling
+// back to the login heuristic for user-account bots.
+export function isBotPR(pr: PRItem): boolean {
+  return !!pr.authorIsApp || isBotAuthor(pr.author);
+}
+
 // authorCategories returns the author-filter keys a PR belongs to: bots map to
 // @bots, the viewer's own PRs to @me, everyone else to their login.
 export function authorCategories(pr: PRItem, viewer: string): string[] {
-  if (isBotAuthor(pr.author)) return [BOT_KEY];
+  if (isBotPR(pr)) return [AUTOMATED_AUTHOR_KEY];
   if (viewer && pr.author === viewer) return [ME_KEY];
   return pr.author ? [pr.author] : [];
 }
@@ -221,13 +228,13 @@ export function collectAuthors(prs: PRItem[], viewer: string, botsAvailable: boo
   let hasBots = botsAvailable;
   for (const pr of prs) {
     if (!pr.author) continue;
-    if (isBotAuthor(pr.author)) { hasBots = true; continue; }
+    if (isBotPR(pr)) { hasBots = true; continue; }
     if (viewer && pr.author === viewer) { hasMe = true; continue; }
     humans.add(pr.author);
   }
   const out: string[] = [];
   if (hasMe) out.push(ME_KEY);
-  if (hasBots) out.push(BOT_KEY);
+  if (hasBots) out.push(AUTOMATED_AUTHOR_KEY);
   out.push(...[...humans].sort());
   return out;
 }
@@ -336,6 +343,49 @@ export function flattenProcesses(projects: Project[], procStatus: Record<string,
     }
   }
   return out;
+}
+
+// statusDotClass maps a single process status to its dot color, shared by the
+// table, the inline control, and the manager badge.
+export function statusDotClass(status: string): string {
+  switch (status) {
+    case 'running': return 'bg-green-500';
+    case 'starting':
+    case 'restarting': return 'bg-yellow-400';
+    case 'crashed': return 'bg-red-500';
+    default: return 'bg-gray-300';
+  }
+}
+
+// aggregateDotClass summarises a group of processes into one dot color: any
+// crash is red, an all-running group is green, any (re)starting or partly
+// running group is yellow, otherwise gray.
+export function aggregateDotClass(procs: ProcProcess[]): string {
+  if (procs.some(p => p.status === 'crashed')) return 'bg-red-500';
+  const running = procs.filter(p => p.status === 'running').length;
+  if (procs.length > 0 && running === procs.length) return 'bg-green-500';
+  if (procs.some(p => p.status === 'starting' || p.status === 'restarting') || running > 0) return 'bg-yellow-400';
+  return 'bg-gray-300';
+}
+
+// statusLabel is the human status, annotating a crash with its exit code so a
+// crashed process reads "crashed (exit 3)" rather than looking like a stop.
+export function statusLabel(proc: ProcProcess): string {
+  if (proc.status === 'crashed' && proc.exitCode !== undefined) {
+    return `${proc.status} (exit ${proc.exitCode})`;
+  }
+  return proc.status;
+}
+
+// crashedSummary describes the crashed processes in a group for a tooltip, e.g.
+// "1 crashed (exit 3)" or "2 crashed (exit 1, exit 137)". Empty when none.
+export function crashedSummary(procs: ProcProcess[]): string {
+  const crashed = procs.filter(p => p.status === 'crashed');
+  if (crashed.length === 0) return '';
+  const codes = crashed
+    .filter(p => p.exitCode !== undefined)
+    .map(p => `exit ${p.exitCode}`);
+  return `${crashed.length} crashed${codes.length ? ` (${codes.join(', ')})` : ''}`;
 }
 
 // humanizeBytes renders a byte count compactly (e.g. "1.5 GB"). Non-positive

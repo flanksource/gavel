@@ -137,7 +137,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
         >
           #{pr.number}
         </a>
-        <span className={`text-sm truncate flex-1 ${unread ? 'font-semibold text-foreground' : 'font-medium text-foreground'}`}>{pr.title}</span>
+        <span className="text-sm truncate flex-1 font-medium text-foreground">{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
             <iconify-icon icon="octicon:git-merge-16" className="text-red-500" />

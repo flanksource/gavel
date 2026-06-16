@@ -1,6 +1,22 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+// Frontend build version, baked in so the Settings panel can show which UI
+// bundle is embedded — and reveal drift from the Go binary's own version.
+function git(args: string, fallback: string): string {
+  try {
+    return (
+      execSync(`git ${args}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || fallback
+    );
+  } catch {
+    return fallback;
+  }
+}
+const uiVersion = git('describe --tags --always', 'dev');
+const uiCommit = git('rev-parse --short HEAD', 'unknown');
+const uiDate = new Date().toISOString();
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -9,6 +25,9 @@ export default defineConfig({
   // bare `process` reference in the browser.
   define: {
     'process.env.NODE_ENV': JSON.stringify('production'),
+    __GAVEL_UI_VERSION__: JSON.stringify(uiVersion),
+    __GAVEL_UI_COMMIT__: JSON.stringify(uiCommit),
+    __GAVEL_UI_DATE__: JSON.stringify(uiDate),
   },
   build: {
     lib: {

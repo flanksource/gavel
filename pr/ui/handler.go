@@ -219,11 +219,12 @@ func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
 	s.fetchedAt = time.Now()
 	s.err = nil
 	// Learn bot authors from whatever came back so subsequent fetches can
-	// exclude them at the source. New bots leak through for one cycle (the UI
-	// hides them client-side) before being caught here.
+	// exclude them at the source via a search-compatible `-author:` qualifier.
+	// New bots leak through for one cycle (the UI hides them client-side)
+	// before being caught here.
 	for _, pr := range prs {
-		if github.IsBotAuthor(pr.Author) {
-			s.knownBots[pr.Author] = struct{}{}
+		if q := github.BotExcludeQualifier(pr.Author, pr.AuthorIsApp); q != "" {
+			s.knownBots[q] = struct{}{}
 		}
 	}
 	subs := s.subscribers
@@ -403,6 +404,7 @@ func pageHTML() string {
 </head>
 <body class="bg-background text-foreground">
     <div id="root"></div>
+    <script>` + buildGlobalJS() + `</script>
     <script>` + bundleJS + `</script>
 </body>
 </html>`

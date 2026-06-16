@@ -246,6 +246,9 @@ func runPRUI(opts PRListOptions) error {
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
 
+	// Surface the backend build metadata to the dashboard (window.__GAVEL__).
+	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
+
 	srv.RepoSearchFn = func() (github.PRSearchResults, error) {
 		since, _ := parseSince("30d")
 		results, _, err := github.SearchPRs(ghOpts, github.PRSearchOptions{

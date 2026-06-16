@@ -29,10 +29,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            testrunner/ui/package-lock.json
-            pr/ui/package-lock.json
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - uses: arduino/setup-task@v2
         with:
@@ -103,10 +102,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            testrunner/ui/package-lock.json
-            pr/ui/package-lock.json
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - uses: arduino/setup-task@v2
         with:

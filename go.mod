@@ -23,6 +23,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
+	github.com/dustin/go-humanize v1.0.1
 	github.com/flanksource/deps v1.0.28
 	github.com/ghodss/yaml v1.0.0
 	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
@@ -143,7 +144,6 @@ require (
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.2 // indirect
 	github.com/eko/gocache/store/go_cache/v4 v4.2.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
