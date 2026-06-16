@@ -38,17 +38,15 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
           </div>
         );
       })}
-      <div className="p-2">
-        <button
-          type="button"
-          onClick={onAdd}
-          title="Add a local workspace directory"
-          className="w-full flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        >
-          <iconify-icon icon="codicon:add" />
-          Add directory
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={onAdd}
+        title="Add a local workspace directory"
+        className="w-full pl-6 pr-3 py-1.5 flex items-center gap-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+      >
+        <iconify-icon icon="codicon:add" className="shrink-0" />
+        Add directory
+      </button>
     </div>
   );
 }

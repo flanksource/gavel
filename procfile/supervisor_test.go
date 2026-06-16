@@ -235,7 +235,7 @@ var _ = Describe("Supervisor", func() {
 	})
 
 	It("does not restart a process under the default 'no' policy", func() {
-		sup, _ := newSupervisor("once: sh -c 'exit 1'\n", verify.ProcfileConfig{})
+		sup, _ := newSupervisor("once: sh -c 'exit 3'\n", verify.ProcfileConfig{})
 		defer sup.Shutdown()
 
 		waitFor(3*time.Second, func() bool {
@@ -244,6 +244,9 @@ var _ = Describe("Supervisor", func() {
 		})
 		p, _ := liveProc(sup, "once")
 		Expect(p.Restarts).To(Equal(0))
+		// A non-zero exit is captured so the UI/CLI can show "crashed (exit 3)".
+		Expect(p.ExitCode).NotTo(BeNil())
+		Expect(*p.ExitCode).To(Equal(3))
 	})
 
 	It("restarts a failing process up to maxRestarts under on-failure", func() {

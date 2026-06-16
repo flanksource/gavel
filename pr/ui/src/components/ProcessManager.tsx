@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { DropdownMenu } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
-import { flattenProcesses } from '../utils';
+import { flattenProcesses, aggregateDotClass } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
 
 interface Props {
@@ -25,20 +25,19 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
 
   // Aggregate counts (across every process) drive the trigger badge.
   const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
-  const { running, crashed, transitioning } = useMemo(() => {
-    let running = 0, crashed = 0, transitioning = 0;
+  const { running, crashed } = useMemo(() => {
+    let running = 0, crashed = 0;
     for (const { proc } of procs) {
       if (proc.status === 'running') running++;
       else if (proc.status === 'crashed') crashed++;
-      else if (proc.status === 'starting' || proc.status === 'restarting') transitioning++;
     }
-    return { running, crashed, transitioning };
+    return { running, crashed };
   }, [procs]);
 
   // No workspaces with a Procfile → no button (keeps the header clean).
   if (workspaces.length === 0) return null;
 
-  const dot = crashed > 0 ? 'bg-red-500' : transitioning > 0 ? 'bg-yellow-400' : running > 0 ? 'bg-green-500' : 'bg-gray-300';
+  const dot = aggregateDotClass(procs.map(p => p.proc));
 
   const trigger = (
     <button

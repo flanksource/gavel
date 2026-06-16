@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { PRItem, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
-import { groupByOrg, prKey, paletteClass } from '../utils';
+import { groupByOrg, prKey, paletteClass, computeCounts } from '../utils';
 import { Avatar } from './Avatar';
 
 interface Props {
@@ -56,6 +56,27 @@ function RepoIcon({ repo, homepageUrl, size }: RepoIconProps) {
   );
 }
 
+// GroupCounts shows per-group open (green) and failing (red) totals on the
+// sidebar org/repo titles, with the overall count kept muted for context.
+function GroupCounts({ items }: { items: PRItem[] }) {
+  const c = computeCounts(items);
+  return (
+    <span className="flex items-center gap-1.5 shrink-0 text-xs font-normal tabular-nums">
+      {c.failing > 0 && (
+        <span className="text-red-600 inline-flex items-center gap-0.5" title={`${c.failing} failing`}>
+          <iconify-icon icon="codicon:error" />{c.failing}
+        </span>
+      )}
+      {c.open > 0 && (
+        <span className="text-green-600 inline-flex items-center gap-0.5" title={`${c.open} open`}>
+          <iconify-icon icon="codicon:git-pull-request" />{c.open}
+        </span>
+      )}
+      <span className="text-muted-foreground" title={`${items.length} total`}>{items.length}</span>
+    </span>
+  );
+}
+
 export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, procStatus, onProcChanged, onProcEdit }: Props) {
   if (prs.length === 0) {
     return (
@@ -84,7 +105,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 colorKey={og.org}
               />
               <span className="text-sm font-semibold text-foreground truncate flex-1">{og.org}</span>
-              <span className="text-xs text-muted-foreground shrink-0">{og.itemCount}</span>
+              <GroupCounts items={og.repos.flatMap(r => r.items)} />
             </div>
           )}
           {og.repos.map(group => (
@@ -118,7 +139,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                     onEdit={onProcEdit}
                   />
                 )}
-                <span className="text-xs text-muted-foreground font-normal shrink-0">{group.items.length}</span>
+                <GroupCounts items={group.items} />
               </div>
               {group.items.map(pr => (
                 <PRRow

@@ -2,20 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { AnsiHtml } from '@flanksource/clicky-ui/data';
 import type { FlatProc } from '../utils';
-import { humanizeBytes } from '../utils';
+import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
-
-// statusDot maps a process status to a colored dot class, matching the inline
-// ProcControl vocabulary (green running, yellow transitioning, red crashed).
-function statusDot(status: string): string {
-  switch (status) {
-    case 'running': return 'bg-green-500';
-    case 'starting':
-    case 'restarting': return 'bg-yellow-400';
-    case 'crashed': return 'bg-red-500';
-    default: return 'bg-gray-300';
-  }
-}
 
 function cpuLabel(p: { cpuPercent?: number }): string {
   return p.cpuPercent && p.cpuPercent > 0 ? `${p.cpuPercent.toFixed(0)}%` : '—';
@@ -188,12 +176,12 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
         <td className="py-1 pl-1 pr-2">
           <button className="flex items-center gap-1.5" onClick={() => setOpen(o => !o)} title="Toggle logs">
             <iconify-icon icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
-            <span className={`inline-block w-2 h-2 rounded-full ${statusDot(proc.status)}`} />
+            <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <span className="font-medium truncate max-w-[180px]">{showWorkspace ? project.name : proc.name}</span>
           </button>
           {showWorkspace && <div className="text-[10px] text-gray-400 pl-5">{proc.name}</div>}
         </td>
-        <td className="px-2 text-gray-500">{proc.status}</td>
+        <td className={`px-2 ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-500'}`}>{statusLabel(proc)}</td>
         <td className="px-2 text-right tabular-nums text-gray-500">{proc.pid || '—'}</td>
         <td className="px-2 text-right tabular-nums">{cpuLabel(proc)}</td>
         <td className="px-2 text-right tabular-nums">{humanizeBytes(proc.memoryRss)}</td>
@@ -261,15 +249,6 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
   );
 }
 
-// groupDot summarises a workspace's processes into one status-dot color.
-function groupDot(procs: ProcProcess[]): string {
-  if (procs.some(p => p.status === 'crashed')) return 'bg-red-500';
-  const running = procs.filter(p => p.status === 'running').length;
-  if (procs.length > 0 && running === procs.length) return 'bg-green-500';
-  if (procs.some(p => p.status === 'starting' || p.status === 'restarting') || running > 0) return 'bg-yellow-400';
-  return 'bg-gray-300';
-}
-
 // WorkspaceGroup renders one project: a header with its profile selector and
 // start/restart/stop-all controls, above its process rows. Profiles choose which
 // processes auto-start; the selector is editable only while stopped (switching a
@@ -335,11 +314,11 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <div className="flex items-center gap-2 px-1">
           <button className="flex items-center gap-1.5 min-w-0" onClick={() => setOpen(o => !o)} title="Toggle logs">
             <iconify-icon icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
-            <span className={`inline-block w-2 h-2 rounded-full ${statusDot(proc.status)}`} />
+            <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
           </button>
-          <span className="text-[10px] tabular-nums text-gray-400 truncate">
-            {proc.status} · pid {proc.pid || '—'} · {cpuLabel(proc)} · {humanizeBytes(proc.memoryRss)}
+          <span className={`text-[10px] tabular-nums truncate ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-400'}`}>
+            {statusLabel(proc)} · pid {proc.pid || '—'} · {cpuLabel(proc)} · {humanizeBytes(proc.memoryRss)}
           </span>
           {ports.map(port => (
             <a key={port} href={`http://localhost:${port}`} target="_blank" rel="noreferrer"
@@ -362,7 +341,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
   return (
     <div className="py-1.5">
       <div className="flex items-center gap-2 px-1">
-        <span className={`inline-block w-2 h-2 rounded-full ${groupDot(procs)}`} />
+        <span className={`inline-block w-2 h-2 rounded-full ${aggregateDotClass(procs)}`} />
         <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
         <span className="text-[10px] tabular-nums text-gray-400">{running}/{procs.length}</span>
         <div className="flex-1" />

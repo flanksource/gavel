@@ -18,6 +18,9 @@ export interface PRItem {
   title: string;
   author: string;
   authorAvatarUrl?: string;
+  // True when the author is a GitHub App bot whose login lacks a "bot" suffix
+  // (e.g. renovate); lets the @bots chip group it without the suffix heuristic.
+  authorIsApp?: boolean;
   repo: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;

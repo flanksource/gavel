@@ -1,5 +1,6 @@
 import { FilterBar as ClickyFilterBar } from '@flanksource/clicky-ui/components';
 import type { FilterBarFilter, MultiSelectOption } from '@flanksource/clicky-ui/components';
+import { UiFolderGit2, UiUser } from '@flanksource/clicky-ui/icons';
 
 export type FilterMode = 'include' | 'exclude';
 
@@ -76,8 +77,8 @@ export function FilterBar({ filters, onChange, counts, repos, authors }: Props) 
   const fb: FilterBarFilter[] = [];
   if (stateOpts.length) fb.push({ key: 'state', kind: 'multi', label: 'State', options: stateOpts, value: filters.state, onChange: (v) => setFacet('state', v) });
   if (checkOpts.length) fb.push({ key: 'checks', kind: 'multi', label: 'Checks', options: checkOpts, value: filters.checks, onChange: (v) => setFacet('checks', v) });
-  if (repos.length > 1) fb.push({ key: 'repos', kind: 'multi', label: 'Repos', icon: 'codicon:repo', options: repoOpts, value: filters.repos, onChange: (v) => setFacet('repos', v) });
-  if (authors.length > 1) fb.push({ key: 'authors', kind: 'multi', label: 'Authors', icon: 'codicon:person', options: authorOpts, value: filters.authors, onChange: (v) => setFacet('authors', v) });
+  if (repos.length > 1) fb.push({ key: 'repos', kind: 'multi', label: 'Repos', icon: <UiFolderGit2 />, options: repoOpts, value: filters.repos, onChange: (v) => setFacet('repos', v) });
+  if (authors.length > 1) fb.push({ key: 'authors', kind: 'multi', label: 'Authors', icon: <UiUser />, options: authorOpts, value: filters.authors, onChange: (v) => setFacet('authors', v) });
 
   if (fb.length === 0) return null;
   return <ClickyFilterBar overflowMode="wrap" filters={fb} />;

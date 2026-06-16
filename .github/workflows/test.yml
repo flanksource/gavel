@@ -28,8 +28,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Install Task
         uses: arduino/setup-task@v2
@@ -43,8 +43,8 @@ jobs:
       # the tsc lint check live in these UI projects' devDependencies.
       - name: Install JS deps
         run: |
-          npm install --prefix testrunner/ui
-          npm install --prefix pr/ui
+          pnpm -C testrunner/ui install --no-frozen-lockfile
+          pnpm -C pr/ui install --no-frozen-lockfile
           npm ci --prefix site
 
       # `gavel test` compiles all Go test binaries in a pre-build phase before
@@ -75,8 +75,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Install Task
         uses: arduino/setup-task@v2
@@ -90,8 +90,8 @@ jobs:
       # projects' devDependencies; install them so gavel lint can run them.
       - name: Install JS deps
         run: |
-          npm install --prefix testrunner/ui
-          npm install --prefix pr/ui
+          pnpm -C testrunner/ui install --no-frozen-lockfile
+          pnpm -C pr/ui install --no-frozen-lockfile
           npm ci --prefix site
 
       - name: Run linters
@@ -113,13 +113,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: testrunner/ui/package-lock.json
 
-      - run: npm ci
-      - run: npm run check
-      - run: npm test
-      - run: npm run build:lib
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm test
+      - run: pnpm run build:lib
 
   build:
     name: Build
@@ -141,6 +142,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
 
       - name: Install Task
         uses: arduino/setup-task@v2

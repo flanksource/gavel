@@ -188,6 +188,9 @@ type graphQLThreadCommentNode struct {
 type graphQLAuthor struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatarUrl"`
+	// TypeName is GraphQL's __typename: "Bot" for GitHub App bots (whose login
+	// lacks the "[bot]" suffix the search API expects), "User" otherwise.
+	TypeName string `json:"__typename"`
 }
 
 type graphQLCommits struct {

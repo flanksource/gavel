@@ -21,7 +21,7 @@ const prSearchQuery = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login avatarUrl }
+        author { login avatarUrl __typename }
         headRefName
         baseRefName
         state
@@ -47,7 +47,7 @@ const prSearchQueryWithStatus = `query($query: String!, $first: Int!) {
       ... on PullRequest {
         number
         title
-        author { login avatarUrl }
+        author { login avatarUrl __typename }
         headRefName
         baseRefName
         state
@@ -177,6 +177,21 @@ func IsBotAuthor(login string) bool {
 	return strings.HasSuffix(login, "[bot]") || strings.HasSuffix(login, "bot")
 }
 
+// BotExcludeQualifier returns the `author:` value that excludes a bot from a
+// search. App bots are matched by their "<login>[bot]" identity (their GraphQL
+// login drops that suffix); user-account bots by their plain login. Returns ""
+// for non-bots so callers can skip them.
+func BotExcludeQualifier(login string, isApp bool) string {
+	switch {
+	case isApp:
+		return login + "[bot]"
+	case IsBotAuthor(login):
+		return login
+	default:
+		return ""
+	}
+}
+
 type searchResponse struct {
 	Data   searchData     `json:"data"`
 	Errors []graphQLError `json:"errors"`
@@ -214,27 +229,31 @@ type searchPRNode struct {
 }
 
 type PRListItem struct {
-	Number          int           `json:"number"`
-	Title           string        `json:"title"`
-	Author          string        `json:"author"`
-	AuthorAvatarURL string        `json:"authorAvatarUrl,omitempty"`
-	Repo            string        `json:"repo"`
-	RepoAvatarURL   string        `json:"repoAvatarUrl,omitempty"`
-	RepoHomepageURL string        `json:"repoHomepageUrl,omitempty"`
-	Source          string        `json:"source"`
-	Target          string        `json:"target"`
-	State           string        `json:"state"`
-	IsDraft         bool          `json:"isDraft"`
-	ReviewDecision  string        `json:"reviewDecision,omitempty"`
-	Mergeable       string        `json:"mergeable,omitempty"`
-	URL             string        `json:"url"`
-	UpdatedAt       time.Time     `json:"updatedAt"`
-	IsCurrent       bool          `json:"isCurrent,omitempty"`
-	Ahead           int           `json:"ahead,omitempty"`
-	Behind          int           `json:"behind,omitempty"`
-	CheckStatus     *CheckSummary `json:"checkStatus,omitempty"`
-	ShowURL         bool          `json:"-"`
-	ShowAuthor      bool          `json:"-"`
+	Number          int       `json:"number"`
+	Title           string    `json:"title"`
+	Author          string    `json:"author"`
+	AuthorAvatarURL string    `json:"authorAvatarUrl,omitempty"`
+	Repo            string    `json:"repo"`
+	RepoAvatarURL   string    `json:"repoAvatarUrl,omitempty"`
+	RepoHomepageURL string    `json:"repoHomepageUrl,omitempty"`
+	Source          string    `json:"source"`
+	Target          string    `json:"target"`
+	State           string    `json:"state"`
+	IsDraft         bool      `json:"isDraft"`
+	ReviewDecision  string    `json:"reviewDecision,omitempty"`
+	Mergeable       string    `json:"mergeable,omitempty"`
+	URL             string    `json:"url"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	// AuthorIsApp is true when the author is a GitHub App bot (GraphQL
+	// __typename "Bot"), whose login lacks the "[bot]" suffix that the search
+	// API needs to match it. Lets callers build a correct `-author:` exclusion.
+	AuthorIsApp bool          `json:"authorIsApp,omitempty"`
+	IsCurrent   bool          `json:"isCurrent,omitempty"`
+	Ahead       int           `json:"ahead,omitempty"`
+	Behind      int           `json:"behind,omitempty"`
+	CheckStatus *CheckSummary `json:"checkStatus,omitempty"`
+	ShowURL     bool          `json:"-"`
+	ShowAuthor  bool          `json:"-"`
 }
 
 type PRSearchResults []PRListItem
@@ -417,6 +436,7 @@ func executeSearch(token, queryString string, searchOpts PRSearchOptions) (PRSea
 			Title:           node.Title,
 			Author:          node.Author.Login,
 			AuthorAvatarURL: node.Author.AvatarURL,
+			AuthorIsApp:     node.Author.TypeName == "Bot",
 			Repo:            node.Repository.NameWithOwner,
 			RepoAvatarURL:   node.Repository.Owner.AvatarURL,
 			RepoHomepageURL: node.Repository.HomepageURL,

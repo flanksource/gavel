@@ -134,6 +134,9 @@ func (r StatusReport) Pretty() api.Text {
 		} else {
 			t = t.Append(fmt.Sprintf("%-12s", ""))
 		}
+		if p.Status == StatusCrashed && p.ExitCode != nil {
+			t = t.Append("exit ", "text-muted").Append(*p.ExitCode).Space()
+		}
 		if up := uptime(p.Started, p.Status); up != "" {
 			t = t.Append("up ", "text-muted").Append(up).Space()
 		}

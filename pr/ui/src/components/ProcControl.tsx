@@ -1,5 +1,6 @@
 import { Button } from '@flanksource/clicky-ui/components';
-import type { Project, ProcStatus, ProcProcess } from '../types';
+import type { Project, ProcStatus } from '../types';
+import { aggregateDotClass, crashedSummary } from '../utils';
 
 interface Props {
   repo: string;
@@ -7,17 +8,6 @@ interface Props {
   status?: ProcStatus;
   onChanged: () => void;
   onEdit?: (project: Project) => void;
-}
-
-function dotColor(procs: ProcProcess[]): string {
-  const total = procs.length;
-  const running = procs.filter(p => p.status === 'running').length;
-  const crashed = procs.filter(p => p.status === 'crashed').length;
-  const transitioning = procs.some(p => p.status === 'starting' || p.status === 'restarting');
-  if (crashed > 0) return 'bg-red-500';
-  if (total > 0 && running === total) return 'bg-green-500';
-  if (running > 0 || transitioning) return 'bg-yellow-400';
-  return 'bg-gray-300';
 }
 
 // IconBtn is a clicky ghost icon button wrapping an iconify glyph, so we keep
@@ -55,6 +45,7 @@ export function ProcControl({ project, status, onEdit }: Props) {
   const mixed = new Set(procs.map(p => p.status)).size > 1;
   // Distinct listening ports across all processes, surfaced as quick-open links.
   const ports = Array.from(new Set(procs.flatMap(p => p.ports ?? []))).sort((a, b) => a - b);
+  const crashed = crashedSummary(procs);
 
   return (
     <span className="inline-flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -66,8 +57,8 @@ export function ProcControl({ project, status, onEdit }: Props) {
       ) : (
         <>
           <span
-            className={`inline-block w-2 h-2 rounded-full ${dotColor(procs)}`}
-            title={`${running}/${total} running${ports.length ? ` · ${ports.map(p => `:${p}`).join(' ')}` : ''}`}
+            className={`inline-block w-2 h-2 rounded-full ${aggregateDotClass(procs)}`}
+            title={`${running}/${total} running${crashed ? ` · ${crashed}` : ''}${ports.length ? ` · ${ports.map(p => `:${p}`).join(' ')}` : ''}`}
           />
           {mixed && <span className="text-[10px] tabular-nums text-muted-foreground mr-0.5">{running}/{total}</span>}
         </>
