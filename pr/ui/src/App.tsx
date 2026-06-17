@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
-import { Summary } from './components/Summary';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
@@ -12,7 +11,6 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
-import { SettingsButton } from './components/SettingsButton';
 import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
 import {
   annotateRoutePaths,
@@ -451,8 +449,7 @@ export function App() {
           <>
             <ProcessManager projects={projects} procStatus={procStatus} onProcChanged={onProcChanged} />
             <OrgChooser config={config} onChange={updateConfig} />
-            <Summary
-              prs={prs}
+            <StatusIndicator
               fetchedAt={fetchedAt}
               error={error}
               nextFetchIn={nextFetchIn}
@@ -463,8 +460,6 @@ export function App() {
               networkBusy={detailLoading}
             />
             <ThemeToggle />
-            <StatusIndicator />
-            <SettingsButton />
           </>
         }
         toolbar={

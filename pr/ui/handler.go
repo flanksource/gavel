@@ -312,6 +312,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
+	mux.HandleFunc("/api/proc/favicon", s.handleProcFavicon)
 	mux.HandleFunc("/api/proc/start", s.handleProcControl)
 	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
 	mux.HandleFunc("/api/proc/restart", s.handleProcControl)

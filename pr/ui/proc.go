@@ -7,6 +7,8 @@ import (
 	"path"
 	"strconv"
 
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -103,6 +105,72 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	json.NewEncoder(w).Encode(byKey) //nolint:errcheck
+}
+
+// handleProcFavicon fetches a favicon from a localhost service that Gavel has
+// already discovered as an open process port. The project+port guard keeps this
+// from becoming an arbitrary URL proxy.
+func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	project := r.URL.Query().Get("project")
+	portStr := r.URL.Query().Get("port")
+	if project == "" || portStr == "" {
+		http.Error(w, "project and port params are required", http.StatusBadRequest)
+		return
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		http.Error(w, "invalid port", http.StatusBadRequest)
+		return
+	}
+	p, ok := projectByName(LoadProjects(), project)
+	if !ok {
+		http.Error(w, "unknown project", http.StatusNotFound)
+		return
+	}
+	st := projectStatus(p)
+	if !st.HasProcfile || !procStatusHasPort(st, port) {
+		http.Error(w, "unknown process port", http.StatusNotFound)
+		return
+	}
+
+	homepage := "http://localhost:" + strconv.Itoa(port)
+	store := cache.Shared()
+	data, mime, hit, err := store.GetFavicon(homepage)
+	if err != nil {
+		logger.Warnf("process favicon cache read %s: %v", homepage, err)
+	}
+	if !hit {
+		data, mime, err = store.FetchFavicon(r.Context(), homepage)
+		if err != nil {
+			logger.Debugf("process favicon fetch %s: %v", homepage, err)
+			http.Error(w, "favicon unavailable", http.StatusNotFound)
+			return
+		}
+	}
+	if len(data) == 0 {
+		http.Error(w, "no favicon", http.StatusNotFound)
+		return
+	}
+	if mime != "" {
+		w.Header().Set("Content-Type", mime)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
+func procStatusHasPort(st procStatus, port int) bool {
+	for _, p := range st.Processes {
+		for _, candidate := range p.Ports {
+			if candidate == port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleProcControl backs POST /api/proc/{start,stop,restart}. The action is

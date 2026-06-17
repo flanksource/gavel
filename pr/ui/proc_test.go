@@ -1,12 +1,18 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/flanksource/gavel/procfile"
 )
 
 // withProject points projectsPath at a temp file holding a single project whose
@@ -150,6 +156,88 @@ func TestHandleProcStatusUnknownProject(t *testing.T) {
 	(&Server{}).handleProcStatus(rec, httptest.NewRequest("GET", "/api/proc/status?project=nope", nil))
 	if rec.Code != 404 {
 		t.Errorf("status = %d, want 404; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleProcFaviconValidation(t *testing.T) {
+	withProject(t, "gavel", "flanksource/gavel", "web: echo hi\n")
+	s := &Server{}
+	tests := []struct {
+		name    string
+		method  string
+		target  string
+		wantSts int
+	}{
+		{"wrong method", "POST", "/api/proc/favicon?project=gavel&port=3000", 405},
+		{"missing project", "GET", "/api/proc/favicon?port=3000", 400},
+		{"missing port", "GET", "/api/proc/favicon?project=gavel", 400},
+		{"invalid port", "GET", "/api/proc/favicon?project=gavel&port=nope", 400},
+		{"unknown project", "GET", "/api/proc/favicon?project=nope&port=3000", 404},
+		{"undiscovered port", "GET", "/api/proc/favicon?project=gavel&port=3000", 404},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.handleProcFavicon(rec, httptest.NewRequest(tc.method, tc.target, nil))
+			if rec.Code != tc.wantSts {
+				t.Errorf("status = %d, want %d; body = %q", rec.Code, tc.wantSts, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleProcFaviconAllowedDiscoveredPort(t *testing.T) {
+	dir := withProject(t, "gavel", "flanksource/gavel", "web: echo hi\n")
+
+	icon := []byte{0x00, 0x00, 0x01, 0x00}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<!doctype html><html><head></head><body>ok</body></html>`))
+		case "/favicon.ico":
+			w.Header().Set("Content-Type", "image/x-icon")
+			_, _ = w.Write(icon)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split test server port: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+	stateDir, err := procfile.StateDir(dir)
+	if err != nil {
+		t.Fatalf("state dir: %v", err)
+	}
+	if err := procfile.WriteState(stateDir, procfile.State{
+		Processes: []procfile.ProcState{{
+			Name:    "web",
+			Command: "echo hi",
+			Status:  procfile.StatusRunning,
+			LogFile: procfile.LogPath(stateDir, "web"),
+			Ports:   []int{port},
+		}},
+	}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleProcFavicon(rec, httptest.NewRequest("GET", "/api/proc/favicon?project=gavel&port="+portStr, nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "image/x-icon") {
+		t.Errorf("content-type = %q, want image/x-icon", got)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), icon) {
+		t.Errorf("body = %v, want icon bytes %v", rec.Body.Bytes(), icon)
 	}
 }
 
