@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
-import { AnsiHtml } from '@flanksource/clicky-ui/data';
+import { AnsiHtml, TimeseriesCoreBars, TimeseriesGauge, type TimeseriesResponse } from '@flanksource/clicky-ui/data';
 import type { FlatProc } from '../utils';
 import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
@@ -9,10 +9,131 @@ function cpuLabel(p: { cpuPercent?: number }): string {
   return p.cpuPercent && p.cpuPercent > 0 ? `${p.cpuPercent.toFixed(0)}%` : '—';
 }
 
+function uptimeLabel(p: { started?: string; status: string }): string {
+  if (!p.started || !isActiveStatus(p.status)) return '—';
+  const started = new Date(p.started).getTime();
+  if (!Number.isFinite(started)) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  if (hours < 24) return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
+function isActiveStatus(status: string): boolean {
+  return status === 'running' || status === 'starting' || status === 'restarting';
+}
+
 // filesLabel renders the open-file count; -1 means the platform can't report it.
 function filesLabel(p: { openFiles?: number }): string {
   if (p.openFiles === undefined || p.openFiles < 0) return '—';
   return String(p.openFiles);
+}
+
+const recordedMax = new Map<string, number>();
+
+function runKey(project: string, proc: ProcProcess): string {
+  return `${project}/${proc.name}/${proc.started || 'not-started'}/${proc.pid || 0}`;
+}
+
+function metricId(project: string, proc: ProcProcess, metric: string): string {
+  return `/proc-metrics/${encodeURIComponent(runKey(project, proc))}/${metric}`;
+}
+
+function useRecordedMax(key: string, value: number): number {
+  const [max, setMax] = useState(() => Math.max(value, recordedMax.get(key) ?? 0));
+  useEffect(() => {
+    const next = Math.max(value, recordedMax.get(key) ?? 0);
+    recordedMax.set(key, next);
+    setMax(next);
+  }, [key, value]);
+  return max;
+}
+
+function nextCpuMaxPercent(maxCpuPercent: number): number {
+  return Math.max(100, Math.ceil(maxCpuPercent / 100) * 100);
+}
+
+function nextMemoryMaxBytes(maxBytes: number): number {
+  let bucket = 64 * 1024 * 1024;
+  while (bucket < maxBytes) bucket *= 2;
+  return bucket;
+}
+
+function latestFetcher(value: number) {
+  return async (url: string): Promise<TimeseriesResponse> => ({
+    id: url,
+    points: [{ at: new Date().toISOString(), value }],
+  });
+}
+
+function CpuBars({ project, proc }: { project: string; proc: ProcProcess }) {
+  const cpuPercent = Math.max(0, proc.cpuPercent ?? 0);
+  const maxPercent = useRecordedMax(`${runKey(project, proc)}/cpu`, cpuPercent);
+  const maxMilli = nextCpuMaxPercent(maxPercent) * 10;
+  return (
+    <div className="flex justify-end" title={cpuLabel(proc)}>
+      <TimeseriesCoreBars
+        title="CPU"
+        value={{ id: metricId(project, proc, 'cpu') }}
+        max={maxMilli}
+        refreshMs={0}
+        fetcher={latestFetcher(cpuPercent * 10)}
+        className="min-w-[58px] [&_.h-10]:h-7 [&_.w-2]:w-1.5 [&_.text-xs]:text-[10px]"
+      />
+    </div>
+  );
+}
+
+function MemoryGauge({ project, proc }: { project: string; proc: ProcProcess }) {
+  const memory = Math.max(0, proc.memoryRss ?? 0);
+  const maxMemory = useRecordedMax(`${runKey(project, proc)}/memory`, memory);
+  const max = nextMemoryMaxBytes(maxMemory);
+  return (
+    <div className="flex justify-end" title={humanizeBytes(proc.memoryRss)}>
+      <TimeseriesGauge
+        title="Mem"
+        value={{ id: metricId(project, proc, 'memory') }}
+        max={max}
+        unit="bytes"
+        refreshMs={0}
+        expandable={false}
+        fetcher={latestFetcher(memory)}
+        className="min-w-[58px] [&_.h-10]:h-7 [&_.w-20]:w-14 [&_.text-sm]:text-[10px] [&_.text-xs]:text-[10px]"
+      />
+    </div>
+  );
+}
+
+export function ProcessPortLink({ project, port }: { project: string; port: number }) {
+  const [faviconFailed, setFaviconFailed] = useState(false);
+  const href = `http://localhost:${port}`;
+  const favicon = `/api/proc/favicon?project=${encodeURIComponent(project)}&port=${port}`;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={`Open localhost:${port}`}
+      className="inline-flex items-center gap-0.5 text-[10px] tabular-nums text-blue-500 hover:underline mr-1"
+      onClick={e => e.stopPropagation()}
+    >
+      {!faviconFailed && (
+        <img
+          src={favicon}
+          alt=""
+          className="h-3 w-3 rounded-sm"
+          onError={() => setFaviconFailed(true)}
+        />
+      )}
+      :{port}
+    </a>
+  );
 }
 
 async function control(project: string, name: string, action: 'start' | 'stop' | 'restart') {
@@ -182,17 +303,13 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
           {showWorkspace && <div className="text-[10px] text-gray-400 pl-5">{proc.name}</div>}
         </td>
         <td className={`px-2 ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-500'}`}>{statusLabel(proc)}</td>
+        <td className="px-2 text-right tabular-nums text-gray-500">{uptimeLabel(proc)}</td>
         <td className="px-2 text-right tabular-nums text-gray-500">{proc.pid || '—'}</td>
-        <td className="px-2 text-right tabular-nums">{cpuLabel(proc)}</td>
-        <td className="px-2 text-right tabular-nums">{humanizeBytes(proc.memoryRss)}</td>
+        <td className="px-2 text-right tabular-nums"><CpuBars project={project.name} proc={proc} /></td>
+        <td className="px-2 text-right tabular-nums"><MemoryGauge project={project.name} proc={proc} /></td>
         <td className="px-2 text-right tabular-nums">{filesLabel(proc)}</td>
         <td className="px-2">
-          {ports.map(port => (
-            <a key={port} href={`http://localhost:${port}`} target="_blank" rel="noreferrer"
-              className="text-[10px] tabular-nums text-blue-500 hover:underline mr-1" onClick={e => e.stopPropagation()}>
-              :{port}
-            </a>
-          ))}
+          {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
         </td>
         <td className="px-1 text-right whitespace-nowrap">
           {!active && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => act('start')} />}
@@ -202,7 +319,7 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
       </tr>
       {open && (
         <tr className="bg-gray-50">
-          <td colSpan={8} className="px-2 pb-2">
+          <td colSpan={9} className="px-2 pb-2">
             <ProcExpanded project={project.name} proc={proc} />
           </td>
         </tr>
@@ -232,6 +349,7 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
         <tr className="text-[10px] uppercase tracking-wide text-gray-400 border-b border-gray-200">
           <th className="py-1 pl-1 pr-2 text-left font-medium">{showWorkspace ? 'Workspace' : 'Process'}</th>
           <th className="px-2 text-left font-medium">Status</th>
+          <th className="px-2 text-right font-medium">Up</th>
           <th className="px-2 text-right font-medium">PID</th>
           <th className="px-2 text-right font-medium">CPU</th>
           <th className="px-2 text-right font-medium">Mem</th>
@@ -318,14 +436,11 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
             <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
           </button>
           <span className={`text-[10px] tabular-nums truncate ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-400'}`}>
-            {statusLabel(proc)} · pid {proc.pid || '—'} · {cpuLabel(proc)} · {humanizeBytes(proc.memoryRss)}
+            {statusLabel(proc)} · up {uptimeLabel(proc)} · pid {proc.pid || '—'}
           </span>
-          {ports.map(port => (
-            <a key={port} href={`http://localhost:${port}`} target="_blank" rel="noreferrer"
-              className="text-[10px] tabular-nums text-blue-500 hover:underline" onClick={e => e.stopPropagation()}>
-              :{port}
-            </a>
-          ))}
+          <CpuBars project={project.name} proc={proc} />
+          <MemoryGauge project={project.name} proc={proc} />
+          {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
           <div className="flex-1" />
           {controls}
         </div>

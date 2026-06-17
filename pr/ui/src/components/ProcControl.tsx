@@ -1,6 +1,7 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { aggregateDotClass, crashedSummary } from '../utils';
+import { ProcessPortLink } from './ProcessTable';
 
 interface Props {
   repo: string;
@@ -64,19 +65,7 @@ export function ProcControl({ project, status, onEdit }: Props) {
         </>
       )}
 
-      {ports.map(port => (
-        <a
-          key={port}
-          href={`http://localhost:${port}`}
-          target="_blank"
-          rel="noreferrer"
-          title={`Open localhost:${port}`}
-          onClick={(e) => e.stopPropagation()}
-          className="text-[10px] tabular-nums text-blue-500 hover:underline mr-0.5"
-        >
-          :{port}
-        </a>
-      ))}
+      {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
 
       {onEdit && <IconBtn icon="codicon:gear" title="Edit directory" onClick={() => onEdit(project)} />}
     </span>
