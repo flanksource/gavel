@@ -1,4 +1,5 @@
 import type { RateLimit } from '../types';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   fetchedAt: string;
@@ -24,7 +25,7 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <span className="inline-flex items-center gap-1 font-mono" title={`Refreshes every ${nextFetchIn}s`}>
-        <iconify-icon icon="codicon:clock" />
+        <GavelIcon name="codicon:clock" />
         {ago}
         {paused
           ? <span className="text-yellow-600 dark:text-yellow-400">(paused)</span>
@@ -35,14 +36,14 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
         className={`transition-colors ${paused ? 'text-yellow-600 hover:text-foreground' : 'hover:text-foreground'}`}
         title={paused ? 'Resume polling' : 'Pause polling'}
       >
-        <iconify-icon icon={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
+        <GavelIcon name={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
       </button>
       <button
         onClick={onRefresh}
         className={`transition-colors ${networkBusy ? 'text-primary' : 'hover:text-primary'}`}
         title={networkBusy ? 'Loading...' : 'Refresh now'}
       >
-        <iconify-icon icon={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
+        <GavelIcon name={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
       </button>
       {rateLimit && (
         <span
@@ -55,7 +56,7 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
       )}
       {error && (
         <span className="text-red-600 dark:text-red-400 inline-flex items-center gap-1" title={error}>
-          <iconify-icon icon="codicon:warning" />
+          <GavelIcon name="codicon:warning" />
         </span>
       )}
     </div>

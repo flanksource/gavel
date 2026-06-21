@@ -3,6 +3,7 @@ import { DropdownMenu } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { flattenProcesses, aggregateDotClass } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   projects: Project[];
@@ -45,7 +46,7 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
       title="Processes"
       aria-label="Processes"
     >
-      <iconify-icon icon="codicon:server-process" className="text-gray-500 text-sm" />
+      <GavelIcon name="codicon:server-process" className="text-gray-500 text-sm" />
       <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
       <span className="tabular-nums text-gray-700">{running}/{procs.length}</span>
       {crashed > 0 && <span className="tabular-nums text-red-600">⚠{crashed}</span>}
@@ -56,8 +57,21 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
     <DropdownMenu trigger={trigger} align="right" menuLabel="Processes" menuClassName="w-[720px] max-w-[90vw]">
       {() => (
         <div className="p-2">
-          <div className="px-1 pb-1 text-xs font-semibold text-gray-600">
-            Processes <span className="text-gray-400 font-normal">· {running} running of {procs.length}</span>
+          <div className="flex items-center justify-between gap-2 px-1 pb-1 text-xs font-semibold text-gray-600">
+            <span>
+              Processes <span className="text-gray-400 font-normal">· {running} running of {procs.length}</span>
+            </span>
+            <a
+              href="/processes"
+              target="_blank"
+              rel="noreferrer"
+              title="Open processes full page"
+              aria-label="Open processes full page"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              onClick={e => e.stopPropagation()}
+            >
+              <GavelIcon name="codicon:link-external" className="text-sm" />
+            </a>
           </div>
           <div className="max-h-[60vh] overflow-y-auto divide-y divide-gray-100">
             {workspaces.map(w => (

@@ -1,4 +1,5 @@
 import { useTheme } from '@flanksource/clicky-ui/hooks';
+import { GavelIcon } from './GavelIcon';
 
 // Cycles light -> dark -> system. The icon reflects the *resolved* theme so
 // the user sees what's currently rendered; the title shows the explicit mode.
@@ -25,7 +26,7 @@ export function ThemeToggle() {
       aria-label={`Switch theme (currently ${theme})`}
       className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
-      <iconify-icon icon={icon} className="text-base" />
+      <GavelIcon name={icon} className="text-base" />
     </button>
   );
 }

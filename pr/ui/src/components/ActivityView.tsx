@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { timeAgo } from '../utils';
+import { GavelIcon } from './GavelIcon';
 
 const KIND_LABELS: Record<string, string> = {
   rest: 'REST',
@@ -71,7 +72,7 @@ export function ActivityView() {
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-foreground">
-            <iconify-icon icon="codicon:pulse" className="mr-1.5 text-blue-600" />
+            <GavelIcon name="codicon:pulse" className="mr-1.5 text-blue-600" />
             HTTP Activity
           </h2>
           <button
@@ -79,7 +80,7 @@ export function ActivityView() {
             className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground"
             title="Clear all recorded activity"
           >
-            <iconify-icon icon="codicon:trash" className="mr-1" />
+            <GavelIcon name="codicon:trash" className="mr-1" />
             Reset
           </button>
         </div>
@@ -172,7 +173,7 @@ function KPI({ label, value, sub, subClass, icon }: { label: string; value: stri
   return (
     <div className="bg-card border border-border rounded-md p-3">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <iconify-icon icon={icon} />
+        <GavelIcon name={icon} />
         {label}
       </div>
       <div className="text-2xl font-semibold text-foreground mt-1">{value}</div>
@@ -229,7 +230,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       <td className="px-3 py-1.5 text-center">
         {entry.fromCache ? (
           <span className="text-green-600" title="Served from cache (304)">
-            <iconify-icon icon="codicon:check" />
+            <GavelIcon name="codicon:check" />
           </span>
         ) : (
           <span className="text-muted-foreground/50">—</span>
@@ -245,7 +246,7 @@ function CachePanel({ cache }: { cache: CacheStatus }) {
     <div className={`bg-card border rounded-md mb-4 p-3 ${cache.enabled ? 'border-border' : 'border-amber-300 bg-amber-50'}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <iconify-icon icon="codicon:database" className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
+          <GavelIcon name="codicon:database" className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
           <span className="text-xs font-semibold text-muted-foreground uppercase">Cache</span>
           <span className={`text-xs px-2 py-0.5 rounded ${cache.enabled ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
             {cache.enabled ? 'ENABLED' : 'DISABLED'}
@@ -253,7 +254,7 @@ function CachePanel({ cache }: { cache: CacheStatus }) {
         </div>
         {cache.error && (
           <span className="text-xs text-amber-700" title={cache.error}>
-            <iconify-icon icon="codicon:warning" className="mr-1" />
+            <GavelIcon name="codicon:warning" className="mr-1" />
             {cache.error}
           </span>
         )}

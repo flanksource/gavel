@@ -2,6 +2,7 @@ import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { aggregateDotClass, crashedSummary } from '../utils';
 import { ProcessPortLink } from './ProcessTable';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   repo: string;
@@ -11,8 +12,8 @@ interface Props {
   onEdit?: (project: Project) => void;
 }
 
-// IconBtn is a clicky ghost icon button wrapping an iconify glyph, so we keep
-// the codicon vocabulary while using clicky-ui's button chrome.
+// IconBtn is a clicky ghost icon button wrapping an offline SVG glyph, so we
+// keep the codicon vocabulary while using clicky-ui's button chrome.
 function IconBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
   return (
     <Button
@@ -22,7 +23,7 @@ function IconBtn({ icon, title, onClick }: { icon: string; title: string; onClic
       aria-label={title}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
-      <iconify-icon icon={icon} className="text-sm" />
+      <GavelIcon name={icon} className="text-sm" />
     </Button>
   );
 }
@@ -52,7 +53,7 @@ export function ProcControl({ project, status, onEdit }: Props) {
     <span className="inline-flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
       {transitioning ? (
         <span className="inline-flex items-center gap-0.5 mr-0.5" title={`${running}/${total} running`}>
-          <iconify-icon icon="svg-spinners:ring-resize" className="text-yellow-500 text-xs" />
+          <GavelIcon name="svg-spinners:ring-resize" className="text-yellow-500 text-xs" />
           <span className="text-[10px] text-muted-foreground">{restarting ? 'restarting' : 'starting'}…</span>
         </span>
       ) : (

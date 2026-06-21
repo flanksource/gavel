@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/github"
@@ -165,6 +167,28 @@ func TestParseRouteRequestAcceptHeader(t *testing.T) {
 			t.Errorf("expected markdown export, got ok=%v export=%v format=%q", ok, req.IsExport, req.Format)
 		}
 	})
+}
+
+func TestHandleRouteMenubar(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	for _, path := range []string{"/menubar", "/processes"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+
+			s.handleRoute(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status: got %d want %d", rec.Code, http.StatusOK)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+				t.Fatalf("content-type: got %q want text/html", ct)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, "gavel · PR Dashboard") {
+				t.Fatalf("body does not look like the PR UI shell")
+			}
+		})
+	}
 }
 
 func TestFindPRNode(t *testing.T) {

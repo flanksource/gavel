@@ -1,7 +1,10 @@
 import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+const require = createRequire(import.meta.url);
 
 // Frontend build version, baked in so the Settings panel can show which UI
 // bundle is embedded — and reveal drift from the Go binary's own version.
@@ -20,6 +23,15 @@ const uiDate = new Date().toISOString();
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    dedupe: ['react', 'react-dom', '@tanstack/react-query'],
+    alias: [
+      { find: /^react$/, replacement: require.resolve('react') },
+      { find: /^react-dom$/, replacement: require.resolve('react-dom') },
+      { find: /^react-dom\/client$/, replacement: require.resolve('react-dom/client') },
+      { find: /^@tanstack\/react-query$/, replacement: require.resolve('@tanstack/react-query') },
+    ],
+  },
   // Lib/IIFE builds don't auto-replace process.env.NODE_ENV, which React and
   // @tanstack/react-query reference at runtime — define it so the bundle has no
   // bare `process` reference in the browser.

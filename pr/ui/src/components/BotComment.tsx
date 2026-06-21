@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { PRComment } from '../types';
 import { Markdown } from './Markdown';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   comment: PRComment;
@@ -44,7 +45,7 @@ function VercelComment({ comment }: Props) {
           rel="noopener"
           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-md text-blue-700 hover:bg-blue-100 transition-colors mb-2"
         >
-          <iconify-icon icon="codicon:link-external" className="text-xs" />
+          <GavelIcon name="codicon:link-external" className="text-xs" />
           <span className="font-medium">Preview Deployment</span>
         </a>
       )}
@@ -52,7 +53,7 @@ function VercelComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
         onClick={() => setShowFull(!showFull)}
       >
-        <iconify-icon icon={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
       </button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
@@ -92,7 +93,7 @@ function CopilotComment({ comment }: Props) {
         part.type === 'suggestion' ? (
           <div key={i} className="my-1.5">
             <div className="text-[10px] text-green-700 font-medium mb-0.5 flex items-center gap-1">
-              <iconify-icon icon="codicon:lightbulb" />
+              <GavelIcon name="codicon:lightbulb" />
               Suggested change
             </div>
             <pre className="bg-green-50 border border-green-200 rounded p-2 text-xs overflow-x-auto">
@@ -130,7 +131,7 @@ function CodeRabbitComment({ comment }: Props) {
     <div className="text-xs">
       {actionableCount !== null && (
         <div className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
-          <iconify-icon icon="codicon:comment-discussion" className="text-purple-500" />
+          <GavelIcon name="codicon:comment-discussion" className="text-purple-500" />
           {actionableCount} actionable comment{actionableCount !== 1 ? 's' : ''} posted
         </div>
       )}
@@ -138,7 +139,7 @@ function CodeRabbitComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
         onClick={() => setShowFull(!showFull)}
       >
-        <iconify-icon icon={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide full review' : 'Show full review'}
       </button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
@@ -183,7 +184,7 @@ function GavelComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
         onClick={() => setShowFull(!showFull)}
       >
-        <iconify-icon icon={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
       </button>
       {showFull && <Markdown text={body} className="text-xs text-gray-600 mt-1" />}
@@ -205,7 +206,7 @@ export function BotBadge({ botType }: { botType: string }) {
   if (!info) return null;
   return (
     <span className={`inline-flex items-center gap-0.5 text-[10px] ${info.color} opacity-70`}>
-      <iconify-icon icon={info.icon} className="text-[10px]" />
+      <GavelIcon name={info.icon} className="text-[10px]" />
       {info.label}
     </span>
   );

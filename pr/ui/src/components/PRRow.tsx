@@ -2,6 +2,7 @@ import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
 import { reviewColor, checkSummaryText, timeAgo } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
 import { Avatar } from './Avatar';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   pr: PRItem;
@@ -51,7 +52,7 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
   if (g.error) {
     return (
       <span className="inline-flex items-center text-yellow-600" title={`gavel: ${g.error}`}>
-        <iconify-icon icon="codicon:warning" />
+        <GavelIcon name="codicon:warning" />
       </span>
     );
   }
@@ -101,7 +102,7 @@ function GavelBadges({ g }: { g: GavelResultsSummary }) {
     <span className="inline-flex items-center gap-1" aria-label="gavel results">
       {items.map((it, i) => (
         <span key={i} className={`inline-flex items-center ${it.color} tabular-nums leading-none`} title={it.title}>
-          <iconify-icon icon={it.icon} className="text-[12px]" />
+          <GavelIcon name={it.icon} className="text-[12px]" />
           <span className="text-[11px] font-medium">{it.count}</span>
         </span>
       ))}
@@ -126,7 +127,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
           title={unread ? 'Unread — updated since last view' : ''}
           aria-label={unread ? 'unread' : ''}
         />
-        <iconify-icon icon={status.icon} className={`text-sm ${status.color} shrink-0`} title={status.title} />
+        <GavelIcon name={status.icon} className={`text-sm ${status.color} shrink-0`} title={status.title} />
         <a
           href={pr.url}
           target="_blank"
@@ -140,7 +141,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
         <span className="text-sm truncate flex-1 font-medium text-foreground">{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
-            <iconify-icon icon="octicon:git-merge-16" className="text-red-500" />
+            <GavelIcon name="octicon:git-merge-16" className="text-red-500" />
           </span>
         )}
         {pr.isCurrent && (
@@ -155,12 +156,12 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
 
       <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
-          <iconify-icon icon="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+          <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
           {pr.source}
         </span>
         <span>→</span>
         <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
-          <iconify-icon icon="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+          <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
           {pr.target}
         </span>
 
