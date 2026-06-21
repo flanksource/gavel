@@ -41,7 +41,7 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			return runCommitLint(rctx, workDir, requested, files)
 		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+		OnEvent: newAIFixRenderer(aiCfg),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)

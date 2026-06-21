@@ -88,7 +88,10 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		t["stderr"] = p.Stderr
 		t["exitCode"] = p.ExitCode
 		combined := p.Stdout + p.Stderr
-		dups := duplicateLines(combined)
+		// width 0: settle unbounded. Fixture stdout/stderr are captured without a
+		// known terminal width here, so wrapping is left to the dedicated
+		// `gavel test ansi` capture which records the PTY width it used.
+		dups := duplicateLines(combined, 0)
 		dupList := make([]map[string]any, 0, len(dups))
 		for _, d := range dups {
 			dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
@@ -101,7 +104,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			"has_cursor_show": hasCursorShow(combined),
 			"has_reset":       hasSGRReset(combined),
 			"stray_controls":  hasStrayControls(combined),
-			"final_text":      finalText(combined),
+			"final_text":      finalText(combined, 0),
 			"duplicate_lines": dupList,
 			"has_duplicates":  len(dups) > 0,
 		}

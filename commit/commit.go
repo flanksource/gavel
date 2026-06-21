@@ -288,6 +288,10 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 
 	analysis, err := generateCommitAnalysis(ctx, opts, source.Diff)
 	if err != nil {
+		if isTokenLimitError(err) {
+			logger.Infof("staged diff exceeds model context window, splitting commit by directory")
+			return commitByDirectory(ctx, opts, source, result)
+		}
 		return result, fmt.Errorf("generate commit analysis: %w", err)
 	}
 	result.Message = analysis.Message
@@ -446,6 +450,20 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	result.Lint = lintRes
 	if lintErr != nil {
 		return result, lintErr
+	}
+
+	return commitByDirectory(ctx, opts, source, result)
+}
+
+// commitByDirectory groups the staged changes by directory and creates one
+// commit per group. It backs `--commit-all` and is also the fallback when a
+// single-commit AI analysis overflows the model context window.
+func commitByDirectory(ctx context.Context, opts Options, source stagedSource, result *Result) (*Result, error) {
+	if opts.MaxFiles == 0 {
+		opts.MaxFiles = defaultMaxFiles
+	}
+	if opts.MaxLines == 0 {
+		opts.MaxLines = defaultMaxLines
 	}
 
 	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)

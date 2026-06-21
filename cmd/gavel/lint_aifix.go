@@ -40,7 +40,7 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 			rerunOpts.AIFix = false
 			return executeLinters(rerunOpts)
 		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+		OnEvent: newAIFixRenderer(aiCfg),
 	})
 	if err != nil {
 		return initial, err
