@@ -16,7 +16,6 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/pr/menubar"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/service"
 	"github.com/timberio/go-datemath"
@@ -297,7 +296,7 @@ func runPRUI(opts PRListOptions) error {
 	syncer.Start(ctx)
 
 	var dashboardURL string
-	if opts.UI {
+	if opts.UI || opts.MenuBar {
 		port, listener, err := bindUIListener(opts.Port)
 		if err != nil {
 			return err
@@ -317,13 +316,13 @@ func runPRUI(opts PRListOptions) error {
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 		logger.Infof("PR Dashboard at %s", dashboardURL)
-		openBrowser(dashboardURL)
+		if opts.UI {
+			openBrowser(dashboardURL)
+		}
 	}
 
 	if opts.MenuBar {
-		mb := menubar.New(srv)
-		mb.DashboardURL = dashboardURL
-		return mb.Run()
+		return runMenuBar(srv, dashboardURL)
 	}
 
 	sig := make(chan os.Signal, 1)

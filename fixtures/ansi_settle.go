@@ -23,10 +23,18 @@ type DupLine struct {
 //   - CR (\r)                column 0
 //   - LF (\n)                new row (auto-scroll append)
 //
+// When width > 0 the grid auto-wraps printable output at that column (DEC
+// pending-wrap semantics), so a line longer than the terminal occupies multiple
+// *physical* rows and cursor moves operate on those physical rows. This is what
+// surfaces wrap-induced redraw bugs: a renderer that emits a cursor-up sized by
+// logical line count lands mid-content when the content wrapped, leaving the
+// smear behind. width <= 0 disables wrapping (rows grow unbounded — the legacy
+// behavior for callers that don't know the terminal width).
+//
 // Unknown escapes are dropped. This is deliberately minimal: clicky's
 // renderer only uses the sequences above, and settling a full VT100 is out
 // of scope.
-func settleANSI(raw string) string {
+func settleANSI(raw string, width int) string {
 	var rows [][]byte
 	rows = append(rows, nil)
 	row := 0
@@ -38,7 +46,22 @@ func settleANSI(raw string) string {
 		}
 	}
 
+	clampCol := func() {
+		if width > 0 && col > width-1 {
+			col = width - 1
+		}
+	}
+
 	writeRune := func(b byte) {
+		if width > 0 && col >= width {
+			// Pending wrap: the previous glyph filled the last column; the next
+			// printable advances to the start of a new physical row.
+			row++
+			col = 0
+			for row >= len(rows) {
+				rows = append(rows, nil)
+			}
+		}
 		ensureCol(row, col)
 		if col < len(rows[row]) {
 			rows[row][col] = b
@@ -96,6 +119,7 @@ func settleANSI(raw string) string {
 				if col < 0 {
 					col = 0
 				}
+				clampCol()
 			case 'H', 'f':
 				// cursor position: default 1;1
 				r, c := parseTwoParams(params, 1, 1)
@@ -107,6 +131,7 @@ func settleANSI(raw string) string {
 				if col < 0 {
 					col = 0
 				}
+				clampCol()
 				for row >= len(rows) {
 					rows = append(rows, nil)
 				}
@@ -261,8 +286,8 @@ func parseTwoParams(params string, d1, d2 int) (int, int) {
 // the ANSI-settled view of raw. Leading/trailing whitespace is trimmed for
 // the comparison so spinner frames like " ⠋ task" and "  ⠋ task" don't
 // spuriously differ.
-func duplicateLines(raw string) []DupLine {
-	settled := settleANSI(raw)
+func duplicateLines(raw string, width int) []DupLine {
+	settled := settleANSI(raw, width)
 	counts := make(map[string]int)
 	order := []string{}
 	for _, line := range strings.Split(settled, "\n") {
@@ -285,13 +310,13 @@ func duplicateLines(raw string) []DupLine {
 }
 
 // finalText exposes settleANSI under a name that reads well in CEL.
-func finalText(raw string) string {
-	return settleANSI(raw)
+func finalText(raw string, width int) string {
+	return settleANSI(raw, width)
 }
 
 // Debug_SettleANSI is an exported wrapper for the hack/ analysis scripts.
 // Not part of the public API — named with underscore to discourage use.
-func Debug_SettleANSI(raw string) string { return settleANSI(raw) }
+func Debug_SettleANSI(raw string, width int) string { return settleANSI(raw, width) }
 
 // Debug_DuplicateLines is an exported wrapper for hack/ analysis scripts.
-func Debug_DuplicateLines(raw string) []DupLine { return duplicateLines(raw) }
+func Debug_DuplicateLines(raw string, width int) []DupLine { return duplicateLines(raw, width) }
