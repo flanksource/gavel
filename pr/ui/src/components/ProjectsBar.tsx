@@ -1,5 +1,6 @@
 import type { Project, ProcStatus } from '../types';
 import { ProcControl } from './ProcControl';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   /** Projects whose repos have no PRs in the current list (pinned above it). */
@@ -26,7 +27,7 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
         const key = p.repos[0] || p.name;
         return (
           <div key={p.name} className="pl-6 pr-3 py-1.5 flex items-center gap-2 hover:bg-muted">
-            <iconify-icon icon="codicon:folder" className="text-muted-foreground shrink-0" />
+            <GavelIcon name="codicon:folder" className="text-muted-foreground shrink-0" />
             <span className="text-sm font-medium text-foreground truncate flex-1" title={p.dir}>{p.name}</span>
             <ProcControl
               repo={key}
@@ -44,7 +45,7 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
         title="Add a local workspace directory"
         className="w-full pl-6 pr-3 py-1.5 flex items-center gap-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
-        <iconify-icon icon="codicon:add" className="shrink-0" />
+        <GavelIcon name="codicon:add" className="shrink-0" />
         Add directory
       </button>
     </div>

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Version } from '@flanksource/clicky-ui/data';
 import type { HealthStatus, RateLimit, Severity } from '../types';
+import { GavelIcon } from './GavelIcon';
 
 // Colored dot in the PR UI header. The dropdown owns the operational status,
 // PR poller controls, GitHub rate-limit details, and build versions so the app
@@ -232,7 +233,7 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <iconify-icon icon={cfg.icon} className={`${cfg.color} text-sm`} />
+        <GavelIcon name={cfg.icon} className={`${cfg.color} text-sm`} />
         <div className="min-w-0 flex-1">
           <div className={`font-medium ${cfg.color}`}>{cfg.label}</div>
           <div className="text-[11px] text-muted-foreground">
@@ -269,7 +270,7 @@ function ActionButton({ icon, label, onClick }: { icon: string; label: string; o
       title={label}
       className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
-      <iconify-icon icon={icon} className="text-xs" />
+      <GavelIcon name={icon} className="text-xs" />
       {label}
     </button>
   );

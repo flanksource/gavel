@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { WorkflowRun, Job } from '../types';
 import { statusIcon, statusColor } from '../utils';
 import { LogViewer } from './LogViewer';
+import { GavelIcon } from './GavelIcon';
 
 interface JobLogsResponse {
   jobId: number;
@@ -32,7 +33,7 @@ function IndeterminateProgress() {
   return (
     <div className="ml-4 mt-1 mb-1">
       <div className="flex items-center gap-1.5 text-[10px] text-blue-600 mb-0.5">
-        <iconify-icon icon="svg-spinners:ring-resize" />
+        <GavelIcon name="svg-spinners:ring-resize" />
         <span>Fetching logs from GitHub…</span>
       </div>
       <div className="h-1 w-full max-w-xs bg-blue-100 rounded overflow-hidden relative">
@@ -61,8 +62,8 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
         className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
         onClick={() => setExpanded(!expanded)}
       >
-        <iconify-icon
-          icon={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+        <GavelIcon
+          name={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
           className="text-muted-foreground text-[10px]"
         />
         <span className={statusColor(run.status, run.conclusion)}>
@@ -78,7 +79,7 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
             className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <iconify-icon icon="codicon:link-external" className="text-xs" />
+            <GavelIcon name="codicon:link-external" className="text-xs" />
           </a>
         )}
       </div>
@@ -162,7 +163,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
             className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <iconify-icon icon="codicon:link-external" className="text-[10px]" />
+            <GavelIcon name="codicon:link-external" className="text-[10px]" />
           </a>
         )}
       </div>
@@ -179,8 +180,8 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
               className="cursor-pointer hover:bg-muted rounded px-1 -mx-1 inline-flex items-center gap-1"
               onClick={() => toggleStep(step.number)}
             >
-              <iconify-icon
-                icon={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+              <GavelIcon
+                name={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
                 className="text-muted-foreground text-[9px]"
               />
               <span className={statusColor(step.status, step.conclusion)}>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { Org, SearchConfig } from '../types';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   config: SearchConfig;
@@ -120,10 +121,10 @@ export function OrgChooser({ config, onChange }: Props) {
         {activeOrgMeta?.avatarUrl ? (
           <img src={activeOrgMeta.avatarUrl} alt={activeOrg} className="w-4 h-4 rounded-sm" />
         ) : (
-          <iconify-icon icon="codicon:organization" className="text-sm" />
+          <GavelIcon name="codicon:organization" className="text-sm" />
         )}
         <span className="font-medium">{label}</span>
-        <iconify-icon icon="codicon:chevron-down" className="text-[10px]" />
+        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
       </button>
 
       {open && (
@@ -134,9 +135,9 @@ export function OrgChooser({ config, onChange }: Props) {
             }`}
             onClick={chooseMe}
           >
-            <iconify-icon icon="codicon:person" className="text-base" />
+            <GavelIcon name="codicon:person" className="text-base" />
             <span className="flex-1">@me (my PRs)</span>
-            {!config.all && <iconify-icon icon="codicon:check" className="text-xs" />}
+            {!config.all && <GavelIcon name="codicon:check" className="text-xs" />}
           </button>
 
           <button
@@ -145,9 +146,9 @@ export function OrgChooser({ config, onChange }: Props) {
             }`}
             onClick={chooseAllOrgs}
           >
-            <iconify-icon icon="codicon:globe" className="text-base" />
+            <GavelIcon name="codicon:globe" className="text-base" />
             <span className="flex-1">All orgs (default)</span>
-            {config.all && !activeOrg && <iconify-icon icon="codicon:check" className="text-xs" />}
+            {config.all && !activeOrg && <GavelIcon name="codicon:check" className="text-xs" />}
           </button>
 
           <div className="border-t border-border my-1" />
@@ -172,16 +173,16 @@ export function OrgChooser({ config, onChange }: Props) {
                 >
                   {o.avatarUrl
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0" />
-                    : <iconify-icon icon="codicon:organization" className="text-base" />}
+                    : <GavelIcon name="codicon:organization" className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
-                  {selected && <iconify-icon icon="codicon:check" className="text-xs" />}
+                  {selected && <GavelIcon name="codicon:check" className="text-xs" />}
                 </button>
                 <button
                   className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
-                  <iconify-icon icon="codicon:eye-closed" className="text-xs" />
+                  <GavelIcon name="codicon:eye-closed" className="text-xs" />
                 </button>
               </div>
             );
@@ -194,7 +195,7 @@ export function OrgChooser({ config, onChange }: Props) {
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 onClick={() => setShowHidden(v => !v)}
               >
-                <iconify-icon icon={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
+                <GavelIcon name={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
                 <span className="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
               </button>
               {showHidden && hiddenOrgs.map(o => (
@@ -204,14 +205,14 @@ export function OrgChooser({ config, onChange }: Props) {
                 >
                   {o.avatarUrl
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
-                    : <iconify-icon icon="codicon:organization" className="text-base" />}
+                    : <GavelIcon name="codicon:organization" className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
                   <button
                     className="text-muted-foreground hover:text-primary transition-colors"
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >
-                    <iconify-icon icon="codicon:eye" className="text-xs" />
+                    <GavelIcon name="codicon:eye" className="text-xs" />
                   </button>
                 </div>
               ))}

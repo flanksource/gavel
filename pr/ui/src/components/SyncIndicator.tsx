@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { PRSyncStatus } from '../types';
 import { timeAgo } from '../utils';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   status: PRSyncStatus;
@@ -42,7 +43,7 @@ export function SyncIndicator({ status }: Props) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <iconify-icon icon={cfg.icon} className={`${cfg.color} text-[11px]`} title={cfg.title} />
+      <GavelIcon name={cfg.icon} className={`${cfg.color} text-[11px]`} title={cfg.title} />
       {hover && <HoverCard status={status} />}
     </span>
   );

@@ -354,6 +354,11 @@ func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/prs", http.StatusFound)
 		return
 	}
+	if (r.URL.Path == "/menubar" || r.URL.Path == "/processes") && r.URL.RawQuery == "" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, pageHTML())
+		return
+	}
 	req, ok := parseRouteRequest(r)
 	if !ok {
 		http.NotFound(w, r)
@@ -392,7 +397,6 @@ func pageHTML() string {
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
     <style>` + bundleCSS + `</style>
-    <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
     <style>
         @keyframes gavel-progress-slide {
             0%   { left: -35%; }

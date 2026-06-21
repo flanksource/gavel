@@ -7,6 +7,7 @@ import { Avatar } from './Avatar';
 import { WorkflowRunView } from './WorkflowView';
 import { BotCommentBody, BotBadge } from './BotComment';
 import type { WorkflowRun } from '../types';
+import { GavelIcon } from './GavelIcon';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -89,14 +90,14 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
 
       {loading && !detail && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground mt-4">
-          <iconify-icon icon="svg-spinners:ring-resize" className="text-blue-500" />
+          <GavelIcon name="svg-spinners:ring-resize" className="text-blue-500" />
           Loading details...
         </div>
       )}
 
       {detail?.error && (
         <div className="mt-3 p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700">
-          <iconify-icon icon="codicon:error" className="mr-1" />
+          <GavelIcon name="codicon:error" className="mr-1" />
           {detail.error}
         </div>
       )}
@@ -129,7 +130,7 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
       <div className="pt-3 mt-3 border-t border-border">
         <a href={pr.url} target="_blank" rel="noopener"
           className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline">
-          <iconify-icon icon="codicon:link-external" />
+          <GavelIcon name="codicon:link-external" />
           Open on GitHub
         </a>
       </div>
@@ -203,7 +204,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
               <>
                 <span className="text-muted-foreground/50">|</span>
                 <span className={m === 'MERGEABLE' ? 'text-green-600' : m === 'CONFLICTING' ? 'text-red-600' : 'text-yellow-600'}>
-                  {m === 'CONFLICTING' && <iconify-icon icon="codicon:git-merge" className="mr-0.5" />}
+                  {m === 'CONFLICTING' && <GavelIcon name="codicon:git-merge" className="mr-0.5" />}
                   {m}
                 </span>
               </>
@@ -251,8 +252,8 @@ function CommentView({ comment }: { comment: PRComment }) {
           @{comment.author}
           {comment.botType && <BotBadge botType={comment.botType} />}
         </span>
-        <iconify-icon
-          icon={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
+        <GavelIcon
+          name={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
           className="text-muted-foreground shrink-0 text-[10px] mt-1"
         />
       </div>
@@ -329,7 +330,7 @@ function DeploymentRow({ project }: { project: VercelProject }) {
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
     >
       <div className="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-muted text-sm transition-colors">
-        <iconify-icon icon={st.icon} className={`${st.color} text-xs`} />
+        <GavelIcon name={st.icon} className={`${st.color} text-xs`} />
         <a href={project.previewUrl} target="_blank" rel="noopener"
           className="text-blue-600 hover:underline font-medium flex-1 truncate"
         >
@@ -340,29 +341,29 @@ function DeploymentRow({ project }: { project: VercelProject }) {
           title="Build output"
           onClick={(e) => e.stopPropagation()}
         >
-          <iconify-icon icon="codicon:server-process" className="text-xs" />
+          <GavelIcon name="codicon:server-process" className="text-xs" />
         </a>
       </div>
       {hover && (
         <div className="absolute left-0 top-full z-50 mt-0.5 w-72 bg-popover border border-border rounded-lg shadow-lg p-3 text-xs">
           <div className="flex items-center gap-1.5 mb-2">
-            <iconify-icon icon="simple-icons:vercel" className="text-sm" />
+            <GavelIcon name="simple-icons:vercel" className="text-sm" />
             <span className="font-semibold text-foreground">{project.name}</span>
             <span className={`ml-auto inline-flex items-center gap-1 ${st.color}`}>
-              <iconify-icon icon={st.icon} className="text-[10px]" />
+              <GavelIcon name={st.icon} className="text-[10px]" />
               {st.label}
             </span>
           </div>
           <div className="space-y-1.5 text-muted-foreground">
             <div className="flex items-center gap-1.5">
-              <iconify-icon icon="codicon:link-external" className="text-muted-foreground text-[10px] shrink-0" />
+              <GavelIcon name="codicon:link-external" className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.previewUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 {project.previewUrl.replace(/^https?:\/\//, '')}
               </a>
             </div>
             <div className="flex items-center gap-1.5">
-              <iconify-icon icon="codicon:server-process" className="text-muted-foreground text-[10px] shrink-0" />
+              <GavelIcon name="codicon:server-process" className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.inspectorUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 Build output
@@ -485,7 +486,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
               }`}
               onClick={() => setShowOutdated(!showOutdated)}
             >
-              <iconify-icon icon="codicon:eye" className="text-[10px]" />
+              <GavelIcon name="codicon:eye" className="text-[10px]" />
               {severityCounts._outdated} resolved
             </button>
           </>
@@ -527,8 +528,8 @@ function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
   const body = (
     <>
       <div className="flex items-center justify-between">
-        <iconify-icon icon={icon} className="text-lg" />
-        {href && <iconify-icon icon="codicon:chevron-right" className="text-xs opacity-30 group-hover:opacity-70" />}
+        <GavelIcon name={icon} className="text-lg" />
+        {href && <GavelIcon name="codicon:chevron-right" className="text-xs opacity-30 group-hover:opacity-70" />}
       </div>
       <div className="text-2xl font-semibold tabular-nums leading-tight mt-1">{value}</div>
       <div className="text-[11px] font-medium uppercase tracking-wide opacity-80">{label}</div>
@@ -627,8 +628,8 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
             onClick={() => setBreakdownOpen(o => !o)}
             aria-expanded={breakdownOpen}
           >
-            <iconify-icon
-              icon={breakdownOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+            <GavelIcon
+              name={breakdownOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
               className="text-muted-foreground"
             />
             <span className="font-semibold">Per-shard breakdown</span>
@@ -754,7 +755,7 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
   if (g.error) {
     return (
       <span className="inline-flex items-center text-yellow-600" title={g.error}>
-        <iconify-icon icon="codicon:warning" />
+        <GavelIcon name="codicon:warning" />
       </span>
     );
   }
@@ -779,7 +780,7 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
     <span className="inline-flex items-center gap-1 tabular-nums">
       {items.map((it, i) => (
         <span key={i} className={`inline-flex items-center ${it.color} leading-none`} title={it.title}>
-          <iconify-icon icon={it.icon} className="text-[12px]" />
+          <GavelIcon name={it.icon} className="text-[12px]" />
           <span className="text-[11px] font-medium">{it.count}</span>
         </span>
       ))}
@@ -801,8 +802,8 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <iconify-icon
-          icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+        <GavelIcon
+          name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
           className="text-muted-foreground text-[12px] shrink-0"
         />
         <span className="text-xs font-mono text-foreground truncate">{label}</span>
@@ -812,7 +813,7 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
         <div className="px-2 pb-3 pt-1">
           {results.error ? (
             <div className="text-xs text-muted-foreground py-1">
-              <iconify-icon icon="codicon:warning" className="text-yellow-500 mr-1" />
+              <GavelIcon name="codicon:warning" className="text-yellow-500 mr-1" />
               {results.error}
             </div>
           ) : cards.length === 0 ? (
@@ -848,7 +849,7 @@ function FailureList({ title, icon, iconColor, total, children }: {
   return (
     <div className="mt-3">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
-        <iconify-icon icon={icon} className={iconColor} />
+        <GavelIcon name={icon} className={iconColor} />
         <span className="font-semibold">{title}</span>
         <span className="text-muted-foreground normal-case tracking-normal">
           showing {shown} of {total}
@@ -868,9 +869,9 @@ function FailureHeader({ f, withChevron }: { f: TestFailure; withChevron: boolea
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
       {withChevron && (
-        <iconify-icon icon="codicon:chevron-right" className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
+        <GavelIcon name="codicon:chevron-right" className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
       )}
-      <iconify-icon icon="codicon:error" className="text-red-600 mt-0.5 shrink-0" />
+      <GavelIcon name="codicon:error" className="text-red-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="font-medium text-foreground truncate" title={f.name}>
           {f.suite ? <span className="text-muted-foreground">{f.suite} › </span> : null}
@@ -909,7 +910,7 @@ function LintViolationRow({ v }: { v: LintViolation }) {
   const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
-      <iconify-icon icon="codicon:warning" className="text-yellow-600 mt-0.5 shrink-0" />
+      <GavelIcon name="codicon:warning" className="text-yellow-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="font-medium text-foreground truncate">
           <span className="text-muted-foreground">{v.linter}</span>
@@ -962,7 +963,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'text' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('text', actions.text!()); }}
         >
-          <iconify-icon icon={copied === 'text' ? 'codicon:check' : 'codicon:copy'} className="text-sm" />
+          <GavelIcon name={copied === 'text' ? 'codicon:check' : 'codicon:copy'} className="text-sm" />
         </button>
       )}
       {actions.markdown && (
@@ -972,7 +973,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'markdown' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('markdown', actions.markdown!()); }}
         >
-          <iconify-icon icon={copied === 'markdown' ? 'codicon:check' : 'codicon:markdown'} className="text-sm" />
+          <GavelIcon name={copied === 'markdown' ? 'codicon:check' : 'codicon:markdown'} className="text-sm" />
         </button>
       )}
       {actions.json && (
@@ -982,7 +983,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground ${copied === 'json' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('json', JSON.stringify(actions.json!(), null, 2)); }}
         >
-          <iconify-icon icon={copied === 'json' ? 'codicon:check' : 'codicon:json'} className="text-sm" />
+          <GavelIcon name={copied === 'json' ? 'codicon:check' : 'codicon:json'} className="text-sm" />
         </button>
       )}
     </div>

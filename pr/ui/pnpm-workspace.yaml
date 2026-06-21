@@ -11,13 +11,6 @@ packages:
   - "."
   - "../../../clicky-ui/packages/ui"
 
-linkWorkspacePackages: true
-# Prefer the linked local clicky-ui even when the registry has a newer matching
-# version, so local edits always win. When the sibling is absent (CI) there is
-# no workspace package and clicky-ui resolves from the registry.
-preferWorkspacePackages: true
-catalogMode: prefer
-
 catalog:
   "@ai-sdk/react": ^3.0.201
   "@floating-ui/react": ^0.27.19
@@ -64,6 +57,7 @@ catalog:
   prettier: ^3.8.3
   react: ^18.3.1
   react-dom: ^18.3.1
+  react-grab: ^0.1.47
   shiki: ^1.24.0
   sonner: ^1.7.1
   storybook: ^8.6.18
@@ -73,3 +67,10 @@ catalog:
   vite: ^6.0.3
   vite-plugin-dts: ^4.3.0
   vitest: ^3.0.5
+catalogMode: prefer
+
+linkWorkspacePackages: true
+# Prefer the linked local clicky-ui even when the registry has a newer matching
+# version, so local edits always win. When the sibling is absent (CI) there is
+# no workspace package and clicky-ui resolves from the registry.
+preferWorkspacePackages: true

@@ -11,7 +11,8 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
-import { computeCounts, collectRepos, collectAuthors, filterPRs, prKey } from './utils';
+import { WorkspaceGroup } from './components/ProcessTable';
+import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey } from './utils';
 import {
   annotateRoutePaths,
   buildRoute,
@@ -21,10 +22,53 @@ import {
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
+import { GavelIcon } from './components/GavelIcon';
 
 type Tab = 'prs' | 'activity';
 
 const defaultConfig: SearchConfig = { repos: [] };
+
+type WebKitExternalBridge = {
+  webkit?: {
+    messageHandlers?: {
+      external?: {
+        postMessage: (message: string) => void;
+      };
+    };
+  };
+};
+
+const menubarOpenExternalMessage = 'gavel:open-external';
+const menubarPointerEnterMessage = 'gavel:pointer-enter';
+const menubarPointerLeaveMessage = 'gavel:pointer-leave';
+
+function postMenubarMessage(type: string, payload: Record<string, unknown> = {}) {
+  const bridge = (window as WebKitExternalBridge).webkit?.messageHandlers?.external;
+  if (!bridge) return false;
+  bridge.postMessage(JSON.stringify({ type, ...payload }));
+  return true;
+}
+
+function useMenubarExternalLinks() {
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest('a[href]');
+      if (!(anchor instanceof HTMLAnchorElement) || !anchor.href) return;
+
+      if (!postMenubarMessage(menubarOpenExternalMessage, { url: anchor.href })) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    };
+
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, []);
+}
 
 // aggregateShards rolls per-shard summaries into one badge for the sidebar,
 // where there is only room for a single number per PR. Returns null if the
@@ -111,6 +155,10 @@ export function App() {
   const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
 
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+  const isMenubar = pathname === '/menubar';
+  const isProcessesPage = pathname === '/processes';
+
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
   const routeState: RouteState = useMemo(
@@ -179,6 +227,7 @@ export function App() {
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
   useEffect(() => {
+    if (isMenubar || isProcessesPage) return;
     if (!selectedPath) {
       if (selected) { setSelected(null); setDetail(null); }
       return;
@@ -335,6 +384,16 @@ export function App() {
     loadPR(pr);
   }
 
+  function clearSelectedPR() {
+    if (detailESRef.current) {
+      detailESRef.current.close();
+      detailESRef.current = null;
+    }
+    setSelected(null);
+    setDetail(null);
+    setDetailLoading(false);
+  }
+
   function handleFiltersChange(next: Filters) {
     commitRoute({ ...routeState, filters: next });
   }
@@ -416,6 +475,38 @@ export function App() {
       (pr.target || '').toLowerCase().includes(q));
   }, [filtered, query]);
 
+  if (isMenubar) {
+    return (
+      <MenubarView
+        prs={searched}
+        selected={selected}
+        detail={detail}
+        detailLoading={detailLoading}
+        unread={unread}
+        projects={projects}
+        projectsByRepo={projectsByRepo}
+        procStatus={procStatus}
+        syncStatus={syncStatus}
+        gavelResults={gavelResultsMap}
+        onSelect={loadPR}
+        onBack={clearSelectedPR}
+        onProcChanged={onProcChanged}
+        fetchedAt={fetchedAt}
+        error={error}
+      />
+    );
+  }
+
+  if (isProcessesPage) {
+    return (
+      <ProcessesPage
+        projects={projects}
+        procStatus={procStatus}
+        onProcChanged={onProcChanged}
+      />
+    );
+  }
+
   return (
     <>
       <AppShell
@@ -424,7 +515,7 @@ export function App() {
         search={
           activeTab === 'prs' ? (
             <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
-              <iconify-icon icon="codicon:search" className="text-muted-foreground text-sm shrink-0" />
+              <GavelIcon name="codicon:search" className="text-muted-foreground text-sm shrink-0" />
               <input
                 value={query}
                 onChange={(e) => setQuery((e.target as HTMLInputElement).value)}
@@ -439,7 +530,7 @@ export function App() {
                   className="text-muted-foreground hover:text-foreground shrink-0"
                   aria-label="Clear search"
                 >
-                  <iconify-icon icon="codicon:close" className="text-xs" />
+                  <GavelIcon name="codicon:close" className="text-xs" />
                 </button>
               )}
             </div>
@@ -501,7 +592,7 @@ export function App() {
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   <div className="text-center">
-                    <iconify-icon icon="codicon:git-pull-request" className="text-4xl mb-2" />
+                    <GavelIcon name="codicon:git-pull-request" className="text-4xl mb-2" />
                     <p>Select a PR to view details</p>
                   </div>
                 </div>
@@ -515,6 +606,196 @@ export function App() {
 
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
     </>
+  );
+}
+
+function ProcessesPage({
+  projects,
+  procStatus,
+  onProcChanged,
+}: {
+  projects: Project[];
+  procStatus: Record<string, ProcStatus>;
+  onProcChanged: () => void;
+}) {
+  const workspaces = useMemo(
+    () => projects
+      .map(p => ({ project: p, status: procStatus[p.name] }))
+      .filter((w): w is { project: Project; status: ProcStatus } => !!w.status?.hasProcfile),
+    [projects, procStatus],
+  );
+  const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
+  const running = procs.filter(p => p.proc.status === 'running').length;
+  const dot = aggregateDotClass(procs.map(p => p.proc));
+
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7 shrink-0" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
+              <span className="text-sm font-semibold">Processes</span>
+            </div>
+            <div className="text-xs text-muted-foreground">{running} running of {procs.length}</div>
+          </div>
+        </div>
+        <a
+          href="/prs"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Back to PR dashboard"
+          aria-label="Back to PR dashboard"
+        >
+          <GavelIcon name="codicon:close" className="text-base" />
+        </a>
+      </header>
+
+      <main className="mx-auto w-full max-w-6xl px-4 py-4">
+        {workspaces.length > 0 ? (
+          <div className="divide-y divide-border border-y border-border">
+            {workspaces.map(w => (
+              <WorkspaceGroup key={w.project.name} project={w.project} status={w.status} onChanged={onProcChanged} />
+            ))}
+          </div>
+        ) : (
+          <div className="py-10 text-center text-sm text-muted-foreground">No Procfile projects configured</div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function MenubarView({
+  prs,
+  selected,
+  detail,
+  detailLoading,
+  unread,
+  projects,
+  projectsByRepo,
+  procStatus,
+  syncStatus,
+  gavelResults,
+  onSelect,
+  onBack,
+  onProcChanged,
+  fetchedAt,
+  error,
+}: {
+  prs: PRItem[];
+  selected: PRItem | null;
+  detail: PRDetail | null;
+  detailLoading: boolean;
+  unread: Record<string, boolean>;
+  projects: Project[];
+  projectsByRepo: Record<string, Project>;
+  procStatus: Record<string, ProcStatus>;
+  syncStatus: Record<string, PRSyncStatus>;
+  gavelResults: Record<string, GavelResultsSummary>;
+  onSelect: (pr: PRItem) => void;
+  onBack: () => void;
+  onProcChanged: () => void;
+  fetchedAt: string;
+  error?: string;
+}) {
+  useMenubarExternalLinks();
+
+  const workspaces = useMemo(
+    () => projects
+      .map(p => ({ project: p, status: procStatus[p.name] }))
+      .filter((w): w is { project: Project; status: ProcStatus } => !!w.status?.hasProcfile),
+    [projects, procStatus],
+  );
+  const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
+  const running = procs.filter(p => p.proc.status === 'running').length;
+  const dot = aggregateDotClass(procs.map(p => p.proc));
+  const failed = prs.filter(pr => pr.checkStatus?.failed && pr.checkStatus.failed > 0).length;
+  const unreadCount = prs.filter(pr => unread[prKey(pr)]).length;
+  const fetched = fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+  if (selected) {
+    return (
+      <div
+        className="h-screen overflow-hidden bg-background text-foreground"
+        onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
+        onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
+      >
+        <div className="flex h-11 items-center justify-between border-b border-border px-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Back to pull requests"
+              aria-label="Back to pull requests"
+            >
+              <GavelIcon name="codicon:arrow-left" className="text-base" />
+            </button>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{selected.repo}#{selected.number}</div>
+              <div className="truncate text-[11px] text-muted-foreground">{selected.title}</div>
+            </div>
+          </div>
+          <div className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+        </div>
+        <div className="h-[calc(100vh-44px)] overflow-hidden">
+          <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="h-screen overflow-hidden bg-background text-foreground"
+      onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
+      onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
+    >
+      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold leading-tight">Gavel</div>
+            <div className="truncate text-[11px] text-muted-foreground">
+              {running}/{procs.length} processes
+              {failed > 0 ? ` · ${failed} failing` : ''}
+              {unreadCount > 0 ? ` · ${unreadCount} unread` : ''}
+            </div>
+          </div>
+        </div>
+        <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+      </div>
+
+      <div className="h-[calc(100vh-45px)] overflow-y-auto">
+        <section className="border-b border-border p-2">
+          <div className="mb-1 px-1 text-xs font-semibold text-muted-foreground">Processes</div>
+          {workspaces.length > 0 ? (
+            <div className="divide-y divide-border">
+              {workspaces.map(w => (
+                <WorkspaceGroup key={w.project.name} project={w.project} status={w.status} onChanged={onProcChanged} />
+              ))}
+            </div>
+          ) : (
+            <div className="px-1 py-3 text-xs text-muted-foreground">No Procfile projects configured</div>
+          )}
+        </section>
+
+        <section>
+          <PRList
+            prs={prs}
+            selected={selected}
+            onSelect={onSelect}
+            unread={unread}
+            syncStatus={syncStatus}
+            gavelResults={gavelResults}
+            projectsByRepo={projectsByRepo}
+            procStatus={procStatus}
+            onProcChanged={onProcChanged}
+          />
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -535,7 +816,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
               : 'text-muted-foreground hover:bg-muted'
           }`}
         >
-          <iconify-icon icon={t.icon} className="mr-1" />
+          <GavelIcon name={t.icon} className="mr-1" />
           {t.label}
         </button>
       ))}
@@ -557,7 +838,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onJSON}
         title="Download current view as JSON"
       >
-        <iconify-icon icon="codicon:json" className="mr-0.5" />
+        <GavelIcon name="codicon:json" className="mr-0.5" />
         JSON
       </button>
       <button
@@ -565,7 +846,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onMarkdown}
         title="Download current view as Markdown"
       >
-        <iconify-icon icon="codicon:markdown" className="mr-0.5" />
+        <GavelIcon name="codicon:markdown" className="mr-0.5" />
         Markdown
       </button>
       <button
@@ -579,8 +860,8 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onCopy}
         title={copyError || 'Copy Markdown export for agent'}
       >
-        <iconify-icon
-          icon={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'}
+        <GavelIcon
+          name={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'}
           className="mr-0.5"
         />
         {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}

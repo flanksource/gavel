@@ -4,6 +4,7 @@ import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
 import { groupByOrg, prKey, paletteClass, computeCounts } from '../utils';
 import { Avatar } from './Avatar';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   prs: PRItem[];
@@ -64,12 +65,12 @@ function GroupCounts({ items }: { items: PRItem[] }) {
     <span className="flex items-center gap-1.5 shrink-0 text-xs font-normal tabular-nums">
       {c.failing > 0 && (
         <span className="text-red-600 inline-flex items-center gap-0.5" title={`${c.failing} failing`}>
-          <iconify-icon icon="codicon:error" />{c.failing}
+          <GavelIcon name="codicon:error" />{c.failing}
         </span>
       )}
       {c.open > 0 && (
         <span className="text-green-600 inline-flex items-center gap-0.5" title={`${c.open} open`}>
-          <iconify-icon icon="codicon:git-pull-request" />{c.open}
+          <GavelIcon name="codicon:git-pull-request" />{c.open}
         </span>
       )}
       <span className="text-muted-foreground" title={`${items.length} total`}>{items.length}</span>
@@ -81,7 +82,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">
-        <iconify-icon icon="codicon:git-pull-request" className="text-3xl mb-2" />
+        <GavelIcon name="codicon:git-pull-request" className="text-3xl mb-2" />
         <p>No pull requests found</p>
       </div>
     );

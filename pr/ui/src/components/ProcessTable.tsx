@@ -1,9 +1,15 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type ComponentProps } from 'react';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { AnsiHtml, TimeseriesCoreBars, TimeseriesGauge, type TimeseriesResponse } from '@flanksource/clicky-ui/data';
+import { UiActivity, UiDatabase } from '@flanksource/clicky-ui/icons';
 import type { FlatProc } from '../utils';
-import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from '../utils';
+import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel, aggregateResources } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
+import { GavelIcon } from './GavelIcon';
+
+// MetricIcon is the gauges' own icon prop type, derived from the component so it
+// matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
+type MetricIcon = ComponentProps<typeof TimeseriesGauge>['icon'];
 
 function cpuLabel(p: { cpuPercent?: number }): string {
   return p.cpuPercent && p.cpuPercent > 0 ? `${p.cpuPercent.toFixed(0)}%` : '—';
@@ -41,8 +47,8 @@ function runKey(project: string, proc: ProcProcess): string {
   return `${project}/${proc.name}/${proc.started || 'not-started'}/${proc.pid || 0}`;
 }
 
-function metricId(project: string, proc: ProcProcess, metric: string): string {
-  return `/proc-metrics/${encodeURIComponent(runKey(project, proc))}/${metric}`;
+function metricId(key: string, metric: string): string {
+  return `/proc-metrics/${encodeURIComponent(key)}/${metric}`;
 }
 
 function useRecordedMax(key: string, value: number): number {
@@ -72,48 +78,77 @@ function latestFetcher(value: number) {
   });
 }
 
-function CpuBars({ project, proc }: { project: string; proc: ProcProcess }) {
-  const cpuPercent = Math.max(0, proc.cpuPercent ?? 0);
-  const maxPercent = useRecordedMax(`${runKey(project, proc)}/cpu`, cpuPercent);
+function firstPort(proc: ProcProcess): number | undefined {
+  const ports = proc.ports ?? [];
+  if (ports.length === 0) return undefined;
+  return [...ports].sort((a, b) => a - b)[0];
+}
+
+// CpuBars renders one CPU reading — a single process or a workspace-summed
+// aggregate — as unlabelled cell bars. metricKey scopes the live-max tracking
+// and the query cache; icon labels the reading in the workspace headers, where
+// no column header names it (table rows are labelled by their column header).
+function CpuBars({ metricKey, cpuPercent, icon }: { metricKey: string; cpuPercent: number; icon?: MetricIcon }) {
+  const value = Math.max(0, cpuPercent);
+  const maxPercent = useRecordedMax(`${metricKey}/cpu`, value);
   const maxMilli = nextCpuMaxPercent(maxPercent) * 10;
   return (
-    <div className="flex justify-end" title={cpuLabel(proc)}>
+    <div className="flex justify-end" title={cpuLabel({ cpuPercent: value })}>
       <TimeseriesCoreBars
+        variant="cell"
+        showLabel={false}
+        {...(icon ? { icon } : {})}
         title="CPU"
-        value={{ id: metricId(project, proc, 'cpu') }}
+        value={{ id: metricId(metricKey, 'cpu') }}
         max={maxMilli}
         refreshMs={0}
-        fetcher={latestFetcher(cpuPercent * 10)}
-        className="min-w-[58px] [&_.h-10]:h-7 [&_.w-2]:w-1.5 [&_.text-xs]:text-[10px]"
+        fetcher={latestFetcher(value * 10)}
       />
     </div>
   );
 }
 
-function MemoryGauge({ project, proc }: { project: string; proc: ProcProcess }) {
-  const memory = Math.max(0, proc.memoryRss ?? 0);
-  const maxMemory = useRecordedMax(`${runKey(project, proc)}/memory`, memory);
+// MemoryGauge mirrors CpuBars for RSS: one process or a workspace-summed
+// aggregate as an unlabelled cell gauge, with an optional header icon.
+function MemoryGauge({ metricKey, memoryRss, icon }: { metricKey: string; memoryRss: number; icon?: MetricIcon }) {
+  const memory = Math.max(0, memoryRss);
+  const maxMemory = useRecordedMax(`${metricKey}/memory`, memory);
   const max = nextMemoryMaxBytes(maxMemory);
   return (
-    <div className="flex justify-end" title={humanizeBytes(proc.memoryRss)}>
+    <div className="flex justify-end" title={humanizeBytes(memory)}>
       <TimeseriesGauge
+        variant="cell"
+        showLabel={false}
+        {...(icon ? { icon } : {})}
         title="Mem"
-        value={{ id: metricId(project, proc, 'memory') }}
+        value={{ id: metricId(metricKey, 'memory') }}
         max={max}
         unit="bytes"
         refreshMs={0}
         expandable={false}
         fetcher={latestFetcher(memory)}
-        className="min-w-[58px] [&_.h-10]:h-7 [&_.w-20]:w-14 [&_.text-sm]:text-[10px] [&_.text-xs]:text-[10px]"
       />
     </div>
   );
 }
 
-export function ProcessPortLink({ project, port }: { project: string; port: number }) {
+function ProcessFavicon({ project, port }: { project: string; port?: number }) {
   const [faviconFailed, setFaviconFailed] = useState(false);
-  const href = `http://localhost:${port}`;
+  useEffect(() => setFaviconFailed(false), [port]);
+  if (!port || faviconFailed) return null;
   const favicon = `/api/proc/favicon?project=${encodeURIComponent(project)}&port=${port}`;
+  return (
+    <img
+      src={favicon}
+      alt=""
+      className="h-4 w-4 shrink-0 rounded-sm"
+      onError={() => setFaviconFailed(true)}
+    />
+  );
+}
+
+export function ProcessPortLink({ port }: { project: string; port: number }) {
+  const href = `http://localhost:${port}`;
   return (
     <a
       href={href}
@@ -123,14 +158,6 @@ export function ProcessPortLink({ project, port }: { project: string; port: numb
       className="inline-flex items-center gap-0.5 text-[10px] tabular-nums text-blue-500 hover:underline mr-1"
       onClick={e => e.stopPropagation()}
     >
-      {!faviconFailed && (
-        <img
-          src={favicon}
-          alt=""
-          className="h-3 w-3 rounded-sm"
-          onError={() => setFaviconFailed(true)}
-        />
-      )}
       :{port}
     </a>
   );
@@ -259,7 +286,12 @@ function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess })
     <div className="space-y-2 py-1">
       {proc.tree && proc.tree.length > 0 && (
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-gray-400 mb-0.5">Process tree</div>
+          <div className="mb-0.5 flex items-center justify-between gap-2">
+            <div className="text-[10px] uppercase tracking-wide text-gray-400">Process tree</div>
+            <div className="text-[10px] tabular-nums text-gray-400">
+              up {uptimeLabel(proc)} · pid {proc.pid || '—'}
+            </div>
+          </div>
           <ProcTree nodes={proc.tree} />
         </div>
       )}
@@ -283,6 +315,7 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
   const transitioning = proc.status === 'starting' || proc.status === 'restarting';
   const active = proc.status === 'running' || transitioning;
   const ports = (proc.ports ?? []).slice().sort((a, b) => a - b);
+  const faviconPort = firstPort(proc);
 
   async function act(action: 'start' | 'stop' | 'restart') {
     setBusy(true);
@@ -296,17 +329,16 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
       <tr className="border-b border-gray-100 hover:bg-gray-50">
         <td className="py-1 pl-1 pr-2">
           <button className="flex items-center gap-1.5" onClick={() => setOpen(o => !o)} title="Toggle logs">
-            <iconify-icon icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
+            <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
+            <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="font-medium truncate max-w-[180px]">{showWorkspace ? project.name : proc.name}</span>
           </button>
           {showWorkspace && <div className="text-[10px] text-gray-400 pl-5">{proc.name}</div>}
         </td>
         <td className={`px-2 ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-500'}`}>{statusLabel(proc)}</td>
-        <td className="px-2 text-right tabular-nums text-gray-500">{uptimeLabel(proc)}</td>
-        <td className="px-2 text-right tabular-nums text-gray-500">{proc.pid || '—'}</td>
-        <td className="px-2 text-right tabular-nums"><CpuBars project={project.name} proc={proc} /></td>
-        <td className="px-2 text-right tabular-nums"><MemoryGauge project={project.name} proc={proc} /></td>
+        <td className="px-2 text-right tabular-nums"><CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} /></td>
+        <td className="px-2 text-right tabular-nums"><MemoryGauge metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} /></td>
         <td className="px-2 text-right tabular-nums">{filesLabel(proc)}</td>
         <td className="px-2">
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
@@ -319,7 +351,7 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
       </tr>
       {open && (
         <tr className="bg-gray-50">
-          <td colSpan={9} className="px-2 pb-2">
+          <td colSpan={7} className="px-2 pb-2">
             <ProcExpanded project={project.name} proc={proc} />
           </td>
         </tr>
@@ -332,7 +364,7 @@ function IconBtn({ icon, title, onClick, disabled }: { icon: string; title: stri
   return (
     <Button variant="ghost" size="icon" title={title} aria-label={title} disabled={disabled}
       onClick={(e) => { e.stopPropagation(); onClick(); }}>
-      <iconify-icon icon={icon} className="text-sm" />
+      <GavelIcon name={icon} className="text-sm" />
     </Button>
   );
 }
@@ -349,8 +381,6 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
         <tr className="text-[10px] uppercase tracking-wide text-gray-400 border-b border-gray-200">
           <th className="py-1 pl-1 pr-2 text-left font-medium">{showWorkspace ? 'Workspace' : 'Process'}</th>
           <th className="px-2 text-left font-medium">Status</th>
-          <th className="px-2 text-right font-medium">Up</th>
-          <th className="px-2 text-right font-medium">PID</th>
           <th className="px-2 text-right font-medium">CPU</th>
           <th className="px-2 text-right font-medium">Mem</th>
           <th className="px-2 text-right font-medium">Files</th>
@@ -403,7 +433,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     <>
       {profiles.length > 0 && (
         <label className="flex items-center gap-1 text-[10px] text-gray-500" title="Profile to start">
-          <iconify-icon icon="codicon:layers" className="text-gray-400" />
+          <GavelIcon name="codicon:layers" className="text-gray-400" />
           <select
             value={profile}
             disabled={busy || anyActive}
@@ -422,24 +452,26 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
   );
 
   // A single-process workspace collapses to one compact row: the workspace and
-  // its lone process share a line (status · pid · cpu · mem · ports) with an
-  // expander for the process tree + log preview, instead of a full table.
+  // its lone process share a line (status · cpu · mem · ports) with an expander
+  // for the process tree + log preview, instead of a full table.
   if (single) {
     const proc = procs[0];
     const ports = (proc.ports ?? []).slice().sort((a, b) => a - b);
+    const faviconPort = firstPort(proc);
     return (
       <div className="py-1.5">
         <div className="flex items-center gap-2 px-1">
-          <button className="flex items-center gap-1.5 min-w-0" onClick={() => setOpen(o => !o)} title="Toggle logs">
-            <iconify-icon icon={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
+          <button className="flex min-w-0 items-center gap-1.5" onClick={() => setOpen(o => !o)} title="Toggle logs">
+            <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
+            <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
           </button>
           <span className={`text-[10px] tabular-nums truncate ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-400'}`}>
-            {statusLabel(proc)} · up {uptimeLabel(proc)} · pid {proc.pid || '—'}
+            {statusLabel(proc)}
           </span>
-          <CpuBars project={project.name} proc={proc} />
-          <MemoryGauge project={project.name} proc={proc} />
+          <CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} icon={UiActivity} />
+          <MemoryGauge metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} icon={UiDatabase} />
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
           <div className="flex-1" />
           {controls}
@@ -453,6 +485,10 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     );
   }
 
+  // The header rolls the workspace's processes up into one CPU/memory reading
+  // (each process's value is itself its own group-sum), shown as unlabelled cell
+  // gauges that the icons identify since there's no column header to name them.
+  const totals = aggregateResources(procs);
   return (
     <div className="py-1.5">
       <div className="flex items-center gap-2 px-1">
@@ -460,6 +496,8 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
         <span className="text-[10px] tabular-nums text-gray-400">{running}/{procs.length}</span>
         <div className="flex-1" />
+        <CpuBars metricKey={`${project.name}/__total__`} cpuPercent={totals.cpuPercent} icon={UiActivity} />
+        <MemoryGauge metricKey={`${project.name}/__total__`} memoryRss={totals.memoryRss} icon={UiDatabase} />
         {controls}
       </div>
       <ProcessTable procs={procs.map(proc => ({ project, proc }))} onChanged={onChanged} showWorkspace={false} />
