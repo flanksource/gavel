@@ -137,6 +137,9 @@ func langFromExt(ext string) string {
 }
 
 func readTODOMarkdownBody(todo *types.TODO) string {
+	if todo.MarkdownBody != "" {
+		return strings.TrimSpace(todo.MarkdownBody)
+	}
 	if todo.FilePath == "" {
 		return ""
 	}

@@ -111,10 +111,11 @@ func runPRFix(cmd *cobra.Command, args []string) error {
 	fmt.Println(clicky.MustFormat(todos.FlattenGrouped(groups)))
 	fmt.Println()
 
+	provider := todos.NewFileProvider(workDir, syncDir)
 	if groupBy != "" && groupBy != todos.GroupByNone {
-		return executeGroups(workDir, groups, interaction)
+		return executeGroups(workDir, groups, interaction, provider)
 	}
-	return executeSingleTODOs(workDir, selected, interaction)
+	return executeSingleTODOs(workDir, types.TODOS(selected), interaction, provider)
 }
 
 func init() {

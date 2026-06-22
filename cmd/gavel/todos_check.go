@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,13 +20,9 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	dir := opts.Dir
-	if dir == "" {
-		dir = filepath.Join(workDir, ".todos")
-	}
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, fmt.Errorf(".todos directory not found: %s", dir)
+	provider, err := newTodosProvider(workDir, opts.Dir)
+	if err != nil {
+		return nil, err
 	}
 
 	filters := todos.DiscoveryFilters{}
@@ -35,7 +30,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
 	}
 
-	todoList, err := todos.DiscoverTODOs(dir, filters)
+	todoList, err := provider.List(context.Background(), filters)
 	if err != nil {
 		return nil, err
 	}
@@ -54,22 +49,13 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
-	}
-
-	todoPath := args[0]
-	if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-		todoPath = filepath.Join(todosDir, todoPath)
-	}
-
-	if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-		return fmt.Errorf("TODO file not found: %s", todoPath)
-	}
-
-	todo, err := todos.ParseTODO(todoPath)
+	provider, err := newTodosProvider(workDir, todosDir)
 	if err != nil {
-		return fmt.Errorf("failed to parse TODO: %w", err)
+		return err
+	}
+	todo, err := provider.Get(context.Background(), args[0])
+	if err != nil {
+		return err
 	}
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
@@ -82,57 +68,39 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
+	provider, err := newTodosProvider(workDir, todosDir)
+	if err != nil {
+		return err
 	}
 
 	var todoList []*types.TODO
 
-	hasFilePaths := len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
+	hasFilePaths := selectedTodosProvider() == todos.ProviderFiles && len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
 
 	if hasFilePaths {
 		logger.Infof("Checking specific TODO files...")
 		for _, arg := range args {
-			todoPath := arg
-			if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-				todoPath = filepath.Join(todosDir, todoPath)
-			}
-			if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-				return fmt.Errorf("TODO file not found: %s", todoPath)
-			}
-			todo, err := todos.ParseTODO(todoPath)
+			todo, err := provider.Get(context.Background(), arg)
 			if err != nil {
-				return fmt.Errorf("failed to parse TODO %s: %w", todoPath, err)
+				return err
 			}
 			todoList = append(todoList, todo)
 		}
 	} else {
-		if _, err := os.Stat(todosDir); os.IsNotExist(err) {
-			return fmt.Errorf(".todos directory not found: %s", todosDir)
-		}
-		logger.Infof("Discovering TODOs in: %s", todosDir)
+		logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
 
 		filters := todos.DiscoveryFilters{}
 		if filterStatus != "" {
 			filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
 		}
 
-		todoList, err = todos.DiscoverTODOs(todosDir, filters)
+		todoList, err = provider.List(context.Background(), filters)
 		if err != nil {
 			return fmt.Errorf("failed to discover TODOs: %w", err)
 		}
 
 		if len(args) > 0 {
-			var filtered []*types.TODO
-			for _, todo := range todoList {
-				for _, arg := range args {
-					if strings.EqualFold(todo.Filename(), arg) {
-						filtered = append(filtered, todo)
-						break
-					}
-				}
-			}
-			todoList = filtered
+			todoList = filterTODOsByArgs(todoList, args, workDir)
 		}
 	}
 
@@ -144,9 +112,10 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 	logger.Infof("Found %d TODOs to check", len(todoList))
 
 	checkOpts := todos.CheckOptions{
-		WorkDir: workDir,
-		Timeout: checkTimeout,
-		Logger:  logger.StandardLogger(),
+		WorkDir:  workDir,
+		Timeout:  checkTimeout,
+		Logger:   logger.StandardLogger(),
+		Provider: provider,
 	}
 
 	ctx := context.Background()
@@ -187,6 +156,7 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
+	todosCmd.PersistentFlags().StringVar(&todosProvider, "provider", todos.ProviderGrite, "TODO provider: grite or todos")
 	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
 	todosCmd.AddCommand(todosGetCmd)
@@ -207,4 +177,61 @@ func init() {
 	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
+}
+
+func selectedTodosProvider() string {
+	if todosProvider == "" {
+		return todos.ProviderGrite
+	}
+	return todosProvider
+}
+
+func newTodosProvider(workDir, dir string) (todos.Provider, error) {
+	switch selectedTodosProvider() {
+	case todos.ProviderGrite:
+		if dir != "" {
+			return nil, fmt.Errorf("--dir is only supported with --provider=todos")
+		}
+		return todos.NewGriteProvider(workDir), nil
+	case todos.ProviderFiles:
+		return todos.NewFileProvider(workDir, dir), nil
+	default:
+		return nil, fmt.Errorf("unknown todos provider %q (expected grite or todos)", selectedTodosProvider())
+	}
+}
+
+func filterTODOsByArgs(todoList types.TODOS, args []string, workDir string) types.TODOS {
+	var filtered types.TODOS
+	for _, todo := range todoList {
+		for _, arg := range args {
+			if todoMatchesArg(todo, arg, workDir) {
+				filtered = append(filtered, todo)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func todoMatchesArg(todo *types.TODO, arg, workDir string) bool {
+	if todo == nil {
+		return false
+	}
+	if todo.ID != "" && (strings.EqualFold(todo.ID, arg) || strings.HasPrefix(todo.ID, arg)) {
+		return true
+	}
+	if todo.Title != "" && strings.EqualFold(todo.Title, arg) {
+		return true
+	}
+	if strings.EqualFold(todo.Filename(), arg) {
+		return true
+	}
+	if todo.FilePath == "" || !(strings.Contains(arg, string(filepath.Separator)) || strings.HasSuffix(arg, ".md")) {
+		return false
+	}
+	absArg := arg
+	if !filepath.IsAbs(arg) {
+		absArg = filepath.Join(workDir, arg)
+	}
+	return filepath.Clean(absArg) == filepath.Clean(todo.FilePath)
 }

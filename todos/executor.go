@@ -80,14 +80,20 @@ type TODOExecutor struct {
 	workDir   string
 	executor  Executor // Pluggable executor implementation
 	sessionID string   // Session ID for resumption across runs
+	provider  Provider
 }
 
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
-func NewTODOExecutor(workDir string, executor Executor, sessionID string) *TODOExecutor {
+func NewTODOExecutor(workDir string, executor Executor, sessionID string, provider ...Provider) *TODOExecutor {
+	var p Provider
+	if len(provider) > 0 {
+		p = provider[0]
+	}
 	return &TODOExecutor{
 		workDir:   workDir,
 		executor:  executor,
 		sessionID: sessionID,
+		provider:  p,
 	}
 }
 
@@ -108,6 +114,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	if e.sessionID != "" {
 		todo.LLM.SessionId = e.sessionID
 	}
+	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 
 	// Check if test already passes (skip if so)
 	if len(todo.StepsToReproduce) > 0 {
@@ -120,6 +127,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		if e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
 			ctx.Logger.Infof("Test already passes, skipping execution")
 			todo.Status = types.StatusSkipped
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now})
 			return &ExecutionResult{
 				Skipped:      true,
 				ExecutorName: e.executor.Name(),
@@ -136,10 +144,11 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		todo.Status = types.StatusFailed
 		todo.Attempts++
 		if result != nil {
-			if saveErr := saveAttempt(todo, result); saveErr != nil {
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 			}
 		}
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 		return result, err
 	}
 
@@ -157,16 +166,17 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 			result.Success = false
 			result.ErrorMessage = "Verification tests failed"
 			todo.Attempts++
-			if saveErr := saveAttempt(todo, result); saveErr != nil {
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 			}
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 			return result, fmt.Errorf("verification failed")
 		}
 	}
 
 	// Update frontmatter with results
 	ctx.Logger.Infof("TODO execution completed successfully")
-	e.updateFrontmatter(todo, result)
+	e.updateFrontmatter(ctx, todo, result)
 
 	return result, nil
 }
@@ -194,6 +204,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		if e.sessionID != "" {
 			todo.LLM.SessionId = e.sessionID
 		}
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 	}
 
 	// Pre-check: filter out TODOs whose steps already pass
@@ -203,6 +214,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		if len(todo.StepsToReproduce) > 0 && e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
 			ctx.Logger.Infof("TODO %s already passes, skipping", todo.Filename())
 			todo.Status = types.StatusSkipped
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now})
 			results[todo.FilePath] = &ExecutionResult{
 				Skipped:      true,
 				ExecutorName: e.executor.Name(),
@@ -224,10 +236,11 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 				todo.Attempts++
 				if groupResult != nil {
 					perTodo := e.splitResult(groupResult, len(needsExecution))
-					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+					if saveErr := e.saveAttempt(ctx, todo, perTodo); saveErr != nil {
 						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 					}
 				}
+				e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 			}
 			return e.collectResults(todosInGroup, results), err
 		}
@@ -246,15 +259,16 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 					perTodo.Success = false
 					perTodo.ErrorMessage = "Verification tests failed"
 					todo.Attempts++
-					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+					if saveErr := e.saveAttempt(ctx, todo, perTodo); saveErr != nil {
 						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 					}
+					e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 					results[todo.FilePath] = perTodo
 					continue
 				}
 			}
 
-			e.updateFrontmatter(todo, perTodo)
+			e.updateFrontmatter(ctx, todo, perTodo)
 			results[todo.FilePath] = perTodo
 		}
 	}
@@ -291,7 +305,7 @@ func (e *TODOExecutor) collectResults(todosInGroup []*types.TODO, resultMap map[
 }
 
 // updateFrontmatter updates the TODO's frontmatter with execution results.
-func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResult) {
+func (e *TODOExecutor) updateFrontmatter(ctx context.Context, todo *types.TODO, result *ExecutionResult) {
 	todo.Status = types.StatusCompleted
 	todo.Attempts++
 
@@ -303,8 +317,26 @@ func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResu
 	todo.LLM.TokensUsed = result.TokensUsed
 	todo.LLM.CostIncurred = result.CostUSD
 
-	if err := saveAttempt(todo, result); err != nil {
+	if err := e.saveAttempt(ctx, todo, result); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", err)
+	}
+	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+}
+
+func (e *TODOExecutor) activeProvider() Provider {
+	if e.provider != nil {
+		return e.provider
+	}
+	return &FileProvider{}
+}
+
+func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
+	return e.activeProvider().SaveAttempt(ctx, todo, result)
+}
+
+func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {
+	if err := e.activeProvider().UpdateState(ctx, todo, updates); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update TODO state: %v\n", err)
 	}
 }
 
