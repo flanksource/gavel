@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { TodoEvent, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { Project, TodoEvent, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { Markdown } from '../Markdown';
 import { GavelIcon } from '../GavelIcon';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
@@ -11,6 +11,8 @@ export function TodoDetail({
   provider,
   onChanged,
   onDeleted,
+  workspaces = [],
+  onTransferred,
 }: {
   todo: TodoItem | null;
   loading: boolean;
@@ -18,10 +20,16 @@ export function TodoDetail({
   provider: string;
   onChanged: (todo: TodoItem) => void;
   onDeleted: () => void;
+  // workspaces/onTransferred are optional: the "Move to project" control only
+  // renders where a caller wires them (the dashboard), not the compact menubar.
+  workspaces?: Project[];
+  onTransferred?: (toDir: string, todo: TodoItem) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const isGrite = todo?.provider === 'grite';
+  // Projects this todo can move to: every configured workspace except its own.
+  const transferTargets = workspaces.filter(ws => !!ws.dir && ws.dir !== dir);
   // A todo is "closed" when completed (Grite also reports providerState).
   const closed = todo?.status === 'completed' || todo?.providerState === 'closed';
   const body = todo?.body?.trim() ?? '';
@@ -48,6 +56,33 @@ export function TodoDetail({
       onChanged(data as TodoItem);
     } catch (err: any) {
       setError(err?.message || 'Update failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function transferTo(toDir: string) {
+    if (!todo || busy || !toDir || !onTransferred) return;
+    const target = transferTargets.find(ws => ws.dir === toDir);
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/todos/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ref: todo.ref,
+          fromDir: dir,
+          fromProvider: provider,
+          toDir,
+          toProvider: target?.todoProvider || 'auto',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Move failed');
+      onTransferred(toDir, data.todo as TodoItem);
+    } catch (err: any) {
+      setError(err?.message || 'Move failed');
     } finally {
       setBusy(false);
     }
@@ -120,6 +155,21 @@ export function TodoDetail({
             >
               {priorities.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
+            {onTransferred && transferTargets.length > 0 && (
+              <select
+                value=""
+                disabled={busy}
+                onChange={e => transferTo((e.target as HTMLSelectElement).value)}
+                className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                aria-label="Move todo to another project"
+                title="Move to project"
+              >
+                <option value="" disabled>Move to…</option>
+                {transferTargets.map(ws => (
+                  <option key={ws.dir} value={ws.dir}>{ws.name || ws.dir}</option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={() => patch({ status: closed ? 'pending' : 'completed' })}

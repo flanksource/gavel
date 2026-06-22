@@ -51,6 +51,11 @@ func TestParseWorkspaceRef(t *testing.T) {
 			out:  "ws-plain\n",
 			want: WorkspaceRef{Raw: "ws-plain"},
 		},
+		{
+			name: "cmux workspace ref",
+			out:  "OK workspace:22\n",
+			want: WorkspaceRef{WorkspaceID: "workspace:22", Raw: "OK workspace:22"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -62,38 +67,129 @@ func TestParseWorkspaceRef(t *testing.T) {
 	}
 }
 
-func TestClientNewWorkspaceAndSendUseCmuxArgs(t *testing.T) {
+func TestParseSurfaceRef(t *testing.T) {
+	cases := map[string]string{
+		`{"ref":"surface:json"}`:               "surface:json",
+		"created surface=surface:text\n":       "surface:text",
+		"surface:plain\n":                      "surface:plain",
+		"cmux: notice\n{\"id\":\"surface:x\"}": "surface:x",
+	}
+	for input, want := range cases {
+		if got := ParseSurfaceRef(input); got != want {
+			t.Fatalf("ParseSurfaceRef(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestClientEnsureWorkspaceReusesFixedWorkspaceAndCreatesSurface(t *testing.T) {
 	runner := &recordingRunner{out: map[string]string{
-		joinArgs([]string{"new-workspace", "--cwd", "/repo", "--name", "repo", "--focus", "true", "--command", "cmux claude-teams --model opus", "--id-format", "both"}): "workspace=ws1 surface=sf1",
+		joinArgs([]string{"list-workspaces", "--json"}): workspaceList("workspace:ws1", "repo-claude", "/repo"),
+		joinArgs([]string{"new-surface", "--type", "terminal", "--workspace", "workspace:ws1", "--working-directory", "/repo", "--focus", "true"}): "OK surface:sf1 pane:41 workspace:ws1",
 	}}
 	client := &Client{Runner: runner.run}
 
-	ref, err := client.NewWorkspace(context.Background(), NewWorkspaceOpts{
-		Cwd:     "/repo",
-		Name:    "repo",
-		Command: "cmux claude-teams --model opus",
-		Focus:   true,
+	workspace, reused, err := client.EnsureWorkspace(context.Background(), EnsureWorkspaceOpts{
+		Cwd:   "/repo",
+		Name:  "repo-claude",
+		Focus: true,
 	})
 	if err != nil {
-		t.Fatalf("NewWorkspace() error = %v", err)
+		t.Fatalf("EnsureWorkspace() error = %v", err)
 	}
-	if ref.String() != "ws1" {
-		t.Fatalf("workspace ref = %q, want ws1", ref.String())
+	if !reused {
+		t.Fatal("expected existing workspace to be reused")
+	}
+	if workspace.String() != "workspace:ws1" {
+		t.Fatalf("workspace ref = %q, want workspace:ws1", workspace.String())
 	}
 
-	if err := client.Send(context.Background(), ref.String(), "hello\n"); err != nil {
-		t.Fatalf("Send() error = %v", err)
+	ref, err := client.NewSurface(context.Background(), NewSurfaceOpts{
+		WorkspaceRef: workspace.String(),
+		Cwd:          "/repo",
+		Focus:        true,
+	})
+	if err != nil {
+		t.Fatalf("NewSurface() error = %v", err)
+	}
+	if ref.SurfaceID != "surface:sf1" {
+		t.Fatalf("surface ref = %q, want surface:sf1", ref.SurfaceID)
 	}
 
+	if err := client.SendSurface(context.Background(), workspace.String(), ref.SurfaceID, "hello"); err != nil {
+		t.Fatalf("SendSurface() error = %v", err)
+	}
+	if err := client.SendKeySurface(context.Background(), workspace.String(), ref.SurfaceID, "Enter"); err != nil {
+		t.Fatalf("SendKeySurface() error = %v", err)
+	}
+
+	screen, err := client.ReadScreen(context.Background(), ReadScreenOpts{
+		WorkspaceRef: workspace.String(),
+		SurfaceRef:   ref.SurfaceID,
+		Lines:        120,
+	})
+	if err != nil {
+		t.Fatalf("ReadScreen() error = %v", err)
+	}
+	if screen != "ok" {
+		t.Fatalf("screen = %q, want ok", screen)
+	}
+
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls = %d, want 5", len(runner.calls))
+	}
+	wantSurface := []string{"new-surface", "--type", "terminal", "--workspace", "workspace:ws1", "--working-directory", "/repo", "--focus", "true"}
+	if !reflect.DeepEqual(runner.calls[1].args, wantSurface) {
+		t.Fatalf("new-surface args = %#v, want %#v", runner.calls[1].args, wantSurface)
+	}
+	wantSend := []string{"send", "--workspace", "workspace:ws1", "--surface", "surface:sf1", "--", "hello"}
+	if !reflect.DeepEqual(runner.calls[2].args, wantSend) {
+		t.Fatalf("send args = %#v, want %#v", runner.calls[2].args, wantSend)
+	}
+	wantEnter := []string{"send-key", "--workspace", "workspace:ws1", "--surface", "surface:sf1", "Enter"}
+	if !reflect.DeepEqual(runner.calls[3].args, wantEnter) {
+		t.Fatalf("send-key args = %#v, want %#v", runner.calls[3].args, wantEnter)
+	}
+	wantReadScreen := []string{"read-screen", "--workspace", "workspace:ws1", "--surface", "surface:sf1", "--lines", "120"}
+	if !reflect.DeepEqual(runner.calls[4].args, wantReadScreen) {
+		t.Fatalf("read-screen args = %#v, want %#v", runner.calls[4].args, wantReadScreen)
+	}
+}
+
+func TestClientEnsureWorkspaceCreatesMissingWorkspace(t *testing.T) {
+	runner := &recordingRunner{out: map[string]string{
+		joinArgs([]string{"list-workspaces", "--json"}): "cmux: notice\n{\"workspaces\":[]}",
+		joinArgs([]string{"new-workspace", "--cwd", "/repo", "--name", "repo-claude", "--focus", "true", "--description", "desc", "--id-format", "both"}): "workspace:ws2",
+	}}
+	client := &Client{Runner: runner.run}
+
+	workspace, reused, err := client.EnsureWorkspace(context.Background(), EnsureWorkspaceOpts{
+		Cwd:         "/repo",
+		Name:        "repo-claude",
+		Description: "desc",
+		Focus:       true,
+	})
+	if err != nil {
+		t.Fatalf("EnsureWorkspace() error = %v", err)
+	}
+	if reused {
+		t.Fatal("expected workspace creation")
+	}
+	if workspace.String() != "workspace:ws2" {
+		t.Fatalf("workspace ref = %q, want workspace:ws2", workspace.String())
+	}
 	if len(runner.calls) != 2 {
 		t.Fatalf("calls = %d, want 2", len(runner.calls))
-	}
-	wantSend := []string{"send", "--workspace", "ws1", "--", "hello\n"}
-	if !reflect.DeepEqual(runner.calls[1].args, wantSend) {
-		t.Fatalf("send args = %#v, want %#v", runner.calls[1].args, wantSend)
 	}
 }
 
 func joinArgs(args []string) string {
 	return strings.Join(args, "\x00")
+}
+
+func treeWithSurface(id string) string {
+	return `{"windows":[{"workspaces":[{"panes":[{"focused":true,"selected_surface_ref":"surface:` + id + `","surface_refs":["surface:` + id + `"],"surfaces":[{"focused":true,"selected":true,"selected_in_pane":true,"ref":"surface:` + id + `"}]}]}]}]}`
+}
+
+func workspaceList(ref, title, cwd string) string {
+	return `{"workspaces":[{"ref":"` + ref + `","title":"` + title + `","custom_title":"` + title + `","current_directory":"` + cwd + `"}]}`
 }

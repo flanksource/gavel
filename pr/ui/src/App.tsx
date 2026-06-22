@@ -185,6 +185,13 @@ export function App() {
     commitRoute({ tab: next, selectedPath: '', filters });
   }, [commitRoute, filters]);
 
+  // Selecting a todo encodes its ref in the path (/todos/{guid}) so a todo is
+  // deep-linkable and back/forward works, mirroring PR selection. An empty id
+  // clears the selection back to /todos.
+  const navigateTodo = useCallback((id: string) => {
+    commitRoute({ tab: 'todos', selectedPath: id, filters });
+  }, [commitRoute, filters]);
+
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
@@ -602,7 +609,7 @@ export function App() {
             }
           />
         ) : activeTab === 'todos' ? (
-          <TodoView projects={projects} />
+          <TodoView projects={projects} selectedId={selectedPath} onNavigate={navigateTodo} />
         ) : (
           <ActivityView />
         )}

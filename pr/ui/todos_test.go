@@ -254,6 +254,90 @@ func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
 	}
 }
 
+func TestTodoAPITransferMovesBetweenWorkspaces(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: srcDir}}
+
+	created, err := todos.NewFileProvider(srcDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:    "Relocate me",
+		Body:     "Body that should travel with the todo.",
+		Priority: types.PriorityHigh,
+		Status:   types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	body, _ := json.Marshal(todoTransferPayload{
+		Ref:          todos.TODOReference(created),
+		FromDir:      srcDir,
+		FromProvider: "todos",
+		ToDir:        dstDir,
+		ToProvider:   "todos",
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoTransfer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/transfer", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("transfer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoTransferResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal transfer: %v", err)
+	}
+	if resp.Dir != dstDir || resp.Provider != todos.ProviderFiles {
+		t.Fatalf("unexpected transfer target: dir=%q provider=%q", resp.Dir, resp.Provider)
+	}
+	if resp.Todo.Title != "Relocate me" || resp.Todo.Priority != types.PriorityHigh {
+		t.Fatalf("transferred todo lost fields: %+v", resp.Todo)
+	}
+	if !strings.HasPrefix(resp.Todo.FilePath, dstDir) {
+		t.Fatalf("transferred todo not in target dir %q: %s", dstDir, resp.Todo.FilePath)
+	}
+
+	// Gone from source, present in target.
+	if _, err := os.Stat(created.FilePath); !os.IsNotExist(err) {
+		t.Fatalf("expected source todo removed, stat err=%v", err)
+	}
+	items, err := todos.NewFileProvider(dstDir, "").List(t.Context(), todos.DiscoveryFilters{})
+	if err != nil {
+		t.Fatalf("target list: %v", err)
+	}
+	if len(items) != 1 || items[0].Title != "Relocate me" {
+		t.Fatalf("unexpected target contents: %+v", items)
+	}
+}
+
+func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: dir}}
+
+	created, err := todos.NewFileProvider(dir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Stay put",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	body, _ := json.Marshal(todoTransferPayload{
+		Ref:          todos.TODOReference(created),
+		FromDir:      dir,
+		FromProvider: "todos",
+		ToDir:        dir,
+		ToProvider:   "todos",
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoTransfer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/transfer", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("same-workspace transfer status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+	// The original must survive a rejected transfer.
+	if _, err := os.Stat(created.FilePath); err != nil {
+		t.Fatalf("expected source todo to survive rejected transfer: %v", err)
+	}
+}
+
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

@@ -13,6 +13,8 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+const providerPersistenceTimeout = 30 * time.Second
+
 // Executor represents any AI system that can execute TODOs.
 // Implementations include ClaudeExecutor, and potentially OpenAI, Anthropic API, etc.
 type Executor interface {
@@ -331,13 +333,27 @@ func (e *TODOExecutor) activeProvider() Provider {
 }
 
 func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
-	return e.activeProvider().SaveAttempt(ctx, todo, result)
+	persistCtx, cancel := providerPersistenceContext(ctx)
+	defer cancel()
+	return e.activeProvider().SaveAttempt(persistCtx, todo, result)
 }
 
 func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {
-	if err := e.activeProvider().UpdateState(ctx, todo, updates); err != nil {
+	persistCtx, cancel := providerPersistenceContext(ctx)
+	defer cancel()
+	if err := e.activeProvider().UpdateState(persistCtx, todo, updates); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update TODO state: %v\n", err)
 	}
+}
+
+func providerPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), providerPersistenceTimeout)
+	}
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), providerPersistenceTimeout)
 }
 
 // stepsAlreadyPass checks if reproduction steps already pass.

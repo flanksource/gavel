@@ -8,13 +8,20 @@ import { TodoDetail } from './todos/TodoDetail';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
 import { TodoFilterBar } from './todos/TodoFilterBar';
 
-export function TodoView({ projects }: { projects: Project[] }) {
+export function TodoView({ projects, selectedId = '', onNavigate }: {
+  projects: Project[];
+  // selectedId is the todo ref from the URL (/todos/{guid}); onNavigate pushes a
+  // new selection into the URL. Both come from the App router so todos are
+  // deep-linkable and back/forward works.
+  selectedId?: string;
+  onNavigate?: (id: string) => void;
+}) {
   const {
     workspaces, byDir, loadingList, error, aggregate,
-    selected, setSelected, detail, loadingDetail,
-    refresh, showCreate, setShowCreate, created, updateItem, deleted,
+    selected, select, detail, loadingDetail,
+    refresh, showCreate, setShowCreate, created, updateItem, deleted, transferred,
     hiddenStatuses, toggleStatus,
-  } = useWorkspaceTodos(projects);
+  } = useWorkspaceTodos(projects, selectedId, onNavigate);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -67,7 +74,7 @@ export function TodoView({ projects }: { projects: Project[] }) {
                     data={byDir[ws.dir]}
                     hiddenStatuses={hiddenStatuses}
                     selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
-                    onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
+                    onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
                   />
                 ))}
               </div>
@@ -86,6 +93,8 @@ export function TodoView({ projects }: { projects: Project[] }) {
               provider={selected?.provider ?? 'auto'}
               onChanged={updateItem}
               onDeleted={deleted}
+              workspaces={workspaces}
+              onTransferred={transferred}
             />
           }
         />
