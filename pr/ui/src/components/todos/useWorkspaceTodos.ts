@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, TodoItem, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts, todoQuery } from './format';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
@@ -14,7 +14,15 @@ export interface SelectedTodo {
 // aggregates counts, and exposes the create/update/delete callbacks. Both the
 // dashboard TodoView and the compact MenubarTodos render off this one hook so
 // they hit the same /api/todos endpoints and stay in sync.
-export function useWorkspaceTodos(projects: Project[]) {
+//
+// selectedId/onNavigate wire the selection to the URL (/todos/{guid}, where the
+// guid is the todo ref): the dashboard passes them so a todo is deep-linkable
+// and back/forward works; the menubar omits them and keeps purely-local state.
+export function useWorkspaceTodos(
+  projects: Project[],
+  selectedId = '',
+  onNavigate?: (id: string) => void,
+) {
   // Every configured workspace with a directory is listed straight from
   // projects.json; ones with no todos render an empty "No todos" group.
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
@@ -102,6 +110,41 @@ export function useWorkspaceTodos(projects: Project[]) {
     return () => { cancelled = true; };
   }, [selected]);
 
+  // select changes the active todo and pushes its ref into the URL (when the
+  // caller wired onNavigate). The resolution effect below mirrors the reverse —
+  // a URL change (deep link, back/forward) into `selected`.
+  const select = useCallback((next: SelectedTodo | null) => {
+    setSelected(next);
+    onNavigate?.(next?.ref ?? '');
+  }, [onNavigate]);
+
+  // Resolve the URL's selectedId into a concrete {dir, ref, provider} by finding
+  // which workspace's list holds that ref. appliedId tracks the last id we
+  // resolved so a user click (which sets `selected` before the URL catches up)
+  // is never clobbered, and a not-yet-loaded deep link retries when byDir fills.
+  const appliedId = useRef('');
+  useEffect(() => {
+    if (selectedId === appliedId.current) return;
+    if (!selectedId) {
+      appliedId.current = '';
+      setSelected(null);
+      return;
+    }
+    for (const ws of workspaces) {
+      if (byDir[ws.dir]?.items.some(item => item.ref === selectedId)) {
+        appliedId.current = selectedId;
+        // Keep the existing selection object when it already points here (a user
+        // click set it before the URL caught up) so the detail effect doesn't
+        // refetch the same todo.
+        setSelected(prev =>
+          prev && prev.dir === ws.dir && prev.ref === selectedId
+            ? prev
+            : { dir: ws.dir, ref: selectedId, provider: ws.todoProvider || 'auto' });
+        return;
+      }
+    }
+  }, [selectedId, byDir, workspaces]);
+
   const aggregate = useMemo(
     () => workspaces.reduce((acc, ws) => addCounts(acc, byDir[ws.dir]?.counts ?? ws.todoCounts ?? emptyCounts), emptyCounts),
     [workspaces, byDir],
@@ -111,10 +154,10 @@ export function useWorkspaceTodos(projects: Project[]) {
 
   const created = useCallback((dir: string, todo: TodoItem) => {
     setShowCreate(false);
-    setSelected({ dir, ref: todo.ref, provider: providerFor(dir) });
+    select({ dir, ref: todo.ref, provider: providerFor(dir) });
     setDetail(todo);
     refresh();
-  }, [providerFor, refresh]);
+  }, [providerFor, refresh, select]);
 
   const updateItem = useCallback((todo: TodoItem) => {
     setDetail(todo);
@@ -123,9 +166,17 @@ export function useWorkspaceTodos(projects: Project[]) {
 
   const deleted = useCallback(() => {
     setDetail(null);
-    setSelected(null);
+    select(null);
     refresh();
-  }, [refresh]);
+  }, [refresh, select]);
+
+  // A transferred todo now lives in the target workspace: follow it there so the
+  // detail pane keeps showing it after the move (the source list loses it).
+  const transferred = useCallback((toDir: string, todo: TodoItem) => {
+    select({ dir: toDir, ref: todo.ref, provider: providerFor(toDir) });
+    setDetail(todo);
+    refresh();
+  }, [providerFor, refresh, select]);
 
   return {
     workspaces,
@@ -135,6 +186,7 @@ export function useWorkspaceTodos(projects: Project[]) {
     aggregate,
     selected,
     setSelected,
+    select,
     detail,
     loadingDetail,
     providerFor,
@@ -144,6 +196,7 @@ export function useWorkspaceTodos(projects: Project[]) {
     created,
     updateItem,
     deleted,
+    transferred,
     hiddenStatuses,
     toggleStatus,
   };

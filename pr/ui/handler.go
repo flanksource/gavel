@@ -316,6 +316,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
+	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)

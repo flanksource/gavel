@@ -4,7 +4,8 @@ import { emptyFilters, type Filters, type FilterMode } from './components/Filter
 export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment (/prs, /todos,
-// /activity). PR selection and filters only apply to the prs tab.
+// /activity). The prs and todos tabs carry a selection in the path
+// (/prs/{repo}/{number}, /todos/{guid}); filters only apply to the prs tab.
 export type Tab = 'prs' | 'todos' | 'activity';
 
 export interface RouteState {
@@ -40,7 +41,7 @@ export function parseRoute(location: Location): RouteState {
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
   const tab: Tab = segments[0] === 'todos' || segments[0] === 'activity' ? segments[0] : 'prs';
   let selectedPath = '';
-  if (segments[0] === 'prs' && segments.length > 1) {
+  if ((tab === 'prs' || tab === 'todos') && segments.length > 1) {
     selectedPath = segments.slice(1).join('/');
   }
 
@@ -59,7 +60,7 @@ export function parseRoute(location: Location): RouteState {
 
 export function buildRoute(state: RouteState): string {
   const segments: string[] = [state.tab];
-  if (state.tab === 'prs' && state.selectedPath) {
+  if ((state.tab === 'prs' || state.tab === 'todos') && state.selectedPath) {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 

@@ -79,6 +79,23 @@ type todoUpdatePayload struct {
 	Priority types.Priority `json:"priority,omitempty"`
 }
 
+// todoTransferPayload moves the todo at Ref from the source workspace
+// (FromDir/FromProvider) to the target workspace (ToDir/ToProvider). Each
+// dir/provider pair resolves the same way the list/get endpoints do.
+type todoTransferPayload struct {
+	Ref          string `json:"ref"`
+	FromDir      string `json:"fromDir,omitempty"`
+	FromProvider string `json:"fromProvider,omitempty"`
+	ToDir        string `json:"toDir"`
+	ToProvider   string `json:"toProvider,omitempty"`
+}
+
+type todoTransferResponse struct {
+	Dir      string      `json:"dir"`
+	Provider string      `json:"provider"`
+	Todo     todoSummary `json:"todo"`
+}
+
 func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.Method {
@@ -266,6 +283,56 @@ func (s *Server) handleTodoDelete(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"status":"ok"}`)
 }
 
+func (s *Server) handleTodoTransfer(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload todoTransferPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	if strings.TrimSpace(payload.Ref) == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
+		return
+	}
+	if strings.TrimSpace(payload.ToDir) == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("toDir is required"))
+		return
+	}
+	source, src, err := s.todoProvider(todoSource{Provider: payload.FromProvider, Dir: payload.FromDir})
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	target, dst, err := s.todoProvider(todoSource{Provider: payload.ToProvider, Dir: payload.ToDir})
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	// Refuse a no-op self-transfer (same dir resolving to the same backend),
+	// which would create a duplicate and then delete the original. Different
+	// backends in one dir is a legitimate migration, so only guard same+same.
+	srcBackend, _ := resolveTodoBackend(src.Dir, payload.FromProvider)
+	dstBackend, _ := resolveTodoBackend(dst.Dir, payload.ToProvider)
+	if src.Dir == dst.Dir && srcBackend == dstBackend {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("source and target are the same workspace"))
+		return
+	}
+	created, err := todos.Transfer(r.Context(), source, target, payload.Ref)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoTransferResponse{ //nolint:errcheck
+		Dir:      dst.Dir,
+		Provider: dstBackend,
+		Todo:     summarizeTodo(created, true),
+	})
+}
+
 func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, error) {
 	workDir := s.todoWorkDir()
 	dir := source.Dir
@@ -281,6 +348,14 @@ func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, er
 	default:
 		return nil, source, fmt.Errorf("unknown todo provider %q", source.Provider)
 	}
+}
+
+// ProviderForProject resolves the todo provider for a stored project, honoring
+// its pinned TodoProvider (or auto-detecting from the resolved directory). The
+// `gavel todos transfer` command uses it to build a transfer target from a
+// named project the same way the dashboard resolves a workspace.
+func ProviderForProject(p Project) todos.Provider {
+	return providerForDir(p.ResolvedDir(), p.TodoProvider)
 }
 
 // providerForDir builds the todo provider for a workspace directory. An explicit

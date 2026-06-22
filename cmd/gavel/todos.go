@@ -460,19 +460,21 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 		groupWorkDir = group.Name
 	}
 	agent, model := resolveTodoAgent(todoModel)
-	agentCmd := fmt.Sprintf("cmux %s-teams", agent)
-	if model != "" {
-		agentCmd += " --model " + model
-	}
-	name := filepath.Base(groupWorkDir)
-	if name == "." || name == string(filepath.Separator) {
-		name = "gavel-todos"
-	}
+	agentCmd := cmux.AgentCommand(agent, model)
+	name := cmux.AgentWorkspaceName(groupWorkDir, agent)
 
 	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
 	fmt.Println("### Commands")
-	fmt.Printf("  cmux new-workspace --cwd %q --name %q --focus true --command %q --id-format both\n", groupWorkDir, name, agentCmd)
-	fmt.Println("  cmux send --workspace <workspace-ref> -- <prompt>")
+	fmt.Println("  cmux list-workspaces --json")
+	fmt.Printf("  cmux new-workspace --cwd %q --name %q --focus true --id-format both  # if missing\n", groupWorkDir, name)
+	fmt.Printf("  cmux new-surface --type terminal --workspace <workspace-ref> --working-directory %q --focus true\n", groupWorkDir)
+	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	fmt.Printf("  cmux send --workspace <workspace-ref> --surface <surface-ref> -- %q\n", agentCmd)
+	fmt.Println("  cmux send-key --workspace <workspace-ref> --surface <surface-ref> Enter")
+	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	fmt.Println("  cmux send --workspace <workspace-ref> --surface <surface-ref> -- <prompt>")
+	fmt.Println("  cmux send-key --workspace <workspace-ref> --surface <surface-ref> Enter")
+	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
 	fmt.Println()
 	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 	fmt.Println("### Prompt")
