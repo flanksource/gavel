@@ -199,16 +199,19 @@ func (s *Supervisor) Start() error {
 }
 
 // Wait blocks until a shutdown signal arrives or every process has exited, then
-// runs Shutdown.
+// tears the daemon down. A signal is an explicit stop and clears the state; every
+// process exiting on its own keeps a terminal state.json so `proc status` and
+// `proc start`'s readiness can see whether a process crashed.
 func (s *Supervisor) Wait() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sig)
 	select {
 	case <-sig:
+		s.teardown(false)
 	case <-s.done:
+		s.teardown(true)
 	}
-	s.Shutdown()
 }
 
 // build opens the per-process log and constructs its clicky SupervisedProcess.
@@ -300,8 +303,18 @@ func (s *Supervisor) onUnitExit(m *managed) {
 
 // Shutdown stops every process (graceful then forceful), closes the control
 // socket, and removes the state/pid files. It is idempotent and does not exit
-// the process, so it is safe to call from tests.
+// the process, so it is safe to call from tests. It is the explicit-stop path:
+// the state is cleared.
 func (s *Supervisor) Shutdown() {
+	s.teardown(false)
+}
+
+// teardown stops every process (graceful then forceful), closes the control
+// socket, and releases the live-supervisor artifacts. With persistTerminal it
+// writes a final state.json capturing each process's terminal status/exit code
+// (a post-mortem for a daemon that exited on its own) and keeps it; otherwise it
+// clears the state entirely (an explicit stop). It is idempotent.
+func (s *Supervisor) teardown(persistTerminal bool) {
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
@@ -333,6 +346,15 @@ func (s *Supervisor) Shutdown() {
 	}
 	wg.Wait()
 
+	// Snapshot before the FDs close: status/exit codes are read off the live
+	// supervised units. SupervisorPID is zeroed so the persisted state never
+	// reports a (dead) supervisor as running.
+	var terminal State
+	if persistTerminal {
+		terminal = s.State()
+		terminal.SupervisorPID = 0
+	}
+
 	for _, m := range s.procs {
 		m.mu.Lock()
 		fd := m.logFD
@@ -341,7 +363,15 @@ func (s *Supervisor) Shutdown() {
 			_ = fd.Close()
 		}
 	}
-	_ = Clean(s.dir)
+
+	if persistTerminal {
+		if err := WriteState(s.dir, terminal); err != nil {
+			logger.Warnf("persist terminal proc state: %v", err)
+		}
+		_ = CleanPidfiles(s.dir)
+	} else {
+		_ = Clean(s.dir)
+	}
 }
 
 func (s *Supervisor) decActive() {

@@ -2,11 +2,11 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/gavel/procfile"
 )
 
 type ProcStopOptions struct {
 	Procfile string   `json:"procfile,omitempty" flag:"procfile" help:"Path to the Procfile (default: nearest Procfile up to the git root)"`
+	Follow   bool     `json:"follow,omitempty" flag:"follow" short:"f" help:"Keep streaming process logs until interrupted (default: stream until they stop)"`
 	Names    []string `json:"-" args:"true"`
 }
 
@@ -18,7 +18,8 @@ the supervisor exits). Pass process names to stop only those, leaving the
 supervisor running:
   gavel proc stop worker
 
-Stopping does nothing when no daemon is running.`
+Process logs are streamed while the processes shut down; -f/--follow keeps
+streaming until interrupted. Stopping does nothing when no daemon is running.`
 }
 
 func init() {
@@ -31,5 +32,5 @@ func runProcStop(opts ProcStopOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return procfile.Stop(workDir, opts.Procfile, opts.Names)
+	return stopAndStream(workDir, opts.Procfile, opts.Names, opts.Follow)
 }

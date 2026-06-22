@@ -1,15 +1,20 @@
 import { useState, useEffect, useMemo, type ComponentProps } from 'react';
 import { Button, Modal } from '@flanksource/clicky-ui/components';
-import { AnsiHtml, TimeseriesCoreBars, TimeseriesGauge, type TimeseriesResponse } from '@flanksource/clicky-ui/data';
+import { AnsiHtml, TimeseriesCoreBars } from '@flanksource/clicky-ui/data';
 import { UiActivity, UiDatabase } from '@flanksource/clicky-ui/icons';
 import type { FlatProc } from '../utils';
 import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel, aggregateResources } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
 import { GavelIcon } from './GavelIcon';
 
-// MetricIcon is the gauges' own icon prop type, derived from the component so it
+// MetricIcon is the gauge's own icon prop type, derived from the component so it
 // matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
-type MetricIcon = ComponentProps<typeof TimeseriesGauge>['icon'];
+type MetricIcon = ComponentProps<typeof TimeseriesCoreBars>['icon'];
+
+// MEMORY_UNIT renders RSS as cores-style bars at one bar per gigabyte; bytes are
+// fed raw and TimeseriesCoreBars divides by perBar, so captions read "x / y GB".
+const GIB = 1024 ** 3;
+const MEMORY_UNIT = { perBar: GIB, label: 'GB', barLabel: 'GB' };
 
 function cpuLabel(p: { cpuPercent?: number }): string {
   return p.cpuPercent && p.cpuPercent > 0 ? `${p.cpuPercent.toFixed(0)}%` : '—';
@@ -43,12 +48,21 @@ function filesLabel(p: { openFiles?: number }): string {
 
 const recordedMax = new Map<string, number>();
 
+// Process gauges poll their recorded series from the backend; the cell only
+// shows the latest point, so a short window keeps each payload tiny.
+const PROC_REFRESH_MS = 2000;
+const PROC_RANGE = '10m';
+
+// runKey MUST match procRunKey in pr/ui/proc_metrics.go — the backend records
+// each series under this id and the gauges below request it back.
 function runKey(project: string, proc: ProcProcess): string {
   return `${project}/${proc.name}/${proc.started || 'not-started'}/${proc.pid || 0}`;
 }
 
+// metricId is the single URL-encoded path segment the clicky metrics handler
+// (mounted at /api/proc) reads via its {id} wildcard.
 function metricId(key: string, metric: string): string {
-  return `/proc-metrics/${encodeURIComponent(key)}/${metric}`;
+  return `/api/proc/metrics/${encodeURIComponent(`${key}/${metric}`)}`;
 }
 
 function useRecordedMax(key: string, value: number): number {
@@ -65,17 +79,10 @@ function nextCpuMaxPercent(maxCpuPercent: number): number {
   return Math.max(100, Math.ceil(maxCpuPercent / 100) * 100);
 }
 
+// nextMemoryMaxBytes rounds the observed peak up to a whole gigabyte so the bar
+// count (max / 1 GiB) is stable and each bar maps to exactly one GB.
 function nextMemoryMaxBytes(maxBytes: number): number {
-  let bucket = 64 * 1024 * 1024;
-  while (bucket < maxBytes) bucket *= 2;
-  return bucket;
-}
-
-function latestFetcher(value: number) {
-  return async (url: string): Promise<TimeseriesResponse> => ({
-    id: url,
-    points: [{ at: new Date().toISOString(), value }],
-  });
+  return Math.max(GIB, Math.ceil(maxBytes / GIB) * GIB);
 }
 
 function firstPort(proc: ProcProcess): number | undefined {
@@ -93,40 +100,39 @@ function CpuBars({ metricKey, cpuPercent, icon }: { metricKey: string; cpuPercen
   const maxPercent = useRecordedMax(`${metricKey}/cpu`, value);
   const maxMilli = nextCpuMaxPercent(maxPercent) * 10;
   return (
-    <div className="flex justify-end" title={cpuLabel({ cpuPercent: value })}>
+    <div className="flex justify-end">
       <TimeseriesCoreBars
         variant="cell"
         showLabel={false}
         {...(icon ? { icon } : {})}
         title="CPU"
-        value={{ id: metricId(metricKey, 'cpu') }}
+        value={{ id: metricId(metricKey, 'cpu'), transform: v => v * 10 }}
         max={maxMilli}
-        refreshMs={0}
-        fetcher={latestFetcher(value * 10)}
+        range={PROC_RANGE}
+        refreshMs={PROC_REFRESH_MS}
       />
     </div>
   );
 }
 
-// MemoryGauge mirrors CpuBars for RSS: one process or a workspace-summed
-// aggregate as an unlabelled cell gauge, with an optional header icon.
-function MemoryGauge({ metricKey, memoryRss, icon }: { metricKey: string; memoryRss: number; icon?: MetricIcon }) {
+// MemoryBars mirrors CpuBars for RSS: one process or a workspace-summed aggregate
+// as unlabelled cell bars at one bar per gigabyte, with an optional header icon.
+function MemoryBars({ metricKey, memoryRss, icon }: { metricKey: string; memoryRss: number; icon?: MetricIcon }) {
   const memory = Math.max(0, memoryRss);
   const maxMemory = useRecordedMax(`${metricKey}/memory`, memory);
   const max = nextMemoryMaxBytes(maxMemory);
   return (
-    <div className="flex justify-end" title={humanizeBytes(memory)}>
-      <TimeseriesGauge
+    <div className="flex justify-end">
+      <TimeseriesCoreBars
         variant="cell"
         showLabel={false}
         {...(icon ? { icon } : {})}
         title="Mem"
         value={{ id: metricId(metricKey, 'memory') }}
         max={max}
-        unit="bytes"
-        refreshMs={0}
-        expandable={false}
-        fetcher={latestFetcher(memory)}
+        unit={MEMORY_UNIT}
+        range={PROC_RANGE}
+        refreshMs={PROC_REFRESH_MS}
       />
     </div>
   );
@@ -338,7 +344,7 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
         </td>
         <td className={`px-2 ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-500'}`}>{statusLabel(proc)}</td>
         <td className="px-2 text-right tabular-nums"><CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} /></td>
-        <td className="px-2 text-right tabular-nums"><MemoryGauge metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} /></td>
+        <td className="px-2 text-right tabular-nums"><MemoryBars metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} /></td>
         <td className="px-2 text-right tabular-nums">{filesLabel(proc)}</td>
         <td className="px-2">
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
@@ -381,8 +387,12 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
         <tr className="text-[10px] uppercase tracking-wide text-gray-400 border-b border-gray-200">
           <th className="py-1 pl-1 pr-2 text-left font-medium">{showWorkspace ? 'Workspace' : 'Process'}</th>
           <th className="px-2 text-left font-medium">Status</th>
-          <th className="px-2 text-right font-medium">CPU</th>
-          <th className="px-2 text-right font-medium">Mem</th>
+          <th className="px-2 text-right font-medium">
+            <span className="inline-flex items-center justify-end gap-1"><UiActivity size={12} aria-hidden /> CPU</span>
+          </th>
+          <th className="px-2 text-right font-medium">
+            <span className="inline-flex items-center justify-end gap-1"><UiDatabase size={12} aria-hidden /> Mem</span>
+          </th>
           <th className="px-2 text-right font-medium">Files</th>
           <th className="px-2 text-left font-medium">Ports</th>
           <th className="px-1 text-right font-medium" />
@@ -471,7 +481,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
             {statusLabel(proc)}
           </span>
           <CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} icon={UiActivity} />
-          <MemoryGauge metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} icon={UiDatabase} />
+          <MemoryBars metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} icon={UiDatabase} />
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
           <div className="flex-1" />
           {controls}
@@ -497,7 +507,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <span className="text-[10px] tabular-nums text-gray-400">{running}/{procs.length}</span>
         <div className="flex-1" />
         <CpuBars metricKey={`${project.name}/__total__`} cpuPercent={totals.cpuPercent} icon={UiActivity} />
-        <MemoryGauge metricKey={`${project.name}/__total__`} memoryRss={totals.memoryRss} icon={UiDatabase} />
+        <MemoryBars metricKey={`${project.name}/__total__`} memoryRss={totals.memoryRss} icon={UiDatabase} />
         {controls}
       </div>
       <ProcessTable procs={procs.map(proc => ({ project, proc }))} onChanged={onChanged} showWorkspace={false} />

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
@@ -72,6 +73,13 @@ type Server struct {
 	// masking fresh memberships for long.
 	orgs         []github.Org
 	orgsCachedAt time.Time
+
+	// procMetrics stores recent per-process CPU/memory points so the process
+	// dashboard gauges can poll a real timeseries (served under
+	// /api/proc/metrics/{id}) instead of a frozen one-shot value. Written by
+	// procMetricsLoop; lastProcPoll gates that loop to recent UI activity.
+	procMetrics  metrics.Timeseries
+	lastProcPoll time.Time
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -120,12 +128,14 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		detailCache: NewDetailCache(),
 		gavelCache:  make(map[string]*GavelResultsSummary),
 		knownBots:   make(map[string]struct{}),
+		procMetrics: metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
 	go s.refreshAuthProbe()
 	go s.authProbeLoop()
+	go s.procMetricsLoop()
 	return s
 }
 
@@ -317,6 +327,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
 	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
 	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
+	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
+	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
+	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }

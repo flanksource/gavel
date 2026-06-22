@@ -166,6 +166,14 @@ func ReadPid(path string) (int, error) {
 // stop. Missing files are ignored.
 func Clean(dir string) error {
 	_ = os.Remove(StatePath(dir))
+	return CleanPidfiles(dir)
+}
+
+// CleanPidfiles removes the supervisor pidfile and every per-process pidfile in
+// dir, leaving state.json (and the logs) in place. It is used when a daemon
+// exits on its own: the live-supervisor artifacts go away but the terminal
+// state.json is kept as a post-mortem. Missing files are ignored.
+func CleanPidfiles(dir string) error {
 	_ = os.Remove(SupervisorPidPath(dir))
 	matches, err := filepath.Glob(filepath.Join(dir, "*.pid"))
 	if err != nil {
