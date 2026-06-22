@@ -82,3 +82,7 @@ pr/ui/dist/
 testrunner/ui/dist/testui.js
 .handoff/
 pr/ui/dist/prui.js
+.playwright-cli/
+.todos/
+go.work.sum
+.grite/

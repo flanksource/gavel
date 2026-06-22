@@ -6,12 +6,14 @@ import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoDetail } from './todos/TodoDetail';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
+import { TodoFilterBar } from './todos/TodoFilterBar';
 
 export function TodoView({ projects }: { projects: Project[] }) {
   const {
     workspaces, byDir, loadingList, error, aggregate,
     selected, setSelected, detail, loadingDetail,
     refresh, showCreate, setShowCreate, created, updateItem, deleted,
+    hiddenStatuses, toggleStatus,
   } = useWorkspaceTodos(projects);
 
   return (
@@ -45,6 +47,12 @@ export function TodoView({ projects }: { projects: Project[] }) {
           </button>
         </div>
       </div>
+      {aggregate.total > 0 && (
+        <div className="flex items-center gap-2 border-b border-border bg-background px-3 py-1.5">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Filter</span>
+          <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
+        </div>
+      )}
       {error && <div className="border-b border-border px-3 py-1 text-xs text-red-600">{error}</div>}
       <CreateTodoDialog open={showCreate} onClose={() => setShowCreate(false)} workspaces={workspaces} onCreated={created} />
       <div className="min-h-0 flex-1 overflow-hidden">
@@ -57,6 +65,7 @@ export function TodoView({ projects }: { projects: Project[] }) {
                     key={ws.dir}
                     workspace={ws}
                     data={byDir[ws.dir]}
+                    hiddenStatuses={hiddenStatuses}
                     selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
                     onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
                   />

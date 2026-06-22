@@ -9,6 +9,38 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+func TestUpdateState_SetsPriority(t *testing.T) {
+	content := "---\npriority: high\nstatus: pending\nattempts: 0\nlanguage: go\n---\n\n# TODO: Test\n\n## Steps to Reproduce\n\n```bash\necho hi\n```\n"
+	tmpDir := t.TempDir()
+	todoPath := filepath.Join(tmpDir, "test.md")
+	if err := os.WriteFile(todoPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	todo, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("parse TODO: %v", err)
+	}
+
+	low := types.PriorityLow
+	if err := UpdateTODOState(todo, StateUpdate{Priority: &low}); err != nil {
+		t.Fatalf("UpdateTODOState: %v", err)
+	}
+	if todo.Priority != types.PriorityLow {
+		t.Errorf("in-memory priority = %q, want low", todo.Priority)
+	}
+
+	reread, err := ParseTODO(todoPath)
+	if err != nil {
+		t.Fatalf("re-parse TODO: %v", err)
+	}
+	if reread.Priority != types.PriorityLow {
+		t.Errorf("persisted priority = %q, want low", reread.Priority)
+	}
+	if reread.Status != types.StatusPending {
+		t.Errorf("status changed unexpectedly = %q, want pending", reread.Status)
+	}
+}
+
 func TestUpdateState_PreservesContent(t *testing.T) {
 	// Input: TODO with frontmatter + markdown content
 	// Action: Update status field

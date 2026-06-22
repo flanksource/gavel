@@ -21,6 +21,7 @@ import (
 )
 
 const statusLabelPrefix = "status:"
+const priorityLabelPrefix = "priority:"
 
 type GriteCommandRunner func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error)
 
@@ -150,6 +151,11 @@ func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updat
 	if id == "" {
 		return fmt.Errorf("missing grite issue id")
 	}
+	if updates.Priority != nil {
+		if err := p.applyPriority(ctx, id, todo, *updates.Priority); err != nil {
+			return err
+		}
+	}
 	if updates.Status == nil {
 		return nil
 	}
@@ -192,6 +198,30 @@ func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updat
 		}
 	}
 
+	return nil
+}
+
+// applyPriority swaps the issue's priority:* label to the requested priority,
+// keeping the in-memory todo's Labels/Priority in sync.
+func (p *GriteProvider) applyPriority(ctx context.Context, id string, todo *types.TODO, priority types.Priority) error {
+	want := priorityLabel(priority)
+	for _, label := range existingPriorityLabels(todo.Labels) {
+		if label == want {
+			continue
+		}
+		if _, err := p.run(ctx, "issue", "label", "remove", id, "--label", label, "--json"); err != nil {
+			return err
+		}
+		todo.Labels = removeLabel(todo.Labels, label)
+	}
+	if !hasLabel(todo.Labels, want) {
+		if _, err := p.run(ctx, "issue", "label", "add", id, "--label", want, "--json"); err != nil {
+			return err
+		}
+		todo.Labels = append(todo.Labels, want)
+		sort.Strings(todo.Labels)
+	}
+	todo.Priority = priority
 	return nil
 }
 
@@ -309,8 +339,12 @@ func installGrite(_ context.Context, binDir, appDir string) (string, error) {
 	if err := os.MkdirAll(appDir, 0755); err != nil {
 		return "", err
 	}
+	// "any" (not "latest"): accept whatever grite is already installed and avoid
+	// pinning to the newest release, which forces a GitHub releases/latest lookup
+	// that 403s under API rate limits. Any working grite is fine here.
+	const griteVersion = "any"
 	cfg := &depstypes.DepsConfig{
-		Dependencies: map[string]string{"grite": "latest"},
+		Dependencies: map[string]string{"grite": griteVersion},
 		Registry: map[string]depstypes.Package{
 			"grite": griteDepsPackage(),
 		},
@@ -321,7 +355,7 @@ func installGrite(_ context.Context, binDir, appDir string) (string, error) {
 		depsinstaller.WithAppDir(appDir),
 		depsinstaller.WithProgress(false),
 	)
-	if _, err := inst.InstallWithResult("grite", "latest", &task.Task{}); err != nil {
+	if _, err := inst.InstallWithResult("grite", griteVersion, &task.Task{}); err != nil {
 		return "", fmt.Errorf("install grite via deps: %w", err)
 	}
 	candidate := filepath.Join(binDir, executableName("grite"))
@@ -560,10 +594,10 @@ func statusFromGriteIssue(state string, labels []string) types.Status {
 
 func priorityFromLabels(labels []string) types.Priority {
 	for _, label := range labels {
-		if !strings.HasPrefix(label, "priority:") {
+		if !strings.HasPrefix(label, priorityLabelPrefix) {
 			continue
 		}
-		priority := types.Priority(strings.TrimPrefix(label, "priority:"))
+		priority := types.Priority(strings.TrimPrefix(label, priorityLabelPrefix))
 		switch priority {
 		case types.PriorityHigh, types.PriorityMedium, types.PriorityLow:
 			return priority
@@ -572,10 +606,24 @@ func priorityFromLabels(labels []string) types.Priority {
 	return types.PriorityMedium
 }
 
+func priorityLabel(priority types.Priority) string {
+	return priorityLabelPrefix + string(priority)
+}
+
+func existingPriorityLabels(labels []string) []string {
+	var out []string
+	for _, label := range labels {
+		if strings.HasPrefix(label, priorityLabelPrefix) {
+			out = append(out, label)
+		}
+	}
+	return out
+}
+
 func griteCreateLabels(priority types.Priority, status types.Status) []string {
 	labels := []string{}
 	if priority != "" {
-		labels = append(labels, "priority:"+string(priority))
+		labels = append(labels, priorityLabel(priority))
 	}
 	if status != "" && status != types.StatusCompleted {
 		labels = append(labels, statusLabel(status))

@@ -12,7 +12,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
   const {
     workspaces, byDir, loadingList,
     selected, setSelected, detail, loadingDetail,
-    updateItem, deleted,
+    updateItem, deleted, hiddenStatuses,
   } = useWorkspaceTodos(projects);
 
   if (selected) {
@@ -53,6 +53,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
               key={ws.dir}
               workspace={ws}
               data={byDir[ws.dir]}
+              hiddenStatuses={hiddenStatuses}
               selectedRef=""
               onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
             />

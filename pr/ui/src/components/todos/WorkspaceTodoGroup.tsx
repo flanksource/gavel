@@ -1,19 +1,25 @@
 import { useState } from 'react';
-import type { Project, TodoListResponse } from '../../types';
+import type { Project, TodoListResponse, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
+import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 
 // WorkspaceTodoGroup is one collapsible workspace section, mirroring the PR
 // tab's per-repo grouping: a sticky header with the workspace name and its
-// open/failed/total counts, with the workspace's todos listed beneath.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect }: {
+// open/failed/total counts, with the workspace's todos listed beneath. The
+// Closed/Status filter hides matching rows but leaves the header counts whole.
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
   onSelect: (ref: string) => void;
+  hiddenStatuses?: Set<TodoStatus>;
 }) {
   const [open, setOpen] = useState(true);
-  const items = data?.items ?? [];
+  const hidden = hiddenStatuses ?? defaultHiddenStatuses();
+  const allItems = data?.items ?? [];
+  const items = allItems.filter(item => isTodoVisible(item, hidden));
+  const hiddenCount = allItems.length - items.length;
   const counts = data?.counts ?? workspace.todoCounts ?? emptyCounts;
   return (
     <div className="border-b border-border">
@@ -32,7 +38,9 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect }: {
           <TodoRow key={item.ref} todo={item} active={item.ref === selectedRef} onClick={() => onSelect(item.ref)} />
         ))
       ) : (
-        <div className="px-3 py-2 text-xs text-muted-foreground">No todos</div>
+        <div className="px-3 py-2 text-xs text-muted-foreground">
+          {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}
+        </div>
       ))}
     </div>
   );
