@@ -55,6 +55,59 @@ export interface Project {
   dir: string;
   repos: string[];
   hasProcfile?: boolean;
+  // Pinned todo backend for this workspace; absent means auto-detect.
+  todoProvider?: TodoProvider;
+  todoCounts?: TodoCounts;
+}
+
+export type TodoProvider = 'grite' | 'todos';
+export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+export type TodoPriority = 'high' | 'medium' | 'low';
+
+export interface TodoCounts {
+  total: number;
+  open: number;
+  pending: number;
+  inProgress: number;
+  failed: number;
+  completed: number;
+  skipped: number;
+}
+
+export interface TodoEvent {
+  id?: string;
+  short_id?: string;
+  kind?: string;
+  actor?: string;
+  timestamp?: string;
+  title?: string;
+  body?: string;
+}
+
+export interface TodoItem {
+  ref: string;
+  id?: string;
+  shortId?: string;
+  title: string;
+  status: TodoStatus;
+  priority: TodoPriority;
+  provider?: TodoProvider | string;
+  providerState?: string;
+  filePath?: string;
+  cwd?: string;
+  labels?: string[];
+  attempts?: number;
+  lastRun?: string;
+  body?: string;
+  implementation?: string;
+  events?: TodoEvent[];
+}
+
+export interface TodoListResponse {
+  provider: TodoProvider | string;
+  dir?: string;
+  counts: TodoCounts;
+  items: TodoItem[];
 }
 
 // ProcProcess mirrors procfile.ProcState — one supervised process.
@@ -98,6 +151,9 @@ export interface ProcStatus {
   // supervisor's, else the .gavel.yaml default).
   profiles?: string[];
   profile?: string;
+  // Uncommitted changes (staged, unstaged, and untracked) in the project's
+  // directory. Absent when the directory is not a git work tree.
+  gitChanges?: number;
   error?: string;
 }
 

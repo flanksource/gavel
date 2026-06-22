@@ -329,6 +329,11 @@ export interface FlatProc {
   proc: ProcProcess;
 }
 
+// emptyProcStatus is the placeholder status for a configured project that has no
+// live entry in the proc-status map yet (or no Procfile at all). It lets the
+// workspace surfaces list every project from config without a type guard.
+export const emptyProcStatus: ProcStatus = { hasProcfile: false, running: false };
+
 // flattenProcesses gathers every supervised process across projects that have a
 // Procfile, tagged with its project. It iterates projects (not the procStatus
 // map, which is keyed by both project name and repo) so each process appears

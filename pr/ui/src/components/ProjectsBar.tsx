@@ -1,9 +1,11 @@
 import type { Project, ProcStatus } from '../types';
 import { ProcControl } from './ProcControl';
 import { GavelIcon } from './GavelIcon';
+import { TodoBadge } from './TodoBadge';
+import { GitChangesBadge } from './GitChangesBadge';
 
 interface Props {
-  /** Projects whose repos have no PRs in the current list (pinned above it). */
+  /** Every configured project from projects.json (not filtered by PR state). */
   projects: Project[];
   /** Status keyed by project name (and repo) from /api/proc/status. */
   procStatus: Record<string, ProcStatus>;
@@ -13,10 +15,10 @@ interface Props {
   onAdd: () => void;
 }
 
-// ProjectsBar pins projects that aren't represented by a repo group in the PR
-// list (e.g. a local directory with no open PRs) so their Procfile controls are
-// still reachable. The section is always shown so its "Add directory" action
-// stays available even when there are no standalone projects yet.
+// ProjectsBar lists every configured workspace straight from projects.json,
+// independent of the GitHub PR fetch, so a project never vanishes when one of
+// its repos gains an open PR. The section is always shown so its "Add directory"
+// action stays available even when no projects are configured yet.
 export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: Props) {
   return (
     <div className="border-b border-border">
@@ -29,6 +31,8 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
           <div key={p.name} className="pl-6 pr-3 py-1.5 flex items-center gap-2 hover:bg-muted">
             <GavelIcon name="codicon:folder" className="text-muted-foreground shrink-0" />
             <span className="text-sm font-medium text-foreground truncate flex-1" title={p.dir}>{p.name}</span>
+            <TodoBadge counts={p.todoCounts} />
+            <GitChangesBadge count={procStatus[p.name]?.gitChanges} />
             <ProcControl
               repo={key}
               project={p}

@@ -5,6 +5,8 @@ import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
+import { TodoView } from './components/TodoView';
+import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
@@ -12,19 +14,18 @@ import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
 import { WorkspaceGroup } from './components/ProcessTable';
-import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey } from './utils';
+import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
 import {
   annotateRoutePaths,
   buildRoute,
   findPRByRoutePath,
   parseRoute,
   type RouteState,
+  type Tab,
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { GavelIcon } from './components/GavelIcon';
-
-type Tab = 'prs' | 'activity';
 
 const defaultConfig: SearchConfig = { repos: [] };
 
@@ -114,7 +115,7 @@ function aggregateShards(shards: GavelResultsSummary[]): GavelResultsSummary | n
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
-    : { selectedPath: '', filters: emptyFilters() };
+    : { tab: 'prs', selectedPath: '', filters: emptyFilters() };
 
   // Hydrate org/search config and filters from localStorage. URL query params
   // (if present) win for filters so deep links still work.
@@ -142,7 +143,7 @@ export function App() {
   const [config, setConfig] = useState<SearchConfig>(initialConfig);
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
-  const [activeTab, setActiveTab] = useState<Tab>('prs');
+  const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
   const [query, setQuery] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
@@ -162,11 +163,12 @@ export function App() {
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
   const routeState: RouteState = useMemo(
-    () => ({ selectedPath, filters }),
-    [selectedPath, filters],
+    () => ({ tab: activeTab, selectedPath, filters }),
+    [activeTab, selectedPath, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
+    setActiveTab(next.tab);
     setSelectedPath(next.selectedPath);
     setFilters(next.filters);
     const url = buildRoute(next);
@@ -177,9 +179,16 @@ export function App() {
     }
   }, []);
 
+  // Switching the top-level tab navigates (so /todos, /activity are linkable and
+  // back/forward works); the PR selection is dropped when leaving the prs tab.
+  const changeTab = useCallback((next: Tab) => {
+    commitRoute({ tab: next, selectedPath: '', filters });
+  }, [commitRoute, filters]);
+
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
+      setActiveTab(next.tab);
       setSelectedPath(next.selectedPath);
       setFilters(next.filters);
     };
@@ -287,13 +296,6 @@ export function App() {
     for (const p of projects) for (const r of p.repos || []) m[r] = p;
     return m;
   }, [projects]);
-
-  // Projects whose repos have no PRs in the current list get pinned above it so
-  // their controls stay reachable (a local dir with no open PRs still shows).
-  const standaloneProjects = useMemo(() => {
-    const reposWithPRs = new Set(prs.map(p => p.repo));
-    return projects.filter(p => !(p.repos || []).some(r => reposWithPRs.has(r)));
-  }, [projects, prs]);
 
   const openAdd = useCallback(() => { setEditProject(null); setAddOpen(true); }, []);
   const openEdit = useCallback((p: Project) => { setEditProject(p); setAddOpen(true); }, []);
@@ -511,7 +513,7 @@ export function App() {
     <>
       <AppShell
         brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
-        nav={<TabBar active={activeTab} onChange={setActiveTab} />}
+        nav={<TabBar active={activeTab} onChange={changeTab} />}
         search={
           activeTab === 'prs' ? (
             <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
@@ -582,7 +584,7 @@ export function App() {
           <SplitPane
             left={
               <>
-                <ProjectsBar projects={standaloneProjects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} />
+                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} />
                 <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
               </>
             }
@@ -599,6 +601,8 @@ export function App() {
               )
             }
           />
+        ) : activeTab === 'todos' ? (
+          <TodoView projects={projects} />
         ) : (
           <ActivityView />
         )}
@@ -619,9 +623,7 @@ function ProcessesPage({
   onProcChanged: () => void;
 }) {
   const workspaces = useMemo(
-    () => projects
-      .map(p => ({ project: p, status: procStatus[p.name] }))
-      .filter((w): w is { project: Project; status: ProcStatus } => !!w.status?.hasProcfile),
+    () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
     [projects, procStatus],
   );
   const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
@@ -659,7 +661,7 @@ function ProcessesPage({
             ))}
           </div>
         ) : (
-          <div className="py-10 text-center text-sm text-muted-foreground">No Procfile projects configured</div>
+          <div className="py-10 text-center text-sm text-muted-foreground">No projects configured</div>
         )}
       </main>
     </div>
@@ -700,17 +702,20 @@ function MenubarView({
   error?: string;
 }) {
   useMenubarExternalLinks();
+  const [menubarTab, setMenubarTab] = useState<'processes' | 'prs' | 'todos'>('prs');
 
   const workspaces = useMemo(
-    () => projects
-      .map(p => ({ project: p, status: procStatus[p.name] }))
-      .filter((w): w is { project: Project; status: ProcStatus } => !!w.status?.hasProcfile),
+    () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
     [projects, procStatus],
   );
   const procs = useMemo(() => flattenProcesses(projects, procStatus), [projects, procStatus]);
   const running = procs.filter(p => p.proc.status === 'running').length;
   const dot = aggregateDotClass(procs.map(p => p.proc));
   const failed = prs.filter(pr => pr.checkStatus?.failed && pr.checkStatus.failed > 0).length;
+  // Tab count/badge come from the projects poll's per-workspace todoCounts, so
+  // the strip reflects todos without fetching the lists until the tab is opened.
+  const openTodos = projects.reduce((n, p) => n + (p.todoCounts?.open ?? 0), 0);
+  const failedTodos = projects.reduce((n, p) => n + (p.todoCounts?.failed ?? 0), 0);
   const unreadCount = prs.filter(pr => unread[prKey(pr)]).length;
   const fetched = fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -748,11 +753,11 @@ function MenubarView({
 
   return (
     <div
-      className="h-screen overflow-hidden bg-background text-foreground"
+      className="flex h-screen flex-col overflow-hidden bg-background text-foreground"
       onPointerEnter={() => postMenubarMessage(menubarPointerEnterMessage)}
       onPointerLeave={() => postMenubarMessage(menubarPointerLeaveMessage)}
     >
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
           <div className="min-w-0">
@@ -767,21 +772,46 @@ function MenubarView({
         <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
       </div>
 
-      <div className="h-[calc(100vh-45px)] overflow-y-auto">
-        <section className="border-b border-border p-2">
-          <div className="mb-1 px-1 text-xs font-semibold text-muted-foreground">Processes</div>
-          {workspaces.length > 0 ? (
-            <div className="divide-y divide-border">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
+        <MenubarTab
+          label="Processes"
+          dot={dot}
+          count={`${running}/${procs.length}`}
+          active={menubarTab === 'processes'}
+          onClick={() => setMenubarTab('processes')}
+        />
+        <MenubarTab
+          label="PRs"
+          icon="codicon:git-pull-request"
+          count={prs.length}
+          badge={failed > 0 ? failed : undefined}
+          active={menubarTab === 'prs'}
+          onClick={() => setMenubarTab('prs')}
+        />
+        <MenubarTab
+          label="Todos"
+          icon="codicon:check"
+          count={openTodos}
+          badge={failedTodos > 0 ? failedTodos : undefined}
+          active={menubarTab === 'todos'}
+          onClick={() => setMenubarTab('todos')}
+        />
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {menubarTab === 'processes' ? (
+          workspaces.length > 0 ? (
+            <div className="divide-y divide-border p-2">
               {workspaces.map(w => (
                 <WorkspaceGroup key={w.project.name} project={w.project} status={w.status} onChanged={onProcChanged} />
               ))}
             </div>
           ) : (
-            <div className="px-1 py-3 text-xs text-muted-foreground">No Procfile projects configured</div>
-          )}
-        </section>
-
-        <section>
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">No projects configured</div>
+          )
+        ) : menubarTab === 'todos' ? (
+          <MenubarTodos projects={projects} />
+        ) : (
           <PRList
             prs={prs}
             selected={selected}
@@ -793,15 +823,48 @@ function MenubarView({
             procStatus={procStatus}
             onProcChanged={onProcChanged}
           />
-        </section>
+        )}
       </div>
     </div>
+  );
+}
+
+// MenubarTab is one segment of the menubar's Processes/PRs switcher. A status
+// dot (process health) or an icon leads the label; count is the inline subtotal
+// and badge is an attention-grabbing count (e.g. failing PRs).
+function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
+  label: string;
+  icon?: string;
+  dot?: string;
+  count?: number | string;
+  badge?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition ${
+        active ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-muted'
+      }`}
+    >
+      {dot ? <span className={`inline-block h-2 w-2 rounded-full ${dot}`} /> : icon ? <GavelIcon name={icon} /> : null}
+      <span>{label}</span>
+      {count !== undefined && count !== '' && (
+        <span className="tabular-nums text-[10px] text-muted-foreground">{count}</span>
+      )}
+      {badge !== undefined && badge > 0 && (
+        <span className="rounded-full bg-red-500/15 px-1 text-[10px] font-medium tabular-nums text-red-600 dark:text-red-400">{badge}</span>
+      )}
+    </button>
   );
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: 'prs', label: 'PRs', icon: 'codicon:git-pull-request' },
+    { id: 'todos', label: 'Todos', icon: 'codicon:check' },
     { id: 'activity', label: 'Activity', icon: 'codicon:pulse' },
   ];
   return (

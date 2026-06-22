@@ -5,6 +5,8 @@ import { ProcControl } from './ProcControl';
 import { groupByOrg, prKey, paletteClass, computeCounts } from '../utils';
 import { Avatar } from './Avatar';
 import { GavelIcon } from './GavelIcon';
+import { TodoBadge } from './TodoBadge';
+import { GitChangesBadge } from './GitChangesBadge';
 
 interface Props {
   prs: PRItem[];
@@ -140,6 +142,8 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                     onEdit={onProcEdit}
                   />
                 )}
+                <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />
+                <GitChangesBadge count={procStatus?.[group.repo]?.gitChanges} />
                 <GroupCounts items={group.items} />
               </div>
               {group.items.map(pr => (

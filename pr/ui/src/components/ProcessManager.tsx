@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { DropdownMenu } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
-import { flattenProcesses, aggregateDotClass } from '../utils';
+import { flattenProcesses, aggregateDotClass, emptyProcStatus } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
 import { GavelIcon } from './GavelIcon';
 
@@ -12,15 +12,15 @@ interface Props {
 }
 
 // ProcessManager is the top-right task-manager dropdown: a profile-aware view of
-// every supervised workspace. Each workspace shows its processes (with live CPU /
-// memory / open-file metrics and a per-process log preview) plus a profile
-// selector and start/restart/stop-all controls.
+// every configured workspace. Each workspace with a Procfile shows its processes
+// (with live CPU / memory / open-file metrics and a per-process log preview) plus
+// a profile selector and start/restart/stop-all controls; one without a Procfile
+// shows as a compact "No Procfile" row.
 export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
-  // Workspaces are the configured projects that actually have a Procfile.
+  // Every configured project is a workspace, listed straight from projects.json;
+  // those without a Procfile render as a compact "No Procfile" row.
   const workspaces = useMemo(
-    () => projects
-      .map(p => ({ project: p, status: procStatus[p.name] }))
-      .filter((w): w is { project: Project; status: ProcStatus } => !!w.status?.hasProcfile),
+    () => projects.map(p => ({ project: p, status: procStatus[p.name] ?? emptyProcStatus })),
     [projects, procStatus],
   );
 
@@ -35,7 +35,7 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
     return { running, crashed };
   }, [procs]);
 
-  // No workspaces with a Procfile → no button (keeps the header clean).
+  // No projects configured → no button (keeps the header clean).
   if (workspaces.length === 0) return null;
 
   const dot = aggregateDotClass(procs.map(p => p.proc));
