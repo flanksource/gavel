@@ -1,6 +1,9 @@
 package todos
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/flanksource/gavel/todos/types"
@@ -12,6 +15,12 @@ func todo(path types.StringOrSlice, priority types.Priority, name string) *types
 		FilePath:        ".todos/" + name + ".md",
 		TODOFrontmatter: types.TODOFrontmatter{Priority: priority, Status: types.StatusPending, Path: path},
 	}
+}
+
+func todoWithCWD(cwd string, priority types.Priority, name string) *types.TODO {
+	t := todo(nil, priority, name)
+	t.CWD = cwd
+	return t
 }
 
 func TestGroupTODOs_ByFile(t *testing.T) {
@@ -50,6 +59,49 @@ func TestGroupTODOs_ByDirectory(t *testing.T) {
 	assert.Len(t, groups[0].TODOs, 2)
 	assert.Equal(t, "pkg/api", groups[1].Name)
 	assert.Len(t, groups[1].TODOs, 1)
+}
+
+func TestGroupTODOs_ByRepoUsesGitRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+	root := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	expectedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "pkg", "auth")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatal(err)
+	}
+	todos := types.TODOS{
+		todoWithCWD(nested, types.PriorityHigh, "a"),
+		todoWithCWD(root, types.PriorityLow, "b"),
+	}
+
+	groups := GroupTODOs(todos, GroupByRepo)
+
+	assert.Len(t, groups, 1)
+	assert.Equal(t, expectedRoot, groups[0].Name)
+	assert.Len(t, groups[0].TODOs, 2)
+}
+
+func TestGroupTODOs_ByRepoFallsBackToWorkDir(t *testing.T) {
+	workDir := t.TempDir()
+	todos := types.TODOS{
+		todo(nil, types.PriorityHigh, "a"),
+	}
+
+	groups := GroupTODOsWithWorkDir(todos, GroupByRepo, workDir)
+
+	assert.Len(t, groups, 1)
+	assert.Equal(t, workDir, groups[0].Name)
+	assert.Len(t, groups[0].TODOs, 1)
 }
 
 func TestGroupTODOs_MultiPath(t *testing.T) {

@@ -87,6 +87,64 @@ func (p *GriteProvider) Get(ctx context.Context, ref string) (*types.TODO, error
 	return todo, nil
 }
 
+func (p *GriteProvider) Create(ctx context.Context, req CreateRequest) (*types.TODO, error) {
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	priority := req.Priority
+	if priority == "" {
+		priority = types.PriorityMedium
+	}
+	status := req.Status
+	if status == "" {
+		status = types.StatusPending
+	}
+	args := []string{"issue", "create", "--title", title, "--body", strings.TrimSpace(req.Body)}
+	for _, label := range griteCreateLabels(priority, status) {
+		args = append(args, "--label", label)
+	}
+	args = append(args, "--json")
+	raw, err := p.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	data, err := decodeGrite[griteIssueCreateData](raw)
+	if err != nil {
+		return nil, err
+	}
+	id := data.ID()
+	if id == "" {
+		return nil, fmt.Errorf("grite issue create did not return an issue id")
+	}
+	todo, err := p.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if status == types.StatusCompleted {
+		if err := p.UpdateState(ctx, todo, StateUpdate{Status: &status}); err != nil {
+			return nil, err
+		}
+	}
+	return todo, nil
+}
+
+func (p *GriteProvider) Delete(ctx context.Context, todo *types.TODO) error {
+	id := TODOReference(todo)
+	if id == "" {
+		return fmt.Errorf("missing grite issue id")
+	}
+	if todo != nil && todo.ProviderState == "closed" {
+		return nil
+	}
+	_, err := p.run(ctx, "issue", "close", id, "--json")
+	if err == nil && todo != nil {
+		todo.ProviderState = "closed"
+		todo.Status = types.StatusCompleted
+	}
+	return err
+}
+
 func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error {
 	id := TODOReference(todo)
 	if id == "" {
@@ -341,6 +399,21 @@ type griteIssueShowData struct {
 	Events []griteEvent `json:"events"`
 }
 
+type griteIssueCreateData struct {
+	IssueID string      `json:"issue_id"`
+	Issue   *griteIssue `json:"issue"`
+}
+
+func (d griteIssueCreateData) ID() string {
+	if d.IssueID != "" {
+		return d.IssueID
+	}
+	if d.Issue != nil {
+		return d.Issue.IssueID
+	}
+	return ""
+}
+
 type griteEvent struct {
 	EventID     string                     `json:"event_id"`
 	IssueID     string                     `json:"issue_id"`
@@ -497,6 +570,17 @@ func priorityFromLabels(labels []string) types.Priority {
 		}
 	}
 	return types.PriorityMedium
+}
+
+func griteCreateLabels(priority types.Priority, status types.Status) []string {
+	labels := []string{}
+	if priority != "" {
+		labels = append(labels, "priority:"+string(priority))
+	}
+	if status != "" && status != types.StatusCompleted {
+		labels = append(labels, statusLabel(status))
+	}
+	return labels
 }
 
 func statusLabel(status types.Status) string {

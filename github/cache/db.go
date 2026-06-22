@@ -85,6 +85,8 @@ func Open() (*Store, error) {
 		&WorkflowDefCache{},
 		&SeenPR{},
 		&FaviconCache{},
+		&GriteIssueCache{},
+		&GriteSyncCursor{},
 	); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate github cache: %w", err)
@@ -258,6 +260,8 @@ func (s *Store) Status() Status {
 		{"workflow_def_caches", &WorkflowDefCache{}},
 		{"seen_prs", &SeenPR{}},
 		{"favicon_caches", &FaviconCache{}},
+		{"grite_issue_caches", &GriteIssueCache{}},
+		{"grite_sync_cursors", &GriteSyncCursor{}},
 	}
 	for _, t := range tables {
 		var n int64
