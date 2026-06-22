@@ -261,6 +261,31 @@ var _ = Describe("Supervisor", func() {
 		})
 	})
 
+	It("keeps a crashed post-mortem in state.json after the daemon self-exits", func() {
+		// A single process that crashes brings the whole daemon down. Run() (Start
+		// + Wait) takes the self-exit path, which must preserve the crashed status
+		// and exit code so `proc start`'s readiness can fail the start.
+		root := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte("boom: sh -c 'exit 7'\n"), 0o644)).To(Succeed())
+		dir, err := pf.StateDir(root)
+		Expect(err).NotTo(HaveOccurred())
+		sup, err := pf.NewSupervisor(pf.Options{Root: root, Procfile: filepath.Join(root, "Procfile")})
+		Expect(err).NotTo(HaveOccurred())
+
+		done := make(chan struct{})
+		go func() { defer close(done); _ = sup.Run() }()
+		Eventually(done, 5*time.Second).Should(BeClosed())
+
+		st, err := pf.ReadState(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(st.Running()).To(BeFalse())
+		p, ok := st.Process("boom")
+		Expect(ok).To(BeTrue())
+		Expect(p.Status).To(Equal(pf.StatusCrashed))
+		Expect(p.ExitCode).NotTo(BeNil())
+		Expect(*p.ExitCode).To(Equal(7))
+	})
+
 	It("stops every process and cleans up on Shutdown", func() {
 		sup, dir := newSupervisor("a: sh -c 'sleep 30'\nb: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
 

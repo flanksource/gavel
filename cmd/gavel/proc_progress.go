@@ -25,11 +25,12 @@ const (
 // each to readiness and updating its label as it moves starting → running →
 // listening on :PORT (or crashed/exited). names selects the subset to track;
 // empty tracks every process in report. It blocks until every tracked process
-// settles so the caller can re-fetch a final, accurate status afterwards.
-func renderProcReadiness(workDir, pf, groupName string, report *procfile.StatusReport, names []string) {
+// settles, returning a non-nil error when any failed to start (a crash or a
+// process that never reached running) so the caller can exit non-zero.
+func renderProcReadiness(workDir, pf, groupName string, report *procfile.StatusReport, names []string) error {
 	tracked := trackedProcNames(report.Processes, names)
 	if len(tracked) == 0 {
-		return
+		return nil
 	}
 	group := clicky.StartGroup[procfile.ProcState](groupName)
 	for _, name := range tracked {
@@ -39,14 +40,15 @@ func renderProcReadiness(workDir, pf, groupName string, report *procfile.StatusR
 		})
 	}
 	group.WaitFor()
+	_, err := group.GetResults()
+	return err
 }
 
 // awaitProcReady polls a single process's status until it settles, keeping the
-// task label in sync. A crash fails the task; a clean early exit warns; a
-// running process (with or without a port) succeeds.
+// task label in sync. A crash or a never-running process fails the task; a clean
+// early exit warns; a running process (with or without a port) succeeds.
 func awaitProcReady(ctx commonsCtx.Context, t *task.Task, workDir, pf, name string) (procfile.ProcState, error) {
-	deadline := time.Now().Add(procReadyTimeout)
-	var runningSince time.Time
+	tr := &procTracker{deadline: time.Now().Add(procReadyTimeout)}
 	var last procfile.ProcState
 	for {
 		rep, err := procfile.Status(workDir, pf)
@@ -60,28 +62,14 @@ func awaitProcReady(ctx commonsCtx.Context, t *task.Task, workDir, pf, name stri
 		last = ps
 		t.SetName(procReadyLabel(ps))
 
-		switch ps.Status {
-		case procfile.StatusCrashed:
-			return ps, fmt.Errorf("%s crashed (exit %s)", name, exitCodeStr(ps.ExitCode))
-		case procfile.StatusExited, procfile.StatusStopped:
+		switch outcome, ferr := tr.observe(ps, time.Now()); outcome {
+		case outcomeReady:
+			return ps, nil
+		case outcomeWarn:
 			t.Warning()
 			return ps, nil
-		case procfile.StatusRunning:
-			if len(ps.Ports) > 0 {
-				return ps, nil
-			}
-			if runningSince.IsZero() {
-				runningSince = time.Now()
-			} else if time.Since(runningSince) >= procPortGrace {
-				return ps, nil
-			}
-		default:
-			runningSince = time.Time{}
-		}
-
-		if time.Now().After(deadline) {
-			t.Warning()
-			return ps, nil
+		case outcomeFailed:
+			return ps, ferr
 		}
 		select {
 		case <-ctx.Done():
@@ -89,6 +77,59 @@ func awaitProcReady(ctx commonsCtx.Context, t *task.Task, workDir, pf, name stri
 		case <-time.After(procReadyPoll):
 		}
 	}
+}
+
+// readyOutcome is the verdict of folding one status sample into a procTracker.
+type readyOutcome int
+
+const (
+	outcomePending readyOutcome = iota // not settled yet
+	outcomeReady                       // settled: running (ready) — a successful start
+	outcomeWarn                        // settled: a clean early exit — soft, not a failure
+	outcomeFailed                      // settled: crashed or never reached running
+)
+
+// procTracker classifies one process's progress toward "ready" across repeated
+// status samples, owning the per-process timing (port grace) so the caller only
+// feeds it fresh ProcStates. A process is ready once it is Running with a
+// detected port, or has run procPortGrace without binding one (a worker). A
+// crash, or never leaving "starting" by the deadline, is a start failure.
+type procTracker struct {
+	deadline     time.Time
+	runningSince time.Time
+}
+
+// observe folds one status sample into the tracker. now is passed in so tests
+// can drive the timing deterministically. The returned error is non-nil only for
+// outcomeFailed and describes why the start failed.
+func (pt *procTracker) observe(ps procfile.ProcState, now time.Time) (readyOutcome, error) {
+	switch ps.Status {
+	case procfile.StatusCrashed:
+		return outcomeFailed, fmt.Errorf("%s crashed (exit %s)", ps.Name, exitCodeStr(ps.ExitCode))
+	case procfile.StatusExited, procfile.StatusStopped:
+		return outcomeWarn, nil
+	case procfile.StatusRunning:
+		if len(ps.Ports) > 0 {
+			return outcomeReady, nil
+		}
+		if pt.runningSince.IsZero() {
+			pt.runningSince = now
+		} else if now.Sub(pt.runningSince) >= procPortGrace {
+			return outcomeReady, nil
+		}
+	default:
+		pt.runningSince = time.Time{}
+	}
+
+	if now.After(pt.deadline) {
+		// A process that is up but slow to bind its port is a success, not a
+		// failure; only one still trying to start has failed.
+		if ps.Status == procfile.StatusRunning {
+			return outcomeReady, nil
+		}
+		return outcomeFailed, fmt.Errorf("%s did not become ready within %s (status %q)", ps.Name, procReadyTimeout, ps.Status)
+	}
+	return outcomePending, nil
 }
 
 // procReadyLabel is the live task label for a process in a given state.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/cache"
@@ -80,6 +81,10 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	// Mark the dashboard as actively watched so procMetricsLoop keeps sampling.
+	s.mu.Lock()
+	s.lastProcPoll = time.Now()
+	s.mu.Unlock()
 	ps := LoadProjects()
 
 	if name := r.URL.Query().Get("project"); name != "" {
