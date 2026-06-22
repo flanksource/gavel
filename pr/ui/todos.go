@@ -72,10 +72,11 @@ type todoCreatePayload struct {
 }
 
 type todoUpdatePayload struct {
-	Provider string       `json:"provider,omitempty"`
-	Dir      string       `json:"dir,omitempty"`
-	Ref      string       `json:"ref,omitempty"`
-	Status   types.Status `json:"status,omitempty"`
+	Provider string         `json:"provider,omitempty"`
+	Dir      string         `json:"dir,omitempty"`
+	Ref      string         `json:"ref,omitempty"`
+	Status   types.Status   `json:"status,omitempty"`
+	Priority types.Priority `json:"priority,omitempty"`
 }
 
 func (s *Server) handleTodos(w http.ResponseWriter, r *http.Request) {
@@ -198,8 +199,24 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	if !validTodoStatus(payload.Status) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid status %q", payload.Status))
+	// A PATCH may set status, priority, or both; at least one is required.
+	var update todos.StateUpdate
+	if payload.Status != "" {
+		if !validTodoStatus(payload.Status) {
+			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid status %q", payload.Status))
+			return
+		}
+		update.Status = &payload.Status
+	}
+	if payload.Priority != "" {
+		if !validTodoPriority(payload.Priority) {
+			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid priority %q", payload.Priority))
+			return
+		}
+		update.Priority = &payload.Priority
+	}
+	if update.Status == nil && update.Priority == nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("status or priority is required"))
 		return
 	}
 	source := todoSourceFromRequest(r)
@@ -219,7 +236,7 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := provider.UpdateState(r.Context(), todo, todos.StateUpdate{Status: &payload.Status}); err != nil {
+	if err := provider.UpdateState(r.Context(), todo, update); err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -420,6 +437,15 @@ func summarizeTodos(items types.TODOS) todoCounts {
 func validTodoStatus(status types.Status) bool {
 	switch status {
 	case types.StatusPending, types.StatusInProgress, types.StatusCompleted, types.StatusFailed, types.StatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTodoPriority(priority types.Priority) bool {
+	switch priority {
+	case types.PriorityHigh, types.PriorityMedium, types.PriorityLow:
 		return true
 	default:
 		return false

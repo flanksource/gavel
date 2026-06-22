@@ -86,6 +86,55 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	}
 }
 
+func TestTodoAPIPatchPriority(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:    "Tune severity",
+		Priority: types.PriorityMedium,
+		Status:   types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("create todo: %v", err)
+	}
+	ref := todos.TODOReference(created)
+
+	// PATCH priority only (no status) sets severity and leaves status alone.
+	rec := httptest.NewRecorder()
+	body := `{"ref":` + strconvQuote(ref) + `,"priority":"low"}`
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch priority status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var patched todoSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	if patched.Priority != types.PriorityLow {
+		t.Errorf("priority = %q, want low", patched.Priority)
+	}
+	if patched.Status != types.StatusPending {
+		t.Errorf("status changed to %q, want pending preserved", patched.Status)
+	}
+
+	// PATCH with neither status nor priority is a 400.
+	rec = httptest.NewRecorder()
+	empty := `{"ref":` + strconvQuote(ref) + `}`
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(empty)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty patch status = %d, want 400", rec.Code)
+	}
+
+	// PATCH with an invalid priority is a 400.
+	rec = httptest.NewRecorder()
+	bad := `{"ref":` + strconvQuote(ref) + `,"priority":"urgent"}`
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(bad)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid priority status = %d, want 400", rec.Code)
+	}
+}
+
 func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}

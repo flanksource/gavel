@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
+	"github.com/flanksource/gavel/todos/cmux"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -139,9 +140,6 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	if dryRun {
 		return dryRunTODOs(groups, workDir)
 	}
-	if todosMode == "cmux" {
-		return fmt.Errorf("cmux execution is not implemented yet; use --dry-run to inspect the cmux dispatch plan")
-	}
 
 	interaction := newInteraction()
 
@@ -213,6 +211,40 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 	return config
 }
 
+func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string) {
+	if todosMode == "cmux" {
+		return cmux.NewCmuxExecutor(newCmuxConfig(workDir, todo)), ""
+	}
+	config := newClaudeConfig(workDir, todo)
+	return claude.NewClaudeExecutor(config), config.SessionID
+}
+
+func newCmuxConfig(workDir string, todo *types.TODO) cmux.CmuxExecutorConfig {
+	model := ""
+	if todo != nil && todo.LLM != nil {
+		model = todo.LLM.Model
+	}
+	if todoModel != "" {
+		model = todoModel
+	}
+
+	cwd := workDir
+	if todo != nil && todo.CWD != "" {
+		if filepath.IsAbs(todo.CWD) {
+			cwd = todo.CWD
+		} else {
+			cwd = filepath.Join(workDir, todo.CWD)
+		}
+	}
+
+	return cmux.CmuxExecutorConfig{
+		WorkDir: cwd,
+		Model:   model,
+		Effort:  todoEffort,
+		Timeout: 30 * time.Minute,
+	}
+}
+
 func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction, provider todos.Provider) error {
 	for gi, group := range groups {
 		if len(group.TODOs) == 0 {
@@ -224,9 +256,8 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		config := newClaudeConfig(workDir, group.TODOs[0])
-		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID, provider)
+		executor, sessionID := newExecutor(workDir, group.TODOs[0])
+		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -291,9 +322,8 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		config := newClaudeConfig(workDir, todo)
-		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID, provider)
+		executor, sessionID := newExecutor(workDir, todo)
+		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -451,41 +481,15 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 }
 
 func buildCmuxPrompt(todoList []*types.TODO, workDir string) string {
-	prompt := claude.BuildGroupPrompt(todoList, workDir)
-	if directive := effortDirective(todoEffort); directive != "" {
-		return directive + "\n\n" + prompt
-	}
-	return prompt
+	return cmux.BuildPrompt(todoList, workDir, todoEffort)
 }
 
 func effortDirective(effort string) string {
-	switch effort {
-	case "low":
-		return "Be concise."
-	case "medium", "":
-		return "Think carefully before implementing."
-	case "high":
-		return "Think hard and reason thoroughly; consider edge cases before implementing."
-	default:
-		return ""
-	}
+	return cmux.EffortDirective(effort)
 }
 
 func resolveTodoAgent(model string) (agent string, modelFlag string) {
-	if model == "" {
-		return "claude", ""
-	}
-	lower := strings.ToLower(model)
-	if lower == "codex" || strings.HasPrefix(lower, "gpt-") {
-		return "codex", model
-	}
-	if strings.HasPrefix(lower, "codex-") {
-		return "codex", model
-	}
-	if lower == "claude" {
-		return "claude", ""
-	}
-	return "claude", model
+	return cmux.ResolveAgent(model)
 }
 
 func printSectionCommands(header string, todoList []*types.TODO, getNodes func(*types.TODO) []*fixtures.FixtureNode) {

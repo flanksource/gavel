@@ -243,6 +243,44 @@ func TestGriteProviderUpdateStateUsesStatusLabels(t *testing.T) {
 	}
 }
 
+func TestGriteProviderUpdateStateSwapsPriorityLabel(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return []byte(`{"ok": true, "data": {}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo := &types.TODO{
+		ID:            "abc123",
+		Provider:      ProviderGrite,
+		ProviderState: "open",
+		Labels:        []string{"priority:high", "status:pending"},
+	}
+	low := types.PriorityLow
+	if err := provider.UpdateState(context.Background(), todo, StateUpdate{Priority: &low}); err != nil {
+		t.Fatalf("UpdateState failed: %v", err)
+	}
+
+	want := []string{
+		"issue label remove abc123 --label priority:high --json",
+		"issue label add abc123 --label priority:low --json",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+	if todo.Priority != types.PriorityLow {
+		t.Fatalf("expected priority low, got %q", todo.Priority)
+	}
+	if !hasLabel(todo.Labels, "priority:low") || hasLabel(todo.Labels, "priority:high") {
+		t.Fatalf("labels not updated: %#v", todo.Labels)
+	}
+	// status:pending untouched when only priority changes.
+	if !hasLabel(todo.Labels, "status:pending") {
+		t.Fatalf("status label should be preserved: %#v", todo.Labels)
+	}
+}
+
 func TestGriteProviderUpdateStateClosesCompletedIssue(t *testing.T) {
 	var calls []string
 	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {

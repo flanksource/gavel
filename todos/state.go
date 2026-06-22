@@ -16,6 +16,7 @@ import (
 type StateUpdate struct {
 	SessionID *string
 	Status    *types.Status
+	Priority  *types.Priority
 	Attempts  *int
 	LastRun   *time.Time
 }
@@ -35,6 +36,9 @@ func UpdateTODOState(todo *types.TODO, updates StateUpdate) error {
 	// Apply updates
 	if updates.Status != nil {
 		frontmatter.Status = *updates.Status
+	}
+	if updates.Priority != nil {
+		frontmatter.Priority = *updates.Priority
 	}
 	if updates.Attempts != nil {
 		frontmatter.Attempts = *updates.Attempts

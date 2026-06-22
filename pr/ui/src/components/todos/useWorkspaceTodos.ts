@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Project, TodoItem, TodoListResponse } from '../../types';
+import type { Project, TodoItem, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts, todoQuery } from './format';
+import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
 
 export interface SelectedTodo {
   dir: string;
@@ -33,6 +34,17 @@ export function useWorkspaceTodos(projects: Project[]) {
   const [detail, setDetail] = useState<TodoItem | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  // Closed/Status filter: the set of statuses hidden from the lists. Defaults to
+  // hiding completed (closed) and persists the user's choice across reloads.
+  const [hiddenStatuses, setHiddenStatuses] = useState<Set<TodoStatus>>(loadHiddenStatuses);
+
+  const toggleStatus = useCallback((status: TodoStatus) => {
+    setHiddenStatuses(prev => {
+      const next = toggleHiddenStatus(prev, status);
+      saveHiddenStatuses(next);
+      return next;
+    });
+  }, []);
 
   // Fetch every workspace's todos in parallel; refetch only when the set of
   // workspace directories changes or on an explicit refresh, not on every
@@ -132,5 +144,7 @@ export function useWorkspaceTodos(projects: Project[]) {
     created,
     updateItem,
     deleted,
+    hiddenStatuses,
+    toggleStatus,
   };
 }
