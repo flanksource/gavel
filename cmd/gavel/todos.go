@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -33,6 +34,9 @@ var (
 	dirty         bool
 	dryRun        bool
 	todosProvider string
+	todosMode     string
+	todoModel     string
+	todoEffort    string
 )
 
 var todosCmd = &cobra.Command{
@@ -51,7 +55,7 @@ var todosRunCmd = &cobra.Command{
 type TodosListOptions struct {
 	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
-	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, all, or none"`
+	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }
@@ -72,6 +76,10 @@ var todosCheckCmd = &cobra.Command{
 }
 
 func runTodosRun(cmd *cobra.Command, args []string) error {
+	if err := validateTodosRunOptions(); err != nil {
+		return err
+	}
+
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -117,19 +125,27 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	effectiveGroupBy := groupBy
+	if todosMode == "cmux" && effectiveGroupBy == "" {
+		effectiveGroupBy = todos.GroupByRepo
+	}
+
 	logger.Infof("Found %d TODOs", len(todoList))
 
-	groups := todos.GroupTODOs(todoList, groupBy)
+	groups := todos.GroupTODOsWithWorkDir(todoList, effectiveGroupBy, workDir)
 	fmt.Println(clicky.MustFormat(todos.FlattenGrouped(groups)))
 	fmt.Println()
 
 	if dryRun {
 		return dryRunTODOs(groups, workDir)
 	}
+	if todosMode == "cmux" {
+		return fmt.Errorf("cmux execution is not implemented yet; use --dry-run to inspect the cmux dispatch plan")
+	}
 
 	interaction := newInteraction()
 
-	if groupBy != "" && groupBy != todos.GroupByNone {
+	if effectiveGroupBy != "" && effectiveGroupBy != todos.GroupByNone {
 		return executeGroups(workDir, groups, interaction, provider)
 	}
 
@@ -184,6 +200,9 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 		if todo.LLM.Model != "" {
 			config.Model = todo.LLM.Model
 		}
+	}
+	if todoModel != "" {
+		config.Model = todoModel
 	}
 	if maxBudget > 0 {
 		config.MaxBudgetUsd = maxBudget
@@ -365,6 +384,11 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			continue
 		}
 
+		if todosMode == "cmux" {
+			printCmuxDryRun(group, workDir)
+			continue
+		}
+
 		if isGrouped {
 			fmt.Printf("=== Group: %s ===\n\n", group.Name)
 			printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
@@ -382,6 +406,86 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 		}
 	}
 	return nil
+}
+
+func validateTodosRunOptions() error {
+	switch todosMode {
+	case "", "inline":
+	case "cmux":
+	default:
+		return fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
+	}
+
+	switch todoEffort {
+	case "", "low", "medium", "high":
+	default:
+		return fmt.Errorf("invalid --effort %q: expected low, medium, or high", todoEffort)
+	}
+	return nil
+}
+
+func printCmuxDryRun(group todos.TODOGroup, workDir string) {
+	groupWorkDir := workDir
+	if group.Name != "" && group.Name != todos.UngroupedLabel && filepath.IsAbs(group.Name) {
+		groupWorkDir = group.Name
+	}
+	agent, model := resolveTodoAgent(todoModel)
+	agentCmd := fmt.Sprintf("cmux %s-teams", agent)
+	if model != "" {
+		agentCmd += " --model " + model
+	}
+	name := filepath.Base(groupWorkDir)
+	if name == "." || name == string(filepath.Separator) {
+		name = "gavel-todos"
+	}
+
+	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
+	fmt.Println("### Commands")
+	fmt.Printf("  cmux new-workspace --cwd %q --name %q --focus true --command %q --id-format both\n", groupWorkDir, name, agentCmd)
+	fmt.Println("  cmux send --workspace <workspace-ref> -- <prompt>")
+	fmt.Println()
+	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
+	fmt.Println("### Prompt")
+	fmt.Println(buildCmuxPrompt(group.TODOs, workDir))
+	printSectionCommands("Verification commands", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.Verification })
+}
+
+func buildCmuxPrompt(todoList []*types.TODO, workDir string) string {
+	prompt := claude.BuildGroupPrompt(todoList, workDir)
+	if directive := effortDirective(todoEffort); directive != "" {
+		return directive + "\n\n" + prompt
+	}
+	return prompt
+}
+
+func effortDirective(effort string) string {
+	switch effort {
+	case "low":
+		return "Be concise."
+	case "medium", "":
+		return "Think carefully before implementing."
+	case "high":
+		return "Think hard and reason thoroughly; consider edge cases before implementing."
+	default:
+		return ""
+	}
+}
+
+func resolveTodoAgent(model string) (agent string, modelFlag string) {
+	if model == "" {
+		return "claude", ""
+	}
+	lower := strings.ToLower(model)
+	if lower == "codex" || strings.HasPrefix(lower, "gpt-") {
+		return "codex", model
+	}
+	if strings.HasPrefix(lower, "codex-") {
+		return "codex", model
+	}
+	if lower == "claude" {
+		return "claude", ""
+	}
+	return "claude", model
 }
 
 func printSectionCommands(header string, todoList []*types.TODO, getNodes func(*types.TODO) []*fixtures.FixtureNode) {

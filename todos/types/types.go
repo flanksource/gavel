@@ -408,6 +408,7 @@ type TODOFrontmatter struct {
 	Language      Language          `yaml:"language,omitempty" json:"language,omitempty"`
 	WorkingCommit string            `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
 	Branch        string            `yaml:"branch,omitempty" json:"branch,omitempty"`
+	CWD           string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	Path          StringOrSlice     `yaml:"path,omitempty" json:"path,omitempty"`
 	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
 	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
@@ -436,6 +437,7 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "verify")
 	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "branch")
+	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "max_turns")
 	delete(f.Metadata, "pr")
 	delete(f.Metadata, "prompt")

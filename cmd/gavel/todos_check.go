@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
@@ -36,7 +37,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	}
 
 	if opts.GroupBy != "" && opts.GroupBy != todos.GroupByNone {
-		groups := todos.GroupTODOs(todoList, opts.GroupBy)
+		groups := todos.GroupTODOsWithWorkDir(todoList, opts.GroupBy, workDir)
 		return todos.FlattenGrouped(groups), nil
 	}
 
@@ -168,7 +169,10 @@ func init() {
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
-	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, all, or none")
+	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
+	todosRunCmd.Flags().StringVar(&todosMode, "mode", "inline", "Execution mode: inline or cmux")
+	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution")
+	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "medium", "Reasoning effort directive for cmux mode: low, medium, or high")
 	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
 
@@ -192,7 +196,7 @@ func newTodosProvider(workDir, dir string) (todos.Provider, error) {
 		if dir != "" {
 			return nil, fmt.Errorf("--dir is only supported with --provider=todos")
 		}
-		return todos.NewGriteProvider(workDir), nil
+		return todos.ResolveGriteProvider(workDir, cache.Shared(), 0), nil
 	case todos.ProviderFiles:
 		return todos.NewFileProvider(workDir, dir), nil
 	default:

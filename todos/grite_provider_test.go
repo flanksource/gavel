@@ -139,6 +139,79 @@ func TestGriteProviderGetParsesIssueBody(t *testing.T) {
 	}
 }
 
+func TestGriteProviderCreateUsesLabelsAndFetchesDetail(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		switch joined {
+		case "issue create --title Fix workspace --body Body text --label priority:high --label status:in_progress --json":
+			return []byte(`{"ok": true, "data": {"issue_id": "new123456789"}}`), nil
+		case "issue show new123456789 --json":
+			return []byte(`{
+				"ok": true,
+				"data": {
+					"issue": {
+						"issue_id": "new123456789",
+						"title": "Fix workspace",
+						"state": "open",
+						"labels": ["priority:high", "status:in_progress"]
+					},
+					"events": [{
+						"event_id": "created123",
+						"actor": "agent",
+						"kind": {"IssueCreated": {"title": "Fix workspace", "body": "Body text"}}
+					}]
+				}
+			}`), nil
+		default:
+			t.Fatalf("unexpected args: %v", args)
+		}
+		return nil, nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo, err := provider.Create(context.Background(), CreateRequest{
+		Title:    "Fix workspace",
+		Body:     "Body text",
+		Priority: types.PriorityHigh,
+		Status:   types.StatusInProgress,
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if todo.ID != "new123456789" || todo.Status != types.StatusInProgress || todo.Priority != types.PriorityHigh {
+		t.Fatalf("unexpected created TODO: %+v", todo)
+	}
+	want := []string{
+		"issue create --title Fix workspace --body Body text --label priority:high --label status:in_progress --json",
+		"issue show new123456789 --json",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+}
+
+func TestGriteProviderDeleteClosesIssue(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return []byte(`{"ok": true, "data": {}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo := &types.TODO{ID: "abc123", Provider: ProviderGrite, ProviderState: "open"}
+	if err := provider.Delete(context.Background(), todo); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if !reflect.DeepEqual(calls, []string{"issue close abc123 --json"}) {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if todo.ProviderState != "closed" || todo.Status != types.StatusCompleted {
+		t.Fatalf("todo state not updated: %+v", todo)
+	}
+}
+
 func TestGriteProviderUpdateStateUsesStatusLabels(t *testing.T) {
 	var calls []string
 	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
