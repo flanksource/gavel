@@ -14,7 +14,11 @@ import (
 	"github.com/flanksource/gavel/github"
 )
 
-const viewTabPRs = "prs"
+const (
+	viewTabPRs      = "prs"
+	viewTabTodos    = "todos"
+	viewTabActivity = "activity"
+)
 
 type routeRequest struct {
 	Tab       string
@@ -220,6 +224,12 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
+	// todos/activity are client-rendered SPA tabs with no server-side node path
+	// or export; accept them so a hard load of /todos or /activity serves the app.
+	if tabSeg == viewTabTodos || tabSeg == viewTabActivity {
+		req.Tab = tabSeg
+		return req, true
+	}
 	if tabSeg != viewTabPRs {
 		return routeRequest{}, false
 	}

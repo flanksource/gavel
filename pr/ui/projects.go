@@ -2,11 +2,22 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+)
+
+// Project CRUD errors. Callers map these to a transport status (HTTP code / CLI
+// exit) with errors.Is, so the create/update/delete semantics live in one place
+// for both the dashboard API and the `gavel projects` command.
+var (
+	ErrProjectNotFound = errors.New("unknown project")
+	ErrProjectExists   = errors.New("project already exists")
+	ErrProjectInvalid  = errors.New("name and dir are required")
 )
 
 // Project associates one or more GitHub repos with a local workspace directory
@@ -16,6 +27,9 @@ type Project struct {
 	Name  string   `json:"name"`
 	Dir   string   `json:"dir"`
 	Repos []string `json:"repos"`
+	// TodoProvider pins which todo backend this workspace uses ("grite" or
+	// "todos"). Empty means auto-detect (.todos files if present, else Grite).
+	TodoProvider string `json:"todoProvider,omitempty"`
 }
 
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
@@ -97,4 +111,63 @@ func upsertProject(ps []Project, p Project) []Project {
 		}
 	}
 	return append(ps, p)
+}
+
+// deleteProject removes the project with the given name and reports whether one
+// was found. The three-index slice keeps the result from aliasing the input's
+// backing array.
+func deleteProject(ps []Project, name string) ([]Project, bool) {
+	for i := range ps {
+		if ps[i].Name == name {
+			return append(ps[:i:i], ps[i+1:]...), true
+		}
+	}
+	return ps, false
+}
+
+// GetProject returns the stored project with the given name.
+func GetProject(name string) (Project, bool) {
+	return projectByName(LoadProjects(), name)
+}
+
+// CreateProject persists a new project, failing if required fields are missing
+// (ErrProjectInvalid) or the name is already taken (ErrProjectExists).
+func CreateProject(p Project) error {
+	if p.Name == "" || p.Dir == "" {
+		return ErrProjectInvalid
+	}
+	ps := LoadProjects()
+	if _, ok := projectByName(ps, p.Name); ok {
+		return fmt.Errorf("%w: %q", ErrProjectExists, p.Name)
+	}
+	SaveProjects(append(ps, p))
+	return nil
+}
+
+// UpdateProject replaces the named project. The name is the entity id, so the
+// path/argument is authoritative and the body cannot rename it. Missing project
+// → ErrProjectNotFound; empty dir → ErrProjectInvalid.
+func UpdateProject(name string, p Project) error {
+	ps := LoadProjects()
+	if _, ok := projectByName(ps, name); !ok {
+		return fmt.Errorf("%w: %q", ErrProjectNotFound, name)
+	}
+	p.Name = name
+	if p.Dir == "" {
+		return ErrProjectInvalid
+	}
+	SaveProjects(upsertProject(ps, p))
+	return nil
+}
+
+// DeleteProject removes the named project, returning ErrProjectNotFound if it
+// does not exist.
+func DeleteProject(name string) error {
+	ps := LoadProjects()
+	next, ok := deleteProject(ps, name)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrProjectNotFound, name)
+	}
+	SaveProjects(next)
+	return nil
 }

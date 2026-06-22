@@ -6,6 +6,7 @@ import type { FlatProc } from '../utils';
 import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel, aggregateResources } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
 import { GavelIcon } from './GavelIcon';
+import { TodoBadge } from './TodoBadge';
 
 // MetricIcon is the gauge's own icon prop type, derived from the component so it
 // matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
@@ -412,6 +413,23 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
 // processes auto-start; the selector is editable only while stopped (switching a
 // running daemon's profile means stop → start).
 export function WorkspaceGroup({ project, status, onChanged }: { project: Project; status: ProcStatus; onChanged: () => void }) {
+  // A configured workspace without a Procfile has nothing to supervise: render a
+  // compact, control-free row (a Start button here would always 400 server-side)
+  // so the workspace still appears in every process listing.
+  if (!status.hasProcfile) {
+    return (
+      <div className="py-1.5">
+        <div className="flex items-center gap-2 px-1">
+          <span className="inline-block w-2 h-2 rounded-full bg-gray-300" />
+          <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
+          <TodoBadge counts={project.todoCounts} />
+          <div className="flex-1" />
+          <span className="text-[10px] text-gray-400">No Procfile</span>
+        </div>
+      </div>
+    );
+  }
+
   const procs = status.processes ?? [];
   const profiles = status.profiles ?? [];
   const single = procs.length === 1;
@@ -480,6 +498,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
           <span className={`text-[10px] tabular-nums truncate ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-400'}`}>
             {statusLabel(proc)}
           </span>
+          <TodoBadge counts={project.todoCounts} />
           <CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} icon={UiActivity} />
           <MemoryBars metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} icon={UiDatabase} />
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
@@ -505,6 +524,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <span className={`inline-block w-2 h-2 rounded-full ${aggregateDotClass(procs)}`} />
         <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>{project.name}</span>
         <span className="text-[10px] tabular-nums text-gray-400">{running}/{procs.length}</span>
+        <TodoBadge counts={project.todoCounts} />
         <div className="flex-1" />
         <CpuBars metricKey={`${project.name}/__total__`} cpuPercent={totals.cpuPercent} icon={UiActivity} />
         <MemoryBars metricKey={`${project.name}/__total__`} memoryRss={totals.memoryRss} icon={UiDatabase} />

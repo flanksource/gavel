@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,17 +51,31 @@ func TestHandleProjectsListsHasProcfile(t *testing.T) {
 	}
 }
 
-func TestHandleProjectsUpsert(t *testing.T) {
+func TestHandleProjectsCreate(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
 
 	body := `{"name":"infra","dir":"/srv/infra","repos":["acme/infra"]}`
 	rec := httptest.NewRecorder()
 	(&Server{}).handleProjects(rec, httptest.NewRequest("POST", "/api/projects", strings.NewReader(body)))
-	if rec.Code != 200 {
-		t.Fatalf("POST status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201; body = %q", rec.Code, rec.Body.String())
 	}
 	if _, ok := projectByName(LoadProjects(), "infra"); !ok {
 		t.Error("POST /api/projects did not persist the new project")
+	}
+}
+
+func TestHandleProjectsCreateConflict(t *testing.T) {
+	withProject(t, "gavel", "flanksource/gavel", "")
+
+	body := `{"name":"gavel","dir":"/elsewhere"}`
+	rec := httptest.NewRecorder()
+	(&Server{}).handleProjects(rec, httptest.NewRequest("POST", "/api/projects", strings.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST duplicate name status = %d, want 409; body = %q", rec.Code, rec.Body.String())
+	}
+	if p, _ := projectByName(LoadProjects(), "gavel"); p.Dir == "/elsewhere" {
+		t.Error("conflicting create overwrote the existing project")
 	}
 }
 
@@ -264,6 +279,38 @@ func TestHandleProcControlValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGitChangeCount(t *testing.T) {
+	// A directory that is not a git work tree is reported as an error, so the
+	// caller can omit the field rather than claiming zero changes.
+	if _, err := gitChangeCount(t.TempDir()); err == nil {
+		t.Error("gitChangeCount on a non-git dir = nil error, want error")
+	}
+
+	dir := t.TempDir()
+	if out, err := runGit(dir, "init"); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	if n, err := gitChangeCount(dir); err != nil || n != 0 {
+		t.Fatalf("gitChangeCount(clean repo) = (%d, %v), want (0, nil)", n, err)
+	}
+
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if n, err := gitChangeCount(dir); err != nil || n != 2 {
+		t.Fatalf("gitChangeCount(2 untracked) = (%d, %v), want (2, nil)", n, err)
+	}
+}
+
+func runGit(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
 }
 
 func TestHandleProcLogsUnknownProject(t *testing.T) {

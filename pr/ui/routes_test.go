@@ -169,6 +169,38 @@ func TestParseRouteRequestAcceptHeader(t *testing.T) {
 	})
 }
 
+func TestParseRouteRequestTabs(t *testing.T) {
+	for _, path := range []string{"/todos", "/activity"} {
+		t.Run(path, func(t *testing.T) {
+			req, ok := parseRouteRequest(httptest.NewRequest(http.MethodGet, path, nil))
+			if !ok || req.IsExport {
+				t.Errorf("%s: expected SPA render, got ok=%v export=%v", path, ok, req.IsExport)
+			}
+		})
+	}
+	t.Run("unknown tab is rejected", func(t *testing.T) {
+		if _, ok := parseRouteRequest(httptest.NewRequest(http.MethodGet, "/bogus", nil)); ok {
+			t.Error("expected /bogus to be rejected (404), got ok=true")
+		}
+	})
+}
+
+func TestHandleRouteTabsServeShell(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	for _, path := range []string{"/prs", "/todos", "/activity"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.handleRoute(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s status: got %d want 200", path, rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+				t.Fatalf("%s content-type: got %q want text/html", path, ct)
+			}
+		})
+	}
+}
+
 func TestHandleRouteMenubar(t *testing.T) {
 	s := NewServer(0, github.Options{}, SearchConfig{})
 	for _, path := range []string{"/menubar", "/processes"} {

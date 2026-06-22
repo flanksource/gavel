@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -21,6 +23,15 @@ type projectInfo struct {
 	Dir         string   `json:"dir"`
 	Repos       []string `json:"repos"`
 	HasProcfile bool     `json:"hasProcfile"`
+	// TodoProvider echoes the configured provider ("grite"/"todos"/"" for auto)
+	// so the dashboard can scope its per-workspace todo requests the same way.
+	TodoProvider string `json:"todoProvider,omitempty"`
+	// TodoBackend is the backend actually resolved for the directory ("grite" or
+	// "todos"); TodoBackendAuto is true when it was auto-detected rather than
+	// pinned by TodoProvider.
+	TodoBackend     string     `json:"todoBackend"`
+	TodoBackendAuto bool       `json:"todoBackendAuto"`
+	TodoCounts      todoCounts `json:"todoCounts"`
 }
 
 // procStatus is the wire shape for /api/proc/status. hasProcfile=false is the
@@ -35,7 +46,10 @@ type procStatus struct {
 	// one (running supervisor's, else the .gavel.yaml default).
 	Profiles []string `json:"profiles,omitempty"`
 	Profile  string   `json:"profile,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	// GitChanges counts uncommitted changes (staged, unstaged, and untracked) in
+	// the project's directory. Omitted when the directory is not a git work tree.
+	GitChanges int    `json:"gitChanges,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // procControl is the request body for the start/stop/restart endpoints. Profile
@@ -44,39 +58,6 @@ type procControl struct {
 	Project string   `json:"project"`
 	Names   []string `json:"names,omitempty"`
 	Profile string   `json:"profile,omitempty"`
-}
-
-func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	switch r.Method {
-	case http.MethodGet:
-		ps := LoadProjects()
-		out := make([]projectInfo, 0, len(ps))
-		for _, p := range ps {
-			dir := p.ResolvedDir()
-			out = append(out, projectInfo{
-				Name:        p.Name,
-				Dir:         dir,
-				Repos:       p.Repos,
-				HasProcfile: dir != "" && procfile.Find(dir, "") != "",
-			})
-		}
-		json.NewEncoder(w).Encode(out) //nolint:errcheck
-	case http.MethodPost:
-		var p Project
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-			return
-		}
-		if p.Name == "" || p.Dir == "" {
-			http.Error(w, `{"error":"name and dir are required"}`, http.StatusBadRequest)
-			return
-		}
-		SaveProjects(upsertProject(LoadProjects(), p))
-		json.NewEncoder(w).Encode(p) //nolint:errcheck
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
 }
 
 func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
@@ -271,21 +252,54 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 // so projects that aren't running anything render cleanly.
 func projectStatus(p Project) procStatus {
 	dir := p.ResolvedDir()
-	if dir == "" || procfile.Find(dir, "") == "" {
-		return procStatus{HasProcfile: false}
+
+	// Uncommitted-change count is a property of the workspace directory, not of
+	// Procfile supervision, so it is surfaced for every workspace in the sidebar
+	// regardless of whether the directory has a Procfile.
+	var st procStatus
+	if dir != "" {
+		if n, err := gitChangeCount(dir); err != nil {
+			logger.Debugf("git status %s: %v", dir, err)
+		} else {
+			st.GitChanges = n
+		}
 	}
+
+	if dir == "" || procfile.Find(dir, "") == "" {
+		return st
+	}
+	st.HasProcfile = true
 	rep, err := procfile.Status(dir, "")
 	if err != nil {
-		return procStatus{HasProcfile: true, Error: err.Error()}
+		st.Error = err.Error()
+		return st
 	}
-	return procStatus{
-		HasProcfile:   true,
-		Running:       rep.Running,
-		SupervisorPID: rep.SupervisorPID,
-		Processes:     rep.Processes,
-		Profiles:      rep.Profiles,
-		Profile:       rep.Profile,
+	st.Running = rep.Running
+	st.SupervisorPID = rep.SupervisorPID
+	st.Processes = rep.Processes
+	st.Profiles = rep.Profiles
+	st.Profile = rep.Profile
+	return st
+}
+
+// gitChangeCount returns the number of uncommitted changes (staged, unstaged,
+// and untracked) in dir. A non-nil error means dir is not a git work tree (or
+// git is unavailable); callers treat that as "no git info" rather than zero
+// changes.
+func gitChangeCount(dir string) (int, error) {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
 	}
+	count := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func writeJSONError(w http.ResponseWriter, status int, err error) {
