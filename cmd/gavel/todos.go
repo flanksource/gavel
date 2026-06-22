@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -23,16 +22,17 @@ import (
 )
 
 var (
-	todosDir     string
-	maxRetries   int
-	filterStatus string
-	checkTimeout time.Duration
-	maxBudget    float64
-	maxTurns     int
-	interactive  bool
-	groupBy      string
-	dirty        bool
-	dryRun       bool
+	todosDir      string
+	maxRetries    int
+	filterStatus  string
+	checkTimeout  time.Duration
+	maxBudget     float64
+	maxTurns      int
+	interactive   bool
+	groupBy       string
+	dirty         bool
+	dryRun        bool
+	todosProvider string
 )
 
 var todosCmd = &cobra.Command{
@@ -77,15 +77,11 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
+	provider, err := newTodosProvider(workDir, todosDir)
+	if err != nil {
+		return err
 	}
-
-	if _, err := os.Stat(todosDir); os.IsNotExist(err) {
-		return fmt.Errorf(".todos directory not found: %s", todosDir)
-	}
-
-	logger.Infof("Discovering TODOs in: %s", todosDir)
+	logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
 
 	filters := todos.DiscoveryFilters{
 		ExcludeStatuses: []types.Status{types.StatusCompleted},
@@ -95,32 +91,13 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
 	}
 
-	todoList, err := todos.DiscoverTODOs(todosDir, filters)
+	todoList, err := provider.List(context.Background(), filters)
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
 
 	if len(args) > 0 {
-		var filtered []*types.TODO
-		for _, todo := range todoList {
-			for _, arg := range args {
-				matched := false
-				if strings.Contains(arg, string(filepath.Separator)) || strings.HasSuffix(arg, ".md") {
-					absArg := arg
-					if !filepath.IsAbs(arg) {
-						absArg = filepath.Join(workDir, arg)
-					}
-					matched = filepath.Clean(absArg) == filepath.Clean(todo.FilePath)
-				} else {
-					matched = strings.EqualFold(todo.Filename(), arg)
-				}
-				if matched {
-					filtered = append(filtered, todo)
-					break
-				}
-			}
-		}
-		todoList = filtered
+		todoList = filterTODOsByArgs(todoList, args, workDir)
 	}
 
 	if interactive && len(args) == 0 && len(todoList) > 0 {
@@ -153,7 +130,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	interaction := newInteraction()
 
 	if groupBy != "" && groupBy != todos.GroupByNone {
-		return executeGroups(workDir, groups, interaction)
+		return executeGroups(workDir, groups, interaction, provider)
 	}
 
 	// Flatten groups to ordered list for individual execution
@@ -161,7 +138,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	for _, group := range groups {
 		orderedTodos = append(orderedTodos, group.TODOs...)
 	}
-	return executeSingleTODOs(workDir, orderedTodos, interaction)
+	return executeSingleTODOs(workDir, orderedTodos, interaction, provider)
 }
 
 func newInteraction() *todos.UserInteraction {
@@ -217,7 +194,7 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 	return config
 }
 
-func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction) error {
+func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction, provider todos.Provider) error {
 	for gi, group := range groups {
 		if len(group.TODOs) == 0 {
 			continue
@@ -230,7 +207,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		config := newClaudeConfig(workDir, group.TODOs[0])
 		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID)
+		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID, provider)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -288,7 +265,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 	return nil
 }
 
-func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos.UserInteraction) error {
+func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos.UserInteraction, provider todos.Provider) error {
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
 
@@ -297,7 +274,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		config := newClaudeConfig(workDir, todo)
 		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID)
+		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID, provider)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

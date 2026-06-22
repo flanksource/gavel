@@ -29,12 +29,22 @@ func (todos TODOS) Sort() {
 			return pi < pj
 		}
 
-		// Same priority, sort alphabetically by filename
-		nameI := filepath.Base(todos[i].FilePath)
-		nameJ := filepath.Base(todos[j].FilePath)
+		// Same priority, sort alphabetically by provider display name
+		nameI := todos[i].sortName()
+		nameJ := todos[j].sortName()
 		return nameI < nameJ
 	})
 
+}
+
+func (t TODO) sortName() string {
+	if t.Title != "" {
+		return strings.ToLower(t.Title)
+	}
+	if t.FilePath != "" {
+		return strings.ToLower(filepath.Base(t.FilePath))
+	}
+	return strings.ToLower(t.ID)
 }
 
 func priorityOrder(p Priority) int {
@@ -61,12 +71,28 @@ type Attempt struct {
 	Transcript string // relative path to transcript .md
 }
 
+type ProviderEvent struct {
+	ID        string    `json:"id,omitempty"`
+	ShortID   string    `json:"short_id,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
+	Actor     string    `json:"actor,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	Title     string    `json:"title,omitempty"`
+	Body      string    `json:"body,omitempty"`
+}
+
 // TODO represents a structured TODO item parsed from a markdown file.
 // It combines fixture test nodes with TODO-specific metadata for tracking
 // implementation tasks including reproduction steps, verification tests, and execution status.
 type TODO struct {
-	FilePath string                `json:"file_path,omitempty"`
-	FileNode *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
+	FilePath       string                `json:"file_path,omitempty"`
+	FileNode       *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
+	ID             string                `json:"id,omitempty"`
+	ShortID        string                `json:"short_id,omitempty"`
+	Provider       string                `json:"provider,omitempty"`
+	ProviderState  string                `json:"provider_state,omitempty"`
+	Labels         []string              `json:"labels,omitempty"`
+	ProviderEvents []ProviderEvent       `json:"provider_events,omitempty"`
 
 	TODOFrontmatter `json:",inline"`
 
@@ -76,6 +102,7 @@ type TODO struct {
 	Implementation    string                  `json:"implementation,omitempty"`
 	Verification      []*fixtures.FixtureNode `json:"verification,omitempty"`       // Section containing verification tests
 	CustomValidations []*fixtures.FixtureNode `json:"custom_validations,omitempty"` // Section containing custom validation tests
+	MarkdownBody      string                  `json:"markdown_body,omitempty"`
 }
 
 func (todo TODO) AsYaml() (string, error) {
@@ -109,13 +136,47 @@ func (t TODO) PrettyRow(opts interface{}) map[string]api.Text {
 		"Status":   t.Status.Pretty().Styles("order-2"),
 		"Priority": t.Priority.Pretty().Styles("order-3"),
 	}
+	if id := t.DisplayID(); id != "" {
+		row["ID"] = clicky.Text(id, "order-0 text-muted")
+	}
 	if t.LastRun != nil {
 		row["Updated"] = clicky.Text("", "order-4").Append(time.Since(*t.LastRun), "text-muted")
 	}
 	return row
 }
 
+func (t TODO) DisplayID() string {
+	if t.ShortID != "" {
+		return t.ShortID
+	}
+	if t.ID == "" {
+		return ""
+	}
+	if len(t.ID) > 8 {
+		return t.ID[:8]
+	}
+	return t.ID
+}
+
 func (t TODO) Filename() string {
+	if t.Provider != "" && t.ID != "" {
+		if t.Title != "" {
+			return t.Title
+		}
+		if len(t.ID) > 8 {
+			return t.ID[:8]
+		}
+		return t.ID
+	}
+	if t.FilePath == "" {
+		if t.Title != "" {
+			return t.Title
+		}
+		if t.ID != "" {
+			return t.ID
+		}
+		return ""
+	}
 	file := filepath.Base(t.FilePath)
 	return lo.PascalCase(file)
 }
@@ -153,6 +214,14 @@ func (t TODO) PrettyDetailed() api.Text {
 	// File path
 	result = result.Append("File: ", "text-gray-500").Append(t.FilePath, "").NewLine()
 
+	if t.ID != "" {
+		result = result.Append("ID: ", "text-gray-500").Append(t.ID, "").NewLine()
+	}
+
+	if t.Provider != "" {
+		result = result.Append("Provider: ", "text-gray-500").Append(t.Provider, "").NewLine()
+	}
+
 	// Language
 	if t.Language != "" {
 		result = result.Append("Language: ", "text-gray-500").Add(t.Language.Pretty()).NewLine()
@@ -169,6 +238,15 @@ func (t TODO) PrettyDetailed() api.Text {
 	}
 
 	result = result.NewLine()
+
+	if strings.TrimSpace(t.MarkdownBody) != "" {
+		result = result.Append("Issue Body", "text-blue-600 font-bold").NewLine()
+		result = result.Append(strings.TrimSpace(t.MarkdownBody), "").NewLine().NewLine()
+	}
+
+	if len(t.ProviderEvents) > 0 {
+		result = result.Add(formatProviderEvents(t.ProviderEvents)).NewLine()
+	}
 
 	// Show fixture tests from the FileNode tree
 	if t.FileNode != nil {
@@ -189,6 +267,45 @@ func (t TODO) PrettyDetailed() api.Text {
 		}
 	}
 
+	return result
+}
+
+func formatProviderEvents(events []ProviderEvent) api.Text {
+	result := api.Text{}
+	result = result.Append("Event History", "text-blue-600 font-bold").NewLine()
+	for _, event := range events {
+		id := event.ShortID
+		if id == "" && event.ID != "" {
+			if len(event.ID) > 8 {
+				id = event.ID[:8]
+			} else {
+				id = event.ID
+			}
+		}
+		line := "  - "
+		if !event.Timestamp.IsZero() {
+			line += event.Timestamp.Format(time.RFC3339) + " "
+		}
+		if event.Kind != "" {
+			line += event.Kind
+		}
+		if id != "" {
+			line += " [" + id + "]"
+		}
+		if event.Actor != "" {
+			line += " by " + event.Actor
+		}
+		result = result.Append(line, "").NewLine()
+		if event.Title != "" {
+			result = result.Append("    Title: ", "text-gray-500").Append(event.Title, "").NewLine()
+		}
+		if strings.TrimSpace(event.Body) != "" {
+			result = result.Append("    Body:", "text-gray-500").NewLine()
+			for _, line := range strings.Split(strings.TrimSpace(event.Body), "\n") {
+				result = result.Append("      "+line, "").NewLine()
+			}
+		}
+	}
 	return result
 }
 

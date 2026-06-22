@@ -62,6 +62,55 @@ func ParseTODO(filePath string) (*types.TODO, error) {
 	}, nil
 }
 
+// ParseTODOContent parses a TODO from markdown content that did not originate
+// from a local TODO file. Missing frontmatter fields are filled from defaults.
+func ParseTODOContent(name, content, sourceDir string, defaults types.TODOFrontmatter) (*types.TODO, error) {
+	body := content
+	frontmatter := defaults
+	if hasFrontmatter(content) {
+		result, err := ParseFrontmatter(content)
+		if err != nil {
+			return nil, err
+		}
+		frontmatter = result.Frontmatter
+		body = result.MarkdownContent
+	}
+
+	if frontmatter.Title == "" {
+		frontmatter.Title = name
+	}
+	if frontmatter.Priority == "" {
+		frontmatter.Priority = types.PriorityMedium
+	}
+	if frontmatter.Status == "" {
+		frontmatter.Status = types.StatusPending
+	}
+	if frontmatter.CWD == "" {
+		frontmatter.CWD = sourceDir
+	}
+	frontmatter.CleanMetadata()
+
+	fixtureFrontmatter := frontmatter.FrontMatter
+	fileNode, err := fixtures.ParseMarkdownContentWithTree(name, body, sourceDir, &fixtureFrontmatter)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.TODO{
+		FileNode:          fileNode,
+		TODOFrontmatter:   frontmatter,
+		StepsToReproduce:  extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:    extractImplementationText(fileNode, "Implementation"),
+		Verification:      extractSection(fileNode, "Verification"),
+		CustomValidations: extractSection(fileNode, "Custom Validations"),
+		MarkdownBody:      body,
+	}, nil
+}
+
+func hasFrontmatter(content string) bool {
+	return strings.HasPrefix(content, "---\n") || strings.HasPrefix(content, "---\r\n")
+}
+
 // parseTODOFrontmatter reads YAML frontmatter directly from a markdown file
 // and unmarshals it into TODOFrontmatter. This works regardless of whether
 // the file contains executable code blocks.
