@@ -53,7 +53,7 @@ type LintOptions struct {
 	Changed      bool            `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since        string          `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
 	UI           bool            `flag:"ui" help:"Launch browser UI to view violations"`
-	Addr         string          `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	Addr         string          `flag:"addr" help:"Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	DryRun       bool            `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
 	Baseline     string          `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
 	Failed       string          `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`

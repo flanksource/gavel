@@ -31,3 +31,21 @@ func TestServeCommandRegistered(t *testing.T) {
 	require.NotNil(t, ui, "--ui flag should still be bound (from PRListOptions)")
 	assert.True(t, ui.Hidden, "--ui should be hidden on the serve command")
 }
+
+func TestServeDefaultsToOrgWideWhenNoRepos(t *testing.T) {
+	got := applyServeDefaults(PRListOptions{})
+	assert.True(t, got.All, "serve with no repo args should default to org-wide (--all)")
+	assert.True(t, got.UI, "serve should serve the web UI")
+}
+
+func TestServeRepoArgsOverrideAllDefault(t *testing.T) {
+	got := applyServeDefaults(PRListOptions{Repos: []string{"flanksource/gavel"}})
+	assert.False(t, got.All, "explicit repo args must not be widened to org-wide")
+	assert.Equal(t, []string{"flanksource/gavel"}, got.Repos)
+}
+
+func TestServeMenuBarDoesNotForceUI(t *testing.T) {
+	got := applyServeDefaults(PRListOptions{MenuBar: true})
+	assert.False(t, got.UI, "--menu-bar mode should not also force the web UI")
+	assert.True(t, got.All, "menu-bar serve with no repos should still default to org-wide")
+}
