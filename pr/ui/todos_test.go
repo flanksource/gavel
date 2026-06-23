@@ -579,6 +579,79 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 	}
 }
 
+func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Plan me",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	oldStart := startTodoRun
+	var got todoRunRequest
+	startTodoRun = func(req todoRunRequest) error {
+		got = req
+		return nil
+	}
+	t.Cleanup(func() { startTodoRun = oldStart })
+
+	body, _ := json.Marshal(todoRunPayload{
+		Ref:    todos.TODOReference(created),
+		Agent:  "claude",
+		Mode:   "cmux",
+		Model:  "claude",
+		Effort: "medium",
+		Plan:   true,
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal run response: %v", err)
+	}
+	if !resp.Plan {
+		t.Fatalf("response did not echo plan: %+v", resp)
+	}
+	if !got.Options.Plan {
+		t.Fatalf("run starter did not receive plan option: %+v", got.Options)
+	}
+}
+
+func TestTodoAPIRunRejectsPlanWithInlineMode(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Plan me",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	body, _ := json.Marshal(todoRunPayload{
+		Ref:    todos.TODOReference(created),
+		Agent:  "claude",
+		Mode:   "inline",
+		Model:  "claude",
+		Effort: "medium",
+		Plan:   true,
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "plan mode requires cmux mode") {
+		t.Fatalf("unexpected error body: %q", rec.Body.String())
+	}
+}
+
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

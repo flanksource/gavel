@@ -80,6 +80,10 @@ type ProviderEvent struct {
 	Title     string    `json:"title,omitempty"`
 	Body      string    `json:"body,omitempty"`
 	Label     string    `json:"label,omitempty"`
+	// OldLabel/NewLabel are set for a "LabelChanged" event, which collapses an
+	// adjacent LabelRemoved/LabelAdded pair within the same label namespace.
+	OldLabel string `json:"old_label,omitempty"`
+	NewLabel string `json:"new_label,omitempty"`
 }
 
 // TODO represents a structured TODO item parsed from a markdown file.
@@ -297,7 +301,10 @@ func formatProviderEvents(events []ProviderEvent) api.Text {
 			line += " by " + event.Actor
 		}
 		result = result.Append(line, "").NewLine()
-		if event.Label != "" {
+		switch {
+		case event.OldLabel != "" || event.NewLabel != "":
+			result = result.Append("    Label: ", "text-gray-500").Append(event.OldLabel+" → "+event.NewLabel, "").NewLine()
+		case event.Label != "":
 			result = result.Append("    Label: ", "text-gray-500").Append(event.Label, "").NewLine()
 		}
 		if event.Title != "" {

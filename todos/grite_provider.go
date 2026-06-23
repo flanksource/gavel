@@ -22,6 +22,7 @@ import (
 
 const statusLabelPrefix = "status:"
 const priorityLabelPrefix = "priority:"
+const sessionLabelPrefix = "session:"
 
 type GriteCommandRunner func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error)
 
@@ -156,6 +157,11 @@ func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updat
 			return err
 		}
 	}
+	if updates.SessionID != nil && *updates.SessionID != "" {
+		if err := p.applySessionLabel(ctx, id, todo, *updates.SessionID); err != nil {
+			return err
+		}
+	}
 	if updates.Status == nil {
 		return nil
 	}
@@ -225,6 +231,30 @@ func (p *GriteProvider) applyPriority(ctx context.Context, id string, todo *type
 	return nil
 }
 
+// applySessionLabel swaps the issue's session:* label to the current run's
+// session id, keeping the in-memory todo's Labels in sync. This records which
+// agent session worked on the issue so the run can be located and resumed.
+func (p *GriteProvider) applySessionLabel(ctx context.Context, id string, todo *types.TODO, sessionID string) error {
+	want := sessionLabel(sessionID)
+	for _, label := range existingSessionLabels(todo.Labels) {
+		if label == want {
+			continue
+		}
+		if _, err := p.run(ctx, "issue", "label", "remove", id, "--label", label, "--json"); err != nil {
+			return err
+		}
+		todo.Labels = removeLabel(todo.Labels, label)
+	}
+	if !hasLabel(todo.Labels, want) {
+		if _, err := p.run(ctx, "issue", "label", "add", id, "--label", want, "--json"); err != nil {
+			return err
+		}
+		todo.Labels = append(todo.Labels, want)
+		sort.Strings(todo.Labels)
+	}
+	return nil
+}
+
 func (p *GriteProvider) UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error {
 	if result == nil {
 		return nil
@@ -257,18 +287,13 @@ func (p *GriteProvider) SaveAttempt(ctx context.Context, todo *types.TODO, resul
 	if result.ErrorMessage != "" {
 		fmt.Fprintf(&sb, "- **Error:** %s\n", result.ErrorMessage)
 	}
-	if result.Transcript != nil && len(result.Transcript.Entries) > 0 {
-		sb.WriteString("\n### Transcript\n\n")
-		for _, entry := range result.Transcript.Entries {
-			fmt.Fprintf(&sb, "**[%s] %s** (%s)\n", entry.Timestamp.Format("15:04:05"), entry.Type, entry.Role)
-			if entry.Content != "" {
-				sb.WriteString(entry.Content)
-				if !strings.HasSuffix(entry.Content, "\n") {
-					sb.WriteString("\n")
-				}
-			}
-			sb.WriteString("\n")
-		}
+	// The transcript is intentionally NOT written into the issue: it can be
+	// re-parsed on demand from the agent's session log via the recorded
+	// session:<id> label (see applySessionLabel), which the dashboard's session
+	// tab follows live. Embedding the full transcript here only duplicated that
+	// data and bloated every issue.
+	if sid := sessionIDFromLabels(todo.Labels); sid != "" {
+		fmt.Fprintf(&sb, "- **Session:** `%s`\n", sid)
 	}
 	return p.comment(ctx, todo, sb.String())
 }
@@ -486,6 +511,9 @@ func frontmatterFromGriteIssue(issue griteIssue, workDir string) types.TODOFront
 		t := time.UnixMilli(issue.UpdatedTS)
 		fm.LastRun = &t
 	}
+	if sid := sessionIDFromLabels(issue.Labels); sid != "" {
+		fm.LLM = &types.LLM{SessionId: sid}
+	}
 	return fm
 }
 
@@ -498,6 +526,15 @@ func applyGriteIdentity(todo *types.TODO, issue griteIssue) {
 	todo.Labels = append([]string(nil), issue.Labels...)
 	if todo.Title == "" {
 		todo.Title = issue.Title
+	}
+	// Carry the recorded session id onto the todo so the dashboard can follow or
+	// resume the run. Get() parses the issue body (which may overwrite the
+	// label-derived default), so set it authoritatively here from the labels.
+	if sid := sessionIDFromLabels(issue.Labels); sid != "" {
+		if todo.LLM == nil {
+			todo.LLM = &types.LLM{}
+		}
+		todo.LLM.SessionId = sid
 	}
 }
 
@@ -545,7 +582,59 @@ func providerEventsFromGriteEvents(events []griteEvent) []types.ProviderEvent {
 			out = append(out, providerEvent)
 		}
 	}
-	return out
+	return collapseLabelChanges(out)
+}
+
+// collapseLabelChanges merges an adjacent LabelRemoved/LabelAdded pair that share
+// a label namespace (e.g. priority:medium removed + priority:high added) into a
+// single LabelChanged event, so the timeline reads "priority:medium → priority:high"
+// instead of two separate lines.
+func collapseLabelChanges(events []types.ProviderEvent) []types.ProviderEvent {
+	merged := make([]types.ProviderEvent, 0, len(events))
+	for i := 0; i < len(events); i++ {
+		if i+1 < len(events) {
+			if changed, ok := labelChange(events[i], events[i+1]); ok {
+				merged = append(merged, changed)
+				i++
+				continue
+			}
+		}
+		merged = append(merged, events[i])
+	}
+	return merged
+}
+
+// labelChange returns the merged LabelChanged event for a removed/added pair in
+// the same namespace, or ok=false when the two events are not such a pair.
+func labelChange(first, second types.ProviderEvent) (types.ProviderEvent, bool) {
+	removed, added := first, second
+	if removed.Kind == "LabelAdded" && added.Kind == "LabelRemoved" {
+		removed, added = second, first
+	}
+	if removed.Kind != "LabelRemoved" || added.Kind != "LabelAdded" {
+		return types.ProviderEvent{}, false
+	}
+	if removed.Label == "" || added.Label == "" {
+		return types.ProviderEvent{}, false
+	}
+	if labelNamespace(removed.Label) != labelNamespace(added.Label) {
+		return types.ProviderEvent{}, false
+	}
+	changed := added
+	changed.Kind = "LabelChanged"
+	changed.OldLabel = removed.Label
+	changed.NewLabel = added.Label
+	changed.Label = ""
+	return changed, true
+}
+
+// labelNamespace returns the portion of a label before the first ':' so that
+// priority:medium and priority:high are recognized as the same namespace.
+func labelNamespace(label string) string {
+	if idx := strings.Index(label, ":"); idx >= 0 {
+		return label[:idx]
+	}
+	return label
 }
 
 func shortGriteID(id string) string {
@@ -645,6 +734,33 @@ func existingStatusLabels(labels []string) []string {
 		}
 	}
 	return out
+}
+
+func sessionLabel(sessionID string) string {
+	return sessionLabelPrefix + sessionID
+}
+
+func existingSessionLabels(labels []string) []string {
+	var out []string
+	for _, label := range labels {
+		if strings.HasPrefix(label, sessionLabelPrefix) {
+			out = append(out, label)
+		}
+	}
+	return out
+}
+
+// sessionIDFromLabels returns the agent session id recorded on the issue via the
+// session:<id> label, or "" when none is present. It lets the dashboard locate
+// (and resume) the session that worked on the issue without storing the
+// transcript in the issue itself.
+func sessionIDFromLabels(labels []string) string {
+	for _, label := range labels {
+		if strings.HasPrefix(label, sessionLabelPrefix) {
+			return strings.TrimPrefix(label, sessionLabelPrefix)
+		}
+	}
+	return ""
 }
 
 func includesStatus(statuses []types.Status, want types.Status) bool {

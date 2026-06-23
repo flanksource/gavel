@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/cmux"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 type todoCounts struct {
@@ -54,6 +55,7 @@ type todoSummary struct {
 	Labels         []string              `json:"labels,omitempty"`
 	Attempts       int                   `json:"attempts,omitempty"`
 	LastRun        *time.Time            `json:"lastRun,omitempty"`
+	SessionID      string                `json:"sessionId,omitempty"`
 	Body           string                `json:"body,omitempty"`
 	Implementation string                `json:"implementation,omitempty"`
 	Events         []types.ProviderEvent `json:"events,omitempty"`
@@ -130,6 +132,8 @@ type todoRunPayload struct {
 	Mode      string   `json:"mode,omitempty"`
 	Model     string   `json:"model,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
+	Plan      bool     `json:"plan,omitempty"`
+	Resume    bool     `json:"resume,omitempty"`
 	Timeout   string   `json:"timeout,omitempty"`
 	MaxBudget float64  `json:"maxBudget,omitempty"`
 	MaxCost   float64  `json:"maxCost,omitempty"`
@@ -149,6 +153,9 @@ type todoRunResponse struct {
 	Mode      string   `json:"mode"`
 	Model     string   `json:"model,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
+	Plan      bool     `json:"plan,omitempty"`
+	Resume    bool     `json:"resume,omitempty"`
+	SessionID string   `json:"sessionId,omitempty"`
 	Timeout   string   `json:"timeout"`
 	MaxBudget float64  `json:"maxBudget,omitempty"`
 	MaxTurns  int      `json:"maxTurns,omitempty"`
@@ -170,6 +177,9 @@ type todoRunOptions struct {
 	Mode            string
 	Model           string
 	Effort          string
+	Plan            bool
+	Resume          bool
+	SessionID       string
 	Timeout         time.Duration
 	MaxBudget       float64
 	MaxTurns        int
@@ -521,6 +531,10 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		todoList = append(todoList, todo)
 	}
 	backend, _ := resolveTodoBackend(source.Dir, source.Provider)
+	// Resolve the run's session id once, up front, so it is stable across the
+	// validation and start calls below and can be returned to the client to
+	// follow the session log live (see handleTodoSessionStream).
+	opts.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
 		Todos:    todoList,
@@ -543,6 +557,9 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Mode:      opts.Mode,
 		Model:     opts.Model,
 		Effort:    opts.Effort,
+		Plan:      opts.Plan,
+		Resume:    opts.Resume,
+		SessionID: opts.SessionID,
 		Timeout:   opts.Timeout.String(),
 		MaxBudget: opts.MaxBudget,
 		MaxTurns:  opts.MaxTurns,
@@ -561,18 +578,25 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, error) {
+// resolveTodoDir turns a request's dir param into an absolute workspace path,
+// defaulting to the server's work dir and joining relative dirs onto it. Shared
+// by todoProvider and the session stream so both resolve dirs identically.
+func (s *Server) resolveTodoDir(dir string) string {
 	workDir := s.todoWorkDir()
-	dir := source.Dir
 	if dir == "" {
-		dir = workDir
-	} else if !filepath.IsAbs(dir) {
-		dir = filepath.Join(workDir, dir)
+		return workDir
 	}
-	source.Dir = dir
+	if !filepath.IsAbs(dir) {
+		return filepath.Join(workDir, dir)
+	}
+	return dir
+}
+
+func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, error) {
+	source.Dir = s.resolveTodoDir(source.Dir)
 	switch source.Provider {
 	case "", providerAuto, todos.ProviderGrite, todos.ProviderFiles:
-		return providerForDir(dir, source.Provider), source, nil
+		return providerForDir(source.Dir, source.Provider), source, nil
 	default:
 		return nil, source, fmt.Errorf("unknown todo provider %q", source.Provider)
 	}
@@ -698,6 +722,9 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		Labels:        todo.Labels,
 		Attempts:      todo.Attempts,
 		LastRun:       todo.LastRun,
+	}
+	if todo.LLM != nil {
+		out.SessionID = todo.LLM.SessionId
 	}
 	if out.Ref == "" {
 		out.Ref = todo.FilePath
@@ -989,6 +1016,9 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if mode == "inline" && agent == "codex" {
 		return todoRunOptions{}, fmt.Errorf("codex runs require cmux mode")
 	}
+	if payload.Plan && mode != "cmux" {
+		return todoRunOptions{}, fmt.Errorf("plan mode requires cmux mode")
+	}
 
 	effort := strings.ToLower(strings.TrimSpace(payload.Effort))
 	if effort == "" {
@@ -1028,6 +1058,8 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Mode:            mode,
 		Model:           model,
 		Effort:          effort,
+		Plan:            payload.Plan,
+		Resume:          payload.Resume,
 		Timeout:         timeout,
 		MaxBudget:       maxBudget,
 		MaxTurns:        payload.MaxTurns,
@@ -1066,23 +1098,25 @@ func defaultStartTodoRun(req todoRunRequest) error {
 func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	switch req.Options.Mode {
 	case "cmux":
+		// Return "" as the orchestrator session id so TODOExecutor does not
+		// overwrite the todo's recorded prior session — the cmux executor needs
+		// that prior to decide resume / history. The run's actual session id is
+		// passed explicitly via SessionID.
 		return cmux.NewCmuxExecutor(cmux.CmuxExecutorConfig{
-			WorkDir: req.Source.Dir,
-			Model:   req.Options.Model,
-			Effort:  req.Options.Effort,
-			Timeout: req.Options.Timeout,
+			WorkDir:   req.Source.Dir,
+			Model:     req.Options.Model,
+			Effort:    req.Options.Effort,
+			Plan:      req.Options.Plan,
+			Resume:    req.Options.Resume,
+			SessionID: req.Options.SessionID,
+			Timeout:   req.Options.Timeout,
 		}), "", nil
 	case "inline":
 		agent, model := cmux.ResolveAgent(req.Options.Model)
 		if agent != "claude" {
 			return nil, "", fmt.Errorf("inline mode only supports claude models")
 		}
-		// Resume a prior session only for a single todo; a multi-select group
-		// always starts a fresh combined session rather than adopting one todo's.
-		sessionID := ""
-		if len(req.Todos) == 1 && req.Todos[0].LLM != nil {
-			sessionID = req.Todos[0].LLM.SessionId
-		}
+		sessionID := req.Options.SessionID
 		config := claude.ClaudeExecutorConfig{
 			WorkDir:      req.Source.Dir,
 			SessionID:    sessionID,
@@ -1097,6 +1131,37 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	default:
 		return nil, "", fmt.Errorf("invalid mode %q", req.Options.Mode)
 	}
+}
+
+// resolveRunSessionID determines the claude session id a run will use, so the
+// caller knows it up front. A resume run reuses the todo's prior session; a
+// fresh cmux run mints a new id (claude is launched with it, so the dashboard
+// can follow the log immediately); inline resumes a single todo's session if it
+// has one and otherwise lets claude manage its own id.
+func resolveRunSessionID(opts todoRunOptions, todoList []*types.TODO) string {
+	if opts.Resume {
+		if sid := firstTodoSessionID(todoList); sid != "" {
+			return sid
+		}
+	}
+	switch opts.Mode {
+	case "cmux":
+		return uuid.NewString()
+	case "inline":
+		if len(todoList) == 1 {
+			return firstTodoSessionID(todoList)
+		}
+	}
+	return ""
+}
+
+func firstTodoSessionID(todoList []*types.TODO) string {
+	for _, todo := range todoList {
+		if todo != nil && todo.LLM != nil && todo.LLM.SessionId != "" {
+			return todo.LLM.SessionId
+		}
+	}
+	return ""
 }
 
 func countProjectTodos(ctx context.Context, dir, provider string) todoCounts {

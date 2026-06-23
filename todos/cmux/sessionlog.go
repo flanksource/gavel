@@ -24,10 +24,10 @@ const (
 // detection.
 var errSessionLogNotFound = errors.New("claude session log did not appear")
 
-// sessionLogPath resolves the on-disk Claude session log for a pre-generated
-// session id, mirroring Claude's `~/.claude/projects/<normalized-cwd>/<id>.jsonl`
-// layout.
-func sessionLogPath(workDir, sessionID string) (string, error) {
+// SessionLogPath resolves the on-disk Claude session log for a session id,
+// mirroring Claude's `~/.claude/projects/<normalized-cwd>/<id>.jsonl` layout.
+// It is exported so the dashboard can locate the log to follow it live.
+func SessionLogPath(workDir, sessionID string) (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("session id is required")
 	}
@@ -50,6 +50,15 @@ type sessionTailer struct {
 	pollInterval  time.Duration
 	appearTimeout time.Duration
 	quiescePeriod time.Duration
+	// seekToEnd skips the lines already in the log when tailing begins. Resume
+	// runs reuse an existing log that ends in the prior turn's end_turn; without
+	// this the tailer would see that stale terminal event and report completion
+	// before the resumed turn produces anything.
+	seekToEnd bool
+	// onLine, when set, receives each complete raw log line before it is parsed
+	// into events. It feeds the session-stats accumulator so token/cost totals
+	// stay live during a run. The slice is only valid for the call's duration.
+	onLine func([]byte)
 }
 
 func (st sessionTailer) poll() time.Duration {
@@ -68,6 +77,12 @@ func (st sessionTailer) tail(ctx context.Context, onEvent func(history.SessionEv
 		return false, err
 	}
 	defer func() { _ = f.Close() }()
+
+	if st.seekToEnd {
+		if _, err := f.Seek(0, io.SeekEnd); err != nil {
+			return false, fmt.Errorf("seek session log %q to end: %w", st.path, err)
+		}
+	}
 
 	var pending []byte
 	buf := make([]byte, 32*1024)
@@ -111,6 +126,9 @@ func (st sessionTailer) drain(f *os.File, pending *[]byte, buf []byte, onEvent f
 				}
 				line := (*pending)[:i]
 				*pending = (*pending)[i+1:]
+				if st.onLine != nil {
+					st.onLine(line)
+				}
 				events, perr := history.ParseSessionEvents(line)
 				if perr != nil {
 					continue
@@ -163,8 +181,8 @@ func (st sessionTailer) waitForFile(ctx context.Context) (*os.File, error) {
 // session id, streaming progress to the transcript/notifications and reporting
 // whether the assistant turn completed. It returns the resolved log path for
 // diagnostics even on error.
-func (e *CmuxExecutor) awaitSessionCompletion(ctx *todopkg.ExecutorContext, sessionID, workDir string, timeout time.Duration) (string, bool, error) {
-	path, err := sessionLogPath(workDir, sessionID)
+func (e *CmuxExecutor) awaitSessionCompletion(ctx *todopkg.ExecutorContext, sessionID, workDir string, timeout time.Duration, resume bool, acc *SessionAccumulator) (string, bool, error) {
+	path, err := SessionLogPath(workDir, sessionID)
 	if err != nil {
 		return "", false, err
 	}
@@ -175,6 +193,10 @@ func (e *CmuxExecutor) awaitSessionCompletion(ctx *todopkg.ExecutorContext, sess
 		pollInterval:  e.sessionLogPollInterval(),
 		appearTimeout: e.sessionLogAppearTimeout(timeout),
 		quiescePeriod: e.sessionLogQuiescePeriod(),
+		seekToEnd:     resume,
+	}
+	if acc != nil {
+		tailer.onLine = acc.AddLine
 	}
 
 	tctx, cancel := context.WithTimeout(ctx, timeout)

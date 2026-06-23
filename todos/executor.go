@@ -140,7 +140,11 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 
 	// Execute with configured executor (Claude, OpenAI, etc.)
 	ctx.Logger.Infof("Executing with %s", e.executor.Name())
+	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	result, err := e.executor.Execute(ctx, todo)
+	// The executor may generate its own session id (e.g. cmux's claude
+	// --session-id); persist it now that it is known, regardless of outcome.
+	e.persistSessionID(ctx, todo)
 	if err != nil {
 		ctx.Logger.Errorf("Execution failed: %v", err)
 		todo.Status = types.StatusFailed
@@ -231,7 +235,13 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 	var groupResult *ExecutionResult
 	if len(needsExecution) > 0 {
 		var err error
+		ctx.SetSessionIDHook(e.sessionIDPersister(ctx, needsExecution))
 		groupResult, err = groupExec.ExecuteGroup(ctx, needsExecution)
+		// The group executor may generate a session id per todo (e.g. cmux's
+		// claude --session-id); persist it now that it is known.
+		for _, todo := range needsExecution {
+			e.persistSessionID(ctx, todo)
+		}
 		if err != nil {
 			for _, todo := range needsExecution {
 				todo.Status = types.StatusFailed
@@ -336,6 +346,37 @@ func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result
 	persistCtx, cancel := providerPersistenceContext(ctx)
 	defer cancel()
 	return e.activeProvider().SaveAttempt(persistCtx, todo, result)
+}
+
+// persistSessionID records the executor's session id (e.g. the cmux/claude
+// --session-id) on the provider so the issue carries a session:<id> label.
+func (e *TODOExecutor) persistSessionID(ctx context.Context, todo *types.TODO) {
+	if todo.LLM == nil || todo.LLM.SessionId == "" {
+		return
+	}
+	e.updateProviderState(ctx, todo, StateUpdate{SessionID: &todo.LLM.SessionId})
+}
+
+// sessionIDPersister builds the SetSessionIDHook callback for a run: when the
+// executor reports its session id (before launching the agent), record it on
+// each todo and persist the session:<id> label immediately, so an interrupted
+// run still carries — and can resume — this session.
+func (e *TODOExecutor) sessionIDPersister(ctx context.Context, todoList []*types.TODO) func(string) {
+	return func(sessionID string) {
+		if sessionID == "" {
+			return
+		}
+		for _, todo := range todoList {
+			if todo == nil {
+				continue
+			}
+			if todo.LLM == nil {
+				todo.LLM = &types.LLM{}
+			}
+			todo.LLM.SessionId = sessionID
+			e.updateProviderState(ctx, todo, StateUpdate{SessionID: &sessionID})
+		}
+	}
 }
 
 func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {
