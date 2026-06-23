@@ -14,12 +14,13 @@ import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 // for a "Run N" control once any are checked, dispatching the whole selection to
 // one agent session via /api/todos/run. Selection is per-workspace because a run
 // targets a single workspace dir/provider. The menubar omits multiSelect.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, density = 'comfortable', multiSelect = false, onRunStarted }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, density = 'comfortable', multiSelect = false, onRunStarted }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
   onSelect: (ref: string) => void;
   hiddenStatuses?: Set<TodoStatus>;
+  onToggleStatus?: (status: TodoStatus) => void;
   density?: TodoDensity;
   multiSelect?: boolean;
   onRunStarted?: () => void;
@@ -121,7 +122,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             </button>
           </div>
         ) : (
-          <TodoCountsBar counts={counts} />
+          <TodoCountsBar counts={counts} hidden={hidden} onToggle={onToggleStatus} />
         )}
       </div>
       {(runError || runMessage) && (
@@ -137,6 +138,9 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
           }}
           loading={runBusy}
           title={`Run ${checkedRefs.length} todo${checkedRefs.length === 1 ? '' : 's'}`}
+          dir={workspace.dir}
+          provider={workspace.todoProvider || 'auto'}
+          refs={checkedRefs}
         />
       )}
       {open && (items.length > 0 ? (

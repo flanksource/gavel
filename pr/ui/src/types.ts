@@ -202,6 +202,17 @@ export interface TodoRunResponse {
   message: string;
 }
 
+// Preview of the exact prompt a run would dispatch, shown in the advanced run
+// dialog before the user starts the run.
+export interface TodoRunPreviewResponse {
+  prompt: string;
+  mode: TodoRunMode;
+  agent: TodoRunAgent;
+  effort?: TodoRunEffort;
+  plan?: boolean;
+  count: number;
+}
+
 export interface TodoListResponse {
   provider: TodoProvider | string;
   dir?: string;

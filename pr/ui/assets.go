@@ -20,6 +20,12 @@ var menubarPNG []byte
 //go:embed brand/menubar-unread.png
 var menubarUnreadPNG []byte
 
+//go:embed assets/react-grab-plugin.js
+var reactGrabPluginJS string
+
+//go:embed assets/react-grab-install.html
+var reactGrabInstallHTML string
+
 // MenubarIconPNG returns the embedded macOS menubar icon bytes.
 func MenubarIconPNG() []byte {
 	return menubarPNG

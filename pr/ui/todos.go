@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
@@ -104,6 +105,13 @@ type todoUpdatePayload struct {
 	Ref      string         `json:"ref,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
 	Priority types.Priority `json:"priority,omitempty"`
+	// Title/Body edit the TODO's content; a nil pointer leaves the field
+	// unchanged (an explicit empty body is allowed, an empty title is not).
+	Title *string `json:"title,omitempty"`
+	Body  *string `json:"body,omitempty"`
+	// Comment, when set, appends a comment. Combined with status it reopens (or
+	// closes) the TODO with a comment in one request.
+	Comment string `json:"comment,omitempty"`
 }
 
 // todoTransferPayload moves the todo at Ref from the source workspace
@@ -140,6 +148,10 @@ type todoRunPayload struct {
 	MaxTurns  int      `json:"maxTurns,omitempty"`
 	Dirty     bool     `json:"dirty,omitempty"`
 	DryRun    bool     `json:"dryRun,omitempty"`
+	// Commit controls whether `gavel commit` runs over the agent's changes once
+	// the run finishes. A nil pointer defaults to true (the dashboard auto-commits
+	// like the CLI's `todos run --commit`); send false to disable it.
+	Commit *bool `json:"commit,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -159,7 +171,17 @@ type todoRunResponse struct {
 	Timeout   string   `json:"timeout"`
 	MaxBudget float64  `json:"maxBudget,omitempty"`
 	MaxTurns  int      `json:"maxTurns,omitempty"`
+	Commit    bool     `json:"commit"`
 	Message   string   `json:"message"`
+}
+
+type todoRunPreviewResponse struct {
+	Prompt string `json:"prompt"`
+	Mode   string `json:"mode"`
+	Agent  string `json:"agent"`
+	Effort string `json:"effort,omitempty"`
+	Plan   bool   `json:"plan,omitempty"`
+	Count  int    `json:"count"`
 }
 
 type todoRunRequest struct {
@@ -185,6 +207,7 @@ type todoRunOptions struct {
 	MaxTurns        int
 	Dirty           bool
 	DryRun          bool
+	Commit          bool
 	TimeoutOriginal string
 }
 
@@ -371,7 +394,8 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	// A PATCH may set status, priority, or both; at least one is required.
+	// A PATCH may edit content (title/body), change state (status/priority),
+	// add a comment, or any combination; at least one operation is required.
 	var update todos.StateUpdate
 	if payload.Status != "" {
 		if !validTodoStatus(payload.Status) {
@@ -387,10 +411,27 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		}
 		update.Priority = &payload.Priority
 	}
-	if update.Status == nil && update.Priority == nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("status or priority is required"))
+
+	var edit todos.EditRequest
+	if payload.Title != nil {
+		title := strings.TrimSpace(*payload.Title)
+		if title == "" {
+			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("title cannot be empty"))
+			return
+		}
+		edit.Title = &title
+	}
+	if payload.Body != nil {
+		edit.Body = payload.Body
+	}
+	comment := strings.TrimSpace(payload.Comment)
+
+	hasState := update.Status != nil || update.Priority != nil
+	if !hasState && edit.IsEmpty() && comment == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("status, priority, title, body, or comment is required"))
 		return
 	}
+
 	source := todoSourceFromRequest(r)
 	if payload.Provider != "" {
 		source.Provider = payload.Provider
@@ -408,9 +449,32 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := provider.UpdateState(r.Context(), todo, update); err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
-		return
+	// Order: edit content, then reopen/close, then comment, so a reopen-with-comment
+	// posts the comment against the now-open TODO and it lands last in the timeline.
+	if !edit.IsEmpty() {
+		if err := provider.Edit(r.Context(), todo, edit); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if hasState {
+		if err := provider.UpdateState(r.Context(), todo, update); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if comment != "" {
+		if err := provider.Comment(r.Context(), todo, comment); err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	// Edits and comments mutate the body/event history; re-read so the response
+	// reflects the provider's authoritative state (new event, rewritten body).
+	if !edit.IsEmpty() || comment != "" {
+		if refreshed, gerr := provider.Get(r.Context(), ref); gerr == nil {
+			todo = refreshed
+		}
 	}
 	json.NewEncoder(w).Encode(summarizeTodo(todo, true)) //nolint:errcheck
 }
@@ -488,26 +552,22 @@ func (s *Server) handleTodoTransfer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// resolveTodoRunRequest decodes a run/preview payload and resolves its options,
+// provider, and todos. handleTodoRun and handleTodoRunPreview share it so both
+// interpret the same request identically; the returned status is the HTTP code
+// to report when err is non-nil.
+func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSource, []*types.TODO, todoRunOptions, int, error) {
 	var payload todoRunPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
-		return
+		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("invalid json")
 	}
 	refs := normalizeTodoRunRefs(payload, r)
 	if len(refs) == 0 {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
-		return
+		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("ref is required")
 	}
 	opts, err := normalizeTodoRunOptions(payload)
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
+		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
 	source := todoSourceFromRequest(r)
 	if payload.Provider != "" {
@@ -518,17 +578,29 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, source, err := s.todoProvider(source)
 	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
+		return nil, source, nil, opts, http.StatusBadRequest, err
 	}
 	todoList := make([]*types.TODO, 0, len(refs))
 	for _, ref := range refs {
 		todo, err := provider.Get(r.Context(), ref)
 		if err != nil {
-			writeTodoError(w, http.StatusNotFound, err)
-			return
+			return provider, source, nil, opts, http.StatusNotFound, err
 		}
 		todoList = append(todoList, todo)
+	}
+	return provider, source, todoList, opts, http.StatusOK, nil
+}
+
+func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	provider, source, todoList, opts, status, err := s.resolveTodoRunRequest(r)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
 	}
 	backend, _ := resolveTodoBackend(source.Dir, source.Provider)
 	// Resolve the run's session id once, up front, so it is stable across the
@@ -563,6 +635,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Timeout:   opts.Timeout.String(),
 		MaxBudget: opts.MaxBudget,
 		MaxTurns:  opts.MaxTurns,
+		Commit:    opts.Commit,
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
 	if opts.DryRun {
@@ -576,6 +649,44 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// handleTodoRunPreview renders the exact prompt a run would dispatch, without
+// starting it, so the advanced run dialog can show the prompt that will be sent
+// before the user commits to a run. It accepts the same payload as handleTodoRun.
+func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_, source, todoList, opts, status, err := s.resolveTodoRunRequest(r)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	resp := todoRunPreviewResponse{
+		Prompt: buildTodoRunPromptPreview(source.Dir, todoList, opts),
+		Mode:   opts.Mode,
+		Agent:  opts.Agent,
+		Effort: opts.Effort,
+		Plan:   opts.Plan,
+		Count:  len(todoList),
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// buildTodoRunPromptPreview renders the prompt a run would dispatch, mirroring
+// newTodoRunExecutor: cmux wraps the group prompt with the run's title and the
+// implement/plan suffix, while inline sends the bare claude prompt.
+func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) string {
+	if opts.Mode == "inline" {
+		if len(todoList) == 1 {
+			return claude.BuildPrompt(todoList[0], dir)
+		}
+		return claude.BuildGroupPrompt(todoList, dir)
+	}
+	return cmux.PreviewInstruction(todoList, dir, opts.Effort, opts.Plan, opts.Resume, opts.Agent)
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,
@@ -1053,6 +1164,13 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		return todoRunOptions{}, fmt.Errorf("max turns must be greater than or equal to zero")
 	}
 
+	// Auto-commit defaults on (matching the CLI's `todos run --commit`); a nil
+	// pointer means the client did not opt out.
+	commit := true
+	if payload.Commit != nil {
+		commit = *payload.Commit
+	}
+
 	return todoRunOptions{
 		Agent:           agent,
 		Mode:            mode,
@@ -1065,6 +1183,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		MaxTurns:        payload.MaxTurns,
 		Dirty:           payload.Dirty,
 		DryRun:          payload.DryRun,
+		Commit:          commit,
 		TimeoutOriginal: payload.Timeout,
 	}, nil
 }
@@ -1081,18 +1200,42 @@ func defaultStartTodoRun(req todoRunRequest) error {
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		var runErr error
+		var result *todos.ExecutionResult
 		// A single selection runs through Execute; a multi-select runs every todo
 		// in one combined agent session via ExecuteGroup.
 		if len(req.Todos) == 1 {
-			_, runErr = runner.Execute(execCtx, req.Todos[0])
+			result, runErr = runner.Execute(execCtx, req.Todos[0])
 		} else {
-			_, runErr = runner.ExecuteGroup(execCtx, req.Todos)
+			var results []*todos.ExecutionResult
+			results, runErr = runner.ExecuteGroup(execCtx, req.Todos)
+			if len(results) > 0 {
+				result = results[0]
+			}
 		}
 		if runErr != nil {
 			logger.Warnf("todo run %s failed: %v", todoRunLabel(req.Todos), runErr)
 		}
+		maybeCommitAfterRun(req, result)
 	}()
 	return nil
+}
+
+// maybeCommitAfterRun runs the `gavel commit` pipeline over the agent's changes
+// once a dashboard run finishes, mirroring the CLI's `todos run --commit`.
+// Auto-commit is skipped for plan-only runs (which make no changes) and whenever
+// the executor already committed its own changes (see todos.ShouldCommitAfter).
+func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
+	enabled := req.Options.Commit && !req.Options.Plan
+	if !todos.ShouldCommitAfter(result, enabled) {
+		return
+	}
+	cwd := ""
+	if len(req.Todos) > 0 && req.Todos[0] != nil {
+		cwd = req.Todos[0].CWD
+	}
+	if err := commit.RunAfterAgent(context.Background(), req.Source.Dir, cwd); err != nil {
+		logger.Errorf("commit after todo run failed: %v", err)
+	}
 }
 
 func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {

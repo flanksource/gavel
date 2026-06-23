@@ -1,7 +1,6 @@
-import type { SessionStats, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { SessionStats, TodoCounts, TodoDensity, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { DENSITY_OPTIONS } from './todoDensity';
-import { GROUP_BY_OPTIONS } from './todoGroup';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
@@ -152,25 +151,63 @@ function InProgressBadge({ dir, provider, sessionId }: { dir: string; provider: 
   );
 }
 
-function CountBadge({ icon, value, label, className = 'text-muted-foreground' }: { icon: string; value: number; label: string; className?: string }) {
+function CountBadge({ icon, value, label, className = 'text-muted-foreground', status, hidden, onToggle }: {
+  icon: string;
+  value: number;
+  label: string;
+  className?: string;
+  status?: TodoStatus;
+  hidden?: Set<TodoStatus>;
+  onToggle?: (status: TodoStatus) => void;
+}) {
   if (!value) return null;
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs tabular-nums ${className}`} title={label}>
+  const content = (
+    <>
       <GavelIcon name={icon} className="text-[12px]" />
       {value}
+    </>
+  );
+  // A status-mapped badge in a wired counts bar doubles as a filter pill: clicking
+  // it toggles that status into/out of the shared hidden set, dimming when the
+  // status is hidden. Aggregate badges (open/total) and unwired bars stay static.
+  if (status && onToggle) {
+    const active = !hidden?.has(status);
+    return (
+      <button
+        type="button"
+        onClick={() => onToggle(status)}
+        aria-pressed={active}
+        title={active ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+        className={`-mx-0.5 inline-flex items-center gap-1 rounded px-0.5 text-xs tabular-nums transition-colors hover:bg-muted ${active ? className : 'text-muted-foreground opacity-40 hover:opacity-100'}`}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs tabular-nums ${className}`} title={label}>
+      {content}
     </span>
   );
 }
 
-export function TodoCountsBar({ counts }: { counts: TodoCounts }) {
+// TodoCountsBar renders a workspace/bucket header's status summary. When `hidden`
+// and `onToggle` are supplied, each status-mapped badge becomes a filter pill
+// (toggling that status in the shared hidden set); without them the badges are
+// static counts (e.g. the aggregate bar in the action header).
+export function TodoCountsBar({ counts, hidden, onToggle }: {
+  counts: TodoCounts;
+  hidden?: Set<TodoStatus>;
+  onToggle?: (status: TodoStatus) => void;
+}) {
   return (
     <div className="flex items-center gap-3 text-xs">
       <CountBadge icon="codicon:check" value={counts.open} label="Open todos" className="text-blue-600" />
-      <CountBadge icon="codicon:clock" value={counts.draft} label="Draft" />
-      <CountBadge icon="codicon:debug-start" value={counts.inProgress} label="In progress" className="text-blue-600" />
-      <CountBadge icon="codicon:error" value={counts.failed} label="Failed" className="text-red-600" />
-      <CountBadge icon="octicon:check-circle-fill-16" value={counts.verified} label="Verified" className="text-emerald-600" />
-      <CountBadge icon="codicon:pass" value={counts.completed} label="Completed" className="text-green-600" />
+      <CountBadge icon="codicon:clock" value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="codicon:debug-start" value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="codicon:error" value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="octicon:check-circle-fill-16" value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="codicon:pass" value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
       <span className="text-muted-foreground tabular-nums" title="Total todos">{counts.total}</span>
     </div>
   );
@@ -253,39 +290,6 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
           </div>
         )}
       </button>
-    </div>
-  );
-}
-
-// TodoGroupByPicker is the segmented toggle that switches how the todo lists are
-// grouped: by Workspace (the default, the only mode that supports batch runs),
-// Severity (priority), or Age (last activity). It lives in the Todos toolbar and
-// drives the shared group-by preference.
-export function TodoGroupByPicker({ groupBy, onChange }: {
-  groupBy: TodoGroupBy;
-  onChange: (groupBy: TodoGroupBy) => void;
-}) {
-  return (
-    <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5" role="group" aria-label="Group todos by">
-      {GROUP_BY_OPTIONS.map(opt => {
-        const active = groupBy === opt.value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            aria-pressed={active}
-            title={`Group by ${opt.label.toLowerCase()}`}
-            aria-label={`Group by ${opt.label.toLowerCase()}`}
-            className={`inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] font-medium transition-colors ${
-              active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            <GavelIcon name={opt.icon} className="text-xs" />
-            <span>{opt.label}</span>
-          </button>
-        );
-      })}
     </div>
   );
 }

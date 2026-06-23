@@ -1,6 +1,6 @@
 import { GavelIcon } from './GavelIcon';
 import { ReactGrabHelp } from './ReactGrabHelp';
-import { TodoCountsBar, TodoDensityPicker, TodoGroupByPicker } from './todos/format';
+import { TodoCountsBar, TodoDensityPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
@@ -29,23 +29,33 @@ export function TodoBodyHeader({ todos }: { todos: WorkspaceTodos }) {
   );
 }
 
+// TodoNewButton is the primary "create todo" action. It lives in the AppShell's
+// top-bar actions cluster (the action header) alongside the other global
+// controls, not the body row. Disabled until at least one workspace exists.
+export function TodoNewButton({ todos }: { todos: WorkspaceTodos }) {
+  const { workspaces, setShowCreate } = todos;
+  return (
+    <button
+      type="button"
+      onClick={() => setShowCreate(true)}
+      disabled={workspaces.length === 0}
+      title="New todo"
+      className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+    >
+      <GavelIcon name="codicon:add" className="text-xs" />
+      New
+    </button>
+  );
+}
+
 // TodoBodyActions is the AppShell bodyActions (right): aggregate counts plus the
-// New and Refresh controls.
+// Refresh control. The New control lives in the top-bar action header
+// (TodoNewButton).
 export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, aggregate, loadingList, refresh, setShowCreate } = todos;
+  const { aggregate, loadingList, refresh } = todos;
   return (
     <div className="flex items-center gap-2">
       <TodoCountsBar counts={aggregate} />
-      <button
-        type="button"
-        onClick={() => setShowCreate(true)}
-        disabled={workspaces.length === 0}
-        title="New todo"
-        className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
-      >
-        <GavelIcon name="codicon:add" className="text-xs" />
-        New
-      </button>
       <ReactGrabHelp />
       <button
         type="button"
@@ -65,13 +75,12 @@ export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
 // only mounts it when there are todos to filter, so the toolbar row stays hidden
 // on an empty list.
 export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, hiddenStatuses, toggleStatus, density, setDensity, groupBy, setGroupBy } = todos;
+  const { aggregate, hiddenStatuses, toggleStatus, density, setDensity } = todos;
   return (
     <>
       <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Filter</span>
       <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
       <div className="ml-auto flex items-center gap-2">
-        <TodoGroupByPicker groupBy={groupBy} onChange={setGroupBy} />
         <TodoDensityPicker density={density} onChange={setDensity} />
       </div>
     </>
@@ -83,7 +92,7 @@ export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
 export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, byDir, hiddenStatuses, density, groupBy, selected, select, refresh, loadingList } = todos;
+  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, selected, select, refresh, loadingList } = todos;
   if (workspaces.length === 0) {
     return (
       <div className="p-6 text-center text-sm text-muted-foreground">
@@ -101,6 +110,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             workspace={ws}
             data={byDir[ws.dir]}
             hiddenStatuses={hiddenStatuses}
+            onToggleStatus={toggleStatus}
             density={density}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}

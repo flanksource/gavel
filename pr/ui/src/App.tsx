@@ -5,10 +5,11 @@ import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
-import { TodoBodyHeader, TodoBodyActions, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
+import { TodoBodyHeader, TodoBodyActions, TodoNewButton, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
+import { TodoGroupByMenu } from './components/todos/TodoGroupByMenu';
 import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
@@ -540,7 +541,14 @@ export function App() {
     <>
       <AppShell
         brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
-        nav={<TabBar active={activeTab} onChange={changeTab} />}
+        nav={
+          <div className="flex items-center gap-2">
+            <TabBar active={activeTab} onChange={changeTab} />
+            {activeTab === 'todos' && todos.aggregate.total > 0 && (
+              <TodoGroupByMenu groupBy={todos.groupBy} onChange={todos.setGroupBy} />
+            )}
+          </div>
+        }
         search={
           activeTab === 'prs' ? (
             <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
@@ -567,6 +575,7 @@ export function App() {
         }
         actions={
           <>
+            {activeTab === 'todos' && <TodoNewButton todos={todos} />}
             <ProcessManager projects={projects} procStatus={procStatus} onProcChanged={onProcChanged} />
             <OrgChooser config={config} onChange={updateConfig} />
             <StatusIndicator

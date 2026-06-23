@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
-import type { TodoRunEffort, TodoRunMode, TodoRunOptions, TodoRunResponse } from '../../types';
+import type { TodoRunEffort, TodoRunMode, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
 
@@ -169,12 +169,20 @@ export function TodoRunAdvancedDialog({
   onRun,
   loading,
   title = 'Run todo',
+  dir,
+  provider,
+  refs,
 }: {
   open: boolean;
   onClose: () => void;
   onRun: (options: TodoRunOptions) => void;
   loading?: boolean;
   title?: string;
+  // dir/provider/refs identify the todo(s) this dialog will run, so it can fetch
+  // a live preview of the prompt that will be sent as the options change.
+  dir: string;
+  provider: string;
+  refs: string[];
 }) {
   const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
   const [mode, setMode] = useState<TodoRunMode>('cmux');
@@ -188,6 +196,9 @@ export function TodoRunAdvancedDialog({
   const [dirty, setDirty] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [commit, setCommit] = useState(true);
+  const [preview, setPreview] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -204,6 +215,60 @@ export function TodoRunAdvancedDialog({
     setDryRun(false);
     setCommit(true);
   }, [open]);
+
+  // refs is a fresh array each render at the call sites, so key the preview fetch
+  // on its contents rather than its identity to avoid an endless refetch loop.
+  const refsKey = refs.join('\n');
+
+  // Fetch the prompt that will be sent whenever the dialog is open and a
+  // prompt-affecting option changes (mode/agent/model/effort/plan/resume). The
+  // server builds it from the same code path the run uses, so it matches exactly.
+  useEffect(() => {
+    if (!open) {
+      setPreview('');
+      setPreviewError('');
+      return;
+    }
+    const list = refsKey.split('\n').filter(Boolean);
+    if (list.length === 0) {
+      setPreview('');
+      setPreviewError('');
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setPreviewLoading(true);
+    setPreviewError('');
+    fetch(`/api/todos/run/preview?${todoQuery(dir, provider)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        refs: list,
+        agent,
+        mode,
+        model: model.trim() || agent,
+        effort,
+        plan: mode === 'cmux' ? plan : undefined,
+        resume: mode === 'cmux' ? resume : undefined,
+      }),
+      signal: controller.signal,
+    })
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Preview failed');
+        if (!cancelled) setPreview((data as TodoRunPreviewResponse).prompt ?? '');
+      })
+      .catch((err: any) => {
+        if (!cancelled && err?.name !== 'AbortError') setPreviewError(err?.message || 'Preview failed');
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [open, dir, provider, refsKey, agent, mode, model, effort, plan, resume]);
 
   if (!open) return null;
 
@@ -320,6 +385,19 @@ export function TodoRunAdvancedDialog({
             <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />
             <span>Dry run</span>
           </label>
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Prompt preview</span>
+            {previewLoading && <GavelIcon name="svg-spinners:ring-resize" className="text-xs text-muted-foreground" />}
+          </div>
+          {previewError ? (
+            <div className="text-xs text-red-600">{previewError}</div>
+          ) : (
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-2 text-[11px] leading-snug text-foreground">
+              {preview || (previewLoading ? 'Loading prompt…' : 'No prompt to preview')}
+            </pre>
+          )}
         </div>
       </div>
     </Modal>
