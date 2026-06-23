@@ -20,7 +20,7 @@ import (
 //
 //	---
 //	priority: high|medium|low
-//	status: pending|in_progress|completed|failed|skipped
+//	status: draft|pending|in_progress|completed|failed|verified|skipped
 //	language: go|typescript|python
 //	cwd: /path/to/working/dir
 //	---
@@ -174,16 +174,8 @@ func validateFrontmatter(fm *types.TODOFrontmatter) error {
 	}
 
 	// Validate status value
-	validStatuses := []types.Status{types.StatusPending, types.StatusInProgress, types.StatusCompleted, types.StatusFailed, types.StatusSkipped}
-	validStatus := false
-	for _, s := range validStatuses {
-		if fm.Status == s {
-			validStatus = true
-			break
-		}
-	}
-	if !validStatus {
-		return fmt.Errorf("invalid status: must be pending, in_progress, completed, failed, or skipped")
+	if !types.IsKnownStatus(fm.Status) {
+		return fmt.Errorf("invalid status: must be draft, pending, in_progress, completed, failed, verified, or skipped")
 	}
 
 	// Validate language value

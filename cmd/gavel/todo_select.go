@@ -131,12 +131,16 @@ func prioritySymbol(p types.Priority) string {
 
 func statusSymbol(s types.Status) string {
 	switch s {
+	case types.StatusDraft:
+		return "○ DRFT"
 	case types.StatusFailed:
 		return "✗ FAIL"
 	case types.StatusPending:
 		return "● PEND"
 	case types.StatusInProgress:
 		return "→ RUN"
+	case types.StatusVerified:
+		return "✓ VER"
 	case types.StatusCompleted:
 		return "✓ DONE"
 	case types.StatusSkipped:

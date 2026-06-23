@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -83,6 +85,105 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	}
 	if _, err := os.Stat(created.Ref); !os.IsNotExist(err) {
 		t.Fatalf("expected TODO file to be removed, stat err=%v", err)
+	}
+}
+
+func TestTodoNewEndpointQueryDefaultsDraft(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/todos/new?provider=todos&dir="+url.QueryEscape(workDir)+"&title=Draft+from+query&priority=low", nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("new status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp todoNewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal new response: %v", err)
+	}
+	if resp.AutoSave {
+		t.Fatalf("autoSave default = true, want false")
+	}
+	if resp.Todo.Title != "Draft from query" || resp.Todo.Status != types.StatusDraft || resp.Todo.Priority != types.PriorityLow {
+		t.Fatalf("unexpected created draft: %+v", resp)
+	}
+}
+
+func TestTodoNewEndpointJSONAutoSaveDefaultsPending(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	body := `{"title":"JSON todo","body":"Created from json","autoSave":true}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("new json status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp todoNewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal new json response: %v", err)
+	}
+	if !resp.AutoSave {
+		t.Fatalf("autoSave = false, want true")
+	}
+	if resp.Todo.Status != types.StatusPending {
+		t.Fatalf("status = %q, want pending", resp.Todo.Status)
+	}
+	if !strings.Contains(resp.Todo.Body, "Created from json") {
+		t.Fatalf("created body missing json content: %+v", resp.Todo)
+	}
+}
+
+func TestTodoNewEndpointMultipartFiles(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range map[string]string{
+		"title":    "Screenshot todo",
+		"body":     "Screenshot context.",
+		"status":   string(types.StatusVerified),
+		"priority": string(types.PriorityHigh),
+		"autoSave": "true",
+	} {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("write field %s: %v", key, err)
+		}
+	}
+	part, err := writer.CreateFormFile("screenshot", "screen.png")
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := part.Write([]byte("png bytes")); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("new multipart status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp todoNewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal new multipart response: %v", err)
+	}
+	if resp.Todo.Status != types.StatusVerified || resp.Todo.Priority != types.PriorityHigh {
+		t.Fatalf("unexpected multipart todo: %+v", resp.Todo)
+	}
+	if len(resp.Attachments) != 1 || resp.Attachments[0].Filename != "screen.png" || resp.Attachments[0].Field != "screenshot" {
+		t.Fatalf("unexpected attachments: %+v", resp.Attachments)
+	}
+	if !strings.Contains(resp.Todo.Body, "## Attachments") || !strings.Contains(resp.Todo.Body, "screen.png") {
+		t.Fatalf("created body missing attachment summary: %q", resp.Todo.Body)
 	}
 }
 
@@ -335,6 +436,146 @@ func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
 	// The original must survive a rejected transfer.
 	if _, err := os.Stat(created.FilePath); err != nil {
 		t.Fatalf("expected source todo to survive rejected transfer: %v", err)
+	}
+}
+
+func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:    "Run me",
+		Priority: types.PriorityMedium,
+		Status:   types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	oldStart := startTodoRun
+	var got todoRunRequest
+	startTodoRun = func(req todoRunRequest) error {
+		got = req
+		return nil
+	}
+	t.Cleanup(func() { startTodoRun = oldStart })
+
+	body, _ := json.Marshal(todoRunPayload{
+		Ref:      todos.TODOReference(created),
+		Agent:    "codex",
+		Mode:     "cmux",
+		Model:    "codex",
+		Effort:   "high",
+		Timeout:  "45m",
+		MaxCost:  1.25,
+		MaxTurns: 12,
+		Dirty:    true,
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal run response: %v", err)
+	}
+	if resp.Status != "started" || resp.Provider != todos.ProviderFiles || resp.Agent != "codex" || resp.Mode != "cmux" {
+		t.Fatalf("unexpected run response: %+v", resp)
+	}
+	if resp.Count != 1 {
+		t.Fatalf("run count = %d, want 1", resp.Count)
+	}
+	if len(got.Todos) != 1 || got.Todos[0].Title != "Run me" {
+		t.Fatalf("run starter did not receive selected todo: %+v", got.Todos)
+	}
+	if got.Source.Dir != workDir || got.Backend != todos.ProviderFiles {
+		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
+	}
+	if got.Options.Model != "codex" || got.Options.Effort != "high" || got.Options.MaxBudget != 1.25 || got.Options.MaxTurns != 12 || !got.Options.Dirty {
+		t.Fatalf("unexpected run options: %+v", got.Options)
+	}
+}
+
+func TestTodoAPIRunStartsMultipleTodosInOneSession(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := todos.NewFileProvider(workDir, "")
+	first, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "First todo",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed first: %v", err)
+	}
+	second, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "Second todo",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed second: %v", err)
+	}
+
+	oldStart := startTodoRun
+	var got todoRunRequest
+	startTodoRun = func(req todoRunRequest) error {
+		got = req
+		return nil
+	}
+	t.Cleanup(func() { startTodoRun = oldStart })
+
+	// Duplicate the first ref to confirm the handler de-duplicates refs.
+	body, _ := json.Marshal(todoRunPayload{
+		Refs:   []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
+		Agent:  "claude",
+		Mode:   "cmux",
+		Model:  "sonnet",
+		Effort: "medium",
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal run response: %v", err)
+	}
+	if resp.Status != "started" || resp.Count != 2 || len(resp.Refs) != 2 {
+		t.Fatalf("unexpected multi-run response: %+v", resp)
+	}
+	if resp.Message != "Started run for 2 todos" {
+		t.Fatalf("message = %q, want %q", resp.Message, "Started run for 2 todos")
+	}
+	if len(got.Todos) != 2 || got.Todos[0].Title != "First todo" || got.Todos[1].Title != "Second todo" {
+		t.Fatalf("run starter did not receive both todos in order: %+v", got.Todos)
+	}
+}
+
+func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Run me",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	body, _ := json.Marshal(todoRunPayload{
+		Ref:    todos.TODOReference(created),
+		Agent:  "codex",
+		Mode:   "inline",
+		Model:  "codex",
+		Effort: "medium",
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "codex runs require cmux mode") {
+		t.Fatalf("unexpected error body: %q", rec.Body.String())
 	}
 }
 

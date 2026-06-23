@@ -29,6 +29,8 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	filters := todos.DiscoveryFilters{}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
+	} else if !opts.All {
+		filters.ExcludeStatuses = []types.Status{types.StatusCompleted}
 	}
 
 	todoList, err := provider.List(context.Background(), filters)

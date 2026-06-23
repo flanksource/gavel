@@ -1,0 +1,278 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Button, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
+import type { TodoRunEffort, TodoRunMode, TodoRunOptions, TodoRunResponse } from '../../types';
+import { GavelIcon } from '../GavelIcon';
+import { inputClass, todoQuery } from './format';
+
+export const defaultRunOptions: TodoRunOptions = { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium' };
+
+export const runPresets: Array<{ label: string; detail: string; icon: string; options: TodoRunOptions }> = [
+  { label: 'Claude Sonnet', detail: 'cmux · medium effort', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'sonnet', effort: 'medium' } },
+  { label: 'Claude Opus', detail: 'cmux · high effort', icon: 'codicon:sparkle-filled', options: { agent: 'claude', mode: 'cmux', model: 'opus', effort: 'high' } },
+  { label: 'Claude Haiku', detail: 'cmux · low effort', icon: 'codicon:zap', options: { agent: 'claude', mode: 'cmux', model: 'haiku', effort: 'low' } },
+  { label: 'Codex', detail: 'cmux · medium effort', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium' } },
+  { label: 'Codex High', detail: 'cmux · high effort', icon: 'codicon:terminal-cmd', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'high' } },
+];
+
+// useTodoRun POSTs a run for one or more todo refs in a workspace. A single ref
+// runs on its own; multiple refs run together in one agent session (the server
+// dispatches them as a combined group). Both the single-todo detail pane and the
+// list's multi-select bar drive runs through this one hook.
+export function useTodoRun(dir: string, provider: string) {
+  const [runBusy, setRunBusy] = useState(false);
+  const [runMessage, setRunMessage] = useState('');
+  const [runError, setRunError] = useState('');
+
+  const reset = useCallback(() => {
+    setRunMessage('');
+    setRunError('');
+  }, []);
+
+  const run = useCallback(
+    async (refs: string[], options: TodoRunOptions = defaultRunOptions): Promise<TodoRunResponse | null> => {
+      const cleaned = refs.map(r => r.trim()).filter(Boolean);
+      if (cleaned.length === 0 || runBusy) return null;
+      setRunBusy(true);
+      setRunError('');
+      setRunMessage('');
+      try {
+        // Send `ref` for a single todo (matching the original payload) and `refs`
+        // for a multi-select group run.
+        const body = cleaned.length === 1 ? { ref: cleaned[0], ...options } : { refs: cleaned, ...options };
+        const response = await fetch(`/api/todos/run?${todoQuery(dir, provider)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Run failed');
+        const result = data as TodoRunResponse;
+        setRunMessage(result.message || (result.status === 'dry_run' ? 'Todo run validated' : 'Todo run started'));
+        return result;
+      } catch (err: any) {
+        setRunError(err?.message || 'Run failed');
+        return null;
+      } finally {
+        setRunBusy(false);
+      }
+    },
+    [dir, provider, runBusy],
+  );
+
+  return { runBusy, runMessage, runError, reset, run };
+}
+
+export function TodoRunSplitButton({
+  disabled,
+  loading,
+  label = 'Run',
+  title = 'Run todo',
+  onRun,
+  onAdvanced,
+}: {
+  disabled?: boolean;
+  loading?: boolean;
+  label?: string;
+  title?: string;
+  onRun: (options?: TodoRunOptions) => void;
+  onAdvanced: () => void;
+}) {
+  return (
+    <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+      <button
+        type="button"
+        onClick={() => onRun(defaultRunOptions)}
+        disabled={disabled}
+        title={title}
+        className="inline-flex h-8 items-center gap-1 border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+      >
+        <GavelIcon name={loading ? 'svg-spinners:ring-resize' : 'codicon:play'} className="text-xs" />
+        <span>{label}</span>
+      </button>
+      <DropdownMenu
+        align="right"
+        menuLabel="Run todo"
+        menuClassName="w-[280px] max-w-[calc(100vw-24px)]"
+        trigger={
+          <button
+            type="button"
+            disabled={disabled}
+            title="Run options"
+            aria-label="Run options"
+            className="inline-flex h-8 w-7 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+          >
+            <GavelIcon name="codicon:chevron-down" className="text-xs" />
+          </button>
+        }
+      >
+        {() => (
+          <div className="p-1 text-xs">
+            {runPresets.map(preset => (
+              <button
+                key={`${preset.label}:${preset.detail}`}
+                type="button"
+                onClick={() => onRun(preset.options)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+              >
+                <GavelIcon name={preset.icon} className="shrink-0 text-sm text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium text-foreground">{preset.label}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{preset.detail}</span>
+                </span>
+              </button>
+            ))}
+            <div className="my-1 border-t border-border" />
+            <button
+              type="button"
+              onClick={onAdvanced}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+            >
+              <GavelIcon name="codicon:settings-gear" className="shrink-0 text-sm text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium text-foreground">Advanced</span>
+                <span className="block truncate text-[11px] text-muted-foreground">model, effort, timeout, limits</span>
+              </span>
+            </button>
+          </div>
+        )}
+      </DropdownMenu>
+    </div>
+  );
+}
+
+export function TodoRunAdvancedDialog({
+  open,
+  onClose,
+  onRun,
+  loading,
+  title = 'Run todo',
+}: {
+  open: boolean;
+  onClose: () => void;
+  onRun: (options: TodoRunOptions) => void;
+  loading?: boolean;
+  title?: string;
+}) {
+  const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
+  const [mode, setMode] = useState<TodoRunMode>('cmux');
+  const [model, setModel] = useState('claude');
+  const [effort, setEffort] = useState<TodoRunEffort>('medium');
+  const [timeout, setTimeout] = useState('30m');
+  const [maxCost, setMaxCost] = useState('');
+  const [maxTurns, setMaxTurns] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [dryRun, setDryRun] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setAgent('claude');
+    setMode('cmux');
+    setModel('claude');
+    setEffort('medium');
+    setTimeout('30m');
+    setMaxCost('');
+    setMaxTurns('');
+    setDirty(false);
+    setDryRun(false);
+  }, [open]);
+
+  if (!open) return null;
+
+  function submit() {
+    const cost = Number(maxCost);
+    const turns = Number.parseInt(maxTurns, 10);
+    onRun({
+      agent,
+      mode,
+      model: model.trim() || agent,
+      effort,
+      timeout: timeout.trim() || '30m',
+      maxCost: mode === 'inline' && maxCost.trim() && Number.isFinite(cost) ? cost : undefined,
+      maxTurns: mode === 'inline' && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
+      dirty: mode === 'inline' ? dirty : undefined,
+      dryRun,
+    });
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={title}
+      size="md"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} loading={loading}>Run</Button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Agent">
+            <select
+              value={agent}
+              onChange={e => {
+                const next = e.currentTarget.value as 'claude' | 'codex';
+                setAgent(next);
+                setModel(next);
+                if (next === 'codex') setMode('cmux');
+              }}
+              className={inputClass}
+            >
+              <option value="claude">Claude</option>
+              <option value="codex">Codex</option>
+            </select>
+          </Field>
+          <Field label="Mode">
+            <select
+              value={mode}
+              onChange={e => setMode(e.currentTarget.value as TodoRunMode)}
+              className={inputClass}
+              disabled={agent === 'codex'}
+            >
+              <option value="cmux">cmux</option>
+              <option value="inline">inline</option>
+            </select>
+          </Field>
+        </div>
+        <Field label="Model">
+          <input
+            className={inputClass}
+            value={model}
+            placeholder={agent === 'codex' ? 'codex' : 'sonnet'}
+            onChange={e => setModel(e.currentTarget.value)}
+          />
+        </Field>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Effort">
+            <select value={effort} onChange={e => setEffort(e.currentTarget.value as TodoRunEffort)} className={inputClass}>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </Field>
+          <Field label="Timeout">
+            <input className={inputClass} value={timeout} onChange={e => setTimeout(e.currentTarget.value)} />
+          </Field>
+          <Field label="Max turns">
+            <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={mode !== 'inline'} />
+          </Field>
+        </div>
+        <Field label="Max cost">
+          <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={mode !== 'inline'} />
+        </Field>
+        <div className="flex flex-wrap gap-3 text-xs">
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={mode !== 'inline'} />
+            <span>Dirty worktree</span>
+          </label>
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />
+            <span>Dry run</span>
+          </label>
+        </div>
+      </div>
+    </Modal>
+  );
+}

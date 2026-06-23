@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -309,6 +310,49 @@ func TestGriteProviderUpdateStateClosesCompletedIssue(t *testing.T) {
 	}
 	if todo.ProviderState != "closed" {
 		t.Fatalf("expected closed state, got %q", todo.ProviderState)
+	}
+}
+
+func TestGriteProviderSupportsDraftAndVerifiedStatusLabels(t *testing.T) {
+	if got := statusFromGriteIssue("open", []string{"status:draft"}); got != types.StatusDraft {
+		t.Fatalf("draft label mapped to %q, want draft", got)
+	}
+	if got := statusFromGriteIssue("open", []string{"status:verified"}); got != types.StatusVerified {
+		t.Fatalf("verified label mapped to %q, want verified", got)
+	}
+
+	labels := griteCreateLabels(types.PriorityLow, types.StatusVerified)
+	want := []string{"priority:low", "status:verified"}
+	if !reflect.DeepEqual(labels, want) {
+		t.Fatalf("create labels mismatch\nwant: %#v\n got: %#v", want, labels)
+	}
+}
+
+func TestProviderEventsCaptureLabelDetail(t *testing.T) {
+	kind := func(name, payload string) map[string]json.RawMessage {
+		return map[string]json.RawMessage{name: json.RawMessage(payload)}
+	}
+	events := []griteEvent{
+		{EventID: "2dfd815d4bd2", Actor: "agent", TimestampMS: 1782148373153, Kind: kind("LabelRemoved", `{"label": "status:pending"}`)},
+		{EventID: "5ee3e0c5d06e", Actor: "agent", TimestampMS: 1782148373193, Kind: kind("LabelAdded", `{"label": "status:in_progress"}`)},
+	}
+
+	got := providerEventsFromGriteEvents(events)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 provider events, got %#v", got)
+	}
+	if got[0].Kind != "LabelRemoved" || got[0].Label != "status:pending" {
+		t.Fatalf("LabelRemoved not parsed: %#v", got[0])
+	}
+	if got[1].Kind != "LabelAdded" || got[1].Label != "status:in_progress" {
+		t.Fatalf("LabelAdded not parsed: %#v", got[1])
+	}
+
+	details := types.TODO{ProviderEvents: got}.PrettyDetailed().String()
+	for _, want := range []string{"LabelRemoved", "status:pending", "LabelAdded", "status:in_progress"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("expected detailed output to contain %q, got:\n%s", want, details)
+		}
 	}
 }
 
