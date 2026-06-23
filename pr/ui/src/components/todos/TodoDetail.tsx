@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { Project, TodoEvent, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import { Markdown } from '../Markdown';
 import { GavelIcon } from '../GavelIcon';
+import { TodoTimeline } from './TodoTimeline';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
+import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
 
 export function TodoDetail({
   todo,
@@ -26,7 +28,9 @@ export function TodoDetail({
   onTransferred?: (toDir: string, todo: TodoItem) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
+  const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir, provider);
   const isGrite = todo?.provider === 'grite';
   // Projects this todo can move to: every configured workspace except its own.
   const transferTargets = workspaces.filter(ws => !!ws.dir && ws.dir !== dir);
@@ -37,7 +41,9 @@ export function TodoDetail({
 
   useEffect(() => {
     setError('');
-  }, [todo?.ref]);
+    resetRun();
+    setAdvancedOpen(false);
+  }, [todo?.ref, resetRun]);
 
   // patch sends a partial update (status and/or priority) and adopts the server's
   // returned todo so the view reflects provider-side side effects (labels, state).
@@ -109,6 +115,14 @@ export function TodoDetail({
     }
   }
 
+  async function runTodo(options?: TodoRunOptions) {
+    if (!todo) return;
+    const result = await run([todo.ref], options);
+    if (result?.status === 'started') {
+      onChanged({ ...todo, status: 'in_progress', lastRun: new Date().toISOString() });
+    }
+  }
+
   if (!todo) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -170,6 +184,12 @@ export function TodoDetail({
                 ))}
               </select>
             )}
+            <TodoRunSplitButton
+              disabled={busy || runBusy}
+              loading={runBusy}
+              onRun={runTodo}
+              onAdvanced={() => setAdvancedOpen(true)}
+            />
             <button
               type="button"
               onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
@@ -192,8 +212,18 @@ export function TodoDetail({
             </button>
           </div>
         </div>
-        {error && <div className="mt-2 text-xs text-red-600">{error}</div>}
+        {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
+        {runMessage && !error && !runError && <div className="mt-2 text-xs text-emerald-600">{runMessage}</div>}
       </div>
+      <TodoRunAdvancedDialog
+        open={advancedOpen}
+        onClose={() => setAdvancedOpen(false)}
+        onRun={options => {
+          setAdvancedOpen(false);
+          runTodo(options);
+        }}
+        loading={runBusy}
+      />
       <div className="px-4 py-3">
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -211,17 +241,13 @@ export function TodoDetail({
             )}
             {events.length > 0 && (
               <TodoSection
-                title="Context"
+                title="History"
                 icon="codicon:history"
                 count={events.length}
                 defaultOpen={!body}
-                resetKey={`${todo.ref}:context`}
+                resetKey={`${todo.ref}:history`}
               >
-                <div className="divide-y divide-border">
-                  {events.map((event, i) => (
-                    <TodoEventBlock key={`${event.id || i}`} event={event} index={i} />
-                  ))}
-                </div>
+                <TodoTimeline events={events} />
               </TodoSection>
             )}
           </div>
@@ -270,28 +296,3 @@ function TodoSection({
   );
 }
 
-function TodoEventBlock({ event, index }: { event: TodoEvent; index: number }) {
-  const body = event.body?.trim() ?? '';
-  const timestamp = formatEventTimestamp(event.timestamp);
-  const title = event.title?.trim();
-
-  return (
-    <div className="py-3 first:pt-0 last:pb-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{event.kind || `Event ${index + 1}`}</span>
-        {event.short_id && <span className="font-mono">{event.short_id}</span>}
-        {event.actor && <span>{event.actor}</span>}
-        {timestamp && <span>{timestamp}</span>}
-      </div>
-      {title && <div className="mt-1 text-xs font-medium text-foreground">{title}</div>}
-      {body && <Markdown text={body} className="mt-2 text-xs" />}
-    </div>
-  );
-}
-
-function formatEventTimestamp(timestamp?: string) {
-  if (!timestamp || timestamp.startsWith('0001-01-01')) return '';
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleString();
-}

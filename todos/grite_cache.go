@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,12 +141,9 @@ func (p *CachedGriteProvider) Get(ctx context.Context, ref string) (*types.TODO,
 	if err := p.ensureSynced(ctx); err != nil {
 		return nil, err
 	}
-	ci, err := p.store.GetIssue(ctx, p.repo, ref)
+	ci, err := p.resolveCachedIssue(ctx, ref)
 	if err != nil {
 		return nil, err
-	}
-	if ci == nil {
-		return nil, fmt.Errorf("todo not found: %s", ref)
 	}
 	events, err := ci.events()
 	if err != nil {
@@ -160,6 +158,46 @@ func (p *CachedGriteProvider) Get(ctx context.Context, ref string) (*types.TODO,
 	applyGriteIdentity(todo, issue)
 	todo.ProviderEvents = providerEventsFromGriteEvents(events)
 	return todo, nil
+}
+
+// resolveCachedIssue locates the cached issue identified by ref. An exact issue
+// id wins; otherwise ref is treated as a short-id prefix (e.g. the 8-char
+// DisplayID shown by `todo list`), mirroring grite's own `issue show` prefix
+// resolution. An ambiguous prefix is reported rather than silently picking one.
+func (p *CachedGriteProvider) resolveCachedIssue(ctx context.Context, ref string) (*CachedIssue, error) {
+	ci, err := p.store.GetIssue(ctx, p.repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	if ci != nil {
+		return ci, nil
+	}
+	issues, err := p.store.ListIssues(ctx, p.repo)
+	if err != nil {
+		return nil, err
+	}
+	var matches []CachedIssue
+	for _, candidate := range issues {
+		if strings.HasPrefix(candidate.IssueID, ref) {
+			matches = append(matches, candidate)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return &matches[0], nil
+	case 0:
+		return nil, fmt.Errorf("todo not found: %s", ref)
+	default:
+		return nil, fmt.Errorf("ambiguous todo id %q matches %d issues: %s", ref, len(matches), strings.Join(ambiguousMatchLabels(matches), "; "))
+	}
+}
+
+func ambiguousMatchLabels(issues []CachedIssue) []string {
+	out := make([]string, len(issues))
+	for i, ci := range issues {
+		out[i] = fmt.Sprintf("%s %s", shortGriteID(ci.IssueID), ci.Title)
+	}
+	return out
 }
 
 func (p *CachedGriteProvider) Create(ctx context.Context, req CreateRequest) (*types.TODO, error) {

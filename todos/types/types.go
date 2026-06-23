@@ -79,6 +79,7 @@ type ProviderEvent struct {
 	Timestamp time.Time `json:"timestamp,omitempty"`
 	Title     string    `json:"title,omitempty"`
 	Body      string    `json:"body,omitempty"`
+	Label     string    `json:"label,omitempty"`
 }
 
 // TODO represents a structured TODO item parsed from a markdown file.
@@ -296,6 +297,9 @@ func formatProviderEvents(events []ProviderEvent) api.Text {
 			line += " by " + event.Actor
 		}
 		result = result.Append(line, "").NewLine()
+		if event.Label != "" {
+			result = result.Append("    Label: ", "text-gray-500").Append(event.Label, "").NewLine()
+		}
 		if event.Title != "" {
 			result = result.Append("    Title: ", "text-gray-500").Append(event.Title, "").NewLine()
 		}
@@ -583,10 +587,14 @@ func (p Priority) Pretty() api.Text {
 type Status string
 
 const (
+	// StatusDraft indicates the TODO is being drafted and is not ready to run.
+	StatusDraft Status = "draft"
 	// StatusPending indicates the TODO has not been started.
 	StatusPending Status = "pending"
 	// StatusInProgress indicates the TODO is currently being worked on.
 	StatusInProgress Status = "in_progress"
+	// StatusVerified indicates the TODO has been verified but not closed.
+	StatusVerified Status = "verified"
 	// StatusCompleted indicates the TODO has been successfully completed.
 	StatusCompleted Status = "completed"
 	// StatusFailed indicates the TODO execution failed.
@@ -595,13 +603,39 @@ const (
 	StatusSkipped Status = "skipped"
 )
 
+// KnownStatuses returns the TODO statuses accepted by parsers and APIs.
+func KnownStatuses() []Status {
+	return []Status{
+		StatusDraft,
+		StatusPending,
+		StatusInProgress,
+		StatusFailed,
+		StatusVerified,
+		StatusCompleted,
+		StatusSkipped,
+	}
+}
+
+func IsKnownStatus(status Status) bool {
+	for _, known := range KnownStatuses() {
+		if status == known {
+			return true
+		}
+	}
+	return false
+}
+
 // Pretty returns a formatted text representation of the Status with color coding
 func (s Status) Pretty() api.Text {
 	switch s {
+	case StatusDraft:
+		return clicky.Text("").Add(icons.Info).Append(" DRAFT", "text-gray-500")
 	case StatusPending:
 		return clicky.Text("").Add(icons.Info).Append(" PENDING", "text-gray-600")
 	case StatusInProgress:
 		return clicky.Text("").Add(icons.ArrowRight).Append(" IN PROGRESS", "text-blue-600 font-medium")
+	case StatusVerified:
+		return clicky.Text("").Add(icons.Pass).Append(" VERIFIED", "text-emerald-600 font-medium")
 	case StatusCompleted:
 		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
 	case StatusFailed:

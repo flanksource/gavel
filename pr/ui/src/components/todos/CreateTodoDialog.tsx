@@ -31,6 +31,7 @@ export function CreateTodoDialog({
       setPriority('medium');
       setStatus('pending');
       setError('');
+      setBusy(false);
     }
   }, [open, workspaces]);
 

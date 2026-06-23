@@ -42,6 +42,7 @@ var (
 
 var todosCmd = &cobra.Command{
 	Use:          "todos",
+	Aliases:      []string{"todo"},
 	SilenceUsage: true,
 	Short:        "Automated TODO execution system with Claude Code integration",
 }
@@ -56,15 +57,16 @@ var todosRunCmd = &cobra.Command{
 type TodosListOptions struct {
 	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
+	All     bool   `json:"all" flag:"all" help:"Show completed TODOs too"`
 	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }
 
 var todosGetCmd = &cobra.Command{
-	Use:          "get <todo-file>",
+	Use:          "get <id-or-file>",
 	SilenceUsage: true,
-	Short:        "Display detailed information about a TODO",
+	Short:        "Display detailed information about a TODO (accepts a full or short id, or a file path)",
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTodosGet,
 }
@@ -460,7 +462,11 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 		groupWorkDir = group.Name
 	}
 	agent, model := resolveTodoAgent(todoModel)
-	agentCmd := cmux.AgentCommand(agent, model)
+	sessionID := ""
+	if agent == "claude" {
+		sessionID = "<session-id>"
+	}
+	agentCmd := cmux.AgentCommand(agent, model, sessionID)
 	name := cmux.AgentWorkspaceName(groupWorkDir, agent)
 
 	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
@@ -474,7 +480,11 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
 	fmt.Println("  cmux send --workspace <workspace-ref> --surface <surface-ref> -- <prompt>")
 	fmt.Println("  cmux send-key --workspace <workspace-ref> --surface <surface-ref> Enter")
-	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	if agent == "claude" {
+		fmt.Println("  # then tail ~/.claude/projects/<cwd>/<session-id>.jsonl for progress until the turn ends")
+	} else {
+		fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	}
 	fmt.Println()
 	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 	fmt.Println("### Prompt")

@@ -112,7 +112,7 @@ func (r *recordingRunner) sawArgs(sub string) bool {
 }
 
 func evt(id, issueID, kind string, ts int64, body string) griteEvent {
-	payload, _ := json.Marshal(griteIssueBodyEvent{Body: body})
+	payload, _ := json.Marshal(griteEventPayload{Body: body})
 	return griteEvent{EventID: id, IssueID: issueID, TimestampMS: ts, Kind: map[string]json.RawMessage{kind: payload}}
 }
 
@@ -239,6 +239,62 @@ func TestCachedGriteProviderGetRebuildsEvents(t *testing.T) {
 	}
 	if len(todo.ProviderEvents) != 1 || todo.ProviderEvents[0].Body != "the body" || todo.ProviderEvents[0].Kind != "IssueCreated" {
 		t.Fatalf("expected rebuilt event history, got %+v", todo.ProviderEvents)
+	}
+}
+
+func TestCachedGriteProviderGetResolvesShortID(t *testing.T) {
+	const fullID = "81b6f0520b0f9f1780bc964a172283ee"
+	store := newFakeGriteStore()
+	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
+		Issues: []griteIssue{{IssueID: fullID, Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteEvent{evt("e1", fullID, "IssueCreated", 100, "the body")},
+	}}}
+	p := newCachedProvider(store, runner, time.Hour)
+
+	// The 8-char DisplayID shown by `todo list` must resolve to the full issue.
+	todo, err := p.Get(context.Background(), shortGriteID(fullID))
+	if err != nil {
+		t.Fatalf("Get by short id failed: %v", err)
+	}
+	if todo.ID != fullID {
+		t.Fatalf("expected short id resolved to %s, got %s", fullID, todo.ID)
+	}
+	if len(todo.ProviderEvents) != 1 || todo.ProviderEvents[0].Body != "the body" {
+		t.Fatalf("expected rebuilt event history, got %+v", todo.ProviderEvents)
+	}
+}
+
+func TestCachedGriteProviderGetAmbiguousShortIDErrors(t *testing.T) {
+	store := newFakeGriteStore()
+	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
+		Issues: []griteIssue{
+			{IssueID: "abcd111100000000", Title: "First", State: "open", UpdatedTS: 100},
+			{IssueID: "abcd222200000000", Title: "Second", State: "open", UpdatedTS: 100},
+		},
+		Events: []griteEvent{
+			evt("e1", "abcd111100000000", "IssueCreated", 100, "a"),
+			evt("e2", "abcd222200000000", "IssueCreated", 100, "b"),
+		},
+	}}}
+	p := newCachedProvider(store, runner, time.Hour)
+
+	_, err := p.Get(context.Background(), "abcd")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected ambiguous short id error, got %v", err)
+	}
+}
+
+func TestCachedGriteProviderGetUnknownRefErrors(t *testing.T) {
+	store := newFakeGriteStore()
+	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
+		Issues: []griteIssue{{IssueID: "abc12345abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteEvent{evt("e1", "abc12345abc12345", "IssueCreated", 100, "b")},
+	}}}
+	p := newCachedProvider(store, runner, time.Hour)
+
+	_, err := p.Get(context.Background(), "ffffffff")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not-found error, got %v", err)
 	}
 }
 

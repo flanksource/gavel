@@ -457,9 +457,10 @@ type griteEvent struct {
 	Kind        map[string]json.RawMessage `json:"kind"`
 }
 
-type griteIssueBodyEvent struct {
+type griteEventPayload struct {
 	Body  string `json:"body"`
 	Title string `json:"title"`
+	Label string `json:"label"`
 }
 
 func todoFromGriteIssue(issue griteIssue, workDir string) *types.TODO {
@@ -508,7 +509,7 @@ func bodyFromGriteEvents(events []griteEvent) string {
 			if !ok {
 				continue
 			}
-			var payload griteIssueBodyEvent
+			var payload griteEventPayload
 			if err := json.Unmarshal(raw, &payload); err == nil && payload.Body != "" {
 				body = payload.Body
 			}
@@ -527,7 +528,7 @@ func providerEventsFromGriteEvents(events []griteEvent) []types.ProviderEvent {
 		sort.Strings(kindNames)
 
 		for _, name := range kindNames {
-			var payload griteIssueBodyEvent
+			var payload griteEventPayload
 			_ = json.Unmarshal(event.Kind[name], &payload)
 			providerEvent := types.ProviderEvent{
 				ID:      event.EventID,
@@ -536,6 +537,7 @@ func providerEventsFromGriteEvents(events []griteEvent) []types.ProviderEvent {
 				Actor:   event.Actor,
 				Title:   payload.Title,
 				Body:    payload.Body,
+				Label:   payload.Label,
 			}
 			if event.TimestampMS > 0 {
 				providerEvent.Timestamp = time.UnixMilli(event.TimestampMS)
@@ -655,12 +657,7 @@ func includesStatus(statuses []types.Status, want types.Status) bool {
 }
 
 func isKnownStatus(status types.Status) bool {
-	switch status {
-	case types.StatusPending, types.StatusInProgress, types.StatusCompleted, types.StatusFailed, types.StatusSkipped:
-		return true
-	default:
-		return false
-	}
+	return types.IsKnownStatus(status)
 }
 
 func hasLabel(labels []string, want string) bool {

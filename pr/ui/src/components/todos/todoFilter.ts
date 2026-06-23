@@ -9,9 +9,11 @@ export const CLOSED_STATUS: TodoStatus = 'completed';
 // "Closed" is the user-facing name for completed (grite's `closed` state), kept
 // last so it reads as the trailing "hide closed" control.
 export const STATUS_FILTER_DEFS: { status: TodoStatus; label: string; countKey: keyof TodoCounts }[] = [
+  { status: 'draft', label: 'Draft', countKey: 'draft' },
   { status: 'pending', label: 'Pending', countKey: 'pending' },
   { status: 'in_progress', label: 'In progress', countKey: 'inProgress' },
   { status: 'failed', label: 'Failed', countKey: 'failed' },
+  { status: 'verified', label: 'Verified', countKey: 'verified' },
   { status: 'skipped', label: 'Skipped', countKey: 'skipped' },
   { status: 'completed', label: 'Closed', countKey: 'completed' },
 ];
