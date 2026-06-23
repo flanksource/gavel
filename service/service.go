@@ -284,14 +284,17 @@ func ReadUIPort() int {
 // Used by `pr list --port=0`: start=DefaultUIPort, tries=50 gives the UI
 // a 50-port search window (9092-9141) which is plenty for the "one daemon
 // per user + a few leftover sockets in TIME_WAIT" case.
-func ScanFreePort(start, tries int) (int, net.Listener, error) {
+func ScanFreePort(host string, start, tries int) (int, net.Listener, error) {
 	if tries < 1 {
 		tries = 1
+	}
+	if host == "" {
+		host = "localhost"
 	}
 	var lastErr error
 	for i := 0; i < tries; i++ {
 		port := start + i
-		l, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 		if err == nil {
 			return port, l, nil
 		}

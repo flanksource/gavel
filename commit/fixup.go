@@ -67,7 +67,7 @@ func validateFixupOptions(opts Options) error {
 // runs after all fixup + leftover commits exist, with a no-op sequence
 // editor so the rebase is non-interactive.
 func runFixup(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageFiles(opts.WorkDir, opts.Stage); err != nil {
+	if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
 		return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 	}
 

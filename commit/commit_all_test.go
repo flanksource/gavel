@@ -320,6 +320,45 @@ func TestRunCommitAllRejectsExplicitMessage(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCommitAllWithMessage)
 }
 
+// TestRunCommitAllExcludesGitIgnoredAndGavelIgnored drives the full
+// `gavel commit -A` path with untracked files blocked by .gitignore and by
+// .gavel.yaml commit.gitignore. It reproduces the reported bug — `-A` staging
+// ignored files via `git add -A` — and guards that both ignore sources are
+// honored: only the normal file is committed, the ignored ones stay untracked.
+func TestRunCommitAllExcludesGitIgnoredAndGavelIgnored(t *testing.T) {
+	repo := initCommitRepo(t)
+	writeFile(t, repo, ".gitignore", "*.secret\n")
+	gitRun(t, repo, "add", ".gitignore")
+	gitRun(t, repo, "commit", "-m", "add gitignore")
+
+	writeFileInDir(t, repo, "app/main.go", "package main\n") // normal -> committed
+	writeFileInDir(t, repo, "app/token.secret", "TOKEN=1\n") // .gitignore -> excluded
+	writeFileInDir(t, repo, "secrets/keys.env", "KEY=1\n")   // .gavel commit.gitignore -> excluded
+
+	t.Setenv(testEnvVar, "1")
+
+	result, err := Run(context.Background(), Options{
+		WorkDir:   repo,
+		CommitAll: true,
+		Config:    verify.CommitConfig{GitIgnore: []string{"*.env"}},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, result.Staged, "app/main.go")
+	assert.NotContains(t, result.Staged, "app/token.secret", ".gitignore'd file must not be committed by -A")
+	assert.NotContains(t, result.Staged, "secrets/keys.env", ".gavel.yaml commit.gitignore file must not be committed by -A")
+
+	// The committed tree (clean index after -A) tracks only the normal file.
+	tracked := gitOutput(t, repo, "ls-files")
+	assert.Contains(t, tracked, "app/main.go")
+	assert.NotContains(t, tracked, "app/token.secret", ".gitignore'd file must not be committed by -A")
+	assert.NotContains(t, tracked, "secrets/keys.env", ".gavel.yaml commit.gitignore file must not be committed by -A")
+
+	// Both ignored files are left untouched in the working tree, not deleted.
+	assert.FileExists(t, filepath.Join(repo, "app/token.secret"))
+	assert.FileExists(t, filepath.Join(repo, "secrets/keys.env"))
+}
+
 func initCommitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

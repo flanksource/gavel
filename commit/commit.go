@@ -14,7 +14,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/internal/changegraph"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 )
@@ -214,7 +213,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		if err := stageFiles(opts.WorkDir, opts.Stage); err != nil {
+		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
 			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 		}
 	}
@@ -381,7 +380,7 @@ func mergeResults(agg, single *Result) *Result {
 }
 
 func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageCommitAllSource(opts.WorkDir); err != nil {
+	if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
 		return nil, err
 	}
 
@@ -518,26 +517,71 @@ func commitByDirectory(ctx context.Context, opts Options, source stagedSource, r
 	return result, nil
 }
 
-func stageFiles(workDir, mode string) error {
+// stageFiles stages changes for the given mode using git's own ignore-aware
+// semantics, so an ignored path can never abort the whole `git add`:
+//   - tracked modifications/deletions go in via `git add -u` (which also keeps
+//     tracked-but-gitignored bundles such as pr/ui/dist/prui.js staged);
+//   - StageAll additionally adds untracked files that are matched by neither
+//     .gitignore (handled by git) nor the repo's .gavel.yaml commit.gitignore.
+func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
 		return nil
 	case StageUnstaged, StageAll:
-		opts := changegraph.DiffOptions{IncludeUnstaged: true}
-		if mode == StageAll {
-			opts.IncludeUntracked = true
+		if err := gitAddUpdate(workDir); err != nil {
+			return err
 		}
-		fs, err := changegraph.ComputeFileSet(workDir, opts)
-		if err != nil {
-			return fmt.Errorf("compute file set: %w", err)
+		if mode == StageUnstaged {
+			return nil
 		}
-		return addFiles(workDir, fs.Sorted())
+		return addUntracked(workDir, cfg)
 	default:
 		return fmt.Errorf("%w: %q", ErrInvalidStage, mode)
 	}
 }
 
-func stageCommitAllSource(workDir string) error {
+// addUntracked stages untracked files that git does not ignore, minus the
+// repo's .gavel.yaml commit.gitignore rules (commit.allow re-includes) and minus
+// embedded git repositories, which `git add` refuses. Every skip is logged so a
+// dropped file is never silent.
+func addUntracked(workDir string, cfg verify.CommitConfig) error {
+	untracked, err := untrackedFiles(workDir)
+	if err != nil {
+		return fmt.Errorf("list untracked files: %w", err)
+	}
+	if len(untracked) == 0 {
+		return nil
+	}
+
+	candidates := make([]string, 0, len(untracked))
+	for _, f := range untracked {
+		if strings.HasSuffix(f, "/") {
+			logger.Infof("commit: skipping embedded repo or directory %s", f)
+			continue
+		}
+		candidates = append(candidates, f)
+	}
+
+	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	ignored := make(map[string]struct{}, len(violations))
+	for _, v := range violations {
+		logger.Infof("commit: skipping %s (matches .gavel.yaml commit.gitignore %q)", v.File, v.Pattern)
+		ignored[v.File] = struct{}{}
+	}
+
+	keep := make([]string, 0, len(candidates))
+	for _, f := range candidates {
+		if _, skip := ignored[f]; !skip {
+			keep = append(keep, f)
+		}
+	}
+	return addFiles(workDir, keep)
+}
+
+func stageCommitAllSource(workDir string, cfg verify.CommitConfig) error {
 	files, err := stagedFiles(workDir)
 	if err != nil {
 		return fmt.Errorf("list staged files: %w", err)
@@ -545,7 +589,7 @@ func stageCommitAllSource(workDir string) error {
 	if len(files) > 0 {
 		return nil
 	}
-	if err := stageFiles(workDir, StageAll); err != nil {
+	if err := stageFiles(workDir, StageAll, cfg); err != nil {
 		return fmt.Errorf("stage files (%s): %w", StageAll, err)
 	}
 	return nil
