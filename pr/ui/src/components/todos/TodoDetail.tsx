@@ -287,6 +287,9 @@ export function TodoDetail({
           runTodo(options);
         }}
         loading={runBusy}
+        dir={dir}
+        provider={provider}
+        refs={[todo.ref]}
       />
       <div className="flex shrink-0 gap-1 border-b border-border px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon="codicon:list-flat" label="Overview" />

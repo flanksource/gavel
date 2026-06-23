@@ -3,3 +3,14 @@
 
 /* clicky-ui's prebuilt styles: shadcn :root design tokens + component utilities. */
 @import "@flanksource/clicky-ui/styles.css";
+
+/* The AppShell root is `h-full` (height:100%); it only fills the viewport — so
+   its inner `overflow-y-auto min-h-0` panes become the scrollers instead of the
+   whole document — when the html/body/#root height chain is constrained to the
+   viewport. Without this, `height:100%` resolves against an auto-height ancestor,
+   the shell collapses to content height, and the entire page scrolls. */
+html,
+body,
+#root {
+  height: 100%;
+}

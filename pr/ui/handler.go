@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -328,11 +329,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
+	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
 	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
+	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
+	mux.HandleFunc("/react-grab", handleReactGrabInstall)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
@@ -360,6 +364,37 @@ func handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	fmt.Fprint(w, faviconSVG)
+}
+
+// requestOrigin reconstructs the scheme+host this request was served from so an
+// asset can target gavel itself even when injected into a different app's page
+// (e.g. via the React Grab bookmarklet, where window.location is the host app).
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	return scheme + "://" + r.Host
+}
+
+// handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
+// substituted for this server's origin. It is intentionally uncached so the
+// origin always matches the host that served it.
+func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", requestOrigin(r)))
+}
+
+// handleReactGrabInstall serves the install page (bookmarklet + console snippet)
+// for loading the React Grab plugin into any running dev app.
+func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", requestOrigin(r)))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {

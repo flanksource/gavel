@@ -236,6 +236,69 @@ func TestTodoAPIPatchPriority(t *testing.T) {
 	}
 }
 
+func TestTodoAPIPatchEditsTitleBodyAndComments(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Before edit",
+		Body:   "Before body",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	ref := todos.TODOReference(created)
+
+	patch := func(payload string) todoSummary {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(payload)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("patch %s status = %d, want 200; body = %q", payload, rec.Code, rec.Body.String())
+		}
+		var out todoSummary
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("unmarshal patch response: %v", err)
+		}
+		return out
+	}
+
+	// Edit title + body.
+	edited := patch(`{"ref":` + strconvQuote(ref) + `,"title":"After edit","body":"After body"}`)
+	if edited.Title != "After edit" {
+		t.Fatalf("title = %q, want After edit", edited.Title)
+	}
+	if !strings.Contains(edited.Body, "After body") || strings.Contains(edited.Body, "Before body") {
+		t.Fatalf("body not replaced: %q", edited.Body)
+	}
+
+	// Add a comment only.
+	commented := patch(`{"ref":` + strconvQuote(ref) + `,"comment":"please double-check"}`)
+	if !strings.Contains(commented.Body, "## Comments") || !strings.Contains(commented.Body, "please double-check") {
+		t.Fatalf("comment not recorded in body: %q", commented.Body)
+	}
+
+	// Close, then reopen with a comment in one request.
+	if got := patch(`{"ref":` + strconvQuote(ref) + `,"status":"completed"}`); got.Status != types.StatusCompleted {
+		t.Fatalf("close status = %q, want completed", got.Status)
+	}
+	reopened := patch(`{"ref":` + strconvQuote(ref) + `,"status":"pending","comment":"reopening to address feedback"}`)
+	if reopened.Status != types.StatusPending {
+		t.Fatalf("reopen status = %q, want pending", reopened.Status)
+	}
+	if !strings.Contains(reopened.Body, "reopening to address feedback") {
+		t.Fatalf("reopen comment not recorded: %q", reopened.Body)
+	}
+
+	// An empty-title edit is rejected.
+	rec := httptest.NewRecorder()
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(`{"ref":`+strconvQuote(ref)+`,"title":"   "}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty-title patch status = %d, want 400", rec.Code)
+	}
+}
+
 func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
@@ -493,6 +556,148 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	}
 	if got.Options.Model != "codex" || got.Options.Effort != "high" || got.Options.MaxBudget != 1.25 || got.Options.MaxTurns != 12 || !got.Options.Dirty {
 		t.Fatalf("unexpected run options: %+v", got.Options)
+	}
+}
+
+func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:    "Fix the parser",
+		Body:     "The parser drops trailing commas.",
+		Priority: types.PriorityMedium,
+		Status:   types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	ref := todos.TODOReference(created)
+
+	preview := func(payload todoRunPayload) todoRunPreviewResponse {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		rec := httptest.NewRecorder()
+		s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run/preview?provider=todos", strings.NewReader(string(body))))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("preview status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+		}
+		var resp todoRunPreviewResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal preview response: %v", err)
+		}
+		return resp
+	}
+
+	cmuxResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Model: "claude", Effort: "high"})
+	if cmuxResp.Count != 1 || cmuxResp.Mode != "cmux" {
+		t.Fatalf("unexpected preview meta: %+v", cmuxResp)
+	}
+	if !strings.HasPrefix(cmuxResp.Prompt, "# Fix the parser\n\n") {
+		t.Fatalf("cmux preview should lead with the title: %q", cmuxResp.Prompt)
+	}
+	if !strings.Contains(cmuxResp.Prompt, "The parser drops trailing commas.") {
+		t.Fatalf("cmux preview should inline the body: %q", cmuxResp.Prompt)
+	}
+	if !strings.HasSuffix(cmuxResp.Prompt, "Implement all TODOs described above. When finished, stop and wait for verification.") {
+		t.Fatalf("cmux preview should end with the implement directive: %q", cmuxResp.Prompt)
+	}
+
+	planResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium", Plan: true})
+	if !strings.Contains(planResp.Prompt, "do NOT make any code changes — only plan") {
+		t.Fatalf("plan preview should forbid code changes: %q", planResp.Prompt)
+	}
+
+	inlineResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Model: "claude", Effort: "medium"})
+	if strings.HasPrefix(inlineResp.Prompt, "# Fix the parser") {
+		t.Fatalf("inline preview should be the bare claude prompt, not the cmux instruction: %q", inlineResp.Prompt)
+	}
+	if !strings.Contains(inlineResp.Prompt, "The parser drops trailing commas.") {
+		t.Fatalf("inline preview should include the body: %q", inlineResp.Prompt)
+	}
+}
+
+func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	base := todoRunPayload{Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium"}
+
+	cases := []struct {
+		name    string
+		payload *bool
+		want    bool
+	}{
+		{"omitted defaults to true", nil, true},
+		{"explicit true", boolPtr(true), true},
+		{"explicit false", boolPtr(false), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := base
+			payload.Commit = tc.payload
+			opts, err := normalizeTodoRunOptions(payload)
+			if err != nil {
+				t.Fatalf("normalize: %v", err)
+			}
+			if opts.Commit != tc.want {
+				t.Fatalf("Commit = %v, want %v", opts.Commit, tc.want)
+			}
+		})
+	}
+}
+
+func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	cases := []struct {
+		name   string
+		commit *bool
+		want   bool
+	}{
+		{"defaults to auto-commit", nil, true},
+		{"opt out disables commit", boolPtr(false), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+			created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+				Title:  "Run me",
+				Status: types.StatusPending,
+			})
+			if err != nil {
+				t.Fatalf("seed create: %v", err)
+			}
+
+			oldStart := startTodoRun
+			var got todoRunRequest
+			startTodoRun = func(req todoRunRequest) error {
+				got = req
+				return nil
+			}
+			t.Cleanup(func() { startTodoRun = oldStart })
+
+			body, _ := json.Marshal(todoRunPayload{
+				Ref:    todos.TODOReference(created),
+				Agent:  "claude",
+				Mode:   "cmux",
+				Model:  "claude",
+				Effort: "medium",
+				Commit: tc.commit,
+			})
+			rec := httptest.NewRecorder()
+			s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+			}
+			var resp todoRunResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal run response: %v", err)
+			}
+			if resp.Commit != tc.want {
+				t.Fatalf("response Commit = %v, want %v", resp.Commit, tc.want)
+			}
+			if got.Options.Commit != tc.want {
+				t.Fatalf("run starter Commit = %v, want %v", got.Options.Commit, tc.want)
+			}
+		})
 	}
 }
 

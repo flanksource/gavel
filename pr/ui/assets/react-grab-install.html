@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>gavel · React Grab → todo</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      body {
+        margin: 0;
+        padding: 2.5rem 1.5rem;
+        font: 15px/1.6 system-ui, sans-serif;
+        color: #111;
+        background: #f6f7f9;
+      }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.25rem;
+      }
+      p {
+        color: #444;
+      }
+      .bookmarklet {
+        display: inline-block;
+        margin: 0.5rem 0 1.5rem;
+        padding: 0.5rem 0.9rem;
+        border-radius: 8px;
+        background: #111;
+        color: #fff;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      pre {
+        background: #111;
+        color: #eee;
+        padding: 0.9rem 1rem;
+        border-radius: 8px;
+        overflow-x: auto;
+      }
+      code {
+        font-family: "Fira Code", ui-monospace, monospace;
+        font-size: 13px;
+      }
+      ol {
+        padding-left: 1.2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>React Grab → gavel todo</h1>
+      <p>
+        Capture any UI element into a gavel todo. Grab an element with
+        <a href="https://github.com/aidenybai/react-grab">React Grab</a>, then run the
+        <strong>Add to gavel todo</strong> action — a dialog opens with this gavel's
+        <code>/todos/new</code> form prefilled with the component and its source.
+      </p>
+
+      <h2>Bookmarklet</h2>
+      <p>Drag this to your bookmarks bar, then click it on any running dev page:</p>
+      <a
+        class="bookmarklet"
+        href="javascript:(function(){var s=document.createElement('script');s.src='__GAVEL_ORIGIN__/react-grab-plugin.js';document.body.appendChild(s);})();"
+        >Add to gavel todo</a
+      >
+
+      <h2>Or paste in the console</h2>
+      <pre><code>var s=document.createElement('script');s.src='__GAVEL_ORIGIN__/react-grab-plugin.js';document.body.appendChild(s);</code></pre>
+
+      <p>
+        Already developing the gavel PR dashboard with <code>gavel pr list --dev</code>? It's loaded
+        for you automatically — just grab and run the action.
+      </p>
+    </main>
+  </body>
+</html>
