@@ -21,7 +21,7 @@ deps: ensure-task
 	@for dir in $(UI_DIRS); do \
 		if [ ! -d "$$dir/node_modules" ]; then \
 			echo "Installing $$dir dependencies"; \
-			( cd "$$dir" && corepack pnpm install --no-frozen-lockfile ); \
+			( cd "$$dir" && CI=true corepack pnpm install --no-frozen-lockfile ); \
 		fi; \
 	done
 

@@ -25,6 +25,7 @@ import {
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
+import { useDocumentVisible } from './useDocumentVisible';
 import { GavelIcon } from './components/GavelIcon';
 
 const defaultConfig: SearchConfig = { repos: [] };
@@ -155,6 +156,7 @@ export function App() {
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
   const [, tick] = useState(0);
+  const visible = useDocumentVisible();
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
@@ -203,7 +205,12 @@ export function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
+  // Pull the PR snapshot and keep it live over SSE — but only while visible. The
+  // menubar webview stays resident when dismissed; holding the stream open (and
+  // re-rendering on every push) there is pure waste, so close it on hide and
+  // reopen — refetching fresh — on show.
   useEffect(() => {
+    if (!visible) return;
     fetch('/api/prs')
       .then(r => r.json())
       .then((snap: Snapshot) => applySnapshot(snap))
@@ -215,9 +222,18 @@ export function App() {
     });
     es.onerror = () => setError('Connection lost — retrying...');
 
+    return () => { es.close(); };
+  }, [visible]);
+
+  // The 1s tick re-renders the whole app to refresh relative timestamps. Gate it
+  // on visibility so a hidden window isn't forced through a full document restyle
+  // every second — the menubar's dominant main-thread cost and a driver of its
+  // unbounded memory growth.
+  useEffect(() => {
+    if (!visible) return;
     const timer = setInterval(() => tick(n => n + 1), 1000);
-    return () => { es.close(); clearInterval(timer); };
-  }, []);
+    return () => clearInterval(timer);
+  }, [visible]);
 
   function applySnapshot(snap: Snapshot) {
     setRawPrs(snap.prs || []);
@@ -276,27 +292,22 @@ export function App() {
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
 
-  // True while any process is mid-transition (starting/restarting) so the poller
-  // can refresh faster and the start/restart progress shows promptly.
-  const anyProcTransitioning = useMemo(
-    () => Object.values(procStatus).some(
-      s => s.processes?.some(p => p.status === 'starting' || p.status === 'restarting')),
-    [procStatus],
-  );
-
-  // Poll process status only while projects are configured and the tab is
-  // visible — this is the sole driver of the sidebar's per-repo proc badges
-  // and is intentionally decoupled from the GitHub PR poller. While a process is
-  // transitioning, poll every 1s so the UI tracks the start/restart progress;
-  // otherwise the steady-state 3s cadence.
+  // Stream process status over SSE while projects are configured and the tab is
+  // visible — this is the sole driver of the sidebar's per-repo proc badges and
+  // is intentionally decoupled from the GitHub PR poller. The server pushes a
+  // fresh frame on connect and then drives the cadence (faster while a process
+  // is starting/restarting), replacing the old client-side poll. Closing on hide
+  // lets the backend stop sampling; reopening on show pushes an immediate frame.
   useEffect(() => {
     if (projects.length === 0) { setProcStatus({}); return; }
-    fetchProcStatus();
-    const id = setInterval(() => {
-      if (document.visibilityState === 'visible') fetchProcStatus();
-    }, anyProcTransitioning ? 1000 : 3000);
-    return () => clearInterval(id);
-  }, [projects.length, fetchProcStatus, anyProcTransitioning]);
+    if (!visible) return;
+    const es = new EventSource('/api/proc/status/stream');
+    es.addEventListener('message', (e: MessageEvent) => {
+      try { setProcStatus(JSON.parse(e.data)); } catch { /* ignore malformed frame */ }
+    });
+    // EventSource auto-reconnects; proc status is best-effort, so swallow errors.
+    return () => { es.close(); };
+  }, [projects.length, visible]);
 
   const projectsByRepo = useMemo(() => {
     const m: Record<string, Project> = {};

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/gavel/github"
@@ -71,8 +72,22 @@ func runMenuBar(srv *ui.Server, dashboardURL string) error {
 		},
 	})
 	menuWindow = window
+
+	var blanked atomic.Bool
+	blankController := newMenubarBlankController(blankIdle,
+		window.IsVisible,
+		func() {
+			window.SetURL("about:blank")
+			blanked.Store(true)
+		},
+	)
+
 	window.OnWindowEvent(events.Common.WindowShow, func(event *application.WindowEvent) {
 		hideController.cancel()
+		if blanked.CompareAndSwap(true, false) {
+			window.SetURL(dashboardURL + "/menubar")
+		}
+		blankController.touch()
 	})
 	window.OnWindowEvent(events.Common.WindowLostFocus, func(event *application.WindowEvent) {
 		hideController.cancel()
@@ -111,6 +126,10 @@ func runMenuBar(srv *ui.Server, dashboardURL string) error {
 
 	return app.Run()
 }
+
+// blankIdle is how long the menubar popover may sit hidden before its webview
+// page is navigated to about:blank to reclaim its (otherwise unbounded) memory.
+const blankIdle = 5 * time.Minute
 
 const menubarOpenExternalMessage = "gavel:open-external"
 const menubarPointerEnterMessage = "gavel:pointer-enter"
@@ -219,6 +238,64 @@ func (c *menubarHideController) cancel() {
 	if c.timer != nil {
 		c.timer.Stop()
 		c.timer = nil
+	}
+}
+
+// menubarBlankController frees the resident webview page once the popover has
+// been idle (hidden) for delay. The menubar window is only hidden, never
+// destroyed, so its DOM/JS heap grows unbounded across the daemon's lifetime;
+// navigating it to about:blank discards that heap, and the next open reloads
+// /menubar. The timer resets on every open ("delay after the last open") and a
+// visible popover is never blanked — if the user still has it open when the
+// timer fires it reschedules for another idle window instead.
+type menubarBlankController struct {
+	delay   time.Duration
+	visible func() bool
+	blank   func()
+
+	mu         sync.Mutex
+	generation int
+	timer      *time.Timer
+}
+
+func newMenubarBlankController(delay time.Duration, visible func() bool, blank func()) *menubarBlankController {
+	return &menubarBlankController{delay: delay, visible: visible, blank: blank}
+}
+
+// touch (re)starts the idle timer; call it on every WindowShow so the page is
+// blanked delay after the most recent open.
+func (c *menubarBlankController) touch() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.arm()
+}
+
+// arm schedules fire after delay, superseding any pending timer. Caller holds mu.
+func (c *menubarBlankController) arm() {
+	c.generation++
+	generation := c.generation
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.timer = time.AfterFunc(c.delay, func() { c.fire(generation) })
+}
+
+func (c *menubarBlankController) fire(generation int) {
+	c.mu.Lock()
+	if generation != c.generation {
+		c.mu.Unlock()
+		return
+	}
+	if c.visible != nil && c.visible() {
+		c.arm()
+		c.mu.Unlock()
+		return
+	}
+	c.timer = nil
+	c.mu.Unlock()
+
+	if c.blank != nil {
+		c.blank()
 	}
 }
 

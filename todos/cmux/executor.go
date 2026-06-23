@@ -2,12 +2,15 @@ package cmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
@@ -35,6 +38,10 @@ type CmuxExecutorConfig struct {
 	ScreenMaxPollInterval time.Duration
 	ScreenStableDuration  time.Duration
 	ScreenLines           int
+
+	SessionLogPollInterval  time.Duration
+	SessionLogAppearTimeout time.Duration
+	SessionLogQuiescePeriod time.Duration
 }
 
 type CmuxExecutor struct {
@@ -69,7 +76,16 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	timeout := e.timeout()
 	agent, model := ResolveAgent(e.config.Model)
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-	agentCommand := AgentCommand(agent, model)
+
+	// Pre-generate the Claude session id so we can launch with --session-id and
+	// tail the resulting session history log for structured progress. codex
+	// manages its own sessions, so it keeps the screen-idle detection path.
+	sessionID := ""
+	if agent == "claude" {
+		sessionID = uuid.NewString()
+		recordSessionID(todosInGroup, sessionID)
+	}
+	agentCommand := AgentCommand(agent, model, sessionID)
 
 	ctx.Logger.Infof("cmux: dispatching %d TODO(s) with %s in %s", len(todosInGroup), agent, workDir)
 	ctx.Logger.V(1).Infof("cmux command: cmux ping")
@@ -139,23 +155,58 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		return failedResult(e.Name(), start, err), err
 	}
 
-	ctx.Logger.Infof("cmux: waiting for %s screen to change and stabilize after prompt dispatch", agent)
-	if _, err := e.waitForScreenIdle(ctx, ref, "after prompt dispatch", timeout, beforePromptScreen, true); err != nil {
-		return failedResult(e.Name(), start, err), err
+	actions := []string{
+		"cmux workspace " + workspace.String(),
+		"cmux new-surface " + ref.SurfaceID,
+		"cmux agent " + agentCommand,
+		"cmux prompt " + promptPath,
+	}
+
+	if sessionID != "" {
+		logPath, completed, serr := e.awaitSessionCompletion(ctx, sessionID, workDir, timeout)
+		if logPath != "" {
+			actions = append(actions, "claude session "+logPath)
+		}
+		switch {
+		case errors.Is(serr, errSessionLogNotFound):
+			ctx.Logger.Warnf("cmux: claude session log never appeared; falling back to screen-idle detection")
+			if _, err := e.waitForScreenIdle(ctx, ref, "after prompt dispatch", timeout, beforePromptScreen, true); err != nil {
+				return failedResult(e.Name(), start, err), err
+			}
+		case serr != nil:
+			return failedResult(e.Name(), start, serr), serr
+		case !completed:
+			err := fmt.Errorf("claude session %s did not complete within %s", sessionID, timeout)
+			return failedResult(e.Name(), start, err), err
+		default:
+			ctx.Logger.Infof("cmux: claude session %s completed", sessionID)
+		}
+	} else {
+		ctx.Logger.Infof("cmux: waiting for %s screen to change and stabilize after prompt dispatch", agent)
+		if _, err := e.waitForScreenIdle(ctx, ref, "after prompt dispatch", timeout, beforePromptScreen, true); err != nil {
+			return failedResult(e.Name(), start, err), err
+		}
 	}
 
 	return &todopkg.ExecutionResult{
-		Success:      true,
-		ExecutorName: e.Name(),
-		Duration:     time.Since(start),
-		ActionsPerformed: []string{
-			"cmux workspace " + workspace.String(),
-			"cmux new-surface " + ref.SurfaceID,
-			"cmux agent " + agentCommand,
-			"cmux prompt " + promptPath,
-		},
-		Transcript: ctx.GetTranscript(),
+		Success:          true,
+		ExecutorName:     e.Name(),
+		Duration:         time.Since(start),
+		ActionsPerformed: actions,
+		Transcript:       ctx.GetTranscript(),
 	}, nil
+}
+
+func recordSessionID(todoList []*types.TODO, sessionID string) {
+	for _, t := range todoList {
+		if t == nil {
+			continue
+		}
+		if t.LLM == nil {
+			t.LLM = &types.LLM{}
+		}
+		t.LLM.SessionId = sessionID
+	}
 }
 
 func (e *CmuxExecutor) sendSurfaceText(ctx *todopkg.ExecutorContext, workspaceRef, surfaceRef, label, text string) error {
@@ -307,7 +358,7 @@ func ResolveAgent(model string) (agent string, modelFlag string) {
 	return "claude", model
 }
 
-func AgentCommand(agent, model string) string {
+func AgentCommand(agent, model, sessionID string) string {
 	switch agent {
 	case "codex":
 		if model != "" {
@@ -315,10 +366,14 @@ func AgentCommand(agent, model string) string {
 		}
 		return "codex"
 	default:
-		if model != "" {
-			return "claude --model " + model
+		cmd := "claude"
+		if sessionID != "" {
+			cmd += " --session-id " + sessionID
 		}
-		return "claude"
+		if model != "" {
+			cmd += " --model " + model
+		}
+		return cmd
 	}
 }
 

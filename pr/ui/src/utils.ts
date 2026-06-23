@@ -373,20 +373,6 @@ export function aggregateDotClass(procs: ProcProcess[]): string {
   return 'bg-gray-300';
 }
 
-// aggregateResources sums a group's live CPU and RSS into one workspace-level
-// reading. Each process's cpuPercent/memoryRss is already its own process-group
-// sum (the supervisor aggregates the tree), so summing across processes gives
-// the workspace total. Missing samples (stopped processes) count as zero.
-export function aggregateResources(procs: ProcProcess[]): { cpuPercent: number; memoryRss: number } {
-  let cpuPercent = 0;
-  let memoryRss = 0;
-  for (const p of procs) {
-    cpuPercent += p.cpuPercent ?? 0;
-    memoryRss += p.memoryRss ?? 0;
-  }
-  return { cpuPercent, memoryRss };
-}
-
 // statusLabel is the human status, annotating a crash with its exit code so a
 // crashed process reads "crashed (exit 3)" rather than looking like a stop.
 export function statusLabel(proc: ProcProcess): string {

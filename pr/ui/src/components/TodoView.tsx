@@ -75,6 +75,8 @@ export function TodoView({ projects, selectedId = '', onNavigate }: {
                     hiddenStatuses={hiddenStatuses}
                     selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
                     onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
+                    multiSelect
+                    onRunStarted={refresh}
                   />
                 ))}
               </div>
