@@ -729,7 +729,7 @@ func mergeHooksWithTests(batch []parsers.Test) []parsers.Test {
 func startTestUI(addr string) (*testui.Server, net.Listener) {
 	srv := testui.NewServer()
 	if addr == "" {
-		addr = "localhost"
+		addr = "0.0.0.0"
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
 	if err != nil {

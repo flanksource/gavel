@@ -31,7 +31,7 @@ import (
 // time.Duration as a field type.
 type UIServeOptions struct {
 	Port         int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
-	Addr         string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	Addr         string        `flag:"addr" help:"Interface to bind. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	ListenerFD   int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --detach)."`
 	ResultsFiles []string      `json:"-" args:"true"`
 	AutoStop     time.Duration `json:"-"`

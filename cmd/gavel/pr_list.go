@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,7 @@ type PRListOptions struct {
 	UI          bool     `flag:"ui" help:"Open PR dashboard in browser with live updates"`
 	MenuBar     bool     `flag:"menu-bar" help:"Show macOS menu bar status indicator"`
 	Interval    string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
+	Addr        string   `flag:"addr" help:"Interface to bind the --ui/--menu-bar HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	Port        int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
 	PersistPort bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
 	Dev         bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
@@ -62,22 +64,23 @@ func parseSince(s string) (time.Time, error) {
 	return expr.Time(datemath.WithNow(time.Now())), nil
 }
 
-// bindUIListener opens the TCP listener for the PR UI and handles the
-// --port=0 auto-scan contract: 0 means "start at DefaultUIPort and try the
-// next 50 ports". Any other value is a fixed bind — a conflict is surfaced
-// as an error so the user knows why the daemon couldn't start.
+// bindUIListener opens the TCP listener for the PR UI on the given interface
+// and handles the --port=0 auto-scan contract: 0 means "start at DefaultUIPort
+// and try the next 50 ports". Any other value is a fixed bind — a conflict is
+// surfaced as an error so the user knows why the daemon couldn't start.
 //
-// Returns the bound listener so the caller doesn't have to re-bind (which
-// could race-lose the port).
-func bindUIListener(requested int) (int, net.Listener, error) {
+// host is the interface to bind (e.g. 0.0.0.0 for the LAN, localhost to
+// restrict to this machine). Returns the bound listener so the caller doesn't
+// have to re-bind (which could race-lose the port).
+func bindUIListener(host string, requested int) (int, net.Listener, error) {
 	if requested == 0 {
-		port, l, err := service.ScanFreePort(service.DefaultUIPort, 50)
+		port, l, err := service.ScanFreePort(host, service.DefaultUIPort, 50)
 		if err != nil {
 			return 0, nil, fmt.Errorf("scan for free UI port: %w", err)
 		}
 		return port, l, nil
 	}
-	addr := fmt.Sprintf("localhost:%d", requested)
+	addr := net.JoinHostPort(host, strconv.Itoa(requested))
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start PR UI server on %s: %w", addr, err)
@@ -313,11 +316,11 @@ func runPRUI(opts PRListOptions) error {
 
 	var dashboardURL string
 	if opts.UI || opts.MenuBar {
-		port, listener, err := bindUIListener(opts.Port)
+		port, listener, err := bindUIListener(opts.Addr, opts.Port)
 		if err != nil {
 			return err
 		}
-		dashboardURL = fmt.Sprintf("http://localhost:%d", port)
+		dashboardURL = fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(port)))
 		if opts.PersistPort {
 			// Only the managed daemon (launchd/systemd) writes to the port
 			// file — foreground `pr list --ui` runs skip this to avoid
@@ -332,6 +335,7 @@ func runPRUI(opts PRListOptions) error {
 		go http.Serve(listener, srv.Handler()) //nolint:errcheck
 
 		logger.Infof("PR Dashboard at %s", dashboardURL)
+		logger.Infof("React Grab → todo: install the bookmarklet at %s/react-grab", dashboardURL)
 		if opts.UI {
 			openBrowser(dashboardURL)
 		}
