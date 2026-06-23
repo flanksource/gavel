@@ -82,6 +82,53 @@ func TestTODOExecutorPersistsFailureAfterContextCanceled(t *testing.T) {
 	}
 }
 
+func TestTODOExecutorPersistsSessionBeforeExecutorReturns(t *testing.T) {
+	execCtx := NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	provider := &recordingProvider{}
+	exec := &sessionHookExecutor{sessionID: "mid-run-session"}
+	runner := NewTODOExecutor(".", exec, "", provider)
+	todo := &types.TODO{
+		ID:              "todo-1",
+		FilePath:        "todo-1",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Persist session early"},
+	}
+
+	if _, err := runner.Execute(execCtx, todo); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	// The executor observed the session id on the todo immediately after calling
+	// RecordSessionID — i.e. the hook persisted it before the executor returned.
+	if !exec.sawSessionPersisted {
+		t.Fatal("session id was not recorded on the todo during the run")
+	}
+	if todo.LLM == nil || todo.LLM.SessionId != "mid-run-session" {
+		t.Fatalf("todo session id = %+v, want mid-run-session", todo.LLM)
+	}
+	found := false
+	for _, sid := range provider.sessionIDs {
+		if sid == "mid-run-session" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("provider never received the session id, got %#v", provider.sessionIDs)
+	}
+}
+
+type sessionHookExecutor struct {
+	sessionID           string
+	sawSessionPersisted bool
+}
+
+func (e *sessionHookExecutor) Name() string { return "session-hook" }
+
+func (e *sessionHookExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*ExecutionResult, error) {
+	ctx.RecordSessionID(e.sessionID)
+	// RecordSessionID runs the hook synchronously, so by now the id is on the todo.
+	e.sawSessionPersisted = todo.LLM != nil && todo.LLM.SessionId == e.sessionID
+	return &ExecutionResult{ExecutorName: e.Name()}, nil
+}
+
 type cancelingExecutor struct {
 	cancel context.CancelFunc
 }
@@ -100,6 +147,7 @@ type recordingProvider struct {
 	saveCalls     int
 	saveCtxErr    error
 	updateCtxErrs []error
+	sessionIDs    []string
 }
 
 func (p *recordingProvider) List(context.Context, DiscoveryFilters) (types.TODOS, error) {
@@ -118,8 +166,11 @@ func (p *recordingProvider) Delete(context.Context, *types.TODO) error {
 	return nil
 }
 
-func (p *recordingProvider) UpdateState(ctx context.Context, _ *types.TODO, _ StateUpdate) error {
+func (p *recordingProvider) UpdateState(ctx context.Context, _ *types.TODO, updates StateUpdate) error {
 	p.updateCtxErrs = append(p.updateCtxErrs, ctx.Err())
+	if updates.SessionID != nil {
+		p.sessionIDs = append(p.sessionIDs, *updates.SessionID)
+	}
 	return ctx.Err()
 }
 

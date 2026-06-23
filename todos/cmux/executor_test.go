@@ -39,23 +39,28 @@ func TestResolveAgent(t *testing.T) {
 
 func TestAgentCommandUsesDirectCLI(t *testing.T) {
 	cases := []struct {
-		agent     string
-		model     string
-		sessionID string
-		want      string
+		name string
+		opts AgentCommandOpts
+		want string
 	}{
-		{"claude", "", "", "claude"},
-		{"claude", "opus", "", "claude --model opus"},
-		{"claude", "opus", "sess-123", "claude --session-id sess-123 --model opus"},
-		{"claude", "", "sess-123", "claude --session-id sess-123"},
-		{"codex", "", "", "codex"},
-		{"codex", "gpt-5", "", "codex -m gpt-5"},
-		{"codex", "gpt-5", "sess-123", "codex -m gpt-5"}, // codex ignores the claude session id
+		{"claude default", AgentCommandOpts{Agent: "claude"}, "claude"},
+		{"claude model", AgentCommandOpts{Agent: "claude", Model: "opus"}, "claude --model opus"},
+		{"claude session+model", AgentCommandOpts{Agent: "claude", Model: "opus", SessionID: "sess-123"}, "claude --session-id sess-123 --model opus"},
+		{"claude session", AgentCommandOpts{Agent: "claude", SessionID: "sess-123"}, "claude --session-id sess-123"},
+		{"claude resume", AgentCommandOpts{Agent: "claude", SessionID: "sess-123", Resume: true}, "claude --resume sess-123"},
+		{"claude resume+model", AgentCommandOpts{Agent: "claude", SessionID: "sess-123", Resume: true, Model: "opus"}, "claude --resume sess-123 --model opus"},
+		{"claude resume without session", AgentCommandOpts{Agent: "claude", Resume: true}, "claude"},
+		{"claude plan", AgentCommandOpts{Agent: "claude", SessionID: "sess-123", Plan: true}, "claude --session-id sess-123 --permission-mode plan"},
+		{"claude plan+model", AgentCommandOpts{Agent: "claude", Model: "opus", Plan: true}, "claude --permission-mode plan --model opus"},
+		{"codex default", AgentCommandOpts{Agent: "codex"}, "codex"},
+		{"codex model", AgentCommandOpts{Agent: "codex", Model: "gpt-5"}, "codex -m gpt-5"},
+		{"codex ignores session", AgentCommandOpts{Agent: "codex", Model: "gpt-5", SessionID: "sess-123"}, "codex -m gpt-5"},
+		{"codex plan has no flag", AgentCommandOpts{Agent: "codex", Plan: true}, "codex"},
 	}
 
 	for _, tc := range cases {
-		if got := AgentCommand(tc.agent, tc.model, tc.sessionID); got != tc.want {
-			t.Fatalf("AgentCommand(%q, %q, %q) = %q, want %q", tc.agent, tc.model, tc.sessionID, got, tc.want)
+		if got := AgentCommand(tc.opts); got != tc.want {
+			t.Fatalf("%s: AgentCommand(%+v) = %q, want %q", tc.name, tc.opts, got, tc.want)
 		}
 	}
 }
@@ -67,6 +72,176 @@ func TestBuildPromptAddsEffortDirective(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Fix it") || !strings.Contains(prompt, "Body") {
 		t.Fatalf("prompt missing todo content: %q", prompt)
+	}
+}
+
+func TestSessionHistoryDirective(t *testing.T) {
+	if got := SessionHistoryDirective(""); got != "" {
+		t.Fatalf("SessionHistoryDirective(\"\") = %q, want empty", got)
+	}
+	got := SessionHistoryDirective("sess-abc")
+	if !strings.Contains(got, "sess-abc") {
+		t.Fatalf("SessionHistoryDirective(sess-abc) = %q, want it to reference the session id", got)
+	}
+}
+
+func TestCmuxExecutorResumesPriorSession(t *testing.T) {
+	repo := t.TempDir()
+	runner := newScreenRunner(repo)
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		Resume:                  true,
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond, // no real session log → fall back to screen-idle
+	})
+
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	todo := &types.TODO{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo, LLM: &types.LLM{SessionId: "prior-session"}},
+	}
+	if _, err := exec.ExecuteGroup(ctx, []*types.TODO{todo}); err != nil {
+		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+
+	var agentSend string
+	for _, call := range runner.calls {
+		if len(call.args) > 0 && call.args[0] == "send" {
+			payload := call.args[len(call.args)-1]
+			if strings.HasPrefix(payload, "claude") {
+				agentSend = payload
+				break
+			}
+		}
+	}
+	if agentSend != "claude --resume prior-session" {
+		t.Fatalf("agent send = %q, want %q", agentSend, "claude --resume prior-session")
+	}
+	// Resume reuses the prior id rather than minting a new one.
+	if todo.LLM == nil || todo.LLM.SessionId != "prior-session" {
+		t.Fatalf("session id changed on resume: %+v", todo.LLM)
+	}
+}
+
+func TestCmuxExecutorRecordsSessionBeforeAgentLaunch(t *testing.T) {
+	repo := t.TempDir()
+	runner := newScreenRunner(repo)
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		SessionID:               "fixed-session",
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond,
+	})
+
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	var recorded string
+	agentSentBeforeHook := false
+	ctx.SetSessionIDHook(func(sid string) {
+		recorded = sid
+		for _, call := range runner.calls {
+			if len(call.args) > 0 && call.args[0] == "send" && strings.HasPrefix(call.args[len(call.args)-1], "claude") {
+				agentSentBeforeHook = true
+			}
+		}
+	})
+	todo := &types.TODO{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
+	}
+	if _, err := exec.ExecuteGroup(ctx, []*types.TODO{todo}); err != nil {
+		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+	if recorded != "fixed-session" {
+		t.Fatalf("session id hook recorded %q, want fixed-session", recorded)
+	}
+	if agentSentBeforeHook {
+		t.Fatal("session id must be recorded before the claude agent command is sent")
+	}
+}
+
+func TestCmuxExecutorUsesConfiguredSessionID(t *testing.T) {
+	repo := t.TempDir()
+	runner := newScreenRunner(repo)
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		SessionID:               "fixed-session",
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond,
+	})
+
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	todo := &types.TODO{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
+	}
+	if _, err := exec.ExecuteGroup(ctx, []*types.TODO{todo}); err != nil {
+		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+
+	var agentSend string
+	for _, call := range runner.calls {
+		if len(call.args) > 0 && call.args[0] == "send" {
+			payload := call.args[len(call.args)-1]
+			if strings.HasPrefix(payload, "claude") {
+				agentSend = payload
+				break
+			}
+		}
+	}
+	if agentSend != "claude --session-id fixed-session" {
+		t.Fatalf("agent send = %q, want %q", agentSend, "claude --session-id fixed-session")
+	}
+	if todo.LLM == nil || todo.LLM.SessionId != "fixed-session" {
+		t.Fatalf("configured session id not recorded: %+v", todo.LLM)
+	}
+}
+
+func TestCmuxExecutorFreshSessionReferencesPriorInPrompt(t *testing.T) {
+	repo := t.TempDir()
+	runner := newScreenRunner(repo)
+	// Resume disabled: a prior session exists but we start a fresh one and tell
+	// the agent about the prior session id for history.
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond,
+	})
+
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	todo := &types.TODO{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo, LLM: &types.LLM{SessionId: "prior-session"}},
+	}
+	if _, err := exec.ExecuteGroup(ctx, []*types.TODO{todo}); err != nil {
+		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+
+	// A fresh session id is minted (not the prior one).
+	if todo.LLM == nil || todo.LLM.SessionId == "" || todo.LLM.SessionId == "prior-session" {
+		t.Fatalf("expected a fresh session id, got %+v", todo.LLM)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, ".gavel", "cmux", "prompt-abc12345.md"))
+	if err != nil {
+		t.Fatalf("read prompt file: %v", err)
+	}
+	if !strings.Contains(string(data), "prior-session") {
+		t.Fatalf("prompt should reference the prior session id for history:\n%s", data)
 	}
 }
 

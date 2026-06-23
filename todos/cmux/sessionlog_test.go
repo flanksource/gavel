@@ -13,21 +13,21 @@ import (
 )
 
 func TestSessionLogPath(t *testing.T) {
-	got, err := sessionLogPath("/tmp/work", "abc-123")
+	got, err := SessionLogPath("/tmp/work", "abc-123")
 	if err != nil {
-		t.Fatalf("sessionLogPath() error = %v", err)
+		t.Fatalf("SessionLogPath() error = %v", err)
 	}
 	wantSuffix := filepath.Join(history.NormalizePath("/tmp/work"), "abc-123.jsonl")
 	if !strings.HasSuffix(got, wantSuffix) {
-		t.Fatalf("sessionLogPath() = %q, want suffix %q", got, wantSuffix)
+		t.Fatalf("SessionLogPath() = %q, want suffix %q", got, wantSuffix)
 	}
 	if !strings.HasPrefix(got, history.GetProjectsDir()) {
-		t.Fatalf("sessionLogPath() = %q, want prefix %q", got, history.GetProjectsDir())
+		t.Fatalf("SessionLogPath() = %q, want prefix %q", got, history.GetProjectsDir())
 	}
 }
 
 func TestSessionLogPathRequiresSessionID(t *testing.T) {
-	if _, err := sessionLogPath("/tmp/work", ""); err == nil {
+	if _, err := SessionLogPath("/tmp/work", ""); err == nil {
 		t.Fatal("expected error for empty session id")
 	}
 }
@@ -84,6 +84,31 @@ func TestSessionTailerCompletesOnQuiescence(t *testing.T) {
 	completed, err := tailer.tail(ctx, func(history.SessionEvent) {})
 	if err != nil || !completed {
 		t.Fatalf("tail() = (%v, %v), want (true, nil)", completed, err)
+	}
+}
+
+func TestSessionTailerSeekToEndSkipsStaleTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A resumed session's log already ends in the prior turn's end_turn. seekToEnd
+	// must skip it so the resume run isn't reported complete before it starts.
+	writeSessionLog(t, path,
+		`{"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"old"}]}}`,
+	)
+
+	tailer := sessionTailer{path: path, pollInterval: time.Millisecond, appearTimeout: 200 * time.Millisecond, seekToEnd: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var got []history.SessionEventKind
+	completed, err := tailer.tail(ctx, func(ev history.SessionEvent) { got = append(got, ev.Kind) })
+	if completed {
+		t.Fatal("seekToEnd tailer completed on a stale end_turn")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("tail() error = %v, want context deadline", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("seekToEnd should skip pre-existing events, got %v", got)
 	}
 }
 

@@ -26,9 +26,24 @@ const defaultScreenStableDuration = 2 * time.Second
 const defaultScreenLines = 120
 
 type CmuxExecutorConfig struct {
-	WorkDir               string
-	Model                 string
-	Effort                string
+	WorkDir string
+	Model   string
+	Effort  string
+	// Plan launches the agent in plan-only mode: it investigates and proposes
+	// an implementation plan without changing code (claude uses
+	// --permission-mode plan; both agents are told to plan, not implement).
+	Plan bool
+	// Resume continues a todo's prior claude session (claude --resume <id>)
+	// instead of starting a fresh one, so the agent keeps the earlier
+	// conversation's context. When no prior session id is recorded it has no
+	// effect and a new session starts. codex manages its own sessions and
+	// ignores this. See ExecuteGroup.
+	Resume bool
+	// SessionID, when set, is the claude session id used for a fresh run instead
+	// of a generated one. Callers set it so they know the id up front (e.g. the
+	// dashboard returns it to follow the session log live). Ignored when
+	// resuming, which reuses the prior id. Empty means generate one.
+	SessionID             string
 	Timeout               time.Duration
 	Binary                string
 	Runner                Runner
@@ -77,15 +92,29 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	agent, model := ResolveAgent(e.config.Model)
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 
-	// Pre-generate the Claude session id so we can launch with --session-id and
-	// tail the resulting session history log for structured progress. codex
-	// manages its own sessions, so it keeps the screen-idle detection path.
+	// Resolve the Claude session id. By default we pre-generate one so we can
+	// launch with --session-id and tail the resulting session history log for
+	// structured progress. With Resume set and a prior session recorded, we
+	// instead reuse that id and launch with --resume so the agent keeps the
+	// earlier conversation's context. codex manages its own sessions, so it
+	// keeps the screen-idle detection path.
 	sessionID := ""
+	resume := false
+	prior := priorSessionID(todosInGroup)
 	if agent == "claude" {
-		sessionID = uuid.NewString()
-		recordSessionID(todosInGroup, sessionID)
+		switch {
+		case e.config.Resume && prior != "":
+			sessionID = prior
+			resume = true
+		case e.config.SessionID != "":
+			sessionID = e.config.SessionID
+			recordSessionID(todosInGroup, sessionID)
+		default:
+			sessionID = uuid.NewString()
+			recordSessionID(todosInGroup, sessionID)
+		}
 	}
-	agentCommand := AgentCommand(agent, model, sessionID)
+	agentCommand := AgentCommand(AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID, Resume: resume, Plan: e.config.Plan})
 
 	ctx.Logger.Infof("cmux: dispatching %d TODO(s) with %s in %s", len(todosInGroup), agent, workDir)
 	ctx.Logger.V(1).Infof("cmux command: cmux ping")
@@ -132,6 +161,10 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		return failedResult(e.Name(), start, err), err
 	}
 
+	// Persist the session id before launching the agent so an interrupted run
+	// still records (and can resume) this session rather than the prior one.
+	ctx.RecordSessionID(sessionID)
+
 	if err := e.sendSurfaceText(ctx, ref.String(), ref.SurfaceID, "agent command", agentCommand); err != nil {
 		return failedResult(e.Name(), start, err), err
 	}
@@ -143,6 +176,12 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	}
 
 	prompt := BuildPrompt(todosInGroup, workDir, e.config.Effort)
+	// When starting a fresh session despite a prior one existing, hand the agent
+	// the previous session id so it can look up that history if it needs context
+	// (the transcript lives in the session log, not the issue).
+	if !resume && agent == "claude" && prior != "" {
+		prompt = SessionHistoryDirective(prior) + "\n\n" + prompt
+	}
 	promptPath, err := WritePromptFile(workDir, todosInGroup, prompt)
 	if err != nil {
 		return failedResult(e.Name(), start, err), err
@@ -151,6 +190,9 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	ctx.Logger.V(2).Infof("cmux prompt body:\n%s", prompt)
 
 	instruction := fmt.Sprintf("Read %s and implement all TODOs described there. When finished, stop and wait for verification.", promptPath)
+	if e.config.Plan {
+		instruction = fmt.Sprintf("Read %s and produce a detailed implementation plan for all TODOs described there. Investigate the codebase to understand each task, but do NOT make any code changes — only plan. When finished, present the plan and stop.", promptPath)
+	}
 	if err := e.sendSurfaceText(ctx, ref.String(), ref.SurfaceID, "initial prompt", instruction); err != nil {
 		return failedResult(e.Name(), start, err), err
 	}
@@ -163,7 +205,12 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	}
 
 	if sessionID != "" {
-		logPath, completed, serr := e.awaitSessionCompletion(ctx, sessionID, workDir, timeout)
+		// Register the run as a live in-progress session so the dashboard timer
+		// reads token/cost totals straight from the tailer instead of re-reading
+		// the growing log on every poll. Finish freezes the elapsed clock.
+		acc := GlobalSessionStats().Begin(sessionID, agent, model, e.config.Effort, start)
+		logPath, completed, serr := e.awaitSessionCompletion(ctx, sessionID, workDir, timeout, resume, acc)
+		acc.Finish()
 		if logPath != "" {
 			actions = append(actions, "claude session "+logPath)
 		}
@@ -207,6 +254,18 @@ func recordSessionID(todoList []*types.TODO, sessionID string) {
 		}
 		t.LLM.SessionId = sessionID
 	}
+}
+
+// priorSessionID returns the first recorded claude session id among the group's
+// todos, or "" when none has run before. It is the id resume reuses (and the one
+// referenced in a fresh session's prompt for history).
+func priorSessionID(todoList []*types.TODO) string {
+	for _, t := range todoList {
+		if t != nil && t.LLM != nil && t.LLM.SessionId != "" {
+			return t.LLM.SessionId
+		}
+	}
+	return ""
 }
 
 func (e *CmuxExecutor) sendSurfaceText(ctx *todopkg.ExecutorContext, workspaceRef, surfaceRef, label, text string) error {
@@ -358,20 +417,40 @@ func ResolveAgent(model string) (agent string, modelFlag string) {
 	return "claude", model
 }
 
-func AgentCommand(agent, model, sessionID string) string {
-	switch agent {
+type AgentCommandOpts struct {
+	Agent     string
+	Model     string
+	SessionID string
+	// Resume reuses SessionID as an existing conversation (claude --resume)
+	// rather than creating a new one (claude --session-id). Ignored when
+	// SessionID is empty or for codex.
+	Resume bool
+	// Plan starts claude in plan-only mode (--permission-mode plan). codex has
+	// no equivalent flag, so plan there is enforced by the prompt instruction.
+	Plan bool
+}
+
+func AgentCommand(opts AgentCommandOpts) string {
+	switch opts.Agent {
 	case "codex":
-		if model != "" {
-			return "codex -m " + model
+		if opts.Model != "" {
+			return "codex -m " + opts.Model
 		}
 		return "codex"
 	default:
 		cmd := "claude"
-		if sessionID != "" {
-			cmd += " --session-id " + sessionID
+		if opts.SessionID != "" {
+			if opts.Resume {
+				cmd += " --resume " + opts.SessionID
+			} else {
+				cmd += " --session-id " + opts.SessionID
+			}
 		}
-		if model != "" {
-			cmd += " --model " + model
+		if opts.Plan {
+			cmd += " --permission-mode plan"
+		}
+		if opts.Model != "" {
+			cmd += " --model " + opts.Model
 		}
 		return cmd
 	}
@@ -383,6 +462,16 @@ func BuildPrompt(todoList []*types.TODO, workDir, effort string) string {
 		return directive + "\n\n" + prompt
 	}
 	return prompt
+}
+
+// SessionHistoryDirective tells a fresh agent session about the prior session
+// that worked on the same todo(s), so it can read that history if it needs the
+// earlier context. Returns "" for an empty id.
+func SessionHistoryDirective(priorSessionID string) string {
+	if priorSessionID == "" {
+		return ""
+	}
+	return fmt.Sprintf("A previous agent session (id `%s`) already worked on this. Its transcript is available in the Claude session log; consult it for prior context before starting.", priorSessionID)
 }
 
 func EffortDirective(effort string) string {
