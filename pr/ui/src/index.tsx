@@ -7,6 +7,12 @@
 // without bound (the webview ballooned to ~26GB; the /processes page OOM-crashed).
 if (import.meta.env.DEV) {
   import("react-grab");
+  // Load gavel's React Grab plugin (the same artifact gavel serves for injection
+  // into other apps) so the "Add to gavel todo" action is available in dev. It
+  // polls for window.__REACT_GRAB__, which the import above sets.
+  document.body.appendChild(
+    Object.assign(document.createElement("script"), { src: "/react-grab-plugin.js" }),
+  );
 }
 
 import "./index.css";

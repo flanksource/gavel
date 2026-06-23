@@ -48,6 +48,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const back = useMemo(() => returnTarget(params), [params]);
+  const embed = useMemo(() => parseBool(firstParam(params, 'embed')), [params]);
 
   const queryDir = useMemo(() => firstParam(params, 'dir', 'workspace'), [params]);
   const queryProvider = useMemo(() => firstParam(params, 'provider', 'todoProvider'), [params]);
@@ -72,6 +73,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
   const [status, setStatus] = useState<TodoStatus>(() => oneOf(firstParam(params, 'status'), statuses, autoSave ? 'pending' : 'draft'));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [created, setCreated] = useState(false);
 
   function providerForDir(target: string): string {
     const ws = workspaces.find(w => w.dir === target);
@@ -80,6 +82,18 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
 
   function leave(to: string) {
     window.location.href = to;
+  }
+
+  // In embed mode (rendered inside the React Grab dialog iframe) the form reports
+  // its outcome to the parent window — which closes the dialog — instead of
+  // navigating this iframe.
+  function finish(type: 'todo-created' | 'cancel', ref?: string) {
+    window.parent.postMessage({ source: 'gavel-react-grab', type, ref }, '*');
+  }
+
+  function cancel() {
+    if (embed) finish('cancel');
+    else leave(back ?? '/todos');
   }
 
   async function submit() {
@@ -95,11 +109,24 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Create failed');
       const todo = data.todo as TodoItem | undefined;
+      if (embed) {
+        setCreated(true);
+        finish('todo-created', todo?.ref);
+        return;
+      }
       leave(back ?? (todo?.ref ? `/todos/${encodeURIComponent(todo.ref)}` : '/todos'));
     } catch (err: any) {
       setError(err?.message || 'Create failed');
       setBusy(false);
     }
+  }
+
+  if (created) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div className="text-sm font-medium">Todo created ✓</div>
+      </div>
+    );
   }
 
   return (
@@ -111,6 +138,12 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
         </div>
         <a
           href={back ?? '/todos'}
+          onClick={e => {
+            if (embed) {
+              e.preventDefault();
+              finish('cancel');
+            }
+          }}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           title={back ? 'Back' : 'Back to todos'}
           aria-label={back ? 'Back' : 'Back to todos'}
@@ -167,7 +200,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
             />
           </Field>
           <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="outline" onClick={() => leave(back ?? '/todos')}>Cancel</Button>
+            <Button type="button" variant="outline" onClick={cancel}>Cancel</Button>
             <Button type="submit" loading={busy} disabled={!title.trim()}>Add todo</Button>
           </div>
         </form>

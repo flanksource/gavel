@@ -1,8 +1,8 @@
-import type { TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { SessionStats, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { GROUP_BY_OPTIONS } from './todoGroup';
-import { TodoSessionTimerCompact } from './TodoSessionTimer';
+import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
@@ -98,6 +98,60 @@ export function priorityClass(priority: TodoPriority | string) {
   }
 }
 
+interface SessionBadgeView {
+  className: string;
+  icon: string;
+  label: string;
+}
+
+// sessionBadgeView is the badge's chrome + icon + label, derived from whether the
+// agent's run is still in progress (found && !inProgress) and its high-level
+// state. Once the run ends the badge stops reading "In progress": a clean turn
+// end settles to Done (green), anything else to Ended (neutral), so the row
+// mirrors the real session state instead of a perpetual blue spinner. Before the
+// log appears (found=false) the session is still starting, so it stays live.
+function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
+  if (stats && stats.found && !stats.inProgress) {
+    if (stats.state === 'completed') {
+      return { className: statusClass('completed'), icon: 'codicon:pass', label: 'Done' };
+    }
+    return { className: statusClass('draft'), icon: 'codicon:clock', label: 'Ended' };
+  }
+  switch (stats?.state) {
+    case 'thinking':
+      return { className: statusClass('in_progress'), icon: 'codicon:lightbulb', label: 'Thinking' };
+    case 'working':
+      return { className: statusClass('in_progress'), icon: 'svg-spinners:ring-resize', label: 'Working' };
+    case 'ask':
+      return { className: statusClass('skipped'), icon: 'codicon:comment-discussion', label: 'Awaiting input' };
+    case 'completed':
+      return { className: statusClass('completed'), icon: 'codicon:pass', label: 'Done' };
+    default:
+      return { className: statusClass('in_progress'), icon: 'svg-spinners:ring-resize', label: 'In progress' };
+  }
+}
+
+// InProgressBadge replaces the static "in progress" status pill for a todo with a
+// live agent session: the agent's current state drives the chrome, icon, and
+// elapsed time (plus cost, once known), and a finished run settles to Done/Ended
+// rather than spinning forever. Render it only for a row that has a session so it
+// never polls idle todos.
+function InProgressBadge({ dir, provider, sessionId }: { dir: string; provider: string; sessionId?: string }) {
+  const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, true);
+  const view = sessionBadgeView(stats);
+  const cost = stats ? formatCost(stats.costUsd) : '';
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${view.className}`}
+      title={`${view.label} · agent session`}
+    >
+      <GavelIcon name={view.icon} className="text-[11px]" />
+      {stats?.found ? formatDuration(elapsedMs) : view.label}
+      {cost && <span className="opacity-80">{cost}</span>}
+    </span>
+  );
+}
+
 function CountBadge({ icon, value, label, className = 'text-muted-foreground' }: { icon: string; value: number; label: string; className?: string }) {
   if (!value) return null;
   return (
@@ -131,9 +185,9 @@ export function TodoCountsBar({ counts }: { counts: TodoCounts }) {
 // metadata — set when rows mix workspaces (severity/age grouping) so each todo's
 // origin stays visible.
 //
-// `dir`/`provider` locate the row's workspace so an in-progress todo can show a
-// live session timer (elapsed + cost) inline; they are omitted by callers (e.g.
-// the menubar) that don't surface it.
+// `dir`/`provider` locate the row's workspace so an in-progress todo's status
+// badge can carry the live agent state + elapsed time; they are omitted by
+// callers (e.g. the menubar) that don't surface it.
 export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, provider }: {
   todo: TodoItem;
   active: boolean;
@@ -149,10 +203,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
   const compact = density === 'compact';
   // Only running sessions poll for stats, so the sidebar never fires a request
   // storm across a large list of idle/finished todos.
-  const showTimer = !!dir && todo.status === 'in_progress' && !!todo.sessionId;
-  const timer = showTimer && (
-    <TodoSessionTimerCompact dir={dir!} provider={provider || 'auto'} sessionId={todo.sessionId} />
-  );
+  const hasLiveSession = !!dir && todo.status === 'in_progress' && !!todo.sessionId;
   return (
     <div className={`flex items-stretch border-b border-border ${selected ? 'bg-primary/5' : ''}`}>
       {selectable && (
@@ -172,13 +223,16 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
         className={`min-w-0 flex-1 px-3 text-left transition-colors hover:bg-muted ${compact ? 'py-1' : 'py-2'} ${active ? 'bg-primary/10' : ''}`}
       >
         <div className="flex min-w-0 items-center gap-2">
-          <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${statusClass(todo.status)}`}>
-            {statusLabel(todo.status)}
-          </span>
+          {hasLiveSession ? (
+            <InProgressBadge dir={dir!} provider={provider || 'auto'} sessionId={todo.sessionId} />
+          ) : (
+            <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${statusClass(todo.status)}`}>
+              {statusLabel(todo.status)}
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
           {compact && (
             <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-              {timer}
               {workspace && <span className="max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
               {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
               <span className={priorityClass(todo.priority)}>{todo.priority}</span>
@@ -196,7 +250,6 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
             <span className={priorityClass(todo.priority)}>{todo.priority}</span>
             {todo.provider && <span className="uppercase">{todo.provider}</span>}
-            {timer && <span className="ml-auto">{timer}</span>}
           </div>
         )}
       </button>

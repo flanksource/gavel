@@ -7,6 +7,7 @@ import { TodoSession } from './TodoSession';
 import { TodoSessionTimer } from './TodoSessionTimer';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
+import { TodoCommentBox, TodoEditForm } from './TodoCompose';
 
 export function TodoDetail({
   todo,
@@ -33,6 +34,9 @@ export function TodoDetail({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'overview' | 'session'>('overview');
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftBody, setDraftBody] = useState('');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir, provider);
   const isGrite = todo?.provider === 'grite';
   // Projects this todo can move to: every configured workspace except its own.
@@ -47,27 +51,51 @@ export function TodoDetail({
     resetRun();
     setAdvancedOpen(false);
     setTab('overview');
+    setEditing(false);
   }, [todo?.ref, resetRun]);
 
-  // patch sends a partial update (status and/or priority) and adopts the server's
-  // returned todo so the view reflects provider-side side effects (labels, state).
-  async function patch(body: { status?: TodoStatus; priority?: TodoPriority }) {
-    if (!todo || busy) return;
+  // patch sends a partial update (status, priority, title, body, and/or comment)
+  // and adopts the server's returned todo so the view reflects provider-side side
+  // effects (labels, state, rewritten body, new comment). Resolves true on success.
+  async function patch(payload: {
+    status?: TodoStatus;
+    priority?: TodoPriority;
+    title?: string;
+    body?: string;
+    comment?: string;
+  }): Promise<boolean> {
+    if (!todo || busy) return false;
     setBusy(true);
     setError('');
     try {
       const response = await fetch(`/api/todos/item?${todoQuery(dir, provider)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref, ...body }),
+        body: JSON.stringify({ ref: todo.ref, ...payload }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Update failed');
       onChanged(data as TodoItem);
+      return true;
     } catch (err: any) {
       setError(err?.message || 'Update failed');
+      return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  function startEditing() {
+    if (!todo) return;
+    setDraftTitle(todo.title);
+    setDraftBody(todo.body ?? '');
+    setTab('overview');
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    if (await patch({ title: draftTitle.trim(), body: draftBody })) {
+      setEditing(false);
     }
   }
 
@@ -147,8 +175,8 @@ export function TodoDetail({
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3">
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-border bg-background px-4 py-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -216,6 +244,17 @@ export function TodoDetail({
             />
             <button
               type="button"
+              onClick={() => (editing ? setEditing(false) : startEditing())}
+              disabled={busy}
+              title={editing ? 'Cancel edit' : 'Edit title & body'}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted hover:text-foreground disabled:opacity-50 ${editing ? 'text-foreground' : 'text-muted-foreground'}`}
+              aria-label={editing ? 'Cancel edit' : 'Edit title & body'}
+              aria-pressed={editing}
+            >
+              <GavelIcon name={editing ? 'codicon:close' : 'codicon:edit'} className="text-sm" />
+            </button>
+            <button
+              type="button"
               onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
               disabled={busy}
               title={closed ? 'Reopen todo' : 'Close todo'}
@@ -249,19 +288,29 @@ export function TodoDetail({
         }}
         loading={runBusy}
       />
-      <div className="flex gap-1 border-b border-border px-4 pt-2">
+      <div className="flex shrink-0 gap-1 border-b border-border px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon="codicon:list-flat" label="Overview" />
         <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon="codicon:comment-discussion" label="Session" />
       </div>
       {tab === 'session' ? (
         <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
       ) : (
-        <div className="px-4 py-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <GavelIcon name="svg-spinners:ring-resize" />
               Loading
             </div>
+          ) : editing ? (
+            <TodoEditForm
+              title={draftTitle}
+              body={draftBody}
+              busy={busy}
+              onTitle={setDraftTitle}
+              onBody={setDraftBody}
+              onSave={saveEdit}
+              onCancel={() => setEditing(false)}
+            />
           ) : (
             <div className="space-y-3">
               {body ? (
@@ -271,6 +320,11 @@ export function TodoDetail({
               ) : (
                 <div className="text-sm text-muted-foreground">No body</div>
               )}
+              <TodoCommentBox
+                closed={closed}
+                busy={busy}
+                onComment={(text, reopen) => patch(reopen ? { status: 'pending', comment: text } : { comment: text })}
+              />
               {events.length > 0 && <TodoTimeline events={events} />}
             </div>
           )}
