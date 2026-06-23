@@ -34,10 +34,12 @@ var (
 	groupBy       string
 	dirty         bool
 	dryRun        bool
+	commitAfter   bool
 	todosProvider string
 	todosMode     string
 	todoModel     string
 	todoEffort    string
+	resumeSession bool
 )
 
 var todosCmd = &cobra.Command{
@@ -243,6 +245,7 @@ func newCmuxConfig(workDir string, todo *types.TODO) cmux.CmuxExecutorConfig {
 		WorkDir: cwd,
 		Model:   model,
 		Effort:  todoEffort,
+		Resume:  resumeSession,
 		Timeout: 30 * time.Minute,
 	}
 }
@@ -310,6 +313,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		if execErr != nil {
 			logger.Errorf("Group execution failed: %v", execErr)
 		}
+		maybeCommitAfter(workDir, group.TODOs[0], safeResult(results, 0))
 	}
 
 	fmt.Println()
@@ -375,6 +379,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		if execErr != nil {
 			logger.Errorf("TODO execution failed: %v", execErr)
 		}
+		maybeCommitAfter(workDir, todo, result)
 	}
 
 	fmt.Println()
@@ -466,7 +471,7 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 	if agent == "claude" {
 		sessionID = "<session-id>"
 	}
-	agentCmd := cmux.AgentCommand(agent, model, sessionID)
+	agentCmd := cmux.AgentCommand(cmux.AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID})
 	name := cmux.AgentWorkspaceName(groupWorkDir, agent)
 
 	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))

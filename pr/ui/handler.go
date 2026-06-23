@@ -80,6 +80,11 @@ type Server struct {
 	// procMetricsLoop; lastProcPoll gates that loop to recent UI activity.
 	procMetrics  metrics.Timeseries
 	lastProcPoll time.Time
+
+	// devProxy, when set via SetDevProxy, reverse-proxies the "/" catch-all to
+	// a running Vite dev server so `pr list --ui --dev` serves HMR'd modules
+	// instead of the embedded bundle. nil in production. See devproxy.go.
+	devProxy http.Handler
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -298,7 +303,11 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRoute)
+	if s.devProxy != nil {
+		mux.HandleFunc("/", s.handleDevRoute)
+	} else {
+		mux.HandleFunc("/", s.handleRoute)
+	}
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
@@ -319,6 +328,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
+	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)

@@ -63,6 +63,13 @@ export interface Project {
 export type TodoProvider = 'grite' | 'todos';
 export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'verified' | 'skipped';
 export type TodoPriority = 'high' | 'medium' | 'low';
+// Row density for the todo lists: 'comfortable' is the two-line default,
+// 'compact' collapses each todo onto a single line.
+export type TodoDensity = 'comfortable' | 'compact';
+// Grouping dimension for the todo lists: 'workspace' is the default per-workspace
+// grouping; 'severity' buckets by priority and 'age' by last activity, both
+// across all workspaces.
+export type TodoGroupBy = 'workspace' | 'severity' | 'age';
 
 export interface TodoCounts {
   total: number;
@@ -85,6 +92,8 @@ export interface TodoEvent {
   title?: string;
   body?: string;
   label?: string;
+  old_label?: string;
+  new_label?: string;
 }
 
 export interface TodoItem {
@@ -101,9 +110,44 @@ export interface TodoItem {
   labels?: string[];
   attempts?: number;
   lastRun?: string;
+  // Agent session id of the most recent run, used to follow the session live
+  // and to resume it. Recorded from the issue's session:<id> label / frontmatter.
+  sessionId?: string;
   body?: string;
   implementation?: string;
   events?: TodoEvent[];
+}
+
+// One parsed event streamed from a TODO's agent session log (see
+// /api/todos/session/stream). kind is assistant | thinking | tool_use | turn_end.
+export interface TodoSessionEvent {
+  kind: string;
+  text?: string;
+  tool?: string;
+  action?: string;
+  stopReason?: string;
+}
+
+// Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
+// identity (agent/model/effort), elapsed time, token usage and derived cost.
+// Mirrors cmux.SessionStats. found=false means the session produced no log yet.
+export interface SessionStats {
+  sessionId?: string;
+  agent?: string;
+  model?: string;
+  effort?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  turns: number;
+  costUsd: number;
+  inProgress: boolean;
+  found: boolean;
 }
 
 export type TodoRunAgent = 'claude' | 'codex';
@@ -115,6 +159,12 @@ export interface TodoRunOptions {
   mode?: TodoRunMode;
   model?: string;
   effort?: TodoRunEffort;
+  // Plan-only run: the agent proposes an implementation plan without changing
+  // code. Requires cmux mode.
+  plan?: boolean;
+  // Resume the todo's prior agent session (claude --resume) instead of starting
+  // a fresh one, so the agent keeps the earlier conversation's context.
+  resume?: boolean;
   timeout?: string;
   maxCost?: number;
   maxTurns?: number;
@@ -134,6 +184,10 @@ export interface TodoRunResponse {
   mode: TodoRunMode;
   model?: string;
   effort?: TodoRunEffort;
+  plan?: boolean;
+  resume?: boolean;
+  // Session id the run uses; lets the UI follow the session log immediately.
+  sessionId?: string;
   timeout: string;
   maxBudget?: number;
   maxTurns?: number;

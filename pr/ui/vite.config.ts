@@ -21,7 +21,7 @@ const uiVersion = git('describe --tags --always', 'dev');
 const uiCommit = git('rev-parse --short HEAD', 'unknown');
 const uiDate = new Date().toISOString();
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     dedupe: ['react', 'react-dom', '@tanstack/react-query'],
@@ -32,14 +32,25 @@ export default defineConfig({
       { find: /^@tanstack\/react-query$/, replacement: require.resolve('@tanstack/react-query') },
     ],
   },
-  // Lib/IIFE builds don't auto-replace process.env.NODE_ENV, which React and
-  // @tanstack/react-query reference at runtime — define it so the bundle has no
-  // bare `process` reference in the browser.
   define: {
-    'process.env.NODE_ENV': JSON.stringify('production'),
+    // Lib/IIFE builds don't auto-replace process.env.NODE_ENV, which React and
+    // @tanstack/react-query reference at runtime — define it for `build` so the
+    // bundle has no bare `process` reference. NOT for `serve`: forcing
+    // 'production' there disables React Fast Refresh / HMR.
+    ...(command === 'build' ? { 'process.env.NODE_ENV': JSON.stringify('production') } : {}),
     __GAVEL_UI_VERSION__: JSON.stringify(uiVersion),
     __GAVEL_UI_COMMIT__: JSON.stringify(uiCommit),
     __GAVEL_UI_DATE__: JSON.stringify(uiDate),
+  },
+  // Dev server for `pr list --ui --dev`. The Go server reverse-proxies the page
+  // to this port; HMR runs on its own port so the websocket connects directly
+  // and never traverses the Go proxy. Dedicated (non-default) ports avoid
+  // colliding with the Vite default 5173 that sibling UIs (e.g. clicky-ui)
+  // commonly hold; strictPort makes a collision fail loudly rather than drift.
+  server: {
+    port: 5273,
+    strictPort: true,
+    hmr: { port: 24778 },
   },
   build: {
     lib: {
@@ -58,4 +69,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
