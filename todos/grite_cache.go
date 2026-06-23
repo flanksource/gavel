@@ -211,6 +211,20 @@ func (p *CachedGriteProvider) Delete(ctx context.Context, todo *types.TODO) erro
 	return p.syncNow(ctx)
 }
 
+func (p *CachedGriteProvider) Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error {
+	if err := p.inner.Edit(ctx, todo, edit); err != nil {
+		return err
+	}
+	return p.syncNow(ctx)
+}
+
+func (p *CachedGriteProvider) Comment(ctx context.Context, todo *types.TODO, body string) error {
+	if err := p.inner.Comment(ctx, todo, body); err != nil {
+		return err
+	}
+	return p.syncNow(ctx)
+}
+
 func (p *CachedGriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error {
 	if err := p.inner.UpdateState(ctx, todo, updates); err != nil {
 		return err

@@ -22,6 +22,10 @@ type Provider interface {
 	Get(ctx context.Context, ref string) (*types.TODO, error)
 	Create(ctx context.Context, req CreateRequest) (*types.TODO, error)
 	Delete(ctx context.Context, todo *types.TODO) error
+	// Edit updates a TODO's title and/or body in place.
+	Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error
+	// Comment appends a free-form comment to a TODO's history.
+	Comment(ctx context.Context, todo *types.TODO, body string) error
 	UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error
 	UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
@@ -32,6 +36,18 @@ type CreateRequest struct {
 	Body     string
 	Priority types.Priority
 	Status   types.Status
+}
+
+// EditRequest is a partial update to a TODO's title and/or body. A nil field is
+// left unchanged, mirroring StateUpdate's pointer semantics.
+type EditRequest struct {
+	Title *string
+	Body  *string
+}
+
+// IsEmpty reports whether the edit would change nothing.
+func (e EditRequest) IsEmpty() bool {
+	return e.Title == nil && e.Body == nil
 }
 
 type FileProvider struct {
@@ -110,6 +126,14 @@ func (p *FileProvider) Delete(_ context.Context, todo *types.TODO) error {
 		return fmt.Errorf("missing TODO file path")
 	}
 	return os.Remove(todo.FilePath)
+}
+
+func (p *FileProvider) Edit(_ context.Context, todo *types.TODO, edit EditRequest) error {
+	return EditTODOContent(todo, edit)
+}
+
+func (p *FileProvider) Comment(_ context.Context, todo *types.TODO, body string) error {
+	return AppendComment(todo, body)
 }
 
 func (p *FileProvider) UpdateState(_ context.Context, todo *types.TODO, updates StateUpdate) error {

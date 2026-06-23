@@ -57,6 +57,59 @@ func TestComputeSessionStatsAggregatesUsage(t *testing.T) {
 	}
 }
 
+// assistantContentLine builds an assistant entry with raw content blocks and an
+// optional stop reason, for exercising session-state derivation.
+func assistantContentLine(ts, stopReason, content string) string {
+	return fmt.Sprintf(
+		`{"type":"assistant","timestamp":%q,"message":{"model":"claude-opus-4-8","stop_reason":%q,"content":[%s],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		ts, stopReason, content,
+	)
+}
+
+func TestComputeSessionStatsDerivesState(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		stop    string
+		want    string
+	}{
+		{"thinking block", `{"type":"thinking","thinking":"hmm"}`, "", sessionStateThinking},
+		{"running a tool", `{"type":"tool_use","name":"Edit","id":"t1","input":{}}`, "", sessionStateWorking},
+		{"awaiting an answer", `{"type":"tool_use","name":"AskUserQuestion","id":"t2","input":{}}`, "", sessionStateAsk},
+		{"turn ended", `{"type":"text","text":"done"}`, "end_turn", sessionStateCompleted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			writeSessionLog(t, path, assistantContentLine("2026-06-23T10:00:00Z", tc.stop, tc.content))
+			stats, err := computeSessionStats(path)
+			if err != nil {
+				t.Fatalf("computeSessionStats() error = %v", err)
+			}
+			if stats.State != tc.want {
+				t.Fatalf("State = %q, want %q", stats.State, tc.want)
+			}
+		})
+	}
+}
+
+func TestComputeSessionStatsStatePersistsAcrossToolResult(t *testing.T) {
+	// A tool_use leaves the agent "working" until the next assistant turn; the
+	// interleaved user/tool_result line carries no event and must not clear it.
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	writeSessionLog(t, path,
+		assistantContentLine("2026-06-23T10:00:00Z", "", `{"type":"tool_use","name":"Bash","id":"t1","input":{}}`),
+		`{"type":"user","timestamp":"2026-06-23T10:00:01Z","message":{"content":[{"type":"tool_result"}]}}`,
+	)
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.State != sessionStateWorking {
+		t.Fatalf("State = %q, want %q (tool_result must not clear working)", stats.State, sessionStateWorking)
+	}
+}
+
 func TestSessionStatsCacheMissingLogIsNotFound(t *testing.T) {
 	c := NewSessionStatsCache()
 	stats, err := c.Get("sess", filepath.Join(t.TempDir(), "missing.jsonl"))

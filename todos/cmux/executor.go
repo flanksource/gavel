@@ -175,13 +175,7 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		return failedResult(e.Name(), start, err), err
 	}
 
-	prompt := BuildPrompt(todosInGroup, workDir, e.config.Effort)
-	// When starting a fresh session despite a prior one existing, hand the agent
-	// the previous session id so it can look up that history if it needs context
-	// (the transcript lives in the session log, not the issue).
-	if !resume && agent == "claude" && prior != "" {
-		prompt = SessionHistoryDirective(prior) + "\n\n" + prompt
-	}
+	prompt := buildSessionPrompt(todosInGroup, workDir, e.config.Effort, resume, agent, prior)
 	promptPath, err := WritePromptFile(workDir, todosInGroup, prompt)
 	if err != nil {
 		return failedResult(e.Name(), start, err), err
@@ -189,10 +183,7 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	ctx.Logger.Infof("cmux: wrote initial prompt to %s", promptPath)
 	ctx.Logger.V(2).Infof("cmux prompt body:\n%s", prompt)
 
-	instruction := fmt.Sprintf("Read %s and implement all TODOs described there. When finished, stop and wait for verification.", promptPath)
-	if e.config.Plan {
-		instruction = fmt.Sprintf("Read %s and produce a detailed implementation plan for all TODOs described there. Investigate the codebase to understand each task, but do NOT make any code changes — only plan. When finished, present the plan and stop.", promptPath)
-	}
+	instruction := buildInstruction(todosInGroup, prompt, promptPath, e.config.Plan)
 	if err := e.sendSurfaceText(ctx, ref.String(), ref.SurfaceID, "initial prompt", instruction); err != nil {
 		return failedResult(e.Name(), start, err), err
 	}
@@ -216,10 +207,11 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		}
 		switch {
 		case errors.Is(serr, errSessionLogNotFound):
-			ctx.Logger.Warnf("cmux: claude session log never appeared; falling back to screen-idle detection")
-			if _, err := e.waitForScreenIdle(ctx, ref, "after prompt dispatch", timeout, beforePromptScreen, true); err != nil {
-				return failedResult(e.Name(), start, err), err
-			}
+			// A pre-generated claude session must produce its log; if it never
+			// appears we fail the run loudly rather than inferring completion from
+			// the terminal screen, which silently masks a broken agent launch.
+			err := fmt.Errorf("claude session %s log %s did not appear within %s", sessionID, logPath, e.sessionLogAppearTimeout(timeout))
+			return failedResult(e.Name(), start, err), err
 		case serr != nil:
 			return failedResult(e.Name(), start, serr), serr
 		case !completed:
@@ -464,6 +456,33 @@ func BuildPrompt(todoList []*types.TODO, workDir, effort string) string {
 	return prompt
 }
 
+// buildSessionPrompt assembles the prompt body for a run: the effort-prefixed
+// group prompt, plus a prior-session history note when a fresh claude session is
+// started over a todo that already recorded one. Execute and PreviewInstruction
+// share it so the dashboard preview matches what is actually sent.
+func buildSessionPrompt(todoList []*types.TODO, workDir, effort string, resume bool, agent, prior string) string {
+	prompt := BuildPrompt(todoList, workDir, effort)
+	// When starting a fresh session despite a prior one existing, hand the agent
+	// the previous session id so it can look up that history if it needs context
+	// (the transcript lives in the session log, not the issue).
+	if !resume && agent == "claude" && prior != "" {
+		prompt = SessionHistoryDirective(prior) + "\n\n" + prompt
+	}
+	return prompt
+}
+
+// PreviewInstruction renders the exact text a cmux run would dispatch to the
+// agent surface, without launching anything, so the dashboard's advanced run
+// dialog can show the prompt before the run starts. It mirrors Execute's prompt
+// assembly: the effort directive, an optional prior-session history note, the
+// run's title header, and the implement/plan suffix.
+func PreviewInstruction(todoList []*types.TODO, workDir, effort string, plan, resume bool, agent string) string {
+	workDir = groupWorkDir(workDir, todoList)
+	prompt := buildSessionPrompt(todoList, workDir, effort, resume, agent, priorSessionID(todoList))
+	promptPath := filepath.Join(workDir, ".gavel", "cmux", promptFileName(todoList))
+	return buildInstruction(todoList, prompt, promptPath, plan)
+}
+
 // SessionHistoryDirective tells a fresh agent session about the prior session
 // that worked on the same todo(s), so it can read that history if it needs the
 // earlier context. Returns "" for an empty id.
@@ -504,6 +523,69 @@ func WritePromptFile(workDir string, todoList []*types.TODO, prompt string) (str
 		return "", err
 	}
 	return path, nil
+}
+
+// maxInlinePromptBytes bounds how much of the prompt is dispatched directly to
+// the agent surface. Prompts at or below this are inlined in full; larger ones
+// are truncated to this size with a pointer to the prompt file for the rest.
+const maxInlinePromptBytes = 10 * 1024
+
+// buildInstruction renders the message dispatched to the agent surface. It leads
+// with the todo title so the run is self-describing, inlines the prompt body, and
+// only references the prompt file when the prompt is too large to send in full.
+func buildInstruction(todoList []*types.TODO, prompt, promptPath string, plan bool) string {
+	var b strings.Builder
+	if title := promptTitle(todoList); title != "" {
+		b.WriteString("# " + title + "\n\n")
+	}
+	body, truncated := truncatePrompt(prompt, maxInlinePromptBytes)
+	b.WriteString(body)
+	if truncated {
+		fmt.Fprintf(&b, "\n\n... (prompt truncated — read %s for the full prompt)", promptPath)
+	}
+	if plan {
+		b.WriteString("\n\nProduce a detailed implementation plan for all TODOs above. Investigate the codebase to understand each task, but do NOT make any code changes — only plan. When finished, present the plan and stop.")
+	} else {
+		b.WriteString("\n\nImplement all TODOs described above. When finished, stop and wait for verification.")
+	}
+	return b.String()
+}
+
+// promptTitle is the H1 at the top of the dispatched prompt. A single run uses
+// the todo's title (falling back to its first path entry); a multi-todo run uses
+// "N Todo Items" so the header stays readable instead of concatenating every
+// title. Returns "" when no title can be derived.
+func promptTitle(todoList []*types.TODO) string {
+	if len(todoList) > 1 {
+		return fmt.Sprintf("%d Todo Items", len(todoList))
+	}
+	for _, todo := range todoList {
+		if todo == nil {
+			continue
+		}
+		title := strings.TrimSpace(todo.Title)
+		if title == "" && len(todo.Path) > 0 {
+			title = strings.TrimSpace(todo.Path[0])
+		}
+		if title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+// truncatePrompt clamps prompt to max bytes, cutting on the last line boundary so
+// the inlined body never ends mid-line. The bool reports whether truncation happened.
+func truncatePrompt(prompt string, max int) (string, bool) {
+	prompt = strings.TrimSpace(prompt)
+	if len(prompt) <= max {
+		return prompt, false
+	}
+	clipped := prompt[:max]
+	if idx := strings.LastIndexByte(clipped, '\n'); idx > 0 {
+		clipped = clipped[:idx]
+	}
+	return strings.TrimRight(clipped, "\n"), true
 }
 
 func (e *CmuxExecutor) timeout() time.Duration {

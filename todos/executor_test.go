@@ -166,6 +166,14 @@ func (p *recordingProvider) Delete(context.Context, *types.TODO) error {
 	return nil
 }
 
+func (p *recordingProvider) Edit(context.Context, *types.TODO, EditRequest) error {
+	return nil
+}
+
+func (p *recordingProvider) Comment(context.Context, *types.TODO, string) error {
+	return nil
+}
+
 func (p *recordingProvider) UpdateState(ctx context.Context, _ *types.TODO, updates StateUpdate) error {
 	p.updateCtxErrs = append(p.updateCtxErrs, ctx.Err())
 	if updates.SessionID != nil {

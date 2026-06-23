@@ -42,6 +42,16 @@ type ExecutionResult struct {
 	Transcript       *ExecutionTranscript
 }
 
+// ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
+// TODO's agent completes: only when enabled, the run succeeded, and the executor
+// did not already commit. The inline claude executor sets CommitSHA after its own
+// commit, so committing again would either duplicate that change set or sweep up
+// the user's restored working-tree changes; the cmux executor leaves CommitSHA
+// empty — that is the path auto-commit is meant to cover.
+func ShouldCommitAfter(result *ExecutionResult, enabled bool) bool {
+	return enabled && result != nil && result.Success && result.CommitSHA == ""
+}
+
 func (e ExecutionResult) Pretty() api.Text {
 	result := clicky.Text(" Executed with ", "text-gray-500").Append(e.ExecutorName, "text-blue-600 font-bold")
 
