@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { PRSyncStatus } from '../types';
 import { timeAgo } from '../utils';
 import { GavelIcon } from './GavelIcon';
+import { RelativeTime } from './RelativeTime';
 
 interface Props {
   status: PRSyncStatus;
@@ -75,7 +76,7 @@ function HoverCard({ status }: { status: PRSyncStatus }) {
         <div className="text-gray-500 mt-0.5">Fetching {phaseLabel(status.phase)}...</div>
       )}
       {status.lastSynced && (
-        <div className="text-gray-400 mt-0.5">Last synced: {timeAgo(status.lastSynced)}</div>
+        <div className="text-gray-400 mt-0.5">Last synced: <RelativeTime iso={status.lastSynced} /></div>
       )}
       {status.error && (
         <div className="text-red-500 mt-0.5 max-w-48 truncate">{status.error}</div>

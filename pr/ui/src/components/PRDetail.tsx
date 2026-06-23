@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from 'react';
 import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation } from '../types';
-import { stateColor, reviewColor, timeAgo, severityIcon } from '../utils';
+import { stateColor, reviewColor, severityIcon } from '../utils';
+import { RelativeTime } from './RelativeTime';
 import { ansiToHtml, stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
 import { Avatar } from './Avatar';
@@ -175,7 +176,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
               @{pr.author}
             </a>
             <span className="mx-1">·</span>
-            <span>{timeAgo(pr.updatedAt)}</span>
+            <RelativeTime iso={pr.updatedAt} />
           </div>
         </div>
       </div>

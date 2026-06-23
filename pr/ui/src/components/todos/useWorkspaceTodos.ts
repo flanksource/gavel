@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Project, TodoItem, TodoListResponse, TodoStatus } from '../../types';
+import type { Project, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts, todoQuery } from './format';
+import { loadDensity, saveDensity } from './todoDensity';
+import { loadGroupBy, saveGroupBy } from './todoGroup';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
 
 export interface SelectedTodo {
@@ -18,10 +20,16 @@ export interface SelectedTodo {
 // selectedId/onNavigate wire the selection to the URL (/todos/{guid}, where the
 // guid is the todo ref): the dashboard passes them so a todo is deep-linkable
 // and back/forward works; the menubar omits them and keeps purely-local state.
+//
+// `enabled` gates the list fetch: the dashboard mounts this hook permanently (so
+// the Todos chrome can live in the AppShell's body slots) but passes false while
+// another tab is active, so the workspaces aren't listed until the Todos tab is
+// opened. Cached results survive a tab switch, so reopening is instant.
 export function useWorkspaceTodos(
   projects: Project[],
   selectedId = '',
   onNavigate?: (id: string) => void,
+  enabled = true,
 ) {
   // Every configured workspace with a directory is listed straight from
   // projects.json; ones with no todos render an empty "No todos" group.
@@ -45,6 +53,10 @@ export function useWorkspaceTodos(
   // Closed/Status filter: the set of statuses hidden from the lists. Defaults to
   // hiding completed (closed) and persists the user's choice across reloads.
   const [hiddenStatuses, setHiddenStatuses] = useState<Set<TodoStatus>>(loadHiddenStatuses);
+  // Row density (comfortable/compact) for the lists, persisted across reloads.
+  const [density, setDensityState] = useState<TodoDensity>(loadDensity);
+  // Grouping dimension (workspace/severity/age) for the lists, persisted too.
+  const [groupBy, setGroupByState] = useState<TodoGroupBy>(loadGroupBy);
 
   const toggleStatus = useCallback((status: TodoStatus) => {
     setHiddenStatuses(prev => {
@@ -54,10 +66,21 @@ export function useWorkspaceTodos(
     });
   }, []);
 
+  const setDensity = useCallback((next: TodoDensity) => {
+    setDensityState(next);
+    saveDensity(next);
+  }, []);
+
+  const setGroupBy = useCallback((next: TodoGroupBy) => {
+    setGroupByState(next);
+    saveGroupBy(next);
+  }, []);
+
   // Fetch every workspace's todos in parallel; refetch only when the set of
   // workspace directories changes or on an explicit refresh, not on every
   // projects poll. A per-workspace failure degrades to an empty group.
   useEffect(() => {
+    if (!enabled) return;
     const specs = dirsKey ? dirsKey.split('|').map(s => s.split('\t')) : [];
     if (specs.length === 0) {
       setByDir({});
@@ -83,7 +106,7 @@ export function useWorkspaceTodos(
       }
     })();
     return () => { cancelled = true; };
-  }, [dirsKey, refreshTick]);
+  }, [dirsKey, refreshTick, enabled]);
 
   // Load the selected todo's detail (body + history).
   useEffect(() => {
@@ -199,5 +222,13 @@ export function useWorkspaceTodos(
     transferred,
     hiddenStatuses,
     toggleStatus,
+    density,
+    setDensity,
+    groupBy,
+    setGroupBy,
   };
 }
+
+// WorkspaceTodos is the shared todos data layer the dashboard's AppShell body
+// slots render off of (header, actions, filter toolbar, sidebar list, detail).
+export type WorkspaceTodos = ReturnType<typeof useWorkspaceTodos>;

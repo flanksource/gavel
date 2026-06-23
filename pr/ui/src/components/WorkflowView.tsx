@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { WorkflowRun, Job } from '../types';
 import { statusIcon, statusColor } from '../utils';
+import { useNow } from '../useNow';
 import { LogViewer } from './LogViewer';
 import { GavelIcon } from './GavelIcon';
 
@@ -27,6 +28,24 @@ export function formatDuration(start?: string, end?: string): string {
   if (!end) return `(running ${secs}s...)`;
   if (secs < 60) return `(${secs}s)`;
   return `(${Math.floor(secs / 60)}m ${secs % 60}s)`;
+}
+
+// JobDuration shows a job's elapsed time. A still-running job (no completedAt)
+// renders a leaf that subscribes to the shared useNow() clock so its
+// '(running Xs...)' counter advances each second without reconciling the job
+// row; a completed job's duration is fixed, so it stays a plain static span.
+function JobDuration({ startedAt, completedAt }: { startedAt?: string; completedAt?: string }) {
+  if (completedAt) {
+    const fixed = formatDuration(startedAt, completedAt);
+    return fixed ? <span className="text-muted-foreground">{fixed}</span> : null;
+  }
+  return <RunningDuration startedAt={startedAt} />;
+}
+
+function RunningDuration({ startedAt }: { startedAt?: string }) {
+  useNow();
+  if (!startedAt) return null;
+  return <span className="text-muted-foreground">{formatDuration(startedAt)}</span>;
 }
 
 function IndeterminateProgress() {
@@ -92,7 +111,6 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
 
 function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }) {
   const failed = job.conclusion?.toLowerCase() === 'failure';
-  const duration = formatDuration(job.startedAt, job.completedAt);
 
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -154,7 +172,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
           {statusIcon(job.status, job.conclusion)}
         </span>
         <span className={failed ? 'text-red-700 font-medium' : 'text-foreground'}>{job.name}</span>
-        {duration && <span className="text-muted-foreground">{duration}</span>}
+        <JobDuration startedAt={job.startedAt} completedAt={job.completedAt} />
         {job.url && (
           <a
             href={job.url}

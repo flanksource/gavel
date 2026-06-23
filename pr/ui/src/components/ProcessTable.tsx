@@ -7,6 +7,7 @@ import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from '.
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
 import { GavelIcon } from './GavelIcon';
 import { TodoBadge } from './TodoBadge';
+import { useNow } from '../useNow';
 
 // MetricIcon is the gauge's own icon prop type, derived from the component so it
 // matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
@@ -35,6 +36,13 @@ function uptimeLabel(p: { started?: string; status: string }): string {
   const days = Math.floor(hours / 24);
   const remHours = hours % 24;
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
+// Uptime is a leaf that re-renders itself each second via the shared useNow()
+// clock, so a ticking uptime doesn't reconcile its parent process row.
+function Uptime({ proc }: { proc: { started?: string; status: string } }) {
+  useNow();
+  return <>{uptimeLabel(proc)}</>;
 }
 
 function isActiveStatus(status: string): boolean {
@@ -299,7 +307,7 @@ function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess })
           <div className="mb-0.5 flex items-center justify-between gap-2">
             <div className="text-[10px] uppercase tracking-wide text-gray-400">Process tree</div>
             <div className="text-[10px] tabular-nums text-gray-400">
-              up {uptimeLabel(proc)} · pid {proc.pid || '—'}
+              up <Uptime proc={proc} /> · pid {proc.pid || '—'}
             </div>
           </div>
           <ProcTree nodes={tree} />

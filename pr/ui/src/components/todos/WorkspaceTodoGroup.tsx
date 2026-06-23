@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Project, TodoListResponse, TodoRunOptions, TodoStatus } from '../../types';
+import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
@@ -14,12 +14,13 @@ import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 // for a "Run N" control once any are checked, dispatching the whole selection to
 // one agent session via /api/todos/run. Selection is per-workspace because a run
 // targets a single workspace dir/provider. The menubar omits multiSelect.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, multiSelect = false, onRunStarted }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, density = 'comfortable', multiSelect = false, onRunStarted }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
   onSelect: (ref: string) => void;
   hiddenStatuses?: Set<TodoStatus>;
+  density?: TodoDensity;
   multiSelect?: boolean;
   onRunStarted?: () => void;
 }) {
@@ -145,9 +146,12 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             todo={item}
             active={item.ref === selectedRef}
             onClick={() => onSelect(item.ref)}
+            density={density}
             selectable={multiSelect}
             selected={checked.has(item.ref)}
             onToggleSelect={() => toggle(item.ref)}
+            dir={workspace.dir}
+            provider={workspace.todoProvider || 'auto'}
           />
         ))
       ) : (
