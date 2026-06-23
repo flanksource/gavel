@@ -52,14 +52,14 @@ func TestBuildGroupPrompt(t *testing.T) {
 	prompt := BuildGroupPrompt(todos, "")
 
 	for _, want := range []string{
-		"implementing multiple related fixes",
-		"## fix-auth",
-		"## fix-db",
-		"## fix-cache",
+		"implementing the 3 todo items listed below",
+		"## 1. fix-auth",
+		"## 2. fix-db",
+		"## 3. fix-cache",
 		"Fix the auth handler",
 		"Fix the database query",
 		"Fix the cache invalidation",
-		"Implement ALL TODOs",
+		"Implement ALL todo items",
 		"Do NOT run git add or git commit",
 	} {
 		if !strings.Contains(prompt, want) {

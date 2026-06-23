@@ -147,6 +147,46 @@ func (p *GriteProvider) Delete(ctx context.Context, todo *types.TODO) error {
 	return err
 }
 
+func (p *GriteProvider) Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error {
+	id := TODOReference(todo)
+	if id == "" {
+		return fmt.Errorf("missing grite issue id")
+	}
+	if edit.IsEmpty() {
+		return fmt.Errorf("nothing to edit: title or body is required")
+	}
+	args := []string{"issue", "update", id}
+	var title string
+	if edit.Title != nil {
+		title = strings.TrimSpace(*edit.Title)
+		if title == "" {
+			return fmt.Errorf("title cannot be empty")
+		}
+		args = append(args, "--title", title)
+	}
+	if edit.Body != nil {
+		args = append(args, "--body", *edit.Body)
+	}
+	args = append(args, "--json")
+	if _, err := p.run(ctx, args...); err != nil {
+		return err
+	}
+	if edit.Title != nil {
+		todo.Title = title
+	}
+	if edit.Body != nil {
+		todo.MarkdownBody = *edit.Body
+	}
+	return nil
+}
+
+func (p *GriteProvider) Comment(ctx context.Context, todo *types.TODO, body string) error {
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("comment body is required")
+	}
+	return p.comment(ctx, todo, body)
+}
+
 func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error {
 	id := TODOReference(todo)
 	if id == "" {

@@ -20,8 +20,8 @@ const (
 )
 
 // errSessionLogNotFound is returned by the tailer when Claude never created the
-// pre-generated session log, signalling the caller to fall back to screen-idle
-// detection.
+// pre-generated session log within the appear timeout. The executor treats it as
+// a hard run failure rather than falling back to screen-idle detection.
 var errSessionLogNotFound = errors.New("claude session log did not appear")
 
 // SessionLogPath resolves the on-disk Claude session log for a session id,

@@ -8,8 +8,56 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/captain/pkg/ai/pricing"
 )
+
+// High-level agent states surfaced to the dashboard, derived from the last
+// meaningful event in the session log. Mirrors the TS deriveSessionState mapping.
+const (
+	sessionStateThinking  = "thinking"
+	sessionStateWorking   = "working"
+	sessionStateAsk       = "ask"
+	sessionStateCompleted = "completed"
+)
+
+// isAskTool reports whether a tool pauses the turn awaiting the user (Claude
+// emits no terminal stop reason for these), so the session is "asking", not
+// "working", until they respond.
+func isAskTool(tool string) bool {
+	switch tool {
+	case "AskUserQuestion", "ExitPlanMode":
+		return true
+	default:
+		return false
+	}
+}
+
+// sessionStateFromLine maps the last event of one session-log line to the agent
+// state it represents. Non-conversational lines (tool results, bookkeeping)
+// yield no event and return ("", false) so the caller keeps the prior state.
+func sessionStateFromLine(line []byte) (string, bool) {
+	events, err := history.ParseSessionEvents(line)
+	if err != nil || len(events) == 0 {
+		return "", false
+	}
+	last := events[len(events)-1]
+	switch last.Kind {
+	case history.EventThinking:
+		return sessionStateThinking, true
+	case history.EventToolUse:
+		if isAskTool(last.ToolUse.Tool) {
+			return sessionStateAsk, true
+		}
+		return sessionStateWorking, true
+	case history.EventTurnEnd:
+		return sessionStateCompleted, true
+	case history.EventAssistantText:
+		return sessionStateWorking, true
+	default:
+		return "", false
+	}
+}
 
 const (
 	// sessionStatsTTL bounds how long a cold (disk-derived) stats entry is reused
@@ -44,6 +92,9 @@ type SessionStats struct {
 	CostUSD             float64   `json:"costUsd"`
 	InProgress          bool      `json:"inProgress"`
 	Found               bool      `json:"found"`
+	// State is the high-level agent state from the most recent session-log event
+	// (thinking / working / ask / completed); empty before the first event.
+	State string `json:"state,omitempty"`
 }
 
 // sessionUsageLine is the subset of a Claude session-log entry needed for stats:
@@ -133,6 +184,9 @@ func computeSessionStats(path string) (SessionStats, error) {
 	scanner.Buffer(make([]byte, 0, 64*1024), sessionStatsMaxLine)
 	var first, last time.Time
 	for scanner.Scan() {
+		if state, ok := sessionStateFromLine(scanner.Bytes()); ok {
+			stats.State = state
+		}
 		var entry sessionUsageLine
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			continue
@@ -166,19 +220,25 @@ type SessionAccumulator struct {
 	stats SessionStats
 }
 
-// AddLine folds one raw session-log line into the running stats. Safe to use as
-// the tailer's onLine hook; it never retains the slice.
+// AddLine folds one raw session-log line into the running stats: its state (from
+// the line's last event) and, for assistant turns, its token usage. Safe to use
+// as the tailer's onLine hook; it never retains the slice.
 func (a *SessionAccumulator) AddLine(line []byte) {
+	state, hasState := sessionStateFromLine(line)
+
 	var entry sessionUsageLine
-	if json.Unmarshal(line, &entry) != nil {
-		return
-	}
-	if entry.Type != "assistant" || !entry.hasUsage() {
+	hasUsage := json.Unmarshal(line, &entry) == nil && entry.Type == "assistant" && entry.hasUsage()
+	if !hasState && !hasUsage {
 		return
 	}
 	a.mu.Lock()
-	a.stats.applyUsage(entry)
-	a.stats.UpdatedAt = time.Now()
+	if hasState {
+		a.stats.State = state
+	}
+	if hasUsage {
+		a.stats.applyUsage(entry)
+		a.stats.UpdatedAt = time.Now()
+	}
 	a.mu.Unlock()
 }
 

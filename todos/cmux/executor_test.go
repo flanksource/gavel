@@ -87,17 +87,26 @@ func TestSessionHistoryDirective(t *testing.T) {
 
 func TestCmuxExecutorResumesPriorSession(t *testing.T) {
 	repo := t.TempDir()
+	fakeClaudeHome(t)
 	runner := newScreenRunner(repo)
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
 		Resume:                  true,
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond, // no real session log → fall back to screen-idle
+		SessionLogAppearTimeout: time.Second,
 	})
+
+	// A resumed run seeks past the existing log, so it only completes on a turn
+	// appended after tailing begins.
+	logPath := sessionLogFile(t, repo, "prior-session")
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appended := appendSessionLineAfter(logPath, completedSessionLine, 30*time.Millisecond)
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
 	todo := &types.TODO{
@@ -106,6 +115,9 @@ func TestCmuxExecutorResumesPriorSession(t *testing.T) {
 	}
 	if _, err := exec.ExecuteGroup(ctx, []*types.TODO{todo}); err != nil {
 		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+	if err := <-appended; err != nil {
+		t.Fatalf("append session line: %v", err)
 	}
 
 	var agentSend string
@@ -129,16 +141,17 @@ func TestCmuxExecutorResumesPriorSession(t *testing.T) {
 
 func TestCmuxExecutorRecordsSessionBeforeAgentLaunch(t *testing.T) {
 	repo := t.TempDir()
+	fakeClaudeHome(t)
 	runner := newScreenRunner(repo)
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
 		SessionID:               "fixed-session",
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond,
+		SessionLogAppearTimeout: time.Second,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
@@ -151,6 +164,7 @@ func TestCmuxExecutorRecordsSessionBeforeAgentLaunch(t *testing.T) {
 				agentSentBeforeHook = true
 			}
 		}
+		writeSessionLog(t, sessionLogFile(t, repo, sid), completedSessionLine)
 	})
 	todo := &types.TODO{
 		ID:              "abc123456789",
@@ -169,19 +183,21 @@ func TestCmuxExecutorRecordsSessionBeforeAgentLaunch(t *testing.T) {
 
 func TestCmuxExecutorUsesConfiguredSessionID(t *testing.T) {
 	repo := t.TempDir()
+	fakeClaudeHome(t)
 	runner := newScreenRunner(repo)
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
 		SessionID:               "fixed-session",
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond,
+		SessionLogAppearTimeout: time.Second,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	completeSessionOnRecord(t, ctx, repo)
 	todo := &types.TODO{
 		ID:              "abc123456789",
 		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
@@ -215,15 +231,16 @@ func TestCmuxExecutorFreshSessionReferencesPriorInPrompt(t *testing.T) {
 	// the agent about the prior session id for history.
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond,
+		SessionLogAppearTimeout: time.Second,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	completeSessionOnRecord(t, ctx, repo)
 	todo := &types.TODO{
 		ID:              "abc123456789",
 		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo, LLM: &types.LLM{SessionId: "prior-session"}},
@@ -265,6 +282,143 @@ func TestWritePromptFile(t *testing.T) {
 	}
 }
 
+func TestBuildInstructionInlinesSmallPrompt(t *testing.T) {
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "Fix the parser"}}
+	prompt := "Think carefully.\n\n## Fix the parser\n\nThe parser drops trailing commas."
+
+	got := buildInstruction([]*types.TODO{todo}, prompt, "/repo/.gavel/cmux/prompt-x.md", false)
+
+	if !strings.HasPrefix(got, "# Fix the parser\n\n") {
+		t.Fatalf("instruction should lead with the todo title: %q", got)
+	}
+	if !strings.Contains(got, "The parser drops trailing commas.") {
+		t.Fatalf("small prompt should be inlined: %q", got)
+	}
+	if strings.Contains(got, "prompt-x.md") {
+		t.Fatalf("small prompt should not reference the prompt file: %q", got)
+	}
+	if !strings.HasSuffix(got, "Implement all TODOs described above. When finished, stop and wait for verification.") {
+		t.Fatalf("instruction should end with the run directive: %q", got)
+	}
+}
+
+func TestBuildInstructionTruncatesLargePrompt(t *testing.T) {
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "Big task"}}
+	// Build a prompt well over the 10KB inline cap from whole lines.
+	var sb strings.Builder
+	for i := 0; sb.Len() < maxInlinePromptBytes*2; i++ {
+		fmt.Fprintf(&sb, "line %d of the prompt body\n", i)
+	}
+	prompt := sb.String()
+	path := "/repo/.gavel/cmux/prompt-big.md"
+
+	got := buildInstruction([]*types.TODO{todo}, prompt, path, false)
+
+	if !strings.Contains(got, "read "+path+" for the full prompt") {
+		t.Fatalf("large prompt should reference the prompt file: %q", got)
+	}
+	body := strings.TrimPrefix(got, "# Big task\n\n")
+	inlined := strings.SplitN(body, "\n\n... (prompt truncated", 2)[0]
+	if len(inlined) > maxInlinePromptBytes {
+		t.Fatalf("inlined body = %d bytes, want <= %d", len(inlined), maxInlinePromptBytes)
+	}
+	if !strings.HasSuffix(inlined, "body") {
+		t.Fatalf("truncation should cut on a line boundary (ending a full line): %q", inlined[len(inlined)-20:])
+	}
+}
+
+func TestBuildInstructionPlanMode(t *testing.T) {
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "Plan it"}}
+	got := buildInstruction([]*types.TODO{todo}, "do the thing", "/p.md", true)
+	if !strings.Contains(got, "do NOT make any code changes — only plan") {
+		t.Fatalf("plan instruction should forbid code changes: %q", got)
+	}
+	if strings.Contains(got, "Implement all TODOs described above") {
+		t.Fatalf("plan instruction should not include the implement directive: %q", got)
+	}
+}
+
+func TestPreviewInstructionMatchesRunPrompt(t *testing.T) {
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "Fix the parser"}, MarkdownBody: "The parser drops trailing commas."}
+
+	got := PreviewInstruction([]*types.TODO{todo}, "/repo", "high", false, false, "claude")
+
+	if !strings.HasPrefix(got, "# Fix the parser\n\n") {
+		t.Fatalf("preview should lead with the todo title: %q", got)
+	}
+	if !strings.Contains(got, EffortDirective("high")) {
+		t.Fatalf("preview should include the effort directive: %q", got)
+	}
+	if !strings.Contains(got, "The parser drops trailing commas.") {
+		t.Fatalf("preview should inline the todo body: %q", got)
+	}
+	if !strings.HasSuffix(got, "Implement all TODOs described above. When finished, stop and wait for verification.") {
+		t.Fatalf("preview should end with the implement directive: %q", got)
+	}
+}
+
+func TestPreviewInstructionNumbersMultipleTodos(t *testing.T) {
+	group := []*types.TODO{
+		{TODOFrontmatter: types.TODOFrontmatter{Title: "Fix the parser"}},
+		{TODOFrontmatter: types.TODOFrontmatter{Title: "Fix the writer"}},
+	}
+
+	got := PreviewInstruction(group, "/repo", "medium", false, false, "claude")
+
+	if !strings.HasPrefix(got, "# 2 Todo Items\n\n") {
+		t.Fatalf("multi-todo preview should be titled with the count: %q", got)
+	}
+	if !strings.Contains(got, "## 1. Fix the parser") || !strings.Contains(got, "## 2. Fix the writer") {
+		t.Fatalf("multi-todo preview should number each item: %q", got)
+	}
+}
+
+func TestPreviewInstructionPlanSuffix(t *testing.T) {
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "Plan it"}}
+	got := PreviewInstruction([]*types.TODO{todo}, "/repo", "medium", true, false, "claude")
+	if !strings.Contains(got, "do NOT make any code changes — only plan") {
+		t.Fatalf("plan preview should forbid code changes: %q", got)
+	}
+	if strings.Contains(got, "Implement all TODOs described above") {
+		t.Fatalf("plan preview should not include the implement directive: %q", got)
+	}
+}
+
+func TestPreviewInstructionPriorSessionNote(t *testing.T) {
+	todo := &types.TODO{
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Resume me", LLM: &types.LLM{SessionId: "sess-123"}},
+	}
+
+	fresh := PreviewInstruction([]*types.TODO{todo}, "/repo", "medium", false, false, "claude")
+	if !strings.Contains(fresh, "sess-123") {
+		t.Fatalf("a fresh claude run over a prior session should reference it: %q", fresh)
+	}
+
+	resumed := PreviewInstruction([]*types.TODO{todo}, "/repo", "medium", false, true, "claude")
+	if strings.Contains(resumed, "A previous agent session") {
+		t.Fatalf("a resume run should not add the prior-session note: %q", resumed)
+	}
+}
+
+func TestPromptTitleCountsGroupItems(t *testing.T) {
+	group := []*types.TODO{
+		{TODOFrontmatter: types.TODOFrontmatter{Title: "First"}},
+		{TODOFrontmatter: types.TODOFrontmatter{Path: types.StringOrSlice{"pkg/foo.go:12"}}},
+	}
+	if got := promptTitle(group); got != "2 Todo Items" {
+		t.Fatalf("group promptTitle = %q, want %q", got, "2 Todo Items")
+	}
+}
+
+func TestPromptTitleSingleUsesTitleWithPathFallback(t *testing.T) {
+	if got := promptTitle([]*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Title: "Fix it"}}}); got != "Fix it" {
+		t.Fatalf("single promptTitle = %q, want %q", got, "Fix it")
+	}
+	if got := promptTitle([]*types.TODO{{TODOFrontmatter: types.TODOFrontmatter{Path: types.StringOrSlice{"pkg/foo.go:12"}}}}); got != "pkg/foo.go:12" {
+		t.Fatalf("single promptTitle fallback = %q, want %q", got, "pkg/foo.go:12")
+	}
+}
+
 func TestScreenPollDelayBacksOffAndCaps(t *testing.T) {
 	now := time.Now()
 	base := time.Second
@@ -292,20 +446,22 @@ func TestScreenPollDelayBacksOffAndCaps(t *testing.T) {
 
 func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 	repo := t.TempDir()
+	fakeClaudeHome(t)
 	runner := newScreenRunner(repo)
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
 		Model:                   "opus",
 		Effort:                  "medium",
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond, // no real session log → fall back to screen-idle
+		SessionLogAppearTimeout: time.Second,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	completeSessionOnRecord(t, ctx, repo)
 	todo := &types.TODO{
 		ID:              "abc123456789",
 		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
@@ -349,8 +505,18 @@ func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 	if len(sends[1]) != 7 || sends[1][0] != "send" || sends[1][2] != "workspace:ws1" || sends[1][4] != "surface:sf1" {
 		t.Fatalf("unexpected prompt send args: %#v", sends[1])
 	}
-	if !strings.Contains(sends[1][6], ".gavel/cmux/prompt-abc12345.md") || strings.HasSuffix(sends[1][6], "\n") {
-		t.Fatalf("send instruction should reference prompt file and submit it: %q", sends[1][6])
+	instruction := sends[1][6]
+	if !strings.HasPrefix(instruction, "# Fix cmux") {
+		t.Fatalf("instruction should lead with the todo title: %q", instruction)
+	}
+	if !strings.Contains(instruction, "body") || !strings.Contains(instruction, "Implement all TODOs described above") {
+		t.Fatalf("instruction should inline the prompt body and run directive: %q", instruction)
+	}
+	if strings.Contains(instruction, "prompt-abc12345.md") {
+		t.Fatalf("a small prompt should be inlined, not reference the prompt file: %q", instruction)
+	}
+	if strings.HasSuffix(instruction, "\n") {
+		t.Fatalf("instruction should be submitted without a trailing newline: %q", instruction)
 	}
 	if len(enterKeys) != 2 {
 		t.Fatalf("send-key calls = %#v, want 2", enterKeys)
@@ -367,9 +533,9 @@ func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 
 func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 	repo := t.TempDir()
+	fakeClaudeHome(t)
 	agentSends := 0
 	promptSends := 0
-	readScreens := 0
 	runner := func(_ context.Context, _ string, _ string, _ time.Duration, args ...string) (string, error) {
 		switch args[0] {
 		case "list-workspaces":
@@ -379,17 +545,10 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 		case "new-surface":
 			return "surface:sf1", nil
 		case "read-screen":
-			readScreens++
 			if agentSends == 0 {
 				return "shell ready\n$ ", nil
 			}
-			if promptSends == 0 {
-				return "Claude ready\n> ", nil
-			}
-			if readScreens < 5 {
-				return "Claude is working", nil
-			}
-			return "Claude done\n> ", nil
+			return "Claude ready\n> ", nil
 		case "send":
 			payload := args[len(args)-1]
 			if strings.HasPrefix(payload, "claude") {
@@ -405,17 +564,18 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 	}
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
 		WorkDir:                 repo,
-		Timeout:                 100 * time.Millisecond,
+		Timeout:                 2 * time.Second,
 		Runner:                  runner,
 		SendAttempts:            2,
 		SendRetryDelay:          time.Millisecond,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
-		SessionLogAppearTimeout: time.Millisecond,
+		SessionLogAppearTimeout: time.Second,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	completeSessionOnRecord(t, ctx, repo)
 	result, err := exec.ExecuteGroup(ctx, []*types.TODO{{
 		ID:              "abc123456789",
 		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
@@ -431,6 +591,42 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 	}
 	if promptSends != 2 {
 		t.Fatalf("prompt sends = %d, want 2", promptSends)
+	}
+}
+
+// TestCmuxExecutorFailsWhenSessionLogNeverAppears asserts a claude run fails the
+// run (rather than falling back to screen-idle detection) when the pre-generated
+// session log never materializes.
+func TestCmuxExecutorFailsWhenSessionLogNeverAppears(t *testing.T) {
+	repo := t.TempDir()
+	fakeClaudeHome(t)
+	runner := newScreenRunner(repo)
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		SessionID:               "missing-session",
+		Timeout:                 200 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: 5 * time.Millisecond,
+	})
+
+	// No session log is ever written, so the tailer reports errSessionLogNotFound.
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	todo := &types.TODO{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
+	}
+	result, err := exec.ExecuteGroup(ctx, []*types.TODO{todo})
+	if err == nil {
+		t.Fatal("ExecuteGroup() error = nil, want a failure when the session log never appears")
+	}
+	if result == nil || result.Success {
+		t.Fatalf("expected a failed result, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "missing-session") || !strings.Contains(err.Error(), "did not appear") {
+		t.Fatalf("error should name the session and the missing log: %v", err)
 	}
 }
 
@@ -479,6 +675,63 @@ func (r *screenRunner) run(_ context.Context, cwd, binary string, _ time.Duratio
 	default:
 		return "ok", nil
 	}
+}
+
+// completedSessionLine is one assistant end_turn entry; a tailer that reads it
+// reports the session complete.
+const completedSessionLine = `{"type":"assistant","sessionId":"s","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`
+
+// fakeClaudeHome redirects the claude projects directory (resolved from $HOME) to
+// a temp dir so cmux runs read and write session logs inside the test sandbox
+// instead of the developer's real ~/.claude.
+func fakeClaudeHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+}
+
+// sessionLogFile resolves the session log a cmux run tails for sessionID under
+// workDir, creating its parent directory tree.
+func sessionLogFile(t *testing.T, workDir, sessionID string) string {
+	t.Helper()
+	path, err := SessionLogPath(workDir, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// completeSessionOnRecord writes a finished session log the moment the run records
+// its session id (before it begins tailing), so a fresh cmux run reports
+// completion from the log rather than the screen.
+func completeSessionOnRecord(t *testing.T, ctx *todopkg.ExecutorContext, workDir string) {
+	t.Helper()
+	ctx.SetSessionIDHook(func(sid string) {
+		writeSessionLog(t, sessionLogFile(t, workDir, sid), completedSessionLine)
+	})
+}
+
+// appendSessionLineAfter appends line to path after delay, simulating the agent
+// emitting a new turn once a resumed run (which seeks past the existing log) has
+// begun tailing. Any write error surfaces on the returned channel.
+func appendSessionLineAfter(path, line string, delay time.Duration) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		time.Sleep(delay)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			done <- err
+			return
+		}
+		_, werr := f.WriteString(line + "\n")
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		done <- werr
+	}()
+	return done
 }
 
 func assertCalled(t *testing.T, calls []runnerCall, want []string) {

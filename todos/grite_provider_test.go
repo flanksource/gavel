@@ -213,6 +213,84 @@ func TestGriteProviderDeleteClosesIssue(t *testing.T) {
 	}
 }
 
+func TestGriteProviderEditUpdatesTitleAndBody(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return []byte(`{"ok": true, "data": {}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo := &types.TODO{ID: "abc123", Provider: ProviderGrite, ProviderState: "open"}
+	title := "Revised title"
+	body := "Revised body"
+	if err := provider.Edit(context.Background(), todo, EditRequest{Title: &title, Body: &body}); err != nil {
+		t.Fatalf("Edit failed: %v", err)
+	}
+	want := []string{"issue update abc123 --title Revised title --body Revised body --json"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+	if todo.Title != "Revised title" || todo.MarkdownBody != "Revised body" {
+		t.Fatalf("in-memory todo not updated: %+v", todo)
+	}
+}
+
+func TestGriteProviderEditTitleOnlyOmitsBodyFlag(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return []byte(`{"ok": true, "data": {}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo := &types.TODO{ID: "abc123", Provider: ProviderGrite, ProviderState: "open", MarkdownBody: "unchanged"}
+	title := "Only the title"
+	if err := provider.Edit(context.Background(), todo, EditRequest{Title: &title}); err != nil {
+		t.Fatalf("Edit failed: %v", err)
+	}
+	want := []string{"issue update abc123 --title Only the title --json"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+	if todo.MarkdownBody != "unchanged" {
+		t.Fatalf("body should be untouched, got %q", todo.MarkdownBody)
+	}
+}
+
+func TestGriteProviderEditRejectsEmptyEdit(t *testing.T) {
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: func(context.Context, string, string, ...string) ([]byte, error) {
+		t.Fatal("runner should not be called for an empty edit")
+		return nil, nil
+	}}
+	todo := &types.TODO{ID: "abc123", Provider: ProviderGrite}
+	if err := provider.Edit(context.Background(), todo, EditRequest{}); err == nil {
+		t.Fatal("expected error for empty edit")
+	}
+}
+
+func TestGriteProviderCommentPostsBody(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return []byte(`{"ok": true, "data": {}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo := &types.TODO{ID: "abc123", Provider: ProviderGrite, ProviderState: "open"}
+	if err := provider.Comment(context.Background(), todo, "looks good to me"); err != nil {
+		t.Fatalf("Comment failed: %v", err)
+	}
+	want := []string{"issue comment abc123 --body looks good to me --json"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+
+	if err := provider.Comment(context.Background(), todo, "   "); err == nil {
+		t.Fatal("expected error for blank comment")
+	}
+}
+
 func TestGriteProviderUpdateStateUsesStatusLabels(t *testing.T) {
 	var calls []string
 	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
