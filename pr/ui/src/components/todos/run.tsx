@@ -6,12 +6,28 @@ import { inputClass, todoQuery } from './format';
 
 export const defaultRunOptions: TodoRunOptions = { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium' };
 
-export const runPresets: Array<{ label: string; detail: string; icon: string; options: TodoRunOptions }> = [
-  { label: 'Claude Sonnet', detail: 'cmux · medium effort', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'sonnet', effort: 'medium' } },
-  { label: 'Claude Opus', detail: 'cmux · high effort', icon: 'codicon:sparkle-filled', options: { agent: 'claude', mode: 'cmux', model: 'opus', effort: 'high' } },
-  { label: 'Claude Haiku', detail: 'cmux · low effort', icon: 'codicon:zap', options: { agent: 'claude', mode: 'cmux', model: 'haiku', effort: 'low' } },
-  { label: 'Codex', detail: 'cmux · medium effort', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium' } },
-  { label: 'Codex High', detail: 'cmux · high effort', icon: 'codicon:terminal-cmd', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'high' } },
+type RunPreset = { label: string; icon: string; options: TodoRunOptions };
+
+// The split-button menu offers two actions — Run (implement) and Plan (propose
+// a plan without changing code) — each with a Claude and a Codex option, plus
+// Advanced for the full dialog.
+export const runActionGroups: Array<{ action: 'Run' | 'Plan'; detail: string; presets: RunPreset[] }> = [
+  {
+    action: 'Run',
+    detail: 'implement',
+    presets: [
+      { label: 'Claude', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium' } },
+      { label: 'Codex', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium' } },
+    ],
+  },
+  {
+    action: 'Plan',
+    detail: 'plan only · no changes',
+    presets: [
+      { label: 'Claude', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium', plan: true } },
+      { label: 'Codex', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium', plan: true } },
+    ],
+  },
 ];
 
 // useTodoRun POSTs a run for one or more todo refs in a workspace. A single ref
@@ -107,19 +123,26 @@ export function TodoRunSplitButton({
       >
         {() => (
           <div className="p-1 text-xs">
-            {runPresets.map(preset => (
-              <button
-                key={`${preset.label}:${preset.detail}`}
-                type="button"
-                onClick={() => onRun(preset.options)}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
-              >
-                <GavelIcon name={preset.icon} className="shrink-0 text-sm text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-foreground">{preset.label}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">{preset.detail}</span>
-                </span>
-              </button>
+            {runActionGroups.map(group => (
+              <div key={group.action}>
+                <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.action}
+                </div>
+                {group.presets.map(preset => (
+                  <button
+                    key={`${group.action}:${preset.label}`}
+                    type="button"
+                    onClick={() => onRun(preset.options)}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                  >
+                    <GavelIcon name={preset.icon} className="shrink-0 text-sm text-muted-foreground" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-foreground">{preset.label}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">cmux · {group.detail}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
             ))}
             <div className="my-1 border-t border-border" />
             <button
@@ -157,6 +180,8 @@ export function TodoRunAdvancedDialog({
   const [mode, setMode] = useState<TodoRunMode>('cmux');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
+  const [plan, setPlan] = useState(false);
+  const [resume, setResume] = useState(false);
   const [timeout, setTimeout] = useState('30m');
   const [maxCost, setMaxCost] = useState('');
   const [maxTurns, setMaxTurns] = useState('');
@@ -169,6 +194,8 @@ export function TodoRunAdvancedDialog({
     setMode('cmux');
     setModel('claude');
     setEffort('medium');
+    setPlan(false);
+    setResume(false);
     setTimeout('30m');
     setMaxCost('');
     setMaxTurns('');
@@ -186,6 +213,8 @@ export function TodoRunAdvancedDialog({
       mode,
       model: model.trim() || agent,
       effort,
+      plan: mode === 'cmux' ? plan : undefined,
+      resume: mode === 'cmux' ? resume : undefined,
       timeout: timeout.trim() || '30m',
       maxCost: mode === 'inline' && maxCost.trim() && Number.isFinite(cost) ? cost : undefined,
       maxTurns: mode === 'inline' && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
@@ -227,7 +256,11 @@ export function TodoRunAdvancedDialog({
           <Field label="Mode">
             <select
               value={mode}
-              onChange={e => setMode(e.currentTarget.value as TodoRunMode)}
+              onChange={e => {
+                const next = e.currentTarget.value as TodoRunMode;
+                setMode(next);
+                if (next !== 'cmux') setPlan(false);
+              }}
               className={inputClass}
               disabled={agent === 'codex'}
             >
@@ -263,6 +296,14 @@ export function TodoRunAdvancedDialog({
           <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={mode !== 'inline'} />
         </Field>
         <div className="flex flex-wrap gap-3 text-xs">
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={plan} onChange={e => setPlan(e.currentTarget.checked)} disabled={mode !== 'cmux'} />
+            <span>Plan only</span>
+          </label>
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={resume} onChange={e => setResume(e.currentTarget.checked)} disabled={mode !== 'cmux'} />
+            <span>Resume session</span>
+          </label>
           <label className="inline-flex items-center gap-2">
             <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={mode !== 'inline'} />
             <span>Dirty worktree</span>

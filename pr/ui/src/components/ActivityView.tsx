@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
-import { timeAgo } from '../utils';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { GavelIcon } from './GavelIcon';
+import { RelativeTime } from './RelativeTime';
 
 const KIND_LABELS: Record<string, string> = {
   rest: 'REST',
@@ -23,7 +23,6 @@ export function ActivityView() {
   });
   const [cache, setCache] = useState<CacheStatus | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('');
-  const [, tick] = useState(0);
   const visible = useDocumentVisible();
 
   const refreshCache = () => {
@@ -33,8 +32,9 @@ export function ActivityView() {
       .catch(() => {});
   };
 
-  // Stream the activity feed and refresh the timestamps only while visible: a
-  // hidden window has no reason to hold the SSE open or re-render every second.
+  // Stream the activity feed only while visible: a hidden window has no reason to
+  // hold the SSE open. The per-row 'Xs ago' timestamps refresh themselves via the
+  // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
   useEffect(() => {
     if (!visible) return;
     fetch('/api/activity')
@@ -53,8 +53,7 @@ export function ActivityView() {
 
     // Cache status changes rarely — refresh every 10s.
     const cacheTimer = setInterval(refreshCache, 10000);
-    const timer = setInterval(() => tick(n => n + 1), 1000);
-    return () => { es.close(); clearInterval(timer); clearInterval(cacheTimer); };
+    return () => { es.close(); clearInterval(cacheTimer); };
   }, [visible]);
 
   const filtered = useMemo(
@@ -218,7 +217,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       : 'text-foreground';
   return (
     <tr className={`border-t border-border ${entry.error ? 'bg-red-50' : ''}`}>
-      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">{timeAgo(entry.timestamp)}</td>
+      <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap"><RelativeTime iso={entry.timestamp} /></td>
       <td className="px-3 py-1.5">
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${KIND_COLORS[entry.kind] || 'bg-muted text-foreground'}`}>
           {KIND_LABELS[entry.kind] || entry.kind}

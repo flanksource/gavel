@@ -1,8 +1,9 @@
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
-import { reviewColor, checkSummaryText, timeAgo } from '../utils';
+import { reviewColor, checkSummaryText } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
 import { Avatar } from './Avatar';
 import { GavelIcon } from './GavelIcon';
+import { RelativeTime } from './RelativeTime';
 
 interface Props {
   pr: PRItem;
@@ -192,7 +193,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
               title={`@${pr.author}`}
             />
           )}
-          <span title={pr.updatedAt}>{timeAgo(pr.updatedAt)}</span>
+          <RelativeTime iso={pr.updatedAt} title={pr.updatedAt} />
         </span>
       </div>
     </div>

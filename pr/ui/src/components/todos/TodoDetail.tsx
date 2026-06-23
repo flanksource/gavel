@@ -3,8 +3,10 @@ import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from
 import { Markdown } from '../Markdown';
 import { GavelIcon } from '../GavelIcon';
 import { TodoTimeline } from './TodoTimeline';
+import { TodoSession } from './TodoSession';
+import { TodoSessionTimer } from './TodoSessionTimer';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
-import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
+import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
 
 export function TodoDetail({
   todo,
@@ -30,6 +32,7 @@ export function TodoDetail({
   const [busy, setBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState<'overview' | 'session'>('overview');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir, provider);
   const isGrite = todo?.provider === 'grite';
   // Projects this todo can move to: every configured workspace except its own.
@@ -43,6 +46,7 @@ export function TodoDetail({
     setError('');
     resetRun();
     setAdvancedOpen(false);
+    setTab('overview');
   }, [todo?.ref, resetRun]);
 
   // patch sends a partial update (status and/or priority) and adopts the server's
@@ -119,7 +123,15 @@ export function TodoDetail({
     if (!todo) return;
     const result = await run([todo.ref], options);
     if (result?.status === 'started') {
-      onChanged({ ...todo, status: 'in_progress', lastRun: new Date().toISOString() });
+      onChanged({
+        ...todo,
+        status: 'in_progress',
+        lastRun: new Date().toISOString(),
+        // Adopt the run's session id so the Session tab follows the new run.
+        sessionId: result.sessionId || todo.sessionId,
+      });
+      // Surface the live session as soon as a run starts.
+      setTab('session');
     }
   }
 
@@ -184,6 +196,18 @@ export function TodoDetail({
                 ))}
               </select>
             )}
+            {todo.sessionId && (
+              <button
+                type="button"
+                onClick={() => runTodo({ ...defaultRunOptions, resume: true })}
+                disabled={busy || runBusy}
+                title="Resume prior agent session"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                aria-label="Resume prior agent session"
+              >
+                <GavelIcon name={runBusy ? 'svg-spinners:ring-resize' : 'codicon:debug-continue'} className="text-sm" />
+              </button>
+            )}
             <TodoRunSplitButton
               disabled={busy || runBusy}
               loading={runBusy}
@@ -214,6 +238,7 @@ export function TodoDetail({
         </div>
         {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
         {runMessage && !error && !runError && <div className="mt-2 text-xs text-emerald-600">{runMessage}</div>}
+        {todo.sessionId && <TodoSessionTimer dir={dir} provider={provider} sessionId={todo.sessionId} />}
       </div>
       <TodoRunAdvancedDialog
         open={advancedOpen}
@@ -224,36 +249,52 @@ export function TodoDetail({
         }}
         loading={runBusy}
       />
-      <div className="px-4 py-3">
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <GavelIcon name="svg-spinners:ring-resize" />
-            Loading
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {body ? (
-              <TodoSection title="Body" icon="codicon:markdown" defaultOpen resetKey={`${todo.ref}:body`}>
-                <Markdown text={body} className="text-sm" />
-              </TodoSection>
-            ) : (
-              <div className="text-sm text-muted-foreground">No body</div>
-            )}
-            {events.length > 0 && (
-              <TodoSection
-                title="History"
-                icon="codicon:history"
-                count={events.length}
-                defaultOpen={!body}
-                resetKey={`${todo.ref}:history`}
-              >
-                <TodoTimeline events={events} />
-              </TodoSection>
-            )}
-          </div>
-        )}
+      <div className="flex gap-1 border-b border-border px-4 pt-2">
+        <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon="codicon:list-flat" label="Overview" />
+        <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon="codicon:comment-discussion" label="Session" />
       </div>
+      {tab === 'session' ? (
+        <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
+      ) : (
+        <div className="px-4 py-3">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <GavelIcon name="svg-spinners:ring-resize" />
+              Loading
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {body ? (
+                <TodoSection title="Body" icon="codicon:markdown" defaultOpen resetKey={`${todo.ref}:body`}>
+                  <Markdown text={body} className="text-sm" />
+                </TodoSection>
+              ) : (
+                <div className="text-sm text-muted-foreground">No body</div>
+              )}
+              {events.length > 0 && <TodoTimeline events={events} />}
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: string; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      <GavelIcon name={icon} className="text-sm" />
+      {label}
+    </button>
   );
 }
 

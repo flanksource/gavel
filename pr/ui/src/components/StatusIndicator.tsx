@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Version } from '@flanksource/clicky-ui/data';
 import type { HealthStatus, RateLimit, Severity } from '../types';
+import { timeAgoShort } from '../utils';
+import { useNow } from '../useNow';
 import { GavelIcon } from './GavelIcon';
+import { RelativeTime } from './RelativeTime';
 
 // Colored dot in the PR UI header. The dropdown owns the operational status,
 // PR poller controls, GitHub rate-limit details, and build versions so the app
@@ -93,7 +96,7 @@ export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, err
                 <ComponentLine label="Database" c={health.database} />
                 <ComponentLine label="GitHub" c={health.github} />
                 <div className="text-[11px] text-muted-foreground">
-                  Checked {timeAgoShort(health.checkedAt)}
+                  Checked <RelativeTime iso={health.checkedAt} short />
                 </div>
               </div>
             ) : (
@@ -217,6 +220,9 @@ interface SyncProps {
 }
 
 function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, healthLoading, onRefresh, onPause, onStatusRefresh }: SyncProps) {
+  // Subscribe to the shared clock so 'Last synced' and the refresh countdown
+  // stay live while this dropdown is open, without an App-level tick.
+  useNow();
   const ago = fetchedAt ? timeAgoShort(fetchedAt) : 'never';
   const countdown = fetchedAt
     ? Math.max(0, nextFetchIn - Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000))
@@ -283,15 +289,4 @@ function VersionRow({ label, children }: { label: string; children: ReactNode })
       <span className="min-w-0 text-right font-mono text-foreground">{children}</span>
     </div>
   );
-}
-
-function timeAgoShort(iso: string): string {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (!Number.isFinite(s)) return 'unknown';
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
 }
