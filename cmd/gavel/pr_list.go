@@ -40,6 +40,8 @@ type PRListOptions struct {
 	Interval    string   `flag:"interval" help:"Poll interval for --ui/--menu-bar (e.g. 30s, 1m, 5m)" default:"60s"`
 	Port        int      `flag:"port" help:"UI port (default 9092, use 0 to auto-scan from 9092 upward for the first free port)" default:"9092"`
 	PersistPort bool     `flag:"persist-port" help:"Write the bound port to ~/.config/gavel/pr-ui.port so gavel system status and WaitForReady can find it — set automatically by the launchd/systemd service files"`
+	Dev         bool     `flag:"dev" help:"Dev mode: spawn the Vite dev server and reverse-proxy to it for hot-module-reload (requires a source checkout)"`
+	DevDir      string   `flag:"dev-dir" help:"pr/ui source directory for the Vite dev server" default:"pr/ui"`
 	Repos       []string `args:"true"`
 }
 
@@ -294,6 +296,20 @@ func runPRUI(opts PRListOptions) error {
 	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)
 	srv.SetDetailSyncer(syncer)
 	syncer.Start(ctx)
+
+	if opts.Dev {
+		devDir, err := resolveDevDir(opts.DevDir)
+		if err != nil {
+			return err
+		}
+		if err := ensureVite(devDir); err != nil {
+			return err
+		}
+		if err := srv.SetDevProxy(viteDevURL); err != nil {
+			return err
+		}
+		logger.Infof("dev mode: reverse-proxying UI to %s (HMR live)", viteDevURL)
+	}
 
 	var dashboardURL string
 	if opts.UI || opts.MenuBar {

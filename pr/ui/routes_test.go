@@ -201,6 +201,25 @@ func TestHandleRouteTabsServeShell(t *testing.T) {
 	}
 }
 
+// A GET /todos/new must serve the SPA shell (the focused new-todo form) even
+// though POST /todos/new is registered as the create endpoint — the Go mux falls
+// the GET through to the "/" catch-all. Routed through the full Handler so the
+// method/path coexistence is exercised, not just handleRoute.
+func TestHandleRouteTodosNewServesShell(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/todos/new", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /todos/new status: got %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("GET /todos/new content-type: got %q want text/html", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "gavel · PR Dashboard") {
+		t.Fatal("GET /todos/new body does not look like the PR UI shell")
+	}
+}
+
 func TestHandleRouteMenubar(t *testing.T) {
 	s := NewServer(0, github.Options{}, SearchConfig{})
 	for _, path := range []string{"/menubar", "/processes"} {

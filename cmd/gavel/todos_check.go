@@ -175,8 +175,10 @@ func init() {
 	todosRunCmd.Flags().StringVar(&todosMode, "mode", "inline", "Execution mode: inline or cmux")
 	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution")
 	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "medium", "Reasoning effort directive for cmux mode: low, medium, or high")
+	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
 	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
+	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 
 	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 

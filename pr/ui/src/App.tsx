@@ -5,7 +5,10 @@ import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
-import { TodoView } from './components/TodoView';
+import { TodoBodyHeader, TodoBodyActions, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
+import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
+import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
+import { TodoNewPage } from './components/todos/TodoNewPage';
 import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
@@ -155,12 +158,16 @@ export function App() {
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [copyError, setCopyError] = useState('');
   const copyResetTimer = useRef<number | null>(null);
-  const [, tick] = useState(0);
   const visible = useDocumentVisible();
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
   const isProcessesPage = pathname === '/processes';
+  // The focused /todos/new form is a standalone page (like /menubar, /processes)
+  // rather than a view inside the Todos tab, so it can be linked to and returns
+  // to its referer. parseRoute reads it as the todos tab with selectedPath="new";
+  // the early return below renders the form before any of that matters.
+  const isTodoNewPage = pathname === '/todos/new';
 
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
@@ -194,6 +201,12 @@ export function App() {
     commitRoute({ tab: 'todos', selectedPath: id, filters });
   }, [commitRoute, filters]);
 
+  // The Todos data layer is mounted permanently so its chrome can live in the
+  // AppShell's body slots, but only fetches while the Todos tab is active. The
+  // selectedPath is the todo ref on that tab (a PR route path otherwise).
+  const onTodosTab = activeTab === 'todos' && !isTodoNewPage;
+  const todos = useWorkspaceTodos(projects, onTodosTab ? selectedPath : '', navigateTodo, onTodosTab);
+
   useEffect(() => {
     const onPopState = () => {
       const next = parseRoute(window.location);
@@ -225,16 +238,10 @@ export function App() {
     return () => { es.close(); };
   }, [visible]);
 
-  // The 1s tick re-renders the whole app to refresh relative timestamps. Gate it
-  // on visibility so a hidden window isn't forced through a full document restyle
-  // every second — the menubar's dominant main-thread cost and a driver of its
-  // unbounded memory growth.
-  useEffect(() => {
-    if (!visible) return;
-    const timer = setInterval(() => tick(n => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [visible]);
-
+  // Relative timestamps refresh themselves: each <RelativeTime/> (and the process
+  // uptime / sync countdown leaves) subscribes to the shared useNow() clock, so
+  // the per-second tick re-renders only those leaves instead of forcing a
+  // full-app reconcile here. The clock is visibility-gated in useNow itself.
   function applySnapshot(snap: Snapshot) {
     setRawPrs(snap.prs || []);
     if (snap.viewer) setViewer(snap.viewer);
@@ -527,6 +534,10 @@ export function App() {
     );
   }
 
+  if (isTodoNewPage) {
+    return <TodoNewPage projects={projects} />;
+  }
+
   return (
     <>
       <AppShell
@@ -576,6 +587,8 @@ export function App() {
         toolbar={
           activeTab === 'prs' ? (
             <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
+          ) : activeTab === 'todos' && todos.aggregate.total > 0 ? (
+            <TodoFilterToolbar todos={todos} />
           ) : undefined
         }
         bodyHeader={
@@ -583,6 +596,8 @@ export function App() {
             <span className="text-xs text-muted-foreground">
               {searched.length} pull request{searched.length !== 1 ? 's' : ''}
             </span>
+          ) : activeTab === 'todos' ? (
+            <TodoBodyHeader todos={todos} />
           ) : undefined
         }
         bodyActions={
@@ -594,8 +609,12 @@ export function App() {
               copyState={copyState}
               copyError={copyError}
             />
+          ) : activeTab === 'todos' ? (
+            <TodoBodyActions todos={todos} />
           ) : undefined
         }
+        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} /> : undefined}
+        bodySplit={38}
         contentClassName="overflow-hidden"
       >
         {activeTab === 'prs' ? (
@@ -620,12 +639,13 @@ export function App() {
             }
           />
         ) : activeTab === 'todos' ? (
-          <TodoView projects={projects} selectedId={selectedPath} onNavigate={navigateTodo} />
+          <TodoDetailPane todos={todos} />
         ) : (
           <ActivityView />
         )}
       </AppShell>
 
+      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
     </>
   );
