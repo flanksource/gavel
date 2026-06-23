@@ -55,7 +55,7 @@ coverage.html
 node_modules/
 
 # Build artifacts
-/gavel
+
 .task
 .cache
 __debug*
@@ -86,3 +86,4 @@ pr/ui/dist/prui.js
 .todos/
 go.work.sum
 .grite/
+go.work.sum

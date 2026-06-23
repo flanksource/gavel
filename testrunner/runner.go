@@ -124,7 +124,7 @@ type RunOptions struct {
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	Concurrency   int                   `json:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
-	Addr          string                `json:"addr,omitempty" flag:"addr" default:"localhost"`               // Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.
+	Addr          string                `json:"addr,omitempty" flag:"addr" default:"0.0.0.0"`                 // Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.
 	Diagnostics   bool                  `json:"diagnostics,omitempty" flag:"diagnostics"`                     // Capture a final diagnostics snapshot and embed it in JSON results / detached UI handoff artifacts.
 	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
 	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
