@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { timeAgo } from '../utils';
+import { useDocumentVisible } from '../useDocumentVisible';
 import { GavelIcon } from './GavelIcon';
 
 const KIND_LABELS: Record<string, string> = {
@@ -23,6 +24,7 @@ export function ActivityView() {
   const [cache, setCache] = useState<CacheStatus | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('');
   const [, tick] = useState(0);
+  const visible = useDocumentVisible();
 
   const refreshCache = () => {
     fetch('/api/activity/cache')
@@ -31,7 +33,10 @@ export function ActivityView() {
       .catch(() => {});
   };
 
+  // Stream the activity feed and refresh the timestamps only while visible: a
+  // hidden window has no reason to hold the SSE open or re-render every second.
   useEffect(() => {
+    if (!visible) return;
     fetch('/api/activity')
       .then(r => r.json())
       .then((s: ActivitySnapshot) => setSnap(s))
@@ -50,7 +55,7 @@ export function ActivityView() {
     const cacheTimer = setInterval(refreshCache, 10000);
     const timer = setInterval(() => tick(n => n + 1), 1000);
     return () => { es.close(); clearInterval(timer); clearInterval(cacheTimer); };
-  }, []);
+  }, [visible]);
 
   const filtered = useMemo(
     () => kindFilter ? snap.entries.filter(e => e.kind === kindFilter) : snap.entries,

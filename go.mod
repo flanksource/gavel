@@ -31,6 +31,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/cel-go v0.27.0
+	github.com/google/uuid v1.6.0
 	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
@@ -192,7 +193,6 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/pprof v0.0.0-20260115054156-294ebfa9ad83 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/google/wire v0.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
 	github.com/googleapis/gax-go/v2 v2.18.0 // indirect

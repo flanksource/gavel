@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"path"
@@ -78,19 +79,122 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No project param: return every project's status keyed by both repo (so the
-	// sidebar repo headers light up) and project name (so repo-less projects in
-	// the pinned Projects bar resolve too). Project names are bare and repos
-	// contain a slash, so the keyspaces don't collide.
+	// No project param: return every project's status (see procStatusByKey).
+	json.NewEncoder(w).Encode(procStatusByKey()) //nolint:errcheck
+}
+
+// procStatusByKey returns every project's status keyed by both project name (so
+// repo-less projects in the pinned Projects bar resolve) and each repo slug (so
+// the sidebar repo headers light up). Project names are bare and repos contain a
+// slash, so the keyspaces don't collide. Shared by handleProcStatus so the
+// single-shot poll carries the full wire shape (live cpu/mem + process tree).
+func procStatusByKey() map[string]procStatus {
 	byKey := make(map[string]procStatus)
-	for _, p := range ps {
+	for _, p := range LoadProjects() {
 		st := projectStatus(p)
 		byKey[p.Name] = st
 		for _, repo := range p.Repos {
 			byKey[repo] = st
 		}
 	}
-	json.NewEncoder(w).Encode(byKey) //nolint:errcheck
+	return byKey
+}
+
+// streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
+// leanProcStatus for why the resource fields are dropped.
+func streamProcStatusByKey() map[string]procStatus {
+	return leanProcStatus(procStatusByKey())
+}
+
+// leanProcStatus clears the continuously-fluctuating resource fields from every
+// process: CPUPercent, MemoryRSS and the per-process Tree. Those churn on every
+// supervisor sample, so streaming them defeats handleProcStatusStream's
+// change-detection — the dashboard would receive a re-render-firing data frame
+// every cadence instead of a cheap keep-alive ping. The per-process gauges
+// already own live cpu/mem via /api/proc/metrics and the expanded row fetches
+// its tree on demand, so the stream only needs the stable supervision state.
+// OpenFiles is kept: it changes slowly and feeds the always-visible Files
+// column, so it rarely defeats the diff. Mutates and returns byKey.
+func leanProcStatus(byKey map[string]procStatus) map[string]procStatus {
+	for key, st := range byKey {
+		if len(st.Processes) == 0 {
+			continue
+		}
+		lean := make([]procfile.ProcState, len(st.Processes))
+		for i, p := range st.Processes {
+			p.CPUPercent = 0
+			p.MemoryRSS = 0
+			p.Tree = nil
+			lean[i] = p
+		}
+		st.Processes = lean
+		byKey[key] = st
+	}
+	return byKey
+}
+
+const (
+	// procStreamFast is the push cadence while a process is starting/restarting,
+	// so the dashboard tracks that progress promptly; procStreamSteady is the
+	// idle cadence. They mirror the adaptive interval the client poll used to run.
+	procStreamFast   = 1 * time.Second
+	procStreamSteady = 3 * time.Second
+)
+
+// handleProcStatusStream pushes the proc-status map to the dashboard over SSE,
+// replacing the client's /api/proc/status poll. A per-connection adaptive ticker
+// is enough — projectStatus recomputes from the supervisor on each tick, so no
+// broadcaster is needed — and an open stream is the "dashboard is being watched"
+// signal that keeps procMetricsLoop sampling (the role the poll used to play).
+func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	var last []byte
+	for {
+		s.mu.Lock()
+		s.lastProcPoll = time.Now()
+		s.mu.Unlock()
+
+		byKey := streamProcStatusByKey()
+		if b, err := json.Marshal(byKey); err == nil && !bytes.Equal(b, last) {
+			fmt.Fprintf(w, "data: %s\n\n", b)
+			last = b
+		} else {
+			// Comment frame: keeps the socket warm without firing a client re-render.
+			fmt.Fprint(w, ": ping\n\n")
+		}
+		flusher.Flush()
+
+		next := procStreamSteady
+		if anyTransitioning(byKey) {
+			next = procStreamFast
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(next):
+		}
+	}
+}
+
+// anyTransitioning reports whether any process is mid start/restart, selecting
+// the faster stream cadence so the UI tracks that progress.
+func anyTransitioning(byKey map[string]procStatus) bool {
+	for _, st := range byKey {
+		for _, p := range st.Processes {
+			if p.Status == procfile.StatusStarting || p.Status == procfile.StatusRestarting {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleProcFavicon fetches a favicon from a localhost service that Gavel has

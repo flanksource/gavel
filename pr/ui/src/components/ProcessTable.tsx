@@ -3,7 +3,7 @@ import { Button, Modal } from '@flanksource/clicky-ui/components';
 import { AnsiHtml, TimeseriesCoreBars } from '@flanksource/clicky-ui/data';
 import { UiActivity, UiDatabase } from '@flanksource/clicky-ui/icons';
 import type { FlatProc } from '../utils';
-import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel, aggregateResources } from '../utils';
+import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from '../utils';
 import type { ProcNode, ProcProcess, Project, ProcStatus } from '../types';
 import { GavelIcon } from './GavelIcon';
 import { TodoBadge } from './TodoBadge';
@@ -47,8 +47,6 @@ function filesLabel(p: { openFiles?: number }): string {
   return String(p.openFiles);
 }
 
-const recordedMax = new Map<string, number>();
-
 // Process gauges poll their recorded series from the backend; the cell only
 // shows the latest point, so a short window keeps each payload tiny.
 const PROC_REFRESH_MS = 2000;
@@ -66,26 +64,6 @@ function metricId(key: string, metric: string): string {
   return `/api/proc/metrics/${encodeURIComponent(`${key}/${metric}`)}`;
 }
 
-function useRecordedMax(key: string, value: number): number {
-  const [max, setMax] = useState(() => Math.max(value, recordedMax.get(key) ?? 0));
-  useEffect(() => {
-    const next = Math.max(value, recordedMax.get(key) ?? 0);
-    recordedMax.set(key, next);
-    setMax(next);
-  }, [key, value]);
-  return max;
-}
-
-function nextCpuMaxPercent(maxCpuPercent: number): number {
-  return Math.max(100, Math.ceil(maxCpuPercent / 100) * 100);
-}
-
-// nextMemoryMaxBytes rounds the observed peak up to a whole gigabyte so the bar
-// count (max / 1 GiB) is stable and each bar maps to exactly one GB.
-function nextMemoryMaxBytes(maxBytes: number): number {
-  return Math.max(GIB, Math.ceil(maxBytes / GIB) * GIB);
-}
-
 function firstPort(proc: ProcProcess): number | undefined {
   const ports = proc.ports ?? [];
   if (ports.length === 0) return undefined;
@@ -93,13 +71,13 @@ function firstPort(proc: ProcProcess): number | undefined {
 }
 
 // CpuBars renders one CPU reading — a single process or a workspace-summed
-// aggregate — as unlabelled cell bars. metricKey scopes the live-max tracking
-// and the query cache; icon labels the reading in the workspace headers, where
-// no column header names it (table rows are labelled by their column header).
-function CpuBars({ metricKey, cpuPercent, icon }: { metricKey: string; cpuPercent: number; icon?: MetricIcon }) {
-  const value = Math.max(0, cpuPercent);
-  const maxPercent = useRecordedMax(`${metricKey}/cpu`, value);
-  const maxMilli = nextCpuMaxPercent(maxPercent) * 10;
+// aggregate — as unlabelled cell bars fed live from the recorded metric series
+// (/api/proc/metrics). With no `max` the gauge sizes its bar count from the
+// usage itself (one bar per core), so a busy multi-core process renders without
+// clipping and the scale needs no client-side peak tracking. metricKey scopes
+// the query cache; icon labels the reading in the workspace headers, where no
+// column header names it (table rows are labelled by their column header).
+function CpuBars({ metricKey, icon }: { metricKey: string; icon?: MetricIcon }) {
   return (
     <div className="flex justify-end">
       <TimeseriesCoreBars
@@ -108,7 +86,6 @@ function CpuBars({ metricKey, cpuPercent, icon }: { metricKey: string; cpuPercen
         {...(icon ? { icon } : {})}
         title="CPU"
         value={{ id: metricId(metricKey, 'cpu'), transform: v => v * 10 }}
-        max={maxMilli}
         range={PROC_RANGE}
         refreshMs={PROC_REFRESH_MS}
       />
@@ -116,12 +93,9 @@ function CpuBars({ metricKey, cpuPercent, icon }: { metricKey: string; cpuPercen
   );
 }
 
-// MemoryBars mirrors CpuBars for RSS: one process or a workspace-summed aggregate
-// as unlabelled cell bars at one bar per gigabyte, with an optional header icon.
-function MemoryBars({ metricKey, memoryRss, icon }: { metricKey: string; memoryRss: number; icon?: MetricIcon }) {
-  const memory = Math.max(0, memoryRss);
-  const maxMemory = useRecordedMax(`${metricKey}/memory`, memory);
-  const max = nextMemoryMaxBytes(maxMemory);
+// MemoryBars mirrors CpuBars for RSS: live cell bars at one bar per gigabyte
+// (MEMORY_UNIT), self-sizing from the reading, with an optional header icon.
+function MemoryBars({ metricKey, icon }: { metricKey: string; icon?: MetricIcon }) {
   return (
     <div className="flex justify-end">
       <TimeseriesCoreBars
@@ -130,7 +104,6 @@ function MemoryBars({ metricKey, memoryRss, icon }: { metricKey: string; memoryR
         {...(icon ? { icon } : {})}
         title="Mem"
         value={{ id: metricId(metricKey, 'memory') }}
-        max={max}
         unit={MEMORY_UNIT}
         range={PROC_RANGE}
         refreshMs={PROC_REFRESH_MS}
@@ -211,6 +184,35 @@ function ProcLogPreview({ project, name }: { project: string; name: string }) {
   );
 }
 
+// useProcTree fetches one process's live process-group breakdown while its row
+// is expanded. The SSE status stream omits the per-process tree (its per-node
+// cpu/mem churn would defeat the stream's change-detection), so the expanded
+// view pulls the full single-project status on its own cadence — abortably and
+// visibility-gated, mirroring ProcLogPreview — and the row unmounts the poll on
+// collapse.
+function useProcTree(project: string, name: string): ProcNode[] {
+  const [tree, setTree] = useState<ProcNode[]>([]);
+  useEffect(() => {
+    let alive = true;
+    let inflight: AbortController | null = null;
+    const load = () => {
+      inflight?.abort();
+      inflight = new AbortController();
+      fetch(`/api/proc/status?project=${encodeURIComponent(project)}`, { signal: inflight.signal })
+        .then(r => r.json())
+        .then((st: ProcStatus) => {
+          if (!alive) return;
+          setTree((st.processes ?? []).find(p => p.name === name)?.tree ?? []);
+        })
+        .catch(() => { /* keep the last tree on a failed poll */ });
+    };
+    load();
+    const id = setInterval(() => { if (document.visibilityState === 'visible') load(); }, 3000);
+    return () => { alive = false; inflight?.abort(); clearInterval(id); };
+  }, [project, name]);
+  return tree;
+}
+
 // flattenTree returns the group's processes in depth-first order with a depth
 // for indentation. Roots are nodes whose parent isn't in the group (the group
 // leader); a visited set guards against a malformed parent cycle.
@@ -289,9 +291,10 @@ function ProcLogsDialog({ project, name, onClose }: { project: string; name: str
 // tree with per-process metrics, plus a log preview that can pop out to a dialog.
 function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess }) {
   const [logsOpen, setLogsOpen] = useState(false);
+  const tree = useProcTree(project, proc.name);
   return (
     <div className="space-y-2 py-1">
-      {proc.tree && proc.tree.length > 0 && (
+      {tree.length > 0 && (
         <div>
           <div className="mb-0.5 flex items-center justify-between gap-2">
             <div className="text-[10px] uppercase tracking-wide text-gray-400">Process tree</div>
@@ -299,7 +302,7 @@ function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess })
               up {uptimeLabel(proc)} · pid {proc.pid || '—'}
             </div>
           </div>
-          <ProcTree nodes={proc.tree} />
+          <ProcTree nodes={tree} />
         </div>
       )}
       <div>
@@ -344,8 +347,8 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
           {showWorkspace && <div className="text-[10px] text-gray-400 pl-5">{proc.name}</div>}
         </td>
         <td className={`px-2 ${proc.status === 'crashed' ? 'text-red-600' : 'text-gray-500'}`}>{statusLabel(proc)}</td>
-        <td className="px-2 text-right tabular-nums"><CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} /></td>
-        <td className="px-2 text-right tabular-nums"><MemoryBars metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} /></td>
+        <td className="px-2 text-right tabular-nums"><CpuBars metricKey={runKey(project.name, proc)} /></td>
+        <td className="px-2 text-right tabular-nums"><MemoryBars metricKey={runKey(project.name, proc)} /></td>
         <td className="px-2 text-right tabular-nums">{filesLabel(proc)}</td>
         <td className="px-2">
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
@@ -380,8 +383,12 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
   if (procs.length === 0) {
     return <div className="px-3 py-4 text-center text-xs text-gray-400">No processes</div>;
   }
-  // Sort by CPU descending for a task-manager feel; ties keep input order.
-  const sorted = [...procs].sort((a, b) => (b.proc.cpuPercent ?? 0) - (a.proc.cpuPercent ?? 0));
+  // Live CPU now lives in the gauges (their own metric series), so the listing
+  // can't sort by it. Keep a stable task-manager-ish order: active processes
+  // first, then alphabetical.
+  const activeFirst = (s: string) => (isActiveStatus(s) ? 0 : 1);
+  const sorted = [...procs].sort((a, b) =>
+    activeFirst(a.proc.status) - activeFirst(b.proc.status) || a.proc.name.localeCompare(b.proc.name));
   return (
     <table className="w-full text-xs">
       <thead>
@@ -499,8 +506,8 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
             {statusLabel(proc)}
           </span>
           <TodoBadge counts={project.todoCounts} />
-          <CpuBars metricKey={runKey(project.name, proc)} cpuPercent={proc.cpuPercent ?? 0} icon={UiActivity} />
-          <MemoryBars metricKey={runKey(project.name, proc)} memoryRss={proc.memoryRss ?? 0} icon={UiDatabase} />
+          <CpuBars metricKey={runKey(project.name, proc)} icon={UiActivity} />
+          <MemoryBars metricKey={runKey(project.name, proc)} icon={UiDatabase} />
           {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
           <div className="flex-1" />
           {controls}
@@ -514,10 +521,10 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     );
   }
 
-  // The header rolls the workspace's processes up into one CPU/memory reading
-  // (each process's value is itself its own group-sum), shown as unlabelled cell
-  // gauges that the icons identify since there's no column header to name them.
-  const totals = aggregateResources(procs);
+  // The header rolls the workspace's processes up into one CPU/memory reading via
+  // the per-project "__total__" metric series the sampler records, shown as
+  // unlabelled cell gauges that the icons identify since there's no column header
+  // to name them.
   return (
     <div className="py-1.5">
       <div className="flex items-center gap-2 px-1">
@@ -526,8 +533,8 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <span className="text-[10px] tabular-nums text-gray-400">{running}/{procs.length}</span>
         <TodoBadge counts={project.todoCounts} />
         <div className="flex-1" />
-        <CpuBars metricKey={`${project.name}/__total__`} cpuPercent={totals.cpuPercent} icon={UiActivity} />
-        <MemoryBars metricKey={`${project.name}/__total__`} memoryRss={totals.memoryRss} icon={UiDatabase} />
+        <CpuBars metricKey={`${project.name}/__total__`} icon={UiActivity} />
+        <MemoryBars metricKey={`${project.name}/__total__`} icon={UiDatabase} />
         {controls}
       </div>
       <ProcessTable procs={procs.map(proc => ({ project, proc }))} onChanged={onChanged} showWorkspace={false} />

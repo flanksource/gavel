@@ -61,15 +61,17 @@ export interface Project {
 }
 
 export type TodoProvider = 'grite' | 'todos';
-export type TodoStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'verified' | 'skipped';
 export type TodoPriority = 'high' | 'medium' | 'low';
 
 export interface TodoCounts {
   total: number;
   open: number;
+  draft: number;
   pending: number;
   inProgress: number;
   failed: number;
+  verified: number;
   completed: number;
   skipped: number;
 }
@@ -82,6 +84,7 @@ export interface TodoEvent {
   timestamp?: string;
   title?: string;
   body?: string;
+  label?: string;
 }
 
 export interface TodoItem {
@@ -101,6 +104,40 @@ export interface TodoItem {
   body?: string;
   implementation?: string;
   events?: TodoEvent[];
+}
+
+export type TodoRunAgent = 'claude' | 'codex';
+export type TodoRunMode = 'cmux' | 'inline';
+export type TodoRunEffort = 'low' | 'medium' | 'high';
+
+export interface TodoRunOptions {
+  agent?: TodoRunAgent;
+  mode?: TodoRunMode;
+  model?: string;
+  effort?: TodoRunEffort;
+  timeout?: string;
+  maxCost?: number;
+  maxTurns?: number;
+  dirty?: boolean;
+  dryRun?: boolean;
+}
+
+export interface TodoRunResponse {
+  status: 'started' | 'dry_run';
+  ref: string;
+  // refs/count echo the full set when several todos run together in one session.
+  refs?: string[];
+  count?: number;
+  dir: string;
+  provider: TodoProvider | string;
+  agent: TodoRunAgent;
+  mode: TodoRunMode;
+  model?: string;
+  effort?: TodoRunEffort;
+  timeout: string;
+  maxBudget?: number;
+  maxTurns?: number;
+  message: string;
 }
 
 export interface TodoListResponse {

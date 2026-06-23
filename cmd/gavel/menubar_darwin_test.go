@@ -3,6 +3,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -183,6 +184,49 @@ func TestMenubarHideControllerScheduleResetsTimer(t *testing.T) {
 
 	assertNoSignal(t, hidden, 25*time.Millisecond)
 	assertSignal(t, hidden, 500*time.Millisecond)
+}
+
+func TestMenubarBlankControllerBlanksWhenHidden(t *testing.T) {
+	blanked := make(chan struct{}, 1)
+	controller := newMenubarBlankController(10*time.Millisecond,
+		func() bool { return false },
+		func() { blanked <- struct{}{} },
+	)
+
+	controller.touch()
+	assertSignal(t, blanked, 500*time.Millisecond)
+}
+
+func TestMenubarBlankControllerReschedulesWhileVisible(t *testing.T) {
+	blanked := make(chan struct{}, 1)
+	var visible atomic.Bool
+	visible.Store(true)
+	controller := newMenubarBlankController(15*time.Millisecond,
+		visible.Load,
+		func() { blanked <- struct{}{} },
+	)
+
+	controller.touch()
+	// Visible at the first deadline → must reschedule, not blank a live popover.
+	assertNoSignal(t, blanked, 25*time.Millisecond)
+	visible.Store(false)
+	// Now hidden → the rescheduled deadline blanks it.
+	assertSignal(t, blanked, 500*time.Millisecond)
+}
+
+func TestMenubarBlankControllerTouchResetsTimer(t *testing.T) {
+	blanked := make(chan struct{}, 1)
+	controller := newMenubarBlankController(40*time.Millisecond,
+		func() bool { return false },
+		func() { blanked <- struct{}{} },
+	)
+
+	controller.touch()
+	time.Sleep(20 * time.Millisecond)
+	controller.touch()
+
+	assertNoSignal(t, blanked, 25*time.Millisecond)
+	assertSignal(t, blanked, 500*time.Millisecond)
 }
 
 func assertSignal(t *testing.T, ch <-chan struct{}, timeout time.Duration) {

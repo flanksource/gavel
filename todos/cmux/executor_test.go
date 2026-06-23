@@ -39,19 +39,23 @@ func TestResolveAgent(t *testing.T) {
 
 func TestAgentCommandUsesDirectCLI(t *testing.T) {
 	cases := []struct {
-		agent string
-		model string
-		want  string
+		agent     string
+		model     string
+		sessionID string
+		want      string
 	}{
-		{"claude", "", "claude"},
-		{"claude", "opus", "claude --model opus"},
-		{"codex", "", "codex"},
-		{"codex", "gpt-5", "codex -m gpt-5"},
+		{"claude", "", "", "claude"},
+		{"claude", "opus", "", "claude --model opus"},
+		{"claude", "opus", "sess-123", "claude --session-id sess-123 --model opus"},
+		{"claude", "", "sess-123", "claude --session-id sess-123"},
+		{"codex", "", "", "codex"},
+		{"codex", "gpt-5", "", "codex -m gpt-5"},
+		{"codex", "gpt-5", "sess-123", "codex -m gpt-5"}, // codex ignores the claude session id
 	}
 
 	for _, tc := range cases {
-		if got := AgentCommand(tc.agent, tc.model); got != tc.want {
-			t.Fatalf("AgentCommand(%q, %q) = %q, want %q", tc.agent, tc.model, got, tc.want)
+		if got := AgentCommand(tc.agent, tc.model, tc.sessionID); got != tc.want {
+			t.Fatalf("AgentCommand(%q, %q, %q) = %q, want %q", tc.agent, tc.model, tc.sessionID, got, tc.want)
 		}
 	}
 }
@@ -115,21 +119,24 @@ func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 	repo := t.TempDir()
 	runner := newScreenRunner(repo)
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
-		WorkDir:              repo,
-		Model:                "opus",
-		Effort:               "medium",
-		Timeout:              100 * time.Millisecond,
-		Runner:               runner.run,
-		ScreenPollInterval:   time.Millisecond,
-		ScreenStableDuration: time.Millisecond,
+		WorkDir:                 repo,
+		Model:                   "opus",
+		Effort:                  "medium",
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner.run,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond, // no real session log → fall back to screen-idle
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
-	result, err := exec.ExecuteGroup(ctx, []*types.TODO{{
+	todo := &types.TODO{
 		ID:              "abc123456789",
 		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
 		MarkdownBody:    "body",
-	}})
+	}
+	result, err := exec.ExecuteGroup(ctx, []*types.TODO{todo})
 	if err != nil {
 		t.Fatalf("ExecuteGroup() error = %v", err)
 	}
@@ -154,8 +161,15 @@ func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 	if len(sends) != 2 {
 		t.Fatalf("send calls = %#v, want 2", sends)
 	}
-	if !reflect.DeepEqual(sends[0], []string{"send", "--workspace", "workspace:ws1", "--surface", "surface:sf1", "--", "claude --model opus"}) {
-		t.Fatalf("agent send args = %#v", sends[0])
+	agentSend := sends[0]
+	if len(agentSend) != 7 || agentSend[0] != "send" || agentSend[2] != "workspace:ws1" || agentSend[4] != "surface:sf1" || agentSend[5] != "--" {
+		t.Fatalf("unexpected agent send args: %#v", agentSend)
+	}
+	if payload := agentSend[6]; !strings.HasPrefix(payload, "claude --session-id ") || !strings.HasSuffix(payload, " --model opus") {
+		t.Fatalf("agent send payload = %q, want claude --session-id <uuid> --model opus", payload)
+	}
+	if todo.LLM == nil || todo.LLM.SessionId == "" {
+		t.Fatalf("expected session id recorded on todo, got %+v", todo.LLM)
 	}
 	if len(sends[1]) != 7 || sends[1][0] != "send" || sends[1][2] != "workspace:ws1" || sends[1][4] != "surface:sf1" {
 		t.Fatalf("unexpected prompt send args: %#v", sends[1])
@@ -203,7 +217,7 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 			return "Claude done\n> ", nil
 		case "send":
 			payload := args[len(args)-1]
-			if payload == "claude" {
+			if strings.HasPrefix(payload, "claude") {
 				agentSends++
 				return "ok", nil
 			}
@@ -215,13 +229,15 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 		return "ok", nil
 	}
 	exec := NewCmuxExecutor(CmuxExecutorConfig{
-		WorkDir:              repo,
-		Timeout:              100 * time.Millisecond,
-		Runner:               runner,
-		SendAttempts:         2,
-		SendRetryDelay:       time.Millisecond,
-		ScreenPollInterval:   time.Millisecond,
-		ScreenStableDuration: time.Millisecond,
+		WorkDir:                 repo,
+		Timeout:                 100 * time.Millisecond,
+		Runner:                  runner,
+		SendAttempts:            2,
+		SendRetryDelay:          time.Millisecond,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Millisecond,
 	})
 
 	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/flanksource/gavel/procfile"
 )
@@ -161,6 +163,65 @@ func TestHandleProcStatusAllProjectsKeyedByRepo(t *testing.T) {
 	st, ok := got["flanksource/gavel"]
 	if !ok || !st.HasProcfile {
 		t.Errorf("status map = %+v, want flanksource/gavel with hasProcfile=true", got)
+	}
+}
+
+// firstDataFrame returns the payload of the first SSE "data: " frame in body,
+// the form handleProcStatusStream writes (comment ": ping" frames are skipped).
+func firstDataFrame(t *testing.T, body string) string {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if payload, ok := strings.CutPrefix(line, "data: "); ok {
+			return payload
+		}
+	}
+	t.Fatalf("no SSE data frame in body = %q", body)
+	return ""
+}
+
+func TestHandleProcStatusStreamEmitsFrame(t *testing.T) {
+	withProject(t, "gavel", "flanksource/gavel", "web: echo hi\n")
+
+	// A short-lived context cancels the stream loop right after its first frame.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/proc/status/stream", nil).WithContext(ctx)
+	(&Server{}).handleProcStatusStream(rec, req)
+
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content-type = %q, want text/event-stream", got)
+	}
+	var got map[string]procStatus
+	if err := json.Unmarshal([]byte(firstDataFrame(t, rec.Body.String())), &got); err != nil {
+		t.Fatalf("unmarshal first frame: %v; body = %q", err, rec.Body.String())
+	}
+	st, ok := got["flanksource/gavel"]
+	if !ok || !st.HasProcfile {
+		t.Errorf("stream frame = %+v, want flanksource/gavel with hasProcfile=true", got)
+	}
+}
+
+func TestAnyTransitioning(t *testing.T) {
+	starting := procfile.ProcState{Name: "web", Status: procfile.StatusStarting}
+	restarting := procfile.ProcState{Name: "web", Status: procfile.StatusRestarting}
+	running := procfile.ProcState{Name: "web", Status: procfile.StatusRunning}
+	tests := []struct {
+		name  string
+		byKey map[string]procStatus
+		want  bool
+	}{
+		{"empty", map[string]procStatus{}, false},
+		{"running only", map[string]procStatus{"a": {Processes: []procfile.ProcState{running}}}, false},
+		{"one starting", map[string]procStatus{"a": {Processes: []procfile.ProcState{running, starting}}}, true},
+		{"one restarting", map[string]procStatus{"a": {Processes: []procfile.ProcState{restarting}}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := anyTransitioning(tc.byKey); got != tc.want {
+				t.Errorf("anyTransitioning = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
