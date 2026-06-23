@@ -9,6 +9,7 @@ import { WorkflowRunView } from './WorkflowView';
 import { BotCommentBody, BotBadge } from './BotComment';
 import type { WorkflowRun } from '../types';
 import { GavelIcon } from './GavelIcon';
+import { useTimeoutFlash } from '../useTimeoutFlash';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -946,13 +947,10 @@ function Section({ title, children, actions }: { title: string; children: any; a
 }
 
 function SectionActionsBar({ actions, title }: { actions: SectionActions; title: string }) {
-  const [copied, setCopied] = useState<'text' | 'json' | 'markdown' | null>(null);
+  const [copied, flashCopied] = useTimeoutFlash<'text' | 'json' | 'markdown' | null>(null, 1200);
 
   const flash = (kind: 'text' | 'json' | 'markdown', content: string) => {
-    navigator.clipboard.writeText(content).then(() => {
-      setCopied(kind);
-      setTimeout(() => setCopied(null), 1200);
-    }).catch(() => {});
+    navigator.clipboard.writeText(content).then(() => flashCopied(kind)).catch(() => {});
   };
 
   return (

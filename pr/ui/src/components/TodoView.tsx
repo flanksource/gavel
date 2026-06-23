@@ -1,4 +1,5 @@
 import { GavelIcon } from './GavelIcon';
+import { ReactGrabHelp } from './ReactGrabHelp';
 import { TodoCountsBar, TodoDensityPicker, TodoGroupByPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
@@ -45,6 +46,7 @@ export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
         <GavelIcon name="codicon:add" className="text-xs" />
         New
       </button>
+      <ReactGrabHelp />
       <button
         type="button"
         onClick={refresh}

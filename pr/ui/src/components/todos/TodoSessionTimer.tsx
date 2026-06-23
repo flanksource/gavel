@@ -129,25 +129,3 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
     </div>
   );
 }
-
-// TodoSessionTimerCompact is the condensed readout for a sidebar row: elapsed
-// time (with a spinner while running) and cost, no chrome. Render it only for a
-// row that actually has a session so it never polls idle todos.
-export function TodoSessionTimerCompact({ dir, provider, sessionId, active = true }: {
-  dir: string;
-  provider: string;
-  sessionId?: string;
-  active?: boolean;
-}) {
-  const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, active);
-  if (!sessionId || !stats?.found) return null;
-
-  const cost = formatCost(stats.costUsd);
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground" title="Agent session">
-      <GavelIcon name={stats.inProgress ? 'svg-spinners:ring-resize' : 'codicon:clock'} className="text-[11px]" />
-      <span>{formatDuration(elapsedMs)}</span>
-      {cost && <span>{cost}</span>}
-    </span>
-  );
-}

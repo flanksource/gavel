@@ -182,11 +182,12 @@ export function TodoRunAdvancedDialog({
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
   const [plan, setPlan] = useState(false);
   const [resume, setResume] = useState(false);
-  const [timeout, setTimeout] = useState('30m');
+  const [timeout, setTimeoutValue] = useState('30m');
   const [maxCost, setMaxCost] = useState('');
   const [maxTurns, setMaxTurns] = useState('');
   const [dirty, setDirty] = useState(false);
   const [dryRun, setDryRun] = useState(false);
+  const [commit, setCommit] = useState(true);
 
   useEffect(() => {
     if (!open) return;
@@ -196,11 +197,12 @@ export function TodoRunAdvancedDialog({
     setEffort('medium');
     setPlan(false);
     setResume(false);
-    setTimeout('30m');
+    setTimeoutValue('30m');
     setMaxCost('');
     setMaxTurns('');
     setDirty(false);
     setDryRun(false);
+    setCommit(true);
   }, [open]);
 
   if (!open) return null;
@@ -220,6 +222,8 @@ export function TodoRunAdvancedDialog({
       maxTurns: mode === 'inline' && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
       dirty: mode === 'inline' ? dirty : undefined,
       dryRun,
+      // Plan-only runs make no changes, so there is nothing to auto-commit.
+      commit: plan ? false : commit,
     });
   }
 
@@ -286,7 +290,7 @@ export function TodoRunAdvancedDialog({
             </select>
           </Field>
           <Field label="Timeout">
-            <input className={inputClass} value={timeout} onChange={e => setTimeout(e.currentTarget.value)} />
+            <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />
           </Field>
           <Field label="Max turns">
             <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={mode !== 'inline'} />
@@ -307,6 +311,10 @@ export function TodoRunAdvancedDialog({
           <label className="inline-flex items-center gap-2">
             <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={mode !== 'inline'} />
             <span>Dirty worktree</span>
+          </label>
+          <label className="inline-flex items-center gap-2">
+            <input type="checkbox" checked={commit && !plan} onChange={e => setCommit(e.currentTarget.checked)} disabled={plan} />
+            <span>Auto-commit</span>
           </label>
           <label className="inline-flex items-center gap-2">
             <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />

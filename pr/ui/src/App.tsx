@@ -18,6 +18,7 @@ import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
 import { WorkspaceGroup } from './components/ProcessTable';
 import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
+import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
   buildRoute,
@@ -29,6 +30,7 @@ import {
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
+import { useIsMobile } from './useIsMobile';
 import { GavelIcon } from './components/GavelIcon';
 
 const defaultConfig: SearchConfig = { repos: [] };
@@ -149,16 +151,15 @@ export function App() {
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
   const [query, setQuery] = useState('');
-  const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
+  const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
-  const [copyError, setCopyError] = useState('');
-  const copyResetTimer = useRef<number | null>(null);
   const visible = useDocumentVisible();
+  const isMobile = useIsMobile();
 
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
   const isMenubar = pathname === '/menubar';
@@ -168,6 +169,12 @@ export function App() {
   // to its referer. parseRoute reads it as the todos tab with selectedPath="new";
   // the early return below renders the form before any of that matters.
   const isTodoNewPage = pathname === '/todos/new';
+  // On mobile the desktop AppShell (split panes, sidebar, toolbars) has no room,
+  // so the dashboard falls back to the same compact, single-column menubar
+  // dropdown layout the native menubar webview uses. The standalone /processes
+  // and /todos/new pages already lay out fine on narrow screens, so they keep
+  // their own views.
+  const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage);
 
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
@@ -266,7 +273,10 @@ export function App() {
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
   useEffect(() => {
-    if (isMenubar || isProcessesPage) return;
+    // The menubar layout (native webview or mobile) drives PR selection through
+    // its own local state, not the route, so skip route→selection reconciliation
+    // there and let onSelect/onBack own it.
+    if (useMenubarLayout || isProcessesPage) return;
     if (!selectedPath) {
       if (selected) { setSelected(null); setDetail(null); }
       return;
@@ -443,30 +453,18 @@ export function App() {
     }).catch(() => {});
   }
 
-  const resetCopyFeedback = useCallback((kind: 'copied' | 'error', message?: string) => {
-    setCopyState(kind);
-    setCopyError(message || '');
-    if (copyResetTimer.current) window.clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = window.setTimeout(() => {
-      setCopyState('idle');
-      setCopyError('');
-      copyResetTimer.current = null;
-    }, 2500);
-  }, []);
-
   const onDownloadJSON = useCallback(() => downloadCurrentView(routeState, 'json'), [routeState]);
   const onDownloadMarkdown = useCallback(() => downloadCurrentView(routeState, 'md'), [routeState]);
   const onCopyForAgent = useCallback(async () => {
     if (copyState === 'copying') return;
-    setCopyState('copying');
-    setCopyError('');
+    beginCopy();
     try {
       await copyCurrentViewForAgent(routeState);
       resetCopyFeedback('copied');
     } catch (e: any) {
       resetCopyFeedback('error', e?.message || 'Copy failed');
     }
-  }, [copyState, routeState, resetCopyFeedback]);
+  }, [copyState, routeState, beginCopy, resetCopyFeedback]);
 
   const counts = useMemo(() => computeCounts(prs), [prs]);
   const reposList = useMemo(() => collectRepos(prs), [prs]);
@@ -502,7 +500,7 @@ export function App() {
       (pr.target || '').toLowerCase().includes(q));
   }, [filtered, query]);
 
-  if (isMenubar) {
+  if (useMenubarLayout) {
     return (
       <MenubarView
         prs={searched}

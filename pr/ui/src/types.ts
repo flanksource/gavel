@@ -148,6 +148,9 @@ export interface SessionStats {
   costUsd: number;
   inProgress: boolean;
   found: boolean;
+  // High-level agent state from the latest session-log event: thinking | working
+  // | ask | completed. Empty before the first event.
+  state?: 'thinking' | 'working' | 'ask' | 'completed';
 }
 
 export type TodoRunAgent = 'claude' | 'codex';
@@ -170,6 +173,9 @@ export interface TodoRunOptions {
   maxTurns?: number;
   dirty?: boolean;
   dryRun?: boolean;
+  // Auto-commit the agent's changes once the run finishes (defaults to true on
+  // the server). Set false in the advanced dialog to disable it.
+  commit?: boolean;
 }
 
 export interface TodoRunResponse {
@@ -191,6 +197,8 @@ export interface TodoRunResponse {
   timeout: string;
   maxBudget?: number;
   maxTurns?: number;
+  // Whether the run will auto-commit the agent's changes when it finishes.
+  commit?: boolean;
   message: string;
 }
 
