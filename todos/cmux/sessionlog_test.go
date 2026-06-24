@@ -70,6 +70,31 @@ func TestSessionTailerStreamsAndCompletesOnEndTurn(t *testing.T) {
 	}
 }
 
+func TestSessionTailerTerminatesOnAPIError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A synthetic API error (stop_sequence) is terminal: the tailer must stop and
+	// emit an EventError rather than waiting for quiescence or a turn end.
+	writeSessionLog(t, path,
+		`{"type":"assistant","sessionId":"s","message":{"model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error: 529 Overloaded"}]},"error":"server_error","isApiErrorMessage":true,"apiErrorStatus":529}`,
+	)
+
+	tailer := sessionTailer{path: path, pollInterval: time.Millisecond, appearTimeout: 200 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var kinds []history.SessionEventKind
+	completed, err := tailer.tail(ctx, func(ev history.SessionEvent) { kinds = append(kinds, ev.Kind) })
+	if err != nil {
+		t.Fatalf("tail() error = %v", err)
+	}
+	if !completed {
+		t.Fatal("tail() completed = false, want true (an error is terminal)")
+	}
+	if len(kinds) != 1 || kinds[0] != history.EventError {
+		t.Fatalf("kinds = %v, want [error]", kinds)
+	}
+}
+
 func TestSessionTailerCompletesOnQuiescence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
 	// No end_turn — only a mid-turn entry; completion must come from quiescence.

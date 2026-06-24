@@ -3,6 +3,7 @@ package cmux
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"sync"
@@ -19,6 +20,10 @@ const (
 	sessionStateWorking   = "working"
 	sessionStateAsk       = "ask"
 	sessionStateCompleted = "completed"
+	// sessionStateError marks a turn that ended on an API/network error rather than
+	// a normal completion, so the dashboard surfaces the failure instead of a stale
+	// "completed". See history.EventError.
+	sessionStateError = "error"
 )
 
 // isAskTool reports whether a tool pauses the turn awaiting the user (Claude
@@ -34,29 +39,48 @@ func isAskTool(tool string) bool {
 }
 
 // sessionStateFromLine maps the last event of one session-log line to the agent
-// state it represents. Non-conversational lines (tool results, bookkeeping)
-// yield no event and return ("", false) so the caller keeps the prior state.
-func sessionStateFromLine(line []byte) (string, bool) {
+// state it represents, plus the failure reason when that event is an API/network
+// error. Non-conversational lines (tool results, bookkeeping) yield no event and
+// return ("", "", false) so the caller keeps the prior state.
+func sessionStateFromLine(line []byte) (state, errMsg string, ok bool) {
 	events, err := history.ParseSessionEvents(line)
 	if err != nil || len(events) == 0 {
-		return "", false
+		return "", "", false
 	}
 	last := events[len(events)-1]
 	switch last.Kind {
 	case history.EventThinking:
-		return sessionStateThinking, true
+		return sessionStateThinking, "", true
 	case history.EventToolUse:
 		if isAskTool(last.ToolUse.Tool) {
-			return sessionStateAsk, true
+			return sessionStateAsk, "", true
 		}
-		return sessionStateWorking, true
+		return sessionStateWorking, "", true
+	case history.EventError:
+		return sessionStateError, sessionErrorText(last), true
 	case history.EventTurnEnd:
-		return sessionStateCompleted, true
+		return sessionStateCompleted, "", true
 	case history.EventAssistantText:
-		return sessionStateWorking, true
+		return sessionStateWorking, "", true
 	default:
-		return "", false
+		return "", "", false
 	}
+}
+
+// sessionErrorText renders the one-line reason for an API/network error event:
+// the synthetic "API Error: …" message Claude Code records, falling back to its
+// classification and HTTP status when the message text is absent.
+func sessionErrorText(ev history.SessionEvent) string {
+	if ev.Text != "" {
+		return ev.Text
+	}
+	if ev.ErrorStatus > 0 {
+		return fmt.Sprintf("API error %d (%s)", ev.ErrorStatus, ev.ErrorType)
+	}
+	if ev.ErrorType != "" {
+		return "API error: " + ev.ErrorType
+	}
+	return "API error"
 }
 
 const (
@@ -88,19 +112,32 @@ type SessionStats struct {
 	CacheReadTokens     int       `json:"cacheReadTokens"`
 	CacheCreationTokens int       `json:"cacheCreationTokens"`
 	TotalTokens         int       `json:"totalTokens"`
-	Turns               int       `json:"turns"`
-	CostUSD             float64   `json:"costUsd"`
-	InProgress          bool      `json:"inProgress"`
-	Found               bool      `json:"found"`
+	// ContextTokens is the live context-window occupancy: the most recent
+	// assistant turn's input + cache-read + cache-creation tokens (which a
+	// compaction resets), as opposed to TotalTokens summing every turn. This is
+	// what the dashboard surfaces as the token figure.
+	ContextTokens int `json:"contextTokens"`
+	Turns         int `json:"turns"`
+	// Compactions counts the context compactions seen so far (Claude's
+	// `compact_boundary` markers); each one shrinks ContextTokens.
+	Compactions int     `json:"compactions"`
+	CostUSD     float64 `json:"costUsd"`
+	InProgress  bool    `json:"inProgress"`
+	Found       bool    `json:"found"`
 	// State is the high-level agent state from the most recent session-log event
-	// (thinking / working / ask / completed); empty before the first event.
+	// (thinking / working / ask / completed / error); empty before the first event.
 	State string `json:"state,omitempty"`
+	// Error is the API/network failure reason when State == "error" — the synthetic
+	// "API Error: …" message Claude Code records when a request fails after retries.
+	Error string `json:"error,omitempty"`
 }
 
-// sessionUsageLine is the subset of a Claude session-log entry needed for stats:
-// the per-request token usage and model carried on each assistant turn.
-type sessionUsageLine struct {
+// sessionLogLine is the subset of a Claude session-log entry needed for stats:
+// the per-request token usage and model carried on each assistant turn, plus the
+// `compact_boundary` marker that resets the context window.
+type sessionLogLine struct {
 	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
 	Timestamp string `json:"timestamp"`
 	Message   struct {
 		Model string `json:"model"`
@@ -111,23 +148,45 @@ type sessionUsageLine struct {
 			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+	// CompactMetadata is present only on `compact_boundary` system entries; its
+	// postTokens is the context size that survived the compaction.
+	CompactMetadata struct {
+		PostTokens int `json:"postTokens"`
+	} `json:"compactMetadata"`
 }
 
-func (l sessionUsageLine) hasUsage() bool {
+func (l sessionLogLine) hasUsage() bool {
 	u := l.Message.Usage
 	return u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0
 }
 
-// applyUsage folds one assistant entry's usage into the running totals.
-func (s *SessionStats) applyUsage(l sessionUsageLine) {
+// isCompaction reports whether this line is a context-compaction boundary, which
+// shrinks the context window and counts toward SessionStats.Compactions.
+func (l sessionLogLine) isCompaction() bool {
+	return l.Type == "system" && l.Subtype == "compact_boundary"
+}
+
+// applyUsage folds one assistant entry's usage into the running totals and snaps
+// the live context window to this turn's prompt size (input + cache).
+func (s *SessionStats) applyUsage(l sessionLogLine) {
 	u := l.Message.Usage
 	s.InputTokens += u.InputTokens
 	s.OutputTokens += u.OutputTokens
 	s.CacheReadTokens += u.CacheReadInputTokens
 	s.CacheCreationTokens += u.CacheCreationInputTokens
+	s.ContextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 	s.Turns++
 	if l.Message.Model != "" {
 		s.Model = l.Message.Model
+	}
+}
+
+// applyCompaction records a compaction boundary: it bumps the count and snaps the
+// context window down to the post-compaction size the metadata reports.
+func (s *SessionStats) applyCompaction(l sessionLogLine) {
+	s.Compactions++
+	if l.CompactMetadata.PostTokens > 0 {
+		s.ContextTokens = l.CompactMetadata.PostTokens
 	}
 }
 
@@ -184,10 +243,11 @@ func computeSessionStats(path string) (SessionStats, error) {
 	scanner.Buffer(make([]byte, 0, 64*1024), sessionStatsMaxLine)
 	var first, last time.Time
 	for scanner.Scan() {
-		if state, ok := sessionStateFromLine(scanner.Bytes()); ok {
+		if state, errMsg, ok := sessionStateFromLine(scanner.Bytes()); ok {
 			stats.State = state
+			stats.Error = errMsg
 		}
-		var entry sessionUsageLine
+		var entry sessionLogLine
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			continue
 		}
@@ -199,7 +259,10 @@ func computeSessionStats(path string) (SessionStats, error) {
 				last = ts
 			}
 		}
-		if entry.Type == "assistant" && entry.hasUsage() {
+		switch {
+		case entry.isCompaction():
+			stats.applyCompaction(entry)
+		case entry.Type == "assistant" && entry.hasUsage():
 			stats.applyUsage(entry)
 		}
 	}
@@ -224,16 +287,23 @@ type SessionAccumulator struct {
 // the line's last event) and, for assistant turns, its token usage. Safe to use
 // as the tailer's onLine hook; it never retains the slice.
 func (a *SessionAccumulator) AddLine(line []byte) {
-	state, hasState := sessionStateFromLine(line)
+	state, errMsg, hasState := sessionStateFromLine(line)
 
-	var entry sessionUsageLine
-	hasUsage := json.Unmarshal(line, &entry) == nil && entry.Type == "assistant" && entry.hasUsage()
-	if !hasState && !hasUsage {
+	var entry sessionLogLine
+	parsed := json.Unmarshal(line, &entry) == nil
+	isCompaction := parsed && entry.isCompaction()
+	hasUsage := parsed && entry.Type == "assistant" && entry.hasUsage()
+	if !hasState && !hasUsage && !isCompaction {
 		return
 	}
 	a.mu.Lock()
 	if hasState {
 		a.stats.State = state
+		a.stats.Error = errMsg
+	}
+	if isCompaction {
+		a.stats.applyCompaction(entry)
+		a.stats.UpdatedAt = time.Now()
 	}
 	if hasUsage {
 		a.stats.applyUsage(entry)
