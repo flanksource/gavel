@@ -32,11 +32,13 @@ var errSessionLogMissing = errors.New("session log did not appear")
 // todoSessionEvent is the JSON shape pushed to the dashboard's session tab for
 // each parsed Claude session-log event.
 type todoSessionEvent struct {
-	Kind       string `json:"kind"`
-	Text       string `json:"text,omitempty"`
-	Tool       string `json:"tool,omitempty"`
-	Action     string `json:"action,omitempty"`
-	StopReason string `json:"stopReason,omitempty"`
+	Kind        string `json:"kind"`
+	Text        string `json:"text,omitempty"`
+	Tool        string `json:"tool,omitempty"`
+	Action      string `json:"action,omitempty"`
+	StopReason  string `json:"stopReason,omitempty"`
+	ErrorType   string `json:"errorType,omitempty"`
+	ErrorStatus int    `json:"errorStatus,omitempty"`
 }
 
 func sessionEventPayload(ev history.SessionEvent) todoSessionEvent {
@@ -49,6 +51,11 @@ func sessionEventPayload(ev history.SessionEvent) todoSessionEvent {
 		out.Action = history.FormatToolUseSummary(ev.ToolUse.Tool, ev.ToolUse.Input)
 	case history.EventTurnEnd:
 		out.StopReason = ev.StopReason
+	case history.EventError:
+		out.Text = ev.Text
+		out.StopReason = ev.StopReason
+		out.ErrorType = ev.ErrorType
+		out.ErrorStatus = ev.ErrorStatus
 	}
 	return out
 }

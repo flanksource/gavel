@@ -52,6 +52,46 @@ func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestHandleTodoSessionStreamEmitsErrorEvent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	sessionID := "sess-err"
+	path, err := cmux.SessionLogPath(dir, sessionID)
+	if err != nil {
+		t.Fatalf("SessionLogPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A synthetic API error (stop_sequence) must stream as an error event carrying
+	// the message and HTTP status, not as a plain turn_end completion.
+	log := `{"type":"assistant","sessionId":"sess-err","message":{"model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error: 529 Overloaded"}]},"error":"server_error","isApiErrorMessage":true,"apiErrorStatus":529}` + "\n"
+	if err := os.WriteFile(path, []byte(log), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	s := &Server{}
+	target := "/api/todos/session/stream?sessionId=" + sessionID + "&dir=" + url.QueryEscape(dir)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("GET", target, nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	s.handleTodoSessionStream(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{`"kind":"error"`, `"errorType":"server_error"`, `"errorStatus":529`, `529 Overloaded`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("session stream missing %q in:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"kind":"turn_end"`) {
+		t.Fatalf("API error must not stream as turn_end:\n%s", body)
+	}
+}
+
 func TestHandleTodoSessionStreamRequiresSessionID(t *testing.T) {
 	s := &Server{}
 	req := httptest.NewRequest("GET", "/api/todos/session/stream", nil)

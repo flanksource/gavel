@@ -342,3 +342,30 @@ func TestAnnounceHost(t *testing.T) {
 		}
 	})
 }
+
+func TestMenubarHost(t *testing.T) {
+	// The native menu-bar webview always runs on the same machine, so it must
+	// dial a loopback host: macOS WKWebView blocks cleartext HTTP to non-loopback
+	// hosts under App Transport Security, and a LAN IP is fragile (VPN/offline).
+	// Unlike announceHost, the wildcard cases resolve to localhost rather than
+	// the externally-reachable LAN IP.
+	cases := []struct {
+		name      string
+		requested string
+		want      string
+	}{
+		{"empty", "", "localhost"},
+		{"localhost", "localhost", "localhost"},
+		{"loopback v4", "127.0.0.1", "localhost"},
+		{"loopback v6", "::1", "localhost"},
+		{"wildcard v4", "0.0.0.0", "localhost"},
+		{"wildcard v6", "::", "localhost"},
+		{"explicit ip", "192.168.42.7", "192.168.42.7"},
+		{"explicit hostname", "buildhost.lan", "buildhost.lan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, menubarHost(tc.requested))
+		})
+	}
+}

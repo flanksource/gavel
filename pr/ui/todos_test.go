@@ -138,6 +138,7 @@ func TestTodoNewEndpointJSONAutoSaveDefaultsPending(t *testing.T) {
 }
 
 func TestTodoNewEndpointMultipartFiles(t *testing.T) {
+	attachmentsDir = t.TempDir()
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
@@ -182,8 +183,11 @@ func TestTodoNewEndpointMultipartFiles(t *testing.T) {
 	if len(resp.Attachments) != 1 || resp.Attachments[0].Filename != "screen.png" || resp.Attachments[0].Field != "screenshot" {
 		t.Fatalf("unexpected attachments: %+v", resp.Attachments)
 	}
-	if !strings.Contains(resp.Todo.Body, "## Attachments") || !strings.Contains(resp.Todo.Body, "screen.png") {
-		t.Fatalf("created body missing attachment summary: %q", resp.Todo.Body)
+	if resp.Attachments[0].URL == "" {
+		t.Fatalf("attachment missing served URL: %+v", resp.Attachments[0])
+	}
+	if !strings.Contains(resp.Todo.Body, "## Attachments") || !strings.Contains(resp.Todo.Body, resp.Attachments[0].URL) {
+		t.Fatalf("created body missing attachment reference: %q", resp.Todo.Body)
 	}
 }
 

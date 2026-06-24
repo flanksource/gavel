@@ -20,6 +20,18 @@ var menubarPNG []byte
 //go:embed brand/menubar-unread.png
 var menubarUnreadPNG []byte
 
+//go:embed brand/manifest.webmanifest
+var webManifest string
+
+//go:embed brand/apple-touch-icon.png
+var appleTouchIconPNG []byte
+
+//go:embed brand/icon-192.png
+var icon192PNG []byte
+
+//go:embed brand/icon-512.png
+var icon512PNG []byte
+
 //go:embed assets/react-grab-plugin.js
 var reactGrabPluginJS string
 
