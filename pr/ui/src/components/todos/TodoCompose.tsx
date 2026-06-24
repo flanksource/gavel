@@ -3,53 +3,69 @@ import { Button } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass } from './format';
 
-// TodoEditForm edits a todo's title and body. It is fully controlled so the
-// parent owns the draft state and can discard it on cancel or todo switch.
-export function TodoEditForm({
-  title,
-  body,
-  busy,
-  onTitle,
-  onBody,
-  onSave,
-  onCancel,
-}: {
-  title: string;
-  body: string;
+// EditActions is the shared Cancel/Save row for the inline field editors.
+function EditActions({ busy, canSave, onSave, onCancel }: {
   busy: boolean;
-  onTitle: (value: string) => void;
-  onBody: (value: string) => void;
+  canSave: boolean;
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const canSave = title.trim().length > 0 && !busy;
+  return (
+    <div className="flex justify-end gap-2">
+      <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+      <Button onClick={onSave} loading={busy} disabled={!canSave}>Save</Button>
+    </div>
+  );
+}
+
+// TodoTitleEditor edits a todo's title inline. Controlled so the parent owns the
+// draft and discards it on cancel or todo switch. Enter saves, Escape cancels.
+export function TodoTitleEditor({ value, busy, onChange, onSave, onCancel }: {
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mt-1 space-y-2">
+      <input
+        className={inputClass}
+        value={value}
+        disabled={busy}
+        autoFocus
+        onChange={e => onChange(e.currentTarget.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') onSave();
+          else if (e.key === 'Escape') onCancel();
+        }}
+        aria-label="Edit todo title"
+      />
+      <EditActions busy={busy} canSave={value.trim().length > 0 && !busy} onSave={onSave} onCancel={onCancel} />
+    </div>
+  );
+}
+
+// TodoBodyEditor edits a todo's markdown body inline.
+export function TodoBodyEditor({ value, busy, onChange, onSave, onCancel }: {
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
   return (
     <section className="space-y-2 rounded-md border border-border bg-background p-3">
-      <label className="block text-xs font-semibold uppercase text-muted-foreground">
-        Title
-        <input
-          className={`${inputClass} mt-1`}
-          value={title}
-          disabled={busy}
-          onChange={e => onTitle(e.currentTarget.value)}
-          aria-label="Edit todo title"
-        />
-      </label>
-      <label className="block text-xs font-semibold uppercase text-muted-foreground">
-        Body
-        <textarea
-          className={`${inputClass} mt-1 h-48 resize-y font-mono`}
-          value={body}
-          disabled={busy}
-          onChange={e => onBody(e.currentTarget.value)}
-          placeholder="Markdown body"
-          aria-label="Edit todo body"
-        />
-      </label>
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button onClick={onSave} loading={busy} disabled={!canSave}>Save</Button>
-      </div>
+      <textarea
+        className={`${inputClass} h-48 resize-y font-mono`}
+        value={value}
+        disabled={busy}
+        autoFocus
+        onChange={e => onChange(e.currentTarget.value)}
+        placeholder="Markdown body"
+        aria-label="Edit todo body"
+      />
+      <EditActions busy={busy} canSave={!busy} onSave={onSave} onCancel={onCancel} />
     </section>
   );
 }

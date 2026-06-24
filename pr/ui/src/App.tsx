@@ -652,7 +652,7 @@ export function App() {
         )}
       </AppShell>
 
-      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} />
+      <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} defaultDir={todos.selected?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
     </>
   );
