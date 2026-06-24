@@ -295,6 +295,23 @@ func announceHost(requested string) string {
 	}
 }
 
+// menubarHost picks the hostname the native macOS menu-bar webview should load
+// from. The webview always runs on the same machine, so it must reach gavel over
+// loopback: WKWebView blocks cleartext HTTP to non-loopback hosts under App
+// Transport Security (which would render a blank popover), and a LAN IP is
+// fragile across VPN/offline state. So unlike announceHost — which prints an
+// externally-reachable LAN IP for the wildcard binds — every loopback/wildcard
+// bind resolves to "localhost". An explicit interface (the user pinned --addr to
+// one NIC) is kept as-is since that is the only address the server listens on.
+func menubarHost(requested string) string {
+	switch requested {
+	case "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
+		return "localhost"
+	default:
+		return requested
+	}
+}
+
 func firstNonLoopbackIPv4() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {

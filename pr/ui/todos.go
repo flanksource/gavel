@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -91,6 +89,9 @@ type todoAttachmentSummary struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"contentType,omitempty"`
 	Size        int64  `json:"size"`
+	ID          string `json:"id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	IsImage     bool   `json:"isImage,omitempty"`
 }
 
 type todoNewResponse struct {
@@ -917,7 +918,11 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 			if err := applyTodoNewValues(&payload, r.MultipartForm.Value, true); err != nil {
 				return payload, nil, err
 			}
-			attachments = summarizeMultipartAttachments(r.MultipartForm)
+			stored, err := persistMultipartAttachments(r.MultipartForm)
+			if err != nil {
+				return payload, nil, err
+			}
+			attachments = stored
 		}
 	case strings.HasPrefix(contentType, "application/x-www-form-urlencoded"):
 		if err := r.ParseForm(); err != nil {
@@ -998,64 +1003,6 @@ func firstTodoNewValue(values map[string][]string, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func summarizeMultipartAttachments(form *multipart.Form) []todoAttachmentSummary {
-	if form == nil || len(form.File) == 0 {
-		return nil
-	}
-	var attachments []todoAttachmentSummary
-	for field, headers := range form.File {
-		for _, header := range headers {
-			if header == nil || strings.TrimSpace(header.Filename) == "" {
-				continue
-			}
-			attachments = append(attachments, todoAttachmentSummary{
-				Field:       field,
-				Filename:    header.Filename,
-				ContentType: header.Header.Get("Content-Type"),
-				Size:        header.Size,
-			})
-		}
-	}
-	sort.Slice(attachments, func(i, j int) bool {
-		if attachments[i].Field != attachments[j].Field {
-			return attachments[i].Field < attachments[j].Field
-		}
-		return attachments[i].Filename < attachments[j].Filename
-	})
-	return attachments
-}
-
-func todoBodyWithAttachments(body string, attachments []todoAttachmentSummary) string {
-	body = strings.TrimSpace(body)
-	if len(attachments) == 0 {
-		return body
-	}
-	var sb strings.Builder
-	if body != "" {
-		sb.WriteString(body)
-		sb.WriteString("\n\n")
-	}
-	sb.WriteString("## Attachments\n\n")
-	for _, attachment := range attachments {
-		fmt.Fprintf(&sb, "- `%s`", attachment.Filename)
-		var details []string
-		if attachment.ContentType != "" {
-			details = append(details, attachment.ContentType)
-		}
-		if attachment.Size > 0 {
-			details = append(details, fmt.Sprintf("%d bytes", attachment.Size))
-		}
-		if len(details) > 0 {
-			fmt.Fprintf(&sb, " (%s)", strings.Join(details, ", "))
-		}
-		if attachment.Field != "" {
-			fmt.Fprintf(&sb, " from `%s`", attachment.Field)
-		}
-		sb.WriteString("\n")
-	}
-	return strings.TrimSpace(sb.String())
 }
 
 // normalizeTodoRunRefs collects the todo refs to run, de-duplicated and in order:

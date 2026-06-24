@@ -327,6 +327,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
+	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
@@ -340,6 +341,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
+	mux.HandleFunc("/manifest.webmanifest", handleManifest)
+	mux.HandleFunc("/brand/apple-touch-icon.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, appleTouchIconPNG) })
+	mux.HandleFunc("/brand/icon-192.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon192PNG) })
+	mux.HandleFunc("/brand/icon-512.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon512PNG) })
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
@@ -419,6 +424,24 @@ func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleManifest serves the PWA web app manifest so the dashboard can be added to
+// an iOS/Android home screen as a standalone app.
+func handleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, webManifest)
+}
+
+// servePNG writes an embedded PNG asset (home-screen / manifest icons) with the
+// shared cache policy.
+func servePNG(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := w.Write(data); err != nil {
+		logger.Debugf("write png asset: %v", err)
+	}
+}
+
 func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" && r.URL.RawQuery == "" {
 		http.Redirect(w, r, "/prs", http.StatusFound)
@@ -463,6 +486,13 @@ func pageHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>gavel · PR Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#3578e5">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="gavel">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">

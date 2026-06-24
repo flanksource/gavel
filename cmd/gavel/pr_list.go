@@ -314,13 +314,17 @@ func runPRUI(opts PRListOptions) error {
 		logger.Infof("dev mode: reverse-proxying UI to %s (HMR live)", viteDevURL)
 	}
 
-	var dashboardURL string
+	var dashboardURL, menubarURL string
 	if opts.UI || opts.MenuBar {
 		port, listener, err := bindUIListener(opts.Addr, opts.Port)
 		if err != nil {
 			return err
 		}
 		dashboardURL = fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(port)))
+		// The menu-bar webview dials loopback regardless of the bind interface —
+		// see menubarHost. Using the announced LAN IP here renders a blank
+		// popover (WKWebView App Transport Security blocks cleartext non-loopback).
+		menubarURL = fmt.Sprintf("http://%s", net.JoinHostPort(menubarHost(opts.Addr), strconv.Itoa(port)))
 		if opts.PersistPort {
 			// Only the managed daemon (launchd/systemd) writes to the port
 			// file — foreground `pr list --ui` runs skip this to avoid
@@ -342,7 +346,7 @@ func runPRUI(opts PRListOptions) error {
 	}
 
 	if opts.MenuBar {
-		return runMenuBar(srv, dashboardURL)
+		return runMenuBar(srv, menubarURL)
 	}
 
 	sig := make(chan os.Signal, 1)
