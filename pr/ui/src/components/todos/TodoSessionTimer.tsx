@@ -111,19 +111,34 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
         <GavelIcon name={stats.inProgress ? 'svg-spinners:ring-resize' : 'codicon:clock'} className="text-[12px]" />
         {formatDuration(elapsedMs)}
       </span>
-      {stats.totalTokens > 0 && (
+      {stats.contextTokens > 0 && (
         <span
           className="inline-flex items-center gap-1 tabular-nums"
-          title={`${stats.inputTokens.toLocaleString()} in / ${stats.outputTokens.toLocaleString()} out${stats.turns ? ` · ${stats.turns} turns` : ''}`}
+          title={`Context window: ${stats.contextTokens.toLocaleString()} tokens${stats.compactions ? ` · compacted ${stats.compactions}×` : ''}\n${stats.inputTokens.toLocaleString()} in / ${stats.outputTokens.toLocaleString()} out${stats.turns ? ` · ${stats.turns} turns` : ''} · ${formatTokens(stats.totalTokens)} total`}
         >
           <GavelIcon name="codicon:symbol-number" className="text-[12px]" />
-          {formatTokens(stats.totalTokens)}
+          {formatTokens(stats.contextTokens)}
+          {stats.compactions > 0 && (
+            <span className="inline-flex items-center gap-0.5" title={`Context compacted ${stats.compactions}×`}>
+              <GavelIcon name="codicon:fold" className="text-[11px]" />
+              {stats.compactions}
+            </span>
+          )}
         </span>
       )}
       {cost && (
         <span className="inline-flex items-center gap-1 tabular-nums" title="Estimated cost">
           <GavelIcon name="codicon:credit-card" className="text-[12px]" />
           {cost}
+        </span>
+      )}
+      {stats.state === 'error' && (
+        <span
+          className="inline-flex max-w-full items-center gap-1 rounded border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 font-medium text-red-300"
+          title={stats.error || 'Session ended on an API/network error'}
+        >
+          <GavelIcon name="codicon:error" className="text-[12px]" />
+          <span className="truncate">{stats.error || 'API error'}</span>
         </span>
       )}
     </div>

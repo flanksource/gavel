@@ -119,13 +119,18 @@ export interface TodoItem {
 }
 
 // One parsed event streamed from a TODO's agent session log (see
-// /api/todos/session/stream). kind is assistant | thinking | tool_use | turn_end.
+// /api/todos/session/stream). kind is assistant | thinking | tool_use | turn_end
+// | error. An error event carries the API/network failure detail.
 export interface TodoSessionEvent {
   kind: string;
   text?: string;
   tool?: string;
   action?: string;
   stopReason?: string;
+  // Populated when kind === 'error': Claude Code's classification (e.g.
+  // "rate_limit") and the HTTP status (0 for a network/connection error).
+  errorType?: string;
+  errorStatus?: number;
 }
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
@@ -144,13 +149,20 @@ export interface SessionStats {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   totalTokens: number;
+  // Live context-window occupancy (latest turn's input + cache), reset by each
+  // compaction — surfaced as the token figure instead of the ever-growing total.
+  contextTokens: number;
   turns: number;
+  // Number of context compactions seen so far; each shrinks contextTokens.
+  compactions: number;
   costUsd: number;
   inProgress: boolean;
   found: boolean;
   // High-level agent state from the latest session-log event: thinking | working
-  // | ask | completed. Empty before the first event.
-  state?: 'thinking' | 'working' | 'ask' | 'completed';
+  // | ask | completed | error. Empty before the first event.
+  state?: 'thinking' | 'working' | 'ask' | 'completed' | 'error';
+  // API/network failure reason when state === 'error' (the "API Error: …" message).
+  error?: string;
 }
 
 export type TodoRunAgent = 'claude' | 'codex';

@@ -40,11 +40,19 @@ export function deriveSessionState(events: TodoSessionEvent[], error: string): S
         return { key: 'ask', label: 'Awaiting input', icon: 'codicon:comment-discussion', className: 'text-purple-300 bg-purple-500/15 border-purple-500/30' };
       }
       return { key: 'working', label: 'Working', icon: 'svg-spinners:ring-resize', className: 'text-cyan-300 bg-cyan-500/15 border-cyan-500/30' };
+    case 'error':
+      return { key: 'error', label: errorLabel(last), icon: 'codicon:error', className: 'text-red-300 bg-red-500/15 border-red-500/30' };
     case 'turn_end':
       return { key: 'completed', label: 'Completed', icon: 'codicon:pass', className: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30' };
     default:
       return { key: 'working', label: 'Working', icon: 'svg-spinners:ring-resize', className: 'text-cyan-300 bg-cyan-500/15 border-cyan-500/30' };
   }
+}
+
+// errorLabel renders a compact badge label for an API/network error event: the
+// HTTP status when present (e.g. "Error 529"), else a plain "Error".
+function errorLabel(ev: TodoSessionEvent): string {
+  return ev.errorStatus ? `Error ${ev.errorStatus}` : 'Error';
 }
 
 // useTodoSession follows a TODO's agent session log over SSE. The server tails
@@ -190,6 +198,15 @@ function SessionEventRow({ event }: { event: TodoSessionEvent }) {
         <div className="flex items-center gap-2 border-t border-zinc-800 pt-2 text-[11px] uppercase tracking-wide text-gray-500">
           <GavelIcon name="codicon:pass" className="shrink-0 text-emerald-400" />
           <span>Turn ended{event.stopReason ? ` (${event.stopReason})` : ''}</span>
+        </div>
+      );
+    case 'error':
+      return (
+        <div className="flex items-start gap-2 border-t border-red-500/30 pt-2 text-red-300">
+          <GavelIcon name="codicon:error" className="mt-0.5 shrink-0 text-red-400" />
+          <span className="min-w-0 whitespace-pre-wrap break-words">
+            {event.text || `API error${event.errorStatus ? ` ${event.errorStatus}` : ''}`}
+          </span>
         </div>
       );
     default:

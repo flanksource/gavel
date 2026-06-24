@@ -7,7 +7,7 @@ import { TodoSession } from './TodoSession';
 import { TodoSessionTimer } from './TodoSessionTimer';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
-import { TodoCommentBox, TodoEditForm } from './TodoCompose';
+import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 
 export function TodoDetail({
   todo,
@@ -34,7 +34,8 @@ export function TodoDetail({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'overview' | 'session'>('overview');
-  const [editing, setEditing] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir, provider);
@@ -51,7 +52,8 @@ export function TodoDetail({
     resetRun();
     setAdvancedOpen(false);
     setTab('overview');
-    setEditing(false);
+    setEditingTitle(false);
+    setEditingBody(false);
   }, [todo?.ref, resetRun]);
 
   // patch sends a partial update (status, priority, title, body, and/or comment)
@@ -85,18 +87,27 @@ export function TodoDetail({
     }
   }
 
-  function startEditing() {
+  function startEditTitle() {
     if (!todo) return;
     setDraftTitle(todo.title);
-    setDraftBody(todo.body ?? '');
-    setTab('overview');
-    setEditing(true);
+    setEditingTitle(true);
   }
 
-  async function saveEdit() {
-    if (await patch({ title: draftTitle.trim(), body: draftBody })) {
-      setEditing(false);
-    }
+  function startEditBody() {
+    if (!todo) return;
+    setDraftBody(todo.body ?? '');
+    setTab('overview');
+    setEditingBody(true);
+  }
+
+  async function saveTitle() {
+    const title = draftTitle.trim();
+    if (!title) return;
+    if (await patch({ title })) setEditingTitle(false);
+  }
+
+  async function saveBody() {
+    if (await patch({ body: draftBody })) setEditingBody(false);
   }
 
   async function transferTo(toDir: string) {
@@ -186,7 +197,20 @@ export function TodoDetail({
               <span className={`text-xs font-medium ${priorityClass(todo.priority)}`}>{todo.priority}</span>
               {todo.shortId && <span className="font-mono text-xs text-muted-foreground">{todo.shortId}</span>}
             </div>
-            <h2 className="mt-1 truncate text-base font-semibold text-foreground">{todo.title}</h2>
+            {editingTitle ? (
+              <TodoTitleEditor
+                value={draftTitle}
+                busy={busy}
+                onChange={setDraftTitle}
+                onSave={saveTitle}
+                onCancel={() => setEditingTitle(false)}
+              />
+            ) : (
+              <div className="mt-1 flex min-w-0 items-start gap-1.5">
+                <h2 className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">{todo.title}</h2>
+                <EditPencil label="Edit title" onClick={startEditTitle} disabled={busy} />
+              </div>
+            )}
             <div className="mt-0.5 truncate text-xs text-muted-foreground">{todo.filePath || todo.cwd || todo.provider}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -244,17 +268,6 @@ export function TodoDetail({
             />
             <button
               type="button"
-              onClick={() => (editing ? setEditing(false) : startEditing())}
-              disabled={busy}
-              title={editing ? 'Cancel edit' : 'Edit title & body'}
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted hover:text-foreground disabled:opacity-50 ${editing ? 'text-foreground' : 'text-muted-foreground'}`}
-              aria-label={editing ? 'Cancel edit' : 'Edit title & body'}
-              aria-pressed={editing}
-            >
-              <GavelIcon name={editing ? 'codicon:close' : 'codicon:edit'} className="text-sm" />
-            </button>
-            <button
-              type="button"
               onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
               disabled={busy}
               title={closed ? 'Reopen todo' : 'Close todo'}
@@ -304,24 +317,31 @@ export function TodoDetail({
               <GavelIcon name="svg-spinners:ring-resize" />
               Loading
             </div>
-          ) : editing ? (
-            <TodoEditForm
-              title={draftTitle}
-              body={draftBody}
-              busy={busy}
-              onTitle={setDraftTitle}
-              onBody={setDraftBody}
-              onSave={saveEdit}
-              onCancel={() => setEditing(false)}
-            />
           ) : (
             <div className="space-y-3">
-              {body ? (
-                <TodoSection title="Body" icon="codicon:markdown" defaultOpen resetKey={`${todo.ref}:body`}>
+              {editingBody ? (
+                <TodoBodyEditor
+                  value={draftBody}
+                  busy={busy}
+                  onChange={setDraftBody}
+                  onSave={saveBody}
+                  onCancel={() => setEditingBody(false)}
+                />
+              ) : body ? (
+                <TodoSection
+                  title="Body"
+                  icon="codicon:markdown"
+                  defaultOpen
+                  resetKey={`${todo.ref}:body`}
+                  action={<EditPencil label="Edit body" onClick={startEditBody} disabled={busy} />}
+                >
                   <Markdown text={body} className="text-sm" />
                 </TodoSection>
               ) : (
-                <div className="text-sm text-muted-foreground">No body</div>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>No body</span>
+                  <EditPencil label="Add body" onClick={startEditBody} disabled={busy} />
+                </div>
               )}
               <TodoCommentBox
                 closed={closed}
@@ -355,12 +375,28 @@ function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
+function EditPencil({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+    >
+      <GavelIcon name="codicon:edit" className="text-xs" />
+    </button>
+  );
+}
+
 function TodoSection({
   title,
   icon,
   count,
   defaultOpen = false,
   resetKey,
+  action,
   children,
 }: {
   title: string;
@@ -368,6 +404,9 @@ function TodoSection({
   count?: number;
   defaultOpen?: boolean;
   resetKey: string;
+  // action renders a control (e.g. an edit pencil) to the right of the header,
+  // outside the toggle button so it doesn't nest interactive elements.
+  action?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -378,17 +417,20 @@ function TodoSection({
 
   return (
     <section className="rounded-md border border-border bg-background">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left hover:bg-muted"
-        aria-expanded={open}
-      >
-        <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="shrink-0 text-xs text-muted-foreground" />
-        <GavelIcon name={icon} className="shrink-0 text-xs text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">{title}</span>
-        {typeof count === 'number' && <span className="text-xs tabular-nums text-muted-foreground">{count}</span>}
-      </button>
+      <div className="flex w-full min-w-0 items-center gap-2 pr-2">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-muted"
+          aria-expanded={open}
+        >
+          <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="shrink-0 text-xs text-muted-foreground" />
+          <GavelIcon name={icon} className="shrink-0 text-xs text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">{title}</span>
+          {typeof count === 'number' && <span className="text-xs tabular-nums text-muted-foreground">{count}</span>}
+        </button>
+        {action}
+      </div>
       {open && <div className="border-t border-border px-3 py-3">{children}</div>}
     </section>
   );

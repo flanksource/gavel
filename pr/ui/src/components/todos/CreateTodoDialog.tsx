@@ -3,19 +3,29 @@ import { Modal, Field, Button } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
+// initialDir picks the workspace to preselect: the current todo's workspace when
+// it's a configured one, otherwise the first workspace.
+function initialDir(defaultDir: string | undefined, workspaces: Project[]): string {
+  if (defaultDir && workspaces.some(w => w.dir === defaultDir)) return defaultDir;
+  return workspaces[0]?.dir ?? '';
+}
+
 // CreateTodoDialog is a modal form for adding a todo to a chosen workspace.
 export function CreateTodoDialog({
   open,
   onClose,
   workspaces,
   onCreated,
+  defaultDir,
 }: {
   open: boolean;
   onClose: () => void;
   workspaces: Project[];
   onCreated: (dir: string, todo: TodoItem) => void;
+  // defaultDir preselects the workspace (the current todo's) when the dialog opens.
+  defaultDir?: string;
 }) {
-  const [dir, setDir] = useState(workspaces[0]?.dir ?? '');
+  const [dir, setDir] = useState(() => initialDir(defaultDir, workspaces));
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
@@ -25,7 +35,7 @@ export function CreateTodoDialog({
 
   useEffect(() => {
     if (open) {
-      setDir(workspaces[0]?.dir ?? '');
+      setDir(initialDir(defaultDir, workspaces));
       setTitle('');
       setBody('');
       setPriority('medium');
@@ -33,7 +43,7 @@ export function CreateTodoDialog({
       setError('');
       setBusy(false);
     }
-  }, [open, workspaces]);
+  }, [open, workspaces, defaultDir]);
 
   if (!open) return null;
 
