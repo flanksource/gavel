@@ -43,6 +43,14 @@ func TestComputeSessionStatsAggregatesUsage(t *testing.T) {
 	if stats.TotalTokens != 300+60+12+50 {
 		t.Fatalf("TotalTokens = %d, want %d", stats.TotalTokens, 300+60+12+50)
 	}
+	// ContextTokens tracks the latest turn's window (input + cache), not the sum:
+	// the second turn's 200 in + 7 cache-read + 0 cache-create.
+	if stats.ContextTokens != 200+7+0 {
+		t.Fatalf("ContextTokens = %d, want %d", stats.ContextTokens, 200+7+0)
+	}
+	if stats.Compactions != 0 {
+		t.Fatalf("Compactions = %d, want 0", stats.Compactions)
+	}
 	if stats.Turns != 2 {
 		t.Fatalf("Turns = %d, want 2", stats.Turns)
 	}
@@ -54,6 +62,114 @@ func TestComputeSessionStatsAggregatesUsage(t *testing.T) {
 	}
 	if stats.InProgress {
 		t.Fatal("cold stats must not be in progress")
+	}
+}
+
+// compactionLine builds a `compact_boundary` system entry whose metadata reports
+// the post-compaction context size, mirroring Claude's session-log marker.
+func compactionLine(ts string, postTokens int) string {
+	return fmt.Sprintf(
+		`{"type":"system","subtype":"compact_boundary","timestamp":%q,"content":"Conversation compacted","compactMetadata":{"trigger":"auto","preTokens":199417,"postTokens":%d}}`,
+		ts, postTokens,
+	)
+}
+
+func TestComputeSessionStatsCountsCompactions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A turn fills the window, a compaction shrinks it to postTokens, then a final
+	// turn grows it again: ContextTokens must track the latest turn, not the sum.
+	writeSessionLog(t, path,
+		assistantLine("2026-06-23T10:00:00Z", "claude-opus-4-8", 5000, 100, 180000, 0),
+		compactionLine("2026-06-23T10:00:30Z", 12000),
+		assistantLine("2026-06-23T10:01:00Z", "claude-opus-4-8", 800, 200, 13000, 0),
+	)
+
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.Compactions != 1 {
+		t.Fatalf("Compactions = %d, want 1", stats.Compactions)
+	}
+	if stats.ContextTokens != 800+13000+0 {
+		t.Fatalf("ContextTokens = %d, want %d (latest turn's window)", stats.ContextTokens, 800+13000)
+	}
+	// The compaction line carries no usage, so it must not inflate token totals.
+	if stats.Turns != 2 {
+		t.Fatalf("Turns = %d, want 2 (compaction is not a turn)", stats.Turns)
+	}
+}
+
+func TestComputeSessionStatsContextFromCompactionPostTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// When a compaction is the most recent event (no turn follows yet), the context
+	// window reflects the post-compaction size the boundary reports.
+	writeSessionLog(t, path,
+		assistantLine("2026-06-23T10:00:00Z", "claude-opus-4-8", 5000, 100, 180000, 0),
+		compactionLine("2026-06-23T10:00:30Z", 12000),
+	)
+
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.Compactions != 1 {
+		t.Fatalf("Compactions = %d, want 1", stats.Compactions)
+	}
+	if stats.ContextTokens != 12000 {
+		t.Fatalf("ContextTokens = %d, want 12000 (post-compaction size)", stats.ContextTokens)
+	}
+}
+
+// apiErrorLine builds the synthetic assistant entry Claude Code records when an
+// API request fails after retries: stop_reason "stop_sequence" plus the
+// isApiErrorMessage marker, classification, and (for HTTP errors) status.
+func apiErrorLine(ts, errType string, status int, text string) string {
+	return fmt.Sprintf(
+		`{"type":"assistant","timestamp":%q,"message":{"model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":%q}],"usage":{"input_tokens":0,"output_tokens":0}},"error":%q,"isApiErrorMessage":true,"apiErrorStatus":%d}`,
+		ts, text, errType, status,
+	)
+}
+
+func TestComputeSessionStatsDetectsAPIError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A normal turn, then an API error ends the session: the stop_sequence error
+	// must surface as State=error (not completed) with its message.
+	writeSessionLog(t, path,
+		assistantContentLine("2026-06-23T10:00:00Z", "", `{"type":"text","text":"working"}`),
+		apiErrorLine("2026-06-23T10:00:30Z", "server_error", 529, "API Error: 529 Overloaded"),
+	)
+
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.State != sessionStateError {
+		t.Fatalf("State = %q, want %q", stats.State, sessionStateError)
+	}
+	if stats.Error != "API Error: 529 Overloaded" {
+		t.Fatalf("Error = %q, want the API error message", stats.Error)
+	}
+}
+
+func TestComputeSessionStatsErrorClearsOnRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// A transient error followed by a real end_turn (after the user re-prompted):
+	// the latest event wins, so State is completed and Error is cleared.
+	writeSessionLog(t, path,
+		apiErrorLine("2026-06-23T10:00:00Z", "rate_limit", 429, "API Error: Rate limited"),
+		assistantContentLine("2026-06-23T10:01:00Z", "end_turn", `{"type":"text","text":"done"}`),
+	)
+
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.State != sessionStateCompleted {
+		t.Fatalf("State = %q, want %q (latest event wins)", stats.State, sessionStateCompleted)
+	}
+	if stats.Error != "" {
+		t.Fatalf("Error = %q, want empty after recovery", stats.Error)
 	}
 }
 

@@ -136,7 +136,10 @@ func (st sessionTailer) drain(f *os.File, pending *[]byte, buf []byte, onEvent f
 				for _, ev := range events {
 					progressed = true
 					onEvent(ev)
-					if ev.Kind == history.EventTurnEnd {
+					// EventTurnEnd is a normal completion; EventError is a terminal
+					// API/network failure. Both end the tail — the caller distinguishes
+					// success from failure from the events it saw.
+					if ev.Kind == history.EventTurnEnd || ev.Kind == history.EventError {
 						return progressed, true, nil
 					}
 				}
@@ -202,10 +205,23 @@ func (e *CmuxExecutor) awaitSessionCompletion(ctx *todopkg.ExecutorContext, sess
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// A synthetic API/network error ends the turn in failure. Capture it so the run
+	// fails loudly with the reason rather than being mis-reported as completed (the
+	// error's stop_reason is "stop_sequence", indistinguishable from success).
+	var apiErr error
 	completed, err := tailer.tail(tctx, func(ev history.SessionEvent) {
+		if ev.Kind == history.EventError {
+			apiErr = fmt.Errorf("claude session %s ended on API error: %s", sessionID, sessionErrorText(ev))
+		}
 		e.handleSessionEvent(ctx, ev)
 	})
-	return path, completed, err
+	if err != nil {
+		return path, completed, err
+	}
+	if apiErr != nil {
+		return path, false, apiErr
+	}
+	return path, completed, nil
 }
 
 // handleSessionEvent maps a parsed session event onto the executor's transcript
@@ -227,6 +243,13 @@ func (e *CmuxExecutor) handleSessionEvent(ctx *todopkg.ExecutorContext, ev histo
 			"action": action,
 		})
 		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyAction, Message: ev.ToolUse.Tool + ": " + action})
+	case history.EventError:
+		msg := sessionErrorText(ev)
+		transcript.AddExecutorMessage(msg, todopkg.EntryNotification, map[string]any{
+			"error":  ev.ErrorType,
+			"status": ev.ErrorStatus,
+		})
+		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyError, Message: msg})
 	}
 }
 
