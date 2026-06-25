@@ -816,7 +816,7 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "codex runs require cmux mode") {
+	if !strings.Contains(rec.Body.String(), "codex runs require a cmux driver") {
 		t.Fatalf("unexpected error body: %q", rec.Body.String())
 	}
 }
@@ -889,8 +889,32 @@ func TestTodoAPIRunRejectsPlanWithInlineMode(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "plan mode requires cmux mode") {
+	if !strings.Contains(rec.Body.String(), "plan mode requires a cmux driver") {
 		t.Fatalf("unexpected error body: %q", rec.Body.String())
+	}
+}
+
+func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
+	// Explicit driver wins and sets the legacy mode label for downstream paths.
+	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Effort: "medium"})
+	if err != nil {
+		t.Fatalf("claude-headless driver: %v", err)
+	}
+	if opts.Driver != "claude-headless" || opts.Agent != "claude" || opts.Mode != "inline" {
+		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.Agent, opts.Mode)
+	}
+
+	// codex-cmux with no model resolves the codex agent and defaults the model.
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-cmux"})
+	if err != nil {
+		t.Fatalf("codex-cmux driver: %v", err)
+	}
+	if opts.Agent != "codex" || opts.Model != "codex" || opts.Mode != "cmux" {
+		t.Fatalf("got agent=%q model=%q mode=%q", opts.Agent, opts.Model, opts.Mode)
+	}
+
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-tui"}); err == nil {
+		t.Fatal("invalid driver should be rejected")
 	}
 }
 

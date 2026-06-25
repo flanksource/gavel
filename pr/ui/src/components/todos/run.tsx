@@ -1,10 +1,29 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
-import type { TodoRunEffort, TodoRunMode, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
+import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
 
-export const defaultRunOptions: TodoRunOptions = { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium' };
+// The selectable agent drivers, in display order. cmux is the interactive TUI
+// path; headless/sdk/api are the structured paths. Codex has no sdk/api driver.
+const DRIVER_OPTIONS: Array<{ value: TodoRunDriver; label: string }> = [
+  { value: 'claude-cmux', label: 'Claude · cmux (TUI)' },
+  { value: 'claude-headless', label: 'Claude · headless' },
+  { value: 'claude-sdk', label: 'Claude · SDK' },
+  { value: 'claude-api', label: 'Claude · API' },
+  { value: 'codex-cmux', label: 'Codex · cmux (TUI)' },
+  { value: 'codex-headless', label: 'Codex · headless' },
+];
+
+function driverAgent(driver: TodoRunDriver): 'claude' | 'codex' {
+  return driver.startsWith('codex') ? 'codex' : 'claude';
+}
+
+function driverIsCmux(driver: TodoRunDriver): boolean {
+  return driver.endsWith('-cmux');
+}
+
+export const defaultRunOptions: TodoRunOptions = { driver: 'claude-cmux', model: 'claude', effort: 'medium' };
 
 type RunPreset = { label: string; icon: string; options: TodoRunOptions };
 
@@ -16,16 +35,16 @@ export const runActionGroups: Array<{ action: 'Run' | 'Plan'; detail: string; pr
     action: 'Run',
     detail: 'implement',
     presets: [
-      { label: 'Claude', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium' } },
-      { label: 'Codex', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium' } },
+      { label: 'Claude', icon: 'codicon:sparkle', options: { driver: 'claude-cmux', model: 'claude', effort: 'medium' } },
+      { label: 'Codex', icon: 'codicon:terminal', options: { driver: 'codex-cmux', model: 'codex', effort: 'medium' } },
     ],
   },
   {
     action: 'Plan',
     detail: 'plan only · no changes',
     presets: [
-      { label: 'Claude', icon: 'codicon:sparkle', options: { agent: 'claude', mode: 'cmux', model: 'claude', effort: 'medium', plan: true } },
-      { label: 'Codex', icon: 'codicon:terminal', options: { agent: 'codex', mode: 'cmux', model: 'codex', effort: 'medium', plan: true } },
+      { label: 'Claude', icon: 'codicon:sparkle', options: { driver: 'claude-cmux', model: 'claude', effort: 'medium', plan: true } },
+      { label: 'Codex', icon: 'codicon:terminal', options: { driver: 'codex-cmux', model: 'codex', effort: 'medium', plan: true } },
     ],
   },
 ];
@@ -184,8 +203,7 @@ export function TodoRunAdvancedDialog({
   provider: string;
   refs: string[];
 }) {
-  const [agent, setAgent] = useState<'claude' | 'codex'>('claude');
-  const [mode, setMode] = useState<TodoRunMode>('cmux');
+  const [driver, setDriver] = useState<TodoRunDriver>('claude-cmux');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
   const [plan, setPlan] = useState(false);
@@ -201,10 +219,15 @@ export function TodoRunAdvancedDialog({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
 
+  // agent/isCmux are derived from the selected driver: agent picks the model
+  // default and placeholder; isCmux gates the cmux-only (plan/resume) vs
+  // structured-only (max cost/turns, dirty worktree) fields.
+  const agent = driverAgent(driver);
+  const isCmux = driverIsCmux(driver);
+
   useEffect(() => {
     if (!open) return;
-    setAgent('claude');
-    setMode('cmux');
+    setDriver('claude-cmux');
     setModel('claude');
     setEffort('medium');
     setPlan(false);
@@ -223,7 +246,7 @@ export function TodoRunAdvancedDialog({
   const refsKey = refs.join('\n');
 
   // Fetch the prompt that will be sent whenever the dialog is open and a
-  // prompt-affecting option changes (mode/agent/model/effort/plan/resume). The
+  // prompt-affecting option changes (driver/model/effort/plan/resume). The
   // server builds it from the same code path the run uses, so it matches exactly.
   useEffect(() => {
     if (!open) {
@@ -246,12 +269,11 @@ export function TodoRunAdvancedDialog({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         refs: list,
-        agent,
-        mode,
+        driver,
         model: model.trim() || agent,
         effort,
-        plan: mode === 'cmux' ? plan : undefined,
-        resume: mode === 'cmux' ? resume : undefined,
+        plan: isCmux ? plan : undefined,
+        resume: isCmux ? resume : undefined,
       }),
       signal: controller.signal,
     })
@@ -270,7 +292,7 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, provider, refsKey, agent, mode, model, effort, plan, resume]);
+  }, [open, dir, provider, refsKey, driver, agent, model, effort, plan, resume, isCmux]);
 
   if (!open) return null;
 
@@ -278,16 +300,15 @@ export function TodoRunAdvancedDialog({
     const cost = Number(maxCost);
     const turns = Number.parseInt(maxTurns, 10);
     onRun({
-      agent,
-      mode,
+      driver,
       model: model.trim() || agent,
       effort,
-      plan: mode === 'cmux' ? plan : undefined,
-      resume: mode === 'cmux' ? resume : undefined,
+      plan: isCmux ? plan : undefined,
+      resume: isCmux ? resume : undefined,
       timeout: timeout.trim() || '30m',
-      maxCost: mode === 'inline' && maxCost.trim() && Number.isFinite(cost) ? cost : undefined,
-      maxTurns: mode === 'inline' && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
-      dirty: mode === 'inline' ? dirty : undefined,
+      maxCost: !isCmux && maxCost.trim() && Number.isFinite(cost) ? cost : undefined,
+      maxTurns: !isCmux && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
+      dirty: !isCmux ? dirty : undefined,
       dryRun,
       // Plan-only runs make no changes, so there is nothing to auto-commit.
       commit: plan ? false : commit,
@@ -311,38 +332,22 @@ export function TodoRunAdvancedDialog({
       }
     >
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Agent">
-            <select
-              value={agent}
-              onChange={e => {
-                const next = e.currentTarget.value as 'claude' | 'codex';
-                setAgent(next);
-                setModel(next);
-                if (next === 'codex') setMode('cmux');
-              }}
-              className={inputClass}
-            >
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
-          </Field>
-          <Field label="Mode">
-            <select
-              value={mode}
-              onChange={e => {
-                const next = e.currentTarget.value as TodoRunMode;
-                setMode(next);
-                if (next !== 'cmux') setPlan(false);
-              }}
-              className={inputClass}
-              disabled={agent === 'codex'}
-            >
-              <option value="cmux">cmux</option>
-              <option value="inline">inline</option>
-            </select>
-          </Field>
-        </div>
+        <Field label="Driver">
+          <select
+            value={driver}
+            onChange={e => {
+              const next = e.currentTarget.value as TodoRunDriver;
+              setDriver(next);
+              setModel(driverAgent(next));
+              if (!driverIsCmux(next)) setPlan(false);
+            }}
+            className={inputClass}
+          >
+            {DRIVER_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </Field>
         <Field label="Model">
           <input
             className={inputClass}
@@ -363,23 +368,23 @@ export function TodoRunAdvancedDialog({
             <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />
           </Field>
           <Field label="Max turns">
-            <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={mode !== 'inline'} />
+            <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={isCmux} />
           </Field>
         </div>
         <Field label="Max cost">
-          <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={mode !== 'inline'} />
+          <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={isCmux} />
         </Field>
         <div className="flex flex-wrap gap-3 text-xs">
           <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={plan} onChange={e => setPlan(e.currentTarget.checked)} disabled={mode !== 'cmux'} />
+            <input type="checkbox" checked={plan} onChange={e => setPlan(e.currentTarget.checked)} disabled={!isCmux} />
             <span>Plan only</span>
           </label>
           <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={resume} onChange={e => setResume(e.currentTarget.checked)} disabled={mode !== 'cmux'} />
+            <input type="checkbox" checked={resume} onChange={e => setResume(e.currentTarget.checked)} disabled={!isCmux} />
             <span>Resume session</span>
           </label>
           <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={mode !== 'inline'} />
+            <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={isCmux} />
             <span>Dirty worktree</span>
           </label>
           <label className="inline-flex items-center gap-2">

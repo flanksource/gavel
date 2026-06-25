@@ -121,6 +121,7 @@ const icons: Record<string, StaticIcon> = {
   'codicon:folder': UiFolder,
   'codicon:gear': UiCog,
   'codicon:git-branch': UiGitBranch,
+  'codicon:git-commit': UiGitGraph,
   'codicon:git-merge': UiGitMerge,
   'codicon:git-pull-request': UiGitPr,
   'codicon:globe': UiGlobe,

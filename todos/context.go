@@ -90,6 +90,7 @@ const (
 	NotifyProgress   NotificationType = "progress"   // Progress update
 	NotifyCompletion NotificationType = "completion" // Task completed
 	NotifyError      NotificationType = "error"      // Error occurred
+	NotifyApproval   NotificationType = "approval"   // Agent is awaiting human approval to use a tool
 )
 
 // Pretty returns a formatted text representation of the NotificationType with appropriate styling
@@ -105,6 +106,8 @@ func (nt NotificationType) Pretty() api.Text {
 		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
 	case NotifyError:
 		return clicky.Text("").Add(icons.Error).Append(" ERROR", "text-red-600 font-bold")
+	case NotifyApproval:
+		return clicky.Text(" APPROVAL", "text-amber-600 font-bold")
 	default:
 		return clicky.Text(string(nt), "text-gray-500")
 	}

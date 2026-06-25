@@ -3,6 +3,7 @@ import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from
 import { Markdown } from '../Markdown';
 import { GavelIcon } from '../GavelIcon';
 import { TodoTimeline } from './TodoTimeline';
+import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
 import { TodoSessionTimer } from './TodoSessionTimer';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
@@ -348,6 +349,7 @@ export function TodoDetail({
                 busy={busy}
                 onComment={(text, reopen) => patch(reopen ? { status: 'pending', comment: text } : { comment: text })}
               />
+              <TodoCommits dir={dir} provider={provider} todoRef={todo.ref} />
               {events.length > 0 && <TodoTimeline events={events} />}
             </div>
           )}
