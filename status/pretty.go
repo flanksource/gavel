@@ -52,12 +52,12 @@ func (r *Result) Pretty() api.Text {
 	}
 
 	pathWidth := longestPath(r.Files)
-	for i, group := range groupFilesByScopeKey(r.Files) {
+	for i, group := range r.ScopeGroups() {
 		if i > 0 {
 			t = t.NewLine()
 		}
-		t = t.Add(prettyScopeHeader(group.label)).NewLine()
-		for _, f := range group.files {
+		t = t.Add(prettyScopeHeader(group.Label)).NewLine()
+		for _, f := range group.Files {
 			t = t.Add(f.prettyRow(pathWidth)).NewLine()
 		}
 	}
@@ -249,10 +249,11 @@ func prettyAISummary(f FileStatus) api.Text {
 	}
 }
 
-type scopeGroup struct {
-	key   scopeGroupKey
-	label string
-	files []FileStatus
+// ScopeGroup is a set of files sharing a repomap scope label, the unit the
+// status renderer and `gavel commit -G` both group changes by.
+type ScopeGroup struct {
+	Label string
+	Files []FileStatus
 }
 
 type scopeGroupKey struct {
@@ -261,7 +262,16 @@ type scopeGroupKey struct {
 	hasTest    bool
 }
 
-func groupFilesByScopeKey(files []FileStatus) []scopeGroup {
+// ScopeGroups buckets the result's files by repomap scope, the same grouping the
+// pretty renderer uses.
+func (r *Result) ScopeGroups() []ScopeGroup {
+	return GroupByScope(r.Files)
+}
+
+// GroupByScope buckets files by their repomap scope label (language · scopes,
+// "general" fallback) and returns the groups in stable render order: feature
+// scopes first, then unscoped, then test-only.
+func GroupByScope(files []FileStatus) []ScopeGroup {
 	if len(files) == 0 {
 		return nil
 	}
@@ -280,12 +290,11 @@ func groupFilesByScopeKey(files []FileStatus) []scopeGroup {
 		return compareScopeKeys(keys[i], keys[j]) < 0
 	})
 
-	groups := make([]scopeGroup, 0, len(keys))
+	groups := make([]ScopeGroup, 0, len(keys))
 	for _, key := range keys {
-		groups = append(groups, scopeGroup{
-			key:   key,
-			label: key.label,
-			files: groupsByScope[key],
+		groups = append(groups, ScopeGroup{
+			Label: key.label,
+			Files: groupsByScope[key],
 		})
 	}
 	return groups

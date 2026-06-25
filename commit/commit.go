@@ -41,8 +41,9 @@ var (
 )
 
 const (
-	defaultMaxFiles = 7
-	defaultMaxLines = 500
+	defaultMaxFiles   = 7
+	defaultMaxLines   = 500
+	defaultMaxCommits = 7
 )
 
 const (
@@ -67,10 +68,18 @@ type Options struct {
 	Summary     bool
 	MaxFiles    int
 	MaxLines    int
-	DryRun      bool
-	Force       bool
-	NoCache     bool
-	Push        bool
+	// MaxCommits caps how many commits AI grouping (--ai-group) produces,
+	// excluding the trailing chore commit for lock/generated files. It is fed to
+	// the grouping prompt and re-enforced via a consolidation feedback prompt when
+	// the LLM exceeds it. Defaults to defaultMaxCommits.
+	MaxCommits int
+	// GroupByScope makes AI grouping treat repomap scope as the primary commit
+	// boundary. Default (false) groups by logical change with scope as a hint.
+	GroupByScope bool
+	DryRun       bool
+	Force        bool
+	NoCache      bool
+	Push         bool
 	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
 	// it merges once required checks pass. Only applies to PRs this run opens.
 	AutoMerge bool
@@ -103,6 +112,10 @@ type Options struct {
 	// FixupAuto value triggers per-file routing by last-touching commit on
 	// base..HEAD; any other value is treated as an explicit target hash.
 	Fixup string
+	// Since, when non-empty, switches Run() to runIssueIdSquash: review
+	// <Since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into a
+	// single commit. History-only — staged files are ignored.
+	Since string
 	// Autosquash controls whether `git rebase -i --autosquash` runs after
 	// fixup commits are created. Defaults to true at the CLI; tests / direct
 	// callers must opt in explicitly.
@@ -172,6 +185,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := validateFixupOptions(opts); err != nil {
 		return nil, err
 	}
+	if err := validateSinceOptions(opts); err != nil {
+		return nil, err
+	}
 	precommitMode, err := resolvePrecommitMode(opts.PrecommitMode, opts.Config)
 	if err != nil {
 		return nil, err
@@ -194,6 +210,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		result *Result
 	)
 	switch {
+	case opts.Since != "":
+		result, err = runIssueIdSquash(ctx, opts)
 	case opts.Fixup != "":
 		result, err = runFixup(ctx, opts)
 	case opts.AIGroup:
@@ -208,6 +226,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		if opts.MaxLines == 0 {
 			opts.MaxLines = defaultMaxLines
+		}
+		if opts.MaxCommits == 0 {
+			opts.MaxCommits = defaultMaxCommits
 		}
 		result, err = runCommitAIGroup(ctx, opts)
 	case opts.CommitAll:
