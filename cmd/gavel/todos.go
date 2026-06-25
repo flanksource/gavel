@@ -35,6 +35,7 @@ var (
 	dirty         bool
 	dryRun        bool
 	commitAfter   bool
+	checkAfter    bool
 	todosProvider string
 	todosMode     string
 	todoModel     string
@@ -263,6 +264,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		executor, sessionID := newExecutor(workDir, group.TODOs[0])
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -330,6 +332,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		executor, sessionID := newExecutor(workDir, todo)
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/todosync"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -72,6 +73,11 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			return nil, err
 		}
 		opts.WorkDir = wd
+	}
+	// testrunner no longer imports the todos package; supply the TODO recorder
+	// it calls when --sync-todos is set (see todosync.NewTestFailureRecorder).
+	if opts.SyncTodos && opts.TodoSync == nil {
+		opts.TodoSync = todosync.NewTestFailureRecorder(opts.TodosDir, opts.TodoTemplate).SyncFailure
 	}
 	if opts.Failed == failedAutoSentinel {
 		resolved, err := snapshots.ResolveLast(opts.WorkDir)

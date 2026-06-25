@@ -19,13 +19,15 @@ import (
 type CommitOptions struct {
 	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
 	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
+	AIGroup      bool   `flag:"ai-group" short:"G" help:"Ask the LLM to split the change set into logical commit groups (and a separate chore commit for lock/generated files) instead of grouping by directory. Combine with -A to first stage all changes."`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
 	Tree         bool   `flag:"tree" short:"t" help:"Alias for --interactive"`
 	Summary      bool   `flag:"summary" short:"s" help:"With -i, print a gavel-status-style summary of the candidate files before the picker opens"`
 	MaxFiles     int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
 	MaxLines     int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
 	Message      string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	Model        string `flag:"model" help:"Override LLM model from .gavel.yaml commit.model"`
+	Model        string `flag:"model" help:"Override LLM model for commit-message/PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
+	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-G) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
 	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
 	NoCache      bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
@@ -41,6 +43,7 @@ type CommitOptions struct {
 	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
 	WorkDir      string `flag:"work-dir" help:"Working directory"`
 	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
+	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
 }
 
 func (o CommitOptions) Help() string {
@@ -148,6 +151,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
 		CommitAll:       opts.CommitAll,
+		AIGroup:         opts.AIGroup,
 		Interactive:     opts.Interactive || opts.Tree,
 		Summary:         opts.Summary,
 		MaxFiles:        opts.MaxFiles,
@@ -156,6 +160,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Force:           opts.Force,
 		NoCache:         opts.NoCache,
 		Model:           opts.Model,
+		GroupModel:      opts.GroupModel,
 		Message:         opts.Message,
 		Push:            opts.Push,
 		AutoMerge:       opts.AutoMerge,
@@ -168,6 +173,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		LintSecretsFlag: opts.LintSecrets,
 		TidyFlag:        opts.Tidy,
 		AssumeYes:       opts.Yes,
+		AddMetadata:     opts.AddMetadata,
 		Config:          cfg.Commit,
 	}
 }

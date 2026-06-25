@@ -35,6 +35,7 @@ import (
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/todosync"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -289,7 +290,7 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.SyncTodos != "" {
 		todosDir := filepath.Join(opts.SyncTodos, "lint")
-		syncResult, err := linters.SyncLintTodos(allResults, linters.SyncOptions{
+		syncResult, err := todosync.SyncLintTodos(allResults, todosync.SyncOptions{
 			TodosDir: todosDir,
 			GroupBy:  opts.GroupBy,
 			WorkDir:  opts.WorkDir,
