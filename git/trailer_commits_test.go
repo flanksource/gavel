@@ -1,7 +1,10 @@
 package git
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,4 +85,68 @@ func TestCommitsWithTrailer(t *testing.T) {
 	if got, err := CommitsWithTrailer(dir, "Gavel-Issue-Id", ""); err != nil || len(got) != 0 {
 		t.Fatalf("empty value: got %d commits, err %v", len(got), err)
 	}
+}
+
+func TestIsValidCommitHash(t *testing.T) {
+	valid := []string{"abc1", "0123456789abcdef", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"}
+	for _, h := range valid {
+		if !IsValidCommitHash(h) {
+			t.Fatalf("IsValidCommitHash(%q) = false, want true", h)
+		}
+	}
+	invalid := []string{"", "abc", "xyz1", "abc123; rm -rf", "--all", "abc 123"}
+	for _, h := range invalid {
+		if IsValidCommitHash(h) {
+			t.Fatalf("IsValidCommitHash(%q) = true, want false", h)
+		}
+	}
+}
+
+func TestCommitDiff(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("config", "user.email", "test@example.com")
+	git("config", "user.name", "Test User")
+	git("config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	git("add", "hello.txt")
+	git("commit", "-m", "feat: add hello")
+
+	head := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	diff, truncated, err := CommitDiff(dir, head)
+	if err != nil {
+		t.Fatalf("CommitDiff: %v", err)
+	}
+	if truncated {
+		t.Fatalf("small diff reported truncated")
+	}
+	// The diffstat names the file and the patch adds its content.
+	if !strings.Contains(diff, "hello.txt") || !strings.Contains(diff, "+hi") {
+		t.Fatalf("diff missing expected content:\n%s", diff)
+	}
+
+	if _, _, err := CommitDiff(dir, "not-a-hash"); err == nil {
+		t.Fatal("expected error for invalid hash")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
 }

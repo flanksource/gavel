@@ -9,7 +9,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@flanksource/clicky-ui": "^0.2.4",
+    "@flanksource/clicky-ui": "^0.3.6",
     "@tanstack/react-query": "catalog:",
     "marked": "^15.0.0",
     "react": "^19.0.0",

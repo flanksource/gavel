@@ -3,10 +3,24 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/flanksource/gavel/models"
 )
+
+// maxCommitDiffBytes caps the size of a single commit's rendered diff so an
+// enormous commit cannot flood the dashboard; the remainder is truncated.
+const maxCommitDiffBytes = 256 * 1024
+
+var commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+
+// IsValidCommitHash reports whether s is a syntactically valid abbreviated or
+// full git object hash, so callers can reject untrusted input before shelling
+// out to git.
+func IsValidCommitHash(s string) bool {
+	return commitHashPattern.MatchString(strings.TrimSpace(s))
+}
 
 // CommitsWithTrailer returns the commits reachable from any ref whose git
 // trailer `key` equals `value`, newest-first. It pre-filters the log with a
@@ -54,6 +68,40 @@ func isNoCommitsError(output []byte) bool {
 	return strings.Contains(s, "does not have any commits yet") ||
 		strings.Contains(s, "bad default revision") ||
 		strings.Contains(s, "unknown revision")
+}
+
+// CommitDiff returns the colored `git show` output (diffstat + patch) for a
+// single commit, so the dashboard can render it through an ANSI viewer. Output
+// is capped at maxCommitDiffBytes; the bool reports whether it was truncated.
+func CommitDiff(path, hash string) (string, bool, error) {
+	hash = strings.TrimSpace(hash)
+	if !IsValidCommitHash(hash) {
+		return "", false, fmt.Errorf("invalid commit hash %q", hash)
+	}
+	cmd := exec.Command("git", "show", "--color=always", "--stat", "--patch", hash)
+	cmd.Dir = path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", false, fmt.Errorf("git show %s: %w\nOutput: %s", hash, err, string(out))
+	}
+	if len(out) > maxCommitDiffBytes {
+		return truncateAtLine(string(out), maxCommitDiffBytes) +
+			"\n\n… diff truncated (showing first 256 KB) …\n", true, nil
+	}
+	return string(out), false, nil
+}
+
+// truncateAtLine trims s to at most max bytes, backing up to the last newline so
+// it never cuts a line (and rarely an ANSI escape) mid-sequence.
+func truncateAtLine(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := s[:max]
+	if nl := strings.LastIndexByte(cut, '\n'); nl > 0 {
+		return cut[:nl]
+	}
+	return cut
 }
 
 // RemoteWebURL returns the https web base for the repository's origin remote

@@ -118,24 +118,6 @@ export interface TodoItem {
   events?: TodoEvent[];
 }
 
-// One parsed event streamed from a TODO's agent session log (see
-// /api/todos/session/stream). kind is assistant | thinking | tool_use | turn_end
-// | error. An error event carries the API/network failure detail.
-export interface TodoSessionEvent {
-  kind: string;
-  text?: string;
-  tool?: string;
-  // subagent_type for Task/Agent tool calls (e.g. "Explore"); lets the session
-  // browser filter agent calls independently of the generic "Task" tool name.
-  subagent?: string;
-  action?: string;
-  stopReason?: string;
-  // Populated when kind === 'error': Claude Code's classification (e.g.
-  // "rate_limit") and the HTTP status (0 for a network/connection error).
-  errorType?: string;
-  errorStatus?: number;
-}
-
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
 // identity (agent/model/effort), elapsed time, token usage and derived cost.
 // Mirrors cmux.SessionStats. found=false means the session produced no log yet.
@@ -165,10 +147,23 @@ export interface SessionStats {
   inProgress: boolean;
   found: boolean;
   // High-level agent state from the latest session-log event: thinking | working
-  // | ask | completed | error. Empty before the first event.
-  state?: 'thinking' | 'working' | 'ask' | 'completed' | 'error';
+  // | ask | completed | error. 'approval' is set when a tool-permission request
+  // is pending (see approval). Empty before the first event.
+  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error';
   // API/network failure reason when state === 'error' (the "API Error: …" message).
   error?: string;
+  // A pending tool-permission request awaiting the user's Allow/Deny. Present
+  // (and state === 'approval') only while a driver is blocked on it.
+  approval?: TodoSessionApproval;
+}
+
+// TodoSessionApproval is a tool-permission request a driver surfaced for human
+// review; the dashboard answers it via POST /api/todos/session/approve.
+export interface TodoSessionApproval {
+  sessionId: string;
+  toolUseId?: string;
+  tool: string;
+  input?: Record<string, unknown>;
 }
 
 export type TodoRunAgent = 'claude' | 'codex';
@@ -272,6 +267,14 @@ export interface TodoCommitsResponse {
   // file-backed todos that carry no id.
   issueId?: string;
   commits: TodoCommit[];
+}
+
+// One commit's rendered diff (ANSI-colored `git show` output). truncated is set
+// when the diff exceeded the server's size cap.
+export interface TodoCommitDiffResponse {
+  hash: string;
+  diff: string;
+  truncated?: boolean;
 }
 
 // ProcProcess mirrors procfile.ProcState — one supervised process.
