@@ -1,6 +1,10 @@
 package verify
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/flanksource/gavel/todos/types"
+)
 
 // ConfigSchemaID is the canonical URL editors fetch to validate .gavel.yaml.
 // Reference it from a file with a leading comment:
@@ -35,6 +39,7 @@ func gavelConfigSchema() map[string]any {
 			"post":     hookStepsSchema("Top-level hooks run after the main pipeline as non-blocking cleanup/reporting. Appended across layers."),
 			"secrets":  secretsSchema(),
 			"procfile": procfileSchema(),
+			"checks":   checksSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -156,6 +161,37 @@ func commitSchema() map[string]any {
 				map[string]any{
 					"enabled": boolWithDefault(
 						"Toggle the tidy step. Omit to keep on.", true),
+				},
+			),
+		},
+	)
+}
+
+func checksSchema() map[string]any {
+	return object(
+		"Post-completion check loop for `gavel todos run --check`: after an agent reports done, run "+
+			"these tests/lint and feed failures back to the agent until they pass. Opt-in — runs only when "+
+			"enabled here, by a TODO's frontmatter `checks`, or by the --check flag. Frontmatter overrides "+
+			"these project defaults.",
+		map[string]any{
+			"enabled": boolProp(
+				"Turn the loop on. Omitted leaves it off unless --check or a TODO's frontmatter enables it."),
+			"maxIterations": intWithDefault(
+				"Maximum agent re-runs before giving up.", types.DefaultMaxCheckIterations),
+			"test": object(
+				"gavel test options for the check run. Omit to skip tests.",
+				map[string]any{
+					"paths":   stringArray("Package paths to test. Empty discovers all."),
+					"changed": boolProp("Only test packages affected by the agent's changes."),
+					"timeout": stringProp("Global wall-clock deadline (e.g. 5m)."),
+				},
+			),
+			"lint": object(
+				"gavel lint options for the check run. Omit to skip linting.",
+				map[string]any{
+					"linters": stringArray("Linters to run. Empty runs every detected linter."),
+					"changed": boolProp("Only report new violations versus the base ref."),
+					"timeout": stringProp("Per-linter deadline (e.g. 5m)."),
 				},
 			),
 		},

@@ -10,6 +10,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
 	yamlv3 "gopkg.in/yaml.v3"
@@ -189,7 +190,15 @@ func (m *CheckMode) UnmarshalJSON(data []byte) error {
 }
 
 type CommitConfig struct {
-	Model         string              `yaml:"model,omitempty" json:"model,omitempty"`
+	// Model is the LLM used for commit-message and PR-content generation. These
+	// are prose tasks that run well on a fast, cheap model (the default is a
+	// haiku-class model). GroupModel overrides the model for AI commit grouping.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// GroupModel is the LLM used for AI commit grouping (`gavel commit -G`).
+	// Grouping reasons over the whole change set and benefits from a more capable
+	// model than message generation; when unset it falls back to Model and then
+	// to a sonnet-class default.
+	GroupModel    string              `yaml:"groupModel,omitempty" json:"groupModel,omitempty"`
 	Hooks         []CommitHook        `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 	GitIgnore     []string            `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
 	Allow         []string            `yaml:"allow,omitempty" json:"allow,omitempty"`
@@ -282,6 +291,9 @@ type GavelConfig struct {
 	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
 	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
+	// Checks is the project default for the post-completion agent check loop
+	// (`gavel todos run --check`). A TODO's frontmatter `checks:` overrides it.
+	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -486,6 +498,7 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Post = append(base.Post, override.Post...)
 	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
 	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
+	base.Checks = base.Checks.Overlay(&override.Checks)
 	return base
 }
 
@@ -625,6 +638,9 @@ func MergeLintConfig(base, override LintConfig) LintConfig {
 func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	if override.Model != "" {
 		base.Model = override.Model
+	}
+	if override.GroupModel != "" {
+		base.GroupModel = override.GroupModel
 	}
 	if len(override.Hooks) > 0 {
 		base.Hooks = append(base.Hooks, override.Hooks...)

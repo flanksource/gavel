@@ -131,7 +131,7 @@ The UI is one of Gavel's strongest workflows. If you prefer drilling into failur
 
 UI-related tips:
 
-- Most live UI commands accept `--addr`; use `0.0.0.0` when you want the browser to connect from another machine on the LAN.
+- Live UI commands bind `0.0.0.0` by default, so the dashboard is reachable from another machine on the LAN out of the box. Pass `--addr localhost` to restrict a server to this machine.
 - `gavel test --ui --detach` and `gavel ui serve` support `--auto-stop` and `--idle-timeout` so the server cleans itself up.
 - `gavel ui serve` is the easiest way to inspect CI-produced JSON locally.
 - The test and lint UIs share the same underlying server, so lint results can appear alongside test results when you run `gavel test --lint --ui`.
@@ -182,7 +182,8 @@ lint:
       enabled: false
 
 commit:
-  model: claude
+  model: claude-haiku-4-5
+  groupModel: claude-sonnet-4-5
   hooks:
     - name: lint-staged
       run: golangci-lint run ./...
@@ -226,7 +227,8 @@ Field reference:
 | `verify.checks.disabledCategories` | Disable whole verify categories |
 | `lint.ignore` | Repo-wide or user-wide ignore rules matched by `source`, `rule`, and/or `file` |
 | `lint.linters.<name>.enabled` | Force a linter on or off when Gavel would otherwise rely on detection/default behavior |
-| `commit.model` | Default model for `gavel commit` |
+| `commit.model` | Model for commit-message and PR-content generation (fast/haiku-class); overridable with `--model` |
+| `commit.groupModel` | Model for AI commit grouping (`gavel commit -G`, capable/sonnet-class); overridable with `--group-model`, falls back to `commit.model` |
 | `commit.hooks` | Pre-commit shell hooks run by `gavel commit` |
 | `commit.hooks[].files` | Optional staged-file glob filter; hook runs only if any staged file matches |
 | `commit.precommit.mode` | How `gavel commit` handles gitignore + linked-dependency precommit checks |
@@ -247,7 +249,7 @@ Merge rules matter because `.gavel.yaml` can come from multiple layers:
 | `verify.checks.disabled`, `verify.checks.disabledCategories` | Appended across layers |
 | `lint.ignore` | Appended across layers |
 | `lint.linters.<name>.enabled` | Later layer wins for that linter |
-| `commit.model` | Last non-empty value wins |
+| `commit.model`, `commit.groupModel` | Last non-empty value wins |
 | `commit.precommit.mode` | Last non-empty value wins |
 | `commit.compatibility.mode` | Last non-empty value wins |
 | `commit.hooks` | Appended across layers |
@@ -494,7 +496,7 @@ This is the right command when you want:
 - AI warnings for removed functionality or compatibility issues before the commit is written
 - Hook execution before finalizing the commit
 - Interactive file selection with an in-picker `/` filter for path, status, language, or scope
-- AI-assisted splitting of a large change into multiple commits
+- AI-assisted splitting of a large change into multiple commits — by directory (`-A`) or into logical groups with a separate chore commit for lock/generated files (`-G`). `-G` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change by default (pass `--group-by-scope` to make repomap scope the primary boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit), re-prompting to consolidate if the model overshoots
 - Optional follow-up push behavior
 
 Common workflows:
@@ -504,6 +506,10 @@ gavel commit
 gavel commit -t
 gavel commit -A
 gavel commit -A --max=5
+gavel commit -G
+gavel commit -G -A
+gavel commit -G --max-commits=3
+gavel commit -G --group-by-scope
 gavel commit -m "chore: bump dep"
 gavel commit --stage all --dry-run
 gavel commit --force
@@ -531,6 +537,45 @@ gavel todos run
 gavel todos run --interactive
 gavel todos run --group-by directory
 ```
+
+#### Run the tests and linters when the agent is done (`--check`)
+
+After an agent reports a TODO done, `--check` runs your real test and lint suite
+and, if anything fails, feeds a compact failure summary back into the *same* agent
+session so it can fix the issues — re-running the suite until it passes or a
+`maxIterations` cap is hit. This closes the loop: the agent doesn't just claim it's
+finished, it has to leave the suite green.
+
+```bash
+gavel todos run --check
+gavel todos run --check --mode cmux        # primary path: resumes the live agent REPL
+```
+
+The loop is **opt-in**. It runs when any of these enable it:
+
+- the `--check` flag (forces it on),
+- a project default in `.gavel.yaml` under `checks:`,
+- a per-issue override in a TODO's frontmatter `checks:` block.
+
+Configure what runs in `.gavel.yaml` (a TODO's frontmatter `checks:` overrides it
+field-by-field):
+
+```yaml
+checks:
+  enabled: true
+  maxIterations: 3          # max agent re-runs before giving up (default 3)
+  test:                     # omit to skip tests
+    changed: true           # only packages affected by the agent's changes
+    timeout: 5m
+  lint:                     # omit to skip linting
+    changed: true           # only new violations vs the base ref
+```
+
+When enabled with neither `test` nor `lint` set, both run against changed files.
+Feedback works best with `--mode cmux` (it resumes the live agent session); the
+inline agent resumes via its session id, and agents that can't resume fall back to
+reporting the failures without iterating. See the [`checks`](SCHEMA.md#checks)
+schema for every field.
 
 `gavel pr fix` builds on the same execution engine, but starts from a pull request instead of an existing `.todos` directory.
 

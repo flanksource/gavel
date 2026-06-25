@@ -114,7 +114,7 @@ gavel test history                                    # show local test duration
 | `[paths...]` | Package paths to test (e.g. `./pkg/...`). If empty, all packages are discovered. |
 | `--lint` | Run linters in parallel with tests |
 | `--ui` | Launch browser with real-time test progress dashboard |
-| `--addr` | Interface to bind the UI server (default: `localhost`, use `0.0.0.0` for LAN) |
+| `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--cache` | Skip packages whose content fingerprint matches the last passing run |
 | `--changed` | Only run packages affected by staged/unstaged/untracked changes vs `origin/main` |
 | `--since` | Only run packages affected by the diff since `<ref>` (merge-base) |
@@ -174,7 +174,7 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--since` | Only report new issues since `<ref>` (merge-base with HEAD) |
 | `--ignore` | Glob patterns to exclude from linting |
 | `--ui` | Launch browser UI to view violations |
-| `--addr` | Interface to bind the UI server (default: `localhost`) |
+| `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--sync-todos` | Sync violations to TODO files in directory |
 | `--group-by` | Group synced TODOs by: `file`, `package`, `message` (default: `file`) |
 | `--no-cache` | Disable caching/debounce |
@@ -347,7 +347,7 @@ gavel bench compare --base base.json --head head.json --threshold 15 --ui
 | `--head-label` | `head` | Display label for the head run |
 | `--threshold` | `10` | Regression threshold in percent |
 | `--ui` | `false` | Launch browser UI with the comparison |
-| `--addr` | `localhost` | Interface to bind the UI server |
+| `--addr` | `0.0.0.0` | Interface to bind the UI server (all interfaces; set `localhost` to restrict to this machine) |
 
 ### Code Review & Commits
 
@@ -382,7 +382,9 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -t                       # choose files in an interactive tree picker
-gavel commit -A                       # split staged changes into multiple commits
+gavel commit -A                       # split staged changes into multiple commits by directory
+gavel commit -G                       # let the LLM split staged changes into logical commits + a chore commit for lock/generated files
+gavel commit -G -A                    # stage everything first, then group logically
 gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
@@ -392,9 +394,13 @@ gavel commit --force                  # skip hooks
 |------|-------------|
 | `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
 | `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
-| `-A` / `--commit-all` | Ask the LLM to group the selected change set into multiple commits; if nothing is staged, stage all first |
+| `-A` / `--commit-all` | Split the selected change set into multiple commits grouped by directory; if nothing is staged, stage all first |
+| `-G` / `--ai-group` | Ask the LLM to split the change set into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles) instead of grouping by directory. Combine with `-A` to stage all changes first |
+| `--max-commits` | Cap the number of commits `-G` produces, excluding the chore commit (default 7). Fed to the grouping prompt and re-enforced via a consolidation follow-up if exceeded |
+| `--group-by-scope` | With `-G`, treat repomap scope as the primary commit boundary (default `false`: group by logical change, scope is only a hint) |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
-| `--model` | Override LLM model from `.gavel.yaml` `commit.model` |
+| `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.model` (fast/haiku-class) |
+| `--group-model` | Override LLM model for AI grouping (`-G`) from `.gavel.yaml` `commit.groupModel` (capable/sonnet-class); falls back to `--model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
@@ -457,6 +463,8 @@ gavel pr list --all --org myorg               # all repos in org
 | `--ui` | Open PR dashboard in browser with live updates |
 | `--menu-bar` | Show macOS menu bar status indicator |
 | `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
+| `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
+| `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
 
 #### `gavel pr fix`
 
@@ -632,7 +640,7 @@ gavel ui serve run.json other-run.json --auto-stop=10m --idle-timeout=5m
 |------|-------------|
 | `run.json [other-run.json ...]` | One or more JSON snapshots to load and merge in order |
 | `--port` | Bind this port (0 = pick ephemeral) |
-| `--addr` | Interface to bind (default: `localhost`) |
+| `--addr` | Interface to bind (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--auto-stop` | Hard wall-clock deadline from process start (default: `30m`) |
 | `--idle-timeout` | Exit after this long with no HTTP requests (default: `5m`) |
 | `--url-file` | Write the bound URL to this path for scripting |
@@ -674,8 +682,11 @@ Manage and execute TODO items with Claude Code integration.
 gavel todos list
 gavel todos list --status pending
 gavel todos run .todos/fix-bug.md
+gavel todos run --check                  # run tests/lint when the agent finishes, feed failures back to it
 gavel todos check .todos/fix-bug.md
 ```
+
+`--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt-in via the flag, `.gavel.yaml` `checks:`, or a TODO's frontmatter `checks:` block.
 
 ## Output Formats
 
@@ -721,7 +732,8 @@ lint:
       enabled: true                   # opt in to jscpd duplicate detection
 
 commit:
-  model: claude                      # LLM model for gavel commit
+  model: claude-haiku-4-5            # fast model for commit-message/PR generation
+  groupModel: claude-sonnet-4-5      # capable model for AI commit grouping (-G)
   hooks:                             # pre-commit hooks
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"
@@ -734,6 +746,14 @@ commit:
 fixtures:
   enabled: true                      # auto-discover fixture files during gavel test
   files: ["tests/**/*.fixture.md"]   # override default glob (**/*.fixture.md)
+
+checks:                              # post-completion loop for `gavel todos run --check`
+  enabled: true                      # run tests/lint after the agent is done, feed failures back
+  maxIterations: 3                   # max agent re-runs before giving up
+  test:                              # omit to skip tests
+    changed: true                    # only packages affected by the agent's changes
+  lint:                              # omit to skip linting
+    changed: true                    # only new violations vs the base ref
 
 ssh:
   cmd: "gavel test --lint --fixtures" # override the command run on git push

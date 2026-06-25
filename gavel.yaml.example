@@ -128,6 +128,27 @@ fixtures:
     - "tests/**/*.fixture.md"
     - "fixtures/**/*.md"
 
+checks:
+  # The post-completion check loop for `gavel todos run --check`. Once an agent
+  # reports it is done, gavel runs the configured test/lint suite below; if it
+  # fails, gavel feeds a compact failure summary back to the agent and re-runs,
+  # looping until the checks pass or maxIterations is reached. Opt-in: the loop
+  # runs only when enabled here (or forced on by --check / the dashboard toggle).
+  # A TODO's frontmatter `checks:` block overrides these project defaults.
+  enabled: true
+  # Maximum number of agent re-runs before giving up (default 3).
+  maxIterations: 3
+  # Omit `test` to skip tests; omit `lint` to skip linting. When the loop is
+  # enabled with neither set, it defaults to running both against changed files.
+  test:
+    changed: true        # only packages affected by the agent's changes
+    timeout: 5m          # global wall-clock deadline for the test run
+    # paths: ["./pkg/..."]  # restrict to specific package paths
+  lint:
+    changed: true        # only report new violations vs the base ref
+    timeout: 5m          # per-linter deadline
+    # linters: ["golangci-lint"]  # restrict to specific linters
+
 ssh:
   # Overrides the command executed by the SSH post-receive hook / push backend.
   # If omitted, the fallback is `gavel test --lint`.
