@@ -74,24 +74,28 @@ func (opt AnalyzeOptions) Pretty() api.Text {
 
 type AnalyzeOptions struct {
 	HistoryOptions `json:",inline"`
-	Input          []string         `json:"input" flag:"input" help:"Input JSON files from previous analysis runs (supports multiple files)"`
-	Model          string           `json:"model" flag:"model" help:"AI model to use for analysis"`
-	MaxConcurrent  int              `json:"max_concurrent" flag:"max-concurrent" help:"Maximum concurrent analysis tasks" default:"4"`
-	ScopeTypes     []string         `json:"scope_types" flag:"scope" help:"Limit analysis to these scope types"`
-	CommitTypes    []string         `json:"commit_types" flag:"commit-types" help:"Limit analysis to these commit types"`
-	Technologies   []string         `json:"technologies" flag:"tech" help:"Limit analysis to these technologies"`
-	Debug          bool             `json:"debug" flag:"debug" help:"Enable debug logging"`
-	MinScore       int              `json:"min_score" flag:"ai-min-score" help:"Minimum score for commit to be excluded from ai analysis" default:"15"`
-	AI             bool             `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
-	AITimeout      time.Duration    `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
-	Summary        bool             `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
-	SummaryWindow  GroupByWindow    `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
-	Short          bool             `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
-	Include        []string         `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
-	Exclude        []string         `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
-	Verbose        bool             `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
-	agent          ai.Agent         `json:"-"`
-	arch           repomap.ArchConf `json:"-"`
+	Input          []string `json:"input" flag:"input" help:"Input JSON files from previous analysis runs (supports multiple files)"`
+	Model          string   `json:"model" flag:"model" help:"AI model to use for analysis"`
+	MaxConcurrent  int      `json:"max_concurrent" flag:"max-concurrent" help:"Maximum concurrent analysis tasks" default:"4"`
+	ScopeTypes     []string `json:"scope_types" flag:"scope" help:"Limit analysis to these scope types"`
+	CommitTypes    []string `json:"commit_types" flag:"commit-types" help:"Limit analysis to these commit types"`
+	Technologies   []string `json:"technologies" flag:"tech" help:"Limit analysis to these technologies"`
+	Debug          bool     `json:"debug" flag:"debug" help:"Enable debug logging"`
+	MinScore       int      `json:"min_score" flag:"ai-min-score" help:"Minimum score for commit to be excluded from ai analysis" default:"15"`
+	// MaxBodyLines caps the commit message body length the LLM is asked to
+	// produce. Scaled to the diff size by the commit package; 0 means
+	// subject-only (no body).
+	MaxBodyLines  int              `json:"max_body_lines,omitempty"`
+	AI            bool             `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
+	AITimeout     time.Duration    `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
+	Summary       bool             `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
+	SummaryWindow GroupByWindow    `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
+	Short         bool             `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
+	Include       []string         `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
+	Exclude       []string         `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
+	Verbose       bool             `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
+	agent         ai.Agent         `json:"-"`
+	arch          repomap.ArchConf `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {
