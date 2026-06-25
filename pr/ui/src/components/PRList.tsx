@@ -1,10 +1,10 @@
-import { useState } from 'react';
 import type { PRItem, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
-import { groupByOrg, prKey, paletteClass, computeCounts } from '../utils';
+import { groupByOrg, prKey, computeCounts } from '../utils';
 import { Avatar } from './Avatar';
 import { GavelIcon } from './GavelIcon';
+import { RepoIcon } from './RepoIcon';
 import { TodoBadge } from './TodoBadge';
 import { GitChangesBadge } from './GitChangesBadge';
 
@@ -19,44 +19,6 @@ interface Props {
   procStatus?: Record<string, ProcStatus>;
   onProcChanged?: () => void;
   onProcEdit?: (project: Project) => void;
-}
-
-interface RepoIconProps {
-  repo: string;
-  homepageUrl?: string;
-  size: number;
-}
-
-function RepoIcon({ repo, homepageUrl, size }: RepoIconProps) {
-  const [faviconFailed, setFaviconFailed] = useState(false);
-  const showFavicon = !!homepageUrl && !faviconFailed;
-
-  if (showFavicon) {
-    const src = `/api/repos/favicon?homepage=${encodeURIComponent(homepageUrl!)}`;
-    return (
-      <img
-        src={src}
-        alt={repo}
-        title={repo}
-        width={size}
-        height={size}
-        className="inline-block shrink-0 rounded bg-white"
-        loading="lazy"
-        onError={() => setFaviconFailed(true)}
-      />
-    );
-  }
-
-  const short = repo.split('/').pop() || repo;
-  return (
-    <span
-      className={`inline-flex items-center justify-center shrink-0 rounded font-semibold ${paletteClass(repo)}`}
-      style={{ width: size, height: size, fontSize: Math.max(9, Math.floor(size * 0.5)) }}
-      title={repo}
-    >
-      {(short.charAt(0) || '?').toUpperCase()}
-    </span>
-  );
 }
 
 // GroupCounts shows per-group open (green) and failing (red) totals on the

@@ -36,9 +36,19 @@ func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetada
 		logger.Warnf("Failed to load .gavel.yaml: %v", err)
 	}
 
+	// Scope the commit to the files the agent's session actually edited. Without
+	// a session id (e.g. a codex run with no on-disk Claude log) fall back to
+	// staging the whole change set, logging the reason rather than failing.
+	stage := StageAll
+	if meta.SessionID != "" {
+		stage = meta.SessionID
+	} else {
+		logger.Infof("commit: no agent session id; staging all changes")
+	}
+
 	result, err := Run(ctx, Options{
 		WorkDir:     commitDir,
-		Stage:       StageAll,
+		Stage:       stage,
 		AddMetadata: true,
 		IssueID:     meta.IssueID,
 		SessionID:   meta.SessionID,

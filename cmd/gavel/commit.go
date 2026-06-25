@@ -17,7 +17,7 @@ import (
 )
 
 type CommitOptions struct {
-	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all" default:"staged"`
+	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all, or a Claude session id to commit only the files that session's Edit/Write tools touched" default:"staged"`
 	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
 	AIGroup      bool   `flag:"ai-group" short:"G" help:"Ask the LLM to split the change set into logical commit groups (and a separate chore commit for lock/generated files) instead of grouping by directory. Combine with -A to first stage all changes."`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
@@ -125,6 +125,7 @@ Examples:
   gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
   gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
   gavel commit --stage all --dry-run    # stage everything, print message
+  gavel commit --stage <session-id>     # commit only the files that Claude session edited
   gavel commit --force                  # skip hooks
   gavel commit -y                       # auto-unstage linked-dep replacements, auto-AI-fix lint findings
   gavel commit --precommit=fail         # error on gitignore or linked-deps issues

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
+import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
 import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
@@ -35,6 +36,11 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   const items = allItems.filter(item => isTodoVisible(item, hidden));
   const hiddenCount = allItems.length - items.length;
   const counts = data?.counts ?? workspace.todoCounts ?? emptyCounts;
+
+  // Match the PR tab's per-repo header: when the workspace maps to a GitHub repo,
+  // show that repo's icon and short name in place of a generic folder + dir name.
+  const repo = workspace.repos?.[0];
+  const repoShort = repo ? repo.split('/').pop() || repo : '';
 
   const checkedRefs = items.filter(item => checked.has(item.ref)).map(item => item.ref);
   const allChecked = items.length > 0 && checkedRefs.length === items.length;
@@ -97,8 +103,17 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
           className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
-          <GavelIcon name="codicon:folder" className="text-muted-foreground text-xs" />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={workspace.dir}>{workspace.name}</span>
+          {repo ? (
+            <>
+              <RepoIcon repo={repo} size={16} />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={workspace.dir}>{repoShort}</span>
+            </>
+          ) : (
+            <>
+              <GavelIcon name="codicon:folder" className="text-muted-foreground text-xs" />
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={workspace.dir}>{workspace.name}</span>
+            </>
+          )}
         </button>
         {multiSelect && checkedRefs.length > 0 ? (
           <div className="flex shrink-0 items-center gap-1.5">

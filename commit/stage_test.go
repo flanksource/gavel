@@ -1,6 +1,10 @@
 package commit
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/verify"
@@ -129,6 +133,72 @@ func TestStageUnstagedExcludesUntracked(t *testing.T) {
 	staged := mustStagedFiles(t, dir)
 	assert.Contains(t, staged, "README.md")
 	assert.NotContains(t, staged, "new.txt", "unstaged mode must not add untracked files")
+}
+
+// TestStageSessionStagesOnlyEditedFiles confirms `--stage=<session-id>` stages
+// exactly the files the session's Edit/Write tools touched: an unrelated dirty
+// file the agent never touched is left out, and edited files matching .gitignore
+// or .gavel.yaml commit.gitignore are skipped rather than aborting the stage.
+func TestStageSessionStagesOnlyEditedFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := initCommitRepo(t)
+	writeFile(t, dir, ".gitignore", "dist/\n")
+	gitRun(t, dir, "add", ".gitignore")
+	gitRun(t, dir, "commit", "-m", "ignore dist")
+
+	writeFile(t, dir, "app.go", "package app\n")        // edited by session
+	writeFileInDir(t, dir, "dist/bundle.js", "x\n")     // edited, but .gitignore'd
+	writeFile(t, dir, "secret.env", "TOKEN=1\n")        // edited, but commit.gitignore'd
+	writeFile(t, dir, "unrelated.go", "package main\n") // NOT edited by the session
+
+	sessionID := "sess-abc"
+	writeSessionLog(t, home, sessionID, []string{
+		filepath.Join(dir, "app.go"),
+		filepath.Join(dir, "dist/bundle.js"),
+		filepath.Join(dir, "secret.env"),
+	})
+
+	err := stageFiles(dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"app.go"}, mustStagedFiles(t, dir))
+}
+
+// TestStageSessionMissingLog surfaces a clear error when the session id has no
+// on-disk log, rather than silently committing nothing.
+func TestStageSessionMissingLog(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := initCommitRepo(t)
+
+	err := stageFiles(dir, "no-such-session", verify.CommitConfig{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no-such-session")
+}
+
+// writeSessionLog lays down a Claude session log under the fake HOME that
+// records an Edit tool_use for each absolute file path.
+func writeSessionLog(t *testing.T, home, sessionID string, absPaths []string) {
+	t.Helper()
+	projects := filepath.Join(home, ".claude", "projects", "repo")
+	require.NoError(t, os.MkdirAll(projects, 0o755))
+
+	var b strings.Builder
+	for _, p := range absPaths {
+		line, err := json.Marshal(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"content": []map[string]any{
+					{"type": "tool_use", "name": "Edit", "input": map[string]any{"file_path": p}},
+				},
+			},
+		})
+		require.NoError(t, err)
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(projects, sessionID+".jsonl"), []byte(b.String()), 0o644))
 }
 
 func mustStagedFiles(t *testing.T, dir string) []string {

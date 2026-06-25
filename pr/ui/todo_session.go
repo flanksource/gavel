@@ -30,44 +30,6 @@ const (
 // appear timeout (e.g. a stale/unknown session id, or a run that never started).
 var errSessionLogMissing = errors.New("session log did not appear")
 
-// todoSessionEvent is the JSON shape pushed to the dashboard's session tab for
-// each parsed Claude session-log event.
-type todoSessionEvent struct {
-	Kind string `json:"kind"`
-	Text string `json:"text,omitempty"`
-	Tool string `json:"tool,omitempty"`
-	// Subagent is the subagent_type for Task/Agent tool calls (e.g. "Explore"),
-	// surfaced so the dashboard can filter agent calls by kind independently of
-	// the generic "Task" tool name.
-	Subagent    string `json:"subagent,omitempty"`
-	Action      string `json:"action,omitempty"`
-	StopReason  string `json:"stopReason,omitempty"`
-	ErrorType   string `json:"errorType,omitempty"`
-	ErrorStatus int    `json:"errorStatus,omitempty"`
-}
-
-func sessionEventPayload(ev history.SessionEvent) todoSessionEvent {
-	out := todoSessionEvent{Kind: string(ev.Kind)}
-	switch ev.Kind {
-	case history.EventAssistantText, history.EventThinking:
-		out.Text = ev.Text
-	case history.EventToolUse:
-		out.Tool = ev.ToolUse.Tool
-		out.Action = history.FormatToolUseSummary(ev.ToolUse.Tool, ev.ToolUse.Input)
-		if sub, ok := ev.ToolUse.Input["subagent_type"].(string); ok {
-			out.Subagent = sub
-		}
-	case history.EventTurnEnd:
-		out.StopReason = ev.StopReason
-	case history.EventError:
-		out.Text = ev.Text
-		out.StopReason = ev.StopReason
-		out.ErrorType = ev.ErrorType
-		out.ErrorStatus = ev.ErrorStatus
-	}
-	return out
-}
-
 // handleTodoSessionStats returns the rolled-up stats for a TODO's agent session
 // — agent/model/effort, elapsed time, token usage and derived cost. Live runs are
 // served from the in-memory cache the cmux tailer feeds; sessions no tailer is
@@ -166,8 +128,8 @@ func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) 
 
 // handleTodoSessionStream follows a TODO's agent session log over SSE. The
 // session id is recorded on the issue (session:<id> label) when the run starts,
-// so the transcript itself is never stored — the dashboard re-parses it live
-// from the log via captain's session parser instead.
+// so the transcript itself is never stored — the dashboard streams the raw
+// captain session entries and renders them with clicky-ui's SessionViewer.
 func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
 	if sessionID == "" {
@@ -193,8 +155,9 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 	streamSessionLog(w, r, flusher, path)
 }
 
-// streamSessionLog tails path, parsing each complete line into session events
-// and emitting them as SSE `event` frames. It first replays the existing log
+// streamSessionLog tails path, parsing each complete line into a captain
+// SessionEntry and emitting the conversational ones as SSE `entry` frames (the
+// schema clicky-ui's SessionViewer consumes). It first replays the existing log
 // (so reopening the tab shows full history) then follows appended lines until
 // the client disconnects. Unlike the executor's tailer it does not stop at
 // end_turn — a resumed run keeps streaming into the same log.
@@ -229,14 +192,15 @@ func streamSessionLog(w http.ResponseWriter, r *http.Request, flusher http.Flush
 					}
 					line := pending[:i]
 					pending = pending[i+1:]
-					events, perr := history.ParseSessionEvents(line)
-					if perr != nil {
+					// Emit the raw captain entry for the SessionViewer, but only for
+					// conversational (assistant) lines — Events() is empty for user
+					// tool-results and bookkeeping, which the viewer would drop anyway.
+					var entry history.SessionEntry
+					if json.Unmarshal(line, &entry) != nil || len(entry.Events()) == 0 {
 						continue
 					}
-					for _, ev := range events {
-						progressed = true
-						emit("event", sessionEventPayload(ev))
-					}
+					progressed = true
+					emit("entry", entry)
 				}
 			}
 			if rerr == io.EOF {

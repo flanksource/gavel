@@ -30,6 +30,14 @@ type todoCommitsResponse struct {
 	Commits []todoCommit `json:"commits"`
 }
 
+// todoCommitDiffResponse carries one commit's rendered diff (ANSI-colored
+// `git show` output). Truncated is set when the diff exceeded the size cap.
+type todoCommitDiffResponse struct {
+	Hash      string `json:"hash"`
+	Diff      string `json:"diff"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 // handleTodoCommits lists the git commits that reference a todo through their
 // Gavel-Issue-Id trailer, each with a link to the commit on the origin remote.
 // It resolves the todo to read its id, then scans the workspace's git history.
@@ -62,6 +70,37 @@ func (s *Server) handleTodoCommits(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(todoCommitsResponse{ //nolint:errcheck
 		IssueID: strings.TrimSpace(todo.ID),
 		Commits: commits,
+	})
+}
+
+// handleTodoCommitDiff returns the ANSI-colored diff for a single commit so the
+// dashboard can expand a commit row to show its changes. The commit is located
+// by hash within the workspace dir; the provider/todo is not needed.
+func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hash := strings.TrimSpace(r.URL.Query().Get("hash"))
+	if hash == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("hash is required"))
+		return
+	}
+	if !gavelgit.IsValidCommitHash(hash) {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
+		return
+	}
+	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	diff, truncated, err := gavelgit.CommitDiff(dir, hash)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoCommitDiffResponse{ //nolint:errcheck
+		Hash:      hash,
+		Diff:      diff,
+		Truncated: truncated,
 	})
 }
 

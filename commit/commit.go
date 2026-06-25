@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/clicky"
 	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
@@ -24,7 +25,6 @@ var (
 	ErrNothingStaged            = errors.New("nothing staged to commit")
 	ErrNothingToPush            = errors.New("nothing to commit and no local commits ahead of upstream")
 	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
-	ErrInvalidStage             = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
 	ErrAIGroupWithMessage       = errors.New("--ai-group does not support --message")
 	ErrAIGroupWithInteractive   = errors.New("--ai-group cannot be combined with --interactive")
@@ -618,6 +618,9 @@ func commitGroups(ctx context.Context, opts Options, source stagedSource, result
 //
 // StageStaged is left untouched: an explicit `git add` is an intentional
 // override of .gitignore for that commit.
+//
+// Any other mode value is a Claude session id: stageSessionFiles stages exactly
+// the files that session's Edit/Write tools touched (see --stage=<session-id>).
 func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
@@ -637,8 +640,95 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 		}
 		return unstageGitIgnored(workDir, preStaged)
 	default:
-		return fmt.Errorf("%w: %q", ErrInvalidStage, mode)
+		return stageSessionFiles(workDir, mode, cfg)
 	}
+}
+
+// stageSessionFiles stages exactly the files an agent wrote to during the Claude
+// session identified by sessionID — the file_path of every Edit/Write/MultiEdit/
+// NotebookEdit tool call — filtered by .gitignore and the repo's .gavel.yaml
+// commit.gitignore. It scopes a commit to what the agent changed rather than the
+// whole working tree, and backs both `gavel commit --stage=<session-id>` and the
+// todo runner's auto-commit. Files edited outside workDir, no longer present, or
+// matching an ignore rule are skipped (each logged).
+func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
+	sessionFile, err := history.FindSessionFile(sessionID)
+	if err != nil {
+		return fmt.Errorf("resolve session %q: %w", sessionID, err)
+	}
+	modified, err := history.SessionModifiedFiles(sessionFile)
+	if err != nil {
+		return err
+	}
+
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("resolve work dir %q: %w", workDir, err)
+	}
+
+	candidates := make([]string, 0, len(modified))
+	for _, p := range modified {
+		abs := p
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(absWork, abs)
+		}
+		rel, err := filepath.Rel(absWork, abs)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			logger.Infof("commit: skipping %s (edited outside %s)", p, absWork)
+			continue
+		}
+		if _, statErr := os.Stat(abs); statErr != nil {
+			logger.Infof("commit: skipping %s (no longer present)", rel)
+			continue
+		}
+		candidates = append(candidates, rel)
+	}
+
+	keep, err := filterIgnoredPaths(absWork, candidates, cfg)
+	if err != nil {
+		return err
+	}
+	return addFiles(workDir, keep)
+}
+
+// filterIgnoredPaths drops paths the repo's .gitignore (naming one to `git add`
+// would error) or .gavel.yaml commit.gitignore excludes, logging each skip.
+func filterIgnoredPaths(workDir string, candidates []string, cfg verify.CommitConfig) ([]string, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	ignored := make(map[string]struct{})
+
+	absToRel := make(map[string]string, len(candidates))
+	abs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		p := filepath.Join(workDir, c)
+		absToRel[p] = c
+		abs = append(abs, p)
+	}
+	_, gitIgnored := utils.PartitionGitIgnored(abs, workDir)
+	for _, p := range gitIgnored {
+		rel := absToRel[p]
+		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
+		ignored[rel] = struct{}{}
+	}
+
+	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	for _, v := range violations {
+		logger.Infof("commit: skipping %s (matches .gavel.yaml commit.gitignore %q)", v.File, v.Pattern)
+		ignored[v.File] = struct{}{}
+	}
+
+	keep := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if _, skip := ignored[c]; !skip {
+			keep = append(keep, c)
+		}
+	}
+	return keep, nil
 }
 
 // unstageGitIgnored removes from the index any staged file that matches the
