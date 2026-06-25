@@ -411,20 +411,21 @@ type TODOFrontmatter struct {
 	fixtures.FrontMatter `yaml:",inline" json:",inline"` // Embed standard fixture frontmatter
 
 	// TODO-specific fields
-	Title         string            `yaml:"title,omitempty" json:"title,omitempty"`
-	Priority      Priority          `yaml:"priority,omitempty" json:"priority,omitempty"`
-	Status        Status            `yaml:"status,omitempty" json:"status,omitempty"`
-	LastRun       *time.Time        `yaml:"last_run,omitempty" json:"last_run,omitempty"`
-	Attempts      int               `yaml:"attempts,omitempty" json:"attempts,omitempty"`
-	Language      Language          `yaml:"language,omitempty" json:"language,omitempty"`
-	WorkingCommit string            `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
-	Branch        string            `yaml:"branch,omitempty" json:"branch,omitempty"`
-	CWD           string            `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-	Path          StringOrSlice     `yaml:"path,omitempty" json:"path,omitempty"`
-	LLM           *LLM              `yaml:"llm,omitempty" json:"llm,omitempty"`
-	Verify        *TODOVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
-	PR            *PR               `yaml:"pr,omitempty" json:"pr,omitempty"`
-	Prompt        string            `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Title         string             `yaml:"title,omitempty" json:"title,omitempty"`
+	Priority      Priority           `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Status        Status             `yaml:"status,omitempty" json:"status,omitempty"`
+	LastRun       *time.Time         `yaml:"last_run,omitempty" json:"last_run,omitempty"`
+	Attempts      int                `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Language      Language           `yaml:"language,omitempty" json:"language,omitempty"`
+	WorkingCommit string             `yaml:"working_commit,omitempty" json:"working_commit,omitempty"`
+	Branch        string             `yaml:"branch,omitempty" json:"branch,omitempty"`
+	CWD           string             `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	Path          StringOrSlice      `yaml:"path,omitempty" json:"path,omitempty"`
+	LLM           *LLM               `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Verify        *TODOVerifyConfig  `yaml:"verify,omitempty" json:"verify,omitempty"`
+	Checks        *AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
+	PR            *PR                `yaml:"pr,omitempty" json:"pr,omitempty"`
+	Prompt        string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -446,6 +447,7 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "path")
 	delete(f.Metadata, "llm")
 	delete(f.Metadata, "verify")
+	delete(f.Metadata, "checks")
 	delete(f.Metadata, "working_commit")
 	delete(f.Metadata, "branch")
 	delete(f.Metadata, "cwd")
@@ -496,6 +498,97 @@ func (f TODOFrontmatter) Pretty() api.Text {
 type TODOVerifyConfig struct {
 	Categories     []string `yaml:"categories,omitempty" json:"categories,omitempty"`
 	ScoreThreshold int      `yaml:"score_threshold,omitempty" json:"score_threshold,omitempty"`
+}
+
+// DefaultMaxCheckIterations bounds how many times the agent is re-run with
+// failing test/lint feedback before the post-completion check loop gives up.
+const DefaultMaxCheckIterations = 3
+
+// AgentChecksConfig configures the post-completion check loop: the gavel test
+// and lint options gavel runs once an agent reports done, feeding any failures
+// back to the agent. It is read from .gavel.yaml (project default) and from a
+// TODO's frontmatter (per-issue override), and force-enabled by the --check
+// flag / dashboard toggle. The loop is opt-in: it runs only when enabled.
+type AgentChecksConfig struct {
+	// Enabled gates the loop. nil means "inherit" (off unless a higher layer or
+	// the --check flag turns it on); a non-nil value is authoritative.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// MaxIterations caps the number of agent re-runs. <=0 resolves to
+	// DefaultMaxCheckIterations.
+	MaxIterations int `yaml:"maxIterations,omitempty" json:"maxIterations,omitempty"`
+	// Test, when non-nil, runs `gavel test` with these options. nil skips tests.
+	Test *AgentTestConfig `yaml:"test,omitempty" json:"test,omitempty"`
+	// Lint, when non-nil, runs `gavel lint` with these options. nil skips lint.
+	Lint *AgentLintConfig `yaml:"lint,omitempty" json:"lint,omitempty"`
+}
+
+// AgentTestConfig is the subset of gavel test options the check loop exposes.
+type AgentTestConfig struct {
+	Paths   []string `yaml:"paths,omitempty" json:"paths,omitempty"`     // package paths to test (empty = discover)
+	Changed bool     `yaml:"changed,omitempty" json:"changed,omitempty"` // only packages affected by changes
+	Timeout string   `yaml:"timeout,omitempty" json:"timeout,omitempty"` // global wall-clock deadline (e.g. "5m")
+}
+
+// AgentLintConfig is the subset of gavel lint options the check loop exposes.
+type AgentLintConfig struct {
+	Linters []string `yaml:"linters,omitempty" json:"linters,omitempty"` // linters to run (empty = all detected)
+	Changed bool     `yaml:"changed,omitempty" json:"changed,omitempty"` // only report new issues vs the base ref
+	Timeout string   `yaml:"timeout,omitempty" json:"timeout,omitempty"` // per-linter deadline (e.g. "5m")
+}
+
+// IsEnabled reports whether the loop should run for this resolved config.
+func (c AgentChecksConfig) IsEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// HasChecks reports whether at least one of test/lint is configured to run.
+func (c AgentChecksConfig) HasChecks() bool {
+	return c.Test != nil || c.Lint != nil
+}
+
+// Overlay returns base with override's set fields layered on top (override wins
+// field-by-field; unset fields leave base intact). It is the shared building
+// block for both .gavel.yaml layer merging and frontmatter-over-project
+// resolution. A nil override returns base unchanged.
+func (base AgentChecksConfig) Overlay(override *AgentChecksConfig) AgentChecksConfig {
+	if override == nil {
+		return base
+	}
+	if override.Enabled != nil {
+		base.Enabled = override.Enabled
+	}
+	if override.MaxIterations != 0 {
+		base.MaxIterations = override.MaxIterations
+	}
+	if override.Test != nil {
+		base.Test = override.Test
+	}
+	if override.Lint != nil {
+		base.Lint = override.Lint
+	}
+	return base
+}
+
+// ResolveAgentChecks produces the effective config for a run by overlaying a
+// TODO's frontmatter onto the project default (frontmatter wins field-by-field),
+// then force-enabling when the caller (the --check flag or dashboard) requests
+// it. Defaults are then applied: MaxIterations falls back to
+// DefaultMaxCheckIterations, and an enabled config with neither test nor lint
+// set gets the sensible default of running both against changed files.
+func ResolveAgentChecks(project AgentChecksConfig, frontmatter *AgentChecksConfig, forceEnabled bool) AgentChecksConfig {
+	resolved := project.Overlay(frontmatter)
+	if forceEnabled {
+		on := true
+		resolved.Enabled = &on
+	}
+	if resolved.MaxIterations <= 0 {
+		resolved.MaxIterations = DefaultMaxCheckIterations
+	}
+	if resolved.IsEnabled() && !resolved.HasChecks() {
+		resolved.Test = &AgentTestConfig{Changed: true}
+		resolved.Lint = &AgentLintConfig{Changed: true}
+	}
+	return resolved
 }
 
 // LLM contains configuration and tracking for LLM usage when executing a TODO.

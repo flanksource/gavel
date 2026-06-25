@@ -182,6 +182,39 @@ func TestClientEnsureWorkspaceCreatesMissingWorkspace(t *testing.T) {
 	}
 }
 
+func TestFocusSessionSelectsMatchingWorkspace(t *testing.T) {
+	runner := &recordingRunner{out: map[string]string{
+		joinArgs([]string{"list-workspaces", "--json"}): workspaceList("workspace:ws9", "repo-claude", "/repo"),
+	}}
+	client := &Client{Runner: runner.run}
+
+	if err := FocusSession(context.Background(), client, "/repo", "claude"); err != nil {
+		t.Fatalf("FocusSession() error = %v", err)
+	}
+	// The workspace name encodes the agent (repo-claude), so the matched ref is
+	// switched to with select-workspace as the final command.
+	want := []string{"select-workspace", "--workspace", "workspace:ws9"}
+	last := runner.calls[len(runner.calls)-1].args
+	if !reflect.DeepEqual(last, want) {
+		t.Fatalf("select-workspace args = %#v, want %#v", last, want)
+	}
+}
+
+func TestFocusSessionErrorsWhenWorkspaceMissing(t *testing.T) {
+	runner := &recordingRunner{out: map[string]string{
+		joinArgs([]string{"list-workspaces", "--json"}): `{"workspaces":[]}`,
+	}}
+	client := &Client{Runner: runner.run}
+
+	err := FocusSession(context.Background(), client, "/repo", "claude")
+	if err == nil {
+		t.Fatal("FocusSession() error = nil, want error for a missing workspace")
+	}
+	if !strings.Contains(err.Error(), "no cmux workspace") {
+		t.Fatalf("error = %v, want 'no cmux workspace'", err)
+	}
+}
+
 func joinArgs(args []string) string {
 	return strings.Join(args, "\x00")
 }

@@ -124,14 +124,14 @@ func TestCmuxExecutorResumesPriorSession(t *testing.T) {
 	for _, call := range runner.calls {
 		if len(call.args) > 0 && call.args[0] == "send" {
 			payload := call.args[len(call.args)-1]
-			if strings.HasPrefix(payload, "claude") {
+			if strings.Contains(payload, "claude --") {
 				agentSend = payload
 				break
 			}
 		}
 	}
-	if agentSend != "claude --resume prior-session" {
-		t.Fatalf("agent send = %q, want %q", agentSend, "claude --resume prior-session")
+	if !strings.HasSuffix(agentSend, "claude --resume prior-session") {
+		t.Fatalf("agent send = %q, want suffix %q", agentSend, "claude --resume prior-session")
 	}
 	// Resume reuses the prior id rather than minting a new one.
 	if todo.LLM == nil || todo.LLM.SessionId != "prior-session" {
@@ -160,7 +160,7 @@ func TestCmuxExecutorRecordsSessionBeforeAgentLaunch(t *testing.T) {
 	ctx.SetSessionIDHook(func(sid string) {
 		recorded = sid
 		for _, call := range runner.calls {
-			if len(call.args) > 0 && call.args[0] == "send" && strings.HasPrefix(call.args[len(call.args)-1], "claude") {
+			if len(call.args) > 0 && call.args[0] == "send" && strings.Contains(call.args[len(call.args)-1], "claude --") {
 				agentSentBeforeHook = true
 			}
 		}
@@ -210,14 +210,14 @@ func TestCmuxExecutorUsesConfiguredSessionID(t *testing.T) {
 	for _, call := range runner.calls {
 		if len(call.args) > 0 && call.args[0] == "send" {
 			payload := call.args[len(call.args)-1]
-			if strings.HasPrefix(payload, "claude") {
+			if strings.Contains(payload, "claude --") {
 				agentSend = payload
 				break
 			}
 		}
 	}
-	if agentSend != "claude --session-id fixed-session" {
-		t.Fatalf("agent send = %q, want %q", agentSend, "claude --session-id fixed-session")
+	if !strings.HasSuffix(agentSend, "claude --session-id fixed-session") {
+		t.Fatalf("agent send = %q, want suffix %q", agentSend, "claude --session-id fixed-session")
 	}
 	if todo.LLM == nil || todo.LLM.SessionId != "fixed-session" {
 		t.Fatalf("configured session id not recorded: %+v", todo.LLM)
@@ -496,8 +496,8 @@ func TestCmuxExecutorDispatchesPromptFileAndWaitsForIdle(t *testing.T) {
 	if len(agentSend) != 7 || agentSend[0] != "send" || agentSend[2] != "workspace:ws1" || agentSend[4] != "surface:sf1" || agentSend[5] != "--" {
 		t.Fatalf("unexpected agent send args: %#v", agentSend)
 	}
-	if payload := agentSend[6]; !strings.HasPrefix(payload, "claude --session-id ") || !strings.HasSuffix(payload, " --model opus") {
-		t.Fatalf("agent send payload = %q, want claude --session-id <uuid> --model opus", payload)
+	if payload := agentSend[6]; !strings.Contains(payload, "claude --session-id ") || !strings.HasSuffix(payload, " --model opus") {
+		t.Fatalf("agent send payload = %q, want ...claude --session-id <uuid> --model opus", payload)
 	}
 	if todo.LLM == nil || todo.LLM.SessionId == "" {
 		t.Fatalf("expected session id recorded on todo, got %+v", todo.LLM)
@@ -551,7 +551,7 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 			return "Claude ready\n> ", nil
 		case "send":
 			payload := args[len(args)-1]
-			if strings.HasPrefix(payload, "claude") {
+			if strings.Contains(payload, "claude --") {
 				agentSends++
 				return "ok", nil
 			}
@@ -594,6 +594,87 @@ func TestCmuxExecutorRetriesInitialPromptSend(t *testing.T) {
 	}
 }
 
+// TestCmuxExecutorRepressesEnterUntilSessionStarts asserts that when the initial
+// prompt's Enter is dropped (no session log, static surface) the executor
+// re-presses Enter until the session log appears, then proceeds normally.
+func TestCmuxExecutorRepressesEnterUntilSessionStarts(t *testing.T) {
+	repo := t.TempDir()
+	fakeClaudeHome(t)
+	logPath := sessionLogFile(t, repo, "start-session")
+
+	var pendingSubmit string
+	agentSent := false
+	promptSubmitted := false
+	repressCount := 0
+	runner := func(_ context.Context, _ string, _ string, _ time.Duration, args ...string) (string, error) {
+		switch args[0] {
+		case "list-workspaces":
+			return `{"workspaces":[]}`, nil
+		case "new-workspace":
+			return "workspace:ws1", nil
+		case "new-surface":
+			return "surface:sf1", nil
+		case "send":
+			pendingSubmit = args[len(args)-1]
+			return "ok", nil
+		case "send-key":
+			switch {
+			case strings.Contains(pendingSubmit, "claude --"):
+				agentSent = true
+			case pendingSubmit != "":
+				promptSubmitted = true
+			default:
+				// A re-press with nothing freshly typed: the first one finally
+				// submits the prompt, so the session log is created here.
+				repressCount++
+				if repressCount == 1 {
+					writeSessionLog(t, logPath, completedSessionLine)
+				}
+			}
+			pendingSubmit = ""
+			return "ok", nil
+		case "read-screen":
+			switch {
+			case !agentSent:
+				return "shell ready\n$ ", nil
+			case !promptSubmitted:
+				return "Claude ready\n> ", nil
+			default:
+				// Static while the prompt sits unsent, so the screen signal never
+				// fires and the session-start check must rely on the jsonl.
+				return "prompt waiting to be submitted\n> ", nil
+			}
+		}
+		return "ok", nil
+	}
+	exec := NewCmuxExecutor(CmuxExecutorConfig{
+		WorkDir:                 repo,
+		SessionID:               "start-session",
+		Timeout:                 2 * time.Second,
+		Runner:                  runner,
+		ScreenPollInterval:      time.Millisecond,
+		ScreenStableDuration:    time.Millisecond,
+		SessionLogPollInterval:  time.Millisecond,
+		SessionLogAppearTimeout: time.Second,
+		SessionStartRetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
+	})
+
+	ctx := todopkg.NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	result, err := exec.ExecuteGroup(ctx, []*types.TODO{{
+		ID:              "abc123456789",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Fix cmux", CWD: repo},
+	}})
+	if err != nil {
+		t.Fatalf("ExecuteGroup() error = %v", err)
+	}
+	if result == nil || !result.Success {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if repressCount != 1 {
+		t.Fatalf("Enter re-presses = %d, want 1", repressCount)
+	}
+}
+
 // TestCmuxExecutorFailsWhenSessionLogNeverAppears asserts a claude run fails the
 // run (rather than falling back to screen-idle detection) when the pre-generated
 // session log never materializes.
@@ -610,6 +691,7 @@ func TestCmuxExecutorFailsWhenSessionLogNeverAppears(t *testing.T) {
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,
 		SessionLogAppearTimeout: 5 * time.Millisecond,
+		SessionStartRetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
 	})
 
 	// No session log is ever written, so the tailer reports errSessionLogNotFound.
@@ -657,7 +739,7 @@ func (r *screenRunner) run(_ context.Context, cwd, binary string, _ time.Duratio
 		if r.pendingSubmit == "" {
 			return "ok", nil
 		}
-		if strings.HasPrefix(r.pendingSubmit, "claude") {
+		if strings.Contains(r.pendingSubmit, "claude --") {
 			r.agentSent = true
 		} else {
 			r.promptSent = true

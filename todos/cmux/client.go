@@ -142,6 +142,17 @@ func (c *Client) EnsureWorkspace(ctx context.Context, opts EnsureWorkspaceOpts) 
 	return created, false, nil
 }
 
+// SelectWorkspace switches cmux to the given workspace (the documented
+// `select-workspace` command), bringing its terminal to the front so the user
+// can watch or take over the agent session running there.
+func (c *Client) SelectWorkspace(ctx context.Context, workspaceRef string) error {
+	if strings.TrimSpace(workspaceRef) == "" {
+		return fmt.Errorf("workspace reference is required")
+	}
+	_, err := c.run(ctx, "", "select-workspace", "--workspace", workspaceRef)
+	return err
+}
+
 func (c *Client) FindWorkspace(ctx context.Context, name, cwd string) (WorkspaceRef, bool, error) {
 	workspaces, err := c.ListWorkspaces(ctx)
 	if err != nil {

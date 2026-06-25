@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/flanksource/captain/pkg/ai/pricing"
 )
 
 // assistantLine builds a session-log assistant entry with the given usage so the
@@ -223,6 +225,45 @@ func TestComputeSessionStatsStatePersistsAcrossToolResult(t *testing.T) {
 	}
 	if stats.State != sessionStateWorking {
 		t.Fatalf("State = %q, want %q (tool_result must not clear working)", stats.State, sessionStateWorking)
+	}
+}
+
+func TestNormalizeModelID(t *testing.T) {
+	cases := map[string]string{
+		"claude-opus-4-8":            "claude-opus-4.8",
+		"claude-sonnet-4-5-20250929": "claude-sonnet-4.5",
+		"claude-haiku-4-5-20251001":  "claude-haiku-4.5",
+		"claude-opus-4-1":            "claude-opus-4.1",
+		"sonnet":                     "sonnet",                    // unversioned, unchanged
+		"anthropic/claude-opus-4.8":  "anthropic/claude-opus-4.8", // already dotted, unchanged
+	}
+	for in, want := range cases {
+		if got := normalizeModelID(in); got != want {
+			t.Errorf("normalizeModelID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestComputeSessionStatsPricesHyphenatedModel(t *testing.T) {
+	// Claude session logs carry hyphenated model ids ("claude-opus-4-8") that the
+	// pricing registry keys under dotted OpenRouter ids; finalize must normalize so
+	// the context window and cost resolve instead of silently reading zero.
+	want, ok := pricing.GetModelInfo("anthropic/claude-opus-4.8")
+	if !ok {
+		t.Skip("pricing registry has no anthropic/claude-opus-4.8 entry")
+	}
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	writeSessionLog(t, path, assistantLine("2026-06-23T10:00:00Z", "claude-opus-4-8", 1000, 500, 2000, 100))
+
+	stats, err := computeSessionStats(path)
+	if err != nil {
+		t.Fatalf("computeSessionStats() error = %v", err)
+	}
+	if stats.ContextWindow != want.ContextWindow {
+		t.Fatalf("ContextWindow = %d, want %d (from pricing registry)", stats.ContextWindow, want.ContextWindow)
+	}
+	if stats.CostUSD <= 0 {
+		t.Fatalf("CostUSD = %v, want > 0 for a priced model", stats.CostUSD)
 	}
 }
 
