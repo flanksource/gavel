@@ -333,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
 	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
+	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)

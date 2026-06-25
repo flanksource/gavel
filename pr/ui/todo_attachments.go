@@ -149,3 +149,17 @@ func todoBodyWithAttachments(body string, attachments []todoAttachmentSummary) s
 	}
 	return strings.TrimSpace(sb.String())
 }
+
+// absolutizeAttachmentURLs rewrites the relative attachment links stored in a
+// todo body (`/api/todos/attachments/<id>`) to absolute URLs rooted at origin,
+// so an agent prompt — which runs outside the browser and has no base URL to
+// resolve against — can fetch the stored screenshots. It matches only markdown
+// link/image targets (`](<prefix>`) and is idempotent: once rewritten the link
+// no longer carries the relative marker, so a second pass leaves it untouched.
+func absolutizeAttachmentURLs(body, origin string) string {
+	marker := "](" + attachmentURLPrefix
+	if origin == "" || !strings.Contains(body, marker) {
+		return body
+	}
+	return strings.ReplaceAll(body, marker, "]("+origin+attachmentURLPrefix)
+}

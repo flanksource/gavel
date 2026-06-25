@@ -85,9 +85,18 @@ function modelLabel(stats: SessionStats): string {
   return stats.model || stats.agent || 'claude';
 }
 
+// ctxBarColor shades the context-usage bar from healthy (green) through filling
+// (amber) to nearly-exhausted (red) so an overfull window reads at a glance.
+function ctxBarColor(pct: number): string {
+  if (pct >= 85) return 'bg-red-500';
+  if (pct >= 60) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
 // TodoSessionTimer is the full session readout for the detail pane: identity
-// (model + effort), live elapsed time, total token usage and estimated cost. It
-// renders nothing until the session has produced a log (found).
+// (model + effort), live elapsed time, a context-window usage bar, estimated
+// cost, and a control to focus the session's cmux terminal. It renders nothing
+// until the session has produced a log (found).
 export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
   dir: string;
   provider: string;
@@ -95,9 +104,33 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
   active?: boolean;
 }) {
   const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, active);
+  const [focusBusy, setFocusBusy] = useState(false);
+  const [focusError, setFocusError] = useState('');
+
+  // focusSession brings the agent's cmux terminal to the front. The workspace is
+  // keyed by the run's working directory and agent, so the server can find it
+  // without the UI tracking cmux refs. A closed terminal / stopped cmux surfaces
+  // its reason inline rather than failing silently.
+  const focusSession = async () => {
+    if (focusBusy) return;
+    setFocusBusy(true);
+    setFocusError('');
+    try {
+      const params = new URLSearchParams(todoQuery(dir, provider));
+      if (stats?.agent) params.set('agent', stats.agent);
+      const res = await fetch(`/api/todos/session/focus?${params.toString()}`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not focus cmux session');
+    } catch (err: any) {
+      setFocusError(err?.message || 'Could not focus cmux session');
+    } finally {
+      setFocusBusy(false);
+    }
+  };
+
   if (!sessionId || !stats?.found) return null;
 
   const cost = formatCost(stats.costUsd);
+  const ctxPct = stats.contextWindow > 0 ? (stats.contextTokens / stats.contextWindow) * 100 : 0;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
       <span className="inline-flex items-center gap-1" title={`${stats.agent || 'claude'} session`}>
@@ -113,11 +146,23 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
       </span>
       {stats.contextTokens > 0 && (
         <span
-          className="inline-flex items-center gap-1 tabular-nums"
-          title={`Context window: ${stats.contextTokens.toLocaleString()} tokens${stats.compactions ? ` · compacted ${stats.compactions}×` : ''}\n${stats.inputTokens.toLocaleString()} in / ${stats.outputTokens.toLocaleString()} out${stats.turns ? ` · ${stats.turns} turns` : ''} · ${formatTokens(stats.totalTokens)} total`}
+          className="inline-flex items-center gap-1.5 tabular-nums"
+          title={`Context: ${stats.contextTokens.toLocaleString()}${stats.contextWindow > 0 ? ` / ${stats.contextWindow.toLocaleString()} tokens (${Math.round(ctxPct)}%)` : ' tokens'}${stats.compactions ? ` · compacted ${stats.compactions}×` : ''}\n${stats.inputTokens.toLocaleString()} in / ${stats.outputTokens.toLocaleString()} out${stats.turns ? ` · ${stats.turns} turns` : ''} · ${formatTokens(stats.totalTokens)} total`}
         >
           <GavelIcon name="codicon:symbol-number" className="text-[12px]" />
-          {formatTokens(stats.contextTokens)}
+          {stats.contextWindow > 0 ? (
+            <>
+              <span className="h-1.5 w-16 overflow-hidden rounded-full bg-border/60">
+                <span
+                  className={`block h-full rounded-full transition-all duration-300 ${ctxBarColor(ctxPct)}`}
+                  style={{ width: `${Math.min(100, ctxPct)}%` }}
+                />
+              </span>
+              <span>{Math.round(ctxPct)}%</span>
+            </>
+          ) : (
+            formatTokens(stats.contextTokens)
+          )}
           {stats.compactions > 0 && (
             <span className="inline-flex items-center gap-0.5" title={`Context compacted ${stats.compactions}×`}>
               <GavelIcon name="codicon:fold" className="text-[11px]" />
@@ -141,6 +186,16 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           <span className="truncate">{stats.error || 'API error'}</span>
         </span>
       )}
+      <button
+        type="button"
+        onClick={focusSession}
+        disabled={focusBusy}
+        title={focusError || 'Focus this session’s terminal in cmux'}
+        className={`ml-auto inline-flex items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50 ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
+      >
+        <GavelIcon name={focusBusy ? 'svg-spinners:ring-resize' : focusError ? 'codicon:error' : 'codicon:eye'} className="text-[12px]" />
+        cmux
+      </button>
     </div>
   );
 }

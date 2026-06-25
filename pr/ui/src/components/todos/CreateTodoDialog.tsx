@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Modal, Field, Button } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
@@ -32,6 +33,9 @@ export function CreateTodoDialog({
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // Capture a pasted screenshot only while the dialog is open — it stays mounted
+  // (closed) in the dashboard, so an always-on listener would hijack paste.
+  const { attachments, previews, add, remove, clear } = useAttachments({ pasteAnywhere: open });
 
   useEffect(() => {
     if (open) {
@@ -42,8 +46,9 @@ export function CreateTodoDialog({
       setStatus('pending');
       setError('');
       setBusy(false);
+      clear();
     }
-  }, [open, workspaces, defaultDir]);
+  }, [open, workspaces, defaultDir, clear]);
 
   if (!open) return null;
 
@@ -53,14 +58,19 @@ export function CreateTodoDialog({
     setError('');
     try {
       const provider = workspaces.find(w => w.dir === dir)?.todoProvider || 'auto';
-      const response = await fetch(`/api/todos?${todoQuery(dir, provider)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, body, priority, status }),
-      });
+      // /api/todos/new accepts both JSON and multipart; post the image bytes as
+      // multipart when screenshots are attached, otherwise the lighter JSON path.
+      const url = `/api/todos/new?${todoQuery(dir, provider)}`;
+      const response = attachments.length
+        ? await fetch(url, { method: 'POST', body: todoFormData({ title, body, priority, status }, attachments) })
+        : await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, body, priority, status }),
+          });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Create failed');
-      onCreated(dir, data as TodoItem);
+      onCreated(dir, data.todo as TodoItem);
     } catch (err: any) {
       setError(err?.message || 'Create failed');
       setBusy(false);
@@ -119,6 +129,9 @@ export function CreateTodoDialog({
             placeholder="Details (optional)"
             onChange={e => setBody(e.currentTarget.value)}
           />
+        </Field>
+        <Field label="Screenshot">
+          <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
         </Field>
       </div>
     </Modal>

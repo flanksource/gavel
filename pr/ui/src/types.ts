@@ -125,6 +125,9 @@ export interface TodoSessionEvent {
   kind: string;
   text?: string;
   tool?: string;
+  // subagent_type for Task/Agent tool calls (e.g. "Explore"); lets the session
+  // browser filter agent calls independently of the generic "Task" tool name.
+  subagent?: string;
   action?: string;
   stopReason?: string;
   // Populated when kind === 'error': Claude Code's classification (e.g.
@@ -152,6 +155,9 @@ export interface SessionStats {
   // Live context-window occupancy (latest turn's input + cache), reset by each
   // compaction — surfaced as the token figure instead of the ever-growing total.
   contextTokens: number;
+  // Total context-window size (tokens) for the model, from captain's pricing
+  // registry; 0 when the model is unknown. Denominator for the context bar.
+  contextWindow: number;
   turns: number;
   // Number of context compactions seen so far; each shrinks contextTokens.
   compactions: number;
@@ -188,6 +194,10 @@ export interface TodoRunOptions {
   // Auto-commit the agent's changes once the run finishes (defaults to true on
   // the server). Set false in the advanced dialog to disable it.
   commit?: boolean;
+  // Run the configured `checks` test/lint suite after the agent completes and
+  // feed any failures back to it for another iteration. Opt-in (defaults off on
+  // the server), mirroring the CLI's `todos run --check`.
+  check?: boolean;
 }
 
 export interface TodoRunResponse {

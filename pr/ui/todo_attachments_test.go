@@ -102,6 +102,35 @@ func TestAttachmentPersistAndServe(t *testing.T) {
 	}
 }
 
+func TestAbsolutizeAttachmentURLs(t *testing.T) {
+	const origin = "http://gavel.example:9092"
+	body := "Look here:\n\n![screen.png](" + attachmentURLPrefix + "abc.png)\n- [log.txt](" + attachmentURLPrefix + "def.txt)"
+
+	got := absolutizeAttachmentURLs(body, origin)
+
+	wantImg := "![screen.png](" + origin + attachmentURLPrefix + "abc.png)"
+	wantLink := "- [log.txt](" + origin + attachmentURLPrefix + "def.txt)"
+	if !strings.Contains(got, wantImg) {
+		t.Errorf("image link not absolutized: %q", got)
+	}
+	if !strings.Contains(got, wantLink) {
+		t.Errorf("file link not absolutized: %q", got)
+	}
+
+	// Idempotent: a second pass leaves the already-absolute links untouched.
+	if again := absolutizeAttachmentURLs(got, origin); again != got {
+		t.Errorf("second pass changed body:\n got %q\nwant %q", again, got)
+	}
+
+	// No origin and bodies without attachments are returned unchanged.
+	if absolutizeAttachmentURLs(body, "") != body {
+		t.Error("empty origin should not modify body")
+	}
+	if absolutizeAttachmentURLs("plain body", origin) != "plain body" {
+		t.Error("body without attachments should be unchanged")
+	}
+}
+
 func TestAttachmentRejectsTraversal(t *testing.T) {
 	attachmentsDir = t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: t.TempDir()}}
