@@ -3,8 +3,10 @@ import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoStatus
 import { GavelIcon } from '../GavelIcon';
 import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
+import { compareTodos } from './todoGroup';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
 import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
+import type { ResolvedRange } from './todoTimeRange';
 
 // WorkspaceTodoGroup is one collapsible workspace section, mirroring the PR
 // tab's per-repo grouping: a sticky header with the workspace name and its
@@ -15,13 +17,14 @@ import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 // for a "Run N" control once any are checked, dispatching the whole selection to
 // one agent session via /api/todos/run. Selection is per-workspace because a run
 // targets a single workspace dir/provider. The menubar omits multiSelect.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, density = 'comfortable', multiSelect = false, onRunStarted }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, range, density = 'comfortable', multiSelect = false, onRunStarted }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
   onSelect: (ref: string) => void;
   hiddenStatuses?: Set<TodoStatus>;
   onToggleStatus?: (status: TodoStatus) => void;
+  range?: ResolvedRange | null;
   density?: TodoDensity;
   multiSelect?: boolean;
   onRunStarted?: () => void;
@@ -33,7 +36,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
 
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
   const allItems = data?.items ?? [];
-  const items = allItems.filter(item => isTodoVisible(item, hidden));
+  // Priority-then-age order so the most important, longest-outstanding todos lead.
+  const items = allItems.filter(item => isTodoVisible(item, hidden, range)).sort(compareTodos);
   const hiddenCount = allItems.length - items.length;
   const counts = data?.counts ?? workspace.todoCounts ?? emptyCounts;
 

@@ -414,6 +414,7 @@ type TODOFrontmatter struct {
 	Title         string             `yaml:"title,omitempty" json:"title,omitempty"`
 	Priority      Priority           `yaml:"priority,omitempty" json:"priority,omitempty"`
 	Status        Status             `yaml:"status,omitempty" json:"status,omitempty"`
+	Created       *time.Time         `yaml:"created,omitempty" json:"created,omitempty"`
 	LastRun       *time.Time         `yaml:"last_run,omitempty" json:"last_run,omitempty"`
 	Attempts      int                `yaml:"attempts,omitempty" json:"attempts,omitempty"`
 	Language      Language           `yaml:"language,omitempty" json:"language,omitempty"`

@@ -1,4 +1,5 @@
 import type { TodoCounts, TodoItem, TodoStatus } from '../../types';
+import { withinActivityRange, type ResolvedRange } from './todoTimeRange';
 
 // The todos list hides "closed" (completed) todos by default; the Closed/Status
 // pills toggle a status into or out of this hidden set. Filtering is done client
@@ -24,8 +25,13 @@ export function defaultHiddenStatuses(): Set<TodoStatus> {
   return new Set<TodoStatus>([CLOSED_STATUS]);
 }
 
-export function isTodoVisible(item: TodoItem, hidden: Set<TodoStatus>): boolean {
-  return !hidden.has(item.status);
+// isTodoVisible applies the status filter and, when an activity range is active,
+// the time filter: a row shows only when its status is not hidden and its
+// activity falls within the range.
+export function isTodoVisible(item: TodoItem, hidden: Set<TodoStatus>, range?: ResolvedRange | null): boolean {
+  if (hidden.has(item.status)) return false;
+  if (range && !withinActivityRange(item, range)) return false;
+  return true;
 }
 
 export function toggleHiddenStatus(hidden: Set<TodoStatus>, status: TodoStatus): Set<TodoStatus> {

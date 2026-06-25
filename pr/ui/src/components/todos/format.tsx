@@ -1,4 +1,5 @@
-import type { SessionStats, TodoCounts, TodoDensity, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import { timeAgo } from '../../utils';
 import { GavelIcon } from '../GavelIcon';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
@@ -213,6 +214,46 @@ export function TodoCountsBar({ counts, hidden, onToggle }: {
   );
 }
 
+// TodoDiffBadge shows the aggregated change footprint of a todo's linked commits
+// as `+adds`/`-dels`, with the commit/file totals in the tooltip. Rendered only
+// when the todo has commits, so todos with no work attached stay uncluttered.
+function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 tabular-nums"
+      title={`${diff.commits} commit${diff.commits === 1 ? '' : 's'}, ${diff.files} file${diff.files === 1 ? '' : 's'} changed`}
+    >
+      <GavelIcon name="codicon:git-commit" className="text-[11px]" />
+      {diff.adds > 0 && <span className="text-green-600">+{diff.adds}</span>}
+      {diff.dels > 0 && <span className="text-red-600">-{diff.dels}</span>}
+      {diff.adds === 0 && diff.dels === 0 && <span>{diff.commits}</span>}
+    </span>
+  );
+}
+
+// TodoAges shows the todo's created age and, when it differs, its last-activity
+// age — the two relative timestamps the list sorts by. Absolute times sit in the
+// tooltips. A todo with neither timestamp (some file-backed todos) renders nothing.
+function TodoAges({ todo }: { todo: TodoItem }) {
+  const showLast = !!todo.lastRun && todo.lastRun !== todo.created;
+  return (
+    <>
+      {todo.created && (
+        <span className="inline-flex shrink-0 items-center gap-1" title={`Created ${new Date(todo.created).toLocaleString()}`}>
+          <GavelIcon name="codicon:add" className="text-[11px]" />
+          {timeAgo(todo.created)}
+        </span>
+      )}
+      {showLast && (
+        <span className="inline-flex shrink-0 items-center gap-1" title={`Last activity ${new Date(todo.lastRun!).toLocaleString()}`}>
+          <GavelIcon name="codicon:history" className="text-[11px]" />
+          {timeAgo(todo.lastRun!)}
+        </span>
+      )}
+    </>
+  );
+}
+
 // TodoRow renders one todo in a workspace list. When `selectable` is set it grows
 // a leading checkbox for multi-select (run several todos in one agent session);
 // the checkbox is a sibling of the open-detail button so toggling selection never
@@ -272,6 +313,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
               {workspace && <span className="max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
               {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
+              {todo.diff && <TodoDiffBadge diff={todo.diff} />}
               <span className={priorityClass(todo.priority)}>{todo.priority}</span>
             </span>
           )}
@@ -286,6 +328,8 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             )}
             {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
             <span className={priorityClass(todo.priority)}>{todo.priority}</span>
+            <TodoAges todo={todo} />
+            {todo.diff && <TodoDiffBadge diff={todo.diff} />}
             {todo.provider && <span className="uppercase">{todo.provider}</span>}
           </div>
         )}

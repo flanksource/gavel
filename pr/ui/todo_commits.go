@@ -1,16 +1,58 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/models"
 )
+
+// commitStatTTL bounds how often the todo list recomputes a workspace's git diff
+// stats. Within the TTL the per-issue counts are served straight from the cache
+// DB; past it, one `git log --numstat` pass refreshes every todo's stats at once.
+const commitStatTTL = 60 * time.Second
+
+// commitDiffStats returns the aggregated git diff footprint per todo id for a
+// workspace, keyed by Gavel-Issue-Id. It serves the DB cache within commitStatTTL
+// and otherwise recomputes from git and refreshes the cache. When no cache DB is
+// configured it computes directly every call. A git failure (e.g. a non-repo
+// workspace) degrades to no stats rather than failing the list.
+func commitDiffStats(ctx context.Context, dir string) map[string]gavelgit.DiffStat {
+	repo := repoStatKey(dir)
+	store := cache.Shared()
+	if cached, syncedAt, err := store.CommitStats(ctx, repo); err != nil {
+		logger.Debugf("read commit stats for %s: %v", repo, err)
+	} else if !syncedAt.IsZero() && time.Since(syncedAt) < commitStatTTL {
+		return cached
+	}
+	stats, err := gavelgit.TrailerDiffStats(dir, commit.TrailerIssueID)
+	if err != nil {
+		logger.Debugf("compute commit stats for %s: %v", repo, err)
+		return map[string]gavelgit.DiffStat{}
+	}
+	if err := store.SaveCommitStats(ctx, repo, stats); err != nil {
+		logger.Debugf("save commit stats for %s: %v", repo, err)
+	}
+	return stats
+}
+
+// repoStatKey normalizes a workspace directory into the stable cache key the
+// commit-stat tables use, matching how the grite cache keys its rows.
+func repoStatKey(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		return filepath.Clean(abs)
+	}
+	return dir
+}
 
 // todoCommit is one git commit linked to a todo via its Gavel-Issue-Id trailer.
 // URL is the commit's web page on the origin remote, empty for a local-only repo.

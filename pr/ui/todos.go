@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
+	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
@@ -54,11 +55,24 @@ type todoSummary struct {
 	CWD            string                `json:"cwd,omitempty"`
 	Labels         []string              `json:"labels,omitempty"`
 	Attempts       int                   `json:"attempts,omitempty"`
+	Created        *time.Time            `json:"created,omitempty"`
 	LastRun        *time.Time            `json:"lastRun,omitempty"`
 	SessionID      string                `json:"sessionId,omitempty"`
 	Body           string                `json:"body,omitempty"`
 	Implementation string                `json:"implementation,omitempty"`
 	Events         []types.ProviderEvent `json:"events,omitempty"`
+	// Diff is the aggregated git diff footprint of the todo's commits (those
+	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
+	Diff *todoDiffStat `json:"diff,omitempty"`
+}
+
+// todoDiffStat is the JSON shape of a todo's aggregated git diff footprint,
+// mirroring git.DiffStat for the dashboard.
+type todoDiffStat struct {
+	Commits int `json:"commits"`
+	Files   int `json:"files"`
+	Adds    int `json:"adds"`
+	Dels    int `json:"dels"`
 }
 
 type todoSource struct {
@@ -275,10 +289,24 @@ func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 		Counts:   summarizeTodos(items),
 		Items:    make([]todoSummary, 0, len(items)),
 	}
+	stats := commitDiffStats(r.Context(), source.Dir)
 	for _, item := range items {
-		resp.Items = append(resp.Items, summarizeTodo(item, false))
+		sum := summarizeTodo(item, false)
+		sum.Diff = diffStatFor(stats, item.ID)
+		resp.Items = append(resp.Items, sum)
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// diffStatFor builds the JSON diff stat for a todo id from the workspace's
+// computed map, returning nil when the todo has no linked commits so the field
+// is omitted rather than serialized as an all-zero object.
+func diffStatFor(stats map[string]gavelgit.DiffStat, id string) *todoDiffStat {
+	d, ok := stats[strings.TrimSpace(id)]
+	if !ok || (d.Commits == 0 && d.Files == 0) {
+		return nil
+	}
+	return &todoDiffStat{Commits: d.Commits, Files: d.Files, Adds: d.Adds, Dels: d.Dels}
 }
 
 func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +315,7 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	provider, _, err := s.todoProvider(todoSourceFromRequest(r))
+	provider, source, err := s.todoProvider(todoSourceFromRequest(r))
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -297,7 +325,9 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
-	json.NewEncoder(w).Encode(summarizeTodo(todo, true)) //nolint:errcheck
+	sum := summarizeTodo(todo, true)
+	sum.Diff = diffStatFor(commitDiffStats(r.Context(), source.Dir), todo.ID)
+	json.NewEncoder(w).Encode(sum) //nolint:errcheck
 }
 
 func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
@@ -848,6 +878,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		CWD:           todo.CWD,
 		Labels:        todo.Labels,
 		Attempts:      todo.Attempts,
+		Created:       todo.Created,
 		LastRun:       todo.LastRun,
 	}
 	if todo.LLM != nil {
