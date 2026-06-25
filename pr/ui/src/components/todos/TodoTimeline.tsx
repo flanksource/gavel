@@ -30,6 +30,17 @@ function humanizeKind(kind?: string): string {
   return kind.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
 }
 
+// Grite records the actor as an opaque id — a 32-char UUID without dashes or the
+// canonical dashed form. Those carry no meaning in the timeline, so surface the
+// actor only when it's a human-readable name; an id renders nothing.
+const OPAQUE_ACTOR_ID = /^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function actorName(actor?: string): string | undefined {
+  const name = actor?.trim();
+  if (!name || OPAQUE_ACTOR_ID.test(name)) return undefined;
+  return name;
+}
+
 // Provider events carry the zero-time sentinel when grite omits a timestamp.
 // Returns the epoch ms (null when absent, used to sort), a relative age for
 // display ("2h ago"), and the absolute timestamp for the hover title.
@@ -84,7 +95,7 @@ function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
     id: event.id || index,
     icon: visual.icon,
     tone: visual.tone,
-    actor: event.actor || undefined,
+    actor: actorName(event.actor),
     action: (
       <>
         {visual.action}
