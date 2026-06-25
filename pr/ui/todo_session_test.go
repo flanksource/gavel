@@ -52,6 +52,43 @@ func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestHandleTodoSessionStreamSurfacesSubagent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	sessionID := "sess-sub"
+	path, err := cmux.SessionLogPath(dir, sessionID)
+	if err != nil {
+		t.Fatalf("SessionLogPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A Task tool call dispatching an Explore subagent must carry the
+	// subagent_type through to the streamed event so the dashboard can filter it.
+	log := `{"type":"assistant","sessionId":"sess-sub","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Task","input":{"description":"find the runner","subagent_type":"Explore"}}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(log), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	s := &Server{}
+	target := "/api/todos/session/stream?sessionId=" + sessionID + "&dir=" + url.QueryEscape(dir)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("GET", target, nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	s.handleTodoSessionStream(rec, req)
+
+	body := rec.Body.String()
+	for _, want := range []string{`"tool":"Task"`, `"subagent":"Explore"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("session stream missing %q in:\n%s", want, body)
+		}
+	}
+}
+
 func TestHandleTodoSessionStreamEmitsErrorEvent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

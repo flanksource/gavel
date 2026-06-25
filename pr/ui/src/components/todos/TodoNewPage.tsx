@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Field, Button } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
+import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
 // firstParam reads the first present query value across a set of aliases so
@@ -74,8 +75,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState(false);
-  const [attachments, setAttachments] = useState<{ blob: Blob; name: string }[]>([]);
-  const [previews, setPreviews] = useState<{ name: string; url: string }[]>([]);
+  const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
 
   // In embed mode the React Grab plugin hands us a captured screenshot: we tell
   // the parent we're ready, then receive the image Blob over postMessage (a Blob
@@ -85,19 +85,12 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
     function onMessage(e: MessageEvent) {
       const d = e.data;
       if (!d || d.source !== 'gavel-react-grab' || d.type !== 'attachment' || !d.blob) return;
-      setAttachments(prev => [...prev, { blob: d.blob as Blob, name: (d.name as string) || 'attachment' }]);
+      add([{ blob: d.blob as Blob, name: (d.name as string) || 'attachment' }]);
     }
     window.addEventListener('message', onMessage);
     window.parent.postMessage({ source: 'gavel-react-grab', type: 'embed-ready' }, '*');
     return () => window.removeEventListener('message', onMessage);
-  }, [embed]);
-
-  // Object URLs for the attachment thumbnails, revoked when the set changes.
-  useEffect(() => {
-    const urls = attachments.map(a => ({ name: a.name, url: URL.createObjectURL(a.blob) }));
-    setPreviews(urls);
-    return () => urls.forEach(u => URL.revokeObjectURL(u.url));
-  }, [attachments]);
+  }, [embed, add]);
 
   function providerForDir(target: string): string {
     const ws = workspaces.find(w => w.dir === target);
@@ -127,24 +120,14 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
     try {
       const url = `/api/todos/new?${todoQuery(dir, providerForDir(dir))}`;
       // With attachments, post multipart so the image bytes ride along and the
-      // server persists them; otherwise keep the lighter JSON path. The browser
-      // sets the multipart Content-Type (with boundary) when body is FormData.
-      let response: Response;
-      if (attachments.length) {
-        const form = new FormData();
-        form.append('title', title);
-        form.append('body', body);
-        form.append('priority', priority);
-        form.append('status', status);
-        attachments.forEach(a => form.append('attachment', a.blob, a.name));
-        response = await fetch(url, { method: 'POST', body: form });
-      } else {
-        response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, body, priority, status }),
-        });
-      }
+      // server persists them; otherwise keep the lighter JSON path.
+      const response = attachments.length
+        ? await fetch(url, { method: 'POST', body: todoFormData({ title, body, priority, status }, attachments) })
+        : await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, body, priority, status }),
+          });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Create failed');
       const todo = data.todo as TodoItem | undefined;
@@ -238,15 +221,9 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
               onChange={e => setBody(e.currentTarget.value)}
             />
           </Field>
-          {previews.length > 0 && (
-            <Field label="Screenshot">
-              <div className="flex flex-wrap gap-2">
-                {previews.map(p => (
-                  <img key={p.url} src={p.url} alt={p.name} className="max-h-40 rounded border border-border" />
-                ))}
-              </div>
-            </Field>
-          )}
+          <Field label="Screenshot">
+            <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
+          </Field>
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" onClick={cancel}>Cancel</Button>
             <Button type="submit" loading={busy} disabled={!title.trim()}>Add todo</Button>

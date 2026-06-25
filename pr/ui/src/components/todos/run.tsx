@@ -196,6 +196,7 @@ export function TodoRunAdvancedDialog({
   const [dirty, setDirty] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [commit, setCommit] = useState(true);
+  const [check, setCheck] = useState(false);
   const [preview, setPreview] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
@@ -214,6 +215,7 @@ export function TodoRunAdvancedDialog({
     setDirty(false);
     setDryRun(false);
     setCommit(true);
+    setCheck(false);
   }, [open]);
 
   // refs is a fresh array each render at the call sites, so key the preview fetch
@@ -289,6 +291,9 @@ export function TodoRunAdvancedDialog({
       dryRun,
       // Plan-only runs make no changes, so there is nothing to auto-commit.
       commit: plan ? false : commit,
+      // Plan-only runs make no changes, so the post-completion test/lint check
+      // loop has nothing to verify.
+      check: plan ? false : check,
     });
   }
 
@@ -380,6 +385,10 @@ export function TodoRunAdvancedDialog({
           <label className="inline-flex items-center gap-2">
             <input type="checkbox" checked={commit && !plan} onChange={e => setCommit(e.currentTarget.checked)} disabled={plan} />
             <span>Auto-commit</span>
+          </label>
+          <label className="inline-flex items-center gap-2" title="Run the configured test/lint checks after the agent finishes and feed failures back to it">
+            <input type="checkbox" checked={check && !plan} onChange={e => setCheck(e.currentTarget.checked)} disabled={plan} />
+            <span>Run checks (test/lint)</span>
           </label>
           <label className="inline-flex items-center gap-2">
             <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />

@@ -620,6 +620,39 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 	}
 }
 
+func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Screenshot todo",
+		Body:   "See the bug:\n\n![screen.png](" + attachmentURLPrefix + "abc.png)",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	ref := todos.TODOReference(created)
+
+	body, _ := json.Marshal(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Model: "claude"})
+	rec := httptest.NewRecorder()
+	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunPreviewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal preview response: %v", err)
+	}
+
+	wantURL := "http://gavel.example:9092" + attachmentURLPrefix + "abc.png"
+	if !strings.Contains(resp.Prompt, wantURL) {
+		t.Fatalf("prompt should reference the absolute attachment URL %q: %q", wantURL, resp.Prompt)
+	}
+	if strings.Contains(resp.Prompt, "]("+attachmentURLPrefix) {
+		t.Fatalf("prompt should not retain relative attachment links: %q", resp.Prompt)
+	}
+}
+
 func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
 	boolPtr := func(b bool) *bool { return &b }
 	base := todoRunPayload{Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium"}

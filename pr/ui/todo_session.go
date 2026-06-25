@@ -32,9 +32,13 @@ var errSessionLogMissing = errors.New("session log did not appear")
 // todoSessionEvent is the JSON shape pushed to the dashboard's session tab for
 // each parsed Claude session-log event.
 type todoSessionEvent struct {
-	Kind        string `json:"kind"`
-	Text        string `json:"text,omitempty"`
-	Tool        string `json:"tool,omitempty"`
+	Kind string `json:"kind"`
+	Text string `json:"text,omitempty"`
+	Tool string `json:"tool,omitempty"`
+	// Subagent is the subagent_type for Task/Agent tool calls (e.g. "Explore"),
+	// surfaced so the dashboard can filter agent calls by kind independently of
+	// the generic "Task" tool name.
+	Subagent    string `json:"subagent,omitempty"`
 	Action      string `json:"action,omitempty"`
 	StopReason  string `json:"stopReason,omitempty"`
 	ErrorType   string `json:"errorType,omitempty"`
@@ -49,6 +53,9 @@ func sessionEventPayload(ev history.SessionEvent) todoSessionEvent {
 	case history.EventToolUse:
 		out.Tool = ev.ToolUse.Tool
 		out.Action = history.FormatToolUseSummary(ev.ToolUse.Tool, ev.ToolUse.Input)
+		if sub, ok := ev.ToolUse.Input["subagent_type"].(string); ok {
+			out.Subagent = sub
+		}
 	case history.EventTurnEnd:
 		out.StopReason = ev.StopReason
 	case history.EventError:
@@ -85,6 +92,25 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	json.NewEncoder(w).Encode(stats) //nolint:errcheck
+}
+
+// handleTodoSessionFocus switches cmux to the workspace running a TODO's agent
+// session, so the dashboard's "focus" control brings the live terminal to the
+// front. The workspace is identified by the run's working directory and agent
+// (claude/codex), matching how the cmux executor names it. A closed terminal or
+// a stopped cmux yields a 4xx with the reason rather than a silent no-op.
+func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if agent == "" {
+		agent = "claude"
+	}
+	if err := cmux.FocusSession(r.Context(), cmux.NewClient(""), dir, agent); err != nil {
+		writeTodoError(w, http.StatusBadGateway, err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"focused": true}) //nolint:errcheck
 }
 
 // handleTodoSessionStream follows a TODO's agent session log over SSE. The

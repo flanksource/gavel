@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TodoSessionEvent } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { Markdown } from '../Markdown';
 import { todoQuery } from './format';
+import { SessionFilterMenu } from './SessionFilterMenu';
+import {
+  computeFacets,
+  DEFAULT_HIDDEN_TOOLS,
+  eventVisible,
+  type SessionCategory,
+} from './sessionFilter';
 
 // Claude tools that pause the turn awaiting the user (the entry carries no
 // terminal stop reason), so the session is "asking" rather than "working" until
@@ -118,6 +125,16 @@ export function TodoSession({
   // to read earlier history (re-engages when they scroll back to the bottom).
   const followRef = useRef(true);
 
+  const [hiddenCategories, setHiddenCategories] = useState<Set<SessionCategory>>(() => new Set());
+  // Explore subagent calls are noisy and excluded by default (see sessionFilter).
+  const [hiddenTools, setHiddenTools] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_TOOLS));
+
+  const facets = useMemo(() => computeFacets(events), [events]);
+  const visible = useMemo(
+    () => events.filter(ev => eventVisible(ev, hiddenCategories, hiddenTools)),
+    [events, hiddenCategories, hiddenTools],
+  );
+
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
@@ -127,7 +144,7 @@ export function TodoSession({
   useEffect(() => {
     const el = scrollRef.current;
     if (el && followRef.current) el.scrollTop = el.scrollHeight;
-  }, [events.length]);
+  }, [visible.length]);
 
   if (!sessionId) {
     return (
@@ -138,26 +155,42 @@ export function TodoSession({
     );
   }
 
+  const toggleCategory = (key: SessionCategory) =>
+    setHiddenCategories(prev => toggleSet(prev, key));
+  const toggleTool = (key: string) => setHiddenTools(prev => toggleSet(prev, key));
+
+  const hiddenCount = events.length - visible.length;
+
   return (
     <div className="m-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-zinc-800 bg-black font-mono">
-      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-3 py-1.5 text-[11px] text-gray-400">
+      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-3 py-1 text-[10px] text-gray-400">
         <SessionStateBadge state={deriveSessionState(events, error)} />
         <span className="inline-flex items-center gap-1 text-gray-500">
-          <GavelIcon name="octicon:dot-fill-16" className={`text-[8px] ${connected ? 'text-emerald-400' : 'text-gray-600'}`} />
+          <GavelIcon name="octicon:dot-fill-16" className={`text-[7px] ${connected ? 'text-emerald-400' : 'text-gray-600'}`} />
           {connected ? 'Following session' : 'Session idle'}
         </span>
-        <span className="ml-auto text-gray-500">{sessionId.slice(0, 8)}</span>
+        <span className="text-gray-600">{sessionId.slice(0, 8)}</span>
+        <SessionFilterMenu
+          facets={facets}
+          hiddenCategories={hiddenCategories}
+          hiddenTools={hiddenTools}
+          onToggleCategory={toggleCategory}
+          onToggleTool={toggleTool}
+        />
       </div>
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 text-xs leading-relaxed text-gray-100"
+        className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 py-2 text-[11px] leading-snug text-gray-100"
       >
         {error && <div className="text-red-400">{error}</div>}
         {events.length === 0 && !error && (
           <div className="text-gray-500">Waiting for session activity…</div>
         )}
-        {events.map((ev, i) => (
+        {events.length > 0 && visible.length === 0 && !error && (
+          <div className="text-gray-500">All {hiddenCount} events hidden by filters.</div>
+        )}
+        {visible.map((ev, i) => (
           <SessionEventRow key={i} event={ev} />
         ))}
       </div>
@@ -165,10 +198,19 @@ export function TodoSession({
   );
 }
 
+// toggleSet returns a new Set with key added when absent and removed when
+// present — React state must not be mutated in place.
+function toggleSet<T>(set: Set<T>, key: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
 function SessionStateBadge({ state }: { state: SessionStateView }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${state.className}`}>
-      <GavelIcon name={state.icon} className="text-[12px]" />
+    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase ${state.className}`}>
+      <GavelIcon name={state.icon} className="text-[11px]" />
       {state.label}
     </span>
   );
@@ -195,7 +237,7 @@ function SessionEventRow({ event }: { event: TodoSessionEvent }) {
       );
     case 'turn_end':
       return (
-        <div className="flex items-center gap-2 border-t border-zinc-800 pt-2 text-[11px] uppercase tracking-wide text-gray-500">
+        <div className="flex items-center gap-2 border-t border-zinc-800 pt-1.5 text-[10px] uppercase tracking-wide text-gray-500">
           <GavelIcon name="codicon:pass" className="shrink-0 text-emerald-400" />
           <span>Turn ended{event.stopReason ? ` (${event.stopReason})` : ''}</span>
         </div>

@@ -153,6 +153,10 @@ type todoRunPayload struct {
 	// the run finishes. A nil pointer defaults to true (the dashboard auto-commits
 	// like the CLI's `todos run --commit`); send false to disable it.
 	Commit *bool `json:"commit,omitempty"`
+	// Check, when true, runs the configured `checks` test/lint suite after the
+	// agent completes and feeds failures back to it. Opt-in (defaults off),
+	// mirroring the CLI's `todos run --check`.
+	Check *bool `json:"check,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -209,6 +213,7 @@ type todoRunOptions struct {
 	Dirty           bool
 	DryRun          bool
 	Commit          bool
+	Check           bool
 	TimeoutOriginal string
 }
 
@@ -581,12 +586,14 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	if err != nil {
 		return nil, source, nil, opts, http.StatusBadRequest, err
 	}
+	origin := requestOrigin(r)
 	todoList := make([]*types.TODO, 0, len(refs))
 	for _, ref := range refs {
 		todo, err := provider.Get(r.Context(), ref)
 		if err != nil {
 			return provider, source, nil, opts, http.StatusNotFound, err
 		}
+		todo.MarkdownBody = absolutizeAttachmentURLs(todo.MarkdownBody, origin)
 		todoList = append(todoList, todo)
 	}
 	return provider, source, todoList, opts, http.StatusOK, nil
@@ -1118,6 +1125,12 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		commit = *payload.Commit
 	}
 
+	// The post-completion check loop is opt-in (matching `todos run --check`).
+	check := false
+	if payload.Check != nil {
+		check = *payload.Check
+	}
+
 	return todoRunOptions{
 		Agent:           agent,
 		Mode:            mode,
@@ -1131,6 +1144,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Dirty:           payload.Dirty,
 		DryRun:          payload.DryRun,
 		Commit:          commit,
+		Check:           check,
 		TimeoutOriginal: payload.Timeout,
 	}, nil
 }
@@ -1146,6 +1160,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
+		runner.EnableChecks(req.Options.Check)
 		var runErr error
 		var result *todos.ExecutionResult
 		// A single selection runs through Execute; a multi-select runs every todo
@@ -1177,10 +1192,15 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 		return
 	}
 	cwd := ""
+	meta := commit.AgentRunMetadata{}
 	if len(req.Todos) > 0 && req.Todos[0] != nil {
 		cwd = req.Todos[0].CWD
+		meta.IssueID = req.Todos[0].ID
+		if req.Todos[0].LLM != nil {
+			meta.SessionID = req.Todos[0].LLM.SessionId
+		}
 	}
-	if err := commit.RunAfterAgent(context.Background(), req.Source.Dir, cwd); err != nil {
+	if err := commit.RunAfterAgent(context.Background(), req.Source.Dir, cwd, meta); err != nil {
 		logger.Errorf("commit after todo run failed: %v", err)
 	}
 }
