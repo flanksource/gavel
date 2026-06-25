@@ -9,7 +9,11 @@ import (
 )
 
 type commitGroup struct {
-	Label   string
+	Label string
+	// Message, when set, is used verbatim as the commit message instead of
+	// invoking the LLM. Used by the --ai-group chore group (lock/generated
+	// files) so trivial bundles do not spend an analysis call.
+	Message string
 	Changes []stagedChange
 }
 
