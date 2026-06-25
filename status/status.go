@@ -15,6 +15,7 @@ import (
 
 	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/gavel/internal/prompting"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"
 )
 
@@ -153,6 +154,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	}
 	files = filterGavelCache(files)
 	files = filterByFolder(files, opts.FolderFilter)
+	files = filterGitIgnored(files, workDir)
 
 	if err := enrichWithLineCounts(workDir, files); err != nil {
 		return nil, err
@@ -269,6 +271,34 @@ func filterByFolder(files []FileStatus, prefix string) []FileStatus {
 	out := files[:0]
 	for _, f := range files {
 		if f.Path == prefix || strings.HasPrefix(f.Path, prefix+"/") {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// filterGitIgnored drops files matching the repo's .gitignore, so force-tracked
+// but ignored bundles (e.g. testrunner/ui/dist/testui.js) don't surface as
+// modifications. Staged files are kept regardless: what status shows then
+// matches what `gavel commit` will commit, and a manually `git add`-ed ignored
+// file stays visible. A !-negation in .gitignore re-includes a path.
+func filterGitIgnored(files []FileStatus, workDir string) []FileStatus {
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = filepath.Join(workDir, f.Path)
+	}
+	_, ignored := utils.PartitionGitIgnored(paths, workDir)
+	if len(ignored) == 0 {
+		return files
+	}
+	ignoredSet := make(map[string]struct{}, len(ignored))
+	for _, p := range ignored {
+		ignoredSet[p] = struct{}{}
+	}
+	out := files[:0]
+	for i, f := range files {
+		_, isIgnored := ignoredSet[paths[i]]
+		if !isIgnored || f.State == StateStaged || f.State == StateBoth || f.State == StateConflict {
 			out = append(out, f)
 		}
 	}

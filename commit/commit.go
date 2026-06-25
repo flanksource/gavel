@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -15,6 +16,7 @@ import (
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -94,7 +96,17 @@ type Options struct {
 	// fixup commits are created. Defaults to true at the CLI; tests / direct
 	// callers must opt in explicitly.
 	Autosquash bool
-	Config     verify.CommitConfig
+	// AddMetadata appends git trailers identifying the gavel todo issue and
+	// agent session to each generated commit message. Defaults to true at the
+	// CLI; direct callers must opt in. See applyCommitMetadata.
+	AddMetadata bool
+	// IssueID and SessionID are the gavel todo issue id and agent session id to
+	// stamp when AddMetadata is set. Populated in-process by RunAfterAgent; when
+	// empty applyCommitMetadata falls back to the GAVEL_ISSUE_ID /
+	// GAVEL_SESSION_ID env vars.
+	IssueID   string
+	SessionID string
+	Config    verify.CommitConfig
 
 	// lintGates is the resolved on/off state. Populated by Run() before
 	// dispatching into runSingleCommit / runCommitAll so the gate runs with
@@ -293,6 +305,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		}
 		return result, fmt.Errorf("generate commit analysis: %w", err)
 	}
+	analysis.Message = applyCommitMetadata(opts, analysis.Message)
 	result.Message = analysis.Message
 	result.Commits = []CommitResult{{
 		Message:              analysis.Message,
@@ -478,7 +491,7 @@ func commitByDirectory(ctx context.Context, opts Options, source stagedSource, r
 		}
 		result.Commits = append(result.Commits, CommitResult{
 			Label:                group.Label,
-			Message:              analysis.Message,
+			Message:              applyCommitMetadata(opts, analysis.Message),
 			Files:                group.Files(),
 			FunctionalityRemoved: analysis.FunctionalityRemoved,
 			CompatibilityIssues:  analysis.CompatibilityIssues,
@@ -519,25 +532,77 @@ func commitByDirectory(ctx context.Context, opts Options, source stagedSource, r
 
 // stageFiles stages changes for the given mode using git's own ignore-aware
 // semantics, so an ignored path can never abort the whole `git add`:
-//   - tracked modifications/deletions go in via `git add -u` (which also keeps
-//     tracked-but-gitignored bundles such as pr/ui/dist/prui.js staged);
+//   - tracked modifications/deletions go in via `git add -u`, then
+//     unstageGitIgnored removes any that match the repo's .gitignore (a
+//     force-tracked bundle like testrunner/ui/dist/testui.js is left out of the
+//     commit but stays tracked); files staged manually before the call are
+//     preserved, and a !-negation in .gitignore re-includes a path;
 //   - StageAll additionally adds untracked files that are matched by neither
 //     .gitignore (handled by git) nor the repo's .gavel.yaml commit.gitignore.
+//
+// StageStaged is left untouched: an explicit `git add` is an intentional
+// override of .gitignore for that commit.
 func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
 		return nil
 	case StageUnstaged, StageAll:
+		preStaged, err := stagedFiles(workDir)
+		if err != nil {
+			return fmt.Errorf("list pre-staged files: %w", err)
+		}
 		if err := gitAddUpdate(workDir); err != nil {
 			return err
 		}
-		if mode == StageUnstaged {
-			return nil
+		if mode == StageAll {
+			if err := addUntracked(workDir, cfg); err != nil {
+				return err
+			}
 		}
-		return addUntracked(workDir, cfg)
+		return unstageGitIgnored(workDir, preStaged)
 	default:
 		return fmt.Errorf("%w: %q", ErrInvalidStage, mode)
 	}
+}
+
+// unstageGitIgnored removes from the index any staged file that matches the
+// repo's .gitignore, except files in preStaged (staged by the user before
+// gavel ran). It uses `git reset --` so the working tree and tracking are
+// untouched — the modification simply won't be in the commit. A !-negation in
+// .gitignore keeps a path staged.
+func unstageGitIgnored(workDir string, preStaged []string) error {
+	staged, err := stagedFiles(workDir)
+	if err != nil {
+		return fmt.Errorf("list staged files: %w", err)
+	}
+	if len(staged) == 0 {
+		return nil
+	}
+
+	absToRel := make(map[string]string, len(staged))
+	abs := make([]string, 0, len(staged))
+	for _, f := range staged {
+		p := filepath.Join(workDir, f)
+		absToRel[p] = f
+		abs = append(abs, p)
+	}
+
+	preStagedSet := make(map[string]struct{}, len(preStaged))
+	for _, f := range preStaged {
+		preStagedSet[f] = struct{}{}
+	}
+
+	_, ignored := utils.PartitionGitIgnored(abs, workDir)
+	toReset := make([]string, 0, len(ignored))
+	for _, p := range ignored {
+		rel := absToRel[p]
+		if _, kept := preStagedSet[rel]; kept {
+			continue
+		}
+		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
+		toReset = append(toReset, rel)
+	}
+	return resetFiles(workDir, toReset)
 }
 
 // addUntracked stages untracked files that git does not ignore, minus the

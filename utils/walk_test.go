@@ -399,3 +399,35 @@ var _ = Describe("FilterGitIgnored", func() {
 		Expect(result).To(BeEmpty())
 	})
 })
+
+var _ = Describe("PartitionGitIgnored", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+	})
+
+	It("splits kept and ignored, honoring !-negation", func() {
+		setupGitRepo(root)
+		os.WriteFile(filepath.Join(root, ".gitignore"), []byte("dist/*\n!dist/keep.js\n"), 0644)
+
+		paths := []string{
+			filepath.Join(root, "src", "main.go"),
+			filepath.Join(root, "dist", "bundle.js"),
+			filepath.Join(root, "dist", "keep.js"),
+		}
+		kept, ignored := PartitionGitIgnored(paths, root)
+		Expect(kept).To(ConsistOf(
+			filepath.Join(root, "src", "main.go"),
+			filepath.Join(root, "dist", "keep.js"),
+		))
+		Expect(ignored).To(ConsistOf(filepath.Join(root, "dist", "bundle.js")))
+	})
+
+	It("keeps everything and reports nothing ignored without a git root", func() {
+		paths := []string{filepath.Join(root, "a.go"), filepath.Join(root, "b.go")}
+		kept, ignored := PartitionGitIgnored(paths, root)
+		Expect(kept).To(Equal(paths))
+		Expect(ignored).To(BeEmpty())
+	})
+})

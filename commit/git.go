@@ -112,8 +112,9 @@ func stagedFiles(workDir string) ([]string, error) {
 
 // gitAddUpdate stages modifications and deletions of already-tracked files
 // (`git add -u`). It never aborts on ignored paths because it only touches
-// tracked files, so tracked-but-gitignored bundles (e.g. pr/ui/dist/prui.js)
-// keep being committed while untracked ignored paths are left untouched.
+// tracked files. Tracked-but-gitignored bundles (e.g. pr/ui/dist/prui.js) get
+// staged here too, then stripped by unstageGitIgnored so they stay out of the
+// commit while remaining tracked.
 func gitAddUpdate(workDir string) error {
 	cmd := exec.Command("git", "add", "-u")
 	cmd.Dir = workDir
