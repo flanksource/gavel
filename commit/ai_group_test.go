@@ -11,52 +11,115 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildChangeSummary(t *testing.T) {
-	changes := []stagedChange{
-		{Path: "a/x.go", Status: "updated", Adds: 3, Dels: 1},
-		{Path: "new.txt", Status: "inserted", Adds: 5, Dels: 0},
-		{Path: "b/new.go", PreviousPath: "b/old.go", Status: "renamed", Adds: 2, Dels: 2},
-	}
-
-	want := "updated  a/x.go (+3/-1)\n" +
-		"inserted new.txt (+5/-0)\n" +
-		"renamed  b/old.go -> b/new.go (+2/-2)\n"
-
-	assert.Equal(t, want, buildChangeSummary(changes))
-}
-
-func TestBuildScopeGroupedSummary(t *testing.T) {
+func TestBuildStatusTable(t *testing.T) {
 	orig := gatherStatusFunc
 	t.Cleanup(func() { gatherStatusFunc = orig })
 	gatherStatusFunc = func(workDir string) (*status.Result, error) {
 		return &status.Result{Files: []status.FileStatus{
 			{Path: "api/a.go", FileMap: &repomap.FileMap{Language: "go", Scopes: repomap.Scopes{repomap.ScopeType("api")}}},
-			{Path: "api/b.go", FileMap: &repomap.FileMap{Language: "go", Scopes: repomap.Scopes{repomap.ScopeType("api")}}},
 			{Path: "README.md"},
-			// In status but not in the commit set — must be omitted.
-			{Path: "other.go", FileMap: &repomap.FileMap{Language: "go", Scopes: repomap.Scopes{repomap.ScopeType("api")}}},
 		}}, nil
 	}
 
 	changes := []stagedChange{
 		{Path: "api/a.go", Status: "updated", Adds: 3, Dels: 1},
-		{Path: "api/b.go", Status: "inserted", Adds: 5, Dels: 0},
 		{Path: "README.md", Status: "updated", Adds: 2, Dels: 2},
-		// Not present in status — must be omitted from the summary.
+		// Not present in the gathered status — must still get a row (general scope),
+		// never dropped, so the LLM can assign it.
 		{Path: "ghost.go", Status: "updated", Adds: 1, Dels: 1},
 	}
 
-	got, err := buildScopeGroupedSummary("/repo", changes)
+	got, err := buildStatusTable("/repo", changes, false)
 	require.NoError(t, err)
 
-	want := "[scope: go · api]\n" +
-		"updated  api/a.go (+3/-1)\n" +
-		"inserted api/b.go (+5/-0)\n" +
-		"\n" +
-		"[scope: general]\n" +
-		"updated  README.md (+2/-2)\n" +
-		"\n"
-	assert.Equal(t, want, got)
+	// A markdown table with the expected columns and one row per change.
+	assert.Contains(t, got, "SCOPE")
+	assert.Contains(t, got, "FILE")
+	assert.Contains(t, got, "api/a.go")
+	assert.Contains(t, got, "go · api")
+	assert.Contains(t, got, "README.md")
+	// Change absent from status falls back to the "general" scope rather than being omitted.
+	assert.Contains(t, got, "ghost.go")
+	assert.Contains(t, got, scopeGeneralFallback)
+}
+
+func TestSortGroupingRowsByScope(t *testing.T) {
+	rows := func() []groupingRow {
+		return []groupingRow{
+			{Scope: "go · b", File: "z.go"},
+			{Scope: "go · a", File: "y.go"},
+			{Scope: "go · b", File: "a.go"},
+		}
+	}
+
+	byScope := rows()
+	sortGroupingRows(byScope, true)
+	assert.Equal(t, []string{"y.go", "a.go", "z.go"}, []string{byScope[0].File, byScope[1].File, byScope[2].File},
+		"group-by-scope orders by scope then file")
+
+	byFile := rows()
+	sortGroupingRows(byFile, false)
+	assert.Equal(t, []string{"a.go", "y.go", "z.go"}, []string{byFile[0].File, byFile[1].File, byFile[2].File},
+		"flat ordering is by file alone")
+}
+
+func TestGroupWithMaxCommitsConsolidates(t *testing.T) {
+	// First call overshoots (3 groups), feedback round returns 2 — within the cap.
+	responses := []aiGroupingSchema{
+		{Groups: []aiGroup{{Label: "a"}, {Label: "b"}, {Label: "c"}}, Ignore: []string{"lock"}},
+		{Groups: []aiGroup{{Label: "ab"}, {Label: "c"}}, Ignore: []string{"lock"}},
+	}
+	var calls []string
+	exec := func(feedback string) (aiGroupingSchema, error) {
+		calls = append(calls, feedback)
+		r := responses[len(calls)-1]
+		return r, nil
+	}
+
+	got, err := groupWithMaxCommits(2, exec)
+	require.NoError(t, err)
+	assert.Len(t, got.Groups, 2, "stops once within the limit")
+	require.Len(t, calls, 2)
+	assert.Empty(t, calls[0], "first call uses the base prompt (no feedback)")
+	assert.Contains(t, calls[1], "limit is 2", "feedback re-prompt cites the cap")
+}
+
+func TestGroupWithMaxCommitsIgnoreDoesNotCount(t *testing.T) {
+	// 2 groups + a large ignore list; the cap of 2 is satisfied without feedback.
+	exec := func(feedback string) (aiGroupingSchema, error) {
+		return aiGroupingSchema{
+			Groups: []aiGroup{{Label: "a"}, {Label: "b"}},
+			Ignore: []string{"x", "y", "z"},
+		}, nil
+	}
+	got, err := groupWithMaxCommits(2, callCounter(t, exec, 1))
+	require.NoError(t, err)
+	assert.Len(t, got.Groups, 2)
+}
+
+func TestGroupWithMaxCommitsStopsAtAttemptBound(t *testing.T) {
+	// LLM never gets under the cap; the loop must stop after maxGroupingAttempts
+	// calls and return the last grouping rather than erroring or looping forever.
+	var calls int
+	exec := func(feedback string) (aiGroupingSchema, error) {
+		calls++
+		return aiGroupingSchema{Groups: []aiGroup{{Label: "a"}, {Label: "b"}, {Label: "c"}}}, nil
+	}
+	got, err := groupWithMaxCommits(2, exec)
+	require.NoError(t, err)
+	assert.Equal(t, maxGroupingAttempts, calls)
+	assert.Len(t, got.Groups, 3)
+}
+
+// callCounter wraps exec asserting it is invoked exactly want times.
+func callCounter(t *testing.T, exec func(string) (aiGroupingSchema, error), want int) func(string) (aiGroupingSchema, error) {
+	t.Helper()
+	var calls int
+	t.Cleanup(func() { assert.Equal(t, want, calls) })
+	return func(feedback string) (aiGroupingSchema, error) {
+		calls++
+		return exec(feedback)
+	}
 }
 
 func TestAssembleGroupsMapsGroupsIgnoreAndLeftovers(t *testing.T) {

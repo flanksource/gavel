@@ -12,6 +12,27 @@ import (
 	"github.com/flanksource/gavel/models"
 )
 
+// commitLogPrettyFormat is the shared `git log --pretty` format that
+// ParseGitLogOutput expects: RS-delimited records of US-delimited fields
+// (hash, author, committer, subject, body) plus unfolded trailer key/value
+// lists. Trailer extraction here is what populates Commit.Trailers, including
+// custom trailers like Gavel-Issue-Id.
+const commitLogPrettyFormat = "--pretty=format:%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%b%x1f%(trailers:unfold,separator=%x1d,keyonly)%x1f%(trailers:unfold,separator=%x1d,valueonly)%x00"
+
+// CommitsInRange returns the commits in revision range spec (e.g.
+// "origin/main..HEAD") for the repository at path, newest-first, with trailers
+// parsed into Commit.Trailers. Patches are not included — callers that only
+// need metadata (subject/body/trailers) avoid reading large diffs.
+func CommitsInRange(path, spec string) (models.Commits, error) {
+	cmd := exec.Command("git", "log", "--date=iso-strict", commitLogPrettyFormat, spec)
+	cmd.Dir = path
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git log %s: %w\nOutput: %s", spec, err, string(output))
+	}
+	return ParseGitLogOutput(output)
+}
+
 func GetCommitHistory(filter HistoryOptions) (models.Commits, error) {
 	if filter.Path == "" {
 		wd, _ := os.Getwd()
@@ -59,7 +80,7 @@ func GetCommitHistory(filter HistoryOptions) (models.Commits, error) {
 		args := []string{
 			"log",
 			"--date=iso-strict",
-			"--pretty=format:%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%b%x1f%(trailers:unfold,separator=%x1d,keyonly)%x1f%(trailers:unfold,separator=%x1d,valueonly)%x00",
+			commitLogPrettyFormat,
 		}
 
 		if hasFilters {
@@ -248,7 +269,7 @@ func getCommitBySHA(repoPath, sha string, pathFilters []string) (models.Commit, 
 	args := []string{
 		"show",
 		"--date=iso-strict",
-		"--pretty=format:%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%b%x1f%(trailers:unfold,separator=%x1d,keyonly)%x1f%(trailers:unfold,separator=%x1d,valueonly)%x00",
+		commitLogPrettyFormat,
 		"-p",
 		sha,
 	}
@@ -279,7 +300,7 @@ func getCommitsByRange(repoPath, commitRange string, pathFilters []string) ([]mo
 	args := []string{
 		"log",
 		"--date=iso-strict",
-		"--pretty=format:%x1e%H%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%s%x1f%b%x1f%(trailers:unfold,separator=%x1d,keyonly)%x1f%(trailers:unfold,separator=%x1d,valueonly)%x00",
+		commitLogPrettyFormat,
 		"-p",
 		commitRange,
 	}
