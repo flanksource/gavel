@@ -191,6 +191,52 @@ func TestLoadGavelConfig_WithFixtures(t *testing.T) {
 	assert.Equal(t, []string{"specs/*.fixture.md", "tests/**/*.fixture.md"}, cfg.Fixtures.Files)
 }
 
+func TestLoadGavelConfig_WithChecks(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`checks:
+  enabled: true
+  maxIterations: 5
+  test:
+    changed: true
+    timeout: 3m
+  lint:
+    changed: true
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Checks.Enabled)
+	assert.True(t, *cfg.Checks.Enabled)
+	assert.Equal(t, 5, cfg.Checks.MaxIterations)
+	require.NotNil(t, cfg.Checks.Test)
+	assert.True(t, cfg.Checks.Test.Changed)
+	assert.Equal(t, "3m", cfg.Checks.Test.Timeout)
+	require.NotNil(t, cfg.Checks.Lint)
+	assert.True(t, cfg.Checks.Lint.Changed)
+}
+
+func TestMergeChecksConfig_RepoOverridesHome(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+
+	t.Setenv("HOME", home)
+	homeCfg := []byte("checks:\n  enabled: false\n  maxIterations: 2\n")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), homeCfg, 0o644))
+	repoCfg := []byte("checks:\n  enabled: true\n")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), repoCfg, 0o644))
+
+	cfg, err := LoadGavelConfig(repo)
+	require.NoError(t, err)
+	// repo turns checks on; home's maxIterations survives where repo is silent.
+	require.NotNil(t, cfg.Checks.Enabled)
+	assert.True(t, *cfg.Checks.Enabled)
+	assert.Equal(t, 2, cfg.Checks.MaxIterations)
+}
+
 func TestFixturesConfig_ResolvedFiles_Default(t *testing.T) {
 	empty := FixturesConfig{}
 	assert.Equal(t, []string{DefaultFixturesGlob}, empty.ResolvedFiles())

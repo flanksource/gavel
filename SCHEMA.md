@@ -122,6 +122,29 @@ Fixture-test discovery for `gavel test`.
 | `fixtures.enabled` | bool | `false` | sticky — once true in any layer, stays true | Auto-discover fixture files when running `gavel test`. |
 | `fixtures.files` | string[] | `["**/*.fixture.md"]` | later non-empty list **replaces** earlier list | Globs used to discover fixtures. |
 
+## `checks`
+
+Post-completion check loop for `gavel todos run --check`: after an agent reports
+done, gavel runs the configured tests/lint and feeds any failures back to the
+same agent session, re-running until they pass or `maxIterations` is reached.
+Opt-in — runs only when enabled here, by a TODO's frontmatter `checks` block, or
+by the `--check` flag. Frontmatter overrides these project defaults. Omit `test`
+to skip tests and `lint` to skip linting; when enabled with neither set, both run
+against changed files.
+
+| Key | Type | Default | Merge | Description |
+| --- | --- | --- | --- | --- |
+| `checks.enabled` | bool | unset (off) | later set value wins | Turn the loop on. `--check` / frontmatter can force it on. |
+| `checks.maxIterations` | int | `3` | later non-zero wins | Maximum agent re-runs before giving up. |
+| `checks.test` | object | — | later non-nil replaces | `gavel test` options for the check run. Omit to skip tests. |
+| `checks.test.paths` | string[] | — | — | Package paths to test. Empty discovers all. |
+| `checks.test.changed` | bool | `false` | — | Only test packages affected by the agent's changes. |
+| `checks.test.timeout` | string | — | — | Global wall-clock deadline (e.g. `5m`). |
+| `checks.lint` | object | — | later non-nil replaces | `gavel lint` options for the check run. Omit to skip linting. |
+| `checks.lint.linters` | string[] | — | — | Linters to run. Empty runs every detected linter. |
+| `checks.lint.changed` | bool | `false` | — | Only report new violations versus the base ref. |
+| `checks.lint.timeout` | string | — | — | Per-linter deadline (e.g. `5m`). |
+
 ## `ssh`
 
 SSH post-receive hook / push backend.
