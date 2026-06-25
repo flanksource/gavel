@@ -26,6 +26,8 @@ var (
 	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
 	ErrInvalidStage             = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
+	ErrAIGroupWithMessage       = errors.New("--ai-group does not support --message")
+	ErrAIGroupWithInteractive   = errors.New("--ai-group cannot be combined with --interactive")
 	ErrInteractiveWithCommitAll = errors.New("--interactive cannot be combined with --commit-all")
 	ErrInteractiveWithMessage   = errors.New("--interactive cannot be combined with --message")
 	ErrInteractiveNonTTY        = errors.New("--interactive requires an interactive terminal")
@@ -53,9 +55,14 @@ const (
 )
 
 type Options struct {
-	WorkDir     string
-	Stage       string
-	CommitAll   bool
+	WorkDir   string
+	Stage     string
+	CommitAll bool
+	// AIGroup asks the LLM to split the change set into logical commit groups
+	// (plus a separate chore commit for lock/generated files) instead of
+	// grouping by directory. Combine with CommitAll to stage all changes first;
+	// otherwise it groups only the staged set.
+	AIGroup     bool
 	Interactive bool
 	Summary     bool
 	MaxFiles    int
@@ -68,8 +75,12 @@ type Options struct {
 	// it merges once required checks pass. Only applies to PRs this run opens.
 	AutoMerge bool
 	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
-	MergeType     string
+	MergeType string
+	// Model overrides the LLM for commit-message and PR-content generation
+	// (CLI --model). GroupModel overrides the LLM for AI grouping (CLI
+	// --group-model); both fall back to .gavel.yaml commit.{model,groupModel}.
 	Model         string
+	GroupModel    string
 	Message       string
 	PrecommitMode string
 	CompatMode    string
@@ -185,6 +196,20 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	switch {
 	case opts.Fixup != "":
 		result, err = runFixup(ctx, opts)
+	case opts.AIGroup:
+		if opts.Message != "" {
+			return nil, ErrAIGroupWithMessage
+		}
+		if opts.Interactive {
+			return nil, ErrAIGroupWithInteractive
+		}
+		if opts.MaxFiles == 0 {
+			opts.MaxFiles = defaultMaxFiles
+		}
+		if opts.MaxLines == 0 {
+			opts.MaxLines = defaultMaxLines
+		}
+		result, err = runCommitAIGroup(ctx, opts)
 	case opts.CommitAll:
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
@@ -238,36 +263,9 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
-	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	source, err = applyPrecommitChecks(ctx, opts, source)
 	if err != nil {
 		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyFileSizeCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyLinkedDepsCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyGoModTidy(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
 	}
 
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
@@ -397,44 +395,61 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	source, result, err := prepareMultiCommit(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+
+	return commitByDirectory(ctx, opts, source, result)
+}
+
+// runCommitAIGroup stages the change set (all changes when --commit-all is also
+// set, otherwise just the staged set), asks the LLM to split it into logical
+// commit groups plus a chore group for lock/generated files, and creates one
+// commit per group.
+func runCommitAIGroup(ctx context.Context, opts Options) (*Result, error) {
+	if opts.CommitAll {
+		if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
+			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
+		}
+	}
+
+	source, result, err := prepareMultiCommit(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+
+	groups, err := groupChangesByAIFunc(ctx, opts, source)
+	if err != nil {
+		return result, fmt.Errorf("ai grouping: %w", err)
+	}
+
+	return commitGroups(ctx, opts, source, result, groups)
+}
+
+// prepareMultiCommit runs the shared staging-completion pipeline for the
+// multi-commit flows (runCommitAll, runCommitAIGroup): it reads the staged
+// source, applies the precommit gates, runs hooks, re-reads the staged source,
+// and applies the lint gate. Callers are responsible for staging beforehand
+// (stageCommitAllSource for --commit-all, stageFiles for --ai-group). It
+// returns the final staged source and a Result pre-populated with Staged/Hooks/
+// Lint so error returns carry partial state.
+func prepareMultiCommit(ctx context.Context, opts Options) (stagedSource, *Result, error) {
 	source, err := readStagedSource(opts.WorkDir)
 	if err != nil {
-		return nil, err
+		return source, nil, err
 	}
 	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, nil, ErrNothingStaged
 	}
 
-	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	source, err = applyPrecommitChecks(ctx, opts, source)
 	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyFileSizeCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyLinkedDepsCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyGoModTidy(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, nil, err
 	}
 
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
@@ -443,7 +458,7 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
-			return result, hookErr
+			return source, result, hookErr
 		}
 	} else if len(opts.Config.Hooks) > 0 {
 		logger.Infof("Skipping %d commit hook(s) due to --force", len(opts.Config.Hooks))
@@ -451,20 +466,44 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 
 	source, err = readStagedSource(opts.WorkDir)
 	if err != nil {
-		return result, err
+		return source, result, err
 	}
 	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, result, ErrNothingStaged
 	}
 	result.Staged = source.Files
 
 	lintRes, lintErr := applyLintGate(ctx, opts.WorkDir, source.Files, opts.lintGates)
 	result.Lint = lintRes
 	if lintErr != nil {
-		return result, lintErr
+		return source, result, lintErr
 	}
 
-	return commitByDirectory(ctx, opts, source, result)
+	return source, result, nil
+}
+
+// applyPrecommitChecks runs the gitignore, file-size, linked-deps and
+// go-mod-tidy gates in order over the staged source, returning ErrNothingStaged
+// as soon as any gate empties the staged set. Shared by runSingleCommit and
+// prepareMultiCommit.
+func applyPrecommitChecks(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
+	checks := []func(context.Context, Options, stagedSource) (stagedSource, error){
+		applyGitIgnoreCheck,
+		applyFileSizeCheck,
+		applyLinkedDepsCheck,
+		applyGoModTidy,
+	}
+	for _, check := range checks {
+		var err error
+		source, err = check(ctx, opts, source)
+		if err != nil {
+			return source, err
+		}
+		if len(source.Files) == 0 {
+			return source, ErrNothingStaged
+		}
+	}
+	return source, nil
 }
 
 // commitByDirectory groups the staged changes by directory and creates one
@@ -479,12 +518,28 @@ func commitByDirectory(ctx context.Context, opts Options, source stagedSource, r
 	}
 
 	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)
+	return commitGroups(ctx, opts, source, result, groups)
+}
+
+// commitGroups generates a message for each commit group and creates one commit
+// per group. A group carrying a preset Message (e.g. the --ai-group chore group
+// for lock/generated files) skips the LLM and uses it verbatim. It backs both
+// the directory grouper and the AI grouper.
+func commitGroups(ctx context.Context, opts Options, source stagedSource, result *Result, groups []commitGroup) (*Result, error) {
 	if len(groups) == 0 {
 		return result, ErrNothingStaged
 	}
 
 	result.Commits = make([]CommitResult, 0, len(groups))
 	for _, group := range groups {
+		if group.Message != "" {
+			result.Commits = append(result.Commits, CommitResult{
+				Label:   group.Label,
+				Message: applyCommitMetadata(opts, group.Message),
+				Files:   group.Files(),
+			})
+			continue
+		}
 		analysis, msgErr := generateCommitAnalysis(ctx, opts, group.diff())
 		if msgErr != nil {
 			return result, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), msgErr)
@@ -674,7 +729,7 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
-	agent, err := BuildAgent(opts)
+	agent, err := BuildAgent(opts, opts.messageModel())
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
@@ -685,7 +740,8 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
 	message := explicitMessage
 	if message == "" {
-		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
+		maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
+		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines})
 		if err != nil {
 			return commitAIAnalysis{}, err
 		}
@@ -719,12 +775,77 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 	}, nil
 }
 
-func BuildAgent(opts Options) (clickyai.Agent, error) {
-	cfg := clickyai.DefaultConfig()
+// countDiffLines counts changed content lines in a unified diff: lines starting
+// with '+' or '-', excluding the '+++'/'---' file headers.
+func countDiffLines(diff string) int {
+	n := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+			continue
+		}
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			n++
+		}
+	}
+	return n
+}
+
+// maxBodyLinesForDiff scales the commit-message body cap to the diff size:
+// trivial diffs get a subject only (0), larger diffs allow a longer body.
+func maxBodyLinesForDiff(changedLines int) int {
+	switch {
+	case changedLines <= 20:
+		return 0
+	case changedLines <= 100:
+		return 3
+	case changedLines <= 300:
+		return 6
+	case changedLines <= 800:
+		return 10
+	default:
+		return 15
+	}
+}
+
+// defaultGroupModel is the model used for AI commit grouping when neither
+// --group-model nor commit.{groupModel,model} is set. Grouping reasons over the
+// whole change set, so it defaults to a more capable tier than the haiku-class
+// model used for message generation.
+const defaultGroupModel = "claude-sonnet-4-5"
+
+// messageModel resolves the LLM for commit-message and PR-content generation:
+// the CLI --model override, then .gavel.yaml commit.model, else the clicky
+// default (a fast haiku-class model).
+func (opts Options) messageModel() string {
 	if opts.Model != "" {
-		cfg.Model = opts.Model
-	} else if opts.Config.Model != "" {
-		cfg.Model = opts.Config.Model
+		return opts.Model
+	}
+	return opts.Config.Model
+}
+
+// groupModel resolves the LLM for AI commit grouping. Precedence: --group-model,
+// then commit.groupModel, then the shared message model (--model / commit.model),
+// else defaultGroupModel.
+func (opts Options) groupModel() string {
+	if opts.GroupModel != "" {
+		return opts.GroupModel
+	}
+	if opts.Config.GroupModel != "" {
+		return opts.Config.GroupModel
+	}
+	if m := opts.messageModel(); m != "" {
+		return m
+	}
+	return defaultGroupModel
+}
+
+// BuildAgent constructs an LLM agent for opts using model. An empty model falls
+// back to the clicky default. Callers resolve model per task via
+// Options.messageModel / Options.groupModel.
+func BuildAgent(opts Options, model string) (clickyai.Agent, error) {
+	cfg := clickyai.DefaultConfig()
+	if model != "" {
+		cfg.Model = model
 	}
 	if opts.NoCache {
 		cfg.NoCache = true
