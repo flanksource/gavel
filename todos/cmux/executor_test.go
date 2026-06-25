@@ -94,6 +94,7 @@ func TestCmuxExecutorResumesPriorSession(t *testing.T) {
 		Resume:                  true,
 		Timeout:                 2 * time.Second,
 		Runner:                  runner.run,
+		SendSettleDelay:         time.Millisecond,
 		ScreenPollInterval:      time.Millisecond,
 		ScreenStableDuration:    time.Millisecond,
 		SessionLogPollInterval:  time.Millisecond,

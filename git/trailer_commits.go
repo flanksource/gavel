@@ -70,15 +70,24 @@ func isNoCommitsError(output []byte) bool {
 		strings.Contains(s, "unknown revision")
 }
 
-// CommitDiff returns the colored `git show` output (diffstat + patch) for a
-// single commit, so the dashboard can render it through an ANSI viewer. Output
-// is capped at maxCommitDiffBytes; the bool reports whether it was truncated.
-func CommitDiff(path, hash string) (string, bool, error) {
+// CommitDiff returns the colored `git show` output for a single commit so the
+// dashboard can render it through an ANSI viewer. With an empty file it shows
+// the whole commit (diffstat + patch); with a file it narrows to that one path's
+// patch (the per-file hover card), dropping the diffstat and commit header.
+// `--` keeps an untrusted file path from being read as a flag. Output is capped
+// at maxCommitDiffBytes; the bool reports whether it was truncated.
+func CommitDiff(path, hash, file string) (string, bool, error) {
 	hash = strings.TrimSpace(hash)
 	if !IsValidCommitHash(hash) {
 		return "", false, fmt.Errorf("invalid commit hash %q", hash)
 	}
-	cmd := exec.Command("git", "show", "--color=always", "--stat", "--patch", hash)
+	args := []string{"show", "--color=always"}
+	if file = strings.TrimSpace(file); file != "" {
+		args = append(args, "--format=", "--patch", hash, "--", file)
+	} else {
+		args = append(args, "--stat", "--patch", hash)
+	}
+	cmd := exec.Command("git", args...)
 	cmd.Dir = path
 	out, err := cmd.CombinedOutput()
 	if err != nil {

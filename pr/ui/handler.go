@@ -333,6 +333,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
+	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
 	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)

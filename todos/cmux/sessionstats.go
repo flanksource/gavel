@@ -392,6 +392,24 @@ func (a *SessionAccumulator) finished() bool {
 	return !a.stats.InProgress
 }
 
+// lastActivity returns the wall-clock time of the most recent token-usage or
+// compaction line folded in, without the snapshot's in-progress now() override,
+// so the stall watchdog can tell whether the session log is actually advancing.
+func (a *SessionAccumulator) lastActivity() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stats.UpdatedAt
+}
+
+// state returns the high-level agent state from the most recent session-log event
+// (thinking / working / ask / …), used by the stall watchdog to suppress nudges
+// while the turn is paused awaiting the user.
+func (a *SessionAccumulator) state() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stats.State
+}
+
 func (a *SessionAccumulator) startedAt() time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
