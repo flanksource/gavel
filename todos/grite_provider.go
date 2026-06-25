@@ -547,6 +547,10 @@ func frontmatterFromGriteIssue(issue griteIssue, workDir string) types.TODOFront
 		Status:   statusFromGriteIssue(issue.State, issue.Labels),
 	}
 	fm.CWD = workDir
+	if issue.CreatedTS > 0 {
+		t := time.UnixMilli(issue.CreatedTS)
+		fm.Created = &t
+	}
 	if issue.UpdatedTS > 0 {
 		t := time.UnixMilli(issue.UpdatedTS)
 		fm.LastRun = &t

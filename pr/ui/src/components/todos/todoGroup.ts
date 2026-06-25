@@ -53,6 +53,36 @@ export interface TodoBucket {
   entries: TodoEntry[];
 }
 
+const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+function priorityRank(priority?: string): number {
+  return priority && priority in PRIORITY_RANK ? PRIORITY_RANK[priority] : PRIORITY_RANK.medium;
+}
+
+// ageMs is the todo's age anchor in epoch millis: its creation time when known,
+// otherwise its last activity. null when neither timestamp is recorded.
+export function ageMs(todo: TodoItem): number | null {
+  const raw = todo.created ?? todo.lastRun;
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// compareTodos orders todos by priority (high→medium→low), then by age with the
+// oldest first, so the most important and longest-outstanding work surfaces at
+// the top of every grouping. Todos with no recorded timestamp sort after dated
+// ones within their priority.
+export function compareTodos(a: TodoItem, b: TodoItem): number {
+  const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
+  if (byPriority !== 0) return byPriority;
+  const am = ageMs(a);
+  const bm = ageMs(b);
+  if (am === bm) return 0;
+  if (am === null) return 1;
+  if (bm === null) return -1;
+  return am - bm;
+}
+
 // flattenTodos tags every workspace's todos with their owning workspace, in
 // workspace order, so the result can be bucketed by any dimension while each
 // entry still knows where it came from.
@@ -115,7 +145,8 @@ export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', n
         label: def.label,
         icon: 'codicon:warning',
         tone: def.tone,
-        entries: entries.filter(e => severityKey(e) === def.key),
+        // Within one priority bucket the priority tie-breaks to oldest-first.
+        entries: entries.filter(e => severityKey(e) === def.key).sort((a, b) => compareTodos(a.todo, b.todo)),
       }))
       .filter(bucket => bucket.entries.length > 0);
   }
@@ -134,7 +165,7 @@ export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', n
   for (const def of AGE_BUCKETS) {
     const bucket = byAge.get(def.key);
     if (!bucket) continue;
-    bucket.sort((a, b) => (lastActivityMs(b.todo) ?? 0) - (lastActivityMs(a.todo) ?? 0));
+    bucket.sort((a, b) => compareTodos(a.todo, b.todo));
     ordered.push({ key: def.key, label: def.label, icon: 'codicon:clock', tone: 'text-muted-foreground', entries: bucket });
   }
   const none = byAge.get('none');

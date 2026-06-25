@@ -79,6 +79,26 @@ func TestReactGrabPluginCapturesScreenshot(t *testing.T) {
 	}
 }
 
+// React Grab is per-window, so the plugin must inject itself into the page's
+// iframes for framed content to be grabbable. Guards the iframe-injection path:
+// same-origin frame access (contentDocument), dynamic-frame coverage
+// (MutationObserver), the own-modal skip (gavel-rg-frame), and that the script
+// injects its own URL into each frame.
+func TestReactGrabPluginInjectsIntoFrames(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"contentDocument", "MutationObserver", "gavel-rg-frame", "/react-grab-plugin.js"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plugin JS missing %q", want)
+		}
+	}
+}
+
 // The served SPA shell must advertise the home-screen metadata so iOS/Android
 // offer "Add to Home Screen" with the gavel icon and standalone chrome.
 func TestPageHTMLHomeScreenTags(t *testing.T) {

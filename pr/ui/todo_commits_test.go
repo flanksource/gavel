@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -160,6 +161,42 @@ func gitOut(t *testing.T, dir string, args ...string) []byte {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return out
+}
+
+func TestCommitDiffStats(t *testing.T) {
+	dir := t.TempDir()
+	gitInDir(t, dir, "init", "-q")
+	gitInDir(t, dir, "config", "user.email", "test@example.com")
+	gitInDir(t, dir, "config", "user.name", "Test User")
+	gitInDir(t, dir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	gitInDir(t, dir, "add", "a.txt")
+	gitInDir(t, dir, "commit", "-m", "feat: a\n\nGavel-Issue-Id: ISSUE-7")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("rewrite a.txt: %v", err)
+	}
+	gitInDir(t, dir, "add", "a.txt")
+	gitInDir(t, dir, "commit", "-m", "fix: trim a\n\nGavel-Issue-Id: ISSUE-7")
+
+	// No cache DB is configured in tests, so this exercises the direct-compute path.
+	stats := commitDiffStats(context.Background(), dir)
+	got := diffStatFor(stats, "ISSUE-7")
+	if got == nil {
+		t.Fatalf("diffStatFor(ISSUE-7) = nil, want stats; map = %+v", stats)
+	}
+	if got.Commits != 2 || got.Files != 1 || got.Adds != 2 || got.Dels != 1 {
+		t.Fatalf("ISSUE-7 diff = %+v, want {Commits:2 Files:1 Adds:2 Dels:1}", got)
+	}
+
+	// An id with no commits, and an empty id, both omit the diff entirely.
+	if d := diffStatFor(stats, "ISSUE-404"); d != nil {
+		t.Fatalf("diffStatFor(unknown) = %+v, want nil", d)
+	}
+	if d := diffStatFor(stats, ""); d != nil {
+		t.Fatalf("diffStatFor(empty) = %+v, want nil", d)
+	}
 }
 
 func TestCollectTodoCommitsNoRemote(t *testing.T) {

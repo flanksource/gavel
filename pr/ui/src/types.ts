@@ -109,6 +109,9 @@ export interface TodoItem {
   cwd?: string;
   labels?: string[];
   attempts?: number;
+  // ISO timestamp the todo was created (grite's created time); absent for
+  // file-backed todos that record no creation time.
+  created?: string;
   lastRun?: string;
   // Agent session id of the most recent run, used to follow the session live
   // and to resume it. Recorded from the issue's session:<id> label / frontmatter.
@@ -116,6 +119,18 @@ export interface TodoItem {
   body?: string;
   implementation?: string;
   events?: TodoEvent[];
+  // Aggregated git diff footprint of the todo's commits (those carrying its
+  // Gavel-Issue-Id trailer); absent when no commit references the todo.
+  diff?: TodoDiffStat;
+}
+
+// TodoDiffStat is the aggregated change footprint of a todo's linked commits,
+// mirroring the server's git.DiffStat.
+export interface TodoDiffStat {
+  commits: number;
+  files: number;
+  adds: number;
+  dels: number;
 }
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):

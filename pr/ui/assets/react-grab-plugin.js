@@ -325,4 +325,82 @@
       }
     }, 100);
   }
+
+  // React Grab and this plugin are per-window: an iframe has its own document and
+  // window, so the parent's instance can't grab inside it. injectIntoFrame loads
+  // this same script into each SAME-ORIGIN iframe, where it self-bootstraps (no
+  // __REACT_GRAB__ there → loadReactGrab() pulls react-grab from unpkg → registers
+  // the gavel action locally). Nested iframes are handled recursively, per-window.
+  function injectIntoFrame(frame) {
+    if (frame.classList && frame.classList.contains("gavel-rg-frame")) return; // our own todo modal
+    var doc;
+    try {
+      doc = frame.contentDocument; // cross-origin / sandboxed-without-allow-same-origin throws or null
+    } catch (e) {
+      return;
+    }
+    if (!doc || doc.getElementById("gavel-rg-plugin-script")) return;
+    var mount = doc.head || doc.body || doc.documentElement;
+    if (!mount) return; // mid-parse/empty doc — the load listener retries
+    var s = doc.createElement("script");
+    s.id = "gavel-rg-plugin-script";
+    s.src = GAVEL_ORIGIN + "/react-grab-plugin.js";
+    mount.appendChild(s);
+  }
+
+  // watchFrame injects now and again on load — navigation replaces the iframe's
+  // document (dropping gavel-rg-plugin-script), so re-injecting is correct. The
+  // one-time element flag keeps the load listener from stacking across re-scans.
+  function watchFrame(frame) {
+    if (frame.__gavelRgWatched) return;
+    frame.__gavelRgWatched = true;
+    injectIntoFrame(frame);
+    frame.addEventListener("load", function () {
+      injectIntoFrame(frame);
+    });
+  }
+
+  function scanFrames(root) {
+    var frames = (root || document).querySelectorAll("iframe");
+    for (var i = 0; i < frames.length; i++) watchFrame(frames[i]);
+  }
+
+  // queueScan coalesces a full re-scan into one frame. React Grab's overlay mutates
+  // the DOM constantly, so re-scanning on every MutationObserver record would storm.
+  var scanQueued = false;
+  function queueScan() {
+    if (scanQueued) return;
+    scanQueued = true;
+    var run = function () {
+      scanQueued = false;
+      scanFrames(document);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+
+  function observeFrames() {
+    if (typeof MutationObserver === "undefined") return;
+    new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var added = mutations[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var node = added[j];
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === "IFRAME") watchFrame(node);
+          else if (node.querySelector && node.querySelector("iframe")) queueScan();
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  function bootstrapFrames() {
+    scanFrames(document);
+    observeFrames();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrapFrames);
+  } else {
+    bootstrapFrames();
+  }
 })();

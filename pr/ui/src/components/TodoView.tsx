@@ -1,3 +1,4 @@
+import { TimeRange } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from './GavelIcon';
 import { ReactGrabHelp } from './ReactGrabHelp';
 import { TodoCountsBar, TodoDensityPicker } from './todos/format';
@@ -5,6 +6,7 @@ import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
+import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoFilterBar } from './todos/TodoFilterBar';
 
@@ -75,12 +77,38 @@ export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
 // only mounts it when there are todos to filter, so the toolbar row stays hidden
 // on an empty list.
 export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, hiddenStatuses, toggleStatus, density, setDensity } = todos;
+  const { aggregate, hiddenStatuses, toggleStatus, density, setDensity, timeRange, setTimeRange } = todos;
   return (
     <>
       <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Filter</span>
       <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
       <div className="ml-auto flex items-center gap-2">
+        <TimeRange
+          kind="date"
+          label="Active"
+          emptyLabel="Any time"
+          from={timeRange?.from}
+          to={timeRange?.to}
+          onApply={(from, to) => setTimeRange({ from, to })}
+          // Only the relative "active since now-X" groups: their now-<n><unit>
+          // tokens are the ones resolveTimeToken handles, and "active in the last
+          // week/month" is exactly what this activity filter means. The snap-to
+          // calendar presets (this/last week) emit now/w-style tokens this filter
+          // does not resolve, so they are intentionally omitted.
+          presets={['hr', 'day', 'wk+']}
+          align="right"
+        />
+        {timeRange && (
+          <button
+            type="button"
+            onClick={() => setTimeRange(null)}
+            title="Clear time filter"
+            aria-label="Clear time filter"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <GavelIcon name="codicon:close" className="text-xs" />
+          </button>
+        )}
         <TodoDensityPicker density={density} onChange={setDensity} />
       </div>
     </>
@@ -92,7 +120,10 @@ export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
 export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, selected, select, refresh, loadingList } = todos;
+  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, timeRange, selected, select, refresh, loadingList } = todos;
+  // Resolve the activity range to absolute bounds once per render so every group
+  // filters against the same instant.
+  const range = resolveRange(timeRange, Date.now());
   if (workspaces.length === 0) {
     return (
       <div className="p-6 text-center text-sm text-muted-foreground">
@@ -111,6 +142,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             data={byDir[ws.dir]}
             hiddenStatuses={hiddenStatuses}
             onToggleStatus={toggleStatus}
+            range={range}
             density={density}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
@@ -139,6 +171,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
           selected={selected}
           onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
           hiddenStatuses={hiddenStatuses}
+          range={range}
           density={density}
         />
       ))}

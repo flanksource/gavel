@@ -97,6 +97,8 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 		section += stripFileRefLine(body) + "\n\n"
 	}
 
+	section += buildCommentsSection(todo.ProviderEvents)
+
 	if len(todo.StepsToReproduce) > 0 {
 		section += "## Steps to Reproduce\n\nRun the following to reproduce the failure:\n\n"
 		for _, node := range todo.StepsToReproduce {
@@ -119,6 +121,32 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 		}
 	}
 
+	return section
+}
+
+// buildCommentsSection renders issue comments so the agent sees the discussion
+// (clarifications, decisions, extra context) that accompanies the issue body.
+// Only CommentAdded events with a non-empty body are included; other event kinds
+// (label changes, status updates) are timeline noise for an implementation prompt.
+func buildCommentsSection(events []types.ProviderEvent) string {
+	var section string
+	for _, event := range events {
+		if event.Kind != "CommentAdded" {
+			continue
+		}
+		body := strings.TrimSpace(event.Body)
+		if body == "" {
+			continue
+		}
+		if section == "" {
+			section = "## Comments\n\n"
+		}
+		author := event.Actor
+		if author == "" {
+			author = "unknown"
+		}
+		section += fmt.Sprintf("**%s:**\n\n%s\n\n", author, body)
+	}
 	return section
 }
 

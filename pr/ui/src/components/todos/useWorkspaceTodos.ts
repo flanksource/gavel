@@ -4,6 +4,7 @@ import { addCounts, emptyCounts, todoQuery } from './format';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
+import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
 
 export interface SelectedTodo {
   dir: string;
@@ -57,6 +58,8 @@ export function useWorkspaceTodos(
   const [density, setDensityState] = useState<TodoDensity>(loadDensity);
   // Grouping dimension (workspace/severity/age) for the lists, persisted too.
   const [groupBy, setGroupByState] = useState<TodoGroupBy>(loadGroupBy);
+  // Activity time-range filter (clicky-ui TimeRange tokens); null shows all.
+  const [timeRange, setTimeRangeState] = useState<TodoTimeRange | null>(loadTimeRange);
 
   const toggleStatus = useCallback((status: TodoStatus) => {
     setHiddenStatuses(prev => {
@@ -74,6 +77,11 @@ export function useWorkspaceTodos(
   const setGroupBy = useCallback((next: TodoGroupBy) => {
     setGroupByState(next);
     saveGroupBy(next);
+  }, []);
+
+  const setTimeRange = useCallback((next: TodoTimeRange | null) => {
+    setTimeRangeState(next);
+    saveTimeRange(next);
   }, []);
 
   // Fetch every workspace's todos in parallel; refetch only when the set of
@@ -226,6 +234,8 @@ export function useWorkspaceTodos(
     setDensity,
     groupBy,
     setGroupBy,
+    timeRange,
+    setTimeRange,
   };
 }
 
