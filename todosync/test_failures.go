@@ -1,4 +1,10 @@
-package testrunner
+// Package todosync records test failures and lint violations as TODO markdown
+// files. It lives outside the testrunner and linters packages so those engines
+// don't import the todos package — breaking the import cycle that would
+// otherwise prevent the todos executor from invoking testrunner/linters. The
+// testrunner reaches this code through the RunOptions.TodoSync callback; the
+// lint path calls SyncLintTodos directly from the CLI.
+package todosync
 
 import (
 	"fmt"
@@ -10,27 +16,30 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/gavel/testrunner/parsers"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/goccy/go-yaml"
 )
 
-// TodoSync manages syncing test failures to TODO files.
-type TodoSync struct {
+// TestFailureRecorder creates or updates a TODO file for each test failure.
+type TestFailureRecorder struct {
 	todosDir     string
 	templatePath string
 }
 
-// NewTodoSync creates a new TODO sync handler.
-func NewTodoSync(todosDir, templatePath string) *TodoSync {
-	return &TodoSync{
+// NewTestFailureRecorder creates a recorder that writes TODOs to todosDir,
+// optionally seeding new TODOs with the contents of templatePath.
+func NewTestFailureRecorder(todosDir, templatePath string) *TestFailureRecorder {
+	return &TestFailureRecorder{
 		todosDir:     todosDir,
 		templatePath: templatePath,
 	}
 }
 
-// SyncFailure creates or updates a TODO for a test failure.
-func (ts *TodoSync) SyncFailure(failure TestFailure) (string, error) {
+// SyncFailure creates or updates a TODO for a test failure and returns its path.
+// It matches the testrunner.RunOptions.TodoSync callback signature.
+func (ts *TestFailureRecorder) SyncFailure(failure parsers.Test) (string, error) {
 	if err := os.MkdirAll(ts.todosDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create todos directory: %w", err)
 	}
@@ -47,7 +56,7 @@ func (ts *TodoSync) SyncFailure(failure TestFailure) (string, error) {
 	return ts.createTodo(failure)
 }
 
-func (ts *TodoSync) findExistingTodo(failure TestFailure) (string, error) {
+func (ts *TestFailureRecorder) findExistingTodo(failure parsers.Test) (string, error) {
 	entries, err := os.ReadDir(ts.todosDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -69,7 +78,7 @@ func (ts *TodoSync) findExistingTodo(failure TestFailure) (string, error) {
 	return "", nil
 }
 
-func (ts *TodoSync) createTodo(failure TestFailure) (string, error) {
+func (ts *TestFailureRecorder) createTodo(failure parsers.Test) (string, error) {
 	slug := ts.generateTodoSlug(failure)
 
 	// Find next number
@@ -103,7 +112,7 @@ func (ts *TodoSync) createTodo(failure TestFailure) (string, error) {
 	return todoPath, nil
 }
 
-func (ts *TodoSync) updateTodo(todoPath string, failure TestFailure) error {
+func (ts *TestFailureRecorder) updateTodo(todoPath string, failure parsers.Test) error {
 	result, err := todos.ParseFrontmatterFromFile(todoPath)
 	if err != nil {
 		return err
@@ -126,14 +135,14 @@ func (ts *TodoSync) updateTodo(todoPath string, failure TestFailure) error {
 	return os.WriteFile(todoPath, []byte(updatedContent), 0644)
 }
 
-func (ts *TodoSync) generateTodoSlug(failure TestFailure) string {
+func (ts *TestFailureRecorder) generateTodoSlug(failure parsers.Test) string {
 	slug := strings.ToLower(failure.Name)
 	slug = regexp.MustCompile(`[:,./]`).ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
 	return slug
 }
 
-func (ts *TodoSync) generateTodoContent(failure TestFailure, template string) string {
+func (ts *TestFailureRecorder) generateTodoContent(failure parsers.Test, template string) string {
 	now := time.Now()
 	frontmatter := types.TODOFrontmatter{
 		Priority: types.PriorityHigh,

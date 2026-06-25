@@ -1,10 +1,11 @@
-package linters
+package todosync
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos"
 	. "github.com/onsi/ginkgo/v2"
@@ -23,8 +24,8 @@ var _ = Describe("SyncLintTodos", func() {
 		todosDir = GinkgoT().TempDir()
 	})
 
-	makeResults := func(violations ...models.Violation) []*LinterResult {
-		return []*LinterResult{{
+	makeResults := func(violations ...models.Violation) []*linters.LinterResult {
+		return []*linters.LinterResult{{
 			Linter:     "golangci-lint",
 			Success:    true,
 			Violations: violations,
@@ -167,7 +168,7 @@ var _ = Describe("SyncLintTodos", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Complete it
-		_, err = SyncLintTodos([]*LinterResult{{
+		_, err = SyncLintTodos([]*linters.LinterResult{{
 			Linter:  "golangci-lint",
 			Success: true,
 		}}, SyncOptions{
@@ -191,7 +192,7 @@ var _ = Describe("SyncLintTodos", func() {
 	})
 
 	It("maps severity to priority correctly", func() {
-		results := []*LinterResult{{
+		results := []*linters.LinterResult{{
 			Linter:  "golangci-lint",
 			Success: true,
 			Violations: []models.Violation{
@@ -210,7 +211,7 @@ var _ = Describe("SyncLintTodos", func() {
 	})
 
 	It("skips failed linter results", func() {
-		results := []*LinterResult{{
+		results := []*linters.LinterResult{{
 			Linter:  "golangci-lint",
 			Success: false,
 			Violations: []models.Violation{
