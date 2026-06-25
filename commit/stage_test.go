@@ -34,10 +34,40 @@ func TestStageAllSkipsEmbeddedRepoWithoutError(t *testing.T) {
 	}
 }
 
-// TestStageAllKeepsTrackedButIgnoredModifications guards gavel's own workflow:
-// pr/ui/dist/prui.js and similar bundles are .gitignore'd yet tracked and must
-// keep being committed. Filtering by ignore rules must not drop them.
-func TestStageAllKeepsTrackedButIgnoredModifications(t *testing.T) {
+// TestStageAllStripsTrackedButIgnoredModifications encodes the rule that
+// .gitignore is authoritative for `gavel commit`: a force-tracked bundle such as
+// dist/bundle.js must be left out of the commit, while a !-negated sibling and
+// normal changes are staged. The bundle stays tracked (non-destructive); the
+// release CI re-commits it with raw `git add -f`.
+func TestStageAllStripsTrackedButIgnoredModifications(t *testing.T) {
+	dir := initCommitRepo(t)
+	writeFile(t, dir, ".gitignore", "dist/*\n!dist/keep.js\n")
+	gitRun(t, dir, "add", ".gitignore")
+	gitRun(t, dir, "commit", "-m", "ignore dist")
+
+	writeFileInDir(t, dir, "dist/bundle.js", "v1\n")
+	writeFileInDir(t, dir, "dist/keep.js", "v1\n")
+	gitRun(t, dir, "add", "-f", "dist/bundle.js")
+	gitRun(t, dir, "add", "dist/keep.js")
+	gitRun(t, dir, "commit", "-m", "vendor bundles")
+
+	writeFileInDir(t, dir, "dist/bundle.js", "v2\n")
+	writeFileInDir(t, dir, "dist/keep.js", "v2\n")
+	writeFileInDir(t, dir, "src/app.go", "package app\n")
+
+	err := stageFiles(dir, StageAll, verify.CommitConfig{})
+	require.NoError(t, err)
+
+	staged := mustStagedFiles(t, dir)
+	assert.NotContains(t, staged, "dist/bundle.js", "force-tracked .gitignore'd file must not be staged")
+	assert.Contains(t, staged, "dist/keep.js", "!-negated file must be staged")
+	assert.Contains(t, staged, "src/app.go")
+	assert.Contains(t, gitOutput(t, dir, "ls-files"), "dist/bundle.js", "stripped file stays tracked")
+}
+
+// TestStageAllPreservesManuallyStagedGitIgnored confirms an explicit `git add`
+// overrides .gitignore for that commit: gavel only strips what it stages itself.
+func TestStageAllPreservesManuallyStagedGitIgnored(t *testing.T) {
 	dir := initCommitRepo(t)
 	writeFile(t, dir, ".gitignore", "dist/\n")
 	gitRun(t, dir, "add", ".gitignore")
@@ -48,14 +78,12 @@ func TestStageAllKeepsTrackedButIgnoredModifications(t *testing.T) {
 	gitRun(t, dir, "commit", "-m", "vendor bundle")
 
 	writeFileInDir(t, dir, "dist/bundle.js", "v2\n")
-	writeFileInDir(t, dir, "src/app.go", "package app\n")
+	gitRun(t, dir, "add", "-f", "dist/bundle.js") // manual stage before gavel runs
 
 	err := stageFiles(dir, StageAll, verify.CommitConfig{})
 	require.NoError(t, err)
 
-	staged := mustStagedFiles(t, dir)
-	assert.Contains(t, staged, "dist/bundle.js", "tracked-but-ignored modification must stay staged")
-	assert.Contains(t, staged, "src/app.go")
+	assert.Contains(t, mustStagedFiles(t, dir), "dist/bundle.js", "manually staged file must be preserved")
 }
 
 // TestStageAllFiltersGavelGitignore verifies the .gavel.yaml commit.gitignore
