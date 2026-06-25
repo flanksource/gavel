@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { AnsiHtml } from '@flanksource/clicky-ui/data';
-import type { TodoCommit, TodoCommitDiffResponse, TodoCommitsResponse } from '../../types';
+import type { TodoCommit, TodoCommitsResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { RelativeTime } from '../RelativeTime';
+import { CommitFiles } from './TodoCommitFiles';
 import { todoQuery } from './format';
 
 // useTodoCommits fetches the git commits linked to a todo via its Gavel-Issue-Id
@@ -46,72 +46,9 @@ function useTodoCommits(dir: string, provider: string, todoRef: string) {
   return { commits, loading, error };
 }
 
-// CommitDiff lazily fetches and renders one commit's diff (the ANSI-colored
-// `git show` output) once its row is expanded. The diff is shown in a black
-// terminal panel via AnsiHtml, matching how process logs render.
-function CommitDiff({ dir, provider, hash }: { dir: string; provider: string; hash: string }) {
-  const [diff, setDiff] = useState('');
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    const params = new URLSearchParams(todoQuery(dir, provider));
-    params.set('hash', hash);
-    fetch(`/api/todos/commits/diff?${params.toString()}`, { signal: controller.signal })
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load diff');
-        if (!cancelled) {
-          const payload = data as TodoCommitDiffResponse;
-          setDiff(payload.diff ?? '');
-          setTruncated(!!payload.truncated);
-        }
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== 'AbortError') setError(err?.message || 'Failed to load diff');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [dir, provider, hash]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-        <GavelIcon name="svg-spinners:ring-resize" className="text-xs" />
-        Loading diff…
-      </div>
-    );
-  }
-  if (error) {
-    return <div className="px-3 py-2 text-[11px] text-red-600">{error}</div>;
-  }
-  if (!diff.trim()) {
-    return <div className="px-3 py-2 text-[11px] text-muted-foreground">No changes</div>;
-  }
-  return (
-    <div className="px-3 pb-3">
-      <AnsiHtml
-        as="pre"
-        text={diff}
-        className="max-h-[28rem] overflow-auto whitespace-pre rounded bg-black p-3 text-[11px] leading-snug text-gray-100"
-      />
-      {truncated && <div className="mt-1 text-[10px] text-muted-foreground">Diff truncated — open the commit to see the rest.</div>}
-    </div>
-  );
-}
-
 // CommitRow renders one linked commit with an expand toggle that reveals its
-// diff. The short hash still links out to the commit on the origin remote.
+// per-file repomap status (each file revealing its own diff on hover). The short
+// hash still links out to the commit on the origin remote.
 function CommitRow({ dir, provider, commit }: { dir: string; provider: string; commit: TodoCommit }) {
   const [open, setOpen] = useState(false);
   return (
@@ -121,7 +58,7 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
           type="button"
           onClick={() => setOpen(o => !o)}
           aria-expanded={open}
-          title={open ? 'Hide changes' : 'Show changes'}
+          title={open ? 'Hide files' : 'Show files'}
           className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-xs" />
@@ -155,7 +92,7 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
           </div>
         </div>
       </div>
-      {open && <CommitDiff dir={dir} provider={provider} hash={commit.hash} />}
+      {open && <CommitFiles dir={dir} provider={provider} hash={commit.hash} />}
     </li>
   );
 }
