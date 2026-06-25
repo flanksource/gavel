@@ -53,7 +53,7 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 		return commit, nil
 	}
 
-	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent)
+	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines)
 	if err != nil {
 		return commit, err
 	}
@@ -71,7 +71,7 @@ func AnalyzeCommitPromptsWithAI(ctx context.Context, commit models.CommitAnalysi
 	}
 
 	if includeMessage {
-		analyzed, err := analyzeCommitMessageWithAI(ctx, out.Commit, agent)
+		analyzed, err := analyzeCommitMessageWithAI(ctx, out.Commit, agent, opts.MaxBodyLines)
 		if err != nil {
 			return out, err
 		}
@@ -114,12 +114,12 @@ func AnalyzeCompatibilityPromptsWithAI(ctx context.Context, commit models.Commit
 	return out, nil
 }
 
-func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent) (models.CommitAnalysis, error) {
+func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int) (models.CommitAnalysis, error) {
 	if commitMessagePrompt == "" {
 		return commit, fmt.Errorf("AI commit message prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, commitMessagePrompt)
+	prompt, err := renderCommitPrompt(commit, commitMessagePrompt, map[string]any{"maxBodyLines": maxBodyLines})
 	if err != nil {
 		return commit, err
 	}
@@ -164,7 +164,7 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 		return nil, fmt.Errorf("AI functionality-removed prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, functionalityRemovedPrompt)
+	prompt, err := renderCommitPrompt(commit, functionalityRemovedPrompt, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 		return nil, fmt.Errorf("AI compatibility-issues prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, compatibilityIssuesPrompt)
+	prompt, err := renderCommitPrompt(commit, compatibilityIssuesPrompt, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -213,8 +213,12 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 	return parseStringArrayResult(schema.CompatibilityIssues, resp.Result, "compatibilityIssues"), nil
 }
 
-func renderCommitPrompt(commit models.CommitAnalysis, template string) (string, error) {
-	prompt, err := gomplate.RunTemplate(commit.AsMap(), gomplate.Template{
+func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map[string]any) (string, error) {
+	data := commit.AsMap()
+	for k, v := range extra {
+		data[k] = v
+	}
+	prompt, err := gomplate.RunTemplate(data, gomplate.Template{
 		Template: template,
 	})
 	if err != nil {
