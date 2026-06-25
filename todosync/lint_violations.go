@@ -1,4 +1,4 @@
-package linters
+package todosync
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -54,7 +55,7 @@ func slugify(s string) string {
 	return s
 }
 
-func SyncLintTodos(results []*LinterResult, opts SyncOptions) (*SyncResult, error) {
+func SyncLintTodos(results []*linters.LinterResult, opts SyncOptions) (*SyncResult, error) {
 	groups := groupViolations(results, opts.GroupBy, opts.WorkDir)
 
 	if err := os.MkdirAll(opts.TodosDir, 0o755); err != nil {
@@ -102,7 +103,7 @@ func SyncLintTodos(results []*LinterResult, opts SyncOptions) (*SyncResult, erro
 	return syncResult, nil
 }
 
-func groupViolations(results []*LinterResult, groupBy, workDir string) map[string]violationGroup {
+func groupViolations(results []*linters.LinterResult, groupBy, workDir string) map[string]violationGroup {
 	groups := map[string]violationGroup{}
 
 	for _, result := range results {
@@ -258,8 +259,8 @@ func formatViolationsBody(group violationGroup) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "\n# Lint: %s\n\n", group.Key)
 
-	linters := sortedKeys(group.Linters)
-	fmt.Fprintf(&sb, "**Linters:** %s\n\n", strings.Join(linters, ", "))
+	lintersList := sortedKeys(group.Linters)
+	fmt.Fprintf(&sb, "**Linters:** %s\n\n", strings.Join(lintersList, ", "))
 	sb.WriteString("## Violations\n\n")
 
 	maxViolations := 100

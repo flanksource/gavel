@@ -147,6 +147,11 @@ type RunOptions struct {
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind       string                `json:"run_kind,omitempty"`                                           // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
 	SummaryOut    *parsers.TestSummary  `json:"-"`                                                            // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
+	// TodoSync, when set, records a failing test as a TODO and returns its path.
+	// It is supplied by the caller (see todosync.NewTestFailureRecorder) so the
+	// testrunner needn't import the todos package. Only invoked when SyncTodos is
+	// true and at least one test failed.
+	TodoSync func(failure TestFailure) (todoPath string, err error) `json:"-"`
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -2039,14 +2044,16 @@ func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
 }
 
 func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
-	sync := NewTodoSync(o.TodosDir, o.TodoTemplate)
+	if o.TodoSync == nil {
+		return fmt.Errorf("SyncTodos is enabled but no TodoSync recorder was provided (set RunOptions.TodoSync)")
+	}
 
 	for _, failure := range failures {
 		failure := failure // Capture for goroutine
 		taskName := fmt.Sprintf("Creating TODO for %s", failure.Name)
 
 		taskFunc := func(ctx commonsCtx.Context, t *task.Task) (string, error) {
-			return sync.SyncFailure(failure)
+			return o.TodoSync(failure)
 		}
 
 		clickyTask := clicky.StartTask[string](taskName, taskFunc)

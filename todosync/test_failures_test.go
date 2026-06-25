@@ -1,4 +1,4 @@
-package testrunner
+package todosync
 
 import (
 	"os"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/gavel/testrunner/parsers"
 	. "github.com/flanksource/gavel/todos/types"
 	"github.com/goccy/go-yaml"
 )
@@ -13,26 +14,26 @@ import (
 func TestTodoSyncGenerateSlug(t *testing.T) {
 	tests := []struct {
 		name     string
-		failure  TestFailure
+		failure  parsers.Test
 		expected string
 	}{
 		{
 			name: "simple test name",
-			failure: TestFailure{
+			failure: parsers.Test{
 				Name: "TestUserLogin",
 			},
 			expected: "testuserlogin",
 		},
 		{
 			name: "ginkgo spec",
-			failure: TestFailure{
+			failure: parsers.Test{
 				Name: "should validate email",
 			},
 			expected: "should validate email",
 		},
 	}
 
-	sync := NewTodoSync(t.TempDir(), "")
+	sync := NewTestFailureRecorder(t.TempDir(), "")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := sync.generateTodoSlug(tt.failure)
@@ -46,23 +47,23 @@ func TestTodoSyncGenerateSlug(t *testing.T) {
 func TestTodoSyncGenerateRerunCommand(t *testing.T) {
 	tests := []struct {
 		name     string
-		failure  TestFailure
+		failure  parsers.Test
 		contains string
 	}{
 		{
 			name: "go test command",
-			failure: TestFailure{
+			failure: parsers.Test{
 				Name:      "TestUserLogin",
 				File:      "pkg/auth/user_test.go",
-				Framework: GoTest,
+				Framework: parsers.GoTest,
 			},
 			contains: "go test -run ^TestUserLogin$",
 		},
 		{
 			name: "ginkgo command",
-			failure: TestFailure{
+			failure: parsers.Test{
 				Name:      "should validate email",
-				Framework: Ginkgo,
+				Framework: parsers.Ginkgo,
 			},
 			contains: `ginkgo --focus="should validate email"`,
 		},
@@ -81,16 +82,16 @@ func TestTodoSyncGenerateRerunCommand(t *testing.T) {
 func TestTodoSyncCreateTodo(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	failure := TestFailure{
+	failure := parsers.Test{
 		Name:      "TestUserLogin",
 		Package:   "github.com/flanksource/gavel/auth",
 		Message:   "expected nil, got error",
 		File:      "pkg/auth/user_test.go",
 		Line:      42,
-		Framework: GoTest,
+		Framework: parsers.GoTest,
 	}
 
-	sync := NewTodoSync(tmpDir, "")
+	sync := NewTestFailureRecorder(tmpDir, "")
 	todoPath, err := sync.createTodo(failure)
 
 	if err != nil {
@@ -124,11 +125,11 @@ func TestTodoSyncFindExisting(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	failure := TestFailure{
+	failure := parsers.Test{
 		Name: "TestUserLogin",
 	}
 
-	sync := NewTodoSync(tmpDir, "")
+	sync := NewTestFailureRecorder(tmpDir, "")
 	found, err := sync.findExistingTodo(failure)
 
 	if err != nil {
@@ -161,12 +162,12 @@ language: go
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	failure := TestFailure{
+	failure := parsers.Test{
 		Name:    "TestUserLogin",
 		Message: "still failing",
 	}
 
-	sync := NewTodoSync(tmpDir, "")
+	sync := NewTestFailureRecorder(tmpDir, "")
 	err := sync.updateTodo(todoPath, failure)
 
 	if err != nil {
@@ -193,16 +194,16 @@ language: go
 func TestTodoSyncGenerateContentWithTODOFrontmatter(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	failure := TestFailure{
+	failure := parsers.Test{
 		Name:      "TestUserLogin",
 		Package:   "github.com/flanksource/gavel/auth",
 		Message:   "expected nil, got error",
 		File:      "pkg/auth/user_test.go",
 		Line:      42,
-		Framework: GoTest,
+		Framework: parsers.GoTest,
 	}
 
-	sync := NewTodoSync(tmpDir, "")
+	sync := NewTestFailureRecorder(tmpDir, "")
 	content := sync.generateTodoContent(failure, "")
 
 	// Check that frontmatter is properly generated
