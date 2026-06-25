@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/cmux"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -133,22 +134,26 @@ type todoTransferResponse struct {
 }
 
 type todoRunPayload struct {
-	Provider  string   `json:"provider,omitempty"`
-	Dir       string   `json:"dir,omitempty"`
-	Ref       string   `json:"ref,omitempty"`
-	Refs      []string `json:"refs,omitempty"`
-	Agent     string   `json:"agent,omitempty"`
-	Mode      string   `json:"mode,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	Effort    string   `json:"effort,omitempty"`
-	Plan      bool     `json:"plan,omitempty"`
-	Resume    bool     `json:"resume,omitempty"`
-	Timeout   string   `json:"timeout,omitempty"`
-	MaxBudget float64  `json:"maxBudget,omitempty"`
-	MaxCost   float64  `json:"maxCost,omitempty"`
-	MaxTurns  int      `json:"maxTurns,omitempty"`
-	Dirty     bool     `json:"dirty,omitempty"`
-	DryRun    bool     `json:"dryRun,omitempty"`
+	Provider string   `json:"provider,omitempty"`
+	Dir      string   `json:"dir,omitempty"`
+	Ref      string   `json:"ref,omitempty"`
+	Refs     []string `json:"refs,omitempty"`
+	Agent    string   `json:"agent,omitempty"`
+	Mode     string   `json:"mode,omitempty"`
+	// Driver selects the agent driver (claude-cmux, claude-headless, claude-sdk,
+	// claude-api, codex-cmux, codex-headless). When empty it is derived from the
+	// legacy agent+mode pair for backward compatibility.
+	Driver    string  `json:"driver,omitempty"`
+	Model     string  `json:"model,omitempty"`
+	Effort    string  `json:"effort,omitempty"`
+	Plan      bool    `json:"plan,omitempty"`
+	Resume    bool    `json:"resume,omitempty"`
+	Timeout   string  `json:"timeout,omitempty"`
+	MaxBudget float64 `json:"maxBudget,omitempty"`
+	MaxCost   float64 `json:"maxCost,omitempty"`
+	MaxTurns  int     `json:"maxTurns,omitempty"`
+	Dirty     bool    `json:"dirty,omitempty"`
+	DryRun    bool    `json:"dryRun,omitempty"`
 	// Commit controls whether `gavel commit` runs over the agent's changes once
 	// the run finishes. A nil pointer defaults to true (the dashboard auto-commits
 	// like the CLI's `todos run --commit`); send false to disable it.
@@ -170,6 +175,7 @@ type todoRunResponse struct {
 	Mode      string   `json:"mode"`
 	Model     string   `json:"model,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
+	Driver    string   `json:"driver,omitempty"`
 	Plan      bool     `json:"plan,omitempty"`
 	Resume    bool     `json:"resume,omitempty"`
 	SessionID string   `json:"sessionId,omitempty"`
@@ -202,6 +208,7 @@ type todoRunRequest struct {
 type todoRunOptions struct {
 	Agent           string
 	Mode            string
+	Driver          string
 	Model           string
 	Effort          string
 	Plan            bool
@@ -635,6 +642,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Provider:  backend,
 		Agent:     opts.Agent,
 		Mode:      opts.Mode,
+		Driver:    opts.Driver,
 		Model:     opts.Model,
 		Effort:    opts.Effort,
 		Plan:      opts.Plan,
@@ -1059,30 +1067,27 @@ func todoRunLabel(todoList []*types.TODO) string {
 }
 
 func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
-	agent := strings.ToLower(strings.TrimSpace(payload.Agent))
+	kind, err := resolveDriverFromPayload(payload)
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+	agent := kind.Agent()
 	model := strings.TrimSpace(payload.Model)
-	if agent == "" {
-		agent, _ = cmux.ResolveAgent(model)
-	}
-	if agent != "claude" && agent != "codex" {
-		return todoRunOptions{}, fmt.Errorf("invalid agent %q", payload.Agent)
-	}
 	if model == "" {
 		model = agent
 	}
+	if got, _ := cmux.ResolveAgent(model); got != agent {
+		return todoRunOptions{}, fmt.Errorf("driver %s expects a %s model but %q resolves to %s", kind, agent, model, got)
+	}
 
-	mode := strings.ToLower(strings.TrimSpace(payload.Mode))
-	if mode == "" {
+	// Mode is the legacy mechanism label (cmux vs inline) some response/preview
+	// paths still read; the authoritative selection is Driver.
+	mode := "inline"
+	if kind.Mechanism() == "cmux" {
 		mode = "cmux"
 	}
-	if mode != "cmux" && mode != "inline" {
-		return todoRunOptions{}, fmt.Errorf("invalid mode %q", payload.Mode)
-	}
-	if mode == "inline" && agent == "codex" {
-		return todoRunOptions{}, fmt.Errorf("codex runs require cmux mode")
-	}
-	if payload.Plan && mode != "cmux" {
-		return todoRunOptions{}, fmt.Errorf("plan mode requires cmux mode")
+	if payload.Plan && kind.Mechanism() != "cmux" {
+		return todoRunOptions{}, fmt.Errorf("plan mode requires a cmux driver")
 	}
 
 	effort := strings.ToLower(strings.TrimSpace(payload.Effort))
@@ -1134,6 +1139,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	return todoRunOptions{
 		Agent:           agent,
 		Mode:            mode,
+		Driver:          string(kind),
 		Model:           model,
 		Effort:          effort,
 		Plan:            payload.Plan,
@@ -1205,42 +1211,54 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	}
 }
 
-func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
-	switch req.Options.Mode {
-	case "cmux":
-		// Return "" as the orchestrator session id so TODOExecutor does not
-		// overwrite the todo's recorded prior session — the cmux executor needs
-		// that prior to decide resume / history. The run's actual session id is
-		// passed explicitly via SessionID.
-		return cmux.NewCmuxExecutor(cmux.CmuxExecutorConfig{
-			WorkDir:   req.Source.Dir,
-			Model:     req.Options.Model,
-			Effort:    req.Options.Effort,
-			Plan:      req.Options.Plan,
-			Resume:    req.Options.Resume,
-			SessionID: req.Options.SessionID,
-			Timeout:   req.Options.Timeout,
-		}), "", nil
-	case "inline":
-		agent, model := cmux.ResolveAgent(req.Options.Model)
-		if agent != "claude" {
-			return nil, "", fmt.Errorf("inline mode only supports claude models")
-		}
-		sessionID := req.Options.SessionID
-		config := claude.ClaudeExecutorConfig{
-			WorkDir:      req.Source.Dir,
-			SessionID:    sessionID,
-			MaxBudgetUsd: req.Options.MaxBudget,
-			MaxTurns:     req.Options.MaxTurns,
-			Model:        model,
-			Timeout:      req.Options.Timeout,
-			Tools:        []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
-			Dirty:        req.Options.Dirty,
-		}
-		return claude.NewClaudeExecutor(config), sessionID, nil
-	default:
-		return nil, "", fmt.Errorf("invalid mode %q", req.Options.Mode)
+// resolveDriverFromPayload selects the driver kind: the explicit Driver field
+// when set, otherwise the legacy agent+mode pair (mode cmux → "<agent>-cmux",
+// mode inline → claude-sdk; codex was never an inline agent).
+func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
+	if s := strings.TrimSpace(p.Driver); s != "" {
+		return drivers.Parse(s)
 	}
+	agent := strings.ToLower(strings.TrimSpace(p.Agent))
+	if agent == "" {
+		agent, _ = cmux.ResolveAgent(strings.TrimSpace(p.Model))
+	}
+	mode := strings.ToLower(strings.TrimSpace(p.Mode))
+	if mode == "" {
+		mode = "cmux"
+	}
+	switch mode {
+	case "cmux":
+		return drivers.Parse(agent + "-cmux")
+	case "inline":
+		if agent == "codex" {
+			return "", fmt.Errorf("codex runs require a cmux driver")
+		}
+		return drivers.ClaudeSDK, nil
+	default:
+		return "", fmt.Errorf("invalid mode %q", p.Mode)
+	}
+}
+
+func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
+	kind, err := drivers.Parse(req.Options.Driver)
+	if err != nil {
+		return nil, "", err
+	}
+	// cmux returns "" as the orchestrator session id (it manages its own
+	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
+	// todo's recorded prior session.
+	return drivers.New(kind, drivers.Config{
+		WorkDir:      req.Source.Dir,
+		Model:        req.Options.Model,
+		Effort:       req.Options.Effort,
+		Plan:         req.Options.Plan,
+		Resume:       req.Options.Resume,
+		SessionID:    req.Options.SessionID,
+		Timeout:      req.Options.Timeout,
+		MaxBudgetUsd: req.Options.MaxBudget,
+		MaxTurns:     req.Options.MaxTurns,
+		Dirty:        req.Options.Dirty,
+	})
 }
 
 // resolveRunSessionID determines the claude session id a run will use, so the

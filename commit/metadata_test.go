@@ -18,19 +18,19 @@ func TestApplyCommitMetadata(t *testing.T) {
 		{
 			name:      "disabled returns message unchanged",
 			opts:      Options{AddMetadata: false, IssueID: "ISSUE-1", SessionID: "sess-1"},
-			wantNotIn: []string{trailerIssueID, trailerSessionID},
+			wantNotIn: []string{TrailerIssueID, trailerSessionID},
 		},
 		{
 			name:    "options values win over env",
 			opts:    Options{AddMetadata: true, IssueID: "ISSUE-1", SessionID: "sess-1"},
 			env:     map[string]string{EnvIssueID: "ENV-ISSUE", EnvSessionID: "env-sess"},
-			wantHas: []string{trailerIssueID + ": ISSUE-1", trailerSessionID + ": sess-1"},
+			wantHas: []string{TrailerIssueID + ": ISSUE-1", trailerSessionID + ": sess-1"},
 		},
 		{
 			name:    "falls back to env vars",
 			opts:    Options{AddMetadata: true},
 			env:     map[string]string{EnvIssueID: "ENV-ISSUE", EnvSessionID: "env-sess"},
-			wantHas: []string{trailerIssueID + ": ENV-ISSUE", trailerSessionID + ": env-sess"},
+			wantHas: []string{TrailerIssueID + ": ENV-ISSUE", trailerSessionID + ": env-sess"},
 		},
 		{
 			name:    "claude session id fallback",
@@ -41,7 +41,7 @@ func TestApplyCommitMetadata(t *testing.T) {
 		{
 			name:      "no values appends nothing",
 			opts:      Options{AddMetadata: true},
-			wantNotIn: []string{trailerIssueID, trailerSessionID},
+			wantNotIn: []string{TrailerIssueID, trailerSessionID},
 		},
 	}
 
@@ -75,7 +75,7 @@ func TestApplyCommitMetadataIdempotent(t *testing.T) {
 	if once != twice {
 		t.Fatalf("metadata not idempotent:\nonce:\n%s\ntwice:\n%s", once, twice)
 	}
-	if got := strings.Count(twice, trailerIssueID+":"); got != 1 {
+	if got := strings.Count(twice, TrailerIssueID+":"); got != 1 {
 		t.Fatalf("expected exactly one issue trailer, got %d:\n%s", got, twice)
 	}
 }

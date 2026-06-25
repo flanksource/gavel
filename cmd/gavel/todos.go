@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/cmux"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -38,6 +39,7 @@ var (
 	checkAfter    bool
 	todosProvider string
 	todosMode     string
+	todosDriver   string
 	todoModel     string
 	todoEffort    string
 	resumeSession bool
@@ -216,21 +218,62 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 	return config
 }
 
-func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string) {
-	if todosMode == "cmux" {
-		return cmux.NewCmuxExecutor(newCmuxConfig(workDir, todo)), ""
+func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, error) {
+	kind, err := resolveDriverKind(todo)
+	if err != nil {
+		return nil, "", err
 	}
-	config := newClaudeConfig(workDir, todo)
-	return claude.NewClaudeExecutor(config), config.SessionID
+	return drivers.New(kind, newDriverConfig(kind, workDir, todo))
 }
 
-func newCmuxConfig(workDir string, todo *types.TODO) cmux.CmuxExecutorConfig {
+// resolveDriverKind selects the driver: the explicit --driver flag when set,
+// otherwise the legacy --mode + model pair (cmux → "<agent>-cmux", inline →
+// claude-sdk, the SDK bridge that "inline" used to launch).
+func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
+	if strings.TrimSpace(todosDriver) != "" {
+		return drivers.Parse(todosDriver)
+	}
+	model := todoModel
+	if model == "" && todo != nil && todo.LLM != nil {
+		model = todo.LLM.Model
+	}
+	agent, _ := cmux.ResolveAgent(model)
+	switch todosMode {
+	case "cmux":
+		return drivers.Parse(agent + "-cmux")
+	case "", "inline":
+		if agent == "codex" {
+			return "", fmt.Errorf("codex runs require a cmux driver (set --driver codex-cmux)")
+		}
+		return drivers.ClaudeSDK, nil
+	default:
+		return "", fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
+	}
+}
+
+// newDriverConfig assembles the shared driver config from flags and the todo.
+// cmux mints and manages its own --session-id (reading any prior session from
+// the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
+// resume by carrying the prior session id explicitly.
+func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) drivers.Config {
 	model := ""
+	prior := ""
+	var maxCost float64
+	var turns int
 	if todo != nil && todo.LLM != nil {
 		model = todo.LLM.Model
+		prior = todo.LLM.SessionId
+		maxCost = todo.LLM.MaxCost
+		turns = todo.LLM.MaxTurns
 	}
 	if todoModel != "" {
 		model = todoModel
+	}
+	if maxBudget > 0 {
+		maxCost = maxBudget
+	}
+	if maxTurns > 0 {
+		turns = maxTurns
 	}
 
 	cwd := workDir
@@ -242,13 +285,21 @@ func newCmuxConfig(workDir string, todo *types.TODO) cmux.CmuxExecutorConfig {
 		}
 	}
 
-	return cmux.CmuxExecutorConfig{
-		WorkDir: cwd,
-		Model:   model,
-		Effort:  todoEffort,
-		Resume:  resumeSession,
-		Timeout: 30 * time.Minute,
+	cfg := drivers.Config{
+		WorkDir:      cwd,
+		Model:        model,
+		Effort:       todoEffort,
+		Resume:       resumeSession,
+		Timeout:      30 * time.Minute,
+		MaxBudgetUsd: maxCost,
+		MaxTurns:     turns,
+		Tools:        drivers.DefaultTools(),
+		Dirty:        dirty,
 	}
+	if kind.Mechanism() != "cmux" {
+		cfg.SessionID = prior
+	}
+	return cfg
 }
 
 func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction, provider todos.Provider) error {
@@ -262,7 +313,11 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID := newExecutor(workDir, group.TODOs[0])
+		executor, sessionID, err := newExecutor(workDir, group.TODOs[0])
+		if err != nil {
+			cancel()
+			return err
+		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.EnableChecks(checkAfter)
 
@@ -330,7 +385,11 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID := newExecutor(workDir, todo)
+		executor, sessionID, err := newExecutor(workDir, todo)
+		if err != nil {
+			cancel()
+			return err
+		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.EnableChecks(checkAfter)
 
@@ -449,6 +508,12 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 }
 
 func validateTodosRunOptions() error {
+	if strings.TrimSpace(todosDriver) != "" {
+		if _, err := drivers.Parse(todosDriver); err != nil {
+			return err
+		}
+	}
+
 	switch todosMode {
 	case "", "inline":
 	case "cmux":

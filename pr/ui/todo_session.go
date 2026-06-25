@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/ai/history"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/cmux"
 )
 
@@ -91,7 +92,57 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	json.NewEncoder(w).Encode(stats) //nolint:errcheck
+	resp := todoSessionStatsResponse{SessionStats: stats}
+	// A pending tool-permission request overrides the derived state so the
+	// dashboard can render the "Needs approval" affordance and its Allow/Deny
+	// buttons regardless of which driver produced it.
+	if req, ok := todos.GlobalApprovals().Pending(sessionID); ok {
+		resp.State = "approval"
+		pending := req
+		resp.Approval = &pending
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// todoSessionStatsResponse is the session-stats payload plus any pending
+// tool-permission request awaiting the user's Allow/Deny.
+type todoSessionStatsResponse struct {
+	cmux.SessionStats
+	Approval *todos.ApprovalRequest `json:"approval,omitempty"`
+}
+
+// handleTodoSessionApprove resolves a pending tool-permission request for a
+// session — the dashboard's Allow/Deny buttons POST here, which unblocks the
+// driver awaiting the decision (see todos.ApprovalRegistry).
+func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var payload struct {
+		SessionID    string         `json:"sessionId"`
+		Allow        bool           `json:"allow"`
+		Message      string         `json:"message,omitempty"`
+		UpdatedInput map[string]any `json:"updatedInput,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		return
+	}
+	sessionID := strings.TrimSpace(payload.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.URL.Query().Get("sessionId"))
+	}
+	if sessionID == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
+		return
+	}
+	if err := todos.GlobalApprovals().Resolve(sessionID, todos.ApprovalDecision{
+		Allow:        payload.Allow,
+		Message:      payload.Message,
+		UpdatedInput: payload.UpdatedInput,
+	}); err != nil {
+		writeTodoError(w, http.StatusConflict, err)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"resolved": true, "allow": payload.Allow}) //nolint:errcheck
 }
 
 // handleTodoSessionFocus switches cmux to the workspace running a TODO's agent

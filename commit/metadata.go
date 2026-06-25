@@ -16,7 +16,10 @@ const (
 	// GAVEL_SESSION_ID is unset but Claude Code exported its own session id.
 	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
 
-	trailerIssueID   = "Gavel-Issue-Id"
+	// TrailerIssueID is the git trailer key that ties a commit to the gavel todo
+	// issue it implements; consumers (e.g. the dashboard) read it to link commits
+	// back to their issue.
+	TrailerIssueID   = "Gavel-Issue-Id"
 	trailerSessionID = "Claude-Session-Id"
 )
 
@@ -36,8 +39,8 @@ func applyCommitMetadata(opts Options, msg string) string {
 	sessionID := firstNonEmpty(opts.SessionID, os.Getenv(EnvSessionID), os.Getenv(EnvClaudeSessionID))
 
 	var trailers []string
-	if issueID != "" && !hasTrailer(msg, trailerIssueID) {
-		trailers = append(trailers, trailerIssueID+": "+issueID)
+	if issueID != "" && !hasTrailer(msg, TrailerIssueID) {
+		trailers = append(trailers, TrailerIssueID+": "+issueID)
 	}
 	if sessionID != "" && !hasTrailer(msg, trailerSessionID) {
 		trailers = append(trailers, trailerSessionID+": "+sessionID)

@@ -174,8 +174,21 @@ export interface SessionStats {
 export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunMode = 'cmux' | 'inline';
 export type TodoRunEffort = 'low' | 'medium' | 'high';
+// TodoRunDriver selects the agent driver: <agent>-<mechanism>. cmux drives the
+// interactive TUI; headless drives `-p --output-format stream-json`; sdk drives
+// the @anthropic-ai/claude-agent-sdk bridge; api drives the direct Anthropic API.
+export type TodoRunDriver =
+  | 'claude-cmux'
+  | 'claude-headless'
+  | 'claude-sdk'
+  | 'claude-api'
+  | 'codex-cmux'
+  | 'codex-headless';
 
 export interface TodoRunOptions {
+  // Driver is the authoritative selection; agent/mode are the legacy pair the
+  // server still accepts and derives a driver from when driver is absent.
+  driver?: TodoRunDriver;
   agent?: TodoRunAgent;
   mode?: TodoRunMode;
   model?: string;
@@ -210,6 +223,7 @@ export interface TodoRunResponse {
   provider: TodoProvider | string;
   agent: TodoRunAgent;
   mode: TodoRunMode;
+  driver?: TodoRunDriver;
   model?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
@@ -240,6 +254,24 @@ export interface TodoListResponse {
   dir?: string;
   counts: TodoCounts;
   items: TodoItem[];
+}
+
+// One git commit linked to a todo via its Gavel-Issue-Id trailer. url is the
+// commit's page on the origin remote, absent for a local-only repo.
+export interface TodoCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author?: string;
+  date?: string;
+  url?: string;
+}
+
+export interface TodoCommitsResponse {
+  // issueId is the todo's id that commits were matched against; absent for
+  // file-backed todos that carry no id.
+  issueId?: string;
+  commits: TodoCommit[];
 }
 
 // ProcProcess mirrors procfile.ProcState — one supervised process.

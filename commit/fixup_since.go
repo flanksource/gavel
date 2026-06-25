@@ -142,7 +142,7 @@ func readIssueGroups(workDir, sinceRef string) ([]models.Commit, []issueGroup, e
 	order := make([]string, 0)
 	byID := make(map[string]*issueGroup)
 	for _, c := range ordered {
-		id := strings.TrimSpace(c.Trailers[trailerIssueID])
+		id := strings.TrimSpace(c.Trailers[TrailerIssueID])
 		if id == "" {
 			continue
 		}
@@ -233,10 +233,10 @@ func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (str
 // ensureIssueTrailer appends `Gavel-Issue-Id: <id>` to msg unless it is already
 // present, keeping the merged commit attributable to its issue.
 func ensureIssueTrailer(msg, issueID string) string {
-	if issueID == "" || hasTrailer(msg, trailerIssueID) {
+	if issueID == "" || hasTrailer(msg, TrailerIssueID) {
 		return msg
 	}
-	return strings.TrimRight(msg, "\n") + "\n\n" + trailerIssueID + ": " + issueID
+	return strings.TrimRight(msg, "\n") + "\n\n" + TrailerIssueID + ": " + issueID
 }
 
 // confirmSquash prints the merge plan and asks the user to confirm. --yes
