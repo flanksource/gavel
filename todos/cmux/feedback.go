@@ -30,14 +30,23 @@ func (e *CmuxExecutor) SendFeedback(ctx *todopkg.ExecutorContext, _ []*types.TOD
 	}
 
 	timeout := e.timeout()
+	logPath, err := SessionLogPath(e.lastWorkDir, e.lastSessionID)
+	if err != nil {
+		return failedResult(e.Name(), start, err), err
+	}
+	// The feedback resumes a live session whose log already holds the prior turn;
+	// confirm the submit by the log growing past its current size (or the surface
+	// advancing), re-pressing Enter when the feedback's Enter is dropped — the same
+	// resilience the initial prompt gets.
+	base := fileSize(logPath)
 	ctx.Logger.Infof("cmux: sending check feedback to session %s", e.lastSessionID)
-	if err := e.sendSurfaceText(ctx, e.lastSurface.String(), e.lastSurface.SurfaceID, "check feedback", feedback); err != nil {
+	if err := e.submitAndConfirm(ctx, e.lastSurface, "check feedback", feedback, submitConfirm{logPath: logPath, baseOffset: base, growth: true}); err != nil {
 		return failedResult(e.Name(), start, err), err
 	}
 
 	// seekToEnd (resume=true) skips the prior turn's end_turn so we wait for the
 	// turn the feedback triggers, not the one that already completed.
-	_, completed, err := e.awaitSessionCompletion(ctx, e.lastSessionID, e.lastWorkDir, timeout, true, nil)
+	_, completed, err := e.awaitWithStallWatchdog(ctx, e.lastSurface, e.lastSessionID, e.lastWorkDir, timeout, true, nil)
 	if err != nil {
 		return failedResult(e.Name(), start, err), err
 	}

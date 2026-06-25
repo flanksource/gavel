@@ -80,6 +80,13 @@ type todoCommitDiffResponse struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+// todoCommitFilesResponse carries one commit's per-file change summary, each
+// enriched with its repomap scope/language for the expanded commit status view.
+type todoCommitFilesResponse struct {
+	Hash  string                `json:"hash"`
+	Files []gavelgit.CommitFile `json:"files"`
+}
+
 // handleTodoCommits lists the git commits that reference a todo through their
 // Gavel-Issue-Id trailer, each with a link to the commit on the origin remote.
 // It resolves the todo to read its id, then scans the workspace's git history.
@@ -134,7 +141,10 @@ func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
-	diff, truncated, err := gavelgit.CommitDiff(dir, hash)
+	// An optional file narrows the diff to a single path (the per-file hover
+	// card); empty shows the whole commit.
+	file := strings.TrimSpace(r.URL.Query().Get("file"))
+	diff, truncated, err := gavelgit.CommitDiff(dir, hash, file)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
@@ -143,6 +153,37 @@ func (s *Server) handleTodoCommitDiff(w http.ResponseWriter, r *http.Request) {
 		Hash:      hash,
 		Diff:      diff,
 		Truncated: truncated,
+	})
+}
+
+// handleTodoCommitFiles returns the per-file change summary for a single commit
+// (path, change kind, +/- counts, and repomap scope/language), so the dashboard
+// can render a commit's "repomap-based status" rows and load each file's diff on
+// demand. The commit is located by hash within the workspace dir.
+func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hash := strings.TrimSpace(r.URL.Query().Get("hash"))
+	if hash == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("hash is required"))
+		return
+	}
+	if !gavelgit.IsValidCommitHash(hash) {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid commit hash %q", hash))
+		return
+	}
+	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	files, err := gavelgit.CommitFiles(dir, hash)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoCommitFilesResponse{ //nolint:errcheck
+		Hash:  hash,
+		Files: files,
 	})
 }
 

@@ -1,27 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, DropdownMenu, Field, Modal } from '@flanksource/clicky-ui/components';
-import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
+import { Button, Combobox, DropdownMenu, Field, Modal, SegmentedControl } from '@flanksource/clicky-ui/components';
+import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
-
-// The selectable agent drivers, in display order. cmux is the interactive TUI
-// path; headless/sdk/api are the structured paths. Codex has no sdk/api driver.
-const DRIVER_OPTIONS: Array<{ value: TodoRunDriver; label: string }> = [
-  { value: 'claude-cmux', label: 'Claude · cmux (TUI)' },
-  { value: 'claude-headless', label: 'Claude · headless' },
-  { value: 'claude-sdk', label: 'Claude · SDK' },
-  { value: 'claude-api', label: 'Claude · API' },
-  { value: 'codex-cmux', label: 'Codex · cmux (TUI)' },
-  { value: 'codex-headless', label: 'Codex · headless' },
-];
-
-function driverAgent(driver: TodoRunDriver): 'claude' | 'codex' {
-  return driver.startsWith('codex') ? 'codex' : 'claude';
-}
-
-function driverIsCmux(driver: TodoRunDriver): boolean {
-  return driver.endsWith('-cmux');
-}
+import { PROVIDERS, providerCatalog, driverFor, type RunMechanism } from './providers';
 
 export const defaultRunOptions: TodoRunOptions = { driver: 'claude-cmux', model: 'claude', effort: 'medium' };
 
@@ -203,7 +185,12 @@ export function TodoRunAdvancedDialog({
   provider: string;
   refs: string[];
 }) {
-  const [driver, setDriver] = useState<TodoRunDriver>('claude-cmux');
+  // The driver splits into two picker axes: the provider (claude/codex, the
+  // segmented control) and the mechanism (cmux/headless/…). agent is the provider
+  // and isCmux gates the cmux-only (plan/resume) vs structured-only (max
+  // cost/turns, dirty worktree) fields.
+  const [agent, setAgent] = useState<TodoRunAgent>('claude');
+  const [mechanism, setMechanism] = useState<RunMechanism>('cmux');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
   const [plan, setPlan] = useState(false);
@@ -219,15 +206,31 @@ export function TodoRunAdvancedDialog({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
 
-  // agent/isCmux are derived from the selected driver: agent picks the model
-  // default and placeholder; isCmux gates the cmux-only (plan/resume) vs
-  // structured-only (max cost/turns, dirty worktree) fields.
-  const agent = driverAgent(driver);
-  const isCmux = driverIsCmux(driver);
+  const catalog = providerCatalog(agent);
+  const driver = driverFor(agent, mechanism);
+  const isCmux = mechanism === 'cmux';
+
+  // Switching provider re-scopes the mechanism/model/effort to what the new
+  // provider offers, keeping the current mechanism when it is still valid.
+  function changeProvider(next: TodoRunAgent) {
+    const nextCatalog = providerCatalog(next);
+    const nextMechanism = nextCatalog.mechanisms.some(m => m.value === mechanism) ? mechanism : 'cmux';
+    setAgent(next);
+    setMechanism(nextMechanism);
+    setModel(nextCatalog.defaultModel);
+    if (!nextCatalog.efforts.includes(effort)) setEffort(nextCatalog.efforts[0]);
+    if (nextMechanism !== 'cmux') setPlan(false);
+  }
+
+  function changeMechanism(next: RunMechanism) {
+    setMechanism(next);
+    if (next !== 'cmux') setPlan(false);
+  }
 
   useEffect(() => {
     if (!open) return;
-    setDriver('claude-cmux');
+    setAgent('claude');
+    setMechanism('cmux');
     setModel('claude');
     setEffort('medium');
     setPlan(false);
@@ -332,37 +335,45 @@ export function TodoRunAdvancedDialog({
       }
     >
       <div className="space-y-3">
-        <Field label="Driver">
-          <select
-            value={driver}
-            onChange={e => {
-              const next = e.currentTarget.value as TodoRunDriver;
-              setDriver(next);
-              setModel(driverAgent(next));
-              if (!driverIsCmux(next)) setPlan(false);
-            }}
-            className={inputClass}
-          >
-            {DRIVER_OPTIONS.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Model">
-          <input
-            className={inputClass}
-            value={model}
-            placeholder={agent === 'codex' ? 'codex' : 'sonnet'}
-            onChange={e => setModel(e.currentTarget.value)}
+        <Field label="Provider">
+          <SegmentedControl
+            aria-label="Provider"
+            value={agent}
+            onChange={changeProvider}
+            options={PROVIDERS.map(p => ({ id: p.id, label: p.label, icon: p.icon }))}
           />
         </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Type">
+            <Combobox
+              ariaLabel="Driver type"
+              value={mechanism}
+              onChange={v => changeMechanism(v as RunMechanism)}
+              options={catalog.mechanisms.map(m => ({ value: m.value, label: m.label }))}
+              allowCustomValue={false}
+              required
+            />
+          </Field>
+          <Field label="Model">
+            <Combobox
+              ariaLabel="Model"
+              value={model}
+              onChange={setModel}
+              options={catalog.models}
+              placeholder={catalog.defaultModel}
+            />
+          </Field>
+        </div>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Effort">
-            <select value={effort} onChange={e => setEffort(e.currentTarget.value as TodoRunEffort)} className={inputClass}>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-            </select>
+            <Combobox
+              ariaLabel="Effort"
+              value={effort}
+              onChange={v => setEffort(v as TodoRunEffort)}
+              options={catalog.efforts.map(e => ({ value: e, label: e }))}
+              allowCustomValue={false}
+              required
+            />
           </Field>
           <Field label="Timeout">
             <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />

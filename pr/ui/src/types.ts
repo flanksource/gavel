@@ -285,11 +285,30 @@ export interface TodoCommitsResponse {
 }
 
 // One commit's rendered diff (ANSI-colored `git show` output). truncated is set
-// when the diff exceeded the server's size cap.
+// when the diff exceeded the server's size cap. When the request scopes to a
+// single file the diff is just that path's patch.
 export interface TodoCommitDiffResponse {
   hash: string;
   diff: string;
   truncated?: boolean;
+}
+
+// One file changed in a commit, mirroring git.CommitFile: its path (and previous
+// path for a rename), change kind, line counts, and repomap classification.
+export interface TodoCommitFile {
+  path: string;
+  previousPath?: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  adds: number;
+  dels: number;
+  binary?: boolean;
+  language?: string;
+  scopes?: string[];
+}
+
+export interface TodoCommitFilesResponse {
+  hash: string;
+  files: TodoCommitFile[];
 }
 
 // ProcProcess mirrors procfile.ProcState — one supervised process.
