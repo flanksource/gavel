@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -117,6 +118,10 @@ type SessionStats struct {
 	// compaction resets), as opposed to TotalTokens summing every turn. This is
 	// what the dashboard surfaces as the token figure.
 	ContextTokens int `json:"contextTokens"`
+	// ContextWindow is the model's total context-window size (tokens), looked up
+	// from captain's pricing registry, so the dashboard can render ContextTokens
+	// as a fraction of capacity. Zero when the model is absent from the registry.
+	ContextWindow int `json:"contextWindow"`
 	Turns         int `json:"turns"`
 	// Compactions counts the context compactions seen so far (Claude's
 	// `compact_boundary` markers); each one shrinks ContextTokens.
@@ -199,18 +204,63 @@ func (s *SessionStats) finalize() {
 		s.DurationMs = s.UpdatedAt.Sub(s.StartedAt).Milliseconds()
 	}
 	s.CostUSD = sessionCost(s.Model, s.InputTokens, s.OutputTokens, s.CacheReadTokens, s.CacheCreationTokens)
+	if info, ok := modelInfo(s.Model); ok {
+		s.ContextWindow = info.ContextWindow
+	}
+}
+
+// modelVersionRe matches a Claude session-log model id whose version uses hyphens
+// (e.g. "claude-opus-4-8" or "claude-sonnet-4-5-20250929") so it can be rewritten
+// to the dotted form the pricing registry is keyed by ("claude-opus-4.8"). The
+// optional trailing date suffix is dropped.
+var modelVersionRe = regexp.MustCompile(`^(claude-[a-z]+)-(\d+)-(\d+)(?:-\d{6,})?$`)
+
+// normalizeModelID rewrites a bare Claude session-log model id to the dotted
+// version the pricing registry uses; ids that don't match are returned unchanged.
+func normalizeModelID(model string) string {
+	if m := modelVersionRe.FindStringSubmatch(model); m != nil {
+		return m[1] + "-" + m[2] + "." + m[3]
+	}
+	return model
+}
+
+// modelIDCandidates lists the registry keys to try for a session-log model id:
+// the bare id, the OpenRouter "anthropic/" prefix, and the dotted-version
+// normalization that reconciles log ids ("claude-opus-4-8") with registry keys
+// ("anthropic/claude-opus-4.8"). Shared by the cost and context-window lookups.
+func modelIDCandidates(model string) []string {
+	norm := normalizeModelID(model)
+	ids := []string{model, "anthropic/" + model}
+	if norm != model {
+		ids = append(ids, norm, "anthropic/"+norm)
+	}
+	return ids
+}
+
+// modelInfo resolves a session-log model id to its pricing registry entry,
+// returning false when no candidate id matches.
+func modelInfo(model string) (pricing.ModelInfo, bool) {
+	if model == "" {
+		return pricing.ModelInfo{}, false
+	}
+	for _, id := range modelIDCandidates(model) {
+		if info, ok := pricing.GetModelInfo(id); ok {
+			return info, true
+		}
+	}
+	return pricing.ModelInfo{}, false
 }
 
 // sessionCost prices the session's tokens via captain's pricing registry. Claude
-// session logs report bare model ids (e.g. "claude-opus-4-8") while the registry
-// is keyed by OpenRouter ids ("anthropic/<model>"), so both forms are tried.
-// An unknown model yields zero cost rather than failing — pricing is optional
-// enrichment, not a correctness invariant.
+// session logs report bare hyphenated model ids (e.g. "claude-opus-4-8") while the
+// registry is keyed by dotted OpenRouter ids ("anthropic/claude-opus-4.8"), so
+// every candidate form is tried. An unknown model yields zero cost rather than
+// failing — pricing is optional enrichment, not a correctness invariant.
 func sessionCost(model string, in, out, cacheRead, cacheWrite int) float64 {
 	if model == "" {
 		return 0
 	}
-	for _, id := range []string{model, "anthropic/" + model} {
+	for _, id := range modelIDCandidates(model) {
 		if res, err := pricing.CalculateCost(id, in, out, 0, cacheRead, cacheWrite); err == nil {
 			return res.TotalCost
 		}

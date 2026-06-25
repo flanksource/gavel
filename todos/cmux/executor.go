@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/flanksource/gavel/commit"
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/types"
@@ -24,6 +25,13 @@ const defaultScreenPollInterval = time.Second
 const defaultScreenMaxPollInterval = 5 * time.Second
 const defaultScreenStableDuration = 2 * time.Second
 const defaultScreenLines = 120
+
+// defaultSessionStartRetryDelays is the back-off between re-pressing Enter when
+// the initial prompt's submit keystroke did not start the claude session. cmux
+// occasionally drops the Enter (the REPL was still initializing, or it landed in
+// paste mode), leaving the typed prompt unsent until the session-log appear
+// timeout fails the run. Re-pressing Enter resubmits the already-typed prompt.
+var defaultSessionStartRetryDelays = []time.Duration{15 * time.Second, 30 * time.Second}
 
 type CmuxExecutorConfig struct {
 	WorkDir string
@@ -57,11 +65,22 @@ type CmuxExecutorConfig struct {
 	SessionLogPollInterval  time.Duration
 	SessionLogAppearTimeout time.Duration
 	SessionLogQuiescePeriod time.Duration
+
+	// SessionStartRetryDelays is the back-off used to re-press Enter when the
+	// initial prompt's submit keystroke did not start the claude session.
+	// Defaults to defaultSessionStartRetryDelays (15s then 30s).
+	SessionStartRetryDelays []time.Duration
 }
 
 type CmuxExecutor struct {
 	config CmuxExecutorConfig
 	client *Client
+	// last* capture the live surface/session from the most recent ExecuteGroup
+	// so SendFeedback can resume the same agent REPL with check-failure feedback.
+	// Set only for claude runs (which carry a session id to tail).
+	lastSurface   WorkspaceRef
+	lastSessionID string
+	lastWorkDir   string
 }
 
 func NewCmuxExecutor(config CmuxExecutorConfig) *CmuxExecutor {
@@ -114,7 +133,7 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 			recordSessionID(todosInGroup, sessionID)
 		}
 	}
-	agentCommand := AgentCommand(AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID, Resume: resume, Plan: e.config.Plan})
+	agentCommand := withRunEnv(AgentCommand(AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID, Resume: resume, Plan: e.config.Plan}), todosInGroup, sessionID)
 
 	ctx.Logger.Infof("cmux: dispatching %d TODO(s) with %s in %s", len(todosInGroup), agent, workDir)
 	ctx.Logger.V(1).Infof("cmux command: cmux ping")
@@ -196,6 +215,13 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 	}
 
 	if sessionID != "" {
+		// The initial prompt's Enter occasionally gets dropped by cmux, leaving the
+		// prompt typed but unsent. Re-press Enter until the session demonstrably
+		// started (its log appeared or the surface advanced) before waiting on it.
+		if err := e.ensureSessionStarted(ctx, ref, sessionID, workDir); err != nil {
+			return failedResult(e.Name(), start, err), err
+		}
+
 		// Register the run as a live in-progress session so the dashboard timer
 		// reads token/cost totals straight from the tailer instead of re-reading
 		// the growing log on every poll. Finish freezes the elapsed clock.
@@ -225,6 +251,15 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		if _, err := e.waitForScreenIdle(ctx, ref, "after prompt dispatch", timeout, beforePromptScreen, true); err != nil {
 			return failedResult(e.Name(), start, err), err
 		}
+	}
+
+	// Remember the live surface/session so the post-completion check loop can
+	// resume this same agent REPL with feedback (see SendFeedback). Only useful
+	// for claude, which keeps a tailable session log.
+	if sessionID != "" {
+		e.lastSurface = ref
+		e.lastSessionID = sessionID
+		e.lastWorkDir = workDir
 	}
 
 	return &todopkg.ExecutionResult{
@@ -304,6 +339,89 @@ func (e *CmuxExecutor) sendSurfaceText(ctx *todopkg.ExecutorContext, workspaceRe
 		return nil
 	}
 	return fmt.Errorf("send cmux %s after %d attempts: %w", label, attempts, lastErr)
+}
+
+// ensureSessionStarted confirms the initial prompt's Enter actually started the
+// claude session. cmux can silently drop the submit keystroke (the REPL was
+// still initializing, or it landed in paste mode), leaving the typed prompt
+// unsent and the run hanging until the session-log appear timeout. It detects a
+// start from two independent signals — the session jsonl appearing and the
+// surface advancing past the just-sent screen — and, if neither has fired,
+// re-presses Enter on the configured back-off (15s then 30s) to resubmit the
+// already-typed prompt. If the session still hasn't started after the last
+// re-press it returns nil and lets awaitSessionCompletion surface the loud
+// "log did not appear" failure rather than masking it here.
+func (e *CmuxExecutor) ensureSessionStarted(ctx *todopkg.ExecutorContext, ref WorkspaceRef, sessionID, workDir string) error {
+	logPath, err := SessionLogPath(workDir, sessionID)
+	if err != nil {
+		return err
+	}
+	// Baseline is the surface right after the prompt+Enter was sent: if the Enter
+	// was dropped the typed prompt sits here unchanged; if it took, the screen
+	// advances past it. Comparing future reads against this (not the pre-prompt
+	// screen) avoids mistaking the typed-but-unsent prompt for progress.
+	postSend := e.readScreen(ctx, ref)
+	if started, why := e.sessionStarted(ctx, ref, logPath, postSend); started {
+		ctx.Logger.V(1).Infof("cmux: session %s started (%s)", sessionID, why)
+		return nil
+	}
+
+	// Wait, re-check, then re-press only if still not started, so a healthy
+	// session whose Enter merely took a moment to register isn't sent a spurious
+	// extra Enter.
+	delays := e.sessionStartRetryDelays()
+	for i, delay := range delays {
+		ctx.Logger.Infof("cmux: session %s not started yet; waiting %s before re-pressing Enter (attempt %d/%d)", sessionID, delay, i+1, len(delays))
+		if err := sleepContext(ctx, delay); err != nil {
+			return err
+		}
+		if started, why := e.sessionStarted(ctx, ref, logPath, postSend); started {
+			ctx.Logger.Infof("cmux: session %s started while waiting to re-press Enter (%s)", sessionID, why)
+			return nil
+		}
+		ctx.Logger.V(1).Infof("cmux command: cmux send-key --workspace %q --surface %q Enter", ref.String(), ref.SurfaceID)
+		if err := e.client.SendKeySurface(ctx, ref.String(), ref.SurfaceID, "Enter"); err != nil {
+			if ctx.Err() != nil {
+				return err
+			}
+			ctx.Logger.Warnf("cmux: session %s Enter re-press failed: %v", sessionID, err)
+		}
+	}
+
+	if started, why := e.sessionStarted(ctx, ref, logPath, postSend); started {
+		ctx.Logger.Infof("cmux: session %s started after re-pressing Enter (%s)", sessionID, why)
+		return nil
+	}
+	ctx.Logger.Warnf("cmux: session %s did not start after re-pressing Enter %d time(s); relying on session-log timeout", sessionID, len(delays))
+	return nil
+}
+
+// sessionStarted reports whether the claude session is underway, using the
+// session jsonl (authoritative — claude writes it on session start) and, as a
+// fallback, the surface having advanced past the post-send baseline.
+func (e *CmuxExecutor) sessionStarted(ctx *todopkg.ExecutorContext, ref WorkspaceRef, logPath, postSend string) (bool, string) {
+	if _, err := os.Stat(logPath); err == nil {
+		return true, "session log appeared"
+	}
+	screen := e.readScreen(ctx, ref)
+	if screen != "" && postSend != "" && screen != postSend {
+		return true, "surface advanced past prompt submission"
+	}
+	return false, ""
+}
+
+// readScreen returns the normalized surface contents, or "" if the read failed.
+func (e *CmuxExecutor) readScreen(ctx *todopkg.ExecutorContext, ref WorkspaceRef) string {
+	screen, err := e.client.ReadScreen(ctx, ReadScreenOpts{
+		WorkspaceRef: ref.String(),
+		SurfaceRef:   ref.SurfaceID,
+		Lines:        e.screenLines(),
+	})
+	if err != nil {
+		ctx.Logger.V(1).Infof("cmux: read-screen during session-start check failed: %v", err)
+		return ""
+	}
+	return normalizeScreen(screen)
 }
 
 func (e *CmuxExecutor) waitForScreenIdle(ctx *todopkg.ExecutorContext, ref WorkspaceRef, phase string, timeout time.Duration, baseline string, requireChange bool) (string, error) {
@@ -420,6 +538,41 @@ type AgentCommandOpts struct {
 	// Plan starts claude in plan-only mode (--permission-mode plan). codex has
 	// no equivalent flag, so plan there is enforced by the prompt instruction.
 	Plan bool
+}
+
+// withRunEnv prepends GAVEL_ISSUE_ID / GAVEL_SESSION_ID assignments to the agent
+// launch command so a `gavel commit` the agent runs itself stamps the matching
+// commit trailers (see commit.applyCommitMetadata). The terminal shell applies
+// the assignments to the agent process, whose Bash-tool children inherit them.
+func withRunEnv(command string, todoList []*types.TODO, sessionID string) string {
+	var assigns []string
+	if id := joinIssueIDs(todoList); id != "" {
+		assigns = append(assigns, commit.EnvIssueID+"="+shellSingleQuote(id))
+	}
+	if sessionID != "" {
+		assigns = append(assigns, commit.EnvSessionID+"="+shellSingleQuote(sessionID))
+	}
+	if len(assigns) == 0 {
+		return command
+	}
+	return strings.Join(assigns, " ") + " " + command
+}
+
+// joinIssueIDs returns the group's todo ids joined by comma, skipping empties.
+func joinIssueIDs(todoList []*types.TODO) string {
+	var ids []string
+	for _, t := range todoList {
+		if t != nil && t.ID != "" {
+			ids = append(ids, t.ID)
+		}
+	}
+	return strings.Join(ids, ",")
+}
+
+// shellSingleQuote wraps v in single quotes so the terminal shell treats it as a
+// literal, escaping any embedded single quotes.
+func shellSingleQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 func AgentCommand(opts AgentCommandOpts) string {
@@ -607,6 +760,13 @@ func (e *CmuxExecutor) sendRetryDelay() time.Duration {
 		return e.config.SendRetryDelay
 	}
 	return defaultSendRetryDelay
+}
+
+func (e *CmuxExecutor) sessionStartRetryDelays() []time.Duration {
+	if len(e.config.SessionStartRetryDelays) > 0 {
+		return e.config.SessionStartRetryDelays
+	}
+	return defaultSessionStartRetryDelays
 }
 
 func (e *CmuxExecutor) screenPollInterval() time.Duration {

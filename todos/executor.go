@@ -26,6 +26,15 @@ type Executor interface {
 	Name() string
 }
 
+// FeedbackExecutor is implemented by executors that can resume the agent with a
+// follow-up message. The post-completion check loop uses it to hand failing
+// test/lint output back to the agent so it can fix the issues. Executors that
+// do not implement it (or whose SendFeedback returns an error) make the loop
+// report the failures without iterating.
+type FeedbackExecutor interface {
+	SendFeedback(ctx *ExecutorContext, todos []*types.TODO, feedback string) (*ExecutionResult, error)
+}
+
 // ExecutionResult contains the outcome from any executor.
 // This is executor-agnostic - all executors return this structure.
 type ExecutionResult struct {
@@ -93,7 +102,16 @@ type TODOExecutor struct {
 	executor  Executor // Pluggable executor implementation
 	sessionID string   // Session ID for resumption across runs
 	provider  Provider
+	// forceChecks turns the post-completion check loop on regardless of config
+	// (the --check flag / dashboard toggle). The loop also runs when .gavel.yaml
+	// or a TODO's frontmatter enables `checks` — see runCheckLoop.
+	forceChecks bool
 }
+
+// EnableChecks forces the post-completion check loop on for this executor,
+// matching `gavel todos run --check`. Without it, the loop still runs when
+// .gavel.yaml or a TODO's frontmatter enables `checks`.
+func (e *TODOExecutor) EnableChecks(force bool) { e.forceChecks = force }
 
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
 func NewTODOExecutor(workDir string, executor Executor, sessionID string, provider ...Provider) *TODOExecutor {
@@ -187,6 +205,24 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 			}
 			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 			return result, fmt.Errorf("verification failed")
+		}
+	}
+
+	// Post-completion check loop: run configured tests/lint and feed failures
+	// back to the agent until they pass (opt-in; no-op when not enabled). Only
+	// gate a run the executor reported successful — runCheckLoop flips Success to
+	// false only when the checks themselves fail.
+	if result.Success {
+		e.runCheckLoop(ctx, []*types.TODO{todo}, result)
+		if !result.Success {
+			ctx.Logger.Errorf("Post-completion checks failed: %s", result.ErrorMessage)
+			todo.Status = types.StatusFailed
+			todo.Attempts++
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+			}
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+			return result, fmt.Errorf("post-completion checks failed: %s", result.ErrorMessage)
 		}
 	}
 
@@ -292,6 +328,17 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 
 			e.updateFrontmatter(ctx, todo, perTodo)
 			results[todo.FilePath] = perTodo
+		}
+
+		// Group-level post-completion checks: run the suite once for the shared
+		// agent session and feed failures back to it, but only when every todo
+		// that needed work verified cleanly. On failure, flip the whole group.
+		if e.allGroupResultsOK(needsExecution, results) {
+			checkResult := &ExecutionResult{Success: true, ExecutorName: e.executor.Name()}
+			e.runCheckLoop(ctx, needsExecution, checkResult)
+			if !checkResult.Success {
+				e.markGroupCheckFailure(ctx, needsExecution, results, checkResult)
+			}
 		}
 	}
 
