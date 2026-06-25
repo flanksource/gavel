@@ -31,8 +31,13 @@ func maybeCommitAfter(workDir string, todo *types.TODO, result *todos.ExecutionR
 // root.
 func commitAfterAgent(workDir string, todo *types.TODO) error {
 	cwd := ""
+	meta := commitpkg.AgentRunMetadata{}
 	if todo != nil {
 		cwd = todo.CWD
+		meta.IssueID = todo.ID
+		if todo.LLM != nil {
+			meta.SessionID = todo.LLM.SessionId
+		}
 	}
-	return commitpkg.RunAfterAgent(context.Background(), workDir, cwd)
+	return commitpkg.RunAfterAgent(context.Background(), workDir, cwd, meta)
 }
