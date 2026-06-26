@@ -21,7 +21,11 @@ func evidenceSchema() map[string]any {
 	}
 }
 
-func BuildSchema(checks []Check) (string, error) {
+// BuildSchema builds the JSON output schema for a verification run. When
+// issueAware is set the schema requires an overall `implemented` verdict; when
+// criteria is additionally non-empty it requires an `acceptance_criteria` array
+// with one scored entry per stored criterion.
+func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, error) {
 	checkProps := make(map[string]any, len(checks))
 	for _, c := range checks {
 		checkProps[c.ID] = map[string]any{
@@ -49,39 +53,67 @@ func BuildSchema(checks []Check) (string, error) {
 		}
 	}
 
+	properties := map[string]any{
+		"checks": map[string]any{
+			"type":                 "object",
+			"description":          "Boolean pass/fail checks. Evaluate every check. Only include evidence for failures.",
+			"required":             checkIDs(checks),
+			"additionalProperties": false,
+			"properties":           checkProps,
+		},
+		"ratings": map[string]any{
+			"type":                 "object",
+			"description":          "Rated dimensions (0-100). Include findings for scores below 80.",
+			"required":             RatingDimensions,
+			"additionalProperties": false,
+			"properties":           ratingProps,
+		},
+		"completeness": map[string]any{
+			"type":                 "object",
+			"description":          "Overall completeness assessment against the diff, issue, and extra instructions.",
+			"required":             []string{"pass", "summary", "evidence"},
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"pass":     map[string]any{"type": "boolean"},
+				"summary":  map[string]any{"type": "string"},
+				"evidence": evidenceSchema(),
+			},
+		},
+	}
+	required := []string{"checks", "ratings", "completeness"}
+
+	if issueAware {
+		properties["implemented"] = map[string]any{
+			"type":        "boolean",
+			"description": "True only if the commits fully and correctly implement the issue and every required acceptance criterion is met.",
+		}
+		required = append(required, "implemented")
+	}
+	if len(criteria) > 0 {
+		properties["acceptance_criteria"] = map[string]any{
+			"type":        "array",
+			"description": "One verdict per stored acceptance criterion (verbatim), in order. Set met=true only with supporting evidence from the commits.",
+			"items": map[string]any{
+				"type":                 "object",
+				"required":             []string{"criterion", "met", "evidence"},
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"criterion": map[string]any{"type": "string"},
+					"met":       map[string]any{"type": "boolean"},
+					"evidence":  evidenceSchema(),
+				},
+			},
+		}
+		required = append(required, "acceptance_criteria")
+	}
+
 	schema := map[string]any{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
 		"type":                 "object",
 		"description":          "Code review result with boolean checks, rated dimensions, and completeness assessment. Rating rubric: 0-39 critical, 40-59 significant, 60-79 minor, 80-100 good.",
-		"required":             []string{"checks", "ratings", "completeness"},
+		"required":             required,
 		"additionalProperties": false,
-		"properties": map[string]any{
-			"checks": map[string]any{
-				"type":                 "object",
-				"description":          "Boolean pass/fail checks. Evaluate every check. Only include evidence for failures.",
-				"required":             checkIDs(checks),
-				"additionalProperties": false,
-				"properties":           checkProps,
-			},
-			"ratings": map[string]any{
-				"type":                 "object",
-				"description":          "Rated dimensions (0-100). Include findings for scores below 80.",
-				"required":             RatingDimensions,
-				"additionalProperties": false,
-				"properties":           ratingProps,
-			},
-			"completeness": map[string]any{
-				"type":                 "object",
-				"description":          "Overall completeness assessment against the diff, issue, and extra instructions.",
-				"required":             []string{"pass", "summary", "evidence"},
-				"additionalProperties": false,
-				"properties": map[string]any{
-					"pass":     map[string]any{"type": "boolean"},
-					"summary":  map[string]any{"type": "string"},
-					"evidence": evidenceSchema(),
-				},
-			},
-		},
+		"properties":           properties,
 	}
 
 	b, err := json.MarshalIndent(schema, "", "  ")
@@ -99,8 +131,8 @@ func checkIDs(checks []Check) []string {
 	return ids
 }
 
-func SchemaFile(cfg ChecksConfig) (string, error) {
-	schema, err := BuildSchema(EnabledChecks(cfg))
+func SchemaFile(cfg ChecksConfig, issueAware bool, criteria []string) (string, error) {
+	schema, err := BuildSchema(EnabledChecks(cfg), issueAware, criteria)
 	if err != nil {
 		return "", err
 	}

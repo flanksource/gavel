@@ -10,6 +10,11 @@ Use `git diff {{.scope.CommitRange}}` to see the changes.
 {{else if eq .scope.Type "commit"}}
 Review the changes introduced by commit {{.scope.Commit}}.
 Use `git show {{.scope.Commit}}` to see the diff.
+{{else if eq .scope.Type "commits"}}
+Review the changes introduced by these commits (run `git show <sha>` for each):
+{{range .scope.Commits}}
+- {{.}}
+{{end}}
 {{else if eq .scope.Type "branch"}}
 Review the changes between branch `{{.scope.Branch}}` and the current branch.
 Use `git diff {{.scope.Branch}}...HEAD` to see the changes.
@@ -24,6 +29,38 @@ Review the following files:
 {{range .scope.Files}}
 - {{.}}
 {{end}}
+{{end}}
+
+{{if .issue}}
+## Issue Being Implemented
+
+You are verifying whether the commits above actually implement this issue. Judge
+the change against the issue's intent and its acceptance criteria — not against
+your own idea of what a good change looks like.
+
+**Title:** {{.issue.Title}}
+{{if .issue.SessionID}}**Agent session:** {{.issue.SessionID}}{{end}}
+
+**Description:**
+
+{{.issue.Description}}
+{{if .issue.Comments}}
+**Comments:**
+{{range .issue.Comments}}
+- {{if .Author}}{{.Author}}: {{end}}{{.Body}}
+{{end}}{{end}}
+
+Set the top-level `implemented` to true only if the commits fully realize the
+issue's intent (and every acceptance criterion below, if any, is met).
+{{if .issue.Criteria}}
+## Acceptance Criteria
+
+Score each of the following acceptance criteria. Return one entry per criterion
+in `acceptance_criteria`, repeating the criterion text verbatim and setting
+`met` true only when the commits clearly satisfy it (cite evidence).
+{{range .issue.Criteria}}
+- {{.}}
+{{end}}{{end}}
 {{end}}
 
 ## Checks
