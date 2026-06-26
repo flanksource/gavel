@@ -1,3 +1,4 @@
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { ProcControl } from './ProcControl';
 import { GavelIcon } from './GavelIcon';
@@ -43,15 +44,16 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
           </div>
         );
       })}
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onAdd}
         title="Add a local workspace directory"
-        className="w-full pl-6 pr-3 py-1.5 flex items-center gap-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        className="w-full pl-6 pr-3 py-1.5 h-auto flex items-center justify-start gap-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
         <GavelIcon name="codicon:add" className="shrink-0" />
         Add directory
-      </button>
+      </Button>
     </div>
   );
 }

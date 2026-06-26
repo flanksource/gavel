@@ -87,4 +87,6 @@ pr/ui/dist/prui.js
 go.work.sum
 .grite/
 go.work.sum
-gavel
+# The built CLI binary at the repo root. Anchored so it does not also ignore the
+# cmd/gavel/ source directory (an unanchored "gavel" hides new files there).
+/gavel

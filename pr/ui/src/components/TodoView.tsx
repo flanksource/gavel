@@ -1,4 +1,4 @@
-import { TimeRange } from '@flanksource/clicky-ui/components';
+import { Button, TimeRange } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from './GavelIcon';
 import { ReactGrabHelp } from './ReactGrabHelp';
 import { TodoCountsBar, TodoDensityPicker } from './todos/format';
@@ -37,16 +37,17 @@ export function TodoBodyHeader({ todos }: { todos: WorkspaceTodos }) {
 export function TodoNewButton({ todos }: { todos: WorkspaceTodos }) {
   const { workspaces, setShowCreate } = todos;
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={() => setShowCreate(true)}
       disabled={workspaces.length === 0}
       title="New todo"
-      className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+      className="inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
     >
       <GavelIcon name="codicon:add" className="text-xs" />
       New
-    </button>
+    </Button>
   );
 }
 
@@ -59,16 +60,18 @@ export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
     <div className="flex items-center gap-2">
       <TodoCountsBar counts={aggregate} />
       <ReactGrabHelp />
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         onClick={refresh}
         disabled={loadingList}
         title="Refresh todos"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+        className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
         aria-label="Refresh todos"
       >
         <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:refresh'} className="text-sm" />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -99,15 +102,17 @@ export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
           align="right"
         />
         {timeRange && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => setTimeRange(null)}
             title="Clear time filter"
             aria-label="Clear time filter"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <GavelIcon name="codicon:close" className="text-xs" />
-          </button>
+          </Button>
         )}
         <TodoDensityPicker density={density} onChange={setDensity} />
       </div>

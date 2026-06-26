@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SessionViewer, type SessionEntry } from '@flanksource/clicky-ui/ai';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { SessionStats, TodoSessionApproval } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { todoQuery } from './format';
@@ -214,22 +215,24 @@ function ApprovalBanner({
         Needs approval: <span className="font-medium">{approval.tool}</span>
         {summary && <span className="ml-1 opacity-80">{summary}</span>}
       </span>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         disabled={busy}
         onClick={() => onDecide(true)}
-        className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-emerald-700 hover:bg-emerald-500/25 disabled:opacity-50"
+        className="h-auto rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-emerald-700 hover:bg-emerald-500/25 disabled:opacity-50"
       >
         Allow
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="ghost"
         type="button"
         disabled={busy}
         onClick={() => onDecide(false)}
-        className="rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-red-700 hover:bg-red-500/25 disabled:opacity-50"
+        className="h-auto rounded border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-red-700 hover:bg-red-500/25 disabled:opacity-50"
       >
         Deny
-      </button>
+      </Button>
     </div>
   );
 }

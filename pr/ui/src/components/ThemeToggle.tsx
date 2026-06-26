@@ -1,4 +1,5 @@
 import { useTheme } from '@flanksource/clicky-ui/hooks';
+import { Button } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from './GavelIcon';
 
 // Cycles light -> dark -> system. The icon reflects the *resolved* theme so
@@ -19,14 +20,16 @@ export function ThemeToggle() {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const icon = theme === 'system' ? ICON.system : resolvedTheme === 'dark' ? 'codicon:moon' : 'codicon:sun';
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon"
       type="button"
       onClick={() => setTheme(NEXT[theme] ?? 'light')}
       title={`Theme: ${theme} — click for ${NEXT[theme]}`}
       aria-label={`Switch theme (currently ${theme})`}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="h-8 w-8 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       <GavelIcon name={icon} className="text-base" />
-    </button>
+    </Button>
   );
 }

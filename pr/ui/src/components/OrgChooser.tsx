@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Org, SearchConfig } from '../types';
 import { GavelIcon } from './GavelIcon';
 
@@ -113,8 +114,9 @@ export function OrgChooser({ config, onChange }: Props) {
 
   return (
     <div className="relative" ref={rootRef}>
-      <button
-        className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
+      <Button
+        variant="ghost"
+        className="inline-flex items-center justify-start gap-1.5 text-xs h-auto px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={() => setOpen(!open)}
         title="Switch GitHub org / scope"
       >
@@ -125,12 +127,13 @@ export function OrgChooser({ config, onChange }: Props) {
         )}
         <span className="font-medium">{label}</span>
         <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
-      </button>
+      </Button>
 
       {open && (
         <div className="absolute top-full right-0 mt-1 w-72 bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
-          <button
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+          <Button
+            variant="ghost"
+            className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
               !config.all ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseMe}
@@ -138,10 +141,11 @@ export function OrgChooser({ config, onChange }: Props) {
             <GavelIcon name="codicon:person" className="text-base" />
             <span className="flex-1">@me (my PRs)</span>
             {!config.all && <GavelIcon name="codicon:check" className="text-xs" />}
-          </button>
+          </Button>
 
-          <button
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+          <Button
+            variant="ghost"
+            className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
               config.all && !activeOrg ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseAllOrgs}
@@ -149,7 +153,7 @@ export function OrgChooser({ config, onChange }: Props) {
             <GavelIcon name="codicon:globe" className="text-base" />
             <span className="flex-1">All orgs (default)</span>
             {config.all && !activeOrg && <GavelIcon name="codicon:check" className="text-xs" />}
-          </button>
+          </Button>
 
           <div className="border-t border-border my-1" />
 
@@ -167,8 +171,9 @@ export function OrgChooser({ config, onChange }: Props) {
                   selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
                 }`}
               >
-                <button
-                  className="flex-1 flex items-center gap-2 text-left"
+                <Button
+                  variant="ghost"
+                  className="flex-1 flex items-center justify-start gap-2 h-auto p-0 text-left"
                   onClick={() => chooseOrg(o.login)}
                 >
                   {o.avatarUrl
@@ -176,14 +181,15 @@ export function OrgChooser({ config, onChange }: Props) {
                     : <GavelIcon name="codicon:organization" className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
                   {selected && <GavelIcon name="codicon:check" className="text-xs" />}
-                </button>
-                <button
-                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-auto p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
                   <GavelIcon name="codicon:eye-closed" className="text-xs" />
-                </button>
+                </Button>
               </div>
             );
           })}
@@ -191,13 +197,14 @@ export function OrgChooser({ config, onChange }: Props) {
           {hiddenOrgs.length > 0 && (
             <>
               <div className="border-t border-border my-1" />
-              <button
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+              <Button
+                variant="ghost"
+                className="w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 onClick={() => setShowHidden(v => !v)}
               >
                 <GavelIcon name={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
                 <span className="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
-              </button>
+              </Button>
               {showHidden && hiddenOrgs.map(o => (
                 <div
                   key={o.login}
@@ -207,13 +214,14 @@ export function OrgChooser({ config, onChange }: Props) {
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
                     : <GavelIcon name="codicon:organization" className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
-                  <button
-                    className="text-muted-foreground hover:text-primary transition-colors"
+                  <Button
+                    variant="ghost"
+                    className="h-auto p-0 text-muted-foreground hover:text-primary transition-colors"
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >
                     <GavelIcon name="codicon:eye" className="text-xs" />
-                  </button>
+                  </Button>
                 </div>
               ))}
             </>

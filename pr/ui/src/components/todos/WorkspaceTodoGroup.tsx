@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { RepoIcon } from '../RepoIcon';
@@ -101,10 +102,11 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
           />
         )}
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setOpen(o => !o)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
+          className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 p-0 text-left hover:opacity-80"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
           {repo ? (
@@ -118,7 +120,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
               <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={workspace.dir}>{workspace.name}</span>
             </>
           )}
-        </button>
+        </Button>
         {multiSelect && checkedRefs.length > 0 ? (
           <div className="flex shrink-0 items-center gap-1.5">
             <span className="text-[11px] tabular-nums text-muted-foreground">{checkedRefs.length} selected</span>
@@ -130,15 +132,17 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
               onRun={runChecked}
               onAdvanced={() => setAdvancedOpen(true)}
             />
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
               onClick={() => setChecked(new Set())}
               title="Clear selection"
               aria-label="Clear selection"
-              className="inline-flex h-8 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="h-8 w-7 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <GavelIcon name="codicon:close" className="text-xs" />
-            </button>
+            </Button>
           </div>
         ) : (
           <TodoCountsBar counts={counts} hidden={hidden} onToggle={onToggleStatus} />

@@ -1,3 +1,4 @@
+import { Button } from '@flanksource/clicky-ui/components';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { timeAgo } from '../../utils';
 import { GavelIcon } from '../GavelIcon';
@@ -174,15 +175,16 @@ function CountBadge({ icon, value, label, className = 'text-muted-foreground', s
   if (status && onToggle) {
     const active = !hidden?.has(status);
     return (
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => onToggle(status)}
         aria-pressed={active}
         title={active ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
-        className={`-mx-0.5 inline-flex items-center gap-1 rounded px-0.5 text-xs tabular-nums transition-colors hover:bg-muted ${active ? className : 'text-muted-foreground opacity-40 hover:opacity-100'}`}
+        className={`-mx-0.5 inline-flex h-auto items-center gap-1 rounded px-0.5 text-xs tabular-nums transition-colors hover:bg-muted ${active ? className : 'text-muted-foreground opacity-40 hover:opacity-100'}`}
       >
         {content}
-      </button>
+      </Button>
     );
   }
   return (
@@ -295,10 +297,11 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
           />
         </label>
       )}
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={onClick}
-        className={`min-w-0 flex-1 px-3 text-left transition-colors hover:bg-muted ${compact ? 'py-1' : 'py-2'} ${active ? 'bg-primary/10' : ''}`}
+        className={`h-auto min-w-0 flex-1 justify-start px-3 text-left transition-colors hover:bg-muted ${compact ? 'py-1' : 'py-2'} ${active ? 'bg-primary/10' : ''}`}
       >
         <div className="flex min-w-0 items-center gap-2">
           {hasLiveSession ? (
@@ -333,7 +336,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             {todo.provider && <span className="uppercase">{todo.provider}</span>}
           </div>
         )}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -350,19 +353,21 @@ export function TodoDensityPicker({ density, onChange }: {
       {DENSITY_OPTIONS.map(opt => {
         const active = density === opt.value;
         return (
-          <button
+          <Button
             key={opt.value}
+            variant="ghost"
+            size="icon"
             type="button"
             onClick={() => onChange(opt.value)}
             aria-pressed={active}
             title={`${opt.label} rows`}
             aria-label={`${opt.label} rows`}
-            className={`inline-flex h-6 w-7 items-center justify-center rounded transition-colors ${
+            className={`h-6 w-7 rounded transition-colors ${
               active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
             <GavelIcon name={opt.icon} className="text-sm" />
-          </button>
+          </Button>
         );
       })}
     </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { PRComment } from '../types';
 import { Markdown } from './Markdown';
 import { GavelIcon } from './GavelIcon';
@@ -26,12 +27,6 @@ function extractVercelPreviewUrl(body: string): string | null {
   return m ? m[0] : null;
 }
 
-function stripVercelNoise(body: string): string {
-  return body
-    .replace(/\*\*The latest updates on your projects\*\*.*$/s, '')
-    .trim();
-}
-
 function VercelComment({ comment }: Props) {
   const previewUrl = extractVercelPreviewUrl(comment.body);
   const [showFull, setShowFull] = useState(false);
@@ -49,13 +44,14 @@ function VercelComment({ comment }: Props) {
           <span className="font-medium">Preview Deployment</span>
         </a>
       )}
-      <button
-        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
+      <Button
+        variant="ghost"
+        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
         <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
-      </button>
+      </Button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
     </div>
   );
@@ -110,13 +106,6 @@ function CopilotComment({ comment }: Props) {
 
 // --- CodeRabbit ---
 
-const coderabbitSections = [
-  { prefix: '📝 Walkthrough', label: 'Walkthrough' },
-  { prefix: '📋 Walkthrough', label: 'Walkthrough' },
-  { prefix: 'Walkthrough', label: 'Walkthrough' },
-  { prefix: '## Changes', label: 'Changes' },
-];
-
 function CodeRabbitComment({ comment }: Props) {
   if (comment.severity === 'nitpick' || comment.path) {
     return <Markdown text={comment.body} className="text-xs text-gray-700" />;
@@ -135,13 +124,14 @@ function CodeRabbitComment({ comment }: Props) {
           {actionableCount} actionable comment{actionableCount !== 1 ? 's' : ''} posted
         </div>
       )}
-      <button
-        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
+      <Button
+        variant="ghost"
+        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
         <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide full review' : 'Show full review'}
-      </button>
+      </Button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
     </div>
   );
@@ -180,13 +170,14 @@ function GavelComment({ comment }: Props) {
           </span>
         )}
       </div>
-      <button
-        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1"
+      <Button
+        variant="ghost"
+        className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
         <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
-      </button>
+      </Button>
       {showFull && <Markdown text={body} className="text-xs text-gray-600 mt-1" />}
     </div>
   );

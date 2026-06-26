@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from '../GavelIcon';
 
 // Attachment is one image picked for a new todo: the raw bytes plus a filename
@@ -183,15 +184,17 @@ export function ScreenshotPicker({ previews, onAdd, onRemove, disabled }: {
           {previews.map((p, i) => (
             <div key={p.url} className="relative">
               <img src={p.url} alt={p.name} className="max-h-32 rounded border border-border" />
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 type="button"
                 onClick={() => onRemove(i)}
                 title="Remove screenshot"
                 aria-label={`Remove ${p.name}`}
-                className="absolute -right-2 -top-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow hover:text-destructive"
+                className="absolute -right-2 -top-2 h-5 w-5 rounded-full border border-border bg-background text-muted-foreground shadow hover:text-destructive"
               >
                 <GavelIcon name="codicon:close" className="text-[11px]" />
-              </button>
+              </Button>
             </div>
           ))}
         </div>

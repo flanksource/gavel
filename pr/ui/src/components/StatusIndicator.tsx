@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { DropdownMenu } from '@flanksource/clicky-ui/components';
+import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Version } from '@flanksource/clicky-ui/data';
 import type { HealthStatus, RateLimit, Severity } from '../types';
 import { timeAgoShort } from '../utils';
@@ -75,14 +75,16 @@ export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, err
       menuLabel="Status"
       menuClassName="w-[360px] max-w-[calc(100vw-24px)]"
       trigger={
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           type="button"
           title={title}
           aria-label="Status, sync, and version details"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="h-8 w-8 rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
-        </button>
+        </Button>
       }
     >
       {() => (
@@ -270,15 +272,16 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
 
 function ActionButton({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={onClick}
       title={label}
-      className="inline-flex h-7 items-center gap-1 rounded border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="inline-flex h-7 items-center justify-start gap-1 rounded border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
       <GavelIcon name={icon} className="text-xs" />
       {label}
-    </button>
+    </Button>
   );
 }
 

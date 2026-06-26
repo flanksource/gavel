@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { GavelIcon } from './GavelIcon';
@@ -79,14 +80,15 @@ export function ActivityView() {
             <GavelIcon name="codicon:pulse" className="mr-1.5 text-blue-600" />
             HTTP Activity
           </h2>
-          <button
+          <Button
+            variant="ghost"
             onClick={handleReset}
-            className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground"
+            className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground h-auto"
             title="Clear all recorded activity"
           >
             <GavelIcon name="codicon:trash" className="mr-1" />
             Reset
-          </button>
+          </Button>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -193,9 +195,10 @@ function KindChip({ kind, label, active, onClick, count, stats }: {
   const avgMs = stats && stats.total > 0 ? stats.totalNs / stats.total / 1e6 : 0;
   const hitRate = stats && stats.total > 0 ? (stats.cacheHits / stats.total) * 100 : 0;
   return (
-    <button
+    <Button
+      variant="ghost"
       onClick={onClick}
-      className={`text-xs px-2.5 py-1 rounded border ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-border'} ${colorClass} hover:opacity-90`}
+      className={`text-xs px-2.5 py-1 rounded border h-auto justify-start ${active ? 'border-blue-500 ring-1 ring-blue-200' : 'border-border'} ${colorClass} hover:opacity-90`}
     >
       <span className="font-semibold">{label}</span>
       <span className="ml-1 opacity-70">{count}</span>
@@ -204,7 +207,7 @@ function KindChip({ kind, label, active, onClick, count, stats }: {
           · {avgMs.toFixed(0)}ms · {hitRate.toFixed(0)}% hit
         </span>
       )}
-    </button>
+    </Button>
   );
 }
 

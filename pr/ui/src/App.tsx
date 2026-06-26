@@ -3,7 +3,7 @@ import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus,
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
-import { SplitPane, AppShell } from '@flanksource/clicky-ui/components';
+import { SplitPane, AppShell, Button } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
 import { TodoBodyHeader, TodoBodyActions, TodoNewButton, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
@@ -132,7 +132,7 @@ export function App() {
   // author chip can toggle them back on). URL params and stored filters win.
   const defaultFilters: Filters = { ...emptyFilters(), authors: { '@bots': 'exclude' } };
   const initialFilters = hasUrlFilters ? initialRoute.filters : (filtersFromStored(stored.filters) ?? defaultFilters);
-  const initialConfig: SearchConfig = { ...defaultConfig, ...(stored.config || {}) };
+  const initialConfig: SearchConfig = { ...defaultConfig, ...stored.config };
 
   const [rawPrs, setRawPrs] = useState<PRItem[]>([]);
   const [viewer, setViewer] = useState('');
@@ -561,14 +561,15 @@ export function App() {
                 className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
               {query && (
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => setQuery('')}
-                  className="text-muted-foreground hover:text-foreground shrink-0"
+                  className="text-muted-foreground hover:text-foreground shrink-0 h-auto p-0"
                   aria-label="Clear search"
                 >
                   <GavelIcon name="codicon:close" className="text-xs" />
-                </button>
+                </Button>
               )}
             </div>
           ) : undefined
@@ -773,15 +774,17 @@ function MenubarView({
       >
         <div className="flex h-11 items-center justify-between border-b border-border px-2">
           <div className="flex min-w-0 items-center gap-2">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
               onClick={onBack}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
               title="Back to pull requests"
               aria-label="Back to pull requests"
             >
               <GavelIcon name="codicon:arrow-left" className="text-base" />
-            </button>
+            </Button>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{selected.repo}#{selected.number}</div>
               <div className="truncate text-[11px] text-muted-foreground">{selected.title}</div>
@@ -887,10 +890,11 @@ function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition ${
+      className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition h-auto justify-start ${
         active ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-muted'
       }`}
     >
@@ -902,7 +906,7 @@ function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
       {badge !== undefined && badge > 0 && (
         <span className="rounded-full bg-red-500/15 px-1 text-[10px] font-medium tabular-nums text-red-600 dark:text-red-400">{badge}</span>
       )}
-    </button>
+    </Button>
   );
 }
 
@@ -915,10 +919,11 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
   return (
     <div className="flex gap-1 border-b border-transparent">
       {tabs.map(t => (
-        <button
+        <Button
+          variant="ghost"
           key={t.id}
           onClick={() => onChange(t.id)}
-          className={`px-3 py-1.5 text-sm rounded-md transition ${
+          className={`px-3 py-1.5 text-sm rounded-md transition h-auto justify-start ${
             active === t.id
               ? 'bg-primary/10 text-primary font-medium'
               : 'text-muted-foreground hover:bg-muted'
@@ -926,7 +931,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
         >
           <GavelIcon name={t.icon} className="mr-1" />
           {t.label}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -941,24 +946,27 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
 }) {
   return (
     <div className="flex items-center gap-1">
-      <button
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
+      <Button
+        variant="ghost"
+        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
         onClick={onJSON}
         title="Download current view as JSON"
       >
         <GavelIcon name="codicon:json" className="mr-0.5" />
         JSON
-      </button>
-      <button
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
+      </Button>
+      <Button
+        variant="ghost"
+        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors h-auto justify-start"
         onClick={onMarkdown}
         title="Download current view as Markdown"
       >
         <GavelIcon name="codicon:markdown" className="mr-0.5" />
         Markdown
-      </button>
-      <button
-        className={`text-xs px-2 py-1 rounded border transition-colors ${
+      </Button>
+      <Button
+        variant="ghost"
+        className={`text-xs px-2 py-1 rounded border transition-colors h-auto justify-start ${
           copyState === 'copied'
             ? 'border-green-300 bg-green-50 text-green-700'
             : copyState === 'error'
@@ -973,7 +981,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
           className="mr-0.5"
         />
         {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
-      </button>
+      </Button>
     </div>
   );
 }

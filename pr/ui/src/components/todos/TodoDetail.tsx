@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import { Markdown } from '../Markdown';
 import { GavelIcon } from '../GavelIcon';
@@ -9,6 +10,7 @@ import { TodoSessionTimer } from './TodoSessionTimer';
 import { priorities, priorityClass, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
+import { AcceptanceCriteria } from './AcceptanceCriteria';
 
 export function TodoDetail({
   todo,
@@ -215,7 +217,7 @@ export function TodoDetail({
             <div className="mt-0.5 truncate text-xs text-muted-foreground">{todo.filePath || todo.cwd || todo.provider}</div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <select
+            <Select
               value={todo.status}
               disabled={busy}
               onChange={e => patch({ status: (e.target as HTMLSelectElement).value as TodoStatus })}
@@ -223,8 +225,8 @@ export function TodoDetail({
               aria-label="Update todo status"
             >
               {statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-            </select>
-            <select
+            </Select>
+            <Select
               value={todo.priority}
               disabled={busy}
               onChange={e => patch({ priority: (e.target as HTMLSelectElement).value as TodoPriority })}
@@ -233,9 +235,9 @@ export function TodoDetail({
               title="Severity"
             >
               {priorities.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
+            </Select>
             {onTransferred && transferTargets.length > 0 && (
-              <select
+              <Select
                 value=""
                 disabled={busy}
                 onChange={e => transferTo((e.target as HTMLSelectElement).value)}
@@ -247,10 +249,12 @@ export function TodoDetail({
                 {transferTargets.map(ws => (
                   <option key={ws.dir} value={ws.dir}>{ws.name || ws.dir}</option>
                 ))}
-              </select>
+              </Select>
             )}
             {todo.sessionId && (
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 type="button"
                 onClick={() => runTodo({ ...defaultRunOptions, resume: true })}
                 disabled={busy || runBusy}
@@ -259,7 +263,7 @@ export function TodoDetail({
                 aria-label="Resume prior agent session"
               >
                 <GavelIcon name={runBusy ? 'svg-spinners:ring-resize' : 'codicon:debug-continue'} className="text-sm" />
-              </button>
+              </Button>
             )}
             <TodoRunSplitButton
               disabled={busy || runBusy}
@@ -267,7 +271,9 @@ export function TodoDetail({
               onRun={runTodo}
               onAdvanced={() => setAdvancedOpen(true)}
             />
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
               onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
               disabled={busy}
@@ -276,8 +282,10 @@ export function TodoDetail({
               aria-label={closed ? 'Reopen todo' : 'Close todo'}
             >
               <GavelIcon name={busy ? 'svg-spinners:ring-resize' : closed ? 'codicon:debug-restart' : 'codicon:pass'} className="text-sm" />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
               onClick={archiveTodo}
               disabled={busy}
@@ -286,7 +294,7 @@ export function TodoDetail({
               aria-label={isGrite ? 'Archive issue' : 'Delete file'}
             >
               <GavelIcon name={busy ? 'svg-spinners:ring-resize' : 'codicon:trash'} className="text-sm" />
-            </button>
+            </Button>
           </div>
         </div>
         {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
@@ -344,6 +352,7 @@ export function TodoDetail({
                   <EditPencil label="Add body" onClick={startEditBody} disabled={busy} />
                 </div>
               )}
+              <AcceptanceCriteria dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
               <TodoCommentBox
                 closed={closed}
                 busy={busy}
@@ -361,11 +370,12 @@ export function TodoDetail({
 
 function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: string; label: string }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
+      className={`-mb-px h-auto inline-flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
         active
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -373,13 +383,15 @@ function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick:
     >
       <GavelIcon name={icon} className="text-sm" />
       {label}
-    </button>
+    </Button>
   );
 }
 
 function EditPencil({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon"
       type="button"
       onClick={onClick}
       disabled={disabled}
@@ -388,7 +400,7 @@ function EditPencil({ label, onClick, disabled }: { label: string; onClick: () =
       className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
     >
       <GavelIcon name="codicon:edit" className="text-xs" />
-    </button>
+    </Button>
   );
 }
 
@@ -420,17 +432,18 @@ function TodoSection({
   return (
     <section className="rounded-md border border-border bg-background">
       <div className="flex w-full min-w-0 items-center gap-2 pr-2">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setOpen(o => !o)}
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-muted"
+          className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 px-3 py-2 text-left hover:bg-muted"
           aria-expanded={open}
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="shrink-0 text-xs text-muted-foreground" />
           <GavelIcon name={icon} className="shrink-0 text-xs text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">{title}</span>
           {typeof count === 'number' && <span className="text-xs tabular-nums text-muted-foreground">{count}</span>}
-        </button>
+        </Button>
         {action}
       </div>
       {open && <div className="border-t border-border px-3 py-3">{children}</div>}

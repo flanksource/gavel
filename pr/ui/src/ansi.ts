@@ -4,6 +4,7 @@
 // (38;5;N / 48;5;N / 38;2;r;g;b). Unknown codes reset to default.
 // Output is safe to drop into dangerouslySetInnerHTML — text is HTML-escaped.
 
+// eslint-disable-next-line no-control-regex -- ANSI SGR sequences start with ESC (0x1b); matching them requires the control char.
 const ESC = /\x1b\[([\d;]*)m/g;
 
 const FG: Record<number, string> = {
@@ -98,10 +99,6 @@ function openSpan(state: State): string {
   return `<span style="${styles.join(';')}">`;
 }
 
-function isActive(state: State): boolean {
-  return !!(state.fg || state.bg || state.bold || state.dim || state.italic || state.underline);
-}
-
 // ansiToHtml returns an HTML string with the ANSI coloring preserved.
 // The caller is responsible for wrapping in a monospace container.
 export function ansiToHtml(input: string): string {
@@ -133,9 +130,11 @@ export function ansiToHtml(input: string): string {
 }
 
 export function hasAnsi(s: string): boolean {
+  // eslint-disable-next-line no-control-regex -- ESC (0x1b) is the ANSI sequence prefix; required to detect ANSI.
   return /\x1b\[[\d;]*m/.test(s);
 }
 
 export function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex -- ESC (0x1b) is the ANSI sequence prefix; required to strip ANSI.
   return s.replace(/\x1b\[[\d;]*m/g, '');
 }

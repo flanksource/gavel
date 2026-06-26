@@ -98,7 +98,7 @@
     if (!stream) return;
     try {
       stream.getTracks().forEach(function (t) { t.stop(); });
-    } catch (e) {
+    } catch {
       /* noop */
     }
   }
@@ -188,7 +188,7 @@
       if (dlg.open) {
         try {
           dlg.close();
-        } catch (e) {
+        } catch {
           /* already closing */
         }
       }
@@ -223,8 +223,8 @@
   // activation (the default) freezes the page and shows the "Grabbing…" overlay;
   // cleanup() is what unfreezes it. Skipping it leaves the page stuck on "Grabbing…".
   function dismissGrab(ctx) {
-    try { if (ctx.hideContextMenu) ctx.hideContextMenu(); } catch (e) { /* noop */ }
-    try { if (ctx.cleanup) ctx.cleanup(); } catch (e) { /* noop */ }
+    try { if (ctx.hideContextMenu) ctx.hideContextMenu(); } catch { /* noop */ }
+    try { if (ctx.cleanup) ctx.cleanup(); } catch { /* noop */ }
   }
 
   // openTodo opens the new-todo dialog prefilled from the grabbed element,
@@ -293,7 +293,7 @@
       // (select) runs it instead of copy.
       try {
         if (api.setToolbarState) api.setToolbarState({ defaultAction: "gavel-todo" });
-      } catch (e) {
+      } catch {
         /* noop */
       }
       return true;
@@ -336,7 +336,7 @@
     var doc;
     try {
       doc = frame.contentDocument; // cross-origin / sandboxed-without-allow-same-origin throws or null
-    } catch (e) {
+    } catch {
       return;
     }
     if (!doc || doc.getElementById("gavel-rg-plugin-script")) return;

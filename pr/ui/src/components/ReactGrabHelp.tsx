@@ -14,15 +14,16 @@ export function ReactGrabHelp() {
 
   return (
     <>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(true)}
         title="Install React Grab → todo"
-        className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted"
+        className="inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted"
       >
         <GavelIcon name="codicon:inspect" className="text-xs" />
         React Grab
-      </button>
+      </Button>
       {open && (
         <Modal
           open

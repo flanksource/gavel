@@ -96,30 +96,33 @@ export function TodoRunSplitButton({
 }) {
   return (
     <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => onRun(defaultRunOptions)}
         disabled={disabled}
         title={title}
-        className="inline-flex h-8 items-center gap-1 border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+        className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
       >
         <GavelIcon name={loading ? 'svg-spinners:ring-resize' : 'codicon:play'} className="text-xs" />
         <span>{label}</span>
-      </button>
+      </Button>
       <DropdownMenu
         align="right"
         menuLabel="Run todo"
         menuClassName="w-[280px] max-w-[calc(100vw-24px)]"
         trigger={
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             type="button"
             disabled={disabled}
             title="Run options"
             aria-label="Run options"
-            className="inline-flex h-8 w-7 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+            className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
           >
             <GavelIcon name="codicon:chevron-down" className="text-xs" />
-          </button>
+          </Button>
         }
       >
         {() => (
@@ -130,33 +133,35 @@ export function TodoRunSplitButton({
                   {group.action}
                 </div>
                 {group.presets.map(preset => (
-                  <button
+                  <Button
                     key={`${group.action}:${preset.label}`}
+                    variant="ghost"
                     type="button"
                     onClick={() => onRun(preset.options)}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                    className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
                   >
                     <GavelIcon name={preset.icon} className="shrink-0 text-sm text-muted-foreground" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate font-medium text-foreground">{preset.label}</span>
                       <span className="block truncate text-[11px] text-muted-foreground">cmux · {group.detail}</span>
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             ))}
             <div className="my-1 border-t border-border" />
-            <button
+            <Button
+              variant="ghost"
               type="button"
               onClick={onAdvanced}
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+              className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
             >
               <GavelIcon name="codicon:settings-gear" className="shrink-0 text-sm text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium text-foreground">Advanced</span>
                 <span className="block truncate text-[11px] text-muted-foreground">model, effort, timeout, limits</span>
               </span>
-            </button>
+            </Button>
           </div>
         )}
       </DropdownMenu>

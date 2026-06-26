@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { DropdownMenu } from '@flanksource/clicky-ui/components';
+import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { flattenProcesses, aggregateDotClass, emptyProcStatus } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
@@ -41,16 +41,22 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
   const dot = aggregateDotClass(procs.map(p => p.proc));
 
   const trigger = (
-    <button
-      className="flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs hover:bg-gray-50"
+    <Button
+      variant="ghost"
+      className="flex items-center justify-start gap-1.5 h-auto rounded-md border border-gray-200 bg-white px-2 py-1 text-xs hover:bg-gray-50"
       title="Processes"
       aria-label="Processes"
     >
       <GavelIcon name="codicon:server-process" className="text-gray-500 text-sm" />
       <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
       <span className="tabular-nums text-gray-700">{running}/{procs.length}</span>
-      {crashed > 0 && <span className="tabular-nums text-red-600">⚠{crashed}</span>}
-    </button>
+      {crashed > 0 && (
+        <span className="inline-flex items-center gap-0.5 tabular-nums text-red-600">
+          <GavelIcon name="codicon:warning" />
+          {crashed}
+        </span>
+      )}
+    </Button>
   );
 
   return (
