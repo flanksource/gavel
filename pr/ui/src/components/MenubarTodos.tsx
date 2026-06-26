@@ -1,3 +1,4 @@
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Project } from '../types';
 import { GavelIcon } from './GavelIcon';
 import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
@@ -30,15 +31,17 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             type="button"
             onClick={() => setSelected(null)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             title="Back to todos"
             aria-label="Back to todos"
           >
             <GavelIcon name="codicon:arrow-left" className="text-base" />
-          </button>
+          </Button>
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{detail?.title ?? 'Todo'}</span>
         </div>
         <div className="min-h-0 flex-1">
@@ -70,15 +73,16 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
               <TodoFilterMenu counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
             </>
           )}
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => setShowCreate(true)}
             title="New todo"
-            className="ml-auto inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-auto inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <GavelIcon name="codicon:add" className="text-xs" />
             New
-          </button>
+          </Button>
         </div>
       )}
 

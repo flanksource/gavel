@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoGroupBy } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { GROUP_BY_OPTIONS } from './todoGroup';
@@ -31,7 +32,8 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
 
   return (
     <div className="relative" ref={rootRef}>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-haspopup="menu"
@@ -42,7 +44,7 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
         <GavelIcon name={active.icon} className="text-xs" />
         <span className="font-medium">Group: {active.label}</span>
         <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -53,20 +55,21 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
           {GROUP_BY_OPTIONS.map(opt => {
             const selected = opt.value === groupBy;
             return (
-              <button
+              <Button
                 key={opt.value}
+                variant="ghost"
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
                 onClick={() => { onChange(opt.value); setOpen(false); }}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+                className={`flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left transition-colors ${
                   selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
                 }`}
               >
                 <GavelIcon name={opt.icon} className="text-base" />
                 <span className="flex-1">{opt.label}</span>
                 {selected && <GavelIcon name="codicon:check" className="text-xs" />}
-              </button>
+              </Button>
             );
           })}
         </div>

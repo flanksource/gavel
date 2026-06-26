@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Field, Button } from '@flanksource/clicky-ui/components';
+import { Field, Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
@@ -184,9 +184,9 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
         >
           {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
           <Field label="Workspace">
-            <select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
+            <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
               {dirOptions.map(o => <option key={o.value || '(default)'} value={o.value}>{o.label}</option>)}
-            </select>
+            </Select>
           </Field>
           <Field label="Title" required>
             <input
@@ -200,16 +200,16 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
           <div className="flex gap-3">
             <div className="flex-1">
               <Field label="Priority">
-                <select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
+                <Select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
                   {priorities.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
+                </Select>
               </Field>
             </div>
             <div className="flex-1">
               <Field label="Status">
-                <select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
+                <Select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
                   {statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-                </select>
+                </Select>
               </Field>
             </div>
           </div>

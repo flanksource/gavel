@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Modal, Field, Combobox, Button } from '@flanksource/clicky-ui/components';
+import { Modal, Field, Combobox, Button, Select } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
 import type { Project, TodoProvider } from '../types';
 
@@ -132,12 +132,12 @@ export function AddProjectDialog({ open, onClose, onSaved, repoOptions, edit }: 
             onChange={(v) => setRepos(v as string[])} placeholder="owner/repo" />
         </Field>
         <Field label="Todos" helper="Which todo backend this workspace uses">
-          <select className={inputClass} value={todoProvider}
+          <Select className={inputClass} value={todoProvider}
             onChange={(e) => setTodoProvider(e.currentTarget.value as TodoProvider | '')}>
             <option value="">Auto-detect</option>
             <option value="grite">Grite</option>
             <option value="todos">.todos files</option>
-          </select>
+          </Select>
         </Field>
       </div>
     </Modal>

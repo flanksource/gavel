@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCounts, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { STATUS_FILTER_DEFS } from './todoFilter';
@@ -30,7 +31,8 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
 
   return (
     <div className="relative" ref={rootRef}>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-haspopup="menu"
@@ -43,7 +45,7 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
           <span className="rounded-full bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{hiddenCount} hidden</span>
         )}
         <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -57,13 +59,14 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
             defs.map(def => {
               const active = !hidden.has(def.status);
               return (
-                <button
+                <Button
                   key={def.status}
+                  variant="ghost"
                   type="button"
                   role="menuitemcheckbox"
                   aria-checked={active}
                   onClick={() => onToggle(def.status)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted"
+                  className="flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted"
                 >
                   <GavelIcon
                     name={active ? 'codicon:check' : 'codicon:circle-large-outline'}
@@ -71,7 +74,7 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
                   />
                   <span className={`flex-1 ${active ? 'text-foreground' : 'text-muted-foreground line-through opacity-60'}`}>{def.label}</span>
                   <span className="tabular-nums text-[11px] text-muted-foreground">{counts[def.countKey]}</span>
-                </button>
+                </Button>
               );
             })
           )}

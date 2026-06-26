@@ -1,3 +1,4 @@
+import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCounts, TodoStatus } from '../../types';
 import { statusClass } from './format';
 import { STATUS_FILTER_DEFS } from './todoFilter';
@@ -19,19 +20,20 @@ export function TodoFilterBar({ counts, hidden, onToggle }: {
         const active = !hidden.has(def.status);
         const count = counts[def.countKey];
         return (
-          <button
+          <Button
             key={def.status}
+            variant="ghost"
             type="button"
             onClick={() => onToggle(def.status)}
             aria-pressed={active}
             title={active ? `Hide ${def.label.toLowerCase()}` : `Show ${def.label.toLowerCase()}`}
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+            className={`inline-flex h-auto items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
               active ? statusClass(def.status) : 'border-border bg-transparent text-muted-foreground opacity-60 hover:opacity-100'
             }`}
           >
             <span>{def.label}</span>
             <span className="tabular-nums">{count}</span>
-          </button>
+          </Button>
         );
       })}
     </div>

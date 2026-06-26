@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, type ComponentProps } from "react";
-import { Button, Modal } from "@flanksource/clicky-ui/components";
+import { Button, Modal, Select } from "@flanksource/clicky-ui/components";
 import { AnsiHtml, TimeseriesCoreBars } from "@flanksource/clicky-ui/data";
 import { UiActivity, UiDatabase } from "@flanksource/clicky-ui/icons";
 import type { FlatProc } from "../utils";
@@ -351,12 +351,12 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
     <>
       <tr className="border-b border-gray-100 hover:bg-gray-50">
         <td className="py-1 pl-1 pr-2">
-          <button className="flex items-center gap-1.5" onClick={() => setOpen((o) => !o)} title="Toggle logs">
+          <Button variant="ghost" className="flex items-center gap-1.5 justify-start h-auto p-0" onClick={() => setOpen((o) => !o)} title="Toggle logs">
             <GavelIcon name={open ? "codicon:chevron-down" : "codicon:chevron-right"} className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="font-medium truncate max-w-[180px]">{showWorkspace ? project.name : proc.name}</span>
-          </button>
+          </Button>
           {showWorkspace && <div className="text-[10px] text-gray-400 pl-5">{proc.name}</div>}
         </td>
         <td className={`px-2 ${proc.status === "crashed" ? "text-red-600" : "text-gray-500"}`}>{statusLabel(proc)}</td>
@@ -506,14 +506,14 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
       {profiles.length > 0 && (
         <label className="flex items-center gap-1 text-[10px] text-gray-500" title="Profile to start">
           <GavelIcon name="codicon:layers" className="text-gray-400" />
-          <select value={profile} disabled={busy || anyActive} onChange={(e) => setProfile(e.target.value)} className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white disabled:opacity-60">
+          <Select value={profile} disabled={busy || anyActive} onChange={(e) => setProfile(e.target.value)} className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white disabled:opacity-60 w-auto">
             <option value="">(default)</option>
             {profiles.map((pr) => (
               <option key={pr} value={pr}>
                 {pr}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       )}
       {!anyActive && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => control("start", true)} />}
@@ -532,14 +532,14 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     return (
       <div className="py-1.5">
         <div className="flex items-center gap-2 px-1">
-          <button className="flex min-w-0 items-center gap-1.5" onClick={() => setOpen((o) => !o)} title="Toggle logs">
+          <Button variant="ghost" className="flex min-w-0 items-center gap-1.5 justify-start h-auto p-0" onClick={() => setOpen((o) => !o)} title="Toggle logs">
             <GavelIcon name={open ? "codicon:chevron-down" : "codicon:chevron-right"} className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>
               {project.name}
             </span>
-          </button>
+          </Button>
           <span className={`text-[10px] tabular-nums truncate ${proc.status === "crashed" ? "text-red-600" : "text-gray-400"}`}>{statusLabel(proc)}</span>
           <TodoBadge counts={project.todoCounts} />
           <CpuBars metricKey={runKey(project.name, proc)} icon={UiActivity} />

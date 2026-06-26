@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCommit, TodoCommitsResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { RelativeTime } from '../RelativeTime';
@@ -54,7 +55,9 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
   return (
     <li>
       <div className="flex items-start gap-2 px-3 py-2">
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           type="button"
           onClick={() => setOpen(o => !o)}
           aria-expanded={open}
@@ -62,17 +65,18 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
           className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-xs" />
-        </button>
+        </Button>
         <GavelIcon name="codicon:git-commit" className="mt-0.5 shrink-0 text-xs text-muted-foreground" />
         <div className="min-w-0 flex-1">
-          <button
+          <Button
+            variant="ghost"
             type="button"
             onClick={() => setOpen(o => !o)}
-            className="block w-full truncate text-left text-sm text-foreground hover:underline"
+            className="block h-auto w-full truncate p-0 text-left text-sm text-foreground hover:underline"
             title={commit.subject}
           >
             {commit.subject}
-          </button>
+          </Button>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
             {commit.url ? (
               <a

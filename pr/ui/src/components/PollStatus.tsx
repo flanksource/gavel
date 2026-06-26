@@ -1,3 +1,4 @@
+import { Button } from '@flanksource/clicky-ui/components';
 import type { RateLimit } from '../types';
 import { GavelIcon } from './GavelIcon';
 
@@ -31,20 +32,22 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
           ? <span className="text-yellow-600 dark:text-yellow-400">(paused)</span>
           : countdown > 0 && <span className="opacity-60">({countdown}s)</span>}
       </span>
-      <button
+      <Button
+        variant="ghost"
         onClick={onPause}
-        className={`transition-colors ${paused ? 'text-yellow-600 hover:text-foreground' : 'hover:text-foreground'}`}
+        className={`h-auto p-0 transition-colors ${paused ? 'text-yellow-600 hover:text-foreground' : 'hover:text-foreground'}`}
         title={paused ? 'Resume polling' : 'Pause polling'}
       >
         <GavelIcon name={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="ghost"
         onClick={onRefresh}
-        className={`transition-colors ${networkBusy ? 'text-primary' : 'hover:text-primary'}`}
+        className={`h-auto p-0 transition-colors ${networkBusy ? 'text-primary' : 'hover:text-primary'}`}
         title={networkBusy ? 'Loading...' : 'Refresh now'}
       >
         <GavelIcon name={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
-      </button>
+      </Button>
       {rateLimit && (
         <span
           className={`inline-flex items-center gap-1 font-mono ${rlLow ? 'text-red-600 dark:text-red-400' : ''}`}

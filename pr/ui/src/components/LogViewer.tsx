@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 
 interface Props {
   logs: string;
@@ -23,12 +24,13 @@ export function LogViewer({ logs, collapsedLines = 5, bgClass = 'bg-gray-50', bo
         {expanded ? logs : lines.slice(0, collapsedLines).join('\n')}
       </pre>
       {hasMore && (
-        <button
-          className={`text-[10px] ml-4 mt-0.5 ${expanded ? 'text-gray-400' : 'text-blue-500 hover:text-blue-700'}`}
+        <Button
+          variant="ghost"
+          className={`text-[10px] ml-4 mt-0.5 h-auto p-0 ${expanded ? 'text-gray-400' : 'text-blue-500 hover:text-blue-700'}`}
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? `▲ Collapse (${lines.length} lines)` : `▼ Show more (${lines.length} lines)`}
-        </button>
+        </Button>
       )}
     </div>
   );

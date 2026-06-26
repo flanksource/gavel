@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { SessionStats } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { todoQuery } from './format';
@@ -186,16 +187,17 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           <span className="truncate">{stats.error || 'API error'}</span>
         </span>
       )}
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={focusSession}
         disabled={focusBusy}
         title={focusError || 'Focus this session’s terminal in cmux'}
-        className={`ml-auto inline-flex items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50 ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
+        className={`ml-auto inline-flex h-auto items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50 ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
       >
         <GavelIcon name={focusBusy ? 'svg-spinners:ring-resize' : focusError ? 'codicon:error' : 'codicon:eye'} className="text-[12px]" />
         cmux
-      </button>
+      </Button>
     </div>
   );
 }

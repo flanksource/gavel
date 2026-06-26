@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoDensity, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { countsFromItems, TodoCountsBar, TodoRow } from './format';
@@ -29,15 +30,16 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
   return (
     <div className="border-b border-border">
       <div className="sticky top-0 z-10 flex w-full items-center gap-2 bg-background/95 px-3 py-1.5 backdrop-blur">
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setOpen(o => !o)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
+          className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 p-0 text-left hover:opacity-80"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
           <GavelIcon name={bucket.icon} className={`text-xs ${bucket.tone}`} />
           <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${bucket.tone}`}>{bucket.label}</span>
-        </button>
+        </Button>
         <TodoCountsBar counts={counts} />
       </div>
       {open && (visible.length > 0 ? (

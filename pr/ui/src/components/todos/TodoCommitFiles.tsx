@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import { AnsiHtml } from '@flanksource/clicky-ui/data';
 import type { TodoCommitDiffResponse, TodoCommitFile, TodoCommitFilesResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
@@ -156,12 +157,13 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setPinned(p => !p)}
         aria-expanded={open}
         title={`${view.label} — ${file.path}`}
-        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted ${pinned ? 'bg-muted' : ''}`}
+        className={`flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted ${pinned ? 'bg-muted' : ''}`}
       >
         <GavelIcon name={view.icon} className={`shrink-0 text-xs ${view.color}`} />
         <span className="flex min-w-0 flex-1 items-baseline truncate font-mono">
@@ -177,7 +179,7 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
           {file.adds > 0 && file.dels > 0 && <span className="text-muted-foreground"> </span>}
           {file.dels > 0 && <span className="text-red-600">-{file.dels}</span>}
         </span>
-      </button>
+      </Button>
       {open && <FileDiffCard dir={dir} provider={provider} hash={hash} file={file} />}
     </li>
   );

@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import { Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
 import { UiAdd, UiCircleFilled, UiComment, UiDiff } from '@flanksource/clicky-ui/icons';
 import type { TodoEvent } from '../../types';
@@ -127,16 +128,17 @@ export function TodoTimeline({ events }: { events: TodoEvent[] }) {
         <GavelIcon name="codicon:history" className="shrink-0 text-xs text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">History</span>
         <span className="text-xs tabular-nums text-muted-foreground">{events.length}</span>
-        <button
+        <Button
+          variant="ghost"
           type="button"
           onClick={() => setDesc(d => !d)}
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="inline-flex h-auto items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
           title={desc ? 'Newest first' : 'Oldest first'}
           aria-label="Toggle timeline sort order"
         >
           <GavelIcon name={desc ? 'codicon:chevron-down' : 'codicon:chevron-up'} className="text-xs" />
           {desc ? 'Newest' : 'Oldest'}
-        </button>
+        </Button>
       </div>
       <div className="border-t border-border px-3 py-3">
         <Timeline items={items} />

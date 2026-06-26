@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Modal, Field, Button } from '@flanksource/clicky-ui/components';
+import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
@@ -93,9 +93,9 @@ export function CreateTodoDialog({
       <div className="space-y-3">
         {error && <div className="text-sm text-destructive">{error}</div>}
         <Field label="Workspace">
-          <select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
+          <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
             {workspaces.map(w => <option key={w.dir} value={w.dir}>{w.name}</option>)}
-          </select>
+          </Select>
         </Field>
         <Field label="Title">
           <input
@@ -109,16 +109,16 @@ export function CreateTodoDialog({
         <div className="flex gap-3">
           <div className="flex-1">
             <Field label="Priority">
-              <select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
+              <Select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
                 {priorities.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+              </Select>
             </Field>
           </div>
           <div className="flex-1">
             <Field label="Status">
-              <select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
+              <Select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
                 {statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </select>
+              </Select>
             </Field>
           </div>
         </div>
