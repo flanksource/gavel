@@ -97,13 +97,14 @@ func ParseTODOContent(name, content, sourceDir string, defaults types.TODOFrontm
 	}
 
 	return &types.TODO{
-		FileNode:          fileNode,
-		TODOFrontmatter:   frontmatter,
-		StepsToReproduce:  extractSection(fileNode, "Steps to Reproduce"),
-		Implementation:    extractImplementationText(fileNode, "Implementation"),
-		Verification:      extractSection(fileNode, "Verification"),
-		CustomValidations: extractSection(fileNode, "Custom Validations"),
-		MarkdownBody:      body,
+		FileNode:           fileNode,
+		TODOFrontmatter:    frontmatter,
+		StepsToReproduce:   extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:     extractImplementationText(fileNode, "Implementation"),
+		Verification:       extractSection(fileNode, "Verification"),
+		CustomValidations:  extractSection(fileNode, "Custom Validations"),
+		MarkdownBody:       body,
+		AcceptanceCriteria: ParseAcceptanceCriteria(body),
 	}, nil
 }
 

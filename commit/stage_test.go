@@ -177,6 +177,39 @@ func TestStageSessionMissingLog(t *testing.T) {
 	assert.Contains(t, err.Error(), "no-such-session")
 }
 
+// TestStageSessionNoEdits hard-errors when the session log exists but records no
+// Edit/Write tool calls, so an explicit --stage never silently commits nothing.
+func TestStageSessionNoEdits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := initCommitRepo(t)
+
+	sessionID := "sess-empty"
+	writeSessionLog(t, home, sessionID, nil)
+
+	err := stageFiles(dir, sessionID, verify.CommitConfig{})
+	require.ErrorIs(t, err, ErrSessionNoFiles)
+}
+
+// TestStageSessionAllSkipped hard-errors when every file the session edited is
+// filtered out (here by .gavel.yaml commit.gitignore), rather than falling
+// through to the soft nothing-staged path.
+func TestStageSessionAllSkipped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := initCommitRepo(t)
+
+	writeFile(t, dir, "secret.env", "TOKEN=1\n")
+
+	sessionID := "sess-skipped"
+	writeSessionLog(t, home, sessionID, []string{
+		filepath.Join(dir, "secret.env"),
+	})
+
+	err := stageFiles(dir, sessionID, verify.CommitConfig{GitIgnore: []string{"*.env"}})
+	require.ErrorIs(t, err, ErrSessionNoFiles)
+}
+
 // writeSessionLog lays down a Claude session log under the fake HOME that
 // records an Edit tool_use for each absolute file path.
 func writeSessionLog(t *testing.T, home, sessionID string, absPaths []string) {

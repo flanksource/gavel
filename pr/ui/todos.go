@@ -61,6 +61,10 @@ type todoSummary struct {
 	Body           string                `json:"body,omitempty"`
 	Implementation string                `json:"implementation,omitempty"`
 	Events         []types.ProviderEvent `json:"events,omitempty"`
+	// Criteria are the todo's acceptance criteria, parsed from its
+	// "## Acceptance Criteria" section; populated on detail responses so the
+	// dashboard can render and edit them structurally.
+	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
 	// Diff is the aggregated git diff footprint of the todo's commits (those
 	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
 	Diff *todoDiffStat `json:"diff,omitempty"`
@@ -176,6 +180,10 @@ type todoRunPayload struct {
 	// agent completes and feeds failures back to it. Opt-in (defaults off),
 	// mirroring the CLI's `todos run --check`.
 	Check *bool `json:"check,omitempty"`
+	// Verify, when true, runs an AI issue verification over the committed work
+	// after the run, scoring it against the issue's acceptance criteria. Opt-in,
+	// mirroring the CLI's `todos run --verify`.
+	Verify *bool `json:"verify,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -235,6 +243,7 @@ type todoRunOptions struct {
 	DryRun          bool
 	Commit          bool
 	Check           bool
+	Verify          bool
 	TimeoutOriginal string
 }
 
@@ -283,6 +292,9 @@ func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
+	for _, item := range items {
+		reconcileSessionStatus(item, source.Dir)
+	}
 	resp := todoListResponse{
 		Provider: source.Provider,
 		Dir:      source.Dir,
@@ -325,6 +337,7 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
+	reconcileSessionStatus(todo, source.Dir)
 	sum := summarizeTodo(todo, true)
 	sum.Diff = diffStatFor(commitDiffStats(r.Context(), source.Dir), todo.ID)
 	json.NewEncoder(w).Encode(sum) //nolint:errcheck
@@ -857,6 +870,29 @@ func todoFiltersFromRequest(r *http.Request) (todos.DiscoveryFilters, error) {
 	return todos.DiscoveryFilters{IncludeStatuses: []types.Status{status}}, nil
 }
 
+// reconcileSessionStatus surfaces a failed todo as in-progress while its recorded
+// agent session is executing again — a resumed run (or a continued cmux REPL)
+// reflects the live work instead of a stale "failed" until the provider's own
+// status write catches up. Only failed todos that carry a session are inspected,
+// so idle/finished rows never read a session log. A missing or unreadable log is
+// the normal "no live session" case, so it leaves the persisted status untouched.
+func reconcileSessionStatus(todo *types.TODO, dir string) {
+	if todo == nil || todo.Status != types.StatusFailed || todo.LLM == nil || todo.LLM.SessionId == "" {
+		return
+	}
+	path, err := cmux.SessionLogPath(dir, todo.LLM.SessionId)
+	if err != nil {
+		return
+	}
+	stats, err := cmux.GlobalSessionStats().Get(todo.LLM.SessionId, path)
+	if err != nil {
+		return
+	}
+	if stats.Executing(time.Now()) {
+		todo.Status = types.StatusInProgress
+	}
+}
+
 func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 	if todo == nil {
 		return todoSummary{}
@@ -891,6 +927,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		out.Body = strings.TrimSpace(todo.MarkdownBody)
 		out.Implementation = strings.TrimSpace(todo.Implementation)
 		out.Events = todo.ProviderEvents
+		out.Criteria = todo.AcceptanceCriteria
 		if out.Body == "" {
 			out.Body = out.Implementation
 		}
@@ -1167,6 +1204,12 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		check = *payload.Check
 	}
 
+	// Post-commit issue verification is opt-in (matching `todos run --verify`).
+	verify := false
+	if payload.Verify != nil {
+		verify = *payload.Verify
+	}
+
 	return todoRunOptions{
 		Agent:           agent,
 		Mode:            mode,
@@ -1182,6 +1225,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		DryRun:          payload.DryRun,
 		Commit:          commit,
 		Check:           check,
+		Verify:          verify,
 		TimeoutOriginal: payload.Timeout,
 	}, nil
 }
@@ -1220,26 +1264,57 @@ func defaultStartTodoRun(req todoRunRequest) error {
 }
 
 // maybeCommitAfterRun runs the `gavel commit` pipeline over the agent's changes
-// once a dashboard run finishes, mirroring the CLI's `todos run --commit`.
-// Auto-commit is skipped for plan-only runs (which make no changes) and whenever
-// the executor already committed its own changes (see todos.ShouldCommitAfter).
+// once a dashboard run finishes, mirroring the CLI's `todos run --commit`, then
+// runs issue verification over the resulting commits when enabled. Auto-commit
+// is skipped for plan-only runs (which make no changes) and whenever the
+// executor already committed its own changes (see todos.ShouldCommitAfter).
 func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
-	enabled := req.Options.Commit && !req.Options.Plan
-	if !todos.ShouldCommitAfter(result, enabled) {
+	if len(req.Todos) == 0 || req.Todos[0] == nil {
 		return
 	}
-	cwd := ""
-	meta := commit.AgentRunMetadata{}
-	if len(req.Todos) > 0 && req.Todos[0] != nil {
-		cwd = req.Todos[0].CWD
-		meta.IssueID = req.Todos[0].ID
-		if req.Todos[0].LLM != nil {
-			meta.SessionID = req.Todos[0].LLM.SessionId
+	todo := req.Todos[0]
+
+	var hashes []string
+	if enabled := req.Options.Commit && !req.Options.Plan; todos.ShouldCommitAfter(result, enabled) {
+		meta := commit.AgentRunMetadata{IssueID: todo.ID}
+		if todo.LLM != nil {
+			meta.SessionID = todo.LLM.SessionId
+		}
+		commitResult, err := commit.RunAfterAgent(context.Background(), req.Source.Dir, todo.CWD, meta)
+		if err != nil {
+			logger.Errorf("commit after todo run failed: %v", err)
+		}
+		hashes = commitHashes(commitResult)
+	}
+
+	if req.Options.Verify && result != nil && result.Success {
+		verifyAfterRun(req, todo, hashes)
+	}
+}
+
+// verifyAfterRun scores the committed work against the issue's acceptance
+// criteria and records the verdict. It is advisory — failures are logged.
+func verifyAfterRun(req todoRunRequest, todo *types.TODO, hashes []string) {
+	if _, err := todos.RunIssueVerification(context.Background(), req.Provider, todo, todos.VerifyOptions{
+		WorkDir: todoVerifyWorkDir(req.Source.Dir, todo),
+		Commits: hashes,
+	}); err != nil {
+		logger.Warnf("issue verification after todo run skipped: %v", err)
+	}
+}
+
+// commitHashes extracts the commit hashes from a commit result.
+func commitHashes(result *commit.Result) []string {
+	if result == nil {
+		return nil
+	}
+	var out []string
+	for _, c := range result.Commits {
+		if c.Hash != "" {
+			out = append(out, c.Hash)
 		}
 	}
-	if err := commit.RunAfterAgent(context.Background(), req.Source.Dir, cwd, meta); err != nil {
-		logger.Errorf("commit after todo run failed: %v", err)
-	}
+	return out
 }
 
 // resolveDriverFromPayload selects the driver kind: the explicit Driver field

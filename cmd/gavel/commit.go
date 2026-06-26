@@ -219,6 +219,11 @@ func runCommit(opts CommitOptions) (any, error) {
 			exitCode = 1
 			return nil, nil
 		}
+		if errors.Is(err, commitpkg.ErrSessionNoFiles) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			exitCode = 1
+			return nil, nil
+		}
 		if errors.Is(err, commitpkg.ErrGitIgnoreCancelled) {
 			fmt.Fprintln(os.Stderr, err.Error())
 			exitCode = 1

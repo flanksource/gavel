@@ -18,6 +18,7 @@ import (
 	depsinstaller "github.com/flanksource/deps/pkg/installer"
 	depstypes "github.com/flanksource/deps/pkg/types"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 const statusLabelPrefix = "status:"
@@ -336,6 +337,16 @@ func (p *GriteProvider) SaveAttempt(ctx context.Context, todo *types.TODO, resul
 		fmt.Fprintf(&sb, "- **Session:** `%s`\n", sid)
 	}
 	return p.comment(ctx, todo, sb.String())
+}
+
+// SaveVerification posts the verdict as a marked "## Verification Result"
+// comment. grite has no comment-edit, so the newest such comment is the current
+// result, mirroring how UpdateLatestFailure surfaces the latest failure.
+func (p *GriteProvider) SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error {
+	if result == nil {
+		return nil
+	}
+	return p.comment(ctx, todo, RenderVerificationSection(result))
 }
 
 func (p *GriteProvider) comment(ctx context.Context, todo *types.TODO, body string) error {

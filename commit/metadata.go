@@ -3,6 +3,8 @@ package commit
 import (
 	"os"
 	"strings"
+
+	"github.com/flanksource/gavel/git"
 )
 
 const (
@@ -16,11 +18,10 @@ const (
 	// GAVEL_SESSION_ID is unset but Claude Code exported its own session id.
 	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
 
-	// TrailerIssueID is the git trailer key that ties a commit to the gavel todo
-	// issue it implements; consumers (e.g. the dashboard) read it to link commits
-	// back to their issue.
-	TrailerIssueID   = "Gavel-Issue-Id"
-	trailerSessionID = "Claude-Session-Id"
+	// TrailerIssueID / trailerSessionID re-export the canonical git trailer keys
+	// so commit-package consumers keep their existing reference.
+	TrailerIssueID   = git.TrailerIssueID
+	trailerSessionID = git.TrailerSessionID
 )
 
 // applyCommitMetadata appends git trailers identifying the gavel todo issue and

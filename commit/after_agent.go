@@ -24,8 +24,9 @@ type AgentRunMetadata struct {
 // driving the same pipeline as `gavel commit` (Stage=all) in the git root of the
 // agent's working directory (workDir joined with the TODO's cwd). It is shared by
 // the CLI (`todos run --commit`) and the dashboard's auto-commit. A run that
-// staged nothing is a no-op, not an error.
-func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetadata) error {
+// staged nothing is a no-op (nil result), not an error. The returned Result
+// carries the commit hashes so callers can hand them to issue verification.
+func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetadata) (*Result, error) {
 	commitDir := resolveAgentCommitDir(workDir, cwd)
 	if root := repomap.FindGitRoot(commitDir); root != "" {
 		commitDir = root
@@ -57,14 +58,14 @@ func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetada
 	if err != nil {
 		if errors.Is(err, ErrNothingStaged) {
 			logger.Infof("commit: no changes to commit")
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	for _, c := range result.Commits {
 		logger.Infof("Committed %s: %s", c.Hash, firstLine(c.Message))
 	}
-	return nil
+	return result, nil
 }
 
 // resolveAgentCommitDir resolves the directory the agent worked in, mirroring how

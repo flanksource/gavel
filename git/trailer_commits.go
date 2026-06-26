@@ -13,6 +13,15 @@ import (
 // enormous commit cannot flood the dashboard; the remainder is truncated.
 const maxCommitDiffBytes = 256 * 1024
 
+const (
+	// TrailerIssueID is the git trailer key that ties a commit to the gavel todo
+	// issue it implements; consumers read it to link commits back to their issue.
+	TrailerIssueID = "Gavel-Issue-Id"
+	// TrailerSessionID is the git trailer key recording the agent session that
+	// produced a commit.
+	TrailerSessionID = "Claude-Session-Id"
+)
+
 var commitHashPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 
 // IsValidCommitHash reports whether s is a syntactically valid abbreviated or
