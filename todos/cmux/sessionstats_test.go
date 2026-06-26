@@ -228,6 +228,32 @@ func TestComputeSessionStatsStatePersistsAcrossToolResult(t *testing.T) {
 	}
 }
 
+func TestSessionStatsExecuting(t *testing.T) {
+	now := time.Date(2026, 6, 23, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		stats SessionStats
+		want  bool
+	}{
+		{"not found ignores in-progress", SessionStats{Found: false, InProgress: true}, false},
+		{"live tailer in progress", SessionStats{Found: true, InProgress: true}, true},
+		{"cold working recently", SessionStats{Found: true, State: sessionStateWorking, UpdatedAt: now.Add(-10 * time.Second)}, true},
+		{"cold thinking recently", SessionStats{Found: true, State: sessionStateThinking, UpdatedAt: now.Add(-1 * time.Second)}, true},
+		{"cold awaiting input recently", SessionStats{Found: true, State: sessionStateAsk, UpdatedAt: now.Add(-5 * time.Second)}, true},
+		{"cold working but stale", SessionStats{Found: true, State: sessionStateWorking, UpdatedAt: now.Add(-10 * time.Minute)}, false},
+		{"cold completed", SessionStats{Found: true, State: sessionStateCompleted, UpdatedAt: now}, false},
+		{"cold error", SessionStats{Found: true, State: sessionStateError, UpdatedAt: now}, false},
+		{"cold active without timestamp", SessionStats{Found: true, State: sessionStateWorking}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.stats.Executing(now); got != tc.want {
+				t.Fatalf("Executing() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeModelID(t *testing.T) {
 	cases := map[string]string{
 		"claude-opus-4-8":            "claude-opus-4.8",

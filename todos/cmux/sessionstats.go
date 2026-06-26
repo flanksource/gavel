@@ -209,6 +209,32 @@ func (s *SessionStats) finalize() {
 	}
 }
 
+// executingRecency bounds how recently a cold (no live tailer) session must have
+// advanced to still count as executing again. A run killed mid-turn leaves an
+// active state but its log stops growing, so past this window the session settles
+// back to its real (e.g. failed) status instead of appearing to run forever.
+const executingRecency = 60 * time.Second
+
+// Executing reports whether the session is doing work right now: a live tailer is
+// feeding it (InProgress), or — for a session gavel is not tailing — its on-disk
+// log is in an active state (thinking/working/ask) and advanced within
+// executingRecency. It lets a todo whose recorded session starts running again (a
+// resume, or a continued cmux REPL) surface as in-progress instead of keeping a
+// stale terminal status. now is passed in so callers can test without a clock.
+func (s SessionStats) Executing(now time.Time) bool {
+	if !s.Found {
+		return false
+	}
+	if s.InProgress {
+		return true
+	}
+	switch s.State {
+	case sessionStateThinking, sessionStateWorking, sessionStateAsk:
+		return !s.UpdatedAt.IsZero() && now.Sub(s.UpdatedAt) < executingRecency
+	}
+	return false
+}
+
 // modelVersionRe matches a Claude session-log model id whose version uses hyphens
 // (e.g. "claude-opus-4-8" or "claude-sonnet-4-5-20250929") so it can be rewritten
 // to the dotted form the pricing registry is keyed by ("claude-opus-4.8"). The
@@ -408,6 +434,16 @@ func (a *SessionAccumulator) state() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.stats.State
+}
+
+// SetState overrides the live agent state. The cmux stall watchdog uses it to
+// surface a tool-permission dialog as "ask" (awaiting input): claude renders the
+// approval prompt only on the terminal, so no session-log event marks it and the
+// state would otherwise stay "working" while the run is actually paused on a human.
+func (a *SessionAccumulator) SetState(state string) {
+	a.mu.Lock()
+	a.stats.State = state
+	a.mu.Unlock()
 }
 
 func (a *SessionAccumulator) startedAt() time.Time {

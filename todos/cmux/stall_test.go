@@ -220,6 +220,30 @@ func TestStallWatchdogAwaitingHumanSuppressesStall(t *testing.T) {
 	}
 }
 
+func TestStallWatchdogApprovalSurfacesAskState(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "s.jsonl")
+	writeSessionLog(t, logPath, "seed")
+	runner := &stallRunner{}
+	runner.setScreen("╭────╮\n│ Do you want to proceed? │\n╰────╯")
+	exec := NewCmuxExecutor(CmuxExecutorConfig{Runner: runner.run})
+
+	// A live accumulator whose last log event left it "working"; the approval must
+	// flip it to "ask" even though no new session-log line arrives.
+	acc := GlobalSessionStats().Begin("ask-state", "claude", "", "", time.Now())
+	acc.SetState(sessionStateWorking)
+	wd := newWatchdog(exec, "ask-state", logPath, acc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ectx := todopkg.NewExecutorContext(ctx, logger.StandardLogger(), nil)
+	result := make(chan bool, 1)
+	go func() { result <- wd.watch(ectx) }()
+
+	waitFor(t, "ask state", func() bool { return acc.state() == sessionStateAsk })
+	cancel()
+	<-result
+	acc.Finish()
+}
+
 func TestHandleApprovalAllowSendsAccept(t *testing.T) {
 	runner := &stallRunner{}
 	exec := NewCmuxExecutor(CmuxExecutorConfig{Runner: runner.run})
