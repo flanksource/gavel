@@ -136,8 +136,11 @@ func (w *stallWatchdog) watch(ctx *todopkg.ExecutorContext) bool {
 		w.maybeRequestApproval(ctx, screen)
 
 		// While the turn is paused awaiting the user, hold the stall clock — a human
-		// thinking about an approval (or an AskUserQuestion) is not a stall.
+		// thinking about an approval (or an AskUserQuestion) is not a stall — and
+		// surface the pause as the "ask" status, since claude renders the approval
+		// prompt only on the terminal and no session-log event marks it.
 		if w.awaitingHuman(screen) {
+			w.markAwaitingHuman()
 			lastProgress = time.Now()
 			continue
 		}
@@ -188,6 +191,16 @@ func (w *stallWatchdog) awaitingHuman(screen string) bool {
 		return true
 	}
 	return false
+}
+
+// markAwaitingHuman surfaces the paused-on-human condition as the "ask" status on
+// the live session, so the dashboard and CLI show "awaiting input" instead of a
+// stale "working" while the run waits on an approval. No-op for feedback turns,
+// which do not feed the live accumulator.
+func (w *stallWatchdog) markAwaitingHuman() {
+	if w.acc != nil {
+		w.acc.SetState(sessionStateAsk)
+	}
 }
 
 // maybeRequestApproval surfaces a newly-detected tool-permission dialog for human
