@@ -122,6 +122,26 @@ export interface TodoItem {
   // Aggregated git diff footprint of the todo's commits (those carrying its
   // Gavel-Issue-Id trailer); absent when no commit references the todo.
   diff?: TodoDiffStat;
+  // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
+  // section; present on detail responses.
+  criteria?: AcceptanceCriterion[];
+}
+
+// AcceptanceCriterion is one done-ness criterion. checkId is set when the line
+// maps to a static verify check (rendered as "<id>: text"); empty checkId marks
+// a custom, functionality-specific criterion.
+export interface AcceptanceCriterion {
+  text: string;
+  checkId?: string;
+  done?: boolean;
+}
+
+// CriteriaCatalogItem is one standard verify check offered in the add-criteria
+// combobox (from /api/todos/criteria/catalog).
+export interface CriteriaCatalogItem {
+  id: string;
+  category: string;
+  description: string;
 }
 
 // TodoDiffStat is the aggregated change footprint of a todo's linked commits,
@@ -131,6 +151,44 @@ export interface TodoDiffStat {
   files: number;
   adds: number;
   dels: number;
+}
+
+// Evidence points at a file (and optionally line) supporting a verify verdict.
+export interface VerifyEvidence {
+  file: string;
+  line?: number;
+  message: string;
+}
+
+// CriterionResult is the AI verdict for one stored acceptance criterion.
+export interface CriterionResult {
+  criterion: string;
+  met: boolean;
+  evidence?: VerifyEvidence[];
+}
+
+// VerifyCheck is a boolean pass/fail static check from a verification run.
+export interface VerifyCheck {
+  pass: boolean;
+  evidence?: VerifyEvidence[];
+}
+
+// VerifyResult mirrors the server's verify.VerifyResult for an issue-aware run:
+// an overall score + implemented verdict, per-criterion results, static checks,
+// and a completeness assessment.
+export interface VerifyResult {
+  score: number;
+  implemented?: boolean;
+  acceptance_criteria?: CriterionResult[];
+  checks?: Record<string, VerifyCheck>;
+  completeness?: { pass: boolean; summary?: string; evidence?: VerifyEvidence[] };
+}
+
+// TodoVerifyResponse is the /api/todos/verify payload: the structured verdict
+// plus the refreshed todo (whose status may have moved to verified/pending).
+export interface TodoVerifyResponse {
+  result: VerifyResult;
+  todo: TodoItem;
 }
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):

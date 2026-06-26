@@ -108,6 +108,19 @@ type TODO struct {
 	Verification      []*fixtures.FixtureNode `json:"verification,omitempty"`       // Section containing verification tests
 	CustomValidations []*fixtures.FixtureNode `json:"custom_validations,omitempty"` // Section containing custom validation tests
 	MarkdownBody      string                  `json:"markdown_body,omitempty"`
+	// AcceptanceCriteria are the editable done-ness criteria parsed from the
+	// "## Acceptance Criteria" section, scored by issue-aware verification.
+	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria,omitempty"`
+}
+
+// AcceptanceCriterion is one editable done-ness criterion for a TODO. CheckID is
+// set when the line maps to a static verify.AllChecks id (rendered as
+// "<id>: <text>"); empty CheckID marks a custom, functionality-specific
+// criterion. Done reflects the checklist box (`- [x]`).
+type AcceptanceCriterion struct {
+	Text    string `json:"text"`
+	CheckID string `json:"check_id,omitempty"`
+	Done    bool   `json:"done,omitempty"`
 }
 
 func (todo TODO) AsYaml() (string, error) {
