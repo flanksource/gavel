@@ -30,11 +30,26 @@ type CompletenessResult struct {
 	Evidence []Evidence `json:"evidence,omitempty" yaml:"evidence,omitempty"`
 }
 
+// CriterionResult is the verdict for one stored acceptance criterion in an
+// issue-aware verification: whether the committed change meets it, plus
+// supporting evidence.
+type CriterionResult struct {
+	Criterion string     `json:"criterion" yaml:"criterion"`
+	Met       bool       `json:"met" yaml:"met"`
+	Evidence  []Evidence `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+}
+
 type VerifyResult struct {
 	Checks       map[string]CheckResult  `json:"checks" yaml:"checks"`
 	Ratings      map[string]RatingResult `json:"ratings" yaml:"ratings"`
 	Completeness CompletenessResult      `json:"completeness" yaml:"completeness"`
 	Score        int                     `json:"score" yaml:"score"`
+	// Implemented is the overall issue-completion verdict; nil for generic
+	// (non-issue) verification runs.
+	Implemented *bool `json:"implemented,omitempty" yaml:"implemented,omitempty"`
+	// AcceptanceCriteria scores the issue's stored custom criteria; empty for
+	// generic runs.
+	AcceptanceCriteria []CriterionResult `json:"acceptance_criteria,omitempty" yaml:"acceptance_criteria,omitempty"`
 }
 
 func ratingColor(score int) string {
@@ -56,12 +71,50 @@ func (e Evidence) location() string {
 }
 
 func (r VerifyResult) Pretty() api.Text {
-	text := clicky.Text("Code Review", "font-bold").
+	title := "Code Review"
+	if r.Implemented != nil {
+		title = "Issue Verification"
+	}
+	text := clicky.Text(title, "font-bold").
 		Append(fmt.Sprintf(" — Score: %d/100", r.Score), ratingColor(r.Score))
 
+	if r.Implemented != nil {
+		icon := icons.Check.WithStyle("text-green-600")
+		label, style := "IMPLEMENTED", "text-green-600 font-bold"
+		if !*r.Implemented {
+			icon = icons.Cross.WithStyle("text-red-600")
+			label, style = "NOT IMPLEMENTED", "text-red-600 font-bold"
+		}
+		text = text.NewLine().NewLine().Add(icon).Append(" "+label, style)
+	}
+	if len(r.AcceptanceCriteria) > 0 {
+		text = text.NewLine().NewLine().Add(r.prettyAcceptanceCriteria())
+	}
 	text = text.NewLine().NewLine().Add(r.prettyChecks())
 	text = text.NewLine().NewLine().Add(r.prettyRatings())
 	text = text.NewLine().NewLine().Add(r.prettyCompleteness())
+	return text
+}
+
+func (r VerifyResult) prettyAcceptanceCriteria() api.Text {
+	met := 0
+	for _, c := range r.AcceptanceCriteria {
+		if c.Met {
+			met++
+		}
+	}
+	text := clicky.Text("Acceptance Criteria", "font-bold").
+		Append(fmt.Sprintf(" (%d/%d met)", met, len(r.AcceptanceCriteria)), "")
+	for _, c := range r.AcceptanceCriteria {
+		icon := icons.Check.WithStyle("text-green-600")
+		if !c.Met {
+			icon = icons.Cross.WithStyle("text-red-600")
+		}
+		text = text.NewLine().Append("  ", "").Add(icon).Append(" "+c.Criterion, "")
+		for _, e := range c.Evidence {
+			text = text.NewLine().Append(fmt.Sprintf("      %s — %s", e.location(), e.Message), "")
+		}
+	}
 	return text
 }
 

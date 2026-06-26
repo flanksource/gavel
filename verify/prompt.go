@@ -9,7 +9,7 @@ import (
 //go:embed verify-prompt.md
 var verifyPromptTemplate string
 
-func renderPrompt(scope ReviewScope, cfg VerifyConfig) (string, error) {
+func renderPrompt(scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (string, error) {
 	checks := EnabledChecks(cfg.Checks)
 	byCategory := ChecksByCategory(checks)
 
@@ -19,6 +19,7 @@ func renderPrompt(scope ReviewScope, cfg VerifyConfig) (string, error) {
 		"categories":   byCategory,
 		"catOrder":     AllCategories,
 		"ratings":      RatingDimensions,
+		"issue":        issue,
 	}
 	return gomplate.RunTemplate(data, gomplate.Template{
 		Template: verifyPromptTemplate,

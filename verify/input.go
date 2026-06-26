@@ -10,9 +10,10 @@ import (
 )
 
 type ReviewScope struct {
-	Type        string   // "diff", "range", "commit", "branch", "files", "pr", "date-range"
+	Type        string   // "diff", "range", "commit", "branch", "files", "pr", "date-range", "commits"
 	CommitRange string   // for "range"
 	Commit      string   // for "commit"
+	Commits     []string // for "commits" (an explicit SHA set, e.g. an issue's commits)
 	Branch      string   // for "branch"
 	PRNumber    int      // for "pr"
 	Files       []string // for "files"
@@ -26,6 +27,8 @@ func (s ReviewScope) String() string {
 		return fmt.Sprintf("commits %s", s.CommitRange)
 	case "commit":
 		return fmt.Sprintf("commit %s", s.Commit)
+	case "commits":
+		return fmt.Sprintf("commits [%s]", strings.Join(s.Commits, ", "))
 	case "branch":
 		return fmt.Sprintf("branch %s vs HEAD", s.Branch)
 	case "pr":
@@ -37,6 +40,29 @@ func (s ReviewScope) String() string {
 	default:
 		return "uncommitted diff"
 	}
+}
+
+// IssueComment is one comment from the issue history, included in an issue-aware
+// verification so the reviewer sees the full conversation, not just the body.
+type IssueComment struct {
+	Author string `json:"author,omitempty"`
+	Body   string `json:"body,omitempty"`
+}
+
+// IssueContext makes a verification issue-aware: the reviewer scores the commits
+// against the issue's spec and its stored acceptance criteria, rather than
+// reviewing an uncommitted diff generically. CheckIDs are the static
+// verify.AllChecks the issue selected as applicable; Criteria are the custom,
+// functionality-specific criteria to score in addition.
+type IssueContext struct {
+	ID          string
+	Title       string
+	Description string
+	SessionID   string
+	Comments    []IssueComment
+	Criteria    []string // custom acceptance criteria to score (one verdict each)
+	CheckIDs    []string // selected static check IDs to enable
+	CommitSHAs  []string // commits implementing the issue
 }
 
 var (

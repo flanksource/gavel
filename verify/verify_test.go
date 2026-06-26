@@ -226,7 +226,7 @@ func TestResolveScope(t *testing.T) {
 
 func TestBuildSchema(t *testing.T) {
 	checks := EnabledChecks(ChecksConfig{})
-	schemaJSON, err := BuildSchema(checks)
+	schemaJSON, err := BuildSchema(checks, false, nil)
 	if err != nil {
 		t.Fatalf("BuildSchema() error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestBuildSchema(t *testing.T) {
 
 func TestBuildSchemaWithDisabled(t *testing.T) {
 	checks := EnabledChecks(ChecksConfig{Disabled: []string{"tests-added"}})
-	schemaJSON, err := BuildSchema(checks)
+	schemaJSON, err := BuildSchema(checks, false, nil)
 	if err != nil {
 		t.Fatalf("BuildSchema() error: %v", err)
 	}
@@ -269,8 +269,87 @@ func TestBuildSchemaWithDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildSchemaIssueAware(t *testing.T) {
+	checks := EnabledChecks(issueChecksConfig([]string{"tests-added"}))
+	schemaJSON, err := BuildSchema(checks, true, []string{"endpoint streams NDJSON"})
+	if err != nil {
+		t.Fatalf("BuildSchema() error: %v", err)
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	props := schema["properties"].(map[string]any)
+	for _, field := range []string{"implemented", "acceptance_criteria"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("issue-aware schema missing property %q", field)
+		}
+	}
+
+	required := make(map[string]bool)
+	for _, r := range schema["required"].([]any) {
+		required[r.(string)] = true
+	}
+	for _, field := range []string{"implemented", "acceptance_criteria"} {
+		if !required[field] {
+			t.Errorf("issue-aware schema does not require %q", field)
+		}
+	}
+}
+
+func TestIssueChecksConfigKeepsDefinitionOfDone(t *testing.T) {
+	enabled := EnabledChecks(issueChecksConfig([]string{"tests-added"}))
+	ids := make(map[string]bool, len(enabled))
+	for _, c := range enabled {
+		ids[c.ID] = true
+	}
+	if !ids["definition-of-done"] {
+		t.Error("issueChecksConfig must always keep definition-of-done")
+	}
+	if !ids["tests-added"] {
+		t.Error("issueChecksConfig must keep the selected check")
+	}
+	if ids["no-hardcoded-secrets"] {
+		t.Error("issueChecksConfig must disable unselected checks")
+	}
+}
+
+func TestComputeOverallScoreFoldsAcceptanceCriteria(t *testing.T) {
+	// 2 of 4 criteria met, no checks/ratings; completeness fail.
+	r := VerifyResult{
+		AcceptanceCriteria: []CriterionResult{
+			{Met: true}, {Met: true}, {Met: false}, {Met: false},
+		},
+	}
+	// checkScore = 50 (2/4), ratingScore 0, completeness 0 → 50*0.5 = 25.
+	if got := ComputeOverallScore(r); got != 25 {
+		t.Errorf("ComputeOverallScore() = %d, want 25", got)
+	}
+}
+
+func TestRenderPromptIncludesIssueAndCommits(t *testing.T) {
+	issue := &IssueContext{
+		Title:       "Add NDJSON export",
+		Description: "Stream rows for large payloads",
+		Criteria:    []string{"endpoint streams NDJSON for >10k rows"},
+		CommitSHAs:  []string{"abc1234", "def5678"},
+	}
+	scope := ReviewScope{Type: "commits", Commits: issue.CommitSHAs}
+	prompt, err := renderPrompt(scope, VerifyConfig{}, issue)
+	if err != nil {
+		t.Fatalf("renderPrompt() error: %v", err)
+	}
+	for _, want := range []string{"Issue Being Implemented", "Add NDJSON export", "endpoint streams NDJSON for >10k rows", "abc1234", "def5678"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q\n%s", want, prompt)
+		}
+	}
+}
+
 func TestSchemaFile(t *testing.T) {
-	path, err := SchemaFile(ChecksConfig{})
+	path, err := SchemaFile(ChecksConfig{}, false, nil)
 	if err != nil {
 		t.Fatalf("SchemaFile() error: %v", err)
 	}
