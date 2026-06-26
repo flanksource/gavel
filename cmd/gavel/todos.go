@@ -37,6 +37,8 @@ var (
 	dryRun        bool
 	commitAfter   bool
 	checkAfter    bool
+	verifyAfter   bool
+	verifyModel   string
 	todosProvider string
 	todosMode     string
 	todosDriver   string
@@ -370,7 +372,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		if execErr != nil {
 			logger.Errorf("Group execution failed: %v", execErr)
 		}
-		maybeCommitAfter(workDir, group.TODOs[0], safeResult(results, 0))
+		maybeCommitAfter(workDir, provider, group.TODOs[0], safeResult(results, 0))
 	}
 
 	fmt.Println()
@@ -441,7 +443,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		if execErr != nil {
 			logger.Errorf("TODO execution failed: %v", execErr)
 		}
-		maybeCommitAfter(workDir, todo, result)
+		maybeCommitAfter(workDir, provider, todo, result)
 	}
 
 	fmt.Println()

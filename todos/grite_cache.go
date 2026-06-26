@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 // defaultSyncTTL bounds how often a read re-syncs from grite. Within the TTL a
@@ -241,6 +242,13 @@ func (p *CachedGriteProvider) UpdateLatestFailure(ctx context.Context, todo *typ
 
 func (p *CachedGriteProvider) SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
 	if err := p.inner.SaveAttempt(ctx, todo, result); err != nil {
+		return err
+	}
+	return p.syncNow(ctx)
+}
+
+func (p *CachedGriteProvider) SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error {
+	if err := p.inner.SaveVerification(ctx, todo, result); err != nil {
 		return err
 	}
 	return p.syncNow(ctx)

@@ -181,6 +181,8 @@ func init() {
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
+	todosRunCmd.Flags().BoolVar(&verifyAfter, "verify", false, "After each TODO is committed, run an AI issue verification scoring the commits against the issue's acceptance criteria; promotes the TODO to verified on success")
+	todosRunCmd.Flags().StringVar(&verifyModel, "verify-model", "", "Model for issue verification (default: .gavel.yaml verify.model)")
 
 	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 

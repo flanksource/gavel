@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 const (
@@ -29,6 +30,9 @@ type Provider interface {
 	UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error
 	UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
+	// SaveVerification records an issue-verification verdict as a persistent
+	// "## Verification Result" section/comment, replacing any prior result.
+	SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error
 }
 
 type CreateRequest struct {
@@ -83,6 +87,7 @@ func (p *FileProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
 	}
 	if result, err := ParseFrontmatterFromFile(todoPath); err == nil {
 		todo.MarkdownBody = result.MarkdownContent
+		todo.AcceptanceCriteria = ParseAcceptanceCriteria(todo.MarkdownBody)
 	}
 	todo.Provider = ProviderFiles
 	return todo, nil
@@ -146,6 +151,13 @@ func (p *FileProvider) UpdateLatestFailure(_ context.Context, todo *types.TODO, 
 
 func (p *FileProvider) SaveAttempt(_ context.Context, todo *types.TODO, result *ExecutionResult) error {
 	return saveAttempt(todo, result)
+}
+
+func (p *FileProvider) SaveVerification(_ context.Context, todo *types.TODO, result *verify.VerifyResult) error {
+	if result == nil {
+		return nil
+	}
+	return UpdateVerificationSection(todo, result)
 }
 
 func TODOReference(todo *types.TODO) string {

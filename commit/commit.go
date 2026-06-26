@@ -23,6 +23,7 @@ import (
 
 var (
 	ErrNothingStaged            = errors.New("nothing staged to commit")
+	ErrSessionNoFiles           = errors.New("session edited no stageable files")
 	ErrNothingToPush            = errors.New("nothing to commit and no local commits ahead of upstream")
 	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
 	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
@@ -654,11 +655,17 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
 	sessionFile, err := history.FindSessionFile(sessionID)
 	if err != nil {
-		return fmt.Errorf("resolve session %q: %w", sessionID, err)
+		return fmt.Errorf("stage session %q: no Claude session log found: %w", sessionID, err)
 	}
+	logger.Infof("commit: staging files from claude session %s (%s)", sessionID, sessionFile)
+
 	modified, err := history.SessionModifiedFiles(sessionFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("stage session %q: read session log %s: %w", sessionID, sessionFile, err)
+	}
+	logger.Infof("commit: session %s edited %d file(s)", sessionID, len(modified))
+	for _, p := range modified {
+		logger.V(1).Infof("commit:   edited %s", p)
 	}
 
 	absWork, err := filepath.Abs(workDir)
@@ -687,6 +694,10 @@ func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error
 	keep, err := filterIgnoredPaths(absWork, candidates, cfg)
 	if err != nil {
 		return err
+	}
+	logger.Infof("commit: staging %d of %d session file(s)", len(keep), len(modified))
+	if len(keep) == 0 {
+		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
 	}
 	return addFiles(workDir, keep)
 }
