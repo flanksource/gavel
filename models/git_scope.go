@@ -183,6 +183,19 @@ const (
 	CommitTypeUnknown    CommitType = ""
 )
 
+// IsValid reports whether ct is one of the recognised conventional-commit
+// types. CommitTypeUnknown (the empty string) is not valid.
+func (ct CommitType) IsValid() bool {
+	switch ct {
+	case CommitTypeFeat, CommitTypeFix, CommitTypeChore, CommitTypeDocs,
+		CommitTypeStyle, CommitTypeRefactor, CommitTypePerf, CommitTypeTest,
+		CommitTypeCi, CommitTypeBuild, CommitTypeRevert, CommitTypeConfig,
+		CommitTypeOther, CommitTypeSecurity, CommitTypeDependency:
+		return true
+	}
+	return false
+}
+
 func (ct CommitType) Pretty() api.Text {
 	t := clicky.Text("")
 

@@ -151,7 +151,13 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	if schema.Scope != "" {
 		commit.Scope = models.ScopeType(schema.Scope)
 	}
-	commit.Subject = strings.TrimSpace(schema.Subject)
+	// The model sometimes echoes the conventional-commit prefix into the
+	// subject (e.g. type=chore, subject="chore: update deps"). Composing the
+	// message would then double it ("chore: chore: ..."). Strip a redundant
+	// leading prefix, recovering type/scope from it when the model left them
+	// blank.
+	commit.CommitType, commit.Scope, commit.Subject =
+		dedupeCommitPrefix(commit.CommitType, commit.Scope, strings.TrimSpace(schema.Subject))
 	if schema.Body != "" {
 		commit.Body = strings.TrimSpace(schema.Body)
 	}
