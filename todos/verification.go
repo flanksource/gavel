@@ -31,13 +31,17 @@ func RenderVerificationSection(result *verify.VerifyResult) string {
 	if len(result.AcceptanceCriteria) > 0 {
 		met := 0
 		for _, c := range result.AcceptanceCriteria {
-			if c.Met {
+			if c.Pass {
 				met++
 			}
 		}
 		fmt.Fprintf(&b, "\n### Acceptance Criteria (%d/%d met)\n\n", met, len(result.AcceptanceCriteria))
 		for _, c := range result.AcceptanceCriteria {
-			fmt.Fprintf(&b, "- %s %s%s\n", checkbox(c.Met), c.Criterion, evidenceSuffix(c.Evidence))
+			suffix := ""
+			if c.Comments != "" {
+				suffix = " — " + c.Comments
+			}
+			fmt.Fprintf(&b, "- %s %s%s\n", checkbox(c.Pass), c.Criteria, suffix)
 		}
 	}
 

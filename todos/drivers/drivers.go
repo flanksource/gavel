@@ -113,6 +113,15 @@ type Config struct {
 	MaxTurns     int
 	Tools        []string
 	Dirty        bool
+	// PromptOverride, when non-empty, is used verbatim as the agent prompt body
+	// instead of the auto-built prompt — the dashboard's editable prompt. The
+	// implement/plan scaffolding is still applied per the run mode.
+	PromptOverride string
+	// Approvals brokers tool permissions to the shared approval registry. Set it
+	// only when a resolver (the dashboard) is present; the headless/sdk drivers
+	// otherwise block on the first tool needing approval. cmux ignores it (it
+	// detects approval prompts on the terminal surface itself).
+	Approvals bool
 }
 
 // New constructs the executor for a driver kind.
@@ -133,13 +142,14 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 	switch kind.Mechanism() {
 	case "cmux":
 		return cmux.NewCmuxExecutor(cmux.CmuxExecutorConfig{
-			WorkDir:   cfg.WorkDir,
-			Model:     model,
-			Effort:    cfg.Effort,
-			Plan:      cfg.Plan,
-			Resume:    cfg.Resume,
-			SessionID: cfg.SessionID,
-			Timeout:   cfg.Timeout,
+			WorkDir:        cfg.WorkDir,
+			Model:          model,
+			Effort:         cfg.Effort,
+			Plan:           cfg.Plan,
+			Resume:         cfg.Resume,
+			SessionID:      cfg.SessionID,
+			Timeout:        cfg.Timeout,
+			PromptOverride: cfg.PromptOverride,
 		}), "", nil
 	case "sdk":
 		tools := cfg.Tools
@@ -147,24 +157,27 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 			tools = DefaultTools()
 		}
 		return claude.NewClaudeExecutor(claude.ClaudeExecutorConfig{
-			WorkDir:      cfg.WorkDir,
-			SessionID:    cfg.SessionID,
-			MaxBudgetUsd: cfg.MaxBudgetUsd,
-			MaxTurns:     cfg.MaxTurns,
-			Model:        model,
-			Timeout:      cfg.Timeout,
-			Tools:        tools,
-			Dirty:        cfg.Dirty,
+			WorkDir:        cfg.WorkDir,
+			SessionID:      cfg.SessionID,
+			MaxBudgetUsd:   cfg.MaxBudgetUsd,
+			MaxTurns:       cfg.MaxTurns,
+			Model:          model,
+			Timeout:        cfg.Timeout,
+			Tools:          tools,
+			Dirty:          cfg.Dirty,
+			PromptOverride: cfg.PromptOverride,
 		}), cfg.SessionID, nil
 	case "headless":
 		return headless.NewExecutor(headless.Config{
-			WorkDir:  cfg.WorkDir,
-			Agent:    kind.Agent(),
-			Model:    model,
-			Effort:   cfg.Effort,
-			MaxTurns: cfg.MaxTurns,
-			Tools:    cfg.Tools,
-			Timeout:  cfg.Timeout,
+			WorkDir:        cfg.WorkDir,
+			Agent:          kind.Agent(),
+			Model:          model,
+			Effort:         cfg.Effort,
+			MaxTurns:       cfg.MaxTurns,
+			Tools:          cfg.Tools,
+			Timeout:        cfg.Timeout,
+			PromptOverride: cfg.PromptOverride,
+			Approvals:      cfg.Approvals,
 		}), "", nil
 	case "api":
 		return nil, "", fmt.Errorf("driver %q is not yet implemented", kind)

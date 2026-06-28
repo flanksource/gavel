@@ -62,7 +62,11 @@ type CmuxExecutorConfig struct {
 	// of a generated one. Callers set it so they know the id up front (e.g. the
 	// dashboard returns it to follow the session log live). Ignored when
 	// resuming, which reuses the prior id. Empty means generate one.
-	SessionID             string
+	SessionID string
+	// PromptOverride, when set, is used verbatim as the prompt body instead of
+	// BuildPrompt (the dashboard's editable prompt). The title header and
+	// implement/plan suffix are still applied by buildInstruction.
+	PromptOverride        string
 	Timeout               time.Duration
 	Binary                string
 	Runner                Runner
@@ -234,7 +238,7 @@ func (e *CmuxExecutor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup [
 		}
 	}
 
-	prompt := buildSessionPrompt(todosInGroup, workDir, e.config.Effort, resume, agent, prior)
+	prompt := buildSessionPrompt(todosInGroup, workDir, e.config.Effort, resume, agent, prior, e.config.PromptOverride)
 	promptPath, err := WritePromptFile(workDir, todosInGroup, prompt)
 	if err != nil {
 		return failedResult(e.Name(), start, err), err
@@ -540,8 +544,11 @@ func BuildPrompt(todoList []*types.TODO, workDir, effort string) string {
 // group prompt, plus a prior-session history note when a fresh claude session is
 // started over a todo that already recorded one. Execute and PreviewInstruction
 // share it so the dashboard preview matches what is actually sent.
-func buildSessionPrompt(todoList []*types.TODO, workDir, effort string, resume bool, agent, prior string) string {
-	prompt := BuildPrompt(todoList, workDir, effort)
+func buildSessionPrompt(todoList []*types.TODO, workDir, effort string, resume bool, agent, prior, override string) string {
+	prompt := override
+	if prompt == "" {
+		prompt = BuildPrompt(todoList, workDir, effort)
+	}
 	// When starting a fresh session despite a prior one existing, hand the agent
 	// the previous session id so it can look up that history if it needs context
 	// (the transcript lives in the session log, not the issue).
@@ -558,7 +565,7 @@ func buildSessionPrompt(todoList []*types.TODO, workDir, effort string, resume b
 // run's title header, and the implement/plan suffix.
 func PreviewInstruction(todoList []*types.TODO, workDir, effort string, plan, resume bool, agent string) string {
 	workDir = groupWorkDir(workDir, todoList)
-	prompt := buildSessionPrompt(todoList, workDir, effort, resume, agent, priorSessionID(todoList))
+	prompt := buildSessionPrompt(todoList, workDir, effort, resume, agent, priorSessionID(todoList), "")
 	promptPath := filepath.Join(workDir, ".gavel", "cmux", promptFileName(todoList))
 	return buildInstruction(todoList, prompt, promptPath, plan)
 }
