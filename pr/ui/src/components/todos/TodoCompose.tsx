@@ -55,7 +55,7 @@ export function TodoBodyEditor({ value, busy, onChange, onSave, onCancel }: {
   onCancel: () => void;
 }) {
   return (
-    <section className="space-y-2 rounded-md border border-border bg-background p-3">
+    <section className="space-y-2 rounded-lg border border-border bg-card p-3 shadow-sm">
       <textarea
         className={`${inputClass} h-48 resize-y font-mono`}
         value={value}
@@ -92,27 +92,38 @@ export function TodoCommentBox({
   }
 
   return (
-    <section className="rounded-md border border-border bg-background">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <GavelIcon name="codicon:comment" className="shrink-0 text-xs text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">Add comment</span>
+    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+          <GavelIcon name="codicon:comment" className="text-xs" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">Add comment</span>
       </div>
-      <div className="space-y-2 border-t border-border px-3 py-3">
+      <div className="space-y-2 px-3 py-3">
         <textarea
           className={`${inputClass} h-20 resize-y`}
           value={text}
           disabled={busy}
           onChange={e => setText(e.currentTarget.value)}
+          onKeyDown={e => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+              e.preventDefault();
+              submit(false);
+            }
+          }}
           placeholder="Leave a comment…"
           aria-label="Comment body"
         />
-        <div className="flex justify-end gap-2">
-          {closed && (
-            <Button variant="outline" onClick={() => submit(true)} loading={busy} disabled={!trimmed}>
-              Reopen &amp; comment
-            </Button>
-          )}
-          <Button onClick={() => submit(false)} loading={busy} disabled={!trimmed}>Comment</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[11px] text-muted-foreground">Markdown supported · Cmd/Ctrl+Enter to comment</span>
+          <span className="flex items-center gap-2">
+            {closed && (
+              <Button variant="outline" onClick={() => submit(true)} loading={busy} disabled={!trimmed}>
+                Reopen &amp; comment
+              </Button>
+            )}
+            <Button onClick={() => submit(false)} loading={busy} disabled={!trimmed}>Comment</Button>
+          </span>
         </div>
       </div>
     </section>

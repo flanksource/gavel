@@ -54,7 +54,7 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
   const [open, setOpen] = useState(false);
   return (
     <li>
-      <div className="flex items-start gap-2 px-3 py-2">
+      <div className="flex items-start gap-2 px-3 py-2.5 hover:bg-muted/30">
         <Button
           variant="ghost"
           size="icon"
@@ -66,7 +66,9 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-xs" />
         </Button>
-        <GavelIcon name="codicon:git-commit" className="mt-0.5 shrink-0 text-xs text-muted-foreground" />
+        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-muted/30 text-muted-foreground">
+          <GavelIcon name="codicon:git-commit" className="text-xs" />
+        </span>
         <div className="min-w-0 flex-1">
           <Button
             variant="ghost"
@@ -111,16 +113,18 @@ export function TodoCommits({ dir, provider, todoRef }: { dir: string; provider:
   if (!error && commits.length === 0) return null;
 
   return (
-    <section className="rounded-md border border-border bg-background">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <GavelIcon name="codicon:git-commit" className="shrink-0 text-xs text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">Commits</span>
-        <span className="text-xs tabular-nums text-muted-foreground">{commits.length}</span>
+    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+          <GavelIcon name="codicon:git-commit" className="text-xs" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commits</span>
+        <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{commits.length}</span>
       </div>
       {error ? (
-        <div className="border-t border-border px-3 py-2 text-xs text-red-600">{error}</div>
+        <div className="px-3 py-2 text-xs text-red-600">{error}</div>
       ) : (
-        <ul className="divide-y divide-border border-t border-border">
+        <ul className="divide-y divide-border">
           {commits.map(commit => (
             <CommitRow key={commit.hash} dir={dir} provider={provider} commit={commit} />
           ))}

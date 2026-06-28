@@ -1,7 +1,27 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCounts, TodoStatus } from '../../types';
+import {
+  StatusBlocked,
+  StatusClosed,
+  StatusInProgress,
+  StatusOpen,
+  StatusResolved,
+  StatusTriage,
+  StatusWontFix,
+  type IssueIconProps,
+} from '../../icons/issues';
 import { statusClass } from './format';
 import { STATUS_FILTER_DEFS } from './todoFilter';
+
+const STATUS_FILTER_ICONS: Record<TodoStatus, (props: IssueIconProps) => JSX.Element> = {
+  draft: StatusTriage,
+  pending: StatusOpen,
+  in_progress: StatusInProgress,
+  failed: StatusBlocked,
+  verified: StatusResolved,
+  completed: StatusClosed,
+  skipped: StatusWontFix,
+};
 
 // TodoFilterBar renders one toggle pill per status that has todos, plus the
 // trailing "Closed" pill. A pill is active (colored) when its status is shown
@@ -19,6 +39,7 @@ export function TodoFilterBar({ counts, hidden, onToggle }: {
       {defs.map(def => {
         const active = !hidden.has(def.status);
         const count = counts[def.countKey];
+        const Icon = STATUS_FILTER_ICONS[def.status];
         return (
           <Button
             key={def.status}
@@ -31,6 +52,7 @@ export function TodoFilterBar({ counts, hidden, onToggle }: {
               active ? statusClass(def.status) : 'border-border bg-transparent text-muted-foreground opacity-60 hover:opacity-100'
             }`}
           >
+            <Icon width={13} height={13} className="shrink-0" />
             <span>{def.label}</span>
             <span className="tabular-nums">{count}</span>
           </Button>

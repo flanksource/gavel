@@ -6,11 +6,10 @@ import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell, Button } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
 import { TestsView } from './components/TestsView';
-import { TodoBodyHeader, TodoBodyActions, TodoNewButton, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
+import { TodoNewButton, TodoNavbarDensityPicker, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
-import { TodoGroupByMenu } from './components/todos/TodoGroupByMenu';
 import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
@@ -18,6 +17,7 @@ import { AddProjectDialog } from './components/AddProjectDialog';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
+import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { WorkspaceGroup } from './components/ProcessTable';
 import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
@@ -548,14 +548,7 @@ export function App() {
     <>
       <AppShell
         brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
-        nav={
-          <div className="flex items-center gap-2">
-            <TabBar active={activeTab} onChange={changeTab} />
-            {activeTab === 'todos' && todos.aggregate.total > 0 && (
-              <TodoGroupByMenu groupBy={todos.groupBy} onChange={todos.setGroupBy} />
-            )}
-          </div>
-        }
+        nav={<TabBar active={activeTab} onChange={changeTab} />}
         search={
           activeTab === 'prs' ? (
             <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
@@ -583,6 +576,8 @@ export function App() {
         }
         actions={
           <>
+            {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
+            {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
             <ProcessManager projects={projects} procStatus={procStatus} onProcChanged={onProcChanged} />
             <OrgChooser config={config} onChange={updateConfig} />
@@ -602,8 +597,6 @@ export function App() {
         toolbar={
           activeTab === 'prs' ? (
             <FilterBar filters={filters} onChange={handleFiltersChange} counts={counts} repos={reposList} authors={authors} />
-          ) : activeTab === 'todos' && todos.aggregate.total > 0 ? (
-            <TodoFilterToolbar todos={todos} />
           ) : undefined
         }
         bodyHeader={
@@ -611,8 +604,6 @@ export function App() {
             <span className="text-xs text-muted-foreground">
               {searched.length} pull request{searched.length !== 1 ? 's' : ''}
             </span>
-          ) : activeTab === 'todos' ? (
-            <TodoBodyHeader todos={todos} />
           ) : undefined
         }
         bodyActions={
@@ -624,8 +615,6 @@ export function App() {
               copyState={copyState}
               copyError={copyError}
             />
-          ) : activeTab === 'todos' ? (
-            <TodoBodyActions todos={todos} />
           ) : undefined
         }
         bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} /> : undefined}
