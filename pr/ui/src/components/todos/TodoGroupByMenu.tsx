@@ -7,9 +7,9 @@ import { GROUP_BY_OPTIONS } from './todoGroup';
 // TodoGroupByMenu is the tab-strip dropdown that switches how the todo lists are
 // grouped: by Workspace (the default, the only mode that supports batch runs),
 // Severity (priority), or Age (last activity). It drives the same shared
-// group-by preference as the rest of the Todos chrome, but lives beside the
-// top-level tabs so grouping is reachable straight from the tab strip rather
-// than the filter toolbar.
+// group-by preference as the rest of the Todos chrome. The dashboard renders it
+// beside the status filter pills, while the menubar renders it beside the compact
+// filter dropdown.
 export function TodoGroupByMenu({ groupBy, onChange }: {
   groupBy: TodoGroupBy;
   onChange: (groupBy: TodoGroupBy) => void;

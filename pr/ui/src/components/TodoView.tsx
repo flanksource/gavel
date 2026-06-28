@@ -1,7 +1,7 @@
+import type { ReactNode } from 'react';
 import { Button, ListMenu, TimeRange } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from './GavelIcon';
-import { ReactGrabHelp } from './ReactGrabHelp';
-import { TodoCountsBar, TodoDensityPicker } from './todos/format';
+import { TodoDensityPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
@@ -9,27 +9,12 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoFilterBar } from './todos/TodoFilterBar';
+import { TodoGroupByMenu } from './todos/TodoGroupByMenu';
 
-// The Todos tab renders its chrome into the shared AppShell's body slots — a
-// bodyHeader/bodyActions row, a filter toolbar, and an independently-scrolling
-// bodySidebar (the workspace list) beside the detail pane — rather than nesting
-// its own header + SplitPane inside the shell's content. Each piece below is one
-// slot, driven by the shared useWorkspaceTodos data layer the App owns.
-
-// TodoBodyHeader is the AppShell bodyHeader (left): the title, workspace count,
-// and any list-load error.
-export function TodoBodyHeader({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, error } = todos;
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold text-foreground">Todos</span>
-      <span className="text-xs text-muted-foreground">
-        {workspaces.length} workspace{workspaces.length === 1 ? '' : 's'}
-      </span>
-      {error && <span className="text-xs text-red-600">{error}</span>}
-    </div>
-  );
-}
+// The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
+// actions and an independently-scrolling bodySidebar (the workspace list) beside
+// the detail pane. Each piece below is one slot, driven by the shared
+// useWorkspaceTodos data layer the App owns.
 
 // TodoNewButton is the primary "create todo" action. It lives in the AppShell's
 // top-bar actions cluster (the action header) alongside the other global
@@ -51,15 +36,56 @@ export function TodoNewButton({ todos }: { todos: WorkspaceTodos }) {
   );
 }
 
-// TodoBodyActions is the AppShell bodyActions (right): aggregate counts plus the
-// Refresh control. The New control lives in the top-bar action header
-// (TodoNewButton).
-export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, loadingList, refresh } = todos;
+// TodoNavbarDensityPicker is a top-bar list display control for the Todos tab.
+// Filter controls live with the sidebar tree they affect; density stays in the
+// navbar because it is a display preference rather than a list filter.
+export function TodoNavbarDensityPicker({ todos }: { todos: WorkspaceTodos }) {
+  const { aggregate, density, setDensity } = todos;
+  if (aggregate.total === 0) return null;
+  return <TodoDensityPicker density={density} onChange={setDensity} />;
+}
+
+// TodoSidebarActions sits above the todo tree in the AppShell bodySidebar. The
+// filter pills are also the count surface, so the sidebar has one compact row:
+// grouping, status filters, time filtering, and refresh.
+export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
+  const { aggregate, hiddenStatuses, toggleStatus, groupBy, setGroupBy, timeRange, setTimeRange, loadingList, refresh } = todos;
   return (
-    <div className="flex items-center gap-2">
-      <TodoCountsBar counts={aggregate} />
-      <ReactGrabHelp />
+    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
+      {aggregate.total > 0 && (
+        <>
+          <TodoGroupByMenu groupBy={groupBy} onChange={setGroupBy} />
+          <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
+        </>
+      )}
+      <div className="min-w-0 flex-1" />
+      {aggregate.total > 0 && (
+        <div className="flex items-center gap-1.5">
+          <TimeRange
+            kind="date"
+            label="Active"
+            emptyLabel="Any time"
+            from={timeRange?.from}
+            to={timeRange?.to}
+            onApply={(from, to) => setTimeRange({ from, to })}
+            presets={['hr', 'day', 'wk+']}
+            align="right"
+          />
+          {timeRange && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setTimeRange(null)}
+              title="Clear time filter"
+              aria-label="Clear time filter"
+              className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <GavelIcon name="codicon:close" className="text-xs" />
+            </Button>
+          )}
+        </div>
+      )}
       <Button
         type="button"
         variant="ghost"
@@ -76,50 +102,6 @@ export function TodoBodyActions({ todos }: { todos: WorkspaceTodos }) {
   );
 }
 
-// TodoFilterToolbar is the AppShell toolbar content for the Todos tab. The App
-// only mounts it when there are todos to filter, so the toolbar row stays hidden
-// on an empty list.
-export function TodoFilterToolbar({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, hiddenStatuses, toggleStatus, density, setDensity, timeRange, setTimeRange } = todos;
-  return (
-    <>
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Filter</span>
-      <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
-      <div className="ml-auto flex items-center gap-2">
-        <TimeRange
-          kind="date"
-          label="Active"
-          emptyLabel="Any time"
-          from={timeRange?.from}
-          to={timeRange?.to}
-          onApply={(from, to) => setTimeRange({ from, to })}
-          // Only the relative "active since now-X" groups: their now-<n><unit>
-          // tokens are the ones resolveTimeToken handles, and "active in the last
-          // week/month" is exactly what this activity filter means. The snap-to
-          // calendar presets (this/last week) emit now/w-style tokens this filter
-          // does not resolve, so they are intentionally omitted.
-          presets={['hr', 'day', 'wk+']}
-          align="right"
-        />
-        {timeRange && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => setTimeRange(null)}
-            title="Clear time filter"
-            aria-label="Clear time filter"
-            className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <GavelIcon name="codicon:close" className="text-xs" />
-          </Button>
-        )}
-        <TodoDensityPicker density={density} onChange={setDensity} />
-      </div>
-    </>
-  );
-}
-
 // TodoWorkspaceList is the AppShell bodySidebar: every configured workspace's
 // todos, grouped and independently scrollable beside the detail pane. The
 // group-by preference picks the grouping: workspace (the default, with batch-run
@@ -129,16 +111,16 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
+  let content: ReactNode;
   if (workspaces.length === 0) {
-    return (
+    content = (
       <div className="p-6 text-center text-sm text-muted-foreground">
         <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-3xl" />
         <p>{loadingList ? 'Loading' : 'No workspaces configured'}</p>
       </div>
     );
-  }
-  if (groupBy === 'workspace') {
-    return (
+  } else if (groupBy === 'workspace') {
+    content = (
       <ListMenu>
         {workspaces.map(ws => (
           <WorkspaceTodoGroup
@@ -157,30 +139,37 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
         ))}
       </ListMenu>
     );
-  }
-  const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
-  if (buckets.length === 0) {
-    return (
+  } else {
+    const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
+    content = buckets.length === 0 ? (
       <div className="p-6 text-center text-sm text-muted-foreground">
         <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-3xl" />
         <p>{loadingList ? 'Loading' : 'No todos'}</p>
       </div>
+    ) : (
+      <ListMenu>
+        {buckets.map(bucket => (
+          <TodoBucketGroup
+            key={bucket.key}
+            bucket={bucket}
+            selected={selected}
+            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
+            hiddenStatuses={hiddenStatuses}
+            range={range}
+            density={density}
+          />
+        ))}
+      </ListMenu>
     );
   }
+
   return (
-    <ListMenu>
-      {buckets.map(bucket => (
-        <TodoBucketGroup
-          key={bucket.key}
-          bucket={bucket}
-          selected={selected}
-          onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
-          hiddenStatuses={hiddenStatuses}
-          range={range}
-          density={density}
-        />
-      ))}
-    </ListMenu>
+    <div className="flex h-full min-h-0 flex-col">
+      <TodoSidebarActions todos={todos} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {content}
+      </div>
+    </div>
   );
 }
 

@@ -83,6 +83,8 @@ export function TodoRunSplitButton({
   disabled,
   loading,
   label = 'Run',
+  icon = 'codicon:play',
+  tone = 'default',
   title = 'Run todo',
   onRun,
   onAdvanced,
@@ -90,10 +92,15 @@ export function TodoRunSplitButton({
   disabled?: boolean;
   loading?: boolean;
   label?: string;
+  icon?: string;
+  tone?: 'default' | 'danger';
   title?: string;
   onRun: (options?: TodoRunOptions) => void;
   onAdvanced: () => void;
 }) {
+  const primaryTone = tone === 'danger'
+    ? 'text-red-600 hover:bg-red-500/10 hover:text-red-700'
+    : 'text-foreground hover:bg-muted';
   return (
     <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
       <Button
@@ -102,9 +109,9 @@ export function TodoRunSplitButton({
         onClick={() => onRun(defaultRunOptions)}
         disabled={disabled}
         title={title}
-        className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+        className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
       >
-        <GavelIcon name={loading ? 'svg-spinners:ring-resize' : 'codicon:play'} className="text-xs" />
+        <GavelIcon name={loading ? 'svg-spinners:ring-resize' : icon} className="text-xs" />
         <span>{label}</span>
       </Button>
       <DropdownMenu

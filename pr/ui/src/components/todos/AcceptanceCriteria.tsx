@@ -153,13 +153,19 @@ export function AcceptanceCriteria({
   const failedChecks = Object.entries(verdict?.checks ?? {}).filter(([, c]) => !c.pass);
 
   return (
-    <section className="rounded-md border border-border bg-background">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <GavelIcon name="codicon:checklist" className="shrink-0 text-xs text-muted-foreground" />
+    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
+        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
+          <GavelIcon name="codicon:checklist" className="text-xs" />
+        </span>
         <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
           Acceptance Criteria
         </span>
-        {criteria.length > 0 && <span className="text-xs tabular-nums text-muted-foreground">{criteria.length}</span>}
+        {criteria.length > 0 && (
+          <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">
+            {criteria.length}
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -186,14 +192,14 @@ export function AcceptanceCriteria({
         </Button>
       </div>
 
-      <div className="space-y-2 border-t border-border px-3 py-3">
+      <div className="space-y-2 px-3 py-3">
         {criteria.length === 0 && (
           <p className="text-sm text-muted-foreground">No acceptance criteria yet — add one below or draft with AI.</p>
         )}
 
         <ul className="space-y-1">
           {criteria.map((c, i) => (
-            <li key={i} className="group flex items-start gap-2 rounded px-1 py-0.5 hover:bg-muted/50">
+            <li key={i} className="group flex items-start gap-2 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40">
               <input
                 type="checkbox"
                 checked={!!c.done}
