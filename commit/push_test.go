@@ -74,7 +74,7 @@ var _ = Describe("findAncestorPRs", func() {
 
 func TestChoosePRReturnsSelectedPR(t *testing.T) {
 	previous := promptSelectFunc
-	promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
+	promptSelectFunc = func(_ context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
 		if title != "Pick a PR" {
 			t.Fatalf("unexpected title: %q", title)
 		}
@@ -103,7 +103,7 @@ func TestChoosePRReturnsSelectedPR(t *testing.T) {
 
 func TestChoosePRReturnsNilWhenCancelled(t *testing.T) {
 	previous := promptSelectFunc
-	promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
+	promptSelectFunc = func(_ context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
 		return promptSelectOption{}, false
 	}
 	defer func() {

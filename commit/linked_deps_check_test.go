@@ -532,7 +532,7 @@ func TestRunLinkedDepsCheck_UpgradeNoTaggedVersionsRePrompts(t *testing.T) {
 	// runPromptLinkedDepDecider explicitly and stub the underlying prompt.
 	calls := 0
 	prevPrompt := promptSelectFunc
-	promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
+	promptSelectFunc = func(_ context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
 		calls++
 		switch calls {
 		case 1:

@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -90,6 +91,7 @@ func rebaseOnto(workDir, upstreamBranch string) error {
 	logger.Warnf("Rebase onto %s hit conflicts and was aborted.", upstream)
 
 	choice, ok := promptSelectIndex(
+		context.Background(),
 		fmt.Sprintf("Rebase onto %s conflicted. Retry with which strategy?", upstream),
 		[]string{
 			"Cancel push",

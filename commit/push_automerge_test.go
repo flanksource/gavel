@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -79,7 +79,7 @@ func isProtectedBranch(name string) bool {
 // protected remote branch. Returns true if the user confirmed.
 func confirmProtectedBranchPush(branch string) bool {
 	header := fmt.Sprintf("Pushing to protected branch %q bypasses PR review. Proceed?", branch)
-	idx, ok := promptSelectIndex(header, []string{
+	idx, ok := promptSelectIndex(context.Background(), header, []string{
 		fmt.Sprintf("No, cancel push to %s", branch),
 		fmt.Sprintf("Yes, push directly to %s", branch),
 	})
@@ -399,7 +399,7 @@ func choosePR(header string, prs []github.PRListItem) (*github.PRListItem, error
 	for i, pr := range prs {
 		items[i] = fmt.Sprintf("#%d  %s  (%s → %s)", pr.Number, pr.Title, pr.Source, pr.Target)
 	}
-	index, ok := promptSelectIndex(header, items)
+	index, ok := promptSelectIndex(context.Background(), header, items)
 	if !ok {
 		return nil, nil
 	}
