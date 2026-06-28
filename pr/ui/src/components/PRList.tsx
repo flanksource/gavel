@@ -1,3 +1,4 @@
+import { ListMenu, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { PRItem, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from '../types';
 import { PRRow } from './PRRow';
 import { ProcControl } from './ProcControl';
@@ -55,11 +56,11 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
   const orgs = groupByOrg(prs);
 
   return (
-    <div className="divide-y divide-border">
+    <ListMenu>
       {orgs.map(og => (
-        <div key={og.org || '_'}>
+        <ListMenuSection key={og.org || '_'}>
           {og.org && (
-            <div className="px-3 py-1.5 bg-muted sticky top-0 border-b border-border flex items-center gap-2 z-20">
+            <ListMenuHeader className="z-20">
               <Avatar
                 src={og.orgAvatarUrl}
                 alt={og.org}
@@ -69,13 +70,13 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 title={og.org}
                 colorKey={og.org}
               />
-              <span className="text-sm font-semibold text-foreground truncate flex-1">{og.org}</span>
+              <span className="text-sm font-semibold text-foreground truncate min-w-0 flex-1">{og.org}</span>
               <GroupCounts items={og.repos.flatMap(r => r.items)} />
-            </div>
+            </ListMenuHeader>
           )}
           {og.repos.map(group => (
             <div key={group.repo}>
-              <div className="pl-6 pr-3 py-1.5 bg-muted sticky top-9 border-b border-border flex items-center gap-2 z-10">
+              <ListMenuHeader className="top-9 z-10 pl-6">
                 <a
                   href={`https://github.com/${group.repo}`}
                   target="_blank"
@@ -90,7 +91,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                   target="_blank"
                   rel="noopener"
                   onClick={(e) => e.stopPropagation()}
-                  className="text-sm font-medium text-foreground truncate flex-1 hover:underline"
+                  className="text-sm font-medium text-foreground truncate min-w-0 flex-1 hover:underline"
                   title={group.repo}
                 >
                   {group.repoShort}
@@ -107,7 +108,7 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                 <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />
                 <GitChangesBadge count={procStatus?.[group.repo]?.gitChanges} />
                 <GroupCounts items={group.items} />
-              </div>
+              </ListMenuHeader>
               {group.items.map(pr => (
                 <PRRow
                   key={prKey(pr)}
@@ -121,8 +122,8 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
               ))}
             </div>
           ))}
-        </div>
+        </ListMenuSection>
       ))}
-    </div>
+    </ListMenu>
   );
 }

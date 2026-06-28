@@ -1,4 +1,4 @@
-import { Button } from '@flanksource/clicky-ui/components';
+import { Button, ListMenu } from '@flanksource/clicky-ui/components';
 import type { Project } from '../types';
 import { GavelIcon } from './GavelIcon';
 import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
@@ -94,30 +94,34 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
           </div>
         ) : buckets ? (
           buckets.length > 0 ? (
-            buckets.map(bucket => (
-              <TodoBucketGroup
-                key={bucket.key}
-                bucket={bucket}
-                selected={selected}
-                onSelect={entry => setSelected({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
-                hiddenStatuses={hiddenStatuses}
-              />
-            ))
+            <ListMenu>
+              {buckets.map(bucket => (
+                <TodoBucketGroup
+                  key={bucket.key}
+                  bucket={bucket}
+                  selected={selected}
+                  onSelect={entry => setSelected({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
+                  hiddenStatuses={hiddenStatuses}
+                />
+              ))}
+            </ListMenu>
           ) : (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">No todos</div>
           )
         ) : (
-          workspaces.map(ws => (
-            <WorkspaceTodoGroup
-              key={ws.dir}
-              workspace={ws}
-              data={byDir[ws.dir]}
-              hiddenStatuses={hiddenStatuses}
-              onToggleStatus={toggleStatus}
-              selectedRef=""
-              onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
-            />
-          ))
+          <ListMenu>
+            {workspaces.map(ws => (
+              <WorkspaceTodoGroup
+                key={ws.dir}
+                workspace={ws}
+                data={byDir[ws.dir]}
+                hiddenStatuses={hiddenStatuses}
+                onToggleStatus={toggleStatus}
+                selectedRef=""
+                onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
+              />
+            ))}
+          </ListMenu>
         )}
       </div>
 

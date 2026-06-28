@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@flanksource/clicky-ui/components';
+import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { RepoIcon } from '../RepoIcon';
@@ -37,7 +37,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
 
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
   const allItems = data?.items ?? [];
-  // Priority-then-age order so the most important, longest-outstanding todos lead.
+  // Severity first, then newest last update, matching the shared todo grouping order.
   const items = allItems.filter(item => isTodoVisible(item, hidden, range)).sort(compareTodos);
   const hiddenCount = allItems.length - items.length;
   const counts = data?.counts ?? workspace.todoCounts ?? emptyCounts;
@@ -89,8 +89,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   }
 
   return (
-    <div className="border-b border-border">
-      <div className="sticky top-0 z-10 flex w-full items-center gap-2 bg-background/95 px-3 py-1.5 backdrop-blur">
+    <ListMenuSection>
+      <ListMenuHeader>
         {multiSelect && items.length > 0 && (
           <input
             ref={selectAllRef}
@@ -147,7 +147,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
         ) : (
           <TodoCountsBar counts={counts} hidden={hidden} onToggle={onToggleStatus} />
         )}
-      </div>
+      </ListMenuHeader>
       {(runError || runMessage) && (
         <div className={`px-3 py-1 text-[11px] ${runError ? 'text-red-600' : 'text-emerald-600'}`}>{runError || runMessage}</div>
       )}
@@ -186,6 +186,6 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
           {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}
         </div>
       ))}
-    </div>
+    </ListMenuSection>
   );
 }

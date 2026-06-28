@@ -1,7 +1,8 @@
-import { Button } from '@flanksource/clicky-ui/components';
+import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { timeAgo } from '../../utils';
 import { GavelIcon } from '../GavelIcon';
+import { ISSUE_ICONS, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusTriage, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
@@ -97,6 +98,45 @@ export function priorityClass(priority: TodoPriority | string) {
     default:
       return 'text-yellow-600';
   }
+}
+
+function StatusIcon({ status }: { status: TodoStatus | string }) {
+  const label = statusLabel(status);
+  const Icon = (() => {
+    switch (status) {
+      case 'draft':
+        return StatusTriage;
+      case 'in_progress':
+        return StatusInProgress;
+      case 'failed':
+        return StatusBlocked;
+      case 'verified':
+        return StatusResolved;
+      case 'completed':
+        return StatusClosed;
+      case 'skipped':
+        return StatusWontFix;
+      default:
+        return StatusOpen;
+    }
+  })();
+  return (
+    <span
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+      title={label}
+      aria-label={label}
+      role="img"
+    >
+      <Icon width={16} height={16} aria-hidden="true" />
+    </span>
+  );
+}
+
+function severityColor(priority: TodoPriority | string): string {
+  if (priority === 'high' || priority === 'medium' || priority === 'low') {
+    return ISSUE_ICONS[priority].color;
+  }
+  return ISSUE_ICONS.medium.color;
 }
 
 interface SessionBadgeView {
@@ -204,7 +244,7 @@ export function TodoCountsBar({ counts, hidden, onToggle }: {
   onToggle?: (status: TodoStatus) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 text-xs">
+    <div className="flex shrink-0 items-center gap-1.5 text-xs font-normal tabular-nums">
       <CountBadge icon="codicon:check" value={counts.open} label="Open todos" className="text-blue-600" />
       <CountBadge icon="codicon:clock" value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon="codicon:debug-start" value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
@@ -234,8 +274,8 @@ function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
 }
 
 // TodoAges shows the todo's created age and, when it differs, its last-activity
-// age — the two relative timestamps the list sorts by. Absolute times sit in the
-// tooltips. A todo with neither timestamp (some file-backed todos) renders nothing.
+// age. Absolute times sit in the tooltips. A todo with neither timestamp (some
+// file-backed todos) renders nothing.
 function TodoAges({ todo }: { todo: TodoItem }) {
   const showLast = !!todo.lastRun && todo.lastRun !== todo.created;
   return (
@@ -260,10 +300,9 @@ function TodoAges({ todo }: { todo: TodoItem }) {
 // a leading checkbox for multi-select (run several todos in one agent session);
 // the checkbox is a sibling of the open-detail button so toggling selection never
 // opens the todo. `density` controls the layout: 'comfortable' (default) stacks
-// the metadata on a second line; 'compact' folds id + priority inline with the
-// title for a single-line row. `workspace` names the owning workspace in the
-// metadata — set when rows mix workspaces (severity/age grouping) so each todo's
-// origin stays visible.
+// secondary metadata on a second line; 'compact' keeps the row to one title line.
+// Severity is intentionally only the ListMenu left border; identifiers and
+// severity labels belong in the detail pane.
 //
 // `dir`/`provider` locate the row's workspace so an in-progress todo's status
 // badge can carry the live agent state + elapsed time; they are omitted by
@@ -285,7 +324,12 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
   // storm across a large list of idle/finished todos.
   const hasLiveSession = !!dir && todo.status === 'in_progress' && !!todo.sessionId;
   return (
-    <div className={`flex items-stretch border-b border-border ${selected ? 'bg-primary/5' : ''}`}>
+    <ListMenuItem
+      active={active}
+      selected={selected}
+      className="flex items-stretch"
+      style={{ borderLeftColor: severityColor(todo.priority) }}
+    >
       {selectable && (
         <label className="flex shrink-0 cursor-pointer items-center pl-3" title="Select for batch run">
           <input
@@ -297,47 +341,47 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
           />
         </label>
       )}
-      <Button
-        variant="ghost"
+      {/* WORKAROUND(clicky-button-fixed-height): clicky <Button>'s base h-control-h
+          pins this 2-line row to one control height and clips it; clicky cn()'s plain
+          tailwind-merge drops our h-auto override. Use a bare <button> (auto height)
+          until the clicky-ui cn() fix ships.
+          Correct fix: revert to <Button variant="ghost" className="h-auto …flex-col…">
+            once @flanksource/clicky-ui with the cn() extendTailwindMerge fix is
+            published & the dep is bumped here.
+          Ref: discussed with user 2026-06-28 */}
+      <button
         type="button"
         onClick={onClick}
-        className={`h-auto min-w-0 flex-1 justify-start px-3 text-left transition-colors hover:bg-muted ${compact ? 'py-1' : 'py-2'} ${active ? 'bg-primary/10' : ''}`}
+        className={`flex min-w-0 flex-1 flex-col items-stretch justify-start overflow-hidden px-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${compact ? 'py-1' : 'py-2'}`}
       >
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
           {hasLiveSession ? (
             <InProgressBadge dir={dir!} provider={provider || 'auto'} sessionId={todo.sessionId} />
           ) : (
-            <span className={`inline-flex shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${statusClass(todo.status)}`}>
-              {statusLabel(todo.status)}
-            </span>
+            <StatusIcon status={todo.status} />
           )}
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
           {compact && (
-            <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-              {workspace && <span className="max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
-              {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
+            <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
               {todo.diff && <TodoDiffBadge diff={todo.diff} />}
-              <span className={priorityClass(todo.priority)}>{todo.priority}</span>
             </span>
           )}
         </div>
         {!compact && (
-          <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden text-xs text-muted-foreground">
             {workspace && (
-              <span className="inline-flex min-w-0 items-center gap-1" title={workspace}>
+              <span className="inline-flex min-w-0 max-w-[10rem] items-center gap-1" title={workspace}>
                 <GavelIcon name="codicon:folder" className="text-[11px]" />
-                <span className="max-w-[10rem] truncate">{workspace}</span>
+                <span className="truncate">{workspace}</span>
               </span>
             )}
-            {todo.shortId && <span className="font-mono">{todo.shortId}</span>}
-            <span className={priorityClass(todo.priority)}>{todo.priority}</span>
             <TodoAges todo={todo} />
             {todo.diff && <TodoDiffBadge diff={todo.diff} />}
-            {todo.provider && <span className="uppercase">{todo.provider}</span>}
           </div>
         )}
-      </Button>
-    </div>
+      </button>
+    </ListMenuItem>
   );
 }
 

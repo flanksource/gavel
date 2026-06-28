@@ -1,4 +1,4 @@
-import { Button, TimeRange } from '@flanksource/clicky-ui/components';
+import { Button, ListMenu, TimeRange } from '@flanksource/clicky-ui/components';
 import { GavelIcon } from './GavelIcon';
 import { ReactGrabHelp } from './ReactGrabHelp';
 import { TodoCountsBar, TodoDensityPicker } from './todos/format';
@@ -139,7 +139,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
   }
   if (groupBy === 'workspace') {
     return (
-      <div>
+      <ListMenu>
         {workspaces.map(ws => (
           <WorkspaceTodoGroup
             key={ws.dir}
@@ -155,7 +155,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             onRunStarted={refresh}
           />
         ))}
-      </div>
+      </ListMenu>
     );
   }
   const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
@@ -168,7 +168,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
     );
   }
   return (
-    <div>
+    <ListMenu>
       {buckets.map(bucket => (
         <TodoBucketGroup
           key={bucket.key}
@@ -180,7 +180,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
           density={density}
         />
       ))}
-    </div>
+    </ListMenu>
   );
 }
 
