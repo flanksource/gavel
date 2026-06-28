@@ -1,12 +1,24 @@
 import { useState } from 'react';
-import { Button } from '@flanksource/clicky-ui/components';
+import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { TodoDensity, TodoStatus } from '../../types';
 import { GavelIcon } from '../GavelIcon';
+import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
 import { countsFromItems, TodoCountsBar, TodoRow } from './format';
 import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 import type { ResolvedRange } from './todoTimeRange';
 import type { SelectedTodo } from './useWorkspaceTodos';
 import type { TodoBucket, TodoEntry } from './todoGroup';
+
+function BucketIcon({ bucket }: { bucket: TodoBucket }) {
+  const Icon = bucket.key === 'high'
+    ? SeverityHigh
+    : bucket.key === 'medium'
+      ? SeverityMedium
+      : bucket.key === 'low'
+        ? SeverityLow
+        : MetaDueDate;
+  return <Icon width={14} height={14} className="shrink-0" />;
+}
 
 // TodoBucketGroup is one collapsible severity/age section of the flattened todo
 // list. Unlike WorkspaceTodoGroup it spans workspaces, so each row names its
@@ -28,8 +40,8 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
   const counts = countsFromItems(bucket.entries.map(e => e.todo));
 
   return (
-    <div className="border-b border-border">
-      <div className="sticky top-0 z-10 flex w-full items-center gap-2 bg-background/95 px-3 py-1.5 backdrop-blur">
+    <ListMenuSection>
+      <ListMenuHeader>
         <Button
           variant="ghost"
           type="button"
@@ -37,11 +49,11 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
           className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 p-0 text-left hover:opacity-80"
         >
           <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
-          <GavelIcon name={bucket.icon} className={`text-xs ${bucket.tone}`} />
+          <BucketIcon bucket={bucket} />
           <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${bucket.tone}`}>{bucket.label}</span>
         </Button>
         <TodoCountsBar counts={counts} />
-      </div>
+      </ListMenuHeader>
       {open && (visible.length > 0 ? (
         visible.map(entry => (
           <TodoRow
@@ -60,6 +72,6 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
           {hiddenCount > 0 ? `${hiddenCount} todo${hiddenCount === 1 ? '' : 's'} hidden by filter` : 'No todos'}
         </div>
       ))}
-    </div>
+    </ListMenuSection>
   );
 }

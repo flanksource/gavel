@@ -1,3 +1,4 @@
+import { ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { PRItem, PRSyncStatus, GavelResultsSummary } from '../types';
 import { reviewColor, checkSummaryText } from '../utils';
 import { SyncIndicator } from './SyncIndicator';
@@ -39,8 +40,7 @@ function prStatusIcon(pr: PRItem, gavel?: GavelResultsSummary): { icon: string; 
   return { icon: 'octicon:git-pull-request-16', color: 'text-green-600', title: 'Open' };
 }
 
-function borderColor(pr: PRItem, selected: boolean, gavel?: GavelResultsSummary): string {
-  if (selected) return 'border-primary';
+function borderColor(pr: PRItem, gavel?: GavelResultsSummary): string {
   if (pr.isDraft || pr.state === 'MERGED' || pr.state === 'CLOSED') return 'border-transparent';
   if (pr.checkStatus?.failed) return 'border-red-400';
   if (gavel && gavel.testsFailed > 0) return 'border-red-400';
@@ -116,10 +116,10 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
   const status = prStatusIcon(pr, gavelResults);
 
   return (
-    <div
-      className={`px-3 py-2 cursor-pointer border-l-2 transition-colors ${borderColor(pr, selected, gavelResults)} ${
-        selected ? 'bg-primary/10' : 'hover:bg-muted'
-      }`}
+    <ListMenuItem
+      active={selected}
+      accentClassName={borderColor(pr, gavelResults)}
+      className="px-3 py-2"
       onClick={onClick}
     >
       <div className="flex items-center gap-2">
@@ -139,7 +139,7 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
         >
           #{pr.number}
         </a>
-        <span className="text-sm truncate flex-1 font-medium text-foreground">{pr.title}</span>
+        <span className="text-sm truncate min-w-0 flex-1 font-medium text-foreground">{pr.title}</span>
         {hasConflict && (
           <span className="text-xs text-red-500" title="Merge conflicts">
             <GavelIcon name="octicon:git-merge-16" className="text-red-500" />
@@ -156,14 +156,16 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
       </div>
 
       <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
-          <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
-          {pr.source}
-        </span>
-        <span>→</span>
-        <span className="inline-flex items-center gap-0.5 underline decoration-dotted underline-offset-2">
-          <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
-          {pr.target}
+        <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+          <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2">
+            <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+            <span className="truncate">{pr.source}</span>
+          </span>
+          <span className="shrink-0">→</span>
+          <span className="inline-flex min-w-0 items-center gap-0.5 underline decoration-dotted underline-offset-2">
+            <GavelIcon name="codicon:git-branch" className="text-muted-foreground/70 shrink-0" />
+            <span className="truncate">{pr.target}</span>
+          </span>
         </span>
 
         {pr.isCurrent && (pr.ahead ?? 0) + (pr.behind ?? 0) > 0 && (
@@ -196,6 +198,6 @@ export function PRRow({ pr, selected, unread, syncStatus, gavelResults, onClick 
           <RelativeTime iso={pr.updatedAt} title={pr.updatedAt} />
         </span>
       </div>
-    </div>
+    </ListMenuItem>
   );
 }

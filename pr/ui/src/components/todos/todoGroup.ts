@@ -43,11 +43,11 @@ export interface TodoEntry {
 }
 
 // One severity/age bucket: a labelled, colour-toned section of the flattened
-// todo list. The label/icon/tone drive the sticky header.
+// todo list. The label/tone drive the sticky header; the view maps bucket keys
+// to the bundled issue-tracking icon set.
 export interface TodoBucket {
   key: string;
   label: string;
-  icon: string;
   // Tailwind text-color class for the bucket's header label and icon.
   tone: string;
   entries: TodoEntry[];
@@ -68,19 +68,27 @@ export function ageMs(todo: TodoItem): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-// compareTodos orders todos by priority (high→medium→low), then by age with the
-// oldest first, so the most important and longest-outstanding work surfaces at
-// the top of every grouping. Todos with no recorded timestamp sort after dated
-// ones within their priority.
+// lastUpdatedMs is the row-order tie-breaker: Grite's updated time / file-backed
+// last_run when present, otherwise created time for never-run file-backed todos.
+function lastUpdatedMs(todo: TodoItem): number | null {
+  const raw = todo.lastRun ?? todo.created;
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// compareTodos orders todos by severity (high→medium→low), then last update
+// newest-first. Todos with no recorded timestamp sort after dated ones within
+// their severity.
 export function compareTodos(a: TodoItem, b: TodoItem): number {
   const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
   if (byPriority !== 0) return byPriority;
-  const am = ageMs(a);
-  const bm = ageMs(b);
+  const am = lastUpdatedMs(a);
+  const bm = lastUpdatedMs(b);
   if (am === bm) return 0;
   if (am === null) return 1;
   if (bm === null) return -1;
-  return am - bm;
+  return bm - am;
 }
 
 // flattenTodos tags every workspace's todos with their owning workspace, in
@@ -143,9 +151,8 @@ export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', n
       .map(def => ({
         key: def.key,
         label: def.label,
-        icon: 'codicon:warning',
         tone: def.tone,
-        // Within one priority bucket the priority tie-breaks to oldest-first.
+        // Within one priority bucket, keep the same newest-updated row order.
         entries: entries.filter(e => severityKey(e) === def.key).sort((a, b) => compareTodos(a.todo, b.todo)),
       }))
       .filter(bucket => bucket.entries.length > 0);
@@ -166,11 +173,11 @@ export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', n
     const bucket = byAge.get(def.key);
     if (!bucket) continue;
     bucket.sort((a, b) => compareTodos(a.todo, b.todo));
-    ordered.push({ key: def.key, label: def.label, icon: 'codicon:clock', tone: 'text-muted-foreground', entries: bucket });
+    ordered.push({ key: def.key, label: def.label, tone: 'text-muted-foreground', entries: bucket });
   }
   const none = byAge.get('none');
   if (none) {
-    ordered.push({ key: 'none', label: 'No activity', icon: 'codicon:circle-large-outline', tone: 'text-muted-foreground', entries: none });
+    ordered.push({ key: 'none', label: 'No activity', tone: 'text-muted-foreground', entries: none });
   }
   return ordered;
 }

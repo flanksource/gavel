@@ -4,9 +4,10 @@ import { emptyFilters, type Filters, type FilterMode } from './components/Filter
 export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment (/prs, /todos,
-// /activity). The prs and todos tabs carry a selection in the path
-// (/prs/{repo}/{number}, /todos/{guid}); filters only apply to the prs tab.
-export type Tab = 'prs' | 'todos' | 'activity';
+// /activity, /tests). The prs, todos, and tests tabs carry a selection in the
+// path (/prs/{repo}/{number}, /todos/{guid}, /tests/{project}/{runId}); filters
+// only apply to the prs tab.
+export type Tab = 'prs' | 'todos' | 'activity' | 'tests';
 
 export interface RouteState {
   tab: Tab;
@@ -39,9 +40,12 @@ function buildFacet(modes: Record<string, FilterMode>): string {
 export function parseRoute(location: Location): RouteState {
   const trimmed = location.pathname.replace(/^\/+|\/+$/g, '');
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
-  const tab: Tab = segments[0] === 'todos' || segments[0] === 'activity' ? segments[0] : 'prs';
+  const tab: Tab =
+    segments[0] === 'todos' || segments[0] === 'activity' || segments[0] === 'tests'
+      ? segments[0]
+      : 'prs';
   let selectedPath = '';
-  if ((tab === 'prs' || tab === 'todos') && segments.length > 1) {
+  if ((tab === 'prs' || tab === 'todos' || tab === 'tests') && segments.length > 1) {
     selectedPath = segments.slice(1).join('/');
   }
 
@@ -60,7 +64,7 @@ export function parseRoute(location: Location): RouteState {
 
 export function buildRoute(state: RouteState): string {
   const segments: string[] = [state.tab];
-  if ((state.tab === 'prs' || state.tab === 'todos') && state.selectedPath) {
+  if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'tests') && state.selectedPath) {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 

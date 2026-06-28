@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
 import { UiAdd, UiCircleFilled, UiComment, UiDiff } from '@flanksource/clicky-ui/icons';
@@ -83,8 +83,8 @@ function toTimelineItem(event: TodoEvent, index: number): TimelineItem {
 
   // Timeline only renders the body bubble when `body` is set, so a title with
   // no body content is surfaced in the body slot rather than the header.
-  let bodyHeader: ReactNode;
-  let bodyNode: ReactNode;
+  let bodyHeader: TimelineItem['bodyHeader'];
+  let bodyNode: TimelineItem['body'];
   if (body) {
     bodyHeader = title || undefined;
     bodyNode = <Markdown text={body} className="text-xs" />;

@@ -5,6 +5,7 @@ import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell, Button } from '@flanksource/clicky-ui/components';
 import { ActivityView } from './components/ActivityView';
+import { TestsView } from './components/TestsView';
 import { TodoBodyHeader, TodoBodyActions, TodoNewButton, TodoFilterToolbar, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
@@ -207,6 +208,12 @@ export function App() {
   // clears the selection back to /todos.
   const navigateTodo = useCallback((id: string) => {
     commitRoute({ tab: 'todos', selectedPath: id, filters });
+  }, [commitRoute, filters]);
+
+  // Selecting a test run encodes "{project}/{runId}" in the path
+  // (/tests/{project}/{runId}) so a run is deep-linkable; empty clears to /tests.
+  const navigateTestRun = useCallback((path: string) => {
+    commitRoute({ tab: 'tests', selectedPath: path, filters });
   }, [commitRoute, filters]);
 
   // The Todos data layer is mounted permanently so its chrome can live in the
@@ -648,6 +655,8 @@ export function App() {
           />
         ) : activeTab === 'todos' ? (
           <TodoDetailPane todos={todos} />
+        ) : activeTab === 'tests' ? (
+          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} />
         ) : (
           <ActivityView />
         )}
@@ -914,6 +923,7 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: 'prs', label: 'PRs', icon: 'codicon:git-pull-request' },
     { id: 'todos', label: 'Todos', icon: 'codicon:check' },
+    { id: 'tests', label: 'Tests', icon: 'codicon:beaker' },
     { id: 'activity', label: 'Activity', icon: 'codicon:pulse' },
   ];
   return (

@@ -47,6 +47,11 @@ type Server struct {
 	detailCache  *DetailCache
 	detailSyncer *DetailSyncer
 
+	// testRunSyncer scans registered workspaces' .gavel/run-*.json files into
+	// the DB cache that the Tests tab is served from. nil until wired by the
+	// CLI; the read endpoints degrade to a direct filesystem scan without it.
+	testRunSyncer *TestRunSyncer
+
 	// gavelCache stores the last computed GavelResultsSummary per PR
 	// (keyed by "repo#number"). Populated as a side-effect of detail
 	// fetches so sidebar badges light up lazily without extra traffic.
@@ -179,6 +184,16 @@ func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
 func (s *Server) notifyDetailSyncer() {
 	if s.detailSyncer != nil {
 		s.detailSyncer.Notify()
+	}
+}
+
+func (s *Server) SetTestRunSyncer(trs *TestRunSyncer) {
+	s.testRunSyncer = trs
+}
+
+func (s *Server) notifyTestRunSyncer() {
+	if s.testRunSyncer != nil {
+		s.testRunSyncer.Notify()
 	}
 }
 
@@ -324,6 +339,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
 	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
+	mux.HandleFunc("/api/tests", s.handleTestRuns)
+	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
+	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
@@ -370,6 +388,7 @@ func (s *Server) Handler() http.Handler {
 	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
 	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
 	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
+	registerPromptRoutes(mux)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }
