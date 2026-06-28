@@ -20,6 +20,9 @@ type VerifyOptions struct {
 	Model     string   // verify model override (empty = config/default)
 	Threshold int      // promote to verified at this score (<=0 → defaultVerifyThreshold)
 	Commits   []string // known commit SHAs (post-run); empty = discover by trailer
+	// Prompt, when non-empty, overrides the rendered verify prompt verbatim — the
+	// dashboard's editable prompt. The output schema is unchanged.
+	Prompt string
 }
 
 func (o VerifyOptions) threshold() int {
@@ -101,9 +104,10 @@ func RunIssueVerification(ctx context.Context, provider Provider, todo *types.TO
 	}
 
 	result, err := verify.RunVerify(verify.RunOptions{
-		Config:   cfg,
-		RepoPath: opts.WorkDir,
-		Issue:    BuildIssueContext(todo, shas),
+		Config:         cfg,
+		RepoPath:       opts.WorkDir,
+		Issue:          BuildIssueContext(todo, shas),
+		PromptOverride: opts.Prompt,
 	})
 	if err != nil {
 		return nil, err
@@ -111,6 +115,31 @@ func RunIssueVerification(ctx context.Context, provider Provider, todo *types.TO
 
 	persistVerificationVerdict(ctx, provider, todo, result, opts.threshold())
 	return result, nil
+}
+
+// PreviewIssueVerification renders the verify prompt a RunIssueVerification would
+// send for a todo, without executing it, so the dashboard can seed an editable
+// prompt. It mirrors RunIssueVerification's scope/issue/config construction.
+func PreviewIssueVerification(todo *types.TODO, opts VerifyOptions) (string, error) {
+	shas, err := ResolveIssueCommits(opts.WorkDir, todo.ID, opts.Commits)
+	if err != nil {
+		return "", fmt.Errorf("resolve issue commits: %w", err)
+	}
+	if len(shas) == 0 {
+		return "", fmt.Errorf("no commits found for issue %s; nothing to verify", todo.ID)
+	}
+	cfg, err := verify.LoadConfig(opts.WorkDir)
+	if err != nil {
+		logger.Warnf("verify: failed to load config: %v", err)
+	}
+	if opts.Model != "" {
+		cfg.Model = opts.Model
+	}
+	return verify.PreviewPrompt(verify.RunOptions{
+		Config:   cfg,
+		RepoPath: opts.WorkDir,
+		Issue:    BuildIssueContext(todo, shas),
+	})
 }
 
 // persistVerificationVerdict saves the verdict comment and transitions the TODO:

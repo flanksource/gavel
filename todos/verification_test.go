@@ -15,9 +15,8 @@ func sampleResult(implemented bool, score int) *verify.VerifyResult {
 		Score:       score,
 		Implemented: &implemented,
 		AcceptanceCriteria: []verify.CriterionResult{
-			{Criterion: "Streams NDJSON for large payloads", Met: true},
-			{Criterion: "Returns 400 on invalid input", Met: false,
-				Evidence: []verify.Evidence{{File: "handler.go", Line: 42, Message: "no validation"}}},
+			{Criteria: "Streams NDJSON for large payloads", Pass: true},
+			{Criteria: "Returns 400 on invalid input", Pass: false, Comments: "handler.go:42: no validation"},
 		},
 		Completeness: verify.CompletenessResult{Pass: false, Summary: "missing tests"},
 	}

@@ -1,8 +1,8 @@
 // Package headless drives an AI coding agent (claude or codex) non-interactively
-// via captain's streaming CLI providers (`claude -p --output-format stream-json`,
-// `codex exec --json`). Unlike the cmux driver it does not automate a terminal:
-// it consumes structured ai.Event stream and completes on the terminal
-// EventResult, so there is no screen-scraping or session-log tailing.
+// via captain's streaming providers (the Claude Agent SDK over JSON-RPC, and
+// `codex app-server` over JSON-RPC). Unlike the cmux driver it does not automate
+// a terminal: it consumes a structured ai.Event stream and completes on the
+// terminal EventResult, so there is no screen-scraping or session-log tailing.
 package headless
 
 import (
@@ -14,6 +14,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	captainprovider "github.com/flanksource/captain/pkg/ai/provider"
+	captainclaudeagent "github.com/flanksource/captain/pkg/ai/provider/claudeagent"
 	gavelai "github.com/flanksource/gavel/ai"
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/cmux"
@@ -34,6 +35,13 @@ type Config struct {
 	MaxTurns int
 	Tools    []string
 	Timeout  time.Duration
+	// PromptOverride, when set, is used verbatim instead of cmux.BuildPrompt.
+	PromptOverride string
+	// Approvals brokers tool permissions over the can_use_tool control protocol:
+	// each tool the agent wants to run that is not auto-approved is surfaced to the
+	// process-wide approval registry (the dashboard resolves it). Off by default so
+	// CLI runs with no resolver keep the auto-approve behaviour instead of blocking.
+	Approvals bool
 	// Stream overrides the captain provider; nil uses the real claude/codex CLI.
 	Stream streamFunc
 }
@@ -67,7 +75,10 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		return nil, fmt.Errorf("no todos supplied")
 	}
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-	prompt := cmux.BuildPrompt(todosInGroup, workDir, e.config.Effort)
+	prompt := e.config.PromptOverride
+	if prompt == "" {
+		prompt = cmux.BuildPrompt(todosInGroup, workDir, e.config.Effort)
+	}
 
 	req := captainai.Request{
 		Prompt:         prompt,
@@ -82,6 +93,13 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	// codex takes a real reasoning-effort flag.
 	if e.config.Agent == "codex" {
 		req.ReasoningEffort = e.config.Effort
+	}
+	if e.config.Approvals {
+		req.CanUseTool = e.buildCanUseTool(ctx)
+		// Allow-listed tools skip the can_use_tool callback, so drop Bash from the
+		// allowlist to route command execution through approval. acceptEdits still
+		// auto-approves file edits and the read/search tools stay allow-listed.
+		req.AllowedTools = withoutBash(e.config.Tools)
 	}
 
 	stream := e.config.Stream
@@ -147,6 +165,10 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 		action := toolSummary(ev)
 		transcript.AddExecutorMessage(action, todopkg.EntryAction, map[string]any{"tool": ev.Tool})
 		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyAction, Message: action})
+	case captainai.EventPermission:
+		action := toolSummary(ev)
+		transcript.AddExecutorMessage("awaiting approval: "+action, todopkg.EntryAction, map[string]any{"tool": ev.Tool})
+		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyApproval, Message: action})
 	case captainai.EventSystem:
 		if ev.SessionID != "" {
 			recordSessionID(todosInGroup, ev.SessionID)
@@ -175,14 +197,40 @@ func (e *Executor) newStreamer() (captainai.StreamingProvider, error) {
 		if model == "codex" {
 			model = ""
 		}
-		return captainprovider.NewCodexCLI(model), nil
+		return captainprovider.NewCodexAppServer(model)
 	case "claude":
 		if model == "" || model == "claude" {
 			model = "sonnet"
 		}
-		return captainprovider.NewClaudeCLI(model), nil
+		return captainclaudeagent.New(captainai.Config{Model: model})
 	default:
 		return nil, fmt.Errorf("headless: unsupported agent %q", e.config.Agent)
+	}
+}
+
+// buildCanUseTool returns the permission callback the captain provider invokes on
+// a can_use_tool control request. It routes each request to the process-wide
+// approval registry — the same one the cmux driver and the dashboard share — and
+// maps the human's decision back onto the captain decision shape. It blocks until
+// the dashboard resolves the request or the run's context is cancelled.
+func (e *Executor) buildCanUseTool(ctx *todopkg.ExecutorContext) captainai.PermissionFunc {
+	return func(callCtx context.Context, preq captainai.PermissionRequest) (captainai.PermissionDecision, error) {
+		ctx.Logger.Infof("%s: session %s awaiting tool-permission approval: %s",
+			e.Name(), preq.SessionID, preq.Tool)
+		decision, err := todopkg.GlobalApprovals().Await(callCtx, todopkg.ApprovalRequest{
+			SessionID: preq.SessionID,
+			ToolUseID: preq.ToolUseID,
+			Tool:      preq.Tool,
+			Input:     preq.Input,
+		})
+		if err != nil {
+			return captainai.PermissionDecision{}, err
+		}
+		return captainai.PermissionDecision{
+			Allow:        decision.Allow,
+			Message:      decision.Message,
+			UpdatedInput: decision.UpdatedInput,
+		}, nil
 	}
 }
 
@@ -218,6 +266,19 @@ func toolSummary(ev captainai.Event) string {
 		}
 	}
 	return ev.Tool
+}
+
+// withoutBash returns tools without "Bash" so command execution is brokered via
+// can_use_tool instead of auto-approved from the allowlist.
+func withoutBash(tools []string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if t == "Bash" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 func truncate(s string, max int) string {
