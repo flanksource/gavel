@@ -6,9 +6,8 @@ import (
 	"os"
 
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
 	"github.com/spf13/cobra"
@@ -102,7 +101,7 @@ func init() {
 			}
 
 			if options.AI {
-				agent, err := gavelai.NewAgent(ai.DefaultConfig())
+				agent, err := ai.NewAgent(ai.DefaultConfig())
 				if err != nil {
 					return nil, fmt.Errorf("failed to get default AI agent for summary: %w", err)
 				}

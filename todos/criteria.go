@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"

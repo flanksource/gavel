@@ -7,10 +7,9 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
 	clickytask "github.com/flanksource/clicky/task"
-	gavelai "github.com/flanksource/gavel/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
@@ -102,7 +101,7 @@ func runStatus(opts StatusOptions) (any, error) {
 		})
 	}
 
-	agent, err := gavelai.NewAgent(clickyai.DefaultConfig())
+	agent, err := clickyai.NewAgent(clickyai.DefaultConfig())
 	if err != nil {
 		return nil, fmt.Errorf("create AI agent for status: %w", err)
 	}

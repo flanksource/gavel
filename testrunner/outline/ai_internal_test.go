@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/gavel/testrunner/parsers"

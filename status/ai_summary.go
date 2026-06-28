@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 )
 
 const (

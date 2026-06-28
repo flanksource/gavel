@@ -1,15 +1,34 @@
-// Package ai wraps commons-db/llm.NewLLMAgent with gavel-specific env
-// normalization so that common alternate API-key env vars are accepted
-// (e.g. CLAUDE_API_KEY as an alias for ANTHROPIC_API_KEY).
+// Package ai adapts captain's pkg/ai to the surface gavel consumers previously
+// used from clicky/ai, backed entirely by captain. It also performs
+// gavel-specific env normalization so that common alternate API-key env vars
+// are accepted (e.g. CLAUDE_API_KEY as an alias for ANTHROPIC_API_KEY).
 package ai
 
 import (
+	"context"
 	"os"
 	"sync"
 
-	clickyai "github.com/flanksource/clicky/ai"
-	"github.com/flanksource/commons-db/llm"
+	captainai "github.com/flanksource/captain/pkg/ai"
 )
+
+// Type aliases to captain so existing call sites compile unchanged.
+type (
+	PromptRequest  = captainai.PromptRequest
+	PromptResponse = captainai.PromptResponse
+	Costs          = captainai.Costs
+	Cost           = captainai.Cost
+)
+
+// Agent is the named-prompt / batch / cost surface gavel codes against.
+// captain's *ai.Agent satisfies it, and so do gavel test mocks that carry the
+// extra GetType/GetConfig/ListModels methods.
+type Agent interface {
+	ExecutePrompt(ctx context.Context, req PromptRequest) (*PromptResponse, error)
+	ExecuteBatch(ctx context.Context, reqs []PromptRequest) (map[string]*PromptResponse, error)
+	GetCosts() Costs
+	Close() error
+}
 
 var envAliases = map[string][]string{
 	"ANTHROPIC_API_KEY": {"CLAUDE_API_KEY", "ANTHROPIC_KEY"},
@@ -19,9 +38,16 @@ var envAliases = map[string][]string{
 
 var normalizeOnce sync.Once
 
-func NewAgent(cfg clickyai.AgentConfig) (*llm.LLMAgent, error) {
+// NewAgent builds a captain-backed agent from cfg after normalizing env keys.
+// The backend is inferred from the model by captain.
+func NewAgent(cfg AgentConfig) (Agent, error) {
 	NormalizeEnv()
-	return llm.NewLLMAgent(cfg)
+	return captainai.NewAgent(cfg.toCaptain())
+}
+
+// GetDefaultAgent returns an agent built from DefaultConfig.
+func GetDefaultAgent() (Agent, error) {
+	return NewAgent(DefaultConfig())
 }
 
 func NormalizeEnv() {

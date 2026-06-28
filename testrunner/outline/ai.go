@@ -8,9 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 )
 
 const (
@@ -46,7 +45,7 @@ type SummaryAgent interface {
 
 // newSummaryAgent is swapped in tests.
 var newSummaryAgent = func() (SummaryAgent, error) {
-	return gavelai.NewAgent(clickyai.DefaultConfig())
+	return clickyai.NewAgent(clickyai.DefaultConfig())
 }
 
 // applyAISummaries generates one-line AI summaries for every leaf, batched
