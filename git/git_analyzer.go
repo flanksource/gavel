@@ -12,10 +12,9 @@ import (
 
 	"github.com/flanksource/gavel/models"
 
-	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git/kubernetes"
 )
 
@@ -135,9 +134,9 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 
 	if options.AI {
 
-		agent, err := gavelai.NewAgent(ai.DefaultConfig())
+		agent, err := ai.NewAgent(ai.DefaultConfig())
 		defer func() {
-			logger.Infof("AI Costs: %s", agent.GetCosts().Pretty().ANSI())
+			logger.Infof("AI Costs: $%.4f", agent.GetCosts().Sum().Total())
 		}()
 		// agent, err := ai.GetDefaultAgent()
 		if err != nil {

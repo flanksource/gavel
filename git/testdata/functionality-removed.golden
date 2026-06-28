@@ -2,7 +2,9 @@ You are reviewing a git diff for user-visible removals. Return structured output
 
 DIFF INPUT:
 
-{{.patch}}
+diff --git a/login.go b/login.go
++func Login() bool { return a < b && c > d }
+
 
 REQUIREMENTS:
 - Only include user-visible functionality removed by the diff.

@@ -17,6 +17,10 @@ type RunOptions struct {
 	// issue's commits against its description, comments, and stored acceptance
 	// criteria, and the result carries Implemented + AcceptanceCriteria.
 	Issue *IssueContext
+	// PromptOverride, when non-empty, is used verbatim instead of the rendered
+	// verify prompt — the dashboard's editable prompt. The JSON output schema is
+	// unchanged (criteria/checks/ratings still drive it).
+	PromptOverride string
 }
 
 func RunVerify(opts RunOptions) (*VerifyResult, error) {
@@ -36,7 +40,7 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 
 	logger.Infof("Verifying %s using %s", scope, model)
 
-	prompt, err := renderPrompt(scope, cfg, opts.Issue)
+	prompt, err := resolveVerifyPrompt(opts, scope, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render prompt: %w", err)
 	}
@@ -61,6 +65,29 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 
 	result.Score = ComputeOverallScore(result)
 	return &result, nil
+}
+
+// resolveVerifyPrompt returns the verbatim PromptOverride when set, otherwise the
+// rendered verify prompt. Keeping it separate makes the override path unit-testable.
+func resolveVerifyPrompt(opts RunOptions, scope ReviewScope, cfg VerifyConfig) (string, error) {
+	if opts.PromptOverride != "" {
+		return opts.PromptOverride, nil
+	}
+	return renderPrompt(scope, cfg, opts.Issue)
+}
+
+// PreviewPrompt renders the verify prompt for a run without executing it, so the
+// dashboard can seed an editable prompt with exactly what RunVerify would send.
+func PreviewPrompt(opts RunOptions) (string, error) {
+	cfg := opts.Config
+	scope, err := resolveRunScope(opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve scope: %w", err)
+	}
+	if opts.Issue != nil {
+		cfg.Checks = issueChecksConfig(opts.Issue.CheckIDs)
+	}
+	return renderPrompt(scope, cfg, opts.Issue)
 }
 
 // resolveRunScope targets the issue's commits when the run is issue-aware,
@@ -100,7 +127,7 @@ func ComputeOverallScore(r VerifyResult) int {
 	// Stored acceptance criteria count like checks toward the pass rate.
 	for _, cr := range r.AcceptanceCriteria {
 		total++
-		if cr.Met {
+		if cr.Pass {
 			passed++
 		}
 	}

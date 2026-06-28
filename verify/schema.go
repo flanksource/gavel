@@ -2,7 +2,9 @@ package verify
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 )
 
 func evidenceSchema() map[string]any {
@@ -90,17 +92,28 @@ func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, er
 		required = append(required, "implemented")
 	}
 	if len(criteria) > 0 {
+		// Generate the acceptance-criteria schema FROM the criteria so the prompt
+		// doesn't have to enumerate them: one array entry per criterion, in this
+		// exact order, each {criteria, pass, comments}.
+		var desc strings.Builder
+		desc.WriteString("One verdict per acceptance criterion below, in this exact order. ")
+		desc.WriteString("Echo the criterion text in `criteria`, set `pass` true only when the commits clearly satisfy it, and justify in `comments`:\n")
+		for i, c := range criteria {
+			fmt.Fprintf(&desc, "%d. %s\n", i+1, c)
+		}
 		properties["acceptance_criteria"] = map[string]any{
 			"type":        "array",
-			"description": "One verdict per stored acceptance criterion (verbatim), in order. Set met=true only with supporting evidence from the commits.",
+			"description": desc.String(),
+			"minItems":    len(criteria),
+			"maxItems":    len(criteria),
 			"items": map[string]any{
 				"type":                 "object",
-				"required":             []string{"criterion", "met", "evidence"},
+				"required":             []string{"criteria", "pass", "comments"},
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"criterion": map[string]any{"type": "string"},
-					"met":       map[string]any{"type": "boolean"},
-					"evidence":  evidenceSchema(),
+					"criteria": map[string]any{"type": "string"},
+					"pass":     map[string]any{"type": "boolean"},
+					"comments": map[string]any{"type": "string"},
 				},
 			},
 		}

@@ -7,20 +7,20 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flanksource/clicky/ai"
+	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gomplate/v3"
 )
 
-//go:embed ai-commit-message.md
+//go:embed ai-commit-message.prompt
 var commitMessagePrompt string
 
-//go:embed ai-commit-functionality-removed.md
+//go:embed ai-commit-functionality-removed.prompt
 var functionalityRemovedPrompt string
 
-//go:embed ai-commit-compatibility-issues.md
+//go:embed ai-commit-compatibility-issues.prompt
 var compatibilityIssuesPrompt string
 
 // commitMessageSchema is the structured-output schema handed to the LLM.
@@ -119,7 +119,7 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 		return commit, fmt.Errorf("AI commit message prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, commitMessagePrompt, map[string]any{"maxBodyLines": maxBodyLines})
+	promptText, err := renderCommitPrompt(commit, commitMessagePrompt, map[string]any{"maxBodyLines": maxBodyLines})
 	if err != nil {
 		return commit, err
 	}
@@ -128,7 +128,7 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "commit message"),
-		Prompt:           prompt,
+		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
 	if err != nil {
@@ -164,7 +164,7 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 		return nil, fmt.Errorf("AI functionality-removed prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, functionalityRemovedPrompt, nil)
+	promptText, err := renderCommitPrompt(commit, functionalityRemovedPrompt, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "removed functionality"),
-		Prompt:           prompt,
+		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 		return nil, fmt.Errorf("AI compatibility-issues prompt template is empty")
 	}
 
-	prompt, err := renderCommitPrompt(commit, compatibilityIssuesPrompt, nil)
+	promptText, err := renderCommitPrompt(commit, compatibilityIssuesPrompt, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "compatibility issues"),
-		Prompt:           prompt,
+		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
 	if err != nil {
@@ -218,13 +218,11 @@ func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map
 	for k, v := range extra {
 		data[k] = v
 	}
-	prompt, err := gomplate.RunTemplate(data, gomplate.Template{
-		Template: template,
-	})
+	req, _, err := prompt.Load(template).Render(data, nil)
 	if err != nil {
 		return "", fmt.Errorf("render AI prompt template: %w", err)
 	}
-	return prompt, nil
+	return req.Prompt, nil
 }
 
 func promptName(commit models.CommitAnalysis, suffix string) string {

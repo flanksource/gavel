@@ -31,12 +31,14 @@ type CompletenessResult struct {
 }
 
 // CriterionResult is the verdict for one stored acceptance criterion in an
-// issue-aware verification: whether the committed change meets it, plus
-// supporting evidence.
+// issue-aware verification: the criterion text (echoed by the model), whether
+// the committed change passes it, and explanatory comments. The schema is
+// generated from the issue's criteria (see BuildSchema), so the prompt no longer
+// enumerates them.
 type CriterionResult struct {
-	Criterion string     `json:"criterion" yaml:"criterion"`
-	Met       bool       `json:"met" yaml:"met"`
-	Evidence  []Evidence `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	Criteria string `json:"criteria" yaml:"criteria"`
+	Pass     bool   `json:"pass" yaml:"pass"`
+	Comments string `json:"comments,omitempty" yaml:"comments,omitempty"`
 }
 
 type VerifyResult struct {
@@ -99,7 +101,7 @@ func (r VerifyResult) Pretty() api.Text {
 func (r VerifyResult) prettyAcceptanceCriteria() api.Text {
 	met := 0
 	for _, c := range r.AcceptanceCriteria {
-		if c.Met {
+		if c.Pass {
 			met++
 		}
 	}
@@ -107,12 +109,12 @@ func (r VerifyResult) prettyAcceptanceCriteria() api.Text {
 		Append(fmt.Sprintf(" (%d/%d met)", met, len(r.AcceptanceCriteria)), "")
 	for _, c := range r.AcceptanceCriteria {
 		icon := icons.Check.WithStyle("text-green-600")
-		if !c.Met {
+		if !c.Pass {
 			icon = icons.Cross.WithStyle("text-red-600")
 		}
-		text = text.NewLine().Append("  ", "").Add(icon).Append(" "+c.Criterion, "")
-		for _, e := range c.Evidence {
-			text = text.NewLine().Append(fmt.Sprintf("      %s — %s", e.location(), e.Message), "")
+		text = text.NewLine().Append("  ", "").Add(icon).Append(" "+c.Criteria, "")
+		if c.Comments != "" {
+			text = text.NewLine().Append(fmt.Sprintf("      %s", c.Comments), "")
 		}
 	}
 	return text
