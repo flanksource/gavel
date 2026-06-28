@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/repomap"

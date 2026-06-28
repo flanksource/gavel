@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 )
 
 type AISummaryStatus string

@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/internal/sessionhistory"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -652,13 +652,13 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 // todo runner's auto-commit. Files edited outside workDir, no longer present, or
 // matching an ignore rule are skipped (each logged).
 func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
-	sessionFile, err := sessionhistory.FindSessionFile(sessionID)
+	sessionFile, err := history.FindSessionFile(sessionID)
 	if err != nil {
 		return fmt.Errorf("stage session %q: no Claude session log found: %w", sessionID, err)
 	}
 	logger.Infof("commit: staging files from claude session %s (%s)", sessionID, sessionFile)
 
-	modified, err := sessionhistory.SessionModifiedFiles(sessionFile)
+	modified, err := history.SessionModifiedFiles(sessionFile)
 	if err != nil {
 		return fmt.Errorf("stage session %q: read session log %s: %w", sessionID, sessionFile, err)
 	}

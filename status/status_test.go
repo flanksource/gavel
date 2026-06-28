@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/snapshots"

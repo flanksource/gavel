@@ -35,6 +35,8 @@ type ClaudeExecutorConfig struct {
 	Tools        []string
 	Timeout      time.Duration
 	Dirty        bool
+	// PromptOverride, when set, is used verbatim instead of BuildPrompt.
+	PromptOverride string
 }
 
 type ClaudeExecutor struct {
@@ -90,7 +92,10 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := BuildPrompt(todo, e.config.WorkDir)
+	prompt := e.config.PromptOverride
+	if prompt == "" {
+		prompt = BuildPrompt(todo, e.config.WorkDir)
+	}
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 
@@ -159,7 +164,10 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+	prompt := e.config.PromptOverride
+	if prompt == "" {
+		prompt = BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+	}
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 

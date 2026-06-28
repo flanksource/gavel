@@ -160,9 +160,9 @@ func (f *fakeBuffered) Execute(ctx context.Context, req captainai.Request) (*cap
 // configure defaults that gavel just learned to honour.
 func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 	p := &fakeStreaming{model: "gpt-5.5", backend: captainai.Backend("test-streaming")}
-	captainai.RegisterProvider(captainai.Backend("test-streaming"), func(cfg captainai.Config) captainai.Provider {
+	captainai.RegisterProvider(captainai.Backend("test-streaming"), func(cfg captainai.Config) (captainai.Provider, error) {
 		p.model = cfg.Model
-		return p
+		return p, nil
 	})
 
 	res, err := Run(context.Background(), Request{
@@ -242,8 +242,8 @@ func TestRun_NoModelErrors(t *testing.T) {
 // loop must stop fast so the model isn't asked to fix stale violations.
 func TestRun_SurfacesReLintError(t *testing.T) {
 	p := &fakeStreaming{model: "rl", backend: captainai.Backend("test-relint-err")}
-	captainai.RegisterProvider(captainai.Backend("test-relint-err"), func(cfg captainai.Config) captainai.Provider {
-		return p
+	captainai.RegisterProvider(captainai.Backend("test-relint-err"), func(cfg captainai.Config) (captainai.Provider, error) {
+		return p, nil
 	})
 	boom := errors.New("re-lint command failed: exit status 1")
 	res, err := Run(context.Background(), Request{
@@ -272,8 +272,8 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 // implement buffered Execute. Aifix needs streaming for live progress, so
 // it must error rather than silently degrade to one-shot calls.
 func TestRun_NonStreamingBackendErrors(t *testing.T) {
-	captainai.RegisterProvider(captainai.Backend("test-buffered-only"), func(cfg captainai.Config) captainai.Provider {
-		return &fakeBuffered{}
+	captainai.RegisterProvider(captainai.Backend("test-buffered-only"), func(cfg captainai.Config) (captainai.Provider, error) {
+		return &fakeBuffered{}, nil
 	})
 	_, err := Run(context.Background(), Request{
 		Initial: resultsWith("fakelint", violation("a", "x", "R", 1)),
