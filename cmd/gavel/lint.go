@@ -144,6 +144,7 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+	runStarted := time.Now().UTC()
 	if opts.Failed == failedAutoSentinel {
 		resolved, err := snapshots.ResolveLast(opts.WorkDir)
 		if err != nil {
@@ -303,6 +304,12 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	snap := &testui.Snapshot{
+		Metadata: &testui.SnapshotMetadata{
+			Version: version,
+			Started: runStarted,
+			Ended:   time.Now().UTC(),
+			Kind:    "lint",
+		},
 		Git: snapshotGitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
 			LintRun: true,
@@ -313,6 +320,14 @@ func runLint(opts LintOptions) (any, error) {
 		logger.Warnf("persist snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote snapshot to %s", path)
+	}
+	// Per-run snapshot so lint-only runs appear in the .gavel run history
+	// (the Tests dashboard scans run-*.json); Save() above only writes the
+	// sha-keyed latest.
+	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted); err != nil {
+		logger.Warnf("persist per-run snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
 	}
 
 	if opts.Summary {
