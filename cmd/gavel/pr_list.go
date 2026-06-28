@@ -300,6 +300,10 @@ func runPRUI(opts PRListOptions) error {
 	srv.SetDetailSyncer(syncer)
 	syncer.Start(ctx)
 
+	testRunSyncer := ui.NewTestRunSyncer(srv)
+	srv.SetTestRunSyncer(testRunSyncer)
+	testRunSyncer.Start(ctx)
+
 	if opts.Dev {
 		devDir, err := resolveDevDir(opts.DevDir)
 		if err != nil {
