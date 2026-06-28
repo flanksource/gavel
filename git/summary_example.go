@@ -3,7 +3,7 @@ package git
 import (
 	"context"
 
-	"github.com/flanksource/clicky/ai"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
 )
 

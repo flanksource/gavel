@@ -9,10 +9,10 @@ import (
 	"github.com/flanksource/repomap"
 
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/collections"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/models"
 )
 

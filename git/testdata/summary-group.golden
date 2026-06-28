@@ -1,16 +1,15 @@
 You are a git commit summarizer.
 
-Analyze these commits from the **{{.window}}** time period affecting **{{.scope}}** scope:
+Analyze these commits from the **last 7 days** time period affecting **api** scope:
 
-{{range .commits}}
-- {{.hash}}: {{.commit_type}}{{if .scope}}({{.scope}}){{end}}: {{.subject}}
-  {{.body}}
-{{end}}
+- abc1234: feat(api): add login endpoint
+  Implements POST /login
+- def5678: fix: fix nil panic on logout
+  
 
 FILES CHANGED:
-{{range .files}}
-- {{.}}
-{{end}}
+- api/auth.go
+- api/login.go
 
 TASK:
 Generate a concise, meaningful summary of these changes.

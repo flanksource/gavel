@@ -2,7 +2,7 @@ You are reviewing a git diff for backward compatibility risks. Return structured
 
 DIFF INPUT:
 
-{{.patch}}
+{{patch}}
 
 REQUIREMENTS:
 - Include breaking changes, required migrations, config changes, upgrade risks, or other backward compatibility issues introduced by the diff.
