@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Combobox, DropdownMenu, Field, Modal, SegmentedControl } from '@flanksource/clicky-ui/components';
 import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
 import { PROVIDERS, providerCatalog, driverFor, type RunMechanism } from './providers';
+
+// RunMode is the prompt the dialog runs: Run (implement), Plan (propose only),
+// or Verify (score the committed work against acceptance criteria).
+type RunMode = 'run' | 'plan' | 'verify';
+
+// MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
+// markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
+// code-split and rendered under Suspense with a plain-textarea fallback.
+const MdxEditorField = lazy(() =>
+  import('@flanksource/clicky-ui/mdx-editor').then(m => ({ default: m.MdxEditorField })),
+);
 
 export const defaultRunOptions: TodoRunOptions = { driver: 'claude-cmux', model: 'claude', effort: 'medium' };
 
@@ -205,7 +216,7 @@ export function TodoRunAdvancedDialog({
   const [mechanism, setMechanism] = useState<RunMechanism>('cmux');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
-  const [plan, setPlan] = useState(false);
+  const [mode, setMode] = useState<RunMode>('run');
   const [resume, setResume] = useState(false);
   const [timeout, setTimeoutValue] = useState('30m');
   const [maxCost, setMaxCost] = useState('');
@@ -214,13 +225,46 @@ export function TodoRunAdvancedDialog({
   const [dryRun, setDryRun] = useState(false);
   const [commit, setCommit] = useState(true);
   const [check, setCheck] = useState(false);
-  const [preview, setPreview] = useState('');
+  // promptDraft is the editable prompt body sent as the verbatim override;
+  // promptDirty stops the live preview from clobbering the user's edits.
+  const [promptDraft, setPromptDraft] = useState('');
+  const [promptDirty, setPromptDirty] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyError, setVerifyError] = useState('');
+  const [regenNonce, setRegenNonce] = useState(0);
+  // Ref mirror of promptDirty so the preview effect can read it without
+  // refetching on every keystroke.
+  const promptDirtyRef = useRef(false);
 
   const catalog = providerCatalog(agent);
   const driver = driverFor(agent, mechanism);
   const isCmux = mechanism === 'cmux';
+  const plan = mode === 'plan';
+  const isVerify = mode === 'verify';
+  const canVerify = refs.length === 1; // verify scores one issue's commits
+
+  // Switching mode re-seeds the editor from the matching preview (Run/Plan share
+  // the run body; Verify uses the verify prompt).
+  function changeMode(next: RunMode) {
+    setMode(next);
+    setPromptDirty(false);
+    promptDirtyRef.current = false;
+    setVerifyError('');
+  }
+
+  function editPrompt(v: string) {
+    setPromptDraft(v);
+    setPromptDirty(true);
+    promptDirtyRef.current = true;
+  }
+
+  function regeneratePrompt() {
+    setPromptDirty(false);
+    promptDirtyRef.current = false;
+    setRegenNonce(n => n + 1);
+  }
 
   // Switching provider re-scopes the mechanism/model/effort to what the new
   // provider offers, keeping the current mechanism when it is still valid.
@@ -231,12 +275,12 @@ export function TodoRunAdvancedDialog({
     setMechanism(nextMechanism);
     setModel(nextCatalog.defaultModel);
     if (!nextCatalog.efforts.includes(effort)) setEffort(nextCatalog.efforts[0]);
-    if (nextMechanism !== 'cmux') setPlan(false);
+    if (nextMechanism !== 'cmux' && mode === 'plan') setMode('run');
   }
 
   function changeMechanism(next: RunMechanism) {
     setMechanism(next);
-    if (next !== 'cmux') setPlan(false);
+    if (next !== 'cmux' && mode === 'plan') setMode('run');
   }
 
   useEffect(() => {
@@ -245,7 +289,7 @@ export function TodoRunAdvancedDialog({
     setMechanism('cmux');
     setModel('claude');
     setEffort('medium');
-    setPlan(false);
+    setMode('run');
     setResume(false);
     setTimeoutValue('30m');
     setMaxCost('');
@@ -254,6 +298,10 @@ export function TodoRunAdvancedDialog({
     setDryRun(false);
     setCommit(true);
     setCheck(false);
+    setPromptDraft('');
+    setPromptDirty(false);
+    promptDirtyRef.current = false;
+    setVerifyError('');
   }, [open]);
 
   // refs is a fresh array each render at the call sites, so key the preview fetch
@@ -263,39 +311,40 @@ export function TodoRunAdvancedDialog({
   // Fetch the prompt that will be sent whenever the dialog is open and a
   // prompt-affecting option changes (driver/model/effort/plan/resume). The
   // server builds it from the same code path the run uses, so it matches exactly.
+  // Fetch the generated prompt body (Run/Plan) or verify prompt (Verify) and seed
+  // the editor with it unless the user has edited it. The server builds it from
+  // the same code path the run/verify uses, so it matches what would be sent.
   useEffect(() => {
     if (!open) {
-      setPreview('');
       setPreviewError('');
       return;
     }
     const list = refsKey.split('\n').filter(Boolean);
     if (list.length === 0) {
-      setPreview('');
       setPreviewError('');
       return;
     }
+    const url = isVerify
+      ? `/api/todos/verify/preview?${todoQuery(dir, provider)}`
+      : `/api/todos/run/preview?${todoQuery(dir, provider)}`;
+    const body = isVerify
+      ? { provider, dir, ref: list[0], model: model.trim() || agent }
+      : { refs: list, driver, model: model.trim() || agent, effort, plan: isCmux ? plan : undefined, resume: isCmux ? resume : undefined };
+
     let cancelled = false;
     const controller = new AbortController();
     setPreviewLoading(true);
     setPreviewError('');
-    fetch(`/api/todos/run/preview?${todoQuery(dir, provider)}`, {
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        refs: list,
-        driver,
-        model: model.trim() || agent,
-        effort,
-        plan: isCmux ? plan : undefined,
-        resume: isCmux ? resume : undefined,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     })
       .then(async res => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Preview failed');
-        if (!cancelled) setPreview((data as TodoRunPreviewResponse).prompt ?? '');
+        if (!cancelled && !promptDirtyRef.current) setPromptDraft((data as TodoRunPreviewResponse).prompt ?? '');
       })
       .catch((err: any) => {
         if (!cancelled && err?.name !== 'AbortError') setPreviewError(err?.message || 'Preview failed');
@@ -307,11 +356,38 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, provider, refsKey, driver, agent, model, effort, plan, resume, isCmux]);
+  }, [open, dir, provider, refsKey, driver, agent, model, effort, plan, resume, isCmux, isVerify, regenNonce]);
 
   if (!open) return null;
 
+  // runVerify POSTs the (edited) verify prompt to the verification endpoint and
+  // closes on success; the parent's todo polling reflects the new status.
+  async function runVerify() {
+    const list = refsKey.split('\n').filter(Boolean);
+    if (list.length === 0) return;
+    setVerifyBusy(true);
+    setVerifyError('');
+    try {
+      const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, dir, ref: list[0], model: model.trim() || agent, prompt: promptDraft }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Verify failed');
+      onClose();
+    } catch (err: any) {
+      setVerifyError(err?.message || 'Verify failed');
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
   function submit() {
+    if (isVerify) {
+      void runVerify();
+      return;
+    }
     const cost = Number(maxCost);
     const turns = Number.parseInt(maxTurns, 10);
     onRun({
@@ -330,8 +406,14 @@ export function TodoRunAdvancedDialog({
       // Plan-only runs make no changes, so the post-completion test/lint check
       // loop has nothing to verify.
       check: plan ? false : check,
+      // The edited prompt body is sent verbatim as the override.
+      prompt: promptDraft.trim() ? promptDraft : undefined,
     });
   }
+
+  const modeOptions: { id: RunMode; label: string }[] = [{ id: 'run', label: 'Run' }];
+  if (isCmux) modeOptions.push({ id: 'plan', label: 'Plan' });
+  if (canVerify) modeOptions.push({ id: 'verify', label: 'Verify' });
 
   return (
     <Modal
@@ -342,11 +424,21 @@ export function TodoRunAdvancedDialog({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} loading={loading}>Run</Button>
+          <Button onClick={submit} loading={isVerify ? verifyBusy : loading}>
+            {isVerify ? 'Verify' : plan ? 'Plan' : 'Run'}
+          </Button>
         </div>
       }
     >
       <div className="space-y-3">
+        <Field label="Mode">
+          <SegmentedControl
+            aria-label="Mode"
+            value={mode}
+            onChange={v => changeMode(v as RunMode)}
+            options={modeOptions}
+          />
+        </Field>
         <Field label="Provider">
           <SegmentedControl
             aria-label="Provider"
@@ -355,17 +447,7 @@ export function TodoRunAdvancedDialog({
             options={PROVIDERS.map(p => ({ id: p.id, label: p.label, icon: p.icon }))}
           />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Type">
-            <Combobox
-              ariaLabel="Driver type"
-              value={mechanism}
-              onChange={v => changeMechanism(v as RunMechanism)}
-              options={catalog.mechanisms.map(m => ({ value: m.value, label: m.label }))}
-              allowCustomValue={false}
-              required
-            />
-          </Field>
+        {isVerify ? (
           <Field label="Model">
             <Combobox
               ariaLabel="Model"
@@ -375,66 +457,110 @@ export function TodoRunAdvancedDialog({
               placeholder={catalog.defaultModel}
             />
           </Field>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Effort">
-            <Combobox
-              ariaLabel="Effort"
-              value={effort}
-              onChange={v => setEffort(v as TodoRunEffort)}
-              options={catalog.efforts.map(e => ({ value: e, label: e }))}
-              allowCustomValue={false}
-              required
-            />
-          </Field>
-          <Field label="Timeout">
-            <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />
-          </Field>
-          <Field label="Max turns">
-            <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={isCmux} />
-          </Field>
-        </div>
-        <Field label="Max cost">
-          <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={isCmux} />
-        </Field>
-        <div className="flex flex-wrap gap-3 text-xs">
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={plan} onChange={e => setPlan(e.currentTarget.checked)} disabled={!isCmux} />
-            <span>Plan only</span>
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={resume} onChange={e => setResume(e.currentTarget.checked)} disabled={!isCmux} />
-            <span>Resume session</span>
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={isCmux} />
-            <span>Dirty worktree</span>
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={commit && !plan} onChange={e => setCommit(e.currentTarget.checked)} disabled={plan} />
-            <span>Auto-commit</span>
-          </label>
-          <label className="inline-flex items-center gap-2" title="Run the configured test/lint checks after the agent finishes and feed failures back to it">
-            <input type="checkbox" checked={check && !plan} onChange={e => setCheck(e.currentTarget.checked)} disabled={plan} />
-            <span>Run checks (test/lint)</span>
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />
-            <span>Dry run</span>
-          </label>
-        </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Type">
+                <Combobox
+                  ariaLabel="Driver type"
+                  value={mechanism}
+                  onChange={v => changeMechanism(v as RunMechanism)}
+                  options={catalog.mechanisms.map(m => ({ value: m.value, label: m.label }))}
+                  allowCustomValue={false}
+                  required
+                />
+              </Field>
+              <Field label="Model">
+                <Combobox
+                  ariaLabel="Model"
+                  value={model}
+                  onChange={setModel}
+                  options={catalog.models}
+                  placeholder={catalog.defaultModel}
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Effort">
+                <Combobox
+                  ariaLabel="Effort"
+                  value={effort}
+                  onChange={v => setEffort(v as TodoRunEffort)}
+                  options={catalog.efforts.map(e => ({ value: e, label: e }))}
+                  allowCustomValue={false}
+                  required
+                />
+              </Field>
+              <Field label="Timeout">
+                <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />
+              </Field>
+              <Field label="Max turns">
+                <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={isCmux} />
+              </Field>
+            </div>
+            <Field label="Max cost">
+              <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={isCmux} />
+            </Field>
+            <div className="flex flex-wrap gap-3 text-xs">
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={resume} onChange={e => setResume(e.currentTarget.checked)} disabled={!isCmux} />
+                <span>Resume session</span>
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={dirty} onChange={e => setDirty(e.currentTarget.checked)} disabled={isCmux} />
+                <span>Dirty worktree</span>
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={commit && !plan} onChange={e => setCommit(e.currentTarget.checked)} disabled={plan} />
+                <span>Auto-commit</span>
+              </label>
+              <label className="inline-flex items-center gap-2" title="Run the configured test/lint checks after the agent finishes and feed failures back to it">
+                <input type="checkbox" checked={check && !plan} onChange={e => setCheck(e.currentTarget.checked)} disabled={plan} />
+                <span>Run checks (test/lint)</span>
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.currentTarget.checked)} />
+                <span>Dry run</span>
+              </label>
+            </div>
+          </>
+        )}
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Prompt preview</span>
-            {previewLoading && <GavelIcon name="svg-spinners:ring-resize" className="text-xs text-muted-foreground" />}
+            <span className="text-xs font-medium text-muted-foreground">{isVerify ? 'Verify prompt' : 'Prompt'}</span>
+            <div className="flex items-center gap-2">
+              {previewLoading && <GavelIcon name="svg-spinners:ring-resize" className="text-xs text-muted-foreground" />}
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={regeneratePrompt}
+                disabled={previewLoading}
+                title="Discard edits and regenerate from the options above"
+                className="h-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                Regenerate
+              </Button>
+            </div>
           </div>
-          {previewError ? (
-            <div className="text-xs text-red-600">{previewError}</div>
-          ) : (
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-2 text-[11px] leading-snug text-foreground">
-              {preview || (previewLoading ? 'Loading prompt…' : 'No prompt to preview')}
-            </pre>
-          )}
+          {(previewError || verifyError) && <div className="text-xs text-red-600">{previewError || verifyError}</div>}
+          <Suspense
+            fallback={
+              <textarea
+                className={`${inputClass} h-auto min-h-[16rem] resize-y font-mono`}
+                value={promptDraft}
+                onChange={e => editPrompt(e.currentTarget.value)}
+                placeholder={previewLoading ? 'Loading prompt…' : 'Prompt'}
+              />
+            }
+          >
+            <MdxEditorField
+              value={promptDraft}
+              onChange={editPrompt}
+              placeholder={previewLoading ? 'Loading prompt…' : 'Prompt'}
+              className="min-h-[16rem]"
+            />
+          </Suspense>
+          {promptDirty && <div className="text-[11px] text-muted-foreground">Edited — sent verbatim as the prompt.</div>}
         </div>
       </div>
     </Modal>

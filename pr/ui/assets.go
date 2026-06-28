@@ -1,9 +1,13 @@
 package ui
 
-import _ "embed"
+import "embed"
 
-//go:embed dist/prui.js
-var bundleJS string
+// distFS holds the built ES-module bundle (the prui.js entry plus the code-split
+// chunks/*.js). It is served from /_assets/ so the entry's relative chunk imports
+// resolve over HTTP; an inlined <script> could not load split chunks.
+//
+//go:embed all:dist
+var distFS embed.FS
 
 //go:embed dist/prui.css
 var bundleCSS string

@@ -201,6 +201,30 @@ func TestHandleRouteTabsServeShell(t *testing.T) {
 	}
 }
 
+// The ES-module bundle is served from /_assets/ (entry + code-split chunks) and
+// the page loads it as a module — not inlined — so the lazy editor chunk can load.
+func TestServesESModuleBundle(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_assets/prui.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/_assets/prui.js status: got %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("/_assets/prui.js content-type: got %q want a javascript type", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("/_assets/prui.js served an empty body")
+	}
+
+	page := httptest.NewRecorder()
+	s.handleRoute(page, httptest.NewRequest(http.MethodGet, "/prs", nil))
+	if !strings.Contains(page.Body.String(), `<script type="module" src="/_assets/prui.js">`) {
+		t.Error("page should load the bundle as an ES module from /_assets/prui.js")
+	}
+}
+
 // A GET /todos/new must serve the SPA shell (the focused new-todo form) even
 // though POST /todos/new is registered as the create endpoint — the Go mux falls
 // the GET through to the "/" catch-all. Routed through the full Handler so the
