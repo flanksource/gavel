@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 )
 

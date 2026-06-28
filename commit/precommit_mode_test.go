@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

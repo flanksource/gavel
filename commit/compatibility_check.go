@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 )
 
@@ -45,7 +46,7 @@ func RunCompatibilityCheck(ctx context.Context, p CompatibilityParams) (Compatib
 		return CompatibilityOutcome{}, nil
 	}
 
-	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
+	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() && !prompt.HasInteractiveSink() {
 		logger.Warnf("compatibility check: stdin is not a terminal; escalating to --compat=fail")
 		mode = IgnoreCheckModeFail
 	}
@@ -132,13 +133,13 @@ func formatCompatibilityAnalysisFailure(err error) string {
 	return fmt.Sprintf("AI compatibility analysis failed: %s", err)
 }
 
-func runPromptCompatibilityDecider(_ context.Context, commit CommitResult) (CompatibilityDecision, error) {
+func runPromptCompatibilityDecider(ctx context.Context, commit CommitResult) (CompatibilityDecision, error) {
 	header := strings.TrimSpace("Compatibility warning\n" + formatCompatibilityFindings(commit))
 	items := []string{
 		"Continue commit",
 		"Cancel commit",
 	}
-	idx, ok := promptSelectIndex(header, items)
+	idx, ok := promptSelectIndex(ctx, header, items)
 	if !ok || idx == 1 {
 		return CompatibilityDecisionCancel, nil
 	}

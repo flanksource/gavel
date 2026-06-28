@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
 )

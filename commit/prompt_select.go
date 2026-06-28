@@ -1,6 +1,10 @@
 package commit
 
-import "github.com/flanksource/clicky"
+import (
+	"context"
+
+	"github.com/flanksource/clicky"
+)
 
 type promptSelectOption struct {
 	Index int
@@ -11,13 +15,16 @@ func (o promptSelectOption) String() string {
 	return o.Label
 }
 
-var promptSelectFunc = func(options []promptSelectOption, title string) (promptSelectOption, bool) {
-	return clicky.PromptSelect(options, clicky.PromptSelectOptions[promptSelectOption]{
+// promptSelectFunc routes a select prompt to clicky, which renders it on the TTY
+// when attached and otherwise hands it to the installed interactive sink (the
+// dashboard), inheriting any prompt.Scope on ctx. Tests override it.
+var promptSelectFunc = func(ctx context.Context, options []promptSelectOption, title string) (promptSelectOption, bool) {
+	return clicky.PromptSelectCtx(ctx, options, clicky.PromptSelectOptions[promptSelectOption]{
 		Title: title,
 	})
 }
 
-func promptSelectIndex(title string, items []string) (int, bool) {
+func promptSelectIndex(ctx context.Context, title string, items []string) (int, bool) {
 	if len(items) == 0 {
 		return -1, false
 	}
@@ -30,7 +37,7 @@ func promptSelectIndex(title string, items []string) (int, bool) {
 		}
 	}
 
-	selected, ok := promptSelectFunc(options, title)
+	selected, ok := promptSelectFunc(ctx, options, title)
 	if !ok || selected.Index < 0 || selected.Index >= len(items) {
 		return -1, false
 	}

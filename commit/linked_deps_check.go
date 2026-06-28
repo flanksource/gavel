@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/utils"
 	"golang.org/x/mod/modfile"
@@ -624,7 +625,7 @@ func RunLinkedDepsCheck(ctx context.Context, p LinkedDepsParams) (CheckOutcome, 
 		return CheckOutcome{}, nil
 	}
 
-	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
+	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() && !prompt.HasInteractiveSink() {
 		logger.Warnf("linked-deps check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
@@ -738,7 +739,7 @@ func runPromptLinkedDepDecider(ctx context.Context, v LinkedDepViolation) (Linke
 	// or the version lookup fails.
 	for {
 		items, decisions := buildLinkedDepMenu(v)
-		idx, ok := promptSelectIndex(header, items)
+		idx, ok := promptSelectIndex(ctx, header, items)
 		if !ok {
 			return LinkedDepChoice{Decision: LinkedDepDecisionCancel}, nil
 		}
@@ -759,7 +760,7 @@ func runPromptLinkedDepDecider(ctx context.Context, v LinkedDepViolation) (Linke
 			fmt.Sprintf("Yes, upgrade to %s", version),
 			"No, choose different action",
 		}
-		cIdx, cOk := promptSelectIndex(confirm, confirmItems)
+		cIdx, cOk := promptSelectIndex(ctx, confirm, confirmItems)
 		if !cOk || cIdx == 1 {
 			continue
 		}

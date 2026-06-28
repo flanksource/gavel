@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -35,6 +36,18 @@ func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetada
 	cfg, err := verify.LoadGavelConfig(commitDir)
 	if err != nil {
 		logger.Warnf("Failed to load .gavel.yaml: %v", err)
+	}
+
+	// Scope any prompt this commit raises (gitignore / linked-deps / file-size /
+	// compatibility) to the todo and session, so the dashboard can surface it on the
+	// todo detail page and the session view. When no UI sink is installed this is
+	// inert and the commit keeps its terminal/non-TTY behavior.
+	if meta.IssueID != "" || meta.SessionID != "" {
+		scope := prompt.Scope{Owner: meta.IssueID, Kind: "commit"}
+		if meta.SessionID != "" {
+			scope.Labels = map[string]string{"session": meta.SessionID}
+		}
+		ctx = prompt.WithScope(ctx, scope)
 	}
 
 	// Scope the commit to the files the agent's session actually edited. Without

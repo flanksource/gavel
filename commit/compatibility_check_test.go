@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
