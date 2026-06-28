@@ -279,6 +279,10 @@ export interface TodoRunOptions {
   // feed any failures back to it for another iteration. Opt-in (defaults off on
   // the server), mirroring the CLI's `todos run --check`.
   check?: boolean;
+  // Prompt, when set, overrides the auto-built prompt body verbatim — the
+  // dashboard's editable prompt. The implement/plan scaffolding still follows
+  // the run mode.
+  prompt?: string;
 }
 
 export interface TodoRunResponse {

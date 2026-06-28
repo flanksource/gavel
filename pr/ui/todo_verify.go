@@ -45,6 +45,9 @@ type todoCriteriaPayload struct {
 	Ref      string                      `json:"ref,omitempty"`
 	Model    string                      `json:"model,omitempty"`
 	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
+	// Prompt, when non-empty, overrides the rendered verify prompt verbatim — the
+	// dashboard's editable prompt.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // loadTodoForWrite resolves the provider + source for a todo mutation and loads
@@ -148,6 +151,7 @@ func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
 	result, err := todos.RunIssueVerification(r.Context(), provider, todo, todos.VerifyOptions{
 		WorkDir: todoVerifyWorkDir(source.Dir, todo),
 		Model:   payload.Model,
+		Prompt:  payload.Prompt,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadGateway, err)
@@ -161,6 +165,32 @@ func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
 		"result": result,
 		"todo":   summarizeTodo(refreshed, true),
 	})
+}
+
+// handleTodoVerifyPreview renders the verify prompt a verify run would send, so
+// the dashboard's editable prompt can be seeded for Verify mode (mirrors
+// handleTodoRunPreview for Run/Plan).
+func (s *Server) handleTodoVerifyPreview(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var payload todoCriteriaPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	_, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	prompt, err := todos.PreviewIssueVerification(todo, todos.VerifyOptions{
+		WorkDir: todoVerifyWorkDir(source.Dir, todo),
+		Model:   payload.Model,
+	})
+	if err != nil {
+		writeTodoError(w, http.StatusBadGateway, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoRunPreviewResponse{Prompt: prompt, Mode: "verify", Count: 1}) //nolint:errcheck
 }
 
 // saveCriteria rewrites the todo body's acceptance-criteria section in place.

@@ -4,14 +4,14 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/flanksource/gavel/internal/prompt"
+	"github.com/flanksource/clicky/prompt"
 )
 
 // promptManagerOnce installs the process-wide prompt manager the first time the
 // dashboard mounts its routes. Installing it makes prompt.HasInteractiveSink()
-// true, so commit checks route their questions to the dashboard instead of
-// failing in the non-TTY server context. A single in-memory manager is shared by
-// every Server/MultiServer in the process.
+// true, so commit checks (and any other clicky prompt) route their questions to
+// the dashboard instead of failing in the non-TTY server context. A single
+// in-memory manager is shared by every Server/MultiServer in the process.
 var promptManagerOnce sync.Once
 
 func ensurePromptManager() *prompt.Manager {

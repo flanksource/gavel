@@ -84,17 +84,23 @@ export default defineConfig(({ command }) => {
       ...(localClicky ? { fs: { allow: [resolve(here, '../../..')] } } : {}),
     },
     build: {
+      // ES-module library build: the stable `prui.js` entry is loaded as
+      // `<script type="module">` and lazy imports (e.g. the heavy MDX editor)
+      // are code-split into hashed `chunks/*.js` the Go server serves from
+      // /_assets/. (IIFE + inlineDynamicImports would force a single bundle.)
       lib: {
         entry: 'src/index.tsx',
-        name: 'PRUI',
-        formats: ['iife'],
+        formats: ['es'],
         fileName: () => 'prui.js',
       },
       outDir: 'dist',
       minify: true,
+      // Keep all CSS in one prui.css so the Go server can inline it as today
+      // (only the JS is split).
+      cssCodeSplit: false,
       rollupOptions: {
         output: {
-          inlineDynamicImports: true,
+          chunkFileNames: 'chunks/[name]-[hash].js',
           // Stable CSS filename so the Go server can go:embed it.
           assetFileNames: 'prui.[ext]',
         },

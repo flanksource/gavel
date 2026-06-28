@@ -30,30 +30,15 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
   if (selected) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            type="button"
-            onClick={() => setSelected(null)}
-            className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Back to todos"
-            aria-label="Back to todos"
-          >
-            <GavelIcon name="codicon:arrow-left" className="text-base" />
-          </Button>
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{detail?.title ?? 'Todo'}</span>
-        </div>
-        <div className="min-h-0 flex-1">
-          <TodoDetail
-            todo={detail}
-            loading={loadingDetail}
-            dir={selected.dir}
-            provider={selected.provider}
-            onChanged={updateItem}
-            onDeleted={deleted}
-          />
-        </div>
+        <TodoDetail
+          todo={detail}
+          loading={loadingDetail}
+          dir={selected.dir}
+          provider={selected.provider}
+          onChanged={updateItem}
+          onDeleted={deleted}
+          onBack={() => setSelected(null)}
+        />
       </div>
     );
   }

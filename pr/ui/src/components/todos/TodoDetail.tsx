@@ -19,6 +19,7 @@ export function TodoDetail({
   provider,
   onChanged,
   onDeleted,
+  onBack,
   workspaces = [],
   onTransferred,
 }: {
@@ -28,6 +29,9 @@ export function TodoDetail({
   provider: string;
   onChanged: (todo: TodoItem) => void;
   onDeleted: () => void;
+  // onBack renders a back arrow in the header; supplied only by the single-column
+  // menubar (the dashboard is master-detail and needs no back navigation).
+  onBack?: () => void;
   // workspaces/onTransferred are optional: the "Move to project" control only
   // renders where a caller wires them (the dashboard), not the compact menubar.
   workspaces?: Project[];
@@ -224,28 +228,51 @@ export function TodoDetail({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b border-border bg-background px-3 py-2 sm:px-4 sm:py-4">
-        <div className="flex min-w-0 flex-col gap-2 sm:gap-3">
+      <div className="shrink-0 border-b border-border bg-background px-3 py-2 md:px-4 md:py-4">
+        <div className="flex min-w-0 flex-col gap-2 md:gap-3">
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-            <div className="min-w-0">
-              {editingTitle ? (
-                <TodoTitleEditor
-                  value={draftTitle}
-                  busy={busy}
-                  onChange={setDraftTitle}
-                  onSave={saveTitle}
-                  onCancel={() => setEditingTitle(false)}
-                />
-              ) : (
-                <div className="group flex min-w-0 items-center gap-2">
-                  <h1 className="min-w-0 flex-1 truncate text-xl font-semibold leading-8 text-foreground">
-                    {todo.title}
-                  </h1>
-                  <span className="hidden sm:inline-flex">
-                    <EditPencil label="Edit title" onClick={startEditTitle} disabled={busy} />
-                  </span>
-                </div>
+            <div className="flex min-w-0 items-center gap-2">
+              {onBack && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  type="button"
+                  onClick={onBack}
+                  title="Back to todos"
+                  aria-label="Back to todos"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <GavelIcon name="codicon:arrow-left" className="text-base" />
+                </Button>
               )}
+              <div className="min-w-0 flex-1">
+                {editingTitle ? (
+                  <TodoTitleEditor
+                    value={draftTitle}
+                    busy={busy}
+                    onChange={setDraftTitle}
+                    onSave={saveTitle}
+                    onCancel={() => setEditingTitle(false)}
+                  />
+                ) : (
+                  <div className="group flex min-w-0 items-center gap-2">
+                    <span
+                      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border md:hidden ${statusClass(todo.status)}`}
+                      title={statusLabel(todo.status)}
+                      aria-label={statusLabel(todo.status)}
+                      role="img"
+                    >
+                      <GavelIcon name={statusIcon(todo.status)} className="text-xs" />
+                    </span>
+                    <h1 className="min-w-0 flex-1 truncate text-xl font-semibold leading-8 text-foreground">
+                      {todo.title}
+                    </h1>
+                    <span className="hidden md:flex">
+                      <EditPencil label="Edit title" onClick={startEditTitle} disabled={busy} />
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
 
             <MobileHeaderMenu
@@ -272,7 +299,7 @@ export function TodoDetail({
               onArchive={archiveTodo}
             />
 
-            <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 sm:flex">
+            <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
               {onTransferred && transferTargets.length > 0 && (
                 <MoveMenu
                   disabled={busy}
@@ -326,20 +353,7 @@ export function TodoDetail({
               />
             </div>
 
-            <div className="hidden min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground sm:col-span-2 sm:flex">
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={copyFullId}
-                title={copyState === 'copied' ? 'Copied' : 'Copy full issue ID'}
-                className="inline-flex h-auto min-w-0 max-w-full items-center gap-1.5 rounded border border-border bg-muted/20 px-2 py-1 text-left font-mono text-[11px] hover:bg-muted"
-              >
-                <GavelIcon
-                  name={copyState === 'copied' ? 'codicon:check' : copyState === 'error' ? 'codicon:error' : 'codicon:copy'}
-                  className={copyState === 'error' ? 'shrink-0 text-red-600' : 'shrink-0 text-muted-foreground'}
-                />
-                <span className="min-w-0 truncate">{fullTodoId}</span>
-              </Button>
+            <div className="hidden min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground md:col-span-2 md:flex">
               <StatusMenu
                 value={todo.status}
                 disabled={busy}
@@ -352,14 +366,29 @@ export function TodoDetail({
                 compact
                 onSelect={priority => patch({ priority })}
               />
-              <HeaderTags labels={visibleLabels} />
-              {copyState === 'error' && <span className="text-red-600">Copy failed</span>}
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={copyFullId}
+                title={copyState === 'copied' ? 'Copied' : 'Copy full issue ID'}
+                className="hidden h-auto min-w-0 max-w-full items-center gap-1.5 rounded border border-border bg-muted/20 px-2 py-1 text-left font-mono text-[11px] hover:bg-muted md:flex"
+              >
+                <GavelIcon
+                  name={copyState === 'copied' ? 'codicon:check' : copyState === 'error' ? 'codicon:error' : 'codicon:copy'}
+                  className={copyState === 'error' ? 'shrink-0 text-red-600' : 'shrink-0 text-muted-foreground'}
+                />
+                <span className="min-w-0 truncate">{fullTodoId}</span>
+              </Button>
+              <span className="hidden items-center gap-2 md:flex">
+                <HeaderTags labels={visibleLabels} />
+              </span>
+              {copyState === 'error' && <span className="hidden text-red-600 md:block">Copy failed</span>}
             </div>
           </div>
           {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
           {runMessage && !error && !runError && <div className="mt-2 text-xs text-emerald-600">{runMessage}</div>}
           {todo.sessionId && (
-            <div className="hidden sm:block">
+            <div className="hidden md:block">
               <TodoSessionTimer dir={dir} provider={provider} sessionId={todo.sessionId} />
             </div>
           )}
@@ -657,7 +686,7 @@ function MobileHeaderMenu({
       align="right"
       menuLabel="Issue actions"
       menuClassName="w-72 max-h-[80vh] max-w-[calc(100vw-16px)] overflow-y-auto"
-      className="sm:hidden"
+      className="md:hidden"
       trigger={
         <Button
           variant="ghost"

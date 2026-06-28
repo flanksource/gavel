@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"sort"
 	"strconv"
@@ -323,6 +324,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/", s.handleDevRoute)
 	} else {
 		mux.HandleFunc("/", s.handleRoute)
+		// The ES-module bundle entry + code-split chunks (production only; in dev
+		// the bundle is served by the proxied Vite server).
+		mux.Handle("/_assets/", assetsHandler())
 	}
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
@@ -353,6 +357,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
 	mux.HandleFunc("POST /api/todos/criteria/generate", s.handleTodoCriteriaGenerate)
 	mux.HandleFunc("POST /api/todos/verify", s.handleTodoVerify)
+	mux.HandleFunc("POST /api/todos/verify/preview", s.handleTodoVerifyPreview)
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
@@ -397,6 +402,25 @@ func handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	fmt.Fprint(w, faviconSVG)
+}
+
+// assetsHandler serves the embedded ES-module bundle (prui.js + chunks/*.js)
+// under /_assets/. Hashed chunks are immutable; the stable entry gets a short
+// cache so a new build is picked up promptly.
+func assetsHandler() http.Handler {
+	sub, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		panic("ui: embedded dist FS: " + err.Error()) // static embed; failure is a build error
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.StripPrefix("/_assets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/chunks/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=300")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 }
 
 // requestOrigin reconstructs the scheme+host this request was served from so an
@@ -538,7 +562,7 @@ func pageHTML() string {
 <body class="bg-background text-foreground">
     <div id="root"></div>
     <script>` + buildGlobalJS() + `</script>
-    <script>` + bundleJS + `</script>
+    <script type="module" src="/_assets/prui.js"></script>
 </body>
 </html>`
 }

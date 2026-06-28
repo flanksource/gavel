@@ -184,6 +184,10 @@ type todoRunPayload struct {
 	// after the run, scoring it against the issue's acceptance criteria. Opt-in,
 	// mirroring the CLI's `todos run --verify`.
 	Verify *bool `json:"verify,omitempty"`
+	// Prompt, when non-empty, overrides the auto-built prompt body verbatim — the
+	// dashboard's editable prompt. The implement/plan scaffolding still follows
+	// the run mode (plan flag).
+	Prompt string `json:"prompt,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -244,6 +248,7 @@ type todoRunOptions struct {
 	Commit          bool
 	Check           bool
 	Verify          bool
+	Prompt          string
 	TimeoutOriginal string
 }
 
@@ -735,9 +740,12 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-// buildTodoRunPromptPreview renders the prompt a run would dispatch, mirroring
-// newTodoRunExecutor: cmux wraps the group prompt with the run's title and the
-// implement/plan suffix, while inline sends the bare claude prompt.
+// buildTodoRunPromptPreview renders the prompt BODY a run would dispatch — the
+// same unit the editable prompt override replaces (drivers.Config.PromptOverride,
+// honored at each executor's body-build call). It deliberately returns the body
+// only: the cmux title header and implement/plan suffix are run-mode scaffolding
+// applied around it (the Run/Plan mode selector controls the suffix), not part of
+// the editable prompt.
 func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) string {
 	if opts.Mode == "inline" {
 		if len(todoList) == 1 {
@@ -745,7 +753,7 @@ func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunO
 		}
 		return claude.BuildGroupPrompt(todoList, dir)
 	}
-	return cmux.PreviewInstruction(todoList, dir, opts.Effort, opts.Plan, opts.Resume, opts.Agent)
+	return cmux.BuildPrompt(todoList, dir, opts.Effort)
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,
@@ -1226,6 +1234,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Commit:          commit,
 		Check:           check,
 		Verify:          verify,
+		Prompt:          payload.Prompt,
 		TimeoutOriginal: payload.Timeout,
 	}, nil
 }
@@ -1354,16 +1363,20 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
 	// todo's recorded prior session.
 	return drivers.New(kind, drivers.Config{
-		WorkDir:      req.Source.Dir,
-		Model:        req.Options.Model,
-		Effort:       req.Options.Effort,
-		Plan:         req.Options.Plan,
-		Resume:       req.Options.Resume,
-		SessionID:    req.Options.SessionID,
-		Timeout:      req.Options.Timeout,
-		MaxBudgetUsd: req.Options.MaxBudget,
-		MaxTurns:     req.Options.MaxTurns,
-		Dirty:        req.Options.Dirty,
+		WorkDir:        req.Source.Dir,
+		Model:          req.Options.Model,
+		Effort:         req.Options.Effort,
+		Plan:           req.Options.Plan,
+		Resume:         req.Options.Resume,
+		SessionID:      req.Options.SessionID,
+		Timeout:        req.Options.Timeout,
+		MaxBudgetUsd:   req.Options.MaxBudget,
+		MaxTurns:       req.Options.MaxTurns,
+		Dirty:          req.Options.Dirty,
+		PromptOverride: req.Options.Prompt,
+		// The dashboard is the approval resolver (handleTodoSessionApprove), so
+		// brokered tool permissions can be surfaced and answered here.
+		Approvals: true,
 	})
 }
 

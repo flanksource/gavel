@@ -3,6 +3,9 @@
 
 /* clicky-ui's prebuilt styles: shadcn :root design tokens + component utilities. */
 @import "@flanksource/clicky-ui/styles.css";
+/* Styles for the MDX markdown editor field (used by the run-todo prompt editor,
+   the same field JsonSchemaForm uses for markdown). */
+@import "@flanksource/clicky-ui/mdx-editor.css";
 
 /* The AppShell root is `h-full` (height:100%); it only fills the viewport — so
    its inner `overflow-y-auto min-h-0` panes become the scrollers instead of the
