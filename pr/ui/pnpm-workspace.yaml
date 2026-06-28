@@ -13,6 +13,7 @@ packages:
 catalog:
   "@ai-sdk/react": ^3.0.201
   "@floating-ui/react": ^0.27.19
+  '@mdxeditor/editor': ^4.0.4
   "@oxlint/plugins": ^1.60.0
   "@playwright/test": ^1.49.1
   "@preact/preset-vite": ^2.9.3
@@ -48,6 +49,7 @@ catalog:
   clsx: ^2.1.1
   cmdk: ^1.0.4
   dompurify: ^3.4.7
+  jotai: ^2.20.1
   jsdom: ^26.0.0
   marked: ^15.0.0
   oxlint: ^1.71.0
