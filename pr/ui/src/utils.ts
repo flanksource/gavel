@@ -1,4 +1,4 @@
-import type { PRItem, CheckSummary, Project, ProcStatus, ProcProcess } from './types';
+import type { PRItem, PRComment, CheckSummary, Project, ProcStatus, ProcProcess } from './types';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -429,4 +429,28 @@ export function severityIcon(severity?: string): string {
     case 'nitpick': return '🧹';
     default: return '💬';
   }
+}
+
+// extractCommentTitle pulls a one-line title out of a (possibly markdown) comment
+// body: the first bold span, heading, or non-decorative line in the first 15
+// lines. Used to label a comment compactly in the detail list and when turning a
+// comment into a todo acceptance criterion.
+export function extractCommentTitle(body: string): string {
+  const clean = body.replace(/[<>]/g, '').trim();
+  for (const line of clean.split('\n').slice(0, 15)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('_') || trimmed.startsWith('> [!')) continue;
+    const bold = trimmed.match(/\*\*(.+?)\*\*/);
+    if (bold) return bold[1];
+    if (trimmed.startsWith('# ')) return trimmed.slice(2).trim();
+    return trimmed;
+  }
+  return clean.split('\n')[0] || '';
+}
+
+// isDeploymentComment reports whether a comment is a Vercel deployment-status
+// blob ("[vc]: …") rather than human/bot review feedback, so those are surfaced
+// as deployments and excluded from the comment list and todo criteria sources.
+export function isDeploymentComment(c: PRComment): boolean {
+  return c.botType === 'vercel' && c.body.startsWith('[vc]:');
 }

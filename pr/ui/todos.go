@@ -96,6 +96,11 @@ type todoCreatePayload struct {
 	Body     string         `json:"body,omitempty"`
 	Priority types.Priority `json:"priority,omitempty"`
 	Status   types.Status   `json:"status,omitempty"`
+	// Criteria, when set, are folded into the body as a "## Acceptance Criteria"
+	// checklist on create — used by the dashboard's "create todo from PR" flow to
+	// seed a todo with the PR's failing tests, lint violations, and review
+	// comments as its acceptance criteria.
+	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
 }
 
 type todoNewPayload struct {
@@ -368,7 +373,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
-		Body:     payload.Body,
+		Body:     bodyWithCriteria(payload.Body, payload.Criteria),
 		Priority: payload.Priority,
 		Status:   payload.Status,
 	})
@@ -378,6 +383,17 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(summarizeTodo(todo, true)) //nolint:errcheck
+}
+
+// bodyWithCriteria folds an "## Acceptance Criteria" checklist into the todo body
+// when criteria are supplied (e.g. a todo created from a PR's failing tests and
+// review comments), so they round-trip through the provider's parse as the todo's
+// acceptance criteria. An empty list leaves the body untouched.
+func bodyWithCriteria(body string, criteria []types.AcceptanceCriterion) string {
+	if len(criteria) == 0 {
+		return body
+	}
+	return todos.UpsertCriteriaSection(body, criteria)
 }
 
 func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +441,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
-		Body:     todoBodyWithAttachments(payload.Body, attachments),
+		Body:     bodyWithCriteria(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria),
 		Priority: payload.Priority,
 		Status:   payload.Status,
 	})

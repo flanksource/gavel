@@ -1,6 +1,7 @@
-import { useState, useMemo, useRef } from 'react';
-import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation } from '../types';
-import { stateColor, reviewColor, severityIcon } from '../utils';
+import { useState, useMemo, useRef, type ReactNode } from 'react';
+import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
+import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { RelativeTime } from './RelativeTime';
 import { ansiToHtml, stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
@@ -84,12 +85,37 @@ interface Props {
   pr: PRItem;
   detail: PRDetail | null;
   loading: boolean;
+  // projects are the configured workspaces a PR-derived todo can be created in;
+  // the "New todo" action is hidden when none are configured.
+  projects?: Project[];
+  // onTodoCreated lets the host refresh todo counts after one is added.
+  onTodoCreated?: () => void;
 }
 
-export function PRDetailPanel({ pr, detail, loading }: Props) {
+export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated }: Props) {
+  const [showCreate, setShowCreate] = useState(false);
+  const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
+
   return (
     <div className="p-4 bg-card h-full overflow-y-auto">
-      <PRHeader pr={pr} detail={detail} />
+      <PRHeader
+        pr={pr}
+        detail={detail}
+        action={
+          workspaces.length > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 gap-1 px-2 text-xs"
+              onClick={() => setShowCreate(true)}
+              title="Create a todo from this PR's failures and comments"
+            >
+              <GavelIcon name="codicon:add" className="text-xs" />
+              New todo
+            </Button>
+          ) : undefined
+        }
+      />
 
       {loading && !detail && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground mt-4">
@@ -137,11 +163,20 @@ export function PRDetailPanel({ pr, detail, loading }: Props) {
           Open on GitHub
         </a>
       </div>
+
+      <CreateTodoFromPRDialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        pr={pr}
+        detail={detail}
+        workspaces={workspaces}
+        onCreated={onTodoCreated}
+      />
     </div>
   );
 }
 
-function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
+function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null; action?: ReactNode }) {
   const info = detail?.pr;
   const authorAvatarUrl = pr.authorAvatarUrl || info?.author?.avatarUrl;
   return (
@@ -181,6 +216,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
             <RelativeTime iso={pr.updatedAt} />
           </div>
         </div>
+        {action}
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm mb-3">
@@ -222,7 +258,7 @@ function PRHeader({ pr, detail }: { pr: PRItem; detail: PRDetail | null }) {
 function CommentView({ comment }: { comment: PRComment }) {
   const [expanded, setExpanded] = useState(false);
   const resolved = comment.isResolved || comment.isOutdated;
-  const title = extractTitle(comment.body);
+  const title = extractCommentTitle(comment.body);
 
   return (
     <div className={`text-xs border-b border-border ${resolved ? 'opacity-50' : ''}`}>
@@ -274,23 +310,6 @@ function CommentView({ comment }: { comment: PRComment }) {
       )}
     </div>
   );
-}
-
-function extractTitle(body: string): string {
-  const clean = body.replace(/[<>]/g, '').trim();
-  for (const line of clean.split('\n').slice(0, 15)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('_') || trimmed.startsWith('> [!')) continue;
-    const bold = trimmed.match(/\*\*(.+?)\*\*/);
-    if (bold) return bold[1];
-    if (trimmed.startsWith('# ')) return trimmed.slice(2).trim();
-    return trimmed;
-  }
-  return clean.split('\n')[0] || '';
-}
-
-function isDeploymentComment(c: PRComment): boolean {
-  return c.botType === 'vercel' && c.body.startsWith('[vc]:');
 }
 
 interface VercelProject {

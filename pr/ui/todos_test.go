@@ -137,6 +137,50 @@ func TestTodoNewEndpointJSONAutoSaveDefaultsPending(t *testing.T) {
 	}
 }
 
+func TestTodoNewEndpointFoldsCriteriaIntoBody(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	// A "create todo from PR" request carries the selected failing tests and
+	// review comments as acceptance criteria; the server folds them into the body
+	// so they round-trip back as the todo's parsed criteria.
+	payload := todoNewPayload{todoCreatePayload: todoCreatePayload{
+		Title: "Fix failing tests in flanksource/gavel#7",
+		Body:  "From flanksource/gavel#7",
+		Criteria: []types.AcceptanceCriterion{
+			{Text: "Test `TestParser` passes"},
+			{Text: "Resolve @reviewer's comment on parser.go:42"},
+		},
+	}}
+	autoSave := true
+	payload.AutoSave = &autoSave
+	raw, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("new status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp todoNewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal new response: %v", err)
+	}
+	if len(resp.Todo.Criteria) != 2 {
+		t.Fatalf("criteria not parsed back onto todo: %+v", resp.Todo.Criteria)
+	}
+	if resp.Todo.Criteria[0].Text != "Test `TestParser` passes" || resp.Todo.Criteria[1].Text != "Resolve @reviewer's comment on parser.go:42" {
+		t.Fatalf("unexpected criteria: %+v", resp.Todo.Criteria)
+	}
+	if !strings.Contains(resp.Todo.Body, "## Acceptance Criteria") {
+		t.Fatalf("body missing acceptance-criteria section: %q", resp.Todo.Body)
+	}
+	if !strings.Contains(resp.Todo.Body, "From flanksource/gavel#7") {
+		t.Fatalf("body dropped the PR reference: %q", resp.Todo.Body)
+	}
+}
+
 func TestTodoNewEndpointMultipartFiles(t *testing.T) {
 	attachmentsDir = t.TempDir()
 	workDir := t.TempDir()

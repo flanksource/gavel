@@ -631,7 +631,7 @@ export function App() {
             }
             right={
               selected ? (
-                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
+                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} />
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   <div className="text-center">
@@ -791,7 +791,7 @@ function MenubarView({
           <div className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
         </div>
         <div className="h-[calc(100vh-44px)] overflow-hidden">
-          <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} />
+          <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} />
         </div>
       </div>
     );
