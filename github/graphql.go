@@ -32,6 +32,7 @@ const prByBranchQuery = `query($owner: String!, $repo: String!, $branch: String!
 ` + prFragment
 
 const prFragment = `fragment prFields on PullRequest {
+  id
   number
   title
   author { login avatarUrl }
@@ -135,6 +136,7 @@ type graphQLPRConnection struct {
 }
 
 type graphQLPR struct {
+	ID             string               `json:"id"`
 	Number         int                  `json:"number"`
 	Title          string               `json:"title"`
 	Author         graphQLAuthor        `json:"author"`
@@ -239,6 +241,7 @@ type graphQLWorkflow struct {
 
 func (pr graphQLPR) toPRInfo() *PRInfo {
 	info := &PRInfo{
+		NodeID:         pr.ID,
 		Number:         pr.Number,
 		Title:          pr.Title,
 		Author:         PRAuthor{Login: pr.Author.Login, AvatarURL: pr.Author.AvatarURL},

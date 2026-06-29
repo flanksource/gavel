@@ -469,6 +469,9 @@ export interface PRSyncStatus {
 
 export interface PRInfo {
   number: number;
+  // nodeId is the GraphQL global node ID, required by the merge / approve /
+  // auto-merge actions. Present once PR detail has loaded.
+  nodeId?: string;
   title: string;
   author: { login: string; name?: string; avatarUrl?: string };
   headRefName: string;

@@ -83,7 +83,6 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	req := captainai.Request{
 		Prompt:         prompt,
 		Cwd:            workDir,
-		Verbose:        true, // required for claude stream-json
 		Edit:           true, // acceptEdits so file edits are not blocked
 		AllowedTools:   e.config.Tools,
 		PermissionMode: "acceptEdits",

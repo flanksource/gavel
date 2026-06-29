@@ -12,7 +12,11 @@ import (
 )
 
 type PRInfo struct {
-	Number            int          `json:"number"`
+	Number int `json:"number"`
+	// NodeID is the GraphQL global node ID, required to merge/approve/enable
+	// auto-merge on this PR. Empty when the PR was loaded from a source that
+	// doesn't request it (e.g. the REST search path).
+	NodeID            string       `json:"nodeId,omitempty"`
 	Title             string       `json:"title"`
 	Author            PRAuthor     `json:"author"`
 	HeadRefName       string       `json:"headRefName"`

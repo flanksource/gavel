@@ -334,6 +334,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/bots", s.handleBots)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
+	mux.HandleFunc("POST /api/prs/approve", s.handlePRApprove)
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)

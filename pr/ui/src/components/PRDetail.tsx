@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, type ReactNode } from 'react';
 import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
 import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
+import { PRActions } from './PRActions';
 import { RelativeTime } from './RelativeTime';
 import { ansiToHtml, stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
@@ -90,9 +91,12 @@ interface Props {
   projects?: Project[];
   // onTodoCreated lets the host refresh todo counts after one is added.
   onTodoCreated?: () => void;
+  // onActionDone fires after a merge/approve/auto-merge action lands so the host
+  // can re-fetch the PR detail and reflect the new state.
+  onActionDone?: () => void;
 }
 
-export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated }: Props) {
+export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, onActionDone }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
 
@@ -102,18 +106,21 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated }: 
         pr={pr}
         detail={detail}
         action={
-          workspaces.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 shrink-0 gap-1 px-2 text-xs"
-              onClick={() => setShowCreate(true)}
-              title="Create a todo from this PR's failures and comments"
-            >
-              <GavelIcon name="codicon:add" className="text-xs" />
-              New todo
-            </Button>
-          ) : undefined
+          <div className="flex items-center gap-2">
+            <PRActions pr={pr} detail={detail} onChanged={onActionDone} />
+            {workspaces.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 gap-1 px-2 text-xs"
+                onClick={() => setShowCreate(true)}
+                title="Create a todo from this PR's failures and comments"
+              >
+                <GavelIcon name="codicon:add" className="text-xs" />
+                New todo
+              </Button>
+            )}
+          </div>
         }
       />
 
