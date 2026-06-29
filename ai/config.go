@@ -4,6 +4,7 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/spf13/pflag"
 )
 
@@ -47,10 +48,14 @@ type AgentConfig struct {
 // toCaptain maps the gavel config onto captain's ai.Config. Backend is left
 // empty so captain infers it from the model.
 func (c AgentConfig) toCaptain() captainai.Config {
+	model := api.Model{Name: c.Model}
+	if c.Temperature != 0 {
+		t := c.Temperature
+		model.Temperature = &t
+	}
 	return captainai.Config{
-		Model:         c.Model,
-		MaxTokens:     c.MaxTokens,
-		Temperature:   c.Temperature,
+		Model:         model,
+		Budget:        api.Budget{MaxTokens: c.MaxTokens},
 		MaxConcurrent: c.MaxConcurrent,
 		NoCache:       c.NoCache,
 		CacheTTL:      c.CacheTTL,

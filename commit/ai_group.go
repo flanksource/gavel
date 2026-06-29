@@ -167,6 +167,7 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 		schema := &aiGroupingSchema{}
 		resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
 			Name:             "commit grouping",
+			Source:           "<commit-grouping>",
 			Prompt:           prompt,
 			StructuredOutput: schema,
 		})

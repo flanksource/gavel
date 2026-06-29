@@ -25,7 +25,10 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		ctx = context.Background()
 	}
 
-	aiCfg, aiProto := buildAIFixRequest(opts.AIRuntimeOptions)
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions)
+	if err != nil {
+		return initial, err
+	}
 
 	res, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        opts.WorkDir,

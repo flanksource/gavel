@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
-	"github.com/flanksource/gavel/todos/cmux"
 	"github.com/flanksource/gavel/todos/headless"
 )
 
@@ -104,6 +104,7 @@ func Parse(s string) (Kind, error) {
 type Config struct {
 	WorkDir      string
 	Model        string
+	Backend      string
 	Effort       string
 	Plan         bool
 	Resume       bool
@@ -113,6 +114,11 @@ type Config struct {
 	MaxTurns     int
 	Tools        []string
 	Dirty        bool
+	// ToolModes is the per-tool exposure (tool name → enabled/ask/disabled) and
+	// PermissionMode the base permission posture (a clicky ClaudePermissionMode),
+	// both honoured by the captain-backed executor (cmux and headless).
+	ToolModes      map[string]string
+	PermissionMode string
 	// PromptOverride, when non-empty, is used verbatim as the agent prompt body
 	// instead of the auto-built prompt — the dashboard's editable prompt. The
 	// implement/plan scaffolding is still applied per the run mode.
@@ -141,15 +147,25 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 
 	switch kind.Mechanism() {
 	case "cmux":
-		return cmux.NewCmuxExecutor(cmux.CmuxExecutorConfig{
+		// cmux now drives the captain cmux provider through the same captain-backed
+		// executor as headless, selected by a cmux backend. It returns "" as the
+		// orchestrator session id (it manages its own --session-id via Config.SessionID).
+		return headless.NewExecutor(headless.Config{
 			WorkDir:        cfg.WorkDir,
+			Agent:          kind.Agent(),
 			Model:          model,
+			Backend:        string(cmuxBackend(kind.Agent())),
 			Effort:         cfg.Effort,
+			MaxTurns:       cfg.MaxTurns,
+			Tools:          cfg.Tools,
+			Timeout:        cfg.Timeout,
+			PromptOverride: cfg.PromptOverride,
+			Approvals:      cfg.Approvals,
 			Plan:           cfg.Plan,
 			Resume:         cfg.Resume,
 			SessionID:      cfg.SessionID,
-			Timeout:        cfg.Timeout,
-			PromptOverride: cfg.PromptOverride,
+			ToolModes:      cfg.ToolModes,
+			PermissionMode: cfg.PermissionMode,
 		}), "", nil
 	case "sdk":
 		tools := cfg.Tools
@@ -172,12 +188,15 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 			WorkDir:        cfg.WorkDir,
 			Agent:          kind.Agent(),
 			Model:          model,
+			Backend:        cfg.Backend,
 			Effort:         cfg.Effort,
 			MaxTurns:       cfg.MaxTurns,
 			Tools:          cfg.Tools,
 			Timeout:        cfg.Timeout,
 			PromptOverride: cfg.PromptOverride,
 			Approvals:      cfg.Approvals,
+			ToolModes:      cfg.ToolModes,
+			PermissionMode: cfg.PermissionMode,
 		}), "", nil
 	case "api":
 		return nil, "", fmt.Errorf("driver %q is not yet implemented", kind)
@@ -189,6 +208,14 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 // DefaultTools is the standard tool allowlist for the sdk/api drivers.
 func DefaultTools() []string {
 	return []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+}
+
+// cmuxBackend maps a coding agent to its cmux captain backend.
+func cmuxBackend(agent string) captainai.Backend {
+	if agent == "codex" {
+		return captainai.BackendCodexCmux
+	}
+	return captainai.BackendClaudeCmux
 }
 
 // resolveModel reconciles the requested model with the driver's agent. An empty
@@ -204,7 +231,7 @@ func resolveModel(kind Kind, model string) (string, error) {
 		}
 		return "", nil
 	}
-	got, _ := cmux.ResolveAgent(model)
+	got, _ := claude.ResolveAgent(model)
 	if got != agent {
 		return "", fmt.Errorf("driver %q expects a %s model but %q resolves to %s", kind, agent, model, got)
 	}

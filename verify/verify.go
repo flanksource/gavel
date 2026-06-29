@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 )
 
 type RunOptions struct {
@@ -21,6 +22,12 @@ type RunOptions struct {
 	// verify prompt — the dashboard's editable prompt. The JSON output schema is
 	// unchanged (criteria/checks/ratings still drive it).
 	PromptOverride string
+	// AgentConfig, when set, runs the review through a captain agentic backend
+	// (claude-code / claude-agent): the agent fetches the diff via its own tools
+	// and is told to emit JSON matching the schema, which is parsed here. Fixture
+	// AI steps and todo verification always set it; `gavel verify` and the autofix
+	// loop leave it nil and use the legacy per-provider CLI adapters.
+	AgentConfig *ai.AgentConfig
 }
 
 func RunVerify(opts RunOptions) (*VerifyResult, error) {
@@ -36,35 +43,67 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 		criteria = opts.Issue.Criteria
 	}
 
-	adapter, model := ResolveAdapter(cfg.Model)
-
-	logger.Infof("Verifying %s using %s", scope, model)
-
 	prompt, err := resolveVerifyPrompt(opts, scope, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render prompt: %w", err)
 	}
 
+	var result VerifyResult
+	if opts.AgentConfig != nil {
+		result, err = runAgentic(opts, scope, cfg, prompt, criteria)
+	} else {
+		result, err = runAdapter(opts, scope, cfg, prompt, criteria)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	result.Score = ComputeOverallScore(result)
+	return &result, nil
+}
+
+// runAgentic executes the review with a captain agentic backend and parses the
+// JSON reply. The schema is built from the run's checks + criteria and embedded
+// in the prompt (the agentic backends have no native structured-output mode).
+func runAgentic(opts RunOptions, scope ReviewScope, cfg VerifyConfig, prompt string, criteria []string) (VerifyResult, error) {
+	schema, err := BuildSchema(EnabledChecks(cfg.Checks), opts.Issue != nil, criteria)
+	if err != nil {
+		return VerifyResult{}, fmt.Errorf("failed to build schema: %w", err)
+	}
+	logger.Infof("Verifying %s using %s", scope, opts.AgentConfig.Model)
+	raw, err := executeAgentic(*opts.AgentConfig, prompt, schema, opts.RepoPath)
+	if err != nil {
+		return VerifyResult{}, err
+	}
+	result, err := parseVerifyResponse(raw)
+	if err != nil {
+		return VerifyResult{}, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// runAdapter executes the review with the legacy per-provider CLI adapters.
+func runAdapter(opts RunOptions, scope ReviewScope, cfg VerifyConfig, prompt string, criteria []string) (VerifyResult, error) {
+	adapter, model := ResolveAdapter(cfg.Model)
+	logger.Infof("Verifying %s using %s", scope, model)
+
 	schemaFile, err := SchemaFile(cfg.Checks, opts.Issue != nil, criteria)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create schema file: %w", err)
+		return VerifyResult{}, fmt.Errorf("failed to create schema file: %w", err)
 	}
 	defer os.Remove(schemaFile)
 
 	raw, err := Execute(adapter, prompt, model, schemaFile, opts.RepoPath, logger.V(2).Enabled())
 	if err != nil {
-		return nil, fmt.Errorf("CLI execution failed: %w", err)
+		return VerifyResult{}, fmt.Errorf("CLI execution failed: %w", err)
 	}
-
 	adapter.PostExecute(raw)
 
 	result, err := adapter.ParseResponse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return VerifyResult{}, fmt.Errorf("failed to parse response: %w", err)
 	}
-
-	result.Score = ComputeOverallScore(result)
-	return &result, nil
+	return result, nil
 }
 
 // resolveVerifyPrompt returns the verbatim PromptOverride when set, otherwise the

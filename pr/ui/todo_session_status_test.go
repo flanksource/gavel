@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/todos/cmux"
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -24,7 +24,7 @@ func TestReconcileSessionStatusFlipsFailedWhileSessionExecuting(t *testing.T) {
 	const sessionID = "reconcile-live-0001"
 	// A live tailer feeding the session marks it in progress, so a failed todo
 	// whose session is executing again must read as in-progress.
-	acc := cmux.GlobalSessionStats().Begin(sessionID, "claude", "claude-opus-4-8", "medium", time.Now())
+	acc := cmuxprov.GlobalSessionStats().Begin(sessionID, "claude", "claude-opus-4-8", "medium", time.Now())
 	defer acc.Finish()
 
 	todo := failedTodoWithSession(sessionID)
@@ -50,7 +50,7 @@ func TestReconcileSessionStatusLeavesFailedWhenNoLiveSession(t *testing.T) {
 func TestReconcileSessionStatusOnlyTouchesFailedTodos(t *testing.T) {
 	dir := t.TempDir()
 	const sessionID = "reconcile-nonfailed-0003"
-	acc := cmux.GlobalSessionStats().Begin(sessionID, "claude", "claude-opus-4-8", "medium", time.Now())
+	acc := cmuxprov.GlobalSessionStats().Begin(sessionID, "claude", "claude-opus-4-8", "medium", time.Now())
 	defer acc.Finish()
 
 	// A completed todo whose session is live must not be dragged back to running;

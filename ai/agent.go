@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/middleware"
 )
 
 // Type aliases to captain so existing call sites compile unchanged.
@@ -38,11 +39,31 @@ var envAliases = map[string][]string{
 
 var normalizeOnce sync.Once
 
-// NewAgent builds a captain-backed agent from cfg after normalizing env keys.
-// The backend is inferred from the model by captain.
-func NewAgent(cfg AgentConfig) (Agent, error) {
+// NewProvider builds the captain provider for cfg (env-normalized, wrapped with
+// the logging middleware) and returns it directly. Callers that need the full
+// request surface — a working directory, agentic tool/permission knobs — drive
+// provider.Execute with a captainai.Request, which the named-prompt PromptRequest
+// wrapper cannot express. NewAgent is the higher-level surface built on top.
+func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	return captainai.NewAgent(cfg.toCaptain())
+	provider, err := captainai.NewProvider(cfg.toCaptain())
+	if err != nil {
+		return nil, err
+	}
+	return middleware.Wrap(provider, middleware.WithLogging())
+}
+
+// NewAgent builds a captain-backed agent from cfg after normalizing env keys.
+// The backend is inferred from the model by captain. The provider is wrapped with
+// captain's logging middleware so the prompt source, rendered input, schema-in and
+// schema-out print under -v (Debug/Trace); captain's NewAgent omits middleware, so
+// gavel applies it here (the ai package cannot import middleware without a cycle).
+func NewAgent(cfg AgentConfig) (Agent, error) {
+	provider, err := NewProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return captainai.NewAgentWithProvider(provider, cfg.toCaptain()), nil
 }
 
 // GetDefaultAgent returns an agent built from DefaultConfig.

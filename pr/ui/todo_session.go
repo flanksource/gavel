@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/ai/history"
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/cmux"
 )
 
 const (
@@ -44,12 +44,12 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
-	stats, err := cmux.GlobalSessionStats().Get(sessionID, path)
+	stats, err := cmuxprov.GlobalSessionStats().Get(sessionID, path)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
@@ -69,7 +69,7 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 // todoSessionStatsResponse is the session-stats payload plus any pending
 // tool-permission request awaiting the user's Allow/Deny.
 type todoSessionStatsResponse struct {
-	cmux.SessionStats
+	cmuxprov.SessionStats
 	Approval *todos.ApprovalRequest `json:"approval,omitempty"`
 }
 
@@ -119,7 +119,7 @@ func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) 
 	if agent == "" {
 		agent = "claude"
 	}
-	if err := cmux.FocusSession(r.Context(), cmux.NewClient(""), dir, agent); err != nil {
+	if err := cmuxprov.FocusSession(r.Context(), cmuxprov.NewClient(""), dir, agent); err != nil {
 		writeTodoError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -138,7 +138,7 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		writeTodoError(w, http.StatusInternalServerError, err)

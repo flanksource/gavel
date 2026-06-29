@@ -26,18 +26,6 @@ func (Codex) BuildVerifyArgs(prompt, model, schemaFile string, _ bool) []string 
 	return args
 }
 
-func (Codex) BuildFixArgs(model, prompt string, patchOnly bool) []string {
-	args := []string{"exec"}
-	if !patchOnly {
-		args = append(args, "--full-auto")
-	}
-	if model != "" && model != "codex" {
-		args = append(args, "-m", model)
-	}
-	args = append(args, "--", prompt)
-	return args
-}
-
 func (Codex) ParseResponse(raw string) (VerifyResult, error) {
 	if text := extractFromJSONL(raw); text != "" {
 		cleaned := strings.TrimSpace(stripMarkdownFences(text))

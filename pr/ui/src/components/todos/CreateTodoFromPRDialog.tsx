@@ -1,22 +1,57 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
+import {
+  Modal,
+  Field,
+  Button,
+  Select,
+  SplitPane,
+  ListMenu,
+  ListMenuItem,
+  ListMenuHeader,
+  useListMenuSelection,
+} from '@flanksource/clicky-ui/components';
 import type { AcceptanceCriterion, PRDetail, PRItem, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { extractCommentTitle, isDeploymentComment } from '../../utils';
+import { ansiToHtml } from '../../ansi';
+import { Markdown } from '../Markdown';
+import { Avatar } from '../Avatar';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
 // SourceGroup is the kind of PR signal a candidate criterion came from.
 type SourceGroup = 'tests' | 'lint' | 'checks' | 'comments';
 
+// CandidateDetail is the full content shown in the right-hand pane when a row is
+// focused: a heading + optional location/meta, a short message, a markdown body
+// (comments), and a preformatted log (test stack traces, check logs).
+interface CandidateDetail {
+  heading: string;
+  // headingMarkdown renders the heading as inline markdown (used for comment
+  // titles, which may carry bold/code/link formatting).
+  headingMarkdown?: boolean;
+  location?: string;
+  meta?: string;
+  message?: string;
+  markdown?: string;
+  log?: string;
+  url?: string;
+}
+
 // Candidate is one selectable acceptance criterion derived from a PR signal. The
 // key is stable per signal so selection survives re-renders; text is the
-// criterion stored on the todo; primary/secondary label the row.
+// criterion stored on the todo; primary/secondary label the row; detail backs
+// the right-hand pane.
 interface Candidate {
   key: string;
   group: SourceGroup;
   text: string;
   primary: string;
   secondary?: string;
+  // author/avatarUrl are set for review comments so they can be sub-grouped by
+  // author in the list.
+  author?: string;
+  avatarUrl?: string;
+  detail: CandidateDetail;
 }
 
 // GROUPS drives both the grouped checkbox lists and the one-click presets: each
@@ -43,12 +78,14 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
   shards.forEach((s, si) => {
     (s.topFailures ?? []).forEach((f, i) => {
       const name = f.suite ? `${f.suite} › ${f.name}` : f.name;
+      const loc = location(f.file, f.line);
       out.push({
         key: `test:${si}:${i}:${f.name}`,
         group: 'tests',
         text: `Test \`${name}\` passes`,
         primary: f.name,
-        secondary: location(f.file, f.line) || f.suite,
+        secondary: loc || f.suite,
+        detail: { heading: name, location: loc, message: f.message, log: f.details },
       });
     });
   });
@@ -63,17 +100,20 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
         text: `Resolve ${v.linter}${rule} violation${loc ? ` at ${loc}` : ''}`,
         primary: `${v.linter}${rule}`,
         secondary: loc || v.message,
+        detail: { heading: `${v.linter}${rule}`, location: loc, message: v.message },
       });
     });
   });
 
   (pr.checkStatus?.failures ?? []).forEach((c, i) => {
+    const steps = (c.failedSteps ?? []).join(', ');
     out.push({
       key: `check:${i}:${c.name}`,
       group: 'checks',
       text: `CI check "${c.name}" passes`,
       primary: c.name,
-      secondary: (c.failedSteps ?? []).join(', ') || undefined,
+      secondary: steps || undefined,
+      detail: { heading: c.name, meta: steps ? `Failed steps: ${steps}` : undefined, log: c.logTail, url: c.detailsUrl },
     });
   });
 
@@ -87,10 +127,57 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
         group: 'comments',
         text: `Address @${c.author}'s comment${loc ? ` on ${loc}` : ''}: ${title}`,
         primary: title || `Comment by @${c.author}`,
-        secondary: `@${c.author}${loc ? ` · ${loc}` : ''}`,
+        secondary: loc || undefined,
+        author: c.author,
+        avatarUrl: c.avatarUrl,
+        detail: { heading: title || `Comment by @${c.author}`, headingMarkdown: true, meta: `@${c.author}`, location: loc, markdown: c.body, url: c.url },
       });
     });
 
+  return out;
+}
+
+// Section is one rendered group in the left list: tests/lint/checks each map to a
+// single section; review comments are sub-grouped into one section per author.
+interface Section {
+  id: string;
+  label: string;
+  icon: string;
+  avatarUrl?: string;
+  isAuthor?: boolean;
+  items: Candidate[];
+}
+
+// buildSections orders the left list (tests, lint, checks, then comments) and
+// splits the comments group into one section per author, preserving first-seen
+// order so the list is stable as detail streams in.
+function buildSections(candidates: Candidate[]): Section[] {
+  const out: Section[] = [];
+  for (const g of GROUPS) {
+    const items = candidates.filter(c => c.group === g.id);
+    if (items.length === 0) continue;
+    if (g.id !== 'comments') {
+      out.push({ id: g.id, label: g.label, icon: g.icon, items });
+      continue;
+    }
+    const byAuthor = new Map<string, Candidate[]>();
+    for (const c of items) {
+      const author = c.author || 'unknown';
+      const list = byAuthor.get(author);
+      if (list) list.push(c);
+      else byAuthor.set(author, [c]);
+    }
+    for (const [author, authorItems] of byAuthor) {
+      out.push({
+        id: `comments:${author}`,
+        label: `@${author}`,
+        icon: g.icon,
+        avatarUrl: authorItems[0]?.avatarUrl,
+        isAuthor: true,
+        items: authorItems,
+      });
+    }
+  }
   return out;
 }
 
@@ -100,9 +187,58 @@ function todoHref(todo: TodoItem): string {
   return `/todos/${todo.ref.split('/').map(encodeURIComponent).join('/')}`;
 }
 
+// DetailPane renders the focused candidate's full content in the right column:
+// a markdown body for comments, an ANSI-rendered message/log for tests and
+// checks, and a link back to the source on GitHub when available.
+function DetailPane({ detail }: { detail?: CandidateDetail }) {
+  if (!detail) {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
+        Select a test, lint violation, check, or comment to see its details here.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2 p-3">
+      <div>
+        {detail.headingMarkdown ? (
+          <Markdown inline text={detail.heading} className="break-words text-sm font-semibold text-foreground" />
+        ) : (
+          <div className="break-words text-sm font-semibold text-foreground">{detail.heading}</div>
+        )}
+        {(detail.meta || detail.location) && (
+          <div className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
+            {[detail.meta, detail.location].filter(Boolean).join(' · ')}
+          </div>
+        )}
+      </div>
+      {detail.message && (
+        <div
+          className="whitespace-pre-wrap break-words text-xs text-foreground"
+          dangerouslySetInnerHTML={{ __html: ansiToHtml(detail.message) }}
+        />
+      )}
+      {detail.markdown && <Markdown text={detail.markdown} className="text-xs text-foreground" />}
+      {detail.log && (
+        <pre
+          className="overflow-x-auto whitespace-pre-wrap rounded border border-border bg-black px-3 py-2 font-mono text-[11px] text-gray-100"
+          dangerouslySetInnerHTML={{ __html: ansiToHtml(detail.log) }}
+        />
+      )}
+      {detail.url && (
+        <a href={detail.url} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
+          <GavelIcon name="codicon:link-external" />
+          View on GitHub
+        </a>
+      )}
+    </div>
+  );
+}
+
 // CreateTodoFromPRDialog turns a PR's failing tests, lint violations, failed CI
 // checks, and review comments into a new todo whose acceptance criteria are the
-// selected signals. It stays on the PR after creating and links to the new todo.
+// selected signals. Selecting a row shows its full details on the right. It stays
+// on the PR after creating and links to the new todo.
 export function CreateTodoFromPRDialog({
   open,
   onClose,
@@ -126,62 +262,90 @@ export function CreateTodoFromPRDialog({
     return match?.dir ?? workspaces[0]?.dir ?? '';
   }, [workspaces, pr.repo]);
 
+  // The ListMenu multi-select owns which signals become acceptance criteria;
+  // activeKey is the separate detail-focus row shown in the right pane. Selection
+  // is controlled (we own selectedKeys) so checkbox writes and the submit read
+  // share one source of truth, and so programmatic defaults (which call
+  // setSelectedKeys directly) are distinguishable from user edits (which route
+  // through onSelectionChange and flip `touched`).
+  const keys = useMemo(() => candidates.map(c => c.key), [candidates]);
+  const sections = useMemo(() => buildSections(candidates), [candidates]);
+  // Default pre-selection is the CI failures (tests/lint/checks); review comments
+  // start unchecked so a long nitpick list isn't dumped in.
+  const defaultKeys = useMemo(() => candidates.filter(c => c.group !== 'comments').map(c => c.key), [candidates]);
+
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const touched = useRef(false);
+  const selection = useListMenuSelection({
+    keys,
+    selectedKeys,
+    onSelectionChange: next => {
+      touched.current = true;
+      setSelectedKeys(next);
+    },
+  });
+
   const [dir, setDir] = useState(defaultDir);
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [notes, setNotes] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
 
-  // Reset the form on the closed→open transition only — not on later renders
-  // when the PR detail streams in (comments first, test/lint results later), so
-  // an in-flight update never wipes a title the user has typed or items they
-  // toggled. The CI failures (tests, lint, checks) are pre-selected since "fix
-  // the failures" is the common intent; review comments start unselected so a
-  // long nitpick list isn't dumped in.
+  // Reset the form on the closed→open transition, then keep re-applying the
+  // default selection as the PR detail streams in (comments first, test/lint
+  // results later) until the user edits the selection. Without the re-apply,
+  // opening the dialog before gavelResults arrive would leave the failing tests
+  // unchecked, so "Add todo" created a todo with no acceptance criteria. Once the
+  // user touches the selection (`touched`), streaming stops overwriting it.
   const wasOpen = useRef(false);
   useEffect(() => {
-    if (open && !wasOpen.current) {
+    if (!open) {
+      wasOpen.current = false;
+      return;
+    }
+    if (!wasOpen.current) {
+      wasOpen.current = true;
+      touched.current = false;
       setDir(defaultDir);
       setTitle(`Address feedback on ${pr.repo}#${pr.number}`);
       setPriority('medium');
       setStatus('pending');
       setNotes('');
-      setSelected(new Set(candidates.filter(c => c.group !== 'comments').map(c => c.key)));
       setError('');
       setBusy(false);
       setCreated(null);
     }
-    wasOpen.current = open;
-  }, [open, defaultDir, pr.repo, pr.number, candidates]);
+    if (!touched.current) {
+      setSelectedKeys(defaultKeys);
+      setActiveKey(prev =>
+        prev && candidates.some(c => c.key === prev) ? prev : (defaultKeys[0] ?? candidates[0]?.key ?? null),
+      );
+    }
+  }, [open, defaultDir, pr.repo, pr.number, candidates, defaultKeys]);
 
   if (!open) return null;
 
-  function toggle(key: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
   function applyPreset(g: (typeof GROUPS)[number]) {
-    setSelected(new Set(candidates.filter(c => c.group === g.id).map(c => c.key)));
+    touched.current = true;
+    setSelectedKeys(candidates.filter(c => c.group === g.id).map(c => c.key));
+    setActiveKey(candidates.find(c => c.group === g.id)?.key ?? null);
     setTitle(`${g.preset} in ${pr.repo}#${pr.number}`);
   }
 
-  function toggleGroup(id: SourceGroup) {
-    const keys = candidates.filter(c => c.group === id).map(c => c.key);
-    const allOn = keys.length > 0 && keys.every(k => selected.has(k));
-    setSelected(prev => {
-      const next = new Set(prev);
-      keys.forEach(k => (allOn ? next.delete(k) : next.add(k)));
-      return next;
-    });
+  // toggleKeys flips a section's All/None: deselect them all when every key is
+  // already selected, otherwise add the missing ones.
+  function toggleKeys(sectionKeys: string[]) {
+    touched.current = true;
+    const allOn = sectionKeys.length > 0 && sectionKeys.every(k => selectedKeys.includes(k));
+    setSelectedKeys(
+      allOn
+        ? selectedKeys.filter(k => !sectionKeys.includes(k))
+        : Array.from(new Set([...selectedKeys, ...sectionKeys])),
+    );
   }
 
   async function submit() {
@@ -190,8 +354,9 @@ export function CreateTodoFromPRDialog({
     setError('');
     try {
       const provider = workspaces.find(w => w.dir === dir)?.todoProvider || 'auto';
+      const sel = new Set(selectedKeys);
       const criteria: AcceptanceCriterion[] = candidates
-        .filter(c => selected.has(c.key))
+        .filter(c => sel.has(c.key))
         .map(c => ({ text: c.text }));
       const bodyParts: string[] = [];
       if (notes.trim()) bodyParts.push(notes.trim());
@@ -212,15 +377,17 @@ export function CreateTodoFromPRDialog({
     }
   }
 
-  const selectedCount = selected.size;
+  const selectedCount = selectedKeys.length;
   const presets = GROUPS.filter(g => candidates.some(c => c.group === g.id));
+  const activeDetail = candidates.find(c => c.key === activeKey)?.detail;
 
   return (
     <Modal
       open
       onClose={onClose}
       title={created ? 'Todo created' : 'New todo from PR'}
-      size="lg"
+      size="xl"
+      className="max-w-6xl"
       footer={
         created ? (
           <div className="flex justify-end gap-2">
@@ -323,44 +490,62 @@ export function CreateTodoFromPRDialog({
                 No failing tests, lint violations, checks, or open comments on this PR — the todo will be created from the title and notes alone.
               </p>
             ) : (
-              <div className="space-y-2">
-                {GROUPS.map(g => {
-                  const items = candidates.filter(c => c.group === g.id);
-                  if (items.length === 0) return null;
-                  const allOn = items.every(c => selected.has(c.key));
-                  return (
-                    <div key={g.id} className="overflow-hidden rounded-md border border-border">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={() => toggleGroup(g.id)}
-                        className="flex h-auto w-full items-center justify-start gap-2 rounded-none border-b border-border bg-muted/40 px-2.5 py-1.5 text-left text-xs font-semibold text-muted-foreground hover:bg-muted"
-                      >
-                        <GavelIcon name={allOn ? 'codicon:check' : 'codicon:checklist'} className="text-sm" />
-                        <span className="flex-1">{g.label}</span>
-                        <span className="rounded-full border border-border bg-background px-1.5 py-0.5 tabular-nums">{items.length}</span>
-                      </Button>
-                      <ul className="divide-y divide-border">
-                        {items.map(c => (
-                          <li key={c.key}>
-                            <label className="flex cursor-pointer items-start gap-2 px-2.5 py-1.5 hover:bg-muted/40">
-                              <input
-                                type="checkbox"
-                                checked={selected.has(c.key)}
-                                onChange={() => toggle(c.key)}
-                                className="mt-1 h-4 w-4 shrink-0 accent-primary"
-                              />
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-sm text-foreground">{c.primary}</span>
+              <div className="h-[55vh] overflow-hidden rounded-md border border-border">
+                <SplitPane
+                  defaultSplit={42}
+                  minLeft={28}
+                  minRight={30}
+                  left={
+                    <ListMenu selection={selection}>
+                      {sections.map(sec => {
+                        const allOn = sec.items.every(c => selection.isSelected(c.key));
+                        return (
+                          <div key={sec.id}>
+                            <ListMenuHeader>
+                              {sec.isAuthor && sec.avatarUrl ? (
+                                <Avatar src={sec.avatarUrl} alt={sec.label} size={16} />
+                              ) : (
+                                <GavelIcon name={sec.icon} className="text-sm text-muted-foreground" />
+                              )}
+                              <span className={`flex-1 truncate text-xs font-semibold tracking-wide text-muted-foreground ${sec.isAuthor ? '' : 'uppercase'}`}>{sec.label}</span>
+                              <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{sec.items.length}</span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-[11px]"
+                                onClick={() => toggleKeys(sec.items.map(c => c.key))}
+                              >
+                                {allOn ? 'None' : 'All'}
+                              </Button>
+                            </ListMenuHeader>
+                            {sec.items.map(c => (
+                              <ListMenuItem
+                                key={c.key}
+                                itemKey={c.key}
+                                active={activeKey === c.key}
+                                className="px-2.5 py-1.5"
+                                onClick={() => setActiveKey(c.key)}
+                              >
+                                {c.group === 'comments' ? (
+                                  <Markdown inline text={c.primary} className="block truncate text-sm text-foreground" />
+                                ) : (
+                                  <span className="block truncate text-sm text-foreground">{c.primary}</span>
+                                )}
                                 {c.secondary && <span className="block truncate font-mono text-[11px] text-muted-foreground">{c.secondary}</span>}
-                              </span>
-                            </label>
-                          </li>
-                        ))}
-                      </ul>
+                              </ListMenuItem>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </ListMenu>
+                  }
+                  right={
+                    <div className="h-full overflow-y-auto bg-muted/20">
+                      <DetailPane detail={activeDetail} />
                     </div>
-                  );
-                })}
+                  }
+                />
               </div>
             )}
           </div>

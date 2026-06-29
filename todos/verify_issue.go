@@ -5,10 +5,25 @@ import (
 	"fmt"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
+
+// defaultTodoVerifyModel is the agentic captain backend used when a TODO has no
+// ai.model front matter and no --model override.
+const defaultTodoVerifyModel = "claude-code-sonnet"
+
+// resolveTodoAgentConfig maps a TODO's ai: front matter onto an agent config for
+// the captain-agentic verify run, with the --model flag taking precedence.
+func resolveTodoAgentConfig(todo *types.TODO, model string) ai.AgentConfig {
+	cfg := todo.AI.ToAgentConfig(defaultTodoVerifyModel)
+	if model != "" {
+		cfg.Model = model
+	}
+	return cfg
+}
 
 // defaultVerifyThreshold is the score (with implemented=true) at or above which
 // an issue verification promotes the TODO to verified.
@@ -103,9 +118,11 @@ func RunIssueVerification(ctx context.Context, provider Provider, todo *types.TO
 		cfg.Model = opts.Model
 	}
 
+	agentCfg := resolveTodoAgentConfig(todo, opts.Model)
 	result, err := verify.RunVerify(verify.RunOptions{
 		Config:         cfg,
 		RepoPath:       opts.WorkDir,
+		AgentConfig:    &agentCfg,
 		Issue:          BuildIssueContext(todo, shas),
 		PromptOverride: opts.Prompt,
 	})

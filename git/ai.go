@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/ai/prompt"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
@@ -22,6 +21,14 @@ var functionalityRemovedPrompt string
 
 //go:embed ai-commit-compatibility-issues.prompt
 var compatibilityIssuesPrompt string
+
+// Prompt source names, reported as PromptRequest.Source so the AI logging
+// middleware identifies which template produced each request under -v.
+const (
+	commitMessagePromptFile        = "ai-commit-message.prompt"
+	functionalityRemovedPromptFile = "ai-commit-functionality-removed.prompt"
+	compatibilityIssuesPromptFile  = "ai-commit-compatibility-issues.prompt"
+)
 
 // commitMessageSchema is the structured-output schema handed to the LLM.
 // Fields are ordered to match the expected conventional-commit layout.
@@ -128,6 +135,7 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "commit message"),
+		Source:           commitMessagePromptFile,
 		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
@@ -137,9 +145,6 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	if resp.Error != "" {
 		return commit, fmt.Errorf("AI commit message prompt returned error: %s", resp.Error)
 	}
-
-	logger.V(2).Infof("AI commit analysis structured response: type=%q scope=%q subject=%q body.len=%d",
-		schema.Type, schema.Scope, schema.Subject, len(schema.Body))
 
 	if strings.TrimSpace(schema.Subject) == "" {
 		return commit, fmt.Errorf("AI analysis returned empty subject (raw text: %q)", truncate(resp.Result, 400))
@@ -179,6 +184,7 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "removed functionality"),
+		Source:           functionalityRemovedPromptFile,
 		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
@@ -206,6 +212,7 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:             promptName(commit, "compatibility issues"),
+		Source:           compatibilityIssuesPromptFile,
 		Prompt:           promptText,
 		StructuredOutput: schema,
 	})
@@ -228,7 +235,7 @@ func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map
 	if err != nil {
 		return "", fmt.Errorf("render AI prompt template: %w", err)
 	}
-	return req.Prompt, nil
+	return req.Prompt.User, nil
 }
 
 func promptName(commit models.CommitAnalysis, suffix string) string {

@@ -282,7 +282,14 @@ func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *
 		},
 	}
 
-	contentTree, err := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	var contentTree *FixtureNode
+	var err error
+	if frontMatter != nil && frontMatter.AI != nil {
+		// `ai:` front matter marks the file as an AI verification step.
+		contentTree, err = parseAIFixtureTree(content, frontMatter, sourceDir)
+	} else {
+		contentTree, err = parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse markdown content: %w", err)
 	}

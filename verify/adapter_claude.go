@@ -26,41 +26,8 @@ func (Claude) BuildVerifyArgs(prompt, model, schemaFile string, debug bool) []st
 	return args
 }
 
-func (Claude) BuildFixArgs(model, prompt string, patchOnly bool) []string {
-	if patchOnly {
-		args := []string{"-p", prompt, "--output-format", "json"}
-		if model != "" && model != "claude" {
-			args = append(args, "--model", model)
-		}
-		return args
-	}
-	args := []string{"-p", prompt, "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep"}
-	if model != "" && model != "claude" {
-		args = append(args, "--model", model)
-	}
-	return args
-}
-
 func (Claude) ParseResponse(raw string) (VerifyResult, error) {
-	if result, ok := tryUnmarshalResult(raw); ok {
-		return result, nil
-	}
-
-	text := extractTextFromJSON(raw)
-	text = stripMarkdownFences(text)
-	text = strings.TrimSpace(text)
-
-	if result, ok := tryUnmarshalResult(text); ok {
-		return result, nil
-	}
-
-	if embedded := extractJSONFromText(text); embedded != "" {
-		if result, ok := tryUnmarshalResult(embedded); ok {
-			return result, nil
-		}
-	}
-
-	return VerifyResult{}, parseError(raw)
+	return parseVerifyResponse(raw)
 }
 
 func (Claude) PostExecute(string) {}

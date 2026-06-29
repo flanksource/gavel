@@ -31,8 +31,11 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		return fmt.Errorf("rendered status was empty")
 	}
 
-	aiCfg, aiProto := buildAIFixRequest(opts.AIRuntimeOptions)
-	if aiCfg.Model == "" {
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions)
+	if err != nil {
+		return err
+	}
+	if aiCfg.Model.Name == "" {
 		return fmt.Errorf("no model configured: pass --model or run `captain configure`")
 	}
 
@@ -45,7 +48,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	}
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return fmt.Errorf("backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", aiCfg.Backend)
+		return fmt.Errorf("backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", aiCfg.Model.Backend)
 	}
 
 	maxIters := opts.AIFixMaxIters
@@ -54,21 +57,21 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	}
 
 	logger.Infof("pr ai-fix: invoking %s (%s), max-iter=%d, budget=$%.2f",
-		aiCfg.Model, aiCfg.Backend, maxIters, aiCfg.BudgetUSD)
+		aiCfg.Model.Name, aiCfg.Model.Backend, maxIters, aiCfg.Budget.Cost)
 
 	runStart := time.Now()
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
 		Provider:      streamer,
 		MaxIterations: maxIters,
-		MaxCostUSD:    aiCfg.BudgetUSD,
+		MaxCostUSD:    aiCfg.Budget.Cost,
 		SessionReuse:  true,
 		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
 			if iter > 0 {
 				return captainai.Request{}, false
 			}
 			turn := aiProto
-			turn.SystemPrompt = systemPrompt
-			turn.Prompt = prompt
+			turn.Prompt.System = systemPrompt
+			turn.Prompt.User = prompt
 			return turn, true
 		},
 		OnEvent: newAIFixRenderer(aiCfg),

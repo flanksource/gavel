@@ -2,17 +2,19 @@ package headless
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 func fakeStream(events ...captainai.Event) streamFunc {
-	return func(_ context.Context, _ captainai.Request) (<-chan captainai.Event, error) {
+	return func(_ context.Context, _ captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		ch := make(chan captainai.Event, len(events))
 		for _, ev := range events {
 			ch <- ev
@@ -54,8 +56,8 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 
 func TestHeadlessUsesPromptOverrideVerbatim(t *testing.T) {
 	var gotPrompt string
-	capture := func(_ context.Context, req captainai.Request) (<-chan captainai.Event, error) {
-		gotPrompt = req.Prompt
+	capture := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+		gotPrompt = req.Prompt.User
 		ch := make(chan captainai.Event, 1)
 		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 		close(ch)
@@ -91,11 +93,13 @@ func TestHeadlessErrorsWithoutResult(t *testing.T) {
 	}
 }
 
-// captureReq is a stream that records the dispatched request and immediately
-// returns a successful result, so a test can inspect req.CanUseTool.
-func captureReq(into *captainai.Request) streamFunc {
-	return func(_ context.Context, req captainai.Request) (<-chan captainai.Event, error) {
+// captureReq is a stream that records the dispatched request and the tool-
+// permission callback (which now lives on the provider Config, threaded through
+// the seam) and immediately returns a successful result.
+func captureReq(into *captainai.Request, canUseTool *captainai.PermissionFunc) streamFunc {
+	return func(_ context.Context, req captainai.Request, fn captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		*into = req
+		*canUseTool = fn
 		ch := make(chan captainai.Event, 1)
 		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 		close(ch)
@@ -105,15 +109,16 @@ func captureReq(into *captainai.Request) streamFunc {
 
 func TestHeadlessNoApprovalCallbackByDefault(t *testing.T) {
 	var captured captainai.Request
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: captureReq(&captured)})
+	var canUseTool captainai.PermissionFunc
+	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: captureReq(&captured, &canUseTool)})
 	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if captured.CanUseTool != nil {
+	if canUseTool != nil {
 		t.Fatal("CanUseTool must be nil when approvals are disabled (CLI runs have no resolver)")
 	}
-	if !contains(captured.AllowedTools, "Bash") {
-		t.Errorf("Bash should stay allow-listed when approvals are off: %v", captured.AllowedTools)
+	if !contains(captured.Permissions.Tools.Allow, "Bash") {
+		t.Errorf("Bash should stay allow-listed when approvals are off: %v", captured.Permissions.Tools.Allow)
 	}
 }
 
@@ -123,15 +128,16 @@ func TestHeadlessNoApprovalCallbackByDefault(t *testing.T) {
 func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	const sessionID = "headless-approval-sess"
 	var captured captainai.Request
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Approvals: true, Stream: captureReq(&captured)})
+	var canUseTool captainai.PermissionFunc
+	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Approvals: true, Stream: captureReq(&captured, &canUseTool)})
 	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if captured.CanUseTool == nil {
+	if canUseTool == nil {
 		t.Fatal("expected CanUseTool to be set when Approvals is enabled")
 	}
-	if contains(captured.AllowedTools, "Bash") {
-		t.Errorf("Bash must be removed from the allowlist so it routes through approval: %v", captured.AllowedTools)
+	if contains(captured.Permissions.Tools.Allow, "Bash") {
+		t.Errorf("Bash must be removed from the allowlist so it routes through approval: %v", captured.Permissions.Tools.Allow)
 	}
 
 	type outcome struct {
@@ -140,7 +146,7 @@ func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		d, err := captured.CanUseTool(context.Background(), captainai.PermissionRequest{
+		d, err := canUseTool(context.Background(), captainai.PermissionRequest{
 			SessionID: sessionID,
 			Tool:      "Bash",
 			Input:     map[string]any{"command": "ls"},
@@ -189,15 +195,71 @@ func waitForPendingApproval(t *testing.T, sessionID string) {
 	t.Fatalf("approval for session %s never became pending", sessionID)
 }
 
+func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
+	capture := func(out *captainai.Request) streamFunc {
+		return func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+			*out = req
+			ch := make(chan captainai.Event, 1)
+			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+			close(ch)
+			return ch, nil
+		}
+	}
+
+	t.Run("sdk backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
+		var req captainai.Request
+		e := NewExecutor(Config{
+			WorkDir:        t.TempDir(),
+			Agent:          "claude",
+			Backend:        string(captainai.BackendClaudeAgent),
+			ToolModes:      map[string]string{"Read": "enabled", "Write": "disabled", "Bash": "ask"},
+			PermissionMode: "acceptEdits",
+			Stream:         capture(&req),
+		})
+		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if got := strings.Join(req.Permissions.Tools.Allow, ","); got != "Read" {
+			t.Errorf("allow = %q, want Read", got)
+		}
+		if got := strings.Join(req.Permissions.Tools.Deny, ","); got != "Write" {
+			t.Errorf("deny = %q, want Write", got)
+		}
+		if req.Permissions.Mode != api.PermissionAcceptEdits {
+			t.Errorf("mode = %q, want acceptEdits", req.Permissions.Mode)
+		}
+		if len(req.Permissions.Presets) != 0 {
+			t.Errorf("presets = %v, want none (explicit modes replace the edit preset)", req.Permissions.Presets)
+		}
+	})
+
+	t.Run("cmux plan run forces plan mode", func(t *testing.T) {
+		var req captainai.Request
+		e := NewExecutor(Config{
+			WorkDir: t.TempDir(),
+			Agent:   "claude",
+			Backend: string(captainai.BackendClaudeCmux),
+			Plan:    true,
+			Stream:  capture(&req),
+		})
+		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if req.Permissions.Mode != api.PermissionPlan {
+			t.Errorf("mode = %q, want plan", req.Permissions.Mode)
+		}
+	})
+}
+
 func TestHeadlessModelDefaults(t *testing.T) {
-	claudeP, err := (&Executor{config: Config{Agent: "claude", Model: "claude"}}).newStreamer()
+	claudeP, err := (&Executor{config: Config{Agent: "claude", Model: "claude"}}).newStreamer(nil, "")
 	if err != nil {
 		t.Fatalf("claude streamer: %v", err)
 	}
 	if claudeP.GetBackend() != captainai.BackendClaudeAgent {
 		t.Errorf("claude backend = %v, want claude-agent", claudeP.GetBackend())
 	}
-	codexP, err := (&Executor{config: Config{Agent: "codex", Model: "codex"}}).newStreamer()
+	codexP, err := (&Executor{config: Config{Agent: "codex", Model: "codex"}}).newStreamer(nil, "")
 	if err != nil {
 		t.Fatalf("codex streamer: %v", err)
 	}

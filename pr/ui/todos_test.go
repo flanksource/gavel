@@ -640,19 +640,22 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 	if cmuxResp.Count != 1 || cmuxResp.Mode != "cmux" {
 		t.Fatalf("unexpected preview meta: %+v", cmuxResp)
 	}
-	if !strings.HasPrefix(cmuxResp.Prompt, "# Fix the parser\n\n") {
-		t.Fatalf("cmux preview should lead with the title: %q", cmuxResp.Prompt)
+	if !strings.Contains(cmuxResp.Prompt, "## Fix the parser") {
+		t.Fatalf("cmux preview should contain the title heading: %q", cmuxResp.Prompt)
 	}
 	if !strings.Contains(cmuxResp.Prompt, "The parser drops trailing commas.") {
 		t.Fatalf("cmux preview should inline the body: %q", cmuxResp.Prompt)
 	}
-	if !strings.HasSuffix(cmuxResp.Prompt, "Implement all TODOs described above. When finished, stop and wait for verification.") {
-		t.Fatalf("cmux preview should end with the implement directive: %q", cmuxResp.Prompt)
+	if !strings.Contains(cmuxResp.Prompt, "Think hard and reason thoroughly") {
+		t.Fatalf("cmux preview should include the effort directive: %q", cmuxResp.Prompt)
+	}
+	if !strings.Contains(cmuxResp.Prompt, "## Instructions") {
+		t.Fatalf("cmux preview should include the instructions section: %q", cmuxResp.Prompt)
 	}
 
 	planResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium", Plan: true})
-	if !strings.Contains(planResp.Prompt, "do NOT make any code changes — only plan") {
-		t.Fatalf("plan preview should forbid code changes: %q", planResp.Prompt)
+	if !strings.Contains(planResp.Prompt, "## Fix the parser") {
+		t.Fatalf("plan preview should contain the title: %q", planResp.Prompt)
 	}
 
 	inlineResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Model: "claude", Effort: "medium"})
@@ -723,6 +726,52 @@ func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
+	base := todoRunPayload{Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium"}
+
+	t.Run("valid prefs and permission mode are threaded", func(t *testing.T) {
+		payload := base
+		payload.ToolPreferences = map[string]string{"Bash": "ask", "Write": "disabled", "Read": "enabled"}
+		payload.PermissionMode = "acceptEdits"
+		opts, err := normalizeTodoRunOptions(payload)
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		if opts.PermissionMode != "acceptEdits" {
+			t.Fatalf("PermissionMode = %q, want acceptEdits", opts.PermissionMode)
+		}
+		if opts.ToolModes["Bash"] != "ask" || opts.ToolModes["Write"] != "disabled" || opts.ToolModes["Read"] != "enabled" {
+			t.Fatalf("ToolModes = %v, want Bash=ask Write=disabled Read=enabled", opts.ToolModes)
+		}
+	})
+
+	t.Run("empty prefs normalize to nil", func(t *testing.T) {
+		opts, err := normalizeTodoRunOptions(base)
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		if opts.ToolModes != nil || opts.PermissionMode != "" {
+			t.Fatalf("want nil ToolModes and empty PermissionMode, got %v / %q", opts.ToolModes, opts.PermissionMode)
+		}
+	})
+
+	t.Run("invalid tool mode fails loud", func(t *testing.T) {
+		payload := base
+		payload.ToolPreferences = map[string]string{"Bash": "maybe"}
+		if _, err := normalizeTodoRunOptions(payload); err == nil {
+			t.Fatal("expected error for invalid tool mode, got nil")
+		}
+	})
+
+	t.Run("invalid permission mode fails loud", func(t *testing.T) {
+		payload := base
+		payload.PermissionMode = "yolo"
+		if _, err := normalizeTodoRunOptions(payload); err == nil {
+			t.Fatal("expected error for invalid permission mode, got nil")
+		}
+	})
 }
 
 func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
@@ -960,6 +1009,105 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-tui"}); err == nil {
 		t.Fatal("invalid driver should be rejected")
 	}
+}
+
+func TestTodoRunContextListsCaptainBackends(t *testing.T) {
+	resp := todoRunContext()
+	if !stringSliceContains(resp.Efforts, "xhigh") {
+		t.Fatalf("efforts = %v, want captain xhigh effort", resp.Efforts)
+	}
+	backends := map[string]todoRunBackendOption{}
+	for _, backend := range resp.Backends {
+		backends[backend.ID] = backend
+	}
+	for _, id := range []string{"claude-agent", "claude-cli", "codex-cli"} {
+		if backends[id].ID == "" {
+			t.Fatalf("missing backend %q in %+v", id, resp.Backends)
+		}
+		if len(backends[id].Models) == 0 {
+			t.Fatalf("backend %q has no model list: %+v", id, backends[id])
+		}
+	}
+	if backends["claude-agent"].Driver != "claude-headless" || backends["codex-cli"].Driver != "codex-headless" {
+		t.Fatalf("unexpected backend drivers: claude-agent=%q codex-cli=%q", backends["claude-agent"].Driver, backends["codex-cli"].Driver)
+	}
+}
+
+func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
+	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Backend: "claude-cli", Effort: "xhigh"})
+	if err != nil {
+		t.Fatalf("claude-cli backend: %v", err)
+	}
+	if opts.Backend != "claude-cli" || opts.Model != "claude-agent-sonnet" || opts.Effort != "xhigh" {
+		t.Fatalf("unexpected claude backend options: %+v", opts)
+	}
+
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Model: "codex"})
+	if err != nil {
+		t.Fatalf("default codex backend: %v", err)
+	}
+	if opts.Backend != "codex-cli" || opts.Model != "gpt-5-codex" {
+		t.Fatalf("unexpected codex backend defaults: %+v", opts)
+	}
+
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Backend: "claude-agent", Model: "claude-agent-sonnet"}); err == nil {
+		t.Fatal("mismatched backend and driver should be rejected")
+	}
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Backend: "claude-agent", Model: "gpt-5-codex"}); err == nil {
+		t.Fatal("mismatched backend and model should be rejected")
+	}
+}
+
+func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Run headless",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	oldStart := startTodoRun
+	var got todoRunRequest
+	startTodoRun = func(req todoRunRequest) error {
+		got = req
+		return nil
+	}
+	t.Cleanup(func() { startTodoRun = oldStart })
+
+	body, _ := json.Marshal(todoRunPayload{
+		Ref:     todos.TODOReference(created),
+		Driver:  "claude-headless",
+		Backend: "claude-agent",
+		Model:   "claude-agent-sonnet",
+		Effort:  "medium",
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal run response: %v", err)
+	}
+	if resp.Driver != "claude-headless" || resp.Backend != "claude-agent" || resp.Model != "claude-agent-sonnet" {
+		t.Fatalf("response did not thread backend/model: %+v", resp)
+	}
+	if got.Options.Backend != "claude-agent" || got.Options.Model != "claude-agent-sonnet" {
+		t.Fatalf("run starter did not receive backend/model: %+v", got.Options)
+	}
+}
+
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func strconvQuote(s string) string {

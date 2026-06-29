@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
-	"github.com/flanksource/gavel/todos/cmux"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
@@ -239,7 +239,7 @@ func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 	if model == "" && todo != nil && todo.LLM != nil {
 		model = todo.LLM.Model
 	}
-	agent, _ := cmux.ResolveAgent(model)
+	agent, _ := claude.ResolveAgent(model)
 	switch todosMode {
 	case "cmux":
 		return drivers.Parse(agent + "-cmux")
@@ -541,8 +541,8 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 	if agent == "claude" {
 		sessionID = "<session-id>"
 	}
-	agentCmd := cmux.AgentCommand(cmux.AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID})
-	name := cmux.AgentWorkspaceName(groupWorkDir, agent)
+	agentCmd := cmuxprov.AgentCommand(cmuxprov.AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID})
+	name := cmuxprov.AgentWorkspaceName(groupWorkDir, agent)
 
 	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
 	fmt.Println("### Commands")
@@ -568,15 +568,15 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 }
 
 func buildCmuxPrompt(todoList []*types.TODO, workDir string) string {
-	return cmux.BuildPrompt(todoList, workDir, todoEffort)
+	return claude.BuildRunPrompt(todoList, workDir, todoEffort)
 }
 
 func effortDirective(effort string) string {
-	return cmux.EffortDirective(effort)
+	return claude.EffortDirective(effort)
 }
 
 func resolveTodoAgent(model string) (agent string, modelFlag string) {
-	return cmux.ResolveAgent(model)
+	return claude.ResolveAgent(model)
 }
 
 func printSectionCommands(header string, todoList []*types.TODO, getNodes func(*types.TODO) []*fixtures.FixtureNode) {

@@ -30,10 +30,8 @@ type Request struct {
 	AIConfig captainai.Config
 
 	// AIRequestProto is the per-iteration request template. aifix sets
-	// SystemPrompt and Prompt on a clone of this struct each turn; all
-	// other fields (PermissionMode, NoMCP, NoHooks, NoSkills, NoUser,
-	// NoProject, NoMemory, MaxTokens, Temperature, ReasoningEffort, Edit,
-	// AllowedTools, DisallowedTools, SkillDirs, Bare, StrictMCP, Verbose)
+	// Prompt.System and Prompt.User on a clone of this struct each turn; all
+	// other fields (Permissions, Memory, Budget, Model knobs, presets, …)
 	// flow through unchanged so saved captain defaults reach the provider.
 	AIRequestProto captainai.Request
 
@@ -72,7 +70,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
-		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", req.AIConfig.Backend)
+		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", req.AIConfig.Model.Backend)
 	}
 
 	current := req.Initial
@@ -86,7 +84,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	loopRes, err := captainai.RunUntil(ctx, captainai.LoopOptions{
 		Provider:      streamer,
 		MaxIterations: req.MaxIterations,
-		MaxCostUSD:    req.AIConfig.BudgetUSD,
+		MaxCostUSD:    req.AIConfig.Budget.Cost,
 		SessionReuse:  true,
 		BuildRequest: func(iter int, prev *captainai.LoopIteration) (captainai.Request, bool) {
 			if iter > 0 {
@@ -101,8 +99,8 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 				}
 			}
 			turn := req.AIRequestProto
-			turn.SystemPrompt = systemPrompt
-			turn.Prompt = buildPrompt(req.WorkDir, current)
+			turn.Prompt.System = systemPrompt
+			turn.Prompt.User = buildPrompt(req.WorkDir, current)
 			return turn, true
 		},
 		OnEvent: req.OnEvent,

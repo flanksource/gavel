@@ -1,9 +1,21 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Combobox, DropdownMenu, Field, Modal, SegmentedControl } from '@flanksource/clicky-ui/components';
+import { BudgetSelector, EffortSelector, ModelSelector, ProviderSelector, type ChatBudgetConfig, type ClaudePermissionMode, type ToolMode } from '@flanksource/clicky-ui/chat';
+import { ToolPreferences } from '@flanksource/clicky-ui/ai';
 import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from '../../types';
 import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
-import { PROVIDERS, providerCatalog, driverFor, type RunMechanism } from './providers';
+import {
+  PROVIDERS,
+  backendCatalog as findBackendCatalog,
+  backendsForAgent,
+  defaultBackendForAgent,
+  driverFor,
+  providerCatalog,
+  runContextWithFallback,
+  type RunContext,
+  type RunMechanism,
+} from './providers';
 
 // RunMode is the prompt the dialog runs: Run (implement), Plan (propose only),
 // or Verify (score the committed work against acceptance criteria).
@@ -214,17 +226,21 @@ export function TodoRunAdvancedDialog({
   // cost/turns, dirty worktree) fields.
   const [agent, setAgent] = useState<TodoRunAgent>('claude');
   const [mechanism, setMechanism] = useState<RunMechanism>('cmux');
+  const [backend, setBackend] = useState('claude-agent');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState<TodoRunEffort>('medium');
   const [mode, setMode] = useState<RunMode>('run');
   const [resume, setResume] = useState(false);
   const [timeout, setTimeoutValue] = useState('30m');
-  const [maxCost, setMaxCost] = useState('');
-  const [maxTurns, setMaxTurns] = useState('');
+  const [budget, setBudget] = useState<ChatBudgetConfig>({});
   const [dirty, setDirty] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [commit, setCommit] = useState(true);
   const [check, setCheck] = useState(false);
+  // toolModes scopes each agent tool for the run (enabled/ask/disabled);
+  // permissionMode is the base posture. Both feed the run's api.Permissions.
+  const [toolModes, setToolModes] = useState<Record<string, ToolMode>>({});
+  const [permissionMode, setPermissionMode] = useState<ClaudePermissionMode>('default');
   // promptDraft is the editable prompt body sent as the verbatim override;
   // promptDirty stops the live preview from clobbering the user's edits.
   const [promptDraft, setPromptDraft] = useState('');
@@ -234,21 +250,35 @@ export function TodoRunAdvancedDialog({
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [verifyError, setVerifyError] = useState('');
   const [regenNonce, setRegenNonce] = useState(0);
+  const [runContext, setRunContext] = useState<RunContext | null>(null);
   // Ref mirror of promptDirty so the preview effect can read it without
   // refetching on every keystroke.
   const promptDirtyRef = useRef(false);
 
+  const context = runContextWithFallback(runContext);
   const catalog = providerCatalog(agent);
-  const driver = driverFor(agent, mechanism);
   const isCmux = mechanism === 'cmux';
   const plan = mode === 'plan';
   const isVerify = mode === 'verify';
+  const usesCaptainBackend = isVerify || mechanism === 'headless';
+  const selectedBackend = findBackendCatalog(context, backend, agent);
+  const driver = usesCaptainBackend && !isVerify ? selectedBackend.driver : driverFor(agent, mechanism);
+  const models = usesCaptainBackend ? selectedBackend.models : catalog.models;
+  const efforts = context.efforts.length > 0 ? context.efforts : catalog.efforts;
+  const modelFallback = usesCaptainBackend ? selectedBackend.defaultModel : agent;
+  const runBackend = usesCaptainBackend ? selectedBackend.id : undefined;
   const canVerify = refs.length === 1; // verify scores one issue's commits
 
   // Switching mode re-seeds the editor from the matching preview (Run/Plan share
   // the run body; Verify uses the verify prompt).
   function changeMode(next: RunMode) {
     setMode(next);
+    if (next === 'verify') {
+      const nextBackend = findBackendCatalog(context, backend, agent);
+      setModel(nextBackend.defaultModel);
+    } else if (mode === 'verify') {
+      setModel(mechanism === 'headless' ? selectedBackend.defaultModel : catalog.defaultModel);
+    }
     setPromptDirty(false);
     promptDirtyRef.current = false;
     setVerifyError('');
@@ -271,37 +301,75 @@ export function TodoRunAdvancedDialog({
   function changeProvider(next: TodoRunAgent) {
     const nextCatalog = providerCatalog(next);
     const nextMechanism = nextCatalog.mechanisms.some(m => m.value === mechanism) ? mechanism : 'cmux';
+    const nextBackend = defaultBackendForAgent(context, next);
+    const nextUsesCaptainBackend = mode === 'verify' || nextMechanism === 'headless';
     setAgent(next);
     setMechanism(nextMechanism);
-    setModel(nextCatalog.defaultModel);
-    if (!nextCatalog.efforts.includes(effort)) setEffort(nextCatalog.efforts[0]);
+    setBackend(nextBackend.id);
+    setModel(nextUsesCaptainBackend ? nextBackend.defaultModel : nextCatalog.defaultModel);
+    if (!efforts.includes(effort)) setEffort((efforts[0] || 'medium') as TodoRunEffort);
     if (nextMechanism !== 'cmux' && mode === 'plan') setMode('run');
   }
 
   function changeMechanism(next: RunMechanism) {
     setMechanism(next);
+    if (next === 'headless') {
+      const nextBackend = findBackendCatalog(context, backend, agent);
+      setModel(nextBackend.defaultModel);
+    } else {
+      setModel(catalog.defaultModel);
+    }
     if (next !== 'cmux' && mode === 'plan') setMode('run');
+  }
+
+  function changeBackend(next: string) {
+    const nextBackend = findBackendCatalog(context, next, agent);
+    setBackend(nextBackend.id);
+    setModel(nextBackend.defaultModel);
+  }
+
+  function changeEffort(next: string) {
+    setEffort((next || 'medium') as TodoRunEffort);
   }
 
   useEffect(() => {
     if (!open) return;
     setAgent('claude');
     setMechanism('cmux');
+    setBackend('claude-agent');
     setModel('claude');
     setEffort('medium');
     setMode('run');
     setResume(false);
     setTimeoutValue('30m');
-    setMaxCost('');
-    setMaxTurns('');
+    setBudget({});
     setDirty(false);
     setDryRun(false);
     setCommit(true);
     setCheck(false);
+    setToolModes({});
+    setPermissionMode('default');
     setPromptDraft('');
     setPromptDirty(false);
     promptDirtyRef.current = false;
     setVerifyError('');
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch('/api/todos/run/context')
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load run context');
+        if (!cancelled) setRunContext(data as RunContext);
+      })
+      .catch(() => {
+        if (!cancelled) setRunContext(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   // refs is a fresh array each render at the call sites, so key the preview fetch
@@ -328,8 +396,16 @@ export function TodoRunAdvancedDialog({
       ? `/api/todos/verify/preview?${todoQuery(dir, provider)}`
       : `/api/todos/run/preview?${todoQuery(dir, provider)}`;
     const body = isVerify
-      ? { provider, dir, ref: list[0], model: model.trim() || agent }
-      : { refs: list, driver, model: model.trim() || agent, effort, plan: isCmux ? plan : undefined, resume: isCmux ? resume : undefined };
+      ? { provider, dir, ref: list[0], backend: runBackend, model: model.trim() || modelFallback }
+      : {
+          refs: list,
+          driver,
+          backend: runBackend,
+          model: model.trim() || modelFallback,
+          effort,
+          plan: isCmux ? plan : undefined,
+          resume: isCmux ? resume : undefined,
+        };
 
     let cancelled = false;
     const controller = new AbortController();
@@ -356,7 +432,7 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, provider, refsKey, driver, agent, model, effort, plan, resume, isCmux, isVerify, regenNonce]);
+  }, [open, dir, provider, refsKey, driver, runBackend, model, modelFallback, effort, plan, resume, isCmux, isVerify, regenNonce]);
 
   if (!open) return null;
 
@@ -371,7 +447,7 @@ export function TodoRunAdvancedDialog({
       const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, dir, ref: list[0], model: model.trim() || agent, prompt: promptDraft }),
+        body: JSON.stringify({ provider, dir, ref: list[0], backend: runBackend, model: model.trim() || modelFallback, prompt: promptDraft }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Verify failed');
@@ -388,17 +464,28 @@ export function TodoRunAdvancedDialog({
       void runVerify();
       return;
     }
-    const cost = Number(maxCost);
-    const turns = Number.parseInt(maxTurns, 10);
+    // Send the effective per-tool posture (catalog default unless the user
+    // overrode it) so the backend sees a complete picture — otherwise a single
+    // override would leave the untouched tools unspecified (and brokered). Sent
+    // only when the user actually changed something; an untouched run keeps the
+    // backend's default posture.
+    const toolPreferences =
+      Object.keys(toolModes).length > 0
+        ? Object.fromEntries([
+            ...context.tools.map(t => [t.name, toolModes[t.name] ?? t.defaultMode ?? 'enabled'] as const),
+            ...Object.entries(toolModes),
+          ])
+        : undefined;
     onRun({
       driver,
-      model: model.trim() || agent,
+      backend: runBackend,
+      model: model.trim() || modelFallback,
       effort,
       plan: isCmux ? plan : undefined,
       resume: isCmux ? resume : undefined,
       timeout: timeout.trim() || '30m',
-      maxCost: !isCmux && maxCost.trim() && Number.isFinite(cost) ? cost : undefined,
-      maxTurns: !isCmux && maxTurns.trim() && Number.isFinite(turns) ? turns : undefined,
+      maxCost: !isCmux && budget.cost !== undefined ? budget.cost : undefined,
+      maxTurns: !isCmux && budget.maxTokens !== undefined ? budget.maxTokens : undefined,
       dirty: !isCmux ? dirty : undefined,
       dryRun,
       // Plan-only runs make no changes, so there is nothing to auto-commit.
@@ -408,12 +495,20 @@ export function TodoRunAdvancedDialog({
       check: plan ? false : check,
       // The edited prompt body is sent verbatim as the override.
       prompt: promptDraft.trim() ? promptDraft : undefined,
+      // Per-tool modes and permission posture, sent only when the user changed
+      // them from the defaults so a plain run keeps the backend's default posture.
+      toolPreferences,
+      permissionMode: permissionMode !== 'default' ? permissionMode : undefined,
     });
   }
 
   const modeOptions: { id: RunMode; label: string }[] = [{ id: 'run', label: 'Run' }];
   if (isCmux) modeOptions.push({ id: 'plan', label: 'Plan' });
   if (canVerify) modeOptions.push({ id: 'verify', label: 'Verify' });
+  const backendOptions = backendsForAgent(context, agent).map(item => ({
+    value: item.id,
+    label: item.configured === false ? `${item.label} (not ready)` : item.label,
+  }));
 
   return (
     <Modal
@@ -439,27 +534,38 @@ export function TodoRunAdvancedDialog({
             options={modeOptions}
           />
         </Field>
-        <Field label="Provider">
-          <SegmentedControl
-            aria-label="Provider"
+        <Field label="Agent">
+          <ProviderSelector
+            ariaLabel="Agent"
             value={agent}
             onChange={changeProvider}
-            options={PROVIDERS.map(p => ({ id: p.id, label: p.label, icon: p.icon }))}
+            providers={PROVIDERS.map(p => ({ id: p.id, label: p.label, icon: p.icon }))}
           />
         </Field>
         {isVerify ? (
-          <Field label="Model">
-            <Combobox
-              ariaLabel="Model"
-              value={model}
-              onChange={setModel}
-              options={catalog.models}
-              placeholder={catalog.defaultModel}
-            />
-          </Field>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Backend">
+              <Combobox
+                ariaLabel="Captain backend"
+                value={selectedBackend.id}
+                onChange={changeBackend}
+                options={backendOptions}
+                allowCustomValue={false}
+                required
+              />
+            </Field>
+            <Field label="Model">
+              <ModelSelector
+                models={models}
+                value={model}
+                onChange={setModel}
+                className="w-full"
+              />
+            </Field>
+          </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid gap-3 ${usesCaptainBackend ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
               <Field label="Type">
                 <Combobox
                   ariaLabel="Driver type"
@@ -470,36 +576,47 @@ export function TodoRunAdvancedDialog({
                   required
                 />
               </Field>
+              {usesCaptainBackend && (
+                <Field label="Backend">
+                  <Combobox
+                    ariaLabel="Captain backend"
+                    value={selectedBackend.id}
+                    onChange={changeBackend}
+                    options={backendOptions}
+                    allowCustomValue={false}
+                    required
+                  />
+                </Field>
+              )}
               <Field label="Model">
-                <Combobox
-                  ariaLabel="Model"
+                <ModelSelector
+                  models={models}
                   value={model}
                   onChange={setModel}
-                  options={catalog.models}
-                  placeholder={catalog.defaultModel}
+                  className="w-full"
                 />
               </Field>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <Field label="Effort">
-                <Combobox
-                  ariaLabel="Effort"
+                <EffortSelector
+                  efforts={efforts}
                   value={effort}
-                  onChange={v => setEffort(v as TodoRunEffort)}
-                  options={catalog.efforts.map(e => ({ value: e, label: e }))}
-                  allowCustomValue={false}
-                  required
+                  onChange={changeEffort}
+                  className="w-full"
                 />
               </Field>
               <Field label="Timeout">
                 <input className={inputClass} value={timeout} onChange={e => setTimeoutValue(e.currentTarget.value)} />
               </Field>
-              <Field label="Max turns">
-                <input className={inputClass} type="number" min="0" value={maxTurns} onChange={e => setMaxTurns(e.currentTarget.value)} disabled={isCmux} />
-              </Field>
             </div>
-            <Field label="Max cost">
-              <input className={inputClass} type="number" min="0" step="0.01" value={maxCost} onChange={e => setMaxCost(e.currentTarget.value)} disabled={isCmux} />
+            <Field label="Budget">
+              <BudgetSelector
+                budget={budget}
+                onBudgetChange={setBudget}
+                maxTokensLabel="Max turns"
+                disabled={isCmux}
+              />
             </Field>
             <div className="flex flex-wrap gap-3 text-xs">
               <label className="inline-flex items-center gap-2">
@@ -523,6 +640,15 @@ export function TodoRunAdvancedDialog({
                 <span>Dry run</span>
               </label>
             </div>
+            <Field label="Tools">
+              <ToolPreferences
+                tools={context.tools}
+                value={toolModes}
+                onChange={setToolModes}
+                permissionMode={permissionMode}
+                onPermissionModeChange={setPermissionMode}
+              />
+            </Field>
           </>
         )}
         <div className="space-y-1">

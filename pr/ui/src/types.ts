@@ -1,3 +1,5 @@
+import type { ClaudePermissionMode, ToolMode } from '@flanksource/clicky-ui/chat';
+
 export interface FailedCheck {
   name: string;
   detailsUrl?: string;
@@ -70,6 +72,9 @@ export type TodoDensity = 'comfortable' | 'compact';
 // grouping; 'severity' buckets by priority and 'age' by last activity, both
 // across all workspaces.
 export type TodoGroupBy = 'workspace' | 'severity' | 'age';
+// Row order within each todo group: 'priority' (default — high→low, then newest
+// activity), 'newest'/'oldest' by created age, or 'title' alphabetically.
+export type TodoSortBy = 'priority' | 'newest' | 'oldest' | 'title';
 
 export interface TodoCounts {
   total: number;
@@ -241,7 +246,7 @@ export interface TodoSessionApproval {
 
 export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunMode = 'cmux' | 'inline';
-export type TodoRunEffort = 'low' | 'medium' | 'high';
+export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh';
 // TodoRunDriver selects the agent driver: <agent>-<mechanism>. cmux drives the
 // interactive TUI; headless drives `-p --output-format stream-json`; sdk drives
 // the @anthropic-ai/claude-agent-sdk bridge; api drives the direct Anthropic API.
@@ -259,6 +264,7 @@ export interface TodoRunOptions {
   driver?: TodoRunDriver;
   agent?: TodoRunAgent;
   mode?: TodoRunMode;
+  backend?: string;
   model?: string;
   effort?: TodoRunEffort;
   // Plan-only run: the agent proposes an implementation plan without changing
@@ -283,6 +289,13 @@ export interface TodoRunOptions {
   // dashboard's editable prompt. The implement/plan scaffolding still follows
   // the run mode.
   prompt?: string;
+  // toolPreferences scopes each agent tool for the run: enabled (Auto), ask
+  // (prompt the dashboard), or disabled (Off). Only tools the user changed need
+  // be sent; omitted tools keep the backend default posture.
+  toolPreferences?: Record<string, ToolMode>;
+  // permissionMode is the base permission posture for the run (a clicky
+  // ClaudePermissionMode); omitted leaves the backend default.
+  permissionMode?: ClaudePermissionMode;
 }
 
 export interface TodoRunResponse {
@@ -296,6 +309,7 @@ export interface TodoRunResponse {
   agent: TodoRunAgent;
   mode: TodoRunMode;
   driver?: TodoRunDriver;
+  backend?: string;
   model?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
@@ -316,6 +330,7 @@ export interface TodoRunPreviewResponse {
   prompt: string;
   mode: TodoRunMode;
   agent: TodoRunAgent;
+  backend?: string;
   effort?: TodoRunEffort;
   plan?: boolean;
   count: number;

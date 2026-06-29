@@ -47,6 +47,11 @@ func TestApplyCommitMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear all metadata env vars so tests are isolated from the
+			// real environment (e.g. GAVEL_ISSUE_ID set by a parent process).
+			for _, k := range []string{EnvIssueID, EnvSessionID, EnvClaudeSessionID, EnvCodexSessionID} {
+				t.Setenv(k, "")
+			}
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}

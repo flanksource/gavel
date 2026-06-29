@@ -74,6 +74,7 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
 		Name:             "PR title and body",
+		Source:           "<pr-content>",
 		Prompt:           prompt,
 		StructuredOutput: schema,
 	})

@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
-	"github.com/flanksource/gavel/todos/cmux"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -167,6 +167,7 @@ type todoRunPayload struct {
 	// claude-api, codex-cmux, codex-headless). When empty it is derived from the
 	// legacy agent+mode pair for backward compatibility.
 	Driver    string  `json:"driver,omitempty"`
+	Backend   string  `json:"backend,omitempty"`
 	Model     string  `json:"model,omitempty"`
 	Effort    string  `json:"effort,omitempty"`
 	Plan      bool    `json:"plan,omitempty"`
@@ -193,6 +194,11 @@ type todoRunPayload struct {
 	// dashboard's editable prompt. The implement/plan scaffolding still follows
 	// the run mode (plan flag).
 	Prompt string `json:"prompt,omitempty"`
+	// ToolPreferences maps a tool name to its per-run mode (enabled/ask/disabled),
+	// from the run dialog's tool-permissions control. PermissionMode is the base
+	// permission posture (a clicky ClaudePermissionMode).
+	ToolPreferences map[string]string `json:"toolPreferences,omitempty"`
+	PermissionMode  string            `json:"permissionMode,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -205,6 +211,7 @@ type todoRunResponse struct {
 	Agent     string   `json:"agent"`
 	Mode      string   `json:"mode"`
 	Model     string   `json:"model,omitempty"`
+	Backend   string   `json:"backend,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
 	Driver    string   `json:"driver,omitempty"`
 	Plan      bool     `json:"plan,omitempty"`
@@ -218,12 +225,13 @@ type todoRunResponse struct {
 }
 
 type todoRunPreviewResponse struct {
-	Prompt string `json:"prompt"`
-	Mode   string `json:"mode"`
-	Agent  string `json:"agent"`
-	Effort string `json:"effort,omitempty"`
-	Plan   bool   `json:"plan,omitempty"`
-	Count  int    `json:"count"`
+	Prompt  string `json:"prompt"`
+	Mode    string `json:"mode"`
+	Agent   string `json:"agent"`
+	Backend string `json:"backend,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Plan    bool   `json:"plan,omitempty"`
+	Count   int    `json:"count"`
 }
 
 type todoRunRequest struct {
@@ -240,6 +248,7 @@ type todoRunOptions struct {
 	Agent           string
 	Mode            string
 	Driver          string
+	Backend         string
 	Model           string
 	Effort          string
 	Plan            bool
@@ -255,6 +264,10 @@ type todoRunOptions struct {
 	Verify          bool
 	Prompt          string
 	TimeoutOriginal string
+	// ToolModes is the per-tool exposure (enabled/ask/disabled) and PermissionMode
+	// the base posture, both threaded into the captain request's permissions.
+	ToolModes      map[string]string
+	PermissionMode string
 }
 
 var startTodoRun = defaultStartTodoRun
@@ -707,6 +720,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Agent:     opts.Agent,
 		Mode:      opts.Mode,
 		Driver:    opts.Driver,
+		Backend:   opts.Backend,
 		Model:     opts.Model,
 		Effort:    opts.Effort,
 		Plan:      opts.Plan,
@@ -746,12 +760,13 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := todoRunPreviewResponse{
-		Prompt: buildTodoRunPromptPreview(source.Dir, todoList, opts),
-		Mode:   opts.Mode,
-		Agent:  opts.Agent,
-		Effort: opts.Effort,
-		Plan:   opts.Plan,
-		Count:  len(todoList),
+		Prompt:  buildTodoRunPromptPreview(source.Dir, todoList, opts),
+		Mode:    opts.Mode,
+		Agent:   opts.Agent,
+		Backend: opts.Backend,
+		Effort:  opts.Effort,
+		Plan:    opts.Plan,
+		Count:   len(todoList),
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
@@ -769,7 +784,7 @@ func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunO
 		}
 		return claude.BuildGroupPrompt(todoList, dir)
 	}
-	return cmux.BuildPrompt(todoList, dir, opts.Effort)
+	return claude.BuildRunPrompt(todoList, dir, opts.Effort)
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,
@@ -904,11 +919,11 @@ func reconcileSessionStatus(todo *types.TODO, dir string) {
 	if todo == nil || todo.Status != types.StatusFailed || todo.LLM == nil || todo.LLM.SessionId == "" {
 		return
 	}
-	path, err := cmux.SessionLogPath(dir, todo.LLM.SessionId)
+	path, err := cmuxprov.SessionLogPath(dir, todo.LLM.SessionId)
 	if err != nil {
 		return
 	}
-	stats, err := cmux.GlobalSessionStats().Get(todo.LLM.SessionId, path)
+	stats, err := cmuxprov.GlobalSessionStats().Get(todo.LLM.SessionId, path)
 	if err != nil {
 		return
 	}
@@ -1164,12 +1179,9 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		return todoRunOptions{}, err
 	}
 	agent := kind.Agent()
-	model := strings.TrimSpace(payload.Model)
-	if model == "" {
-		model = agent
-	}
-	if got, _ := cmux.ResolveAgent(model); got != agent {
-		return todoRunOptions{}, fmt.Errorf("driver %s expects a %s model but %q resolves to %s", kind, agent, model, got)
+	backend, model, err := resolveTodoRunBackendModel(kind, payload.Backend, payload.Model)
+	if err != nil {
+		return todoRunOptions{}, err
 	}
 
 	// Mode is the legacy mechanism label (cmux vs inline) some response/preview
@@ -1186,9 +1198,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if effort == "" {
 		effort = "medium"
 	}
-	switch effort {
-	case "low", "medium", "high":
-	default:
+	if !validTodoRunEffort(effort) {
 		return todoRunOptions{}, fmt.Errorf("invalid effort %q", payload.Effort)
 	}
 
@@ -1234,10 +1244,20 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		verify = *payload.Verify
 	}
 
+	toolModes, err := normalizeToolPreferences(payload.ToolPreferences)
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+	permissionMode := strings.TrimSpace(payload.PermissionMode)
+	if permissionMode != "" && !validClickyPermissionMode(permissionMode) {
+		return todoRunOptions{}, fmt.Errorf("invalid permission mode %q", payload.PermissionMode)
+	}
+
 	return todoRunOptions{
 		Agent:           agent,
 		Mode:            mode,
 		Driver:          string(kind),
+		Backend:         backend,
 		Model:           model,
 		Effort:          effort,
 		Plan:            payload.Plan,
@@ -1252,7 +1272,53 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Verify:          verify,
 		Prompt:          payload.Prompt,
 		TimeoutOriginal: payload.Timeout,
+		ToolModes:       toolModes,
+		PermissionMode:  permissionMode,
 	}, nil
+}
+
+// normalizeToolPreferences validates a tool-name→mode map (enabled/ask/disabled),
+// failing loud on an unknown mode. An empty map normalizes to nil (no per-tool
+// preferences — the run keeps the backend's default tool posture).
+func normalizeToolPreferences(prefs map[string]string) (map[string]string, error) {
+	if len(prefs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(prefs))
+	for tool, mode := range prefs {
+		tool = strings.TrimSpace(tool)
+		if tool == "" {
+			continue
+		}
+		if !validToolMode(mode) {
+			return nil, fmt.Errorf("invalid tool mode %q for %q (want enabled, ask or disabled)", mode, tool)
+		}
+		out[tool] = mode
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func validToolMode(m string) bool {
+	switch m {
+	case "enabled", "ask", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
+// validClickyPermissionMode reports whether m is one of clicky's
+// ClaudePermissionMode values (the run dialog's permission-mode picker).
+func validClickyPermissionMode(m string) bool {
+	switch m {
+	case "default", "auto", "acceptEdits", "dontAsk", "plan", "bypassPermissions":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultStartTodoRun(req todoRunRequest) error {
@@ -1322,6 +1388,8 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 func verifyAfterRun(req todoRunRequest, todo *types.TODO, hashes []string) {
 	if _, err := todos.RunIssueVerification(context.Background(), req.Provider, todo, todos.VerifyOptions{
 		WorkDir: todoVerifyWorkDir(req.Source.Dir, todo),
+		Model:   req.Options.Model,
+		Backend: req.Options.Backend,
 		Commits: hashes,
 	}); err != nil {
 		logger.Warnf("issue verification after todo run skipped: %v", err)
@@ -1351,7 +1419,7 @@ func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 	}
 	agent := strings.ToLower(strings.TrimSpace(p.Agent))
 	if agent == "" {
-		agent, _ = cmux.ResolveAgent(strings.TrimSpace(p.Model))
+		agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Model))
 	}
 	mode := strings.ToLower(strings.TrimSpace(p.Mode))
 	if mode == "" {
@@ -1381,6 +1449,7 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
 		Model:          req.Options.Model,
+		Backend:        req.Options.Backend,
 		Effort:         req.Options.Effort,
 		Plan:           req.Options.Plan,
 		Resume:         req.Options.Resume,
@@ -1390,6 +1459,8 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 		MaxTurns:       req.Options.MaxTurns,
 		Dirty:          req.Options.Dirty,
 		PromptOverride: req.Options.Prompt,
+		ToolModes:      req.Options.ToolModes,
+		PermissionMode: req.Options.PermissionMode,
 		// The dashboard is the approval resolver (handleTodoSessionApprove), so
 		// brokered tool permissions can be surfaced and answered here.
 		Approvals: true,

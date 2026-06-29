@@ -32,6 +32,11 @@ type FixtureTest struct {
 	Query     string       `json:"query,omitempty"`
 	Expected  Expectations `json:"expected,omitempty"`
 
+	// AIStep, when set, makes this an AI-prompt verification step: the agent
+	// reviews the scope diff against the document's acceptance-criteria checklist
+	// and returns a structured verify result. See fixtures/aistep.go.
+	AIStep *AIStepSpec `json:"ai_step,omitempty"`
+
 	// Per-test overrides for skip conditions (override file-level FrontMatter values)
 	TestOS   string `json:"test_os,omitempty"`
 	TestArch string `json:"test_arch,omitempty"`
@@ -103,6 +108,13 @@ func (fixture FixtureTest) String() string {
 
 func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 	return fixture.FrontMatter.MergeInto(fixture.ExecFixtureBase)
+}
+
+// IsAIStep reports whether this fixture runs an AI verification prompt instead of
+// a shell/query step. AI steps are dispatched by the runner before the type
+// registry (they are not a registered FixtureType).
+func (fixture FixtureTest) IsAIStep() bool {
+	return fixture.AIStep != nil
 }
 
 func (fixture FixtureTest) Pretty() api.Text {
@@ -342,6 +354,12 @@ type FrontMatter struct {
 	// Skip is a bash command; if it exits 0 (true), the fixture is skipped.
 	Skip string `yaml:"skip,omitempty" json:"skip,omitempty"`
 
+	// AI configures the captain agent for an AI verification step (its presence
+	// marks the file as an AI fixture). Verify carries scope/threshold/check
+	// overrides for that step. Both are nil for ordinary exec/query fixtures.
+	AI     *FixtureAIConfig     `yaml:"ai,omitempty" json:"ai,omitempty"`
+	Verify *FixtureVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -366,6 +384,8 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "os")
 	delete(f.Metadata, "arch")
 	delete(f.Metadata, "skip")
+	delete(f.Metadata, "ai")
+	delete(f.Metadata, "verify")
 }
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped

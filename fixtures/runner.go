@@ -357,6 +357,27 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		}, nil
 	}
 
+	// AI verification steps are dispatched through the AIStepRunner hook (not a
+	// registered type). The implementation lives in fixtures/types to keep this
+	// package free of a verify import (which would cycle via todos/types).
+	if fixture.IsAIStep() {
+		if AIStepRunner == nil {
+			return FixtureResult{
+				Name:   fixture.Name,
+				Status: task.StatusERR,
+				Test:   fixture,
+				Error:  "AI step runner not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"",
+			}, nil
+		}
+		if r.options.WorkDir == "" {
+			r.options.WorkDir, _ = os.Getwd()
+		}
+		return AIStepRunner(fixture, RunOptions{
+			WorkDir:        r.options.WorkDir,
+			ExecutablePath: r.options.ExecutablePath,
+		}), nil
+	}
+
 	// Get the appropriate fixture type from registry
 	fixtureType, err := DefaultRegistry.GetForFixture(fixture)
 	if err != nil {

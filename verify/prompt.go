@@ -40,7 +40,7 @@ func renderPrompt(scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (str
 	if err != nil {
 		return "", fmt.Errorf("render verify prompt: %w", err)
 	}
-	return req.Prompt, nil
+	return req.Prompt.User, nil
 }
 
 // scopeInstruction returns the reviewer's how-to-obtain-the-diff instruction for

@@ -31,7 +31,7 @@ const uiDate = new Date().toISOString();
 // linked symlink otherwise serves stale built output. Only the JS entry points
 // are redirected; `styles.css` keeps resolving to the package's generated CSS.
 const clickySrc = resolve(here, '../../../clicky-ui/packages/ui/src');
-const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai'];
+const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat'];
 
 export default defineConfig(({ command }) => {
   // Gated to `serve` + sibling-present so `vite build` and CI (no sibling) keep

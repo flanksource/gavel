@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
@@ -161,7 +162,7 @@ func (f *fakeBuffered) Execute(ctx context.Context, req captainai.Request) (*cap
 func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 	p := &fakeStreaming{model: "gpt-5.5", backend: captainai.Backend("test-streaming")}
 	captainai.RegisterProvider(captainai.Backend("test-streaming"), func(cfg captainai.Config) (captainai.Provider, error) {
-		p.model = cfg.Model
+		p.model = cfg.Model.Name
 		return p, nil
 	})
 
@@ -171,18 +172,13 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 		Initial:       resultsWith("fakelint", violation("x.go", "missing comma", "RULE", 7)),
 		MaxIterations: 1,
 		AIConfig: captainai.Config{
-			Backend: captainai.Backend("test-streaming"),
-			Model:   "gpt-5.5",
+			Model: api.Model{Name: "gpt-5.5", Backend: captainai.Backend("test-streaming")},
 		},
 		AIRequestProto: captainai.Request{
-			NoMCP:           true,
-			NoHooks:         true,
-			NoSkills:        true,
-			NoUser:          true,
-			NoProject:       true,
-			NoMemory:        true,
-			MaxTokens:       16000,
-			ReasoningEffort: "high",
+			Model:       api.Model{Effort: api.EffortHigh},
+			Budget:      api.Budget{MaxTokens: 16000},
+			Memory:      api.Memory{SkipHooks: true, SkipSkills: true, SkipUser: true, SkipProject: true, SkipMemory: true},
+			Permissions: api.Permissions{MCP: api.MCP{Disabled: true}},
 		},
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			return nil, nil
@@ -196,23 +192,24 @@ func TestRun_UsesAIConfigFromCaller(t *testing.T) {
 	}
 	got := p.requests[0]
 	for name, b := range map[string]bool{
-		"NoMCP": got.NoMCP, "NoHooks": got.NoHooks, "NoSkills": got.NoSkills,
-		"NoUser": got.NoUser, "NoProject": got.NoProject, "NoMemory": got.NoMemory,
+		"MCP.Disabled": got.Permissions.MCP.Disabled, "Memory.SkipHooks": got.Memory.SkipHooks,
+		"Memory.SkipSkills": got.Memory.SkipSkills, "Memory.SkipUser": got.Memory.SkipUser,
+		"Memory.SkipProject": got.Memory.SkipProject, "Memory.SkipMemory": got.Memory.SkipMemory,
 	} {
 		if !b {
 			t.Errorf("%s = false, want true (propagated from AIRequestProto)", name)
 		}
 	}
-	if got.MaxTokens != 16000 {
-		t.Errorf("MaxTokens = %d, want 16000", got.MaxTokens)
+	if got.Budget.MaxTokens != 16000 {
+		t.Errorf("MaxTokens = %d, want 16000", got.Budget.MaxTokens)
 	}
-	if got.ReasoningEffort != "high" {
-		t.Errorf("ReasoningEffort = %q, want high", got.ReasoningEffort)
+	if got.Effort != api.EffortHigh {
+		t.Errorf("Effort = %q, want high", got.Effort)
 	}
-	if got.SystemPrompt == "" {
+	if got.Prompt.System == "" {
 		t.Error("SystemPrompt unset, expected aifix to fill it")
 	}
-	if got.Prompt == "" {
+	if got.Prompt.User == "" {
 		t.Error("Prompt unset, expected aifix to fill it with violation list")
 	}
 	if res.StopReason == "error" {
@@ -250,8 +247,7 @@ func TestRun_SurfacesReLintError(t *testing.T) {
 		Initial:       resultsWith("fakelint", violation("a", "x", "R", 1)),
 		MaxIterations: 3,
 		AIConfig: captainai.Config{
-			Backend: captainai.Backend("test-relint-err"),
-			Model:   "rl",
+			Model: api.Model{Name: "rl", Backend: captainai.Backend("test-relint-err")},
 		},
 		ReLint: func(ctx context.Context) ([]*linters.LinterResult, error) {
 			return nil, boom
@@ -279,8 +275,7 @@ func TestRun_NonStreamingBackendErrors(t *testing.T) {
 		Initial: resultsWith("fakelint", violation("a", "x", "R", 1)),
 		ReLint:  func(ctx context.Context) ([]*linters.LinterResult, error) { return nil, nil },
 		AIConfig: captainai.Config{
-			Backend: captainai.Backend("test-buffered-only"),
-			Model:   "buf",
+			Model: api.Model{Name: "buf", Backend: captainai.Backend("test-buffered-only")},
 		},
 	})
 	if err == nil {

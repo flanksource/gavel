@@ -55,7 +55,7 @@ func renderSummaryPrompt(scope models.ScopeType, window string, commits models.C
 	if err != nil {
 		return "", fmt.Errorf("failed to render AI prompt template: %w", err)
 	}
-	return req.Prompt, nil
+	return req.Prompt.User, nil
 }
 
 func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent) (string, string, error) {
@@ -67,6 +67,7 @@ func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window st
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:   fmt.Sprintf("Summary: %s - %s", scope, window),
+		Source: "ai-summary-group.prompt",
 		Prompt: promptText,
 	})
 	if err != nil {

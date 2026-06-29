@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/gavel/todos/cmux"
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 )
 
 func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
@@ -20,7 +20,7 @@ func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
 
 	dir := t.TempDir()
 	sessionID := "sess-test"
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		t.Fatalf("SessionLogPath: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestHandleTodoSessionStreamSurfacesSubagent(t *testing.T) {
 
 	dir := t.TempDir()
 	sessionID := "sess-sub"
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		t.Fatalf("SessionLogPath: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestHandleTodoSessionStreamEmitsErrorEvent(t *testing.T) {
 
 	dir := t.TempDir()
 	sessionID := "sess-err"
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		t.Fatalf("SessionLogPath: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestHandleTodoSessionStatsReportsUsage(t *testing.T) {
 
 	dir := t.TempDir()
 	sessionID := "sess-stats"
-	path, err := cmux.SessionLogPath(dir, sessionID)
+	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		t.Fatalf("SessionLogPath: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestHandleTodoSessionStatsReportsUsage(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
-	var got cmux.SessionStats
+	var got cmuxprov.SessionStats
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v (body: %s)", err, rec.Body.String())
 	}

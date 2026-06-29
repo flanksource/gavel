@@ -55,28 +55,3 @@ func TestCodexParseResponse(t *testing.T) {
 		})
 	}
 }
-
-func TestCodexBuildFixArgs(t *testing.T) {
-	adapter := Codex{}
-
-	t.Run("full-auto", func(t *testing.T) {
-		args := adapter.BuildFixArgs("codex-mini", "fix this", false)
-		joined := strings.Join(args, " ")
-		for _, want := range []string{"exec", "--full-auto", "-m", "codex-mini"} {
-			if !strings.Contains(joined, want) {
-				t.Errorf("args %q should contain %q", joined, want)
-			}
-		}
-	})
-
-	t.Run("patch-only", func(t *testing.T) {
-		args := adapter.BuildFixArgs("", "fix this", true)
-		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "--full-auto") {
-			t.Error("patch-only should not include --full-auto")
-		}
-		if !strings.Contains(joined, "exec") {
-			t.Error("should include exec subcommand")
-		}
-	})
-}

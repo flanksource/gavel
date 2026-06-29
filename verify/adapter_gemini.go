@@ -17,14 +17,6 @@ func (Gemini) BuildVerifyArgs(prompt, model, _ string, debug bool) []string {
 	return args
 }
 
-func (Gemini) BuildFixArgs(model, prompt string, _ bool) []string {
-	args := []string{"-p", prompt}
-	if model != "" && model != "gemini" {
-		args = append(args, "-m", model)
-	}
-	return args
-}
-
 func (Gemini) ParseResponse(raw string) (VerifyResult, error) {
 	if result, ok := tryUnmarshalResult(raw); ok {
 		return result, nil

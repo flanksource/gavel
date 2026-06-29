@@ -3,6 +3,9 @@ import { Marked, Renderer } from 'marked';
 interface Props {
   text: string;
   className?: string;
+  // inline renders with marked.parseInline (no block <p>/heading wrappers) into a
+  // <span>, for one-line contexts like a list-row title.
+  inline?: boolean;
 }
 
 const renderer = new Renderer();
@@ -81,7 +84,11 @@ const marked = new Marked({
   breaks: true,
 });
 
-export function Markdown({ text, className: cls }: Props) {
+export function Markdown({ text, className: cls, inline }: Props) {
+  if (inline) {
+    const html = marked.parseInline(text) as string;
+    return <span className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
+  }
   const html = marked.parse(text) as string;
   return <div className={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }

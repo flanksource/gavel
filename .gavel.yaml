@@ -17,6 +17,9 @@ lint:
   - file: testrunner/ui/dist/testui.js
     rule: omar-oracle-mention
     source: betterleaks
+  - file: testrunner/ui/pnpm-lock.yaml
+    rule: omar-country-short-codes
+    source: betterleaks
 pre:
 - name: deps
   run: make tidy

@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -48,16 +47,5 @@ func TestGeminiParseResponse(t *testing.T) {
 				t.Errorf("got %d checks, want %d", len(result.Checks), tt.wantChecks)
 			}
 		})
-	}
-}
-
-func TestGeminiBuildFixArgs(t *testing.T) {
-	adapter := Gemini{}
-	args := adapter.BuildFixArgs("gemini-2.5-flash", "fix this", false)
-	joined := strings.Join(args, " ")
-	for _, want := range []string{"-p", "-m", "gemini-2.5-flash"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("args %q should contain %q", joined, want)
-		}
 	}
 }

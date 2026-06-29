@@ -31,7 +31,11 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 	requested := commitGateRequest(result.Lint.Gates)
 	ctx := context.Background()
 
-	aiCfg, aiProto := buildAIFixRequest(defaultAIRuntimeOptions())
+	aiCfg, aiProto, err := buildAIFixRequest(defaultAIRuntimeOptions())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+		return lintFindingsBlocked
+	}
 
 	fixRes, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        workDir,
