@@ -85,17 +85,23 @@ type AnalyzeOptions struct {
 	// MaxBodyLines caps the commit message body length the LLM is asked to
 	// produce. Scaled to the diff size by the commit package; 0 means
 	// subject-only (no body).
-	MaxBodyLines  int              `json:"max_body_lines,omitempty"`
-	AI            bool             `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
-	AITimeout     time.Duration    `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
-	Summary       bool             `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
-	SummaryWindow GroupByWindow    `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
-	Short         bool             `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
-	Include       []string         `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
-	Exclude       []string         `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
-	Verbose       bool             `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
-	agent         ai.Agent         `json:"-"`
-	arch          repomap.ArchConf `json:"-"`
+	MaxBodyLines  int           `json:"max_body_lines,omitempty"`
+	AI            bool          `json:"ai" flag:"ai" help:"Enable AI-powered analysis"`
+	AITimeout     time.Duration `json:"ai_timeout" flag:"ai-timeout" help:"Timeout for AI analysis per commit" default:"60s"`
+	Summary       bool          `json:"summary" flag:"summary" help:"Generate a tree based summary of the analysis results"`
+	SummaryWindow GroupByWindow `json:"summary_window,omitempty" flag:"summary-window" help:"Time window for summary grouping (day, week, month, year), dynamically groups based on total time range if not set"`
+	Short         bool          `json:"show_files" flag:"short"  help:"Show short summary with files changed instead of full analysis"`
+	Include       []string      `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
+	Exclude       []string      `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
+	Verbose       bool          `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
+	// MessagePrompt, FunctionalityRemovedPrompt, and CompatibilityPrompt override
+	// the embedded AI prompt templates. Resolved from .gavel.yaml by the commit
+	// package; empty falls back to the built-in template. Not CLI flags.
+	MessagePrompt              string           `json:"-"`
+	FunctionalityRemovedPrompt string           `json:"-"`
+	CompatibilityPrompt        string           `json:"-"`
+	agent                      ai.Agent         `json:"-"`
+	arch                       repomap.ArchConf `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {

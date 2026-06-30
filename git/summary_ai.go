@@ -23,8 +23,8 @@ type AISummaryOutput struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
-func renderSummaryPrompt(scope models.ScopeType, window string, commits models.CommitAnalyses) (string, error) {
-	if summaryGroupPrompt == "" {
+func renderSummaryPrompt(scope models.ScopeType, window string, commits models.CommitAnalyses, template string) (string, error) {
+	if template == "" {
 		return "", fmt.Errorf("AI summary group prompt template is empty")
 	}
 
@@ -46,7 +46,7 @@ func renderSummaryPrompt(scope models.ScopeType, window string, commits models.C
 		commitMaps = append(commitMaps, commit.AsMap())
 	}
 
-	req, _, err := prompt.Load(summaryGroupPrompt).Render(map[string]any{
+	req, _, err := prompt.Load(template).Render(map[string]any{
 		"window":  window,
 		"scope":   scope,
 		"commits": commitMaps,
@@ -58,8 +58,8 @@ func renderSummaryPrompt(scope models.ScopeType, window string, commits models.C
 	return req.Prompt.User, nil
 }
 
-func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent) (string, string, error) {
-	promptText, err := renderSummaryPrompt(scope, window, commits)
+func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent, promptOverride string) (string, string, error) {
+	promptText, err := renderSummaryPrompt(scope, window, commits, promptOrDefault(promptOverride, summaryGroupPrompt))
 	if err != nil {
 		return "", "", err
 	}

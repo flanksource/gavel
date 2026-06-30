@@ -97,7 +97,7 @@ func TestPromptSummaryGroup(t *testing.T) {
 		},
 	}
 
-	got, err := renderSummaryPrompt(models.ScopeType("api"), "last 7 days", commits)
+	got, err := renderSummaryPrompt(models.ScopeType("api"), "last 7 days", commits, summaryGroupPrompt)
 	require.NoError(t, err)
 
 	require.Contains(t, got, "abc1234: feat(api): add login endpoint", "scoped commit line must render scope in parens")

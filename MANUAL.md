@@ -499,6 +499,8 @@ This is the right command when you want:
 - AI-assisted splitting of a large change into multiple commits — by directory (`-A`) or into logical groups with a separate chore commit for lock/generated files (`-G`). `-G` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change by default (pass `--group-by-scope` to make repomap scope the primary boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit), re-prompting to consolidate if the model overshoots
 - Optional follow-up push behavior
 
+By default (`--stage session`) commit scopes itself to the running agent's edits: it resolves a session id from `GAVEL_SESSION_ID`, `CLAUDE_SESSION_ID`, or `CODEX_SESSION_ID` and stages only the files that Claude or Codex session touched. With no session id in the environment it falls back to the previous default of committing the already-staged set. Pass `--stage staged|unstaged|all` or an explicit session id to override.
+
 Common workflows:
 
 ```bash

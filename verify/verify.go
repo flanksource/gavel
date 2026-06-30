@@ -112,7 +112,11 @@ func resolveVerifyPrompt(opts RunOptions, scope ReviewScope, cfg VerifyConfig) (
 	if opts.PromptOverride != "" {
 		return opts.PromptOverride, nil
 	}
-	return renderPrompt(scope, cfg, opts.Issue)
+	template, err := cfg.PromptTemplate.Resolve(opts.RepoPath, verifyPromptTemplate)
+	if err != nil {
+		return "", err
+	}
+	return renderPrompt(template, scope, cfg, opts.Issue)
 }
 
 // PreviewPrompt renders the verify prompt for a run without executing it, so the
@@ -126,7 +130,11 @@ func PreviewPrompt(opts RunOptions) (string, error) {
 	if opts.Issue != nil {
 		cfg.Checks = issueChecksConfig(opts.Issue.CheckIDs)
 	}
-	return renderPrompt(scope, cfg, opts.Issue)
+	template, err := cfg.PromptTemplate.Resolve(opts.RepoPath, verifyPromptTemplate)
+	if err != nil {
+		return "", err
+	}
+	return renderPrompt(template, scope, cfg, opts.Issue)
 }
 
 // resolveRunScope targets the issue's commits when the run is issue-aware,

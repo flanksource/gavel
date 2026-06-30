@@ -60,7 +60,7 @@ func AnalyzeWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.A
 		return commit, nil
 	}
 
-	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines)
+	analyzed, err := analyzeCommitMessageWithAI(ctx, commit, agent, opts.MaxBodyLines, opts.MessagePrompt)
 	if err != nil {
 		return commit, err
 	}
@@ -78,7 +78,7 @@ func AnalyzeCommitPromptsWithAI(ctx context.Context, commit models.CommitAnalysi
 	}
 
 	if includeMessage {
-		analyzed, err := analyzeCommitMessageWithAI(ctx, out.Commit, agent, opts.MaxBodyLines)
+		analyzed, err := analyzeCommitMessageWithAI(ctx, out.Commit, agent, opts.MaxBodyLines, opts.MessagePrompt)
 		if err != nil {
 			return out, err
 		}
@@ -106,13 +106,13 @@ func AnalyzeCompatibilityPromptsWithAI(ctx context.Context, commit models.Commit
 		return out, nil
 	}
 
-	functionalityRemoved, err := analyzeFunctionalityRemovedWithAI(ctx, out.Commit, agent)
+	functionalityRemoved, err := analyzeFunctionalityRemovedWithAI(ctx, out.Commit, agent, opts.FunctionalityRemovedPrompt)
 	if err != nil {
 		return out, err
 	}
 	out.FunctionalityRemoved = functionalityRemoved
 
-	compatibilityIssues, err := analyzeCompatibilityIssuesWithAI(ctx, out.Commit, agent)
+	compatibilityIssues, err := analyzeCompatibilityIssuesWithAI(ctx, out.Commit, agent, opts.CompatibilityPrompt)
 	if err != nil {
 		return out, err
 	}
@@ -121,12 +121,13 @@ func AnalyzeCompatibilityPromptsWithAI(ctx context.Context, commit models.Commit
 	return out, nil
 }
 
-func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int) (models.CommitAnalysis, error) {
-	if commitMessagePrompt == "" {
+func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, maxBodyLines int, override string) (models.CommitAnalysis, error) {
+	template := promptOrDefault(override, commitMessagePrompt)
+	if template == "" {
 		return commit, fmt.Errorf("AI commit message prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, commitMessagePrompt, map[string]any{"maxBodyLines": maxBodyLines})
+	promptText, err := renderCommitPrompt(commit, template, map[string]any{"maxBodyLines": maxBodyLines})
 	if err != nil {
 		return commit, err
 	}
@@ -170,12 +171,13 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 	return commit, nil
 }
 
-func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent) ([]string, error) {
-	if functionalityRemovedPrompt == "" {
+func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, override string) ([]string, error) {
+	template := promptOrDefault(override, functionalityRemovedPrompt)
+	if template == "" {
 		return nil, fmt.Errorf("AI functionality-removed prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, functionalityRemovedPrompt, nil)
+	promptText, err := renderCommitPrompt(commit, template, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +200,13 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 	return parseStringArrayResult(schema.FunctionalityRemoved, resp.Result, "functionalityRemoved"), nil
 }
 
-func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent) ([]string, error) {
-	if compatibilityIssuesPrompt == "" {
+func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, override string) ([]string, error) {
+	template := promptOrDefault(override, compatibilityIssuesPrompt)
+	if template == "" {
 		return nil, fmt.Errorf("AI compatibility-issues prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, compatibilityIssuesPrompt, nil)
+	promptText, err := renderCommitPrompt(commit, template, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +227,15 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 	}
 
 	return parseStringArrayResult(schema.CompatibilityIssues, resp.Result, "compatibilityIssues"), nil
+}
+
+// promptOrDefault returns the .gavel.yaml override when set, otherwise the
+// embedded default template.
+func promptOrDefault(override, embedded string) string {
+	if strings.TrimSpace(override) != "" {
+		return override
+	}
+	return embedded
 }
 
 func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map[string]any) (string, error) {

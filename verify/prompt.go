@@ -11,11 +11,12 @@ import (
 //go:embed verify-prompt.prompt
 var verifyPromptTemplate string
 
-// renderPrompt builds the reviewer prompt. The checks, rating dimensions, and
-// acceptance criteria are carried by the JSON output schema (see BuildSchema),
-// so the template only needs the scope instruction and issue context — keeping
-// it simple enough for dotprompt (no eq/index/range-over-checks logic).
-func renderPrompt(scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (string, error) {
+// renderPrompt builds the reviewer prompt from template. The checks, rating
+// dimensions, and acceptance criteria are carried by the JSON output schema (see
+// BuildSchema), so the template only needs the scope instruction and issue
+// context — keeping it simple enough for dotprompt (no eq/index/range logic).
+// template is the embedded default or a cfg.PromptTemplate override.
+func renderPrompt(template string, scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (string, error) {
 	data := map[string]any{
 		"scopeInstruction": scopeInstruction(scope),
 		"extraPrompt":      cfg.Prompt,
@@ -36,7 +37,7 @@ func renderPrompt(scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (str
 		data["issue"] = im
 	}
 
-	req, _, err := prompt.Load(verifyPromptTemplate).Render(data, nil)
+	req, _, err := prompt.Load(template).Render(data, nil)
 	if err != nil {
 		return "", fmt.Errorf("render verify prompt: %w", err)
 	}

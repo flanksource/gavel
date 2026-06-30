@@ -34,6 +34,9 @@ type SummaryOptions struct {
 	Context context.Context `json:"-"`
 	// MaxWorkers for parallel AI summary generation (default: 3)
 	MaxWorkers int `json:"-"`
+	// SummaryPrompt is the resolved .gavel.yaml commit.summaryPrompt override
+	// (inline text or file contents); empty uses the embedded default template.
+	SummaryPrompt string `json:"-"`
 }
 
 type windowScopeKey struct {
@@ -466,7 +469,7 @@ func Summarize(commits models.CommitAnalyses, options SummaryOptions) (GitSummar
 
 				logger.Infof("generating summary for %s in %s", group.scope, windowLabel)
 
-				aiName, aiDesc, err := GenerateGroupSummary(options.Context, group.scope, windowLabel, group.commits, options.Agent)
+				aiName, aiDesc, err := GenerateGroupSummary(options.Context, group.scope, windowLabel, group.commits, options.Agent, options.SummaryPrompt)
 				var name, desc string
 				if err != nil {
 					logger.Warnf("AI summary generation failed, using fallback: %v", err)

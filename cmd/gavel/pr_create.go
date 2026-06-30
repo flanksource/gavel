@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -143,7 +144,11 @@ func runPRCreateWithDeps(ctx context.Context, sha string, opts prCreateOptions, 
 		return fmt.Errorf("git cherry-pick %s: %w", pf.shortSHA, err)
 	}
 
-	content, err := deps.generateContent(ctx, prContentInputForSHA(wtPath))
+	prIn, err := prContentInputForSHA(wtPath)
+	if err != nil {
+		return err
+	}
+	content, err := deps.generateContent(ctx, prIn)
 	if err != nil {
 		return fmt.Errorf("generate PR content: %w", err)
 	}
@@ -250,7 +255,7 @@ func splitBaseRef(base string) (string, string) {
 	return branch, base
 }
 
-func prContentInputForSHA(wtPath string) commitpkg.PRContentInput {
+func prContentInputForSHA(wtPath string) (commitpkg.PRContentInput, error) {
 	msg, _ := captureGit(wtPath, "show", "-s", "--format=%B", "HEAD")
 	rawFiles, _ := captureGit(wtPath, "show", "--name-only", "--format=", "HEAD")
 	var files []string
@@ -259,9 +264,18 @@ func prContentInputForSHA(wtPath string) commitpkg.PRContentInput {
 			files = append(files, s)
 		}
 	}
-	return commitpkg.PRContentInput{
-		Commits: []commitpkg.PRCommitInput{{Message: strings.TrimSpace(msg), Files: files}},
+	cfg, err := verify.LoadGavelConfig(wtPath)
+	if err != nil {
+		return commitpkg.PRContentInput{}, fmt.Errorf("load .gavel.yaml for PR content prompt: %w", err)
 	}
+	prContentPrompt, err := cfg.Commit.PRContentPrompt.Resolve(wtPath, "")
+	if err != nil {
+		return commitpkg.PRContentInput{}, fmt.Errorf("resolve commit.prContentPrompt override: %w", err)
+	}
+	return commitpkg.PRContentInput{
+		Commits:        []commitpkg.PRCommitInput{{Message: strings.TrimSpace(msg), Files: files}},
+		PromptOverride: prContentPrompt,
+	}, nil
 }
 
 // --- worktree creation, push, cleanup ---------------------------------------

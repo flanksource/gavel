@@ -391,7 +391,7 @@ func TestRenderPromptIncludesIssueAndCommits(t *testing.T) {
 		CommitSHAs:  []string{"abc1234", "def5678"},
 	}
 	scope := ReviewScope{Type: "commits", Commits: issue.CommitSHAs}
-	prompt, err := renderPrompt(scope, VerifyConfig{}, issue)
+	prompt, err := renderPrompt(verifyPromptTemplate, scope, VerifyConfig{}, issue)
 	if err != nil {
 		t.Fatalf("renderPrompt() error: %v", err)
 	}

@@ -97,6 +97,10 @@ type VerifyConfig struct {
 	Model  string       `yaml:"model" json:"model"`
 	Prompt string       `yaml:"prompt" json:"prompt"`
 	Checks ChecksConfig `yaml:"checks" json:"checks"`
+	// PromptTemplate replaces the built-in reviewer prompt entirely (inline or a
+	// file reference). Distinct from Prompt, which is appended as additional
+	// instructions to the default template.
+	PromptTemplate PromptOverride `yaml:"promptTemplate,omitempty" json:"promptTemplate,omitempty"`
 }
 
 // LintIgnoreRule suppresses lint violations matching every populated field.
@@ -207,6 +211,16 @@ type CommitConfig struct {
 	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
 	Lint          CommitLintConfig    `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Tidy          CommitTidyConfig    `yaml:"tidy,omitempty" json:"tidy,omitempty"`
+	// MessagePrompt, FunctionalityRemovedPrompt, CompatibilityPrompt, SummaryPrompt,
+	// and PRContentPrompt override the built-in AI prompt templates for
+	// commit-message generation, the compatibility analysis, commit-grouping
+	// summaries (`gavel git analyze --summary`), and PR title/body generation
+	// (inline or a file reference). Empty uses the default.
+	MessagePrompt              PromptOverride `yaml:"messagePrompt,omitempty" json:"messagePrompt,omitempty"`
+	FunctionalityRemovedPrompt PromptOverride `yaml:"functionalityRemovedPrompt,omitempty" json:"functionalityRemovedPrompt,omitempty"`
+	CompatibilityPrompt        PromptOverride `yaml:"compatibilityPrompt,omitempty" json:"compatibilityPrompt,omitempty"`
+	SummaryPrompt              PromptOverride `yaml:"summaryPrompt,omitempty" json:"summaryPrompt,omitempty"`
+	PRContentPrompt            PromptOverride `yaml:"prContentPrompt,omitempty" json:"prContentPrompt,omitempty"`
 }
 
 // CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every
@@ -294,6 +308,14 @@ type GavelConfig struct {
 	// Checks is the project default for the post-completion agent check loop
 	// (`gavel todos run --check`). A TODO's frontmatter `checks:` overrides it.
 	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
+	Todos  TodosConfig             `yaml:"todos,omitempty" json:"todos,omitempty"`
+}
+
+// TodosConfig configures `gavel todos run`.
+type TodosConfig struct {
+	// RunPrompt overrides the built-in todo run prompt template (inline or a file
+	// reference). Empty uses the embedded default. See prompts.TodosRun.
+	RunPrompt PromptOverride `yaml:"runPrompt,omitempty" json:"runPrompt,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -499,6 +521,15 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
 	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
 	base.Checks = base.Checks.Overlay(&override.Checks)
+	base.Todos = MergeTodosConfig(base.Todos, override.Todos)
+	return base
+}
+
+// MergeTodosConfig merges override onto base: a set runPrompt override wins.
+func MergeTodosConfig(base, override TodosConfig) TodosConfig {
+	if !override.RunPrompt.IsZero() {
+		base.RunPrompt = override.RunPrompt
+	}
 	return base
 }
 
@@ -613,6 +644,9 @@ func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
 	if len(override.Checks.DisabledCategories) > 0 {
 		base.Checks.DisabledCategories = append(base.Checks.DisabledCategories, override.Checks.DisabledCategories...)
 	}
+	if !override.PromptTemplate.IsZero() {
+		base.PromptTemplate = override.PromptTemplate
+	}
 	return base
 }
 
@@ -661,6 +695,21 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	if override.Lint.Secrets != nil {
 		base.Lint.Secrets = override.Lint.Secrets
+	}
+	if !override.MessagePrompt.IsZero() {
+		base.MessagePrompt = override.MessagePrompt
+	}
+	if !override.FunctionalityRemovedPrompt.IsZero() {
+		base.FunctionalityRemovedPrompt = override.FunctionalityRemovedPrompt
+	}
+	if !override.CompatibilityPrompt.IsZero() {
+		base.CompatibilityPrompt = override.CompatibilityPrompt
+	}
+	if !override.SummaryPrompt.IsZero() {
+		base.SummaryPrompt = override.SummaryPrompt
+	}
+	if !override.PRContentPrompt.IsZero() {
+		base.PRContentPrompt = override.PRContentPrompt
 	}
 	return base
 }

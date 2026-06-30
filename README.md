@@ -394,7 +394,7 @@ gavel commit --force                  # skip hooks
 
 | Flag | Description |
 |------|-------------|
-| `--stage` | Which changes to commit: `staged` (default), `unstaged`, `all` |
+| `--stage` | Which changes to commit: `session` (default — commits only the running agent's edits, resolving `GAVEL_SESSION_ID`/`CLAUDE_SESSION_ID`/`CODEX_SESSION_ID`, falling back to `staged` when none is set), `staged`, `unstaged`, `all`, or an explicit Claude/Codex session id |
 | `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
 | `-A` / `--commit-all` | Split the selected change set into multiple commits grouped by directory; if nothing is staged, stage all first |
 | `-G` / `--ai-group` | Ask the LLM to split the change set into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles) instead of grouping by directory. Combine with `-A` to stage all changes first |

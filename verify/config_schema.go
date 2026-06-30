@@ -3,6 +3,7 @@ package verify
 import (
 	"encoding/json"
 
+	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -40,6 +41,7 @@ func gavelConfigSchema() map[string]any {
 			"secrets":  secretsSchema(),
 			"procfile": procfileSchema(),
 			"checks":   checksSchema(),
+			"todos":    todosSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -58,6 +60,9 @@ func verifySchema() map[string]any {
 			"prompt": stringProp(
 				"Optional repo-specific review policy appended to Gavel's built-in verify prompt. " +
 					"Last-write-wins across layers."),
+			"promptTemplate": promptOverrideSchema(prompts.Verify,
+				"Replace the built-in reviewer prompt entirely (dotprompt template). Unlike prompt, "+
+					"which is appended, this is the whole template. Last-write-wins across layers."),
 			"checks": object(
 				"Selectively disable checks emitted by the verify engine.",
 				map[string]any{
@@ -116,6 +121,10 @@ func commitSchema() map[string]any {
 			"model": stringProp(
 				"AI CLI / model used for commit-message generation and compatibility analysis. " +
 					"Last-write-wins across layers."),
+			"groupModel": stringProp(
+				"AI model used for AI commit grouping (`gavel commit -G`). Grouping reasons over the " +
+					"whole change set and benefits from a more capable model than message generation; " +
+					"falls back to model, then a sonnet-class default. Last-write-wins across layers."),
 			"hooks": arrayOf(
 				"Hooks run during `gavel commit` before the final commit is written. Appended across "+
 					"layers in declaration order.",
@@ -163,8 +172,54 @@ func commitSchema() map[string]any {
 						"Toggle the tidy step. Omit to keep on.", true),
 				},
 			),
+			"messagePrompt": promptOverrideSchema(prompts.CommitMessage,
+				"Override the built-in commit-message generation prompt (dotprompt template). "+
+					"Last-write-wins across layers."),
+			"functionalityRemovedPrompt": promptOverrideSchema(prompts.CommitFuncRemoved,
+				"Override the built-in prompt that detects user-visible functionality removed by a diff. "+
+					"Last-write-wins across layers."),
+			"compatibilityPrompt": promptOverrideSchema(prompts.CommitCompatibility,
+				"Override the built-in prompt that detects backward-compatibility/breaking issues. "+
+					"Last-write-wins across layers."),
+			"summaryPrompt": promptOverrideSchema(prompts.CommitSummary,
+				"Override the built-in prompt that names and summarises a group of commits "+
+					"(`gavel git analyze --summary`). Last-write-wins across layers."),
+			"prContentPrompt": promptOverrideSchema(prompts.PRContent,
+				"Override the built-in prompt that generates PR title, body, and branch name. "+
+					"Last-write-wins across layers."),
 		},
 	)
+}
+
+func todosSchema() map[string]any {
+	return object(
+		"Settings for `gavel todos run`.",
+		map[string]any{
+			"runPrompt": promptOverrideSchema(prompts.TodosRun,
+				"Override the built-in todo run prompt (dotprompt template): the framing, the TODO "+
+					"items injected as {{{body}}}, and the instructions. Last-write-wins across layers."),
+		},
+	)
+}
+
+// promptOverrideSchema models a PromptOverride: a bare string is shorthand for
+// inline text, or an object with inline/file keys. The union `type` keeps both
+// hand-written forms valid; the properties document the object form (and let the
+// settings form render inline/file inputs). desc documents which prompt it
+// replaces; promptID is stamped as x-prompt-id so the settings UI links this
+// field to its prompts.Prompt descriptor (default + metadata).
+func promptOverrideSchema(promptID, desc string) map[string]any {
+	return map[string]any{
+		"description":          desc,
+		"type":                 []any{"string", "object"},
+		"additionalProperties": false,
+		"x-prompt-id":          promptID,
+		"properties": map[string]any{
+			"inline": stringProp("Inline prompt template text used verbatim."),
+			"file": stringProp(
+				"Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory."),
+		},
+	}
 }
 
 func checksSchema() map[string]any {

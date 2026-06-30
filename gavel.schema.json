@@ -102,12 +102,54 @@
           },
           "type": "object"
         },
+        "compatibilityPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in prompt that detects backward-compatibility/breaking issues. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "commit.compatibility"
+        },
+        "functionalityRemovedPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in prompt that detects user-visible functionality removed by a diff. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "commit.functionalityRemoved"
+        },
         "gitignore": {
           "description": "Extra ignore globs applied when selecting files to commit. Appended and deduped across layers.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "groupModel": {
+          "description": "AI model used for AI commit grouping (`gavel commit -G`). Grouping reasons over the whole change set and benefits from a more capable model than message generation; falls back to model, then a sonnet-class default. Last-write-wins across layers.",
+          "type": "string"
         },
         "hooks": {
           "description": "Hooks run during `gavel commit` before the final commit is written. Appended across layers in declaration order.",
@@ -179,9 +221,47 @@
           },
           "type": "object"
         },
+        "messagePrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in commit-message generation prompt (dotprompt template). Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "commit.message"
+        },
         "model": {
           "description": "AI CLI / model used for commit-message generation and compatibility analysis. Last-write-wins across layers.",
           "type": "string"
+        },
+        "prContentPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in prompt that generates PR title, body, and branch name. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "pr.content"
         },
         "precommit": {
           "additionalProperties": false,
@@ -209,6 +289,25 @@
             }
           },
           "type": "object"
+        },
+        "summaryPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in prompt that names and summarises a group of commits (`gavel git analyze --summary`). Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "commit.summary"
         },
         "tidy": {
           "additionalProperties": false,
@@ -413,6 +512,32 @@
       },
       "type": "object"
     },
+    "todos": {
+      "additionalProperties": false,
+      "description": "Settings for `gavel todos run`.",
+      "properties": {
+        "runPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in todo run prompt (dotprompt template): the framing, the TODO items injected as {{{body}}}, and the instructions. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.run"
+        }
+      },
+      "type": "object"
+    },
     "verify": {
       "additionalProperties": false,
       "description": "Settings for `gavel verify`, the AI code-review engine.",
@@ -446,6 +571,25 @@
         "prompt": {
           "description": "Optional repo-specific review policy appended to Gavel's built-in verify prompt. Last-write-wins across layers.",
           "type": "string"
+        },
+        "promptTemplate": {
+          "additionalProperties": false,
+          "description": "Replace the built-in reviewer prompt entirely (dotprompt template). Unlike prompt, which is appended, this is the whole template. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "verify"
         }
       },
       "type": "object"
