@@ -1,6 +1,6 @@
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
-import { timeAgo } from '../../utils';
+import { ageShort, timeAgo } from '../../utils';
 import { GavelIcon } from '../GavelIcon';
 import { ISSUE_ICONS, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusTriage, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
@@ -275,8 +275,22 @@ function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
 
 // TodoAges shows the todo's created age and, when it differs, its last-activity
 // age. Absolute times sit in the tooltips. A todo with neither timestamp (some
-// file-backed todos) renders nothing.
-function TodoAges({ todo }: { todo: TodoItem }) {
+// file-backed todos) renders nothing. `short` collapses both ages into a single
+// compact 'X' token (no "ago") for the single-line compact density.
+function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
+  if (short) {
+    const anchor = todo.created ?? todo.lastRun;
+    if (!anchor) return null;
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 tabular-nums"
+        title={todo.created ? `Created ${new Date(todo.created).toLocaleString()}` : `Last activity ${new Date(todo.lastRun!).toLocaleString()}`}
+      >
+        <GavelIcon name="codicon:clock" className="text-[11px]" />
+        {ageShort(anchor)}
+      </span>
+    );
+  }
   const showLast = !!todo.lastRun && todo.lastRun !== todo.created;
   return (
     <>
@@ -363,6 +377,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{todo.title}</span>
           {compact && (
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
+              <TodoAges todo={todo} short />
               {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
               {todo.diff && <TodoDiffBadge diff={todo.diff} />}
             </span>

@@ -6,7 +6,7 @@ import { GavelIcon } from '../GavelIcon';
 import { TodoTimeline } from './TodoTimeline';
 import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
-import { TodoSessionTimer, useSessionStats } from './TodoSessionTimer';
+import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
@@ -387,11 +387,6 @@ export function TodoDetail({
           </div>
           {(error || runError) && <div className="mt-2 text-xs text-red-600">{error || runError}</div>}
           {runMessage && !error && !runError && <div className="mt-2 text-xs text-emerald-600">{runMessage}</div>}
-          {todo.sessionId && (
-            <div className="hidden md:block">
-              <TodoSessionTimer dir={dir} provider={provider} sessionId={todo.sessionId} />
-            </div>
-          )}
         </div>
       </div>
       <TodoRunAdvancedDialog

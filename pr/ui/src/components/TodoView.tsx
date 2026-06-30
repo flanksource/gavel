@@ -10,6 +10,7 @@ import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
 import { TodoFilterBar } from './todos/TodoFilterBar';
 import { TodoGroupByMenu } from './todos/TodoGroupByMenu';
+import { TodoSortByMenu } from './todos/TodoSortByMenu';
 
 // The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
 // actions and an independently-scrolling bodySidebar (the workspace list) beside
@@ -49,12 +50,13 @@ export function TodoNavbarDensityPicker({ todos }: { todos: WorkspaceTodos }) {
 // filter pills are also the count surface, so the sidebar has one compact row:
 // grouping, status filters, time filtering, and refresh.
 export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, hiddenStatuses, toggleStatus, groupBy, setGroupBy, timeRange, setTimeRange, loadingList, refresh } = todos;
+  const { aggregate, hiddenStatuses, toggleStatus, groupBy, setGroupBy, sortBy, setSortBy, timeRange, setTimeRange, loadingList, refresh } = todos;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
       {aggregate.total > 0 && (
         <>
           <TodoGroupByMenu groupBy={groupBy} onChange={setGroupBy} />
+          <TodoSortByMenu sortBy={sortBy} onChange={setSortBy} />
           <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
         </>
       )}
@@ -107,7 +109,7 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
 export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, timeRange, selected, select, refresh, loadingList } = todos;
+  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -131,6 +133,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             onToggleStatus={toggleStatus}
             range={range}
             density={density}
+            sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
             multiSelect
@@ -140,7 +143,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
       </ListMenu>
     );
   } else {
-    const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
+    const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now(), sortBy);
     content = buckets.length === 0 ? (
       <div className="p-6 text-center text-sm text-muted-foreground">
         <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-3xl" />

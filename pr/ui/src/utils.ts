@@ -52,6 +52,19 @@ export function timeAgo(iso: string): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// ageShort is the most compact age form for dense list rows: a single token with
+// no "ago" suffix ('now', '5m', '2h', '3d', '4w'). Used by the todo sidebar's
+// compact density where space for a full 'X ago' phrase doesn't exist.
+export function ageShort(iso: string): string {
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(s)) return '';
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d`;
+  return `${Math.floor(s / 604800)}w`;
+}
+
 // timeAgoShort is timeAgo with second-level granularity for fresh timestamps
 // ('Xs ago'), used by the header status/sync readouts where the most recent
 // poll is only seconds old.

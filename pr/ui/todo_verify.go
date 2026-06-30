@@ -44,6 +44,7 @@ type todoCriteriaPayload struct {
 	Dir      string                      `json:"dir,omitempty"`
 	Ref      string                      `json:"ref,omitempty"`
 	Model    string                      `json:"model,omitempty"`
+	Backend  string                      `json:"backend,omitempty"`
 	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
 	// Prompt, when non-empty, overrides the rendered verify prompt verbatim — the
 	// dashboard's editable prompt.
@@ -151,6 +152,7 @@ func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
 	result, err := todos.RunIssueVerification(r.Context(), provider, todo, todos.VerifyOptions{
 		WorkDir: todoVerifyWorkDir(source.Dir, todo),
 		Model:   payload.Model,
+		Backend: payload.Backend,
 		Prompt:  payload.Prompt,
 	})
 	if err != nil {
@@ -185,6 +187,7 @@ func (s *Server) handleTodoVerifyPreview(w http.ResponseWriter, r *http.Request)
 	prompt, err := todos.PreviewIssueVerification(todo, todos.VerifyOptions{
 		WorkDir: todoVerifyWorkDir(source.Dir, todo),
 		Model:   payload.Model,
+		Backend: payload.Backend,
 	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadGateway, err)

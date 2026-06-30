@@ -759,8 +759,13 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
+	previewPrompt, err := buildTodoRunPromptPreview(source.Dir, todoList, opts)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	resp := todoRunPreviewResponse{
-		Prompt:  buildTodoRunPromptPreview(source.Dir, todoList, opts),
+		Prompt:  previewPrompt,
 		Mode:    opts.Mode,
 		Agent:   opts.Agent,
 		Backend: opts.Backend,
@@ -777,14 +782,18 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 // only: the cmux title header and implement/plan suffix are run-mode scaffolding
 // applied around it (the Run/Plan mode selector controls the suffix), not part of
 // the editable prompt.
-func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) string {
+func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
+	tmpl, err := claude.ResolveRunTemplate(dir)
+	if err != nil {
+		return "", err
+	}
 	if opts.Mode == "inline" {
 		if len(todoList) == 1 {
-			return claude.BuildPrompt(todoList[0], dir)
+			return claude.BuildPrompt(todoList[0], dir), nil
 		}
-		return claude.BuildGroupPrompt(todoList, dir)
+		return claude.BuildGroupPrompt(todoList, claude.GroupPromptOptions{WorkDir: dir, Template: tmpl})
 	}
-	return claude.BuildRunPrompt(todoList, dir, opts.Effort)
+	return claude.BuildRunPrompt(todoList, claude.RunPromptOptions{WorkDir: dir, Effort: opts.Effort, Template: tmpl})
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,

@@ -14,13 +14,15 @@ interface Props {
   onEdit: (project: Project) => void;
   /** Opens the add-workspace-directory dialog. */
   onAdd: () => void;
+  /** Opens the per-project .gavel.yaml settings editor. */
+  onSettings: (project: Project) => void;
 }
 
 // ProjectsBar lists every configured workspace straight from projects.json,
 // independent of the GitHub PR fetch, so a project never vanishes when one of
 // its repos gains an open PR. The section is always shown so its "Add directory"
 // action stays available even when no projects are configured yet.
-export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: Props) {
+export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd, onSettings }: Props) {
   return (
     <div className="border-b border-border">
       <div className="px-3 py-1 bg-muted text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
@@ -34,6 +36,17 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd }: 
             <span className="text-sm font-medium text-foreground truncate flex-1" title={p.dir}>{p.name}</span>
             <TodoBadge counts={p.todoCounts} />
             <GitChangesBadge count={procStatus[p.name]?.gitChanges} />
+            <Button
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={() => onSettings(p)}
+              title={`Edit ${p.name} .gavel.yaml`}
+              aria-label={`Edit ${p.name} settings`}
+              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              <GavelIcon name="codicon:settings-gear" />
+            </Button>
             <ProcControl
               repo={key}
               project={p}

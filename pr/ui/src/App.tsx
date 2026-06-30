@@ -14,6 +14,7 @@ import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
+import { SettingsDialog, type SettingsScope } from './components/SettingsDialog';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -160,6 +161,7 @@ export function App() {
   const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
+  const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
   const visible = useDocumentVisible();
   const isMobile = useIsMobile();
 
@@ -342,6 +344,11 @@ export function App() {
 
   const openAdd = useCallback(() => { setEditProject(null); setAddOpen(true); }, []);
   const openEdit = useCallback((p: Project) => { setEditProject(p); setAddOpen(true); }, []);
+  const openGlobalSettings = useCallback(() => setSettingsScope({ kind: 'global' }), []);
+  const openProjectSettings = useCallback(
+    (p: Project) => setSettingsScope({ kind: 'project', project: p.name, label: p.name }),
+    [],
+  );
 
   useEffect(() => { saveUIState(config, filters); }, [config, filters]);
 
@@ -591,6 +598,17 @@ export function App() {
               onPause={handlePause}
               networkBusy={detailLoading}
             />
+            <Button
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={openGlobalSettings}
+              title="Global settings (~/.gavel.yaml)"
+              aria-label="Global settings"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <GavelIcon name="codicon:settings-gear" />
+            </Button>
             <ThemeToggle />
           </>
         }
@@ -625,7 +643,7 @@ export function App() {
           <SplitPane
             left={
               <>
-                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} />
+                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} onSettings={openProjectSettings} />
                 <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
               </>
             }
@@ -653,6 +671,7 @@ export function App() {
 
       <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} defaultDir={todos.selected?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
+      <SettingsDialog open={!!settingsScope} scope={settingsScope ?? { kind: 'global' }} onClose={() => setSettingsScope(null)} />
     </>
   );
 }

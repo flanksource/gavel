@@ -94,10 +94,11 @@ function ctxBarColor(pct: number): string {
   return 'bg-emerald-500';
 }
 
-// TodoSessionTimer is the full session readout for the detail pane: identity
-// (model + effort), live elapsed time, a context-window usage bar, estimated
-// cost, and a control to focus the session's cmux terminal. It renders nothing
-// until the session has produced a log (found).
+// TodoSessionTimer is the inline session readout for the Session header:
+// identity (model + effort), live elapsed time, a context-window usage bar,
+// estimated cost, and a control to focus the session's cmux terminal. It renders
+// nothing until the session has produced a log (found), and returns a bare run of
+// flex items so the caller's header owns the surrounding row.
 export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
   dir: string;
   provider: string;
@@ -133,7 +134,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
   const cost = formatCost(stats.costUsd);
   const ctxPct = stats.contextWindow > 0 ? (stats.contextTokens / stats.contextWindow) * 100 : 0;
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+    <>
       <span className="inline-flex items-center gap-1" title={`${stats.agent || 'claude'} session`}>
         <GavelIcon name="codicon:hubot" className="text-[12px]" />
         <span className="font-medium text-foreground">{modelLabel(stats)}</span>
@@ -198,6 +199,6 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
         <GavelIcon name={focusBusy ? 'svg-spinners:ring-resize' : focusError ? 'codicon:error' : 'codicon:eye'} className="text-[12px]" />
         cmux
       </Button>
-    </div>
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import type { Project, TodoGroupBy, TodoItem, TodoListResponse } from '../../types';
+import type { Project, TodoGroupBy, TodoItem, TodoListResponse, TodoSortBy } from '../../types';
 
 // Group-by is a per-user view preference for the todo lists, persisted alongside
 // density and the status filter so it survives reloads. 'workspace' keeps the
@@ -30,6 +30,42 @@ export function loadGroupBy(): TodoGroupBy {
 export function saveGroupBy(groupBy: TodoGroupBy): void {
   try {
     localStorage.setItem(STORAGE_KEY, groupBy);
+  } catch {
+    // best-effort: storage unavailable — skip persisting.
+  }
+}
+
+// Sort-by is the row order within each group (workspace section or severity/age
+// bucket), persisted alongside group-by so the chosen order survives reloads.
+export const SORT_BY_OPTIONS: { value: TodoSortBy; label: string; icon: string }[] = [
+  { value: 'priority', label: 'Priority', icon: 'codicon:warning' },
+  { value: 'newest', label: 'Newest', icon: 'codicon:arrow-down' },
+  { value: 'oldest', label: 'Oldest', icon: 'codicon:chevron-up' },
+  { value: 'title', label: 'Title', icon: 'codicon:list-flat' },
+];
+
+const SORT_STORAGE_KEY = 'gavel.pr-ui.todoSortBy.v1';
+
+export function defaultSortBy(): TodoSortBy {
+  return 'priority';
+}
+
+function isSortBy(value: string | null): value is TodoSortBy {
+  return SORT_BY_OPTIONS.some(opt => opt.value === value);
+}
+
+export function loadSortBy(): TodoSortBy {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    return isSortBy(raw) ? raw : defaultSortBy();
+  } catch {
+    return defaultSortBy();
+  }
+}
+
+export function saveSortBy(sortBy: TodoSortBy): void {
+  try {
+    localStorage.setItem(SORT_STORAGE_KEY, sortBy);
   } catch {
     // best-effort: storage unavailable — skip persisting.
   }
@@ -91,6 +127,32 @@ export function compareTodos(a: TodoItem, b: TodoItem): number {
   return bm - am;
 }
 
+// compareByAge orders two age anchors so the requested direction wins while todos
+// with no recorded timestamp always sort last (regardless of direction).
+function compareByAge(am: number | null, bm: number | null, newestFirst: boolean): number {
+  if (am === bm) return 0;
+  if (am === null) return 1;
+  if (bm === null) return -1;
+  return newestFirst ? bm - am : am - bm;
+}
+
+// todoComparator resolves the sidebar's sort-by preference to a TodoItem
+// comparator. 'priority' keeps the shared severity-then-recent order; the others
+// order by created age or title. All fall back to title to keep ties stable.
+export function todoComparator(sortBy: TodoSortBy): (a: TodoItem, b: TodoItem) => number {
+  switch (sortBy) {
+    case 'newest':
+      return (a, b) => compareByAge(ageMs(a), ageMs(b), true) || (a.title || '').localeCompare(b.title || '');
+    case 'oldest':
+      return (a, b) => compareByAge(ageMs(a), ageMs(b), false) || (a.title || '').localeCompare(b.title || '');
+    case 'title':
+      return (a, b) => (a.title || '').localeCompare(b.title || '');
+    case 'priority':
+    default:
+      return compareTodos;
+  }
+}
+
 // flattenTodos tags every workspace's todos with their owning workspace, in
 // workspace order, so the result can be bucketed by any dimension while each
 // entry still knows where it came from.
@@ -143,17 +205,17 @@ function ageKey(item: TodoEntry, now: number): string {
 
 // bucketTodos splits the flattened entries into ordered, non-empty buckets for
 // the given non-workspace grouping. Severity buckets follow high→medium→low; age
-// buckets run today→older then a trailing "no activity", sorted most-recent-first
-// within each so the freshest work surfaces at the top.
-export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', now: number): TodoBucket[] {
+// buckets run today→older then a trailing "no activity". Rows within each bucket
+// follow the caller's sort preference (defaulting to the priority order).
+export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', now: number, sortBy: TodoSortBy = 'priority'): TodoBucket[] {
+  const cmp = todoComparator(sortBy);
   if (groupBy === 'severity') {
     return SEVERITY_BUCKETS
       .map(def => ({
         key: def.key,
         label: def.label,
         tone: def.tone,
-        // Within one priority bucket, keep the same newest-updated row order.
-        entries: entries.filter(e => severityKey(e) === def.key).sort((a, b) => compareTodos(a.todo, b.todo)),
+        entries: entries.filter(e => severityKey(e) === def.key).sort((a, b) => cmp(a.todo, b.todo)),
       }))
       .filter(bucket => bucket.entries.length > 0);
   }
@@ -172,7 +234,7 @@ export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', n
   for (const def of AGE_BUCKETS) {
     const bucket = byAge.get(def.key);
     if (!bucket) continue;
-    bucket.sort((a, b) => compareTodos(a.todo, b.todo));
+    bucket.sort((a, b) => cmp(a.todo, b.todo));
     ordered.push({ key: def.key, label: def.label, tone: 'text-muted-foreground', entries: bucket });
   }
   const none = byAge.get('none');
