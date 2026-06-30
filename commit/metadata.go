@@ -17,6 +17,10 @@ const (
 	// EnvClaudeSessionID is the fallback session-id source used when
 	// GAVEL_SESSION_ID is unset but Claude Code exported its own session id.
 	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
+	// EnvCodexSessionID is the fallback session-id source used when neither
+	// GAVEL_SESSION_ID nor CLAUDE_SESSION_ID is set but Codex exported its
+	// session id. Resolved by --stage=session via resolveEnvSessionID.
+	EnvCodexSessionID = "CODEX_SESSION_ID"
 
 	// TrailerIssueID / trailerSessionID re-export the canonical git trailer keys
 	// so commit-package consumers keep their existing reference.

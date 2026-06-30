@@ -17,7 +17,7 @@ import (
 )
 
 type CommitOptions struct {
-	Stage        string `flag:"stage" help:"Which changes to commit: staged|unstaged|all, or a Claude session id to commit only the files that session's Edit/Write tools touched" default:"staged"`
+	Stage        string `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id" default:"session"`
 	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
 	AIGroup      bool   `flag:"ai-group" short:"G" help:"Ask the LLM to split the change set into logical commit groups (and a separate chore commit for lock/generated files) instead of grouping by directory. Combine with -A to first stage all changes."`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
@@ -115,7 +115,7 @@ with a warning. If GitHub rejects enabling auto-merge (repo disallows it, the
 chosen method isn't enabled, no branch protection), gavel exits non-zero.
 
 Examples:
-  gavel commit                          # LLM-generated message, staged changes
+  gavel commit                          # session-scoped: commits only the running agent's edits, else staged changes
   gavel commit -i                       # tree picker over all changed files; no git add needed
   gavel commit -t                       # alias for the tree picker
   gavel commit -i -s                    # show a status summary before opening the picker
@@ -124,8 +124,9 @@ Examples:
   gavel commit -A --max-files=3         # tighter file cap; triggers deeper splits
   gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
   gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
+  gavel commit --stage staged           # commit only what is already git-added (the pre-session default)
   gavel commit --stage all --dry-run    # stage everything, print message
-  gavel commit --stage <session-id>     # commit only the files that Claude session edited
+  gavel commit --stage <session-id>     # commit only the files that Claude or Codex session edited
   gavel commit --force                  # skip hooks
   gavel commit -y                       # auto-unstage linked-dep replacements, auto-AI-fix lint findings
   gavel commit --precommit=fail         # error on gitignore or linked-deps issues

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
@@ -98,6 +99,13 @@ func init() {
 			opts := git.SummaryOptions{
 				Window:        options.SummaryWindow,
 				MaxCategories: 7,
+			}
+			if cfg, cfgErr := verify.LoadGavelConfig(options.Path); cfgErr == nil {
+				summaryPrompt, err := cfg.Commit.SummaryPrompt.Resolve(options.Path, "")
+				if err != nil {
+					return nil, fmt.Errorf("resolve commit.summaryPrompt override: %w", err)
+				}
+				opts.SummaryPrompt = summaryPrompt
 			}
 
 			if options.AI {

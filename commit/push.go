@@ -248,7 +248,14 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}
 
-	prIn := PRContentInput{Commits: commitInputsFromResults(result.Commits)}
+	prContentPrompt, err := opts.Config.PRContentPrompt.Resolve(opts.WorkDir, "")
+	if err != nil {
+		return fmt.Errorf("resolve commit.prContentPrompt override: %w", err)
+	}
+	prIn := PRContentInput{
+		Commits:        commitInputsFromResults(result.Commits),
+		PromptOverride: prContentPrompt,
+	}
 	content, err := deps.generatePRPrompt(ctx, agent, prIn)
 	if err != nil {
 		return fmt.Errorf("generate PR title/body: %w", err)

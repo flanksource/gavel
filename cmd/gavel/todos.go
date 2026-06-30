@@ -486,7 +486,9 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 		}
 
 		if todosMode == "cmux" {
-			printCmuxDryRun(group, workDir)
+			if err := printCmuxDryRun(group, workDir); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -494,7 +496,15 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			fmt.Printf("=== Group: %s ===\n\n", group.Name)
 			printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 			fmt.Println("### Prompt")
-			fmt.Println(claude.BuildGroupPrompt(group.TODOs, workDir))
+			tmpl, err := claude.ResolveRunTemplate(workDir)
+			if err != nil {
+				return err
+			}
+			groupPrompt, err := claude.BuildGroupPrompt(group.TODOs, claude.GroupPromptOptions{WorkDir: workDir, Template: tmpl})
+			if err != nil {
+				return err
+			}
+			fmt.Println(groupPrompt)
 			printSectionCommands("Verification commands", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.Verification })
 		} else {
 			for _, todo := range group.TODOs {
@@ -531,7 +541,7 @@ func validateTodosRunOptions() error {
 	return nil
 }
 
-func printCmuxDryRun(group todos.TODOGroup, workDir string) {
+func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 	groupWorkDir := workDir
 	if group.Name != "" && group.Name != todos.UngroupedLabel && filepath.IsAbs(group.Name) {
 		groupWorkDir = group.Name
@@ -563,12 +573,21 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) {
 	fmt.Println()
 	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 	fmt.Println("### Prompt")
-	fmt.Println(buildCmuxPrompt(group.TODOs, workDir))
+	cmuxPrompt, err := buildCmuxPrompt(group.TODOs, workDir)
+	if err != nil {
+		return err
+	}
+	fmt.Println(cmuxPrompt)
 	printSectionCommands("Verification commands", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.Verification })
+	return nil
 }
 
-func buildCmuxPrompt(todoList []*types.TODO, workDir string) string {
-	return claude.BuildRunPrompt(todoList, workDir, todoEffort)
+func buildCmuxPrompt(todoList []*types.TODO, workDir string) (string, error) {
+	tmpl, err := claude.ResolveRunTemplate(workDir)
+	if err != nil {
+		return "", err
+	}
+	return claude.BuildRunPrompt(todoList, claude.RunPromptOptions{WorkDir: workDir, Effort: todoEffort, Template: tmpl})
 }
 
 func effortDirective(effort string) string {

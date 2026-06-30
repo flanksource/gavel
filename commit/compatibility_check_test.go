@@ -256,7 +256,7 @@ func TestGenerateCommitAnalysisWithAgent_ExplicitMessageAndCompatSkipSkipsAI(t *
 	)
 	defer restore()
 
-	got, err := generateCommitAnalysisWithAgent(context.Background(), "diff", "chore: keep explicit message", IgnoreCheckModeSkip, nil)
+	got, err := generateCommitAnalysisWithAgent(context.Background(), "diff", "chore: keep explicit message", IgnoreCheckModeSkip, nil, commitPromptOverrides{})
 	require.NoError(t, err)
 	assert.Equal(t, "chore: keep explicit message", got.Message)
 	assert.Empty(t, got.FunctionalityRemoved)
@@ -281,7 +281,7 @@ func TestGenerateCommitAnalysisWithAgent_CompatSkipStillGeneratesMessage(t *test
 	)
 	defer restore()
 
-	got, err := generateCommitAnalysisWithAgent(context.Background(), "diff", "", IgnoreCheckModeSkip, nil)
+	got, err := generateCommitAnalysisWithAgent(context.Background(), "diff", "", IgnoreCheckModeSkip, nil, commitPromptOverrides{})
 	require.NoError(t, err)
 	assert.Equal(t, "feat(api): add stable endpoint", got.Message)
 	assert.Empty(t, got.FunctionalityRemoved)

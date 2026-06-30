@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
@@ -50,6 +49,11 @@ const (
 	StageStaged   = "staged"
 	StageUnstaged = "unstaged"
 	StageAll      = "all"
+	// StageSession resolves the agent session id from the environment
+	// (GAVEL_SESSION_ID / CLAUDE_SESSION_ID / CODEX_SESSION_ID) and stages only
+	// the files that session edited; with no session id in the environment it
+	// falls back to committing the already-staged set (StageStaged).
+	StageSession = "session"
 
 	testEnvVar  = "GAVEL_COMMIT_TEST"
 	stubMessage = "chore: fixture stub"
@@ -174,7 +178,7 @@ type commitAIAnalysis struct {
 
 func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Stage == "" {
-		opts.Stage = StageStaged
+		opts.Stage = StageSession
 	}
 	if opts.WorkDir == "" {
 		return nil, errors.New("commit.Run: WorkDir is required")
@@ -619,8 +623,11 @@ func commitGroups(ctx context.Context, opts Options, source stagedSource, result
 // StageStaged is left untouched: an explicit `git add` is an intentional
 // override of .gitignore for that commit.
 //
-// Any other mode value is a Claude session id: stageSessionFiles stages exactly
-// the files that session's Edit/Write tools touched (see --stage=<session-id>).
+// StageSession resolves the agent session id from the environment and stages
+// only that session's edited files, falling back to StageStaged when no session
+// id is set. Any other mode value is treated as an explicit session id (Claude
+// or Codex): stageSessionFiles stages exactly the files that session touched
+// (see --stage=session|<session-id>).
 func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
@@ -639,106 +646,16 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 			}
 		}
 		return unstageGitIgnored(workDir, preStaged)
+	case StageSession:
+		sessionID := resolveEnvSessionID()
+		if sessionID == "" {
+			logger.V(1).Infof("commit: --stage=session but no agent session id in env; committing the staged set")
+			return nil
+		}
+		return stageSessionFiles(workDir, sessionID, cfg)
 	default:
 		return stageSessionFiles(workDir, mode, cfg)
 	}
-}
-
-// stageSessionFiles stages exactly the files an agent wrote to during the Claude
-// session identified by sessionID — the file_path of every Edit/Write/MultiEdit/
-// NotebookEdit tool call — filtered by .gitignore and the repo's .gavel.yaml
-// commit.gitignore. It scopes a commit to what the agent changed rather than the
-// whole working tree, and backs both `gavel commit --stage=<session-id>` and the
-// todo runner's auto-commit. Files edited outside workDir, no longer present, or
-// matching an ignore rule are skipped (each logged).
-func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
-	sessionFile, err := history.FindSessionFile(sessionID)
-	if err != nil {
-		return fmt.Errorf("stage session %q: no Claude session log found: %w", sessionID, err)
-	}
-	logger.Infof("commit: staging files from claude session %s (%s)", sessionID, sessionFile)
-
-	modified, err := history.SessionModifiedFiles(sessionFile)
-	if err != nil {
-		return fmt.Errorf("stage session %q: read session log %s: %w", sessionID, sessionFile, err)
-	}
-	logger.Infof("commit: session %s edited %d file(s)", sessionID, len(modified))
-	for _, p := range modified {
-		logger.V(1).Infof("commit:   edited %s", p)
-	}
-
-	absWork, err := filepath.Abs(workDir)
-	if err != nil {
-		return fmt.Errorf("resolve work dir %q: %w", workDir, err)
-	}
-
-	candidates := make([]string, 0, len(modified))
-	for _, p := range modified {
-		abs := p
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(absWork, abs)
-		}
-		rel, err := filepath.Rel(absWork, abs)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			logger.Infof("commit: skipping %s (edited outside %s)", p, absWork)
-			continue
-		}
-		if _, statErr := os.Stat(abs); statErr != nil {
-			logger.Infof("commit: skipping %s (no longer present)", rel)
-			continue
-		}
-		candidates = append(candidates, rel)
-	}
-
-	keep, err := filterIgnoredPaths(absWork, candidates, cfg)
-	if err != nil {
-		return err
-	}
-	logger.Infof("commit: staging %d of %d session file(s)", len(keep), len(modified))
-	if len(keep) == 0 {
-		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
-	}
-	return addFiles(workDir, keep)
-}
-
-// filterIgnoredPaths drops paths the repo's .gitignore (naming one to `git add`
-// would error) or .gavel.yaml commit.gitignore excludes, logging each skip.
-func filterIgnoredPaths(workDir string, candidates []string, cfg verify.CommitConfig) ([]string, error) {
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-	ignored := make(map[string]struct{})
-
-	absToRel := make(map[string]string, len(candidates))
-	abs := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		p := filepath.Join(workDir, c)
-		absToRel[p] = c
-		abs = append(abs, p)
-	}
-	_, gitIgnored := utils.PartitionGitIgnored(abs, workDir)
-	for _, p := range gitIgnored {
-		rel := absToRel[p]
-		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
-		ignored[rel] = struct{}{}
-	}
-
-	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)
-	if err != nil {
-		return nil, fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
-	}
-	for _, v := range violations {
-		logger.Infof("commit: skipping %s (matches .gavel.yaml commit.gitignore %q)", v.File, v.Pattern)
-		ignored[v.File] = struct{}{}
-	}
-
-	keep := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		if _, skip := ignored[c]; !skip {
-			keep = append(keep, c)
-		}
-	}
-	return keep, nil
 }
 
 // unstageGitIgnored removes from the index any staged file that matches the
@@ -854,15 +771,45 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
-	return generateCommitAnalysisWithAgent(ctx, diff, explicitMessage, opts.CompatMode, agent)
+	prompts, err := resolveCommitPrompts(opts.Config, opts.WorkDir)
+	if err != nil {
+		return commitAIAnalysis{}, err
+	}
+	return generateCommitAnalysisWithAgent(ctx, diff, explicitMessage, opts.CompatMode, agent, prompts)
 }
 
-func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage, compatMode string, agent clickyai.Agent) (commitAIAnalysis, error) {
+// commitPromptOverrides holds the resolved .gavel.yaml prompt-template overrides
+// for the commit AI flow. Empty strings fall back to the embedded defaults.
+type commitPromptOverrides struct {
+	message              string
+	functionalityRemoved string
+	compatibility        string
+}
+
+// resolveCommitPrompts reads the commit-section prompt overrides, resolving file
+// references against workDir. A configured-but-unreadable file is a hard error.
+func resolveCommitPrompts(cfg verify.CommitConfig, workDir string) (commitPromptOverrides, error) {
+	message, err := cfg.MessagePrompt.Resolve(workDir, "")
+	if err != nil {
+		return commitPromptOverrides{}, err
+	}
+	functionalityRemoved, err := cfg.FunctionalityRemovedPrompt.Resolve(workDir, "")
+	if err != nil {
+		return commitPromptOverrides{}, err
+	}
+	compatibility, err := cfg.CompatibilityPrompt.Resolve(workDir, "")
+	if err != nil {
+		return commitPromptOverrides{}, err
+	}
+	return commitPromptOverrides{message: message, functionalityRemoved: functionalityRemoved, compatibility: compatibility}, nil
+}
+
+func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage, compatMode string, agent clickyai.Agent, prompts commitPromptOverrides) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
 	message := explicitMessage
 	if message == "" {
 		maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
-		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines})
+		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines, MessagePrompt: prompts.message})
 		if err != nil {
 			return commitAIAnalysis{}, err
 		}
@@ -883,7 +830,10 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 		return result, nil
 	}
 
-	analyzed, err := analyzeCompatibilityPromptsWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
+	analyzed, err := analyzeCompatibilityPromptsWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{
+		FunctionalityRemovedPrompt: prompts.functionalityRemoved,
+		CompatibilityPrompt:        prompts.compatibility,
+	})
 	if err != nil {
 		result.CompatibilityIssues = []string{formatCompatibilityAnalysisFailure(err)}
 		return result, nil
