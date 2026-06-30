@@ -6,16 +6,28 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+// RunPromptOptions configures BuildRunPrompt.
+type RunPromptOptions struct {
+	WorkDir string
+	Effort  string
+	// Template is the resolved .gavel.yaml todos.runPrompt override; empty uses the
+	// embedded default. Resolve it with ResolveRunTemplate.
+	Template string
+}
+
 // BuildRunPrompt assembles the prompt body a coding-agent run is given: the
 // effort directive (when any) followed by the group prompt. The cmux driver
 // moved to captain, but prompt assembly stays here — the run executor builds this
 // body and hands it to the provider as the verbatim prompt.
-func BuildRunPrompt(todoList []*types.TODO, workDir, effort string) string {
-	prompt := BuildGroupPrompt(todoList, workDir)
-	if directive := EffortDirective(effort); directive != "" {
-		return directive + "\n\n" + prompt
+func BuildRunPrompt(todoList []*types.TODO, opts RunPromptOptions) (string, error) {
+	body, err := BuildGroupPrompt(todoList, GroupPromptOptions{WorkDir: opts.WorkDir, Template: opts.Template})
+	if err != nil {
+		return "", err
 	}
-	return prompt
+	if directive := EffortDirective(opts.Effort); directive != "" {
+		return directive + "\n\n" + body, nil
+	}
+	return body, nil
 }
 
 // EffortDirective renders the leading reasoning-effort instruction for a run, or

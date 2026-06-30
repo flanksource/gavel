@@ -49,7 +49,10 @@ func TestBuildGroupPrompt(t *testing.T) {
 		newTestTODO("fix-cache", "Fix the cache invalidation"),
 	}
 
-	prompt := BuildGroupPrompt(todos, "")
+	prompt, err := BuildGroupPrompt(todos, GroupPromptOptions{})
+	if err != nil {
+		t.Fatalf("BuildGroupPrompt: %v", err)
+	}
 
 	for _, want := range []string{
 		"implementing the 3 todo items listed below",
@@ -70,13 +73,48 @@ func TestBuildGroupPrompt(t *testing.T) {
 
 func TestBuildGroupPromptSingleTODO(t *testing.T) {
 	todos := []*types.TODO{newTestTODO("solo", "Single task")}
-	prompt := BuildGroupPrompt(todos, "")
+	prompt, err := BuildGroupPrompt(todos, GroupPromptOptions{})
+	if err != nil {
+		t.Fatalf("BuildGroupPrompt: %v", err)
+	}
 
 	if !strings.Contains(prompt, "## solo") {
 		t.Error("single-element group should contain title heading")
 	}
 	if !strings.Contains(prompt, "Single task") {
 		t.Error("should contain implementation text")
+	}
+}
+
+func TestBuildGroupPromptTemplateOverride(t *testing.T) {
+	todoList := []*types.TODO{newTestTODO("solo", "Single task")}
+
+	// A custom dotprompt template replaces framing + instructions while the Go-
+	// assembled per-TODO section is still injected as {{{body}}}.
+	prompt, err := BuildGroupPrompt(todoList, GroupPromptOptions{
+		Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END",
+	})
+	if err != nil {
+		t.Fatalf("BuildGroupPrompt with override: %v", err)
+	}
+	if !strings.Contains(prompt, "CUSTOM FRAMING for 1 item(s)") {
+		t.Errorf("override framing not rendered: %q", prompt)
+	}
+	if !strings.Contains(prompt, "## solo") || !strings.Contains(prompt, "Single task") {
+		t.Errorf("per-TODO body not injected into override template: %q", prompt)
+	}
+	if strings.Contains(prompt, "## Instructions") {
+		t.Error("override should replace the default instructions block")
+	}
+}
+
+func TestTodosRunPromptRegistered(t *testing.T) {
+	got := Prompts()
+	if len(got) != 1 || got[0].ID == "" || strings.TrimSpace(got[0].Default) == "" {
+		t.Fatalf("Prompts() = %+v, want one entry with id and default", got)
+	}
+	if got[0].Default != todosRunPrompt {
+		t.Error("descriptor default must be the embedded run prompt")
 	}
 }
 
@@ -145,7 +183,10 @@ func TestBuildGroupPromptExcludesPRButIncludesSource(t *testing.T) {
 	todo.PR = &types.PR{Number: 42, URL: "https://example.com/pull/42", Head: "feat/x", Base: "main"}
 	todo.Path = types.StringOrSlice{"pkg/auth.go:25"}
 
-	prompt := BuildGroupPrompt([]*types.TODO{todo}, dir)
+	prompt, err := BuildGroupPrompt([]*types.TODO{todo}, GroupPromptOptions{WorkDir: dir})
+	if err != nil {
+		t.Fatalf("BuildGroupPrompt: %v", err)
+	}
 
 	if strings.Contains(prompt, "## PR Context") {
 		t.Error("grouped prompt should not contain PR Context section")
@@ -201,7 +242,10 @@ func TestBuildGroupPromptIncludesComments(t *testing.T) {
 	todo.ProviderEvents = []types.ProviderEvent{
 		{Kind: "CommentAdded", Actor: "reviewer", Body: "Group context matters"},
 	}
-	prompt := BuildGroupPrompt([]*types.TODO{todo}, "")
+	prompt, err := BuildGroupPrompt([]*types.TODO{todo}, GroupPromptOptions{})
+	if err != nil {
+		t.Fatalf("BuildGroupPrompt: %v", err)
+	}
 
 	for _, want := range []string{"## Comments", "**reviewer:**", "Group context matters"} {
 		if !strings.Contains(prompt, want) {

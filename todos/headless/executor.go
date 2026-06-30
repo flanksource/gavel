@@ -105,7 +105,14 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	prompt := e.config.PromptOverride
 	if prompt == "" {
-		prompt = claude.BuildRunPrompt(todosInGroup, workDir, e.config.Effort)
+		tmpl, err := claude.ResolveRunTemplate(workDir)
+		if err != nil {
+			return nil, err
+		}
+		prompt, err = claude.BuildRunPrompt(todosInGroup, claude.RunPromptOptions{WorkDir: workDir, Effort: e.config.Effort, Template: tmpl})
+		if err != nil {
+			return nil, err
+		}
 	}
 	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, prompt, e.config.Resume)
 	return e.runStream(ctx, start, req, canUseTool, providerSessionID, todosInGroup)

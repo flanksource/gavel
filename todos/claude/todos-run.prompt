@@ -1,0 +1,15 @@
+{{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
+
+{{{body}}}---
+## Instructions
+
+1. Implement ALL todo items listed above
+2. Investigate the codebase to understand the root cause of each issue
+3. Implement fixes that address the underlying issues
+4. Do NOT run git add or git commit — gavel manages commits automatically
+
+Your fixes should:
+- Address root causes, not mask symptoms
+- Follow existing code patterns and style
+- Pass all verification tests (if specified)
+- Be minimal and focused

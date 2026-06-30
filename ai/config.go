@@ -33,6 +33,7 @@ type Model struct {
 type AgentConfig struct {
 	Type            AgentType     `json:"type"`
 	Model           string        `json:"model"`
+	Backend         string        `json:"backend,omitempty"`
 	CacheDBPath     string        `json:"cache_db_path,omitempty"`
 	ProjectName     string        `json:"project_name,omitempty"`
 	CacheTTL        time.Duration `json:"cache_ttl,omitempty"`
@@ -48,7 +49,7 @@ type AgentConfig struct {
 // toCaptain maps the gavel config onto captain's ai.Config. Backend is left
 // empty so captain infers it from the model.
 func (c AgentConfig) toCaptain() captainai.Config {
-	model := api.Model{Name: c.Model}
+	model := api.Model{Name: c.Model, Backend: api.Backend(c.Backend)}
 	if c.Temperature != 0 {
 		t := c.Temperature
 		model.Temperature = &t

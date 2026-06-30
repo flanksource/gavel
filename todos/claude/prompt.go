@@ -1,14 +1,44 @@
 package claude
 
 import (
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
+
+//go:embed todos-run.prompt
+var todosRunPrompt string
+
+// GroupPromptOptions configures BuildGroupPrompt.
+type GroupPromptOptions struct {
+	WorkDir string
+	// Template is the resolved .gavel.yaml todos.runPrompt override (dotprompt
+	// source); empty uses the embedded default. Resolve it with ResolveRunTemplate.
+	Template string
+}
+
+// ResolveRunTemplate reads the .gavel.yaml todos.runPrompt override for dir,
+// returning the inline/file template source or "" when unset (the embedded
+// default is then used). A configured-but-missing file is a hard error.
+func ResolveRunTemplate(dir string) (string, error) {
+	cfg, err := verify.LoadGavelConfig(dir)
+	if err != nil {
+		return "", fmt.Errorf("load .gavel.yaml for todos.runPrompt: %w", err)
+	}
+	tmpl, err := cfg.Todos.RunPrompt.Resolve(dir, "")
+	if err != nil {
+		return "", fmt.Errorf("resolve todos.runPrompt override: %w", err)
+	}
+	return tmpl, nil
+}
 
 // BuildPrompt constructs a structured prompt from a TODO for Claude Code execution.
 func BuildPrompt(todo *types.TODO, workDir string) string {
@@ -18,27 +48,49 @@ func BuildPrompt(todo *types.TODO, workDir string) string {
 	return prompt
 }
 
-// BuildGroupPrompt constructs a combined prompt for multiple related TODOs,
-// structured as intro → numbered list of items → outro instructions. A single
-// item keeps the plain framing (no numbering); several items are numbered so the
-// agent can address each in turn.
-func BuildGroupPrompt(todoList []*types.TODO, workDir string) string {
-	var prompt string
-	if len(todoList) > 1 {
-		prompt = fmt.Sprintf("You are implementing the %d todo items listed below. Each is a separate task — implement ALL of them.\n\n", len(todoList))
-	} else {
-		prompt = "You are implementing the todo item below in a codebase.\n\n"
-	}
+// BuildGroupPrompt renders the run prompt for a group of TODOs from the dotprompt
+// template (opts.Template or the embedded default). The per-TODO sections are
+// assembled in Go and injected as {{{body}}}; the template owns the framing and
+// instructions so .gavel.yaml todos.runPrompt can override them. A single item
+// keeps the plain framing (no numbering); several items are numbered so the agent
+// can address each in turn.
+func BuildGroupPrompt(todoList []*types.TODO, opts GroupPromptOptions) (string, error) {
+	multiple := len(todoList) > 1
+	var body strings.Builder
 	for i, todo := range todoList {
 		number := 0
-		if len(todoList) > 1 {
+		if multiple {
 			number = i + 1
 		}
-		prompt += buildTODOSection(todo, workDir, true, number)
+		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number))
 	}
-	prompt += "---\n"
-	prompt += groupTODOInstructions
-	return prompt
+
+	template := opts.Template
+	if strings.TrimSpace(template) == "" {
+		template = todosRunPrompt
+	}
+	req, _, err := prompt.Load(template).Render(map[string]any{
+		"multiple": multiple,
+		"count":    len(todoList),
+		"body":     body.String(),
+	}, nil)
+	if err != nil {
+		return "", fmt.Errorf("render todo run prompt: %w", err)
+	}
+	return req.Prompt.User, nil
+}
+
+// Prompts returns the overridable prompt templates owned by the claude todo
+// runner: the run prompt assembled for a coding-agent session. The override is
+// the typed todos.runPrompt field, resolved against Default by ResolveRunTemplate.
+func Prompts() []prompts.Prompt {
+	return []prompts.Prompt{{
+		ID:          prompts.TodosRun,
+		Title:       "Todo run prompt",
+		Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
+		ConfigPath:  "todos.runPrompt",
+		Default:     todosRunPrompt,
+	}}
 }
 
 // buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
@@ -209,19 +261,5 @@ Your fix should:
 - Address the root cause, not mask symptoms
 - Follow existing code patterns and style
 - Pass all verification tests
-- Be minimal and focused
-`
-
-const groupTODOInstructions = `## Instructions
-
-1. Implement ALL todo items listed above
-2. Investigate the codebase to understand the root cause of each issue
-3. Implement fixes that address the underlying issues
-4. Do NOT run git add or git commit — gavel manages commits automatically
-
-Your fixes should:
-- Address root causes, not mask symptoms
-- Follow existing code patterns and style
-- Pass all verification tests (if specified)
 - Be minimal and focused
 `

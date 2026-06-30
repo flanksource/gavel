@@ -166,7 +166,15 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 
 	prompt := e.config.PromptOverride
 	if prompt == "" {
-		prompt = BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+		tmpl, terr := ResolveRunTemplate(e.config.WorkDir)
+		if terr != nil {
+			return result, terr
+		}
+		p, perr := BuildGroupPrompt(todosInGroup, GroupPromptOptions{WorkDir: e.config.WorkDir, Template: tmpl})
+		if perr != nil {
+			return result, perr
+		}
+		prompt = p
 	}
 
 	before, _ := gitSnapshot(e.config.WorkDir)

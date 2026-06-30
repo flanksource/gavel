@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
@@ -17,12 +18,29 @@ const defaultTodoVerifyModel = "claude-code-sonnet"
 
 // resolveTodoAgentConfig maps a TODO's ai: front matter onto an agent config for
 // the captain-agentic verify run, with the --model flag taking precedence.
-func resolveTodoAgentConfig(todo *types.TODO, model string) ai.AgentConfig {
+func resolveTodoAgentConfig(todo *types.TODO, model, backend string) ai.AgentConfig {
 	cfg := todo.AI.ToAgentConfig(defaultTodoVerifyModel)
+	if backend != "" {
+		cfg.Backend = backend
+		if model == "" {
+			cfg.Model = defaultTodoVerifyModelForBackend(backend)
+		}
+	}
 	if model != "" {
 		cfg.Model = model
 	}
 	return cfg
+}
+
+func defaultTodoVerifyModelForBackend(backend string) string {
+	switch captainai.Backend(backend) {
+	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI:
+		return "claude-agent-sonnet"
+	case captainai.BackendCodexCLI:
+		return "gpt-5-codex"
+	default:
+		return defaultTodoVerifyModel
+	}
 }
 
 // defaultVerifyThreshold is the score (with implemented=true) at or above which
@@ -33,6 +51,7 @@ const defaultVerifyThreshold = 80
 type VerifyOptions struct {
 	WorkDir   string   // git root the commits live in
 	Model     string   // verify model override (empty = config/default)
+	Backend   string   // captain backend override (empty = infer from model/default)
 	Threshold int      // promote to verified at this score (<=0 → defaultVerifyThreshold)
 	Commits   []string // known commit SHAs (post-run); empty = discover by trailer
 	// Prompt, when non-empty, overrides the rendered verify prompt verbatim — the
@@ -118,7 +137,7 @@ func RunIssueVerification(ctx context.Context, provider Provider, todo *types.TO
 		cfg.Model = opts.Model
 	}
 
-	agentCfg := resolveTodoAgentConfig(todo, opts.Model)
+	agentCfg := resolveTodoAgentConfig(todo, opts.Model, opts.Backend)
 	result, err := verify.RunVerify(verify.RunOptions{
 		Config:         cfg,
 		RepoPath:       opts.WorkDir,

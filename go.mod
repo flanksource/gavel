@@ -10,7 +10,7 @@ require (
 	github.com/flanksource/gomplate/v3 v3.24.84
 	github.com/flanksource/is-healthy v1.0.88 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
-	github.com/flanksource/repomap v0.0.1
+	github.com/flanksource/repomap v0.2.0
 )
 
 require (
@@ -23,7 +23,7 @@ require (
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
-	github.com/flanksource/deps v1.0.28
+	github.com/flanksource/deps v1.0.35
 	github.com/ghodss/yaml v1.0.0
 	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
 	github.com/gliderlabs/ssh v0.3.8
@@ -31,7 +31,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/cel-go v0.27.0
-	github.com/google/uuid v1.6.0
+	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/hairyhenderson/toml v0.4.2-0.20210923231440-40456b8e66cf
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
@@ -151,6 +151,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.8.0 // indirect
+	github.com/flanksource/clicky/aichat v1.21.34-0.20260630075958-cd55f2f4fce3 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -257,7 +258,7 @@ require (
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
+	github.com/patrickmn/go-cache v2.1.1-0.20191004192108-46f407853014+incompatible // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
