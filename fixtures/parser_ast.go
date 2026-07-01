@@ -162,7 +162,33 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 			lang := strings.ToLower(extractLanguage(infoString))
 			codeContent := extractCodeBlockContent(&node.BaseBlock, source)
 
-			if inCommandBlock && currentCommand != nil {
+			if kind := runnerStepKind(infoString); kind != "" {
+				// `yaml test` / `yaml lint` (or bare `test`/`lint`): the body is
+				// engine options, run by the TestStepRunner/LintStepRunner hook.
+				name := parentHeading
+				if name == "" {
+					name = kind + "-step"
+				}
+				test := &FixtureTest{
+					Name:       name,
+					SourceDir:  sourceDir,
+					RunnerStep: &RunnerStepSpec{Kind: kind, Config: codeContent},
+				}
+				if frontMatter != nil {
+					test.FrontMatter = *frontMatter
+				}
+				currentSection.AddChild(&FixtureNode{
+					Name: name,
+					Type: TestNode,
+					Test: test,
+					Origin: &FixtureOrigin{
+						Kind:        "runner-step",
+						SectionPath: currentSection.GetSectionPath(),
+						Line:        nodeStartLine(node, source),
+					},
+					Children: make([]*FixtureNode, 0),
+				})
+			} else if inCommandBlock && currentCommand != nil {
 				// Handle code blocks within command blocks (existing behavior)
 				// Get allowed code blocks from frontmatter
 				allowedBlocks := getCodeBlocksOrDefault(frontMatter)

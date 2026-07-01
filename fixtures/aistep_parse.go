@@ -19,6 +19,17 @@ import (
 // implementation in its init().
 var AIStepRunner func(fixture FixtureTest, opts RunOptions) FixtureResult
 
+// TestStepRunner / LintStepRunner execute a `yaml test` / `yaml lint` fixture
+// step: the raw YAML body is unmarshalled onto testrunner.RunOptions /
+// lint.Options and the engine is run. They are package-level hooks so the
+// fixtures package needn't import testrunner or the lint package (which would
+// cycle: testrunner imports fixtures). The fixtures/types package registers the
+// implementations in its init().
+var (
+	TestStepRunner func(fixture FixtureTest, opts RunOptions) FixtureResult
+	LintStepRunner func(fixture FixtureTest, opts RunOptions) FixtureResult
+)
+
 // FixtureAIConfig is the `ai:` front-matter block. Its presence marks a fixture
 // file as an AI verification step; the fields map onto ai.AgentConfig (resolved
 // in aistep.go to avoid coupling this package to the ai package).

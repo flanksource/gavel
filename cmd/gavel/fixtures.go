@@ -52,6 +52,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("FILE STRUCTURE")).
 		Add(code(`  ---
   build: go build -o myapp`)).Add(dim("           # Shell command run once before all tests")).NewLine().
+		Add(code("  daemon: go run ./server --port {{.port}}")).Add(dim("  # Background command run before tests; stopped after")).NewLine().
 		Add(code("  exec: ./myapp")).Add(dim("                      # Default executable (default: bash)")).NewLine().
 		Add(code("  args: [--verbose]")).Add(dim("                  # Default arguments for exec")).NewLine().
 		Add(code("  env:")).Add(dim("                               # Environment variables for all tests")).NewLine().
@@ -64,6 +65,17 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  os: linux")).Add(dim("                          # Skip on other OSes (prefix ! to negate: !darwin)")).NewLine().
 		Add(code("  arch: amd64")).Add(dim("                        # Skip on other architectures")).NewLine().
 		Add(code("  skip: \"! command -v docker\"")).Add(dim("        # Skip if command exits 0")).NewLine().
+		Add(code("  ai:")).Add(dim("                                # AI verification fixture config")).NewLine().
+		Add(code("    model: \"provider/model\"")).NewLine().
+		Add(code("    temperature: 0")).NewLine().
+		Add(code("    maxTokens: 10000")).NewLine().
+		Add(code("    maxConcurrent: 4")).NewLine().
+		Add(code("    cacheTTL: 10m")).NewLine().
+		Add(code("    noCache: false")).NewLine().
+		Add(code("  verify:")).Add(dim("                            # AI verification scoring options")).NewLine().
+		Add(code("    scope: diff")).NewLine().
+		Add(code("    threshold: 80")).NewLine().
+		Add(code("    disabled: [style]")).NewLine().
 		Add(code("  ---")).NewLine()
 
 	// Format 1: Markdown tables
@@ -75,8 +87,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(sh("Input columns")).
 		Add(kv("name, test name", "Test name (required)")).
 		Add(kv("cli, command, exec", "Executable to run")).
-		Add(kv("cli args, args", "Arguments (space-separated)")).
-		Add(kv("cwd, working directory", "Working directory")).
+		Add(kv("cli args, args, arguments", "Arguments (space-separated)")).
+		Add(kv("cwd, dir, working directory", "Working directory")).
 		Add(kv("terminal, term", "Terminal mode (\"pty\" for pseudo-terminal)")).
 		Add(kv("os", "OS constraint (e.g. \"linux\", \"!darwin\")")).
 		Add(kv("arch", "Architecture constraint (e.g. \"amd64\")")).
@@ -84,9 +96,15 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("query", "Query string")).NewLine().
 		Add(sh("Expectation columns")).
 		Add(kv("exit code, exitcode", "Expected exit code (default: 0, \"-\" to skip)")).
-		Add(kv("expected output, output", "Expected stdout (exact match)")).
+		Add(kv("expected output, output, stdout", "Expected stdout (literal or @file reference)")).
+		Add(kv("stderr", "Expected stderr (literal or @file reference)")).
 		Add(kv("expected error, error", "Expected stderr substring (implies non-zero exit)")).
 		Add(kv("expected format, format", "Output format validation (json, yaml)")).
+		Add(kv("expected count, count", "Expected result count for fixture types that expose counts")).
+		Add(kv("expected matches, matches", "Expected output/result matcher value")).
+		Add(kv("expected results, results", "Expected structured result value")).
+		Add(kv("expected files, files", "Expected file result value")).
+		Add(kv("template output", "Expected templated output value")).
 		Add(kv("cel, validation, expr", "CEL validation expression")).NewLine().
 		Append("  Unrecognized columns become Properties available in CEL.", "text-muted").NewLine()
 
@@ -101,6 +119,52 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Append("    ").Add(code("* regex: .*world.*")).NewLine().
 		Append("    ").Add(code("* not: contains: error")).NewLine()
 
+	t = t.Add(h("FORMAT 3: AI VERIFICATION FIXTURES")).
+		Append("  Add ").Add(code("ai:")).Append(" front-matter to turn the markdown document into one AI verification step.").NewLine().
+		Append("  The first ").Add(code("```prompt")).Append(" or ").Add(code("```ai")).Append(" block becomes reviewer instructions.").NewLine().
+		Append("  GitHub task-list items become scored acceptance criteria.").NewLine().NewLine().
+		Add(sh("Example")).
+		Add(code("  ---\n  ai:\n    model: \"claude-code-sonnet\"\n  verify:\n    threshold: 80\n  ---\n\n  # Verify feature X\n\n  Some prose describing the expected change.\n\n  ```prompt\n  Focus on the new parser path and acceptance criteria.\n  ```\n\n  ## Acceptance Criteria\n  - [ ] Parser errors are actionable\n  - [ ] Existing fixture formats still pass\n\n  - cel: json.score >= 80")).NewLine().NewLine().
+		Add(sh("AI options")).
+		Add(kv("model", "Agent model name (falls back to the default model)")).
+		Add(kv("temperature", "Sampling temperature")).
+		Add(kv("maxTokens", "Maximum response tokens")).
+		Add(kv("maxConcurrent", "Maximum concurrent AI checks")).
+		Add(kv("cacheTTL", "Cache duration for AI calls")).
+		Add(kv("noCache", "Disable AI response cache")).NewLine().
+		Add(sh("Verify options")).
+		Add(kv("scope", "Review scope, defaulting to the working-tree diff")).
+		Add(kv("threshold", "Minimum passing score, defaulting to 80")).
+		Add(kv("disabled", "Check IDs to disable for this fixture")).NewLine()
+
+	t = t.Add(h("FORMAT 4: TEST / LINT STEPS")).
+		Append("  A ").Add(code("```yaml test")).Append(" or ").Add(code("```yaml lint")).Append(" fence (bare ").Add(code("```test")).Append(" / ").Add(code("```lint")).Append(" also work; the").NewLine().
+		Append("  leading ").Add(code("yaml")).Append(" is optional and only there for editor highlighting) runs the test / lint").NewLine().
+		Append("  engine. The YAML body is unmarshalled directly onto the ").Add(code("gavel test")).Append(" / ").Add(code("gavel lint")).Append(" options, so").NewLine().
+		Append("  every CLI flag is available as a key (kebab-case). Each test / violation becomes a child node.").NewLine().NewLine().
+		Add(sh("Example")).
+		Add(code("  ## Run the engine tests\n  ```yaml test\n  paths: [./testrunner/...]\n  framework: [go]\n  test-timeout: 2m\n  show-passed: true\n  ```\n\n  ## Lint the changed files\n  ```lint\n  linters: [golangci-lint, ruff]\n  changed: true\n  fix: false\n  ```")).NewLine().NewLine().
+		Add(sh("Common test keys")).Append("    ").Add(dim("(full list: ")).Add(code("gavel test --help")).Add(dim(")")).NewLine().
+		Add(kv("paths", "Package paths to test (empty = discover all)")).
+		Add(kv("framework", "Restrict to jest, vitest, playwright, go, ginkgo")).
+		Add(kv("changed, since, failed, baseline", "Narrow to changed / prior-failed / new-vs-baseline packages")).
+		Add(kv("extra-args", "Arguments forwarded to the underlying runner")).
+		Add(kv("test-timeout, timeout", "Per-package / whole-run deadline (e.g. 2m)")).
+		Add(kv("lint", "Also run linters in parallel with the tests")).NewLine().
+		Add(sh("Common lint keys")).Append("    ").Add(dim("(full list: ")).Add(code("gavel lint --help")).Add(dim(")")).NewLine().
+		Add(kv("linters", "Only run these linters (empty = every detected linter)")).
+		Add(kv("files", "Target paths to lint")).
+		Add(kv("ignore", "Glob patterns to exclude")).
+		Add(kv("fix", "Apply auto-fixes")).
+		Add(kv("changed, since, baseline, failed", "Only report new / prior violations")).
+		Add(kv("timeout", "Per-linter timeout (e.g. 5m)")).
+		Add(kv("group-by", "Group synced TODOs by file, package or message")).NewLine().
+		Add(sh("Rendering")).
+		Add(kv("show-passed", "Add passing tests / clean linters as child nodes (default: only failures)")).
+		Add(kv("show-failed", "Add failing tests / violations as child nodes (default: true)")).NewLine().
+		Append("  UI / detach options (", "text-muted").Add(code("ui")).Append(", ", "text-muted").Add(code("addr")).Append(", ", "text-muted").Add(code("detach")).Append(") are ignored, and a test step never", "text-muted").NewLine().
+		Append("  recurses into fixture discovery.", "text-muted").NewLine()
+
 	// Supported languages
 	t = t.Add(h("SUPPORTED LANGUAGES")).
 		Add(kv("bash, sh, shell", "bash -c <content>")).
@@ -108,7 +172,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("typescript, ts", "ts-node -e <content>")).
 		Add(kv("javascript, js", "node -e <content>")).
 		Add(kv("pwsh, powershell", "pwsh -Command <content>")).
-		Add(kv("go", "go <content>")).NewLine().
+		Add(kv("go", "go <content>")).
+		Add(kv("test, lint (or yaml test/yaml lint)", "Run the test / lint engine (see FORMAT 4)")).NewLine().
 		Append("  Non-executable labels (parsed as config): ", "text-muted").Add(code("yaml, frontmatter, json")).NewLine()
 
 	// Inline code fence attributes
@@ -133,11 +198,14 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Append("  Expressions must evaluate to ").Add(code("true")).Append(".").NewLine().NewLine().
 		Add(sh("Variables")).
 		Add(kv("stdout", "string    Process stdout")).
+		Add(kv("output", "string    Alias for process stdout")).
 		Add(kv("stderr", "string    Process stderr")).
 		Add(kv("exitCode", "int       Process exit code")).
 		Add(kv("json", "any       Auto-parsed JSON (when stdout starts with { or [)")).
 		Add(kv("name", "string    Test name")).
 		Add(kv("sourceDir", "string    Directory containing the fixture file")).
+		Add(kv("query", "string    Query string")).
+		Add(kv("expectations", "object    Expected values and custom table properties")).
 		Add(kv("workDir", "string    Working directory")).
 		Add(kv("executablePath", "string    Path to the gavel binary")).NewLine().
 		Add(sh("Auto-injected variables (use as $VAR or {{.VAR}})")).
@@ -152,6 +220,13 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("ansi.has_color", "bool   Output contains ANSI color codes")).
 		Add(kv("ansi.has_any", "bool   Output contains any ANSI escape sequences")).
 		Add(kv("ansi.has_updates", "bool   Output contains cursor movement codes")).NewLine().
+		Add(kv("ansi.has_cursor_hide", "bool   Output hides the cursor")).
+		Add(kv("ansi.has_cursor_show", "bool   Output shows the cursor")).
+		Add(kv("ansi.has_reset", "bool   Output contains an SGR reset")).
+		Add(kv("ansi.stray_controls", "bool   Output contains unexpected control bytes")).
+		Add(kv("ansi.final_text", "string Final settled terminal text")).
+		Add(kv("ansi.duplicate_lines", "list   Duplicate settled terminal lines")).
+		Add(kv("ansi.has_duplicates", "bool   Duplicate settled terminal lines were found")).NewLine().
 		Add(sh("File expansion variables")).
 		Add(kv("file", "string    Relative path to matched file")).
 		Add(kv("filename", "string    Filename without extension")).
@@ -169,15 +244,20 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("<name>.json", "any       Parsed JSON (if content is JSON)")).NewLine().
 		Add(sh("Built-in CEL functions")).
 		Append("    ").Add(code("string.contains(s)  startsWith(s)  endsWith(s)  matches(regex)")).NewLine().
-		Append("    ").Add(code("size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)")).NewLine()
+		Append("    ").Add(code("size(list)  list.all(x, pred)  list.exists(x, pred)  list.filter(x, pred)")).NewLine().
+		Append("    ").Add(code("has_color(s)  has_ansi(s)  has_cursor_updates(s)")).NewLine().
+		Add(sh("Extended gomplate functions")).
+		Append("    ").Add(code("strings.*  math.*  regexp.*  conv.*  coll.*  data.*  file.*  time.*")).NewLine()
 
 	// Template variables
 	t = t.Add(h("TEMPLATE VARIABLES")).
-		Append("  The ").Add(code("exec")).Append(", ").Add(code("build")).Append(", ").Add(code("args")).Append(", and ").Add(code("cwd")).Append(" fields support shell-style $VAR and Go template syntax:").NewLine().NewLine().
+		Append("  The ").Add(code("exec")).Append(", ").Add(code("daemon")).Append(", ").Add(code("build")).Append(", ").Add(code("args")).Append(", and ").Add(code("cwd")).Append(" fields support shell-style $VAR and Go template syntax:").NewLine().NewLine().
 		Add(code("    exec: $executablePath")).NewLine().
+		Add(code("    daemon: go run ./server --port {{.port}}")).NewLine().
 		Add(code("    args: [--file, \"$file\"]")).NewLine().
 		Add(code("    build: go build -o $workDir/myapp")).NewLine().
-		Add(code("    cwd: $GIT_ROOT_DIR/testdata")).NewLine()
+		Add(code("    cwd: $GIT_ROOT_DIR/testdata")).NewLine().
+		Add(kv("port", "Free TCP port available to daemon commands and fixture templates")).NewLine()
 
 	// File expansion
 	t = t.Add(h("FILE EXPANSION")).
@@ -197,7 +277,18 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("EXECUTION")).
 		Append("  Tests run in parallel with a 2-minute default timeout per test").NewLine().
 		Append("  and 5-minute timeout for the build step. The build command runs").NewLine().
-		Append("  once before any tests.").NewLine()
+		Append("  once before any tests. A daemon command, when configured, starts").NewLine().
+		Append("  after build, waits for its free port to accept connections, and is").NewLine().
+		Append("  stopped after all fixtures finish.").NewLine()
+
+	t = t.Add(h("OUTPUT OPTIONS")).
+		Add(kv("-v", "Show passed fixture results")).
+		Add(kv("-vv", "Also show executed commands")).
+		Add(kv("-vvv", "Also show CEL variables and stdout/stderr by default")).
+		Add(kv("--show-passed", "Show passed fixture results without increasing log verbosity")).
+		Add(kv("--show-stdout", "When to show stdout: Never, OnFailure, Always")).
+		Add(kv("--show-stderr", "When to show stderr: Never, OnFailure, Always")).
+		Add(kv("--update-golden", "Rewrite mismatched @file stdout/stderr expectations")).NewLine()
 
 	// Examples
 	t = t.Add(h("EXAMPLES")).

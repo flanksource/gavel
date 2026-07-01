@@ -1,4 +1,4 @@
-package main
+package lint
 
 import (
 	"context"
@@ -38,23 +38,23 @@ func TestGroupFilesByGitRootResolvesRelativeFilesFromWorkDir(t *testing.T) {
 		_ = os.Chdir(cwd)
 	})
 
-	groups := groupFilesByGitRoot(LintOptions{
+	groups := GroupFilesByGitRoot(Options{
 		WorkDir: subdir,
 		Files:   []string{"foo.go"},
 	})
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
-	if groups[0].gitRoot != repo {
-		t.Fatalf("gitRoot = %q, want %q", groups[0].gitRoot, repo)
+	if groups[0].GitRoot != repo {
+		t.Fatalf("gitRoot = %q, want %q", groups[0].GitRoot, repo)
 	}
 	want := filepath.Join("sub", "foo.go")
-	if len(groups[0].files) != 1 || groups[0].files[0] != want {
-		t.Fatalf("files = %v, want [%s]", groups[0].files, want)
+	if len(groups[0].Files) != 1 || groups[0].Files[0] != want {
+		t.Fatalf("files = %v, want [%s]", groups[0].Files, want)
 	}
 }
 
-func TestNormalizeLintRootArgLeavesFilesAloneInsideGitRepo(t *testing.T) {
+func TestNormalizeRootArgLeavesFilesAloneInsideGitRepo(t *testing.T) {
 	repo := t.TempDir()
 	subdir := filepath.Join(repo, "sub")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -67,11 +67,11 @@ func TestNormalizeLintRootArgLeavesFilesAloneInsideGitRepo(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	opts, err := normalizeLintRootArg(LintOptions{
+	opts, err := NormalizeRootArg(Options{
 		Files: []string{subdir},
 	})
 	if err != nil {
-		t.Fatalf("normalizeLintRootArg: %v", err)
+		t.Fatalf("NormalizeRootArg: %v", err)
 	}
 	if opts.WorkDir != "" {
 		t.Fatalf("WorkDir = %q, want empty (downstream resolves per linter)", opts.WorkDir)
@@ -81,7 +81,7 @@ func TestNormalizeLintRootArgLeavesFilesAloneInsideGitRepo(t *testing.T) {
 	}
 }
 
-func TestNormalizeLintRootArgPromotesSingleDirectoryWhenNotInGitRepo(t *testing.T) {
+func TestNormalizeRootArgPromotesSingleDirectoryWhenNotInGitRepo(t *testing.T) {
 	root := t.TempDir()
 	subdir := filepath.Join(root, "sub")
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
@@ -91,11 +91,11 @@ func TestNormalizeLintRootArgPromotesSingleDirectoryWhenNotInGitRepo(t *testing.
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	opts, err := normalizeLintRootArg(LintOptions{
+	opts, err := NormalizeRootArg(Options{
 		Files: []string{subdir},
 	})
 	if err != nil {
-		t.Fatalf("normalizeLintRootArg: %v", err)
+		t.Fatalf("NormalizeRootArg: %v", err)
 	}
 	if opts.WorkDir != root {
 		t.Fatalf("WorkDir = %q, want %q", opts.WorkDir, root)
@@ -118,7 +118,7 @@ func TestResolveLinterInvocationsTscFindsParentTsconfig(t *testing.T) {
 		t.Fatalf("create scope: %v", err)
 	}
 
-	invs := resolveLinterInvocations(tsc.NewTSC(repo), LintOptions{
+	invs := resolveLinterInvocations(tsc.NewTSC(repo), Options{
 		WorkDir: repo,
 		Files:   []string{filepath.Join("frontend", "src")},
 	})
@@ -148,18 +148,18 @@ func TestGroupFilesByGitRootFallsBackToGitRootForRelativePaths(t *testing.T) {
 		t.Fatalf("write root.go: %v", err)
 	}
 
-	groups := groupFilesByGitRoot(LintOptions{
+	groups := GroupFilesByGitRoot(Options{
 		WorkDir: subdir,
 		Files:   []string{"root.go"},
 	})
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
-	if groups[0].gitRoot != repo {
-		t.Fatalf("gitRoot = %q, want %q", groups[0].gitRoot, repo)
+	if groups[0].GitRoot != repo {
+		t.Fatalf("gitRoot = %q, want %q", groups[0].GitRoot, repo)
 	}
-	if len(groups[0].files) != 1 || groups[0].files[0] != "root.go" {
-		t.Fatalf("files = %v, want [root.go]", groups[0].files)
+	if len(groups[0].Files) != 1 || groups[0].Files[0] != "root.go" {
+		t.Fatalf("files = %v, want [root.go]", groups[0].Files)
 	}
 }
 

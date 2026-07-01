@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai/aifix"
+	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 )
 
@@ -41,7 +42,7 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 			rerunOpts := opts
 			rerunOpts.Context = rctx
 			rerunOpts.AIFix = false
-			return executeLinters(rerunOpts)
+			return lint.Execute(rerunOpts)
 		},
 		OnEvent: newAIFixRenderer(aiCfg),
 	})

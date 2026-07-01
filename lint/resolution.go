@@ -1,4 +1,4 @@
-package main
+package lint
 
 import (
 	"context"
@@ -39,14 +39,14 @@ func resolveLintPath(workDir, value string) string {
 	return filepath.Clean(value)
 }
 
-// normalizeLintRootArg promotes a single bare-directory positional arg to
+// NormalizeRootArg promotes a single bare-directory positional arg to
 // opts.WorkDir, but ONLY when the arg is outside any git repository. Inside a
 // repo, project-root discovery is per-linter and is handled downstream by
-// groupFilesByGitRoot + resolveLinterInvocations (which walk up using each
+// GroupFilesByGitRoot + resolveLinterInvocations (which walk up using each
 // linter's ProjectRootMarkers), and post-run scope filtering is handled by
 // FilterViolationsByUserScope. Promoting WorkDir + clearing Files would
 // destroy both signals, so we leave them alone in the in-repo case.
-func normalizeLintRootArg(opts LintOptions) (LintOptions, error) {
+func NormalizeRootArg(opts Options) (Options, error) {
 	if opts.WorkDir != "" || len(opts.Files) != 1 {
 		return opts, nil
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/baseline"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
@@ -133,7 +134,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		if opts.Lint {
 			for _, workDir := range lintWorkDirs(opts.WorkDir, opts.StartingPaths) {
-				if err := displayLintDryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
+				if err := lint.DryRun(LintOptions{WorkDir: workDir, Timeout: "5m"}); err != nil {
 					return nil, err
 				}
 			}
@@ -252,7 +253,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				lintTimeout = 5 * time.Minute
 			}
 			for _, dir := range lintWorkDirs(workDir, opts.StartingPaths) {
-				results, err := executeLinters(LintOptions{
+				results, err := lint.Execute(LintOptions{
 					WorkDir: dir,
 					Timeout: lintTimeout.String(),
 					Context: opts.Context,

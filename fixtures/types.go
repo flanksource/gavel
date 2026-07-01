@@ -37,6 +37,12 @@ type FixtureTest struct {
 	// and returns a structured verify result. See fixtures/aistep.go.
 	AIStep *AIStepSpec `json:"ai_step,omitempty"`
 
+	// RunnerStep, when set, makes this a `yaml test` / `yaml lint` fence: the raw
+	// YAML body is unmarshalled onto testrunner.RunOptions / lint.Options and the
+	// engine is run. Dispatched by the runner via the TestStepRunner /
+	// LintStepRunner hooks (implemented in fixtures/types to avoid an import cycle).
+	RunnerStep *RunnerStepSpec `json:"runner_step,omitempty"`
+
 	// Per-test overrides for skip conditions (override file-level FrontMatter values)
 	TestOS   string `json:"test_os,omitempty"`
 	TestArch string `json:"test_arch,omitempty"`
@@ -115,6 +121,36 @@ func (fixture FixtureTest) ExecBase() ExecFixtureBase {
 // registry (they are not a registered FixtureType).
 func (fixture FixtureTest) IsAIStep() bool {
 	return fixture.AIStep != nil
+}
+
+// RunnerStepKind identifies which engine a RunnerStep drives.
+const (
+	RunnerKindTest = "test"
+	RunnerKindLint = "lint"
+)
+
+// RunnerStepSpec carries a parsed `yaml test` / `yaml lint` fixture step. Kind
+// selects the engine; Config is the raw YAML body of the fence, unmarshalled by
+// the runner hook onto the engine's own options struct (testrunner.RunOptions or
+// lint.Options) so every CLI option is available as a YAML key.
+type RunnerStepSpec struct {
+	Kind   string `json:"kind"`   // "test" | "lint"
+	Config string `json:"config"` // raw YAML body of the fence
+}
+
+// IsRunnerStep reports whether this fixture runs the test/lint engine.
+func (fixture FixtureTest) IsRunnerStep() bool {
+	return fixture.RunnerStep != nil
+}
+
+// IsTestStep reports whether this fixture runs the test engine (`yaml test`).
+func (fixture FixtureTest) IsTestStep() bool {
+	return fixture.RunnerStep != nil && fixture.RunnerStep.Kind == RunnerKindTest
+}
+
+// IsLintStep reports whether this fixture runs the lint engine (`yaml lint`).
+func (fixture FixtureTest) IsLintStep() bool {
+	return fixture.RunnerStep != nil && fixture.RunnerStep.Kind == RunnerKindLint
 }
 
 func (fixture FixtureTest) Pretty() api.Text {
@@ -470,6 +506,11 @@ type FixtureResult struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty" pretty:"label=Metadata,omitempty"`
 	Start    *time.Time             `json:"start,omitempty" pretty:"label=Start Time,omitempty"`
 	Display  *DisplayOptions        `json:"-"`
+
+	// Children are per-item nodes produced by a runner step (one per test or
+	// lint violation). The runner appends them under the step's tree node so the
+	// existing stats/display pipeline rolls them up. Nil for ordinary steps.
+	Children []*FixtureNode `json:"children,omitempty"`
 }
 
 func (f FixtureResult) Failf(format string, args ...interface{}) FixtureResult {

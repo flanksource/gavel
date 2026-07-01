@@ -84,6 +84,34 @@ func TestExtractLanguageFromInfoString(t *testing.T) {
 	}
 }
 
+func TestRunnerStepKind(t *testing.T) {
+	tests := []struct {
+		name       string
+		infoString string
+		expected   string
+	}{
+		{name: "yaml test", infoString: "yaml test", expected: "test"},
+		{name: "yaml lint", infoString: "yaml lint", expected: "lint"},
+		{name: "bare test", infoString: "test", expected: "test"},
+		{name: "bare lint", infoString: "lint", expected: "lint"},
+		{name: "case insensitive", infoString: "YAML Test", expected: "test"},
+		{name: "trailing space", infoString: "yaml test ", expected: "test"},
+		{name: "plain yaml is not a step", infoString: "yaml", expected: ""},
+		{name: "bash is not a step", infoString: "bash", expected: ""},
+		{name: "bash with attrs", infoString: "bash exitCode=1", expected: ""},
+		{name: "empty", infoString: "", expected: ""},
+		{name: "non-yaml prefix rejected", infoString: "json test", expected: ""},
+		{name: "extra tokens rejected", infoString: "yaml test extra", expected: ""},
+		{name: "test not last rejected", infoString: "test yaml", expected: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, runnerStepKind(tt.infoString))
+		})
+	}
+}
+
 func TestShouldExecuteCodeBlock(t *testing.T) {
 	tests := []struct {
 		name       string

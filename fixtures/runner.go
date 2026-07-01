@@ -278,7 +278,16 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 
 		// Update the corresponding tree node with results
 		if testNode, exists := taskToNodeMap[typedTask]; exists {
-			testNode.Results = &result
+			if len(result.Children) > 0 {
+				// Runner steps (test/lint) return one child node per test /
+				// violation. Render the step as a group: leave Results nil so
+				// stats roll up from the children (UpdateStatsRecursive counts
+				// Results + children, so setting both would double-count) and
+				// the existing display/prune pipeline handles each child.
+				testNode.Children = append(testNode.Children, result.Children...)
+			} else {
+				testNode.Results = &result
+			}
 		} else {
 			logger.Warnf("No tree node found for task: %s", typedTask.Name())
 		}
@@ -373,6 +382,31 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			r.options.WorkDir, _ = os.Getwd()
 		}
 		return AIStepRunner(fixture, RunOptions{
+			WorkDir:        r.options.WorkDir,
+			ExecutablePath: r.options.ExecutablePath,
+		}), nil
+	}
+
+	// Runner steps (`yaml test` / `yaml lint`) drive the test/lint engine via
+	// the TestStepRunner/LintStepRunner hooks (implemented in fixtures/types to
+	// keep this package free of a testrunner/lint import that would cycle).
+	if fixture.IsRunnerStep() {
+		runner := TestStepRunner
+		if fixture.IsLintStep() {
+			runner = LintStepRunner
+		}
+		if runner == nil {
+			return FixtureResult{
+				Name:   fixture.Name,
+				Status: task.StatusERR,
+				Test:   fixture,
+				Error:  "runner step hook not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"",
+			}, nil
+		}
+		if r.options.WorkDir == "" {
+			r.options.WorkDir, _ = os.Getwd()
+		}
+		return runner(fixture, RunOptions{
 			WorkDir:        r.options.WorkDir,
 			ExecutablePath: r.options.ExecutablePath,
 		}), nil

@@ -238,7 +238,7 @@ func todoMatchesArg(todo *types.TODO, arg, workDir string) bool {
 	if strings.EqualFold(todo.Filename(), arg) {
 		return true
 	}
-	if todo.FilePath == "" || !(strings.Contains(arg, string(filepath.Separator)) || strings.HasSuffix(arg, ".md")) {
+	if todo.FilePath == "" || (!strings.Contains(arg, string(filepath.Separator)) && !strings.HasSuffix(arg, ".md")) {
 		return false
 	}
 	absArg := arg

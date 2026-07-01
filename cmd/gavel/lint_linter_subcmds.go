@@ -8,7 +8,7 @@ import (
 )
 
 // lintSubcommands enumerates every linter that gavel registers in
-// executeLinters. Each entry becomes `gavel lint <name>` with the Linters
+// lint.Execute. Each entry becomes `gavel lint <name>` with the Linters
 // filter pinned. Aliases (e.g. secrets → betterleaks) get their own
 // subcommand too so `gavel lint secrets` stays discoverable.
 var lintSubcommands = []struct {

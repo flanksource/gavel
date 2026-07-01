@@ -1,4 +1,4 @@
-package main
+package lint
 
 import (
 	"os"
@@ -31,7 +31,7 @@ func TestShouldRunLinterSkipsGolangciWithoutGoMod(t *testing.T) {
 	}
 }
 
-func TestExecuteLintersJSCPDOptIn(t *testing.T) {
+func TestExecuteJSCPDOptIn(t *testing.T) {
 	t.Run("jscpd disabled by default", func(t *testing.T) {
 		workDir := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
@@ -41,12 +41,12 @@ func TestExecuteLintersJSCPDOptIn(t *testing.T) {
 			t.Fatalf("write example.go: %v", err)
 		}
 
-		results, err := executeLinters(LintOptions{
+		results, err := Execute(Options{
 			WorkDir: workDir,
 			Timeout: "1s",
 		})
 		if err != nil {
-			t.Fatalf("executeLinters: %v", err)
+			t.Fatalf("Execute: %v", err)
 		}
 		for _, result := range results {
 			if result != nil && result.Linter == "jscpd" {
@@ -67,12 +67,12 @@ func TestExecuteLintersJSCPDOptIn(t *testing.T) {
 			t.Fatalf("write example.go: %v", err)
 		}
 
-		results, err := executeLinters(LintOptions{
+		results, err := Execute(Options{
 			WorkDir: workDir,
 			Timeout: "1s",
 		})
 		if err != nil {
-			t.Fatalf("executeLinters: %v", err)
+			t.Fatalf("Execute: %v", err)
 		}
 		found := false
 		for _, result := range results {
@@ -87,7 +87,7 @@ func TestExecuteLintersJSCPDOptIn(t *testing.T) {
 	})
 }
 
-func TestExecuteLintersSelectsESLintForESLintConfigFiles(t *testing.T) {
+func TestExecuteSelectsESLintForESLintConfigFiles(t *testing.T) {
 	clicky.ClearGlobalTasks()
 	t.Cleanup(clicky.ClearGlobalTasks)
 
@@ -99,12 +99,12 @@ func TestExecuteLintersSelectsESLintForESLintConfigFiles(t *testing.T) {
 		t.Fatalf("write eslint config: %v", err)
 	}
 
-	results, err := executeLinters(LintOptions{
+	results, err := Execute(Options{
 		WorkDir: workDir,
 		Timeout: "1s",
 	})
 	if err != nil {
-		t.Fatalf("executeLinters: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
 
 	found := false
@@ -129,12 +129,12 @@ func TestGroupFilesByGitRootUsesWorkDirForImplicitRun(t *testing.T) {
 		t.Fatalf("create subdir: %v", err)
 	}
 
-	groups := groupFilesByGitRoot(LintOptions{WorkDir: subdir})
+	groups := GroupFilesByGitRoot(Options{WorkDir: subdir})
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
-	if groups[0].gitRoot != subdir {
-		t.Fatalf("expected implicit group root %q, got %q", subdir, groups[0].gitRoot)
+	if groups[0].GitRoot != subdir {
+		t.Fatalf("expected implicit group root %q, got %q", subdir, groups[0].GitRoot)
 	}
 }
 
@@ -322,7 +322,7 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 		t.Fatalf("write index.ts: %v", err)
 	}
 
-	opts := LintOptions{
+	opts := Options{
 		WorkDir: root,
 		Files:   []string{backendFile, frontendFile},
 	}
@@ -376,7 +376,7 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 			t.Fatalf("write tools/go.mod: %v", err)
 		}
 
-		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), LintOptions{WorkDir: root})
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), Options{WorkDir: root})
 		if len(invs) != 2 {
 			t.Fatalf("expected 2 golangci invocations (backend, tools), got %d", len(invs))
 		}
@@ -399,7 +399,7 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 		if err := os.WriteFile(orphan, []byte("package orphan\n"), 0o644); err != nil {
 			t.Fatalf("write orphan: %v", err)
 		}
-		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), LintOptions{
+		invs := resolveLinterInvocations(golangci.NewGolangciLint(root), Options{
 			WorkDir: root,
 			Files:   []string{orphan},
 		})
@@ -410,7 +410,7 @@ func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 }
 
 // TestApplyPostLintFiltersHonorsGavelIgnore is a regression for the commit
-// pre-commit lint gate: before the cascade was pushed into executeLinters,
+// pre-commit lint gate: before the cascade was pushed into Execute,
 // runCommitLint returned raw results so a finding under a path covered by
 // .gavel.yaml lint.ignore would still block the commit.
 func TestApplyPostLintFiltersHonorsGavelIgnore(t *testing.T) {
