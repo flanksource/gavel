@@ -146,10 +146,10 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO, promptText string, resume bool) (captainai.Request, string, captainai.PermissionFunc) {
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	req := captainai.Request{
-		Prompt:   api.Prompt{User: promptText},
-		Context:  api.Context{Dir: workDir},
-		MaxTurns: e.config.MaxTurns,
+		Prompt: api.Prompt{User: promptText},
+		Budget: api.Budget{MaxTurns: e.config.MaxTurns},
 	}
+	req.SetCwd(workDir)
 	// claude conveys effort through the prompt directive (claude.BuildRunPrompt);
 	// codex takes a real reasoning-effort flag.
 	if e.config.Agent == "codex" {
@@ -185,7 +185,13 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		}
 		// Stamp GAVEL_ISSUE_ID / GAVEL_SESSION_ID so a `gavel commit` the agent runs
 		// itself writes the matching commit trailers.
-		req.Context.Env = cmuxRunEnv(todosInGroup, firstNonEmpty(req.SessionID, providerSessionID))
+		if envMap := cmuxRunEnv(todosInGroup, firstNonEmpty(req.SessionID, providerSessionID)); len(envMap) > 0 {
+			env := make([]string, 0, len(envMap))
+			for k, v := range envMap {
+				env = append(env, k+"="+v)
+			}
+			req.Setup.Env = env
+		}
 	} else {
 		req.Permissions = api.Permissions{
 			Mode:    e.resolveMode(api.PermissionAcceptEdits), // acceptEdits so file edits are not blocked
@@ -288,7 +294,7 @@ func (e *Executor) runStream(ctx *todopkg.ExecutorContext, start time.Time, req 
 		}
 	}
 
-	ctx.Logger.Infof("%s: dispatching %d TODO(s) in %s", e.Name(), len(todosInGroup), req.Context.Dir)
+	ctx.Logger.Infof("%s: dispatching %d TODO(s) in %s", e.Name(), len(todosInGroup), req.Cwd())
 	gavelai.NormalizeEnv()
 
 	streamCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)

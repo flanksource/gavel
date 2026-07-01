@@ -39,13 +39,14 @@ func executeAgentic(cfg ai.AgentConfig, prompt, schema, repoPath string) (string
 	}
 
 	logger.V(1).Infof("verify: agentic review with %s in %s", cfg.Model, repoPath)
-	resp, err := provider.Execute(context.Background(), captainai.Request{
+	req := captainai.Request{
 		Prompt: api.Prompt{
 			User:   prompt + "\n\n" + schemaInstruction(schema),
 			Source: "verify",
 		},
-		Context: api.Context{Dir: repoPath},
-	})
+	}
+	req.SetCwd(repoPath)
+	resp, err := provider.Execute(context.Background(), req)
 	if err != nil {
 		return "", fmt.Errorf("verify agent execution failed: %w", err)
 	}
