@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/betterleaks"
@@ -164,21 +163,13 @@ func resolveRequestedLinters(registry *linters.Registry, requested []string) ([]
 	return out, true, nil
 }
 
-// hasMatchingFiles checks if any files in workDir match at least one of the glob patterns.
-// Uses GlobWalk to bail early on first match instead of scanning the entire tree.
-func hasMatchingFiles(workDir string, patterns []string) bool {
-	fsys := os.DirFS(workDir)
-	for _, pattern := range patterns {
-		found := false
-		_ = doublestar.GlobWalk(fsys, pattern, func(path string, d os.DirEntry) error {
-			found = true
-			return doublestar.SkipDir
-		})
-		if found {
-			return true
-		}
-	}
-	return false
+// hasMatchingFiles checks if any files in workDir match at least one of the glob
+// patterns, skipping anything excluded by .gitignore or the .gavel.yaml gitignore
+// list (extraIgnore). Gitignored directories are pruned, never descended, so a
+// stray match inside vendor/ or node_modules/ never selects a linter. Bails on
+// the first match.
+func hasMatchingFiles(workDir string, patterns, extraIgnore []string) bool {
+	return utils.AnyGlobMatchGitIgnored(workDir, patterns, extraIgnore)
 }
 
 // lintBaseRef returns the git ref to use for --new-from-rev computation, or

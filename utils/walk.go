@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/go-git/go-billy/v5/osfs"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -281,4 +282,67 @@ func PartitionGitIgnored(paths []string, dir string) (kept, ignored []string) {
 		}
 	}
 	return kept, ignored
+}
+
+// GlobWalkGitIgnored walks root like WalkGitIgnored — pruning .gitignored
+// directories and files before they are visited — and invokes fn for every
+// non-ignored file whose root-relative slash path matches one of patterns
+// (doublestar semantics, so "**/*.go" matches at any depth). extraIgnore holds
+// additional gitignore-syntax patterns (e.g. the .gavel.yaml gitignore list)
+// applied on top of the repository's .gitignore; a directory matching one of
+// them is pruned, never descended. fn may return fs.SkipDir/fs.SkipAll to stop
+// early.
+func GlobWalkGitIgnored(root string, patterns, extraIgnore []string, fn func(rel string, d fs.DirEntry) error) error {
+	root, _ = filepath.Abs(root)
+
+	var extra gitignore.Matcher
+	if len(extraIgnore) > 0 {
+		ps := make([]gitignore.Pattern, 0, len(extraIgnore))
+		for _, p := range extraIgnore {
+			ps = append(ps, gitignore.ParsePattern(p, nil))
+		}
+		extra = gitignore.NewMatcher(ps)
+	}
+
+	return WalkGitIgnored(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+
+		if extra != nil && extra.Match(strings.Split(rel, "/"), d.IsDir()) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		for _, pat := range patterns {
+			if matched, _ := doublestar.Match(pat, rel); matched {
+				return fn(rel, d)
+			}
+		}
+		return nil
+	})
+}
+
+// AnyGlobMatchGitIgnored reports whether any non-ignored file under root matches
+// one of patterns, honoring .gitignore and extraIgnore the same way as
+// GlobWalkGitIgnored. It stops at the first match.
+func AnyGlobMatchGitIgnored(root string, patterns, extraIgnore []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	found := false
+	_ = GlobWalkGitIgnored(root, patterns, extraIgnore, func(rel string, d fs.DirEntry) error {
+		found = true
+		return fs.SkipAll
+	})
+	return found
 }

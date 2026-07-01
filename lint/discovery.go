@@ -77,7 +77,7 @@ func isLinterExplicitlyEnabled(cfg verify.GavelConfig, name string) bool {
 
 func shouldSelectLinter(workDir string, cfg verify.GavelConfig, linter linters.Linter, cliExplicit bool) (bool, string) {
 	if cliExplicit {
-		if !hasMatchingFiles(workDir, linter.DefaultIncludes()) {
+		if !hasMatchingFiles(workDir, linter.DefaultIncludes(), cfg.Commit.GitIgnore) {
 			return false, "no matching files"
 		}
 		return shouldRunLinter(workDir, cfg, linter.Name(), true, false, false)

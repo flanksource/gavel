@@ -291,6 +291,76 @@ func TestShouldSelectLinterExplicitFilesDoNotBypassConfigRequirement(t *testing.
 	}
 }
 
+func TestShouldSelectLinterSkipsMatchInsideGitignoredDir(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	dep := filepath.Join(workDir, "node_modules", "dep")
+	if err := os.MkdirAll(dep, 0o755); err != nil {
+		t.Fatalf("create node_modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dep, "index.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write vendored js: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if ok {
+		t.Fatal("expected eslint to be skipped when its only match is inside a gitignored directory")
+	}
+	if reason != "no matching files" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectLinterSkipsMatchInGavelGitignoredDir(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	dist := filepath.Join(workDir, "dist")
+	if err := os.MkdirAll(dist, 0o755); err != nil {
+		t.Fatalf("create dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "bundle.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+
+	cfg := verify.GavelConfig{Commit: verify.CommitConfig{GitIgnore: []string{"dist/"}}}
+	ok, reason := shouldSelectLinter(workDir, cfg, eslint.NewESLint(workDir), true)
+	if ok {
+		t.Fatal("expected eslint to be skipped when its only match is under a .gavel gitignore path")
+	}
+	if reason != "no matching files" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectLinterExplicitSelectsWhenMatchNotIgnored(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "index.js"), []byte("module.exports = {};\n"), 0o644); err != nil {
+		t.Fatalf("write src js: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), true)
+	if !ok {
+		t.Fatalf("expected eslint to be selected for src/index.js, got skip reason %q", reason)
+	}
+}
+
 func TestResolveLinterInvocationsBucketsByProjectRoot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {

@@ -431,3 +431,89 @@ var _ = Describe("PartitionGitIgnored", func() {
 		Expect(ignored).To(BeEmpty())
 	})
 })
+
+var _ = Describe("GlobWalkGitIgnored", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	collect := func(patterns, extraIgnore []string) []string {
+		var matched []string
+		err := GlobWalkGitIgnored(root, patterns, extraIgnore, func(rel string, d fs.DirEntry) error {
+			matched = append(matched, rel)
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		return matched
+	}
+
+	It("matches files at top level and any nested depth", func() {
+		Expect(os.WriteFile(filepath.Join(root, "main.go"), nil, 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg", "inner"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "pkg", "inner", "deep.go"), nil, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "pkg", "notes.md"), nil, 0o644)).To(Succeed())
+
+		Expect(collect([]string{"**/*.go"}, nil)).To(ConsistOf("main.go", "pkg/inner/deep.go"))
+	})
+
+	It("does not descend into gitignored directories", func() {
+		Expect(os.WriteFile(filepath.Join(root, ".gitignore"), []byte("node_modules/\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "node_modules", "dep"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "node_modules", "dep", "vendored.py"), nil, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "app.py"), nil, 0o644)).To(Succeed())
+
+		Expect(collect([]string{"**/*.py"}, nil)).To(ConsistOf("app.py"))
+	})
+
+	It("prunes directories matched by extraIgnore (.gavel gitignore)", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "dist"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "dist", "bundle.js"), nil, 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "index.js"), nil, 0o644)).To(Succeed())
+
+		Expect(collect([]string{"**/*.js"}, []string{"dist/"})).To(ConsistOf("index.js"))
+	})
+})
+
+var _ = Describe("AnyGlobMatchGitIgnored", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	It("returns false when the only match is inside a gitignored directory", func() {
+		Expect(os.WriteFile(filepath.Join(root, ".gitignore"), []byte("node_modules/\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "node_modules", "dep"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "node_modules", "dep", "vendored.py"), nil, 0o644)).To(Succeed())
+
+		Expect(AnyGlobMatchGitIgnored(root, []string{"**/*.py"}, nil)).To(BeFalse())
+	})
+
+	It("returns true when a match exists outside ignored directories", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "src"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "src", "app.py"), nil, 0o644)).To(Succeed())
+
+		Expect(AnyGlobMatchGitIgnored(root, []string{"**/*.py"}, nil)).To(BeTrue())
+	})
+
+	It("returns false when extraIgnore hides the only match", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "dist"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "dist", "bundle.js"), nil, 0o644)).To(Succeed())
+
+		Expect(AnyGlobMatchGitIgnored(root, []string{"**/*.js"}, []string{"dist/"})).To(BeFalse())
+	})
+
+	It("returns false when no file matches the patterns", func() {
+		Expect(os.WriteFile(filepath.Join(root, "README.md"), nil, 0o644)).To(Succeed())
+		Expect(AnyGlobMatchGitIgnored(root, []string{"**/*.go"}, nil)).To(BeFalse())
+	})
+
+	It("returns false for empty patterns", func() {
+		Expect(os.WriteFile(filepath.Join(root, "main.go"), nil, 0o644)).To(Succeed())
+		Expect(AnyGlobMatchGitIgnored(root, nil, nil)).To(BeFalse())
+	})
+})
