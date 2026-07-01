@@ -10,7 +10,8 @@ type MergeMethod = 'rebase' | 'squash' | 'merge';
 type Pending =
   | { type: 'merge'; method: MergeMethod }
   | { type: 'automerge'; method: MergeMethod }
-  | { type: 'approve' };
+  | { type: 'approve' }
+  | { type: 'update-branch' };
 
 // menuLabel pairs a (working) GavelIcon with text. clicky-ui's own Icon renders
 // string names as broken boxes here (no fallback provider), so action icons must
@@ -43,9 +44,9 @@ async function postAction(path: string, body: Record<string, unknown>): Promise<
   }
 }
 
-// PRActions renders merge / auto-merge / approve controls for an OPEN PR. Each
-// action is confirmed in a modal before it hits GitHub. On success it calls
-// onChanged so the host can re-fetch the detail and reflect the new state
+// PRActions renders merge / auto-merge / approve / update-branch controls for an
+// OPEN PR. Each action is confirmed in a modal before it hits GitHub. On success
+// it calls onChanged so the host can re-fetch the detail and reflect the new state
 // (merged / approved), at which point these controls disappear or update.
 export function PRActions({
   pr,
@@ -67,6 +68,7 @@ export function PRActions({
   const isDraft = info?.isDraft ?? pr.isDraft ?? false;
   const mergeable = (info?.mergeable || pr.mergeable || '').toUpperCase();
   const base = info?.baseRefName || pr.target;
+  const behind = pr.behind ?? 0;
 
   // Only OPEN PRs are actionable; merged/closed ones have nothing to merge or approve.
   if (state !== 'OPEN') return null;
@@ -97,6 +99,11 @@ export function PRActions({
       title: 'Merge automatically once all required checks pass',
       onSelect: () => open({ type: 'automerge', method: 'rebase' }),
     },
+    {
+      label: menuLabel('codicon:repo-sync', 'Update branch'),
+      title: `Merge ${base} into this PR's branch to bring it up to date`,
+      onSelect: () => open({ type: 'update-branch' }),
+    },
   ];
 
   function open(p: Pending) {
@@ -111,13 +118,17 @@ export function PRActions({
   }
 
   async function confirm() {
-    if (!pending || !nodeId) return;
+    if (!pending) return;
     setBusy(true);
     setError('');
     try {
       if (pending.type === 'approve') {
+        if (!nodeId) return;
         await postAction('/api/prs/approve', { repo: pr.repo, number: pr.number, nodeId, body: comment.trim() });
+      } else if (pending.type === 'update-branch') {
+        await postAction('/api/prs/update-branch', { repo: pr.repo, number: pr.number });
       } else {
+        if (!nodeId) return;
         await postAction('/api/prs/merge', {
           repo: pr.repo,
           number: pr.number,
@@ -162,6 +173,20 @@ export function PRActions({
           items={mergeItems}
         />
       </span>
+
+      {behind > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 shrink-0 gap-1 px-2 text-xs"
+          onClick={() => open({ type: 'update-branch' })}
+          disabled={loading}
+          title={`Branch is ${behind} commit${behind !== 1 ? 's' : ''} behind ${base} — update to bring it up to date`}
+        >
+          <GavelIcon name="codicon:repo-sync" className="text-xs" />
+          Update
+        </Button>
+      )}
 
       {pending && (
         <Modal
@@ -216,6 +241,12 @@ function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: 
         title: 'Approve pull request',
         confirmLabel: 'Approve',
         description: `Submit an approving review on ${ref}.`,
+      };
+    case 'update-branch':
+      return {
+        title: 'Update branch',
+        confirmLabel: 'Update branch',
+        description: `Merge ${base} into the head branch of ${ref} to bring it up to date. This adds a merge commit to the PR.`,
       };
   }
 }

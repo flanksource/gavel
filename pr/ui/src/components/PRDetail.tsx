@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, type ReactNode } from 'react';
-import type { PRItem, PRDetail, PRComment, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
+import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
 import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRActions } from './PRActions';
@@ -96,9 +96,16 @@ interface Props {
   onActionDone?: () => void;
 }
 
+type DetailTab = 'overview' | 'commits' | 'files';
+
 export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, onActionDone }: Props) {
   const [showCreate, setShowCreate] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
+
+  const info = detail?.pr;
+  const commits = info?.prCommits ?? [];
+  const files = info?.prFiles ?? [];
 
   return (
     <div className="p-4 bg-card h-full overflow-y-auto">
@@ -124,6 +131,11 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
         }
       />
 
+      {/* PR Description / Body */}
+      {info?.body && info.body.trim().length > 0 && (
+        <PRBodySection body={info.body} />
+      )}
+
       {loading && !detail && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground mt-4">
           <GavelIcon name="svg-spinners:ring-resize" className="text-blue-500" />
@@ -138,29 +150,49 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
         </div>
       )}
 
-      {detail?.runs && Object.keys(detail.runs).length > 0 && (
-        <Section
-          title="Workflows"
-          actions={{
-            json: () => detail.runs,
-            text: () => formatWorkflowsText(Object.values(detail.runs!)),
-            markdown: () => formatWorkflowsMarkdown(Object.values(detail.runs!)),
-          }}
-        >
-          {Object.values(detail.runs).map(run => (
-            <WorkflowRunView key={run.databaseId} run={run} repo={pr.repo} />
-          ))}
-        </Section>
+      {/* Detail tabs: Overview | Commits | Files */}
+      <DetailTabBar
+        active={activeTab}
+        onChange={setActiveTab}
+        commitCount={commits.length}
+        fileCount={files.length}
+      />
+
+      {activeTab === 'overview' && (
+        <>
+          {detail?.runs && Object.keys(detail.runs).length > 0 && (
+            <Section
+              title="Workflows"
+              actions={{
+                json: () => detail.runs,
+                text: () => formatWorkflowsText(Object.values(detail.runs!)),
+                markdown: () => formatWorkflowsMarkdown(Object.values(detail.runs!)),
+              }}
+            >
+              {Object.values(detail.runs).map(run => (
+                <WorkflowRunView key={run.databaseId} run={run} repo={pr.repo} />
+              ))}
+            </Section>
+          )}
+
+          {detail?.gavelResults && detail.gavelResults.length > 0 && (
+            <GavelResultsSection shards={detail.gavelResults} pr={pr} />
+          )}
+
+          {detail?.comments && <DeploymentsSection comments={detail.comments} />}
+
+          {detail?.comments && detail.comments.length > 0 && (
+            <CommentsSection comments={detail.comments.filter(c => !isDeploymentComment(c))} />
+          )}
+        </>
       )}
 
-      {detail?.gavelResults && detail.gavelResults.length > 0 && (
-        <GavelResultsSection shards={detail.gavelResults} pr={pr} />
+      {activeTab === 'commits' && (
+        <CommitsTab commits={commits} pr={pr} />
       )}
 
-      {detail?.comments && <DeploymentsSection comments={detail.comments} />}
-
-      {detail?.comments && detail.comments.length > 0 && (
-        <CommentsSection comments={detail.comments.filter(c => !isDeploymentComment(c))} />
+      {activeTab === 'files' && (
+        <FilesTab files={files} pr={pr} info={info} />
       )}
 
       <div className="pt-3 mt-3 border-t border-border">
@@ -179,6 +211,221 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
         workspaces={workspaces}
         onCreated={onTodoCreated}
       />
+    </div>
+  );
+}
+
+function PRBodySection({ body }: { body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = body.length > 500;
+
+  return (
+    <Section title="Description">
+      <div className={`relative ${!expanded && isLong ? 'max-h-40 overflow-hidden' : ''}`}>
+        <Markdown text={body} className="text-xs text-foreground" />
+        {!expanded && isLong && (
+          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-card to-transparent" />
+        )}
+      </div>
+      {isLong && (
+        <Button
+          variant="ghost"
+          className="text-xs text-blue-600 hover:text-blue-800 mt-1 h-auto p-0"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+    </Section>
+  );
+}
+
+function DetailTabBar({ active, onChange, commitCount, fileCount }: {
+  active: DetailTab;
+  onChange: (t: DetailTab) => void;
+  commitCount: number;
+  fileCount: number;
+}) {
+  const tabs: { id: DetailTab; label: string; icon: string; count?: number }[] = [
+    { id: 'overview', label: 'Overview', icon: 'codicon:pulse' },
+    { id: 'commits', label: 'Commits', icon: 'codicon:git-commit', count: commitCount },
+    { id: 'files', label: 'Files', icon: 'codicon:diff', count: fileCount },
+  ];
+
+  return (
+    <div className="flex items-center gap-1 mt-3 mb-1 border-b border-border">
+      {tabs.map(t => (
+        <Button
+          key={t.id}
+          variant="ghost"
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-none border-b-2 transition-colors h-auto ${
+            active === t.id
+              ? 'border-blue-600 text-blue-600 font-medium'
+              : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+          }`}
+          onClick={() => onChange(t.id)}
+        >
+          <GavelIcon name={t.icon} className="text-xs" />
+          {t.label}
+          {t.count != null && t.count > 0 && (
+            <span className="text-[10px] bg-muted rounded-full px-1.5 py-0 font-medium">{t.count}</span>
+          )}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
+  if (commits.length === 0) {
+    return <div className="text-xs text-muted-foreground py-4">No commits found</div>;
+  }
+  return (
+    <div className="mt-2 divide-y divide-border border border-border rounded">
+      {commits.map(c => (
+        <CommitRow key={c.oid} commit={c} pr={pr} />
+      ))}
+    </div>
+  );
+}
+
+function CommitRow({ commit, pr }: { commit: PRCommitInfo; pr: PRItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const shortSha = commit.oid.slice(0, 7);
+  const displayAuthor = commit.authorLogin || commit.authorName || '';
+  const commitUrl = `https://github.com/${pr.repo}/commit/${commit.oid}`;
+  const adds = commit.additions;
+  const dels = commit.deletions;
+
+  return (
+    <div>
+      <div
+        className="flex items-start gap-2 py-2 px-3 text-xs cursor-pointer hover:bg-muted transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <GavelIcon name="codicon:git-commit" className="text-muted-foreground mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-foreground truncate" title={commit.messageHeadline}>
+            {commit.messageHeadline}
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 text-muted-foreground">
+            {commit.authorAvatarUrl && (
+              <Avatar
+                src={commit.authorAvatarUrl}
+                alt={displayAuthor}
+                size={14}
+                href={commit.authorLogin ? `https://github.com/${commit.authorLogin}` : undefined}
+                title={displayAuthor}
+              />
+            )}
+            {displayAuthor && <span>{displayAuthor}</span>}
+            <span>·</span>
+            <RelativeTime iso={commit.committedDate} />
+            {(adds > 0 || dels > 0) && (
+              <>
+                <span>·</span>
+                {adds > 0 && <span className="text-green-600">+{adds}</span>}
+                {dels > 0 && <span className="text-red-600">-{dels}</span>}
+              </>
+            )}
+          </div>
+        </div>
+        <a
+          href={commitUrl}
+          target="_blank"
+          rel="noopener"
+          className="text-cyan-600 font-mono hover:underline shrink-0"
+          onClick={e => e.stopPropagation()}
+          title="View on GitHub"
+        >
+          {shortSha}
+        </a>
+        {commit.messageBody && (
+          <GavelIcon
+            name={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
+            className="text-muted-foreground shrink-0 text-[10px] mt-1"
+          />
+        )}
+      </div>
+      {expanded && commit.messageBody && (
+        <div className="px-3 pb-2 ml-5">
+          <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap font-mono bg-muted rounded p-2">
+            {commit.messageBody}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilesTab({ files, pr, info }: { files: PRFileInfo[]; pr: PRItem; info?: import('../types').PRInfo }) {
+  if (files.length === 0) {
+    return <div className="text-xs text-muted-foreground py-4">No changed files found</div>;
+  }
+
+  const totalAdds = info?.additions ?? files.reduce((s, f) => s + f.additions, 0);
+  const totalDels = info?.deletions ?? files.reduce((s, f) => s + f.deletions, 0);
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+        <span className="font-medium">{files.length} file{files.length !== 1 ? 's' : ''} changed</span>
+        <span>·</span>
+        <span className="text-green-600">+{totalAdds}</span>
+        <span className="text-red-600">-{totalDels}</span>
+      </div>
+      <div className="divide-y divide-border border border-border rounded">
+        {files.map(f => (
+          <FileRow key={f.path} file={f} pr={pr} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FileRow({ file, pr }: { file: PRFileInfo; pr: PRItem }) {
+  const total = file.additions + file.deletions;
+  const maxBars = 5;
+  const addBars = total > 0 ? Math.round((file.additions / total) * maxBars) : 0;
+  const delBars = total > 0 ? maxBars - addBars : 0;
+
+  const changeTypeIcon = {
+    ADDED: { icon: 'codicon:diff-added', color: 'text-green-600' },
+    DELETED: { icon: 'codicon:diff-removed', color: 'text-red-600' },
+    RENAMED: { icon: 'codicon:diff-renamed', color: 'text-blue-600' },
+    MODIFIED: { icon: 'codicon:diff-modified', color: 'text-yellow-600' },
+    COPIED: { icon: 'codicon:copy', color: 'text-blue-600' },
+  }[file.changeType] ?? { icon: 'codicon:diff-modified', color: 'text-yellow-600' };
+
+  const fileUrl = `${pr.url}/files#diff-${btoa(file.path).replace(/=/g, '')}`;
+
+  return (
+    <div className="flex items-center gap-2 py-1.5 px-3 text-xs hover:bg-muted transition-colors">
+      <GavelIcon name={changeTypeIcon.icon} className={`${changeTypeIcon.color} shrink-0`} />
+      <a
+        href={fileUrl}
+        target="_blank"
+        rel="noopener"
+        className="flex-1 min-w-0 font-mono text-foreground hover:text-blue-600 hover:underline truncate"
+        title={file.path}
+      >
+        {file.path}
+      </a>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-green-600 tabular-nums w-8 text-right">+{file.additions}</span>
+        <span className="text-red-600 tabular-nums w-8 text-right">-{file.deletions}</span>
+        <span className="inline-flex gap-px">
+          {Array.from({ length: addBars }).map((_, i) => (
+            <span key={`a${i}`} className="inline-block w-1.5 h-2 bg-green-500 rounded-sm" />
+          ))}
+          {Array.from({ length: delBars }).map((_, i) => (
+            <span key={`d${i}`} className="inline-block w-1.5 h-2 bg-red-500 rounded-sm" />
+          ))}
+          {total === 0 && (
+            <span className="inline-block w-1.5 h-2 bg-muted-foreground/30 rounded-sm" />
+          )}
+        </span>
+      </div>
     </div>
   );
 }

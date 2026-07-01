@@ -35,6 +35,7 @@ const prFragment = `fragment prFields on PullRequest {
   id
   number
   title
+  body
   author { login avatarUrl }
   headRefName
   baseRefName
@@ -43,9 +44,21 @@ const prFragment = `fragment prFields on PullRequest {
   reviewDecision
   mergeable
   url
-  commits(last: 1) {
+  additions
+  deletions
+  changedFiles
+  commits(last: 100) {
+    totalCount
     nodes {
       commit {
+        oid
+        messageHeadline
+        messageBody
+        committedDate
+        author { name user { login avatarUrl } }
+        additions
+        deletions
+        changedFilesIfAvailable
         statusCheckRollup {
           contexts(first: 100) {
             nodes {
@@ -72,6 +85,14 @@ const prFragment = `fragment prFields on PullRequest {
           }
         }
       }
+    }
+  }
+  files(first: 100) {
+    nodes {
+      path
+      additions
+      deletions
+      changeType
     }
   }
   comments(last: 100) {
@@ -139,6 +160,7 @@ type graphQLPR struct {
 	ID             string               `json:"id"`
 	Number         int                  `json:"number"`
 	Title          string               `json:"title"`
+	Body           string               `json:"body"`
 	Author         graphQLAuthor        `json:"author"`
 	HeadRefName    string               `json:"headRefName"`
 	BaseRefName    string               `json:"baseRefName"`
@@ -147,7 +169,11 @@ type graphQLPR struct {
 	ReviewDecision string               `json:"reviewDecision"`
 	Mergeable      string               `json:"mergeable"`
 	URL            string               `json:"url"`
+	Additions      int                  `json:"additions"`
+	Deletions      int                  `json:"deletions"`
+	ChangedFiles   int                  `json:"changedFiles"`
 	Commits        graphQLCommits       `json:"commits"`
+	Files          graphQLFileList      `json:"files"`
 	Comments       graphQLCommentList   `json:"comments"`
 	Reviews        graphQLCommentList   `json:"reviews"`
 	ReviewThreads  graphQLReviewThreads `json:"reviewThreads"`
@@ -196,7 +222,8 @@ type graphQLAuthor struct {
 }
 
 type graphQLCommits struct {
-	Nodes []graphQLCommitNode `json:"nodes"`
+	TotalCount int                 `json:"totalCount"`
+	Nodes      []graphQLCommitNode `json:"nodes"`
 }
 
 type graphQLCommitNode struct {
@@ -204,7 +231,31 @@ type graphQLCommitNode struct {
 }
 
 type graphQLCommit struct {
-	StatusCheckRollup *graphQLStatusCheckRollup `json:"statusCheckRollup"`
+	OID                       string                   `json:"oid"`
+	MessageHeadline           string                   `json:"messageHeadline"`
+	MessageBody               string                   `json:"messageBody"`
+	CommittedDate             time.Time                `json:"committedDate"`
+	Author                    graphQLCommitAuthor      `json:"author"`
+	Additions                 int                      `json:"additions"`
+	Deletions                 int                      `json:"deletions"`
+	ChangedFilesIfAvailable   *int                     `json:"changedFilesIfAvailable"`
+	StatusCheckRollup         *graphQLStatusCheckRollup `json:"statusCheckRollup"`
+}
+
+type graphQLCommitAuthor struct {
+	Name string         `json:"name"`
+	User *graphQLAuthor `json:"user"`
+}
+
+type graphQLFileList struct {
+	Nodes []graphQLFileNode `json:"nodes"`
+}
+
+type graphQLFileNode struct {
+	Path       string `json:"path"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	ChangeType string `json:"changeType"`
 }
 
 type graphQLStatusCheckRollup struct {
@@ -244,6 +295,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 		NodeID:         pr.ID,
 		Number:         pr.Number,
 		Title:          pr.Title,
+		Body:           pr.Body,
 		Author:         PRAuthor{Login: pr.Author.Login, AvatarURL: pr.Author.AvatarURL},
 		HeadRefName:    pr.HeadRefName,
 		BaseRefName:    pr.BaseRefName,
@@ -252,15 +304,54 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 		ReviewDecision: pr.ReviewDecision,
 		Mergeable:      pr.Mergeable,
 		URL:            pr.URL,
+		Additions:      pr.Additions,
+		Deletions:      pr.Deletions,
+		ChangedFiles:   pr.ChangedFiles,
 	}
 
+	// Use the last commit's statusCheckRollup for status checks (most recent).
 	if len(pr.Commits.Nodes) > 0 {
-		rollup := pr.Commits.Nodes[0].Commit.StatusCheckRollup
+		lastCommit := pr.Commits.Nodes[len(pr.Commits.Nodes)-1]
+		rollup := lastCommit.Commit.StatusCheckRollup
 		if rollup != nil {
 			for _, node := range rollup.Contexts.Nodes {
 				info.StatusCheckRollup = append(info.StatusCheckRollup, node.toStatusCheck())
 			}
 		}
+	}
+
+	// Populate commit list.
+	for _, cn := range pr.Commits.Nodes {
+		c := cn.Commit
+		ci := PRCommitInfo{
+			OID:             c.OID,
+			MessageHeadline: c.MessageHeadline,
+			MessageBody:     c.MessageBody,
+			CommittedDate:   c.CommittedDate.Format(time.RFC3339),
+			Additions:       c.Additions,
+			Deletions:       c.Deletions,
+		}
+		if c.ChangedFilesIfAvailable != nil {
+			ci.ChangedFiles = *c.ChangedFilesIfAvailable
+		}
+		if c.Author.User != nil {
+			ci.AuthorLogin = c.Author.User.Login
+			ci.AuthorAvatarURL = c.Author.User.AvatarURL
+		}
+		if c.Author.Name != "" {
+			ci.AuthorName = c.Author.Name
+		}
+		info.PRCommits = append(info.PRCommits, ci)
+	}
+
+	// Populate changed files list.
+	for _, f := range pr.Files.Nodes {
+		info.PRFiles = append(info.PRFiles, PRFileInfo{
+			Path:       f.Path,
+			Additions:  f.Additions,
+			Deletions:  f.Deletions,
+			ChangeType: f.ChangeType,
+		})
 	}
 
 	// Flatten issue-level comments and top-level review bodies into Comments.

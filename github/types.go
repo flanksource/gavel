@@ -18,6 +18,7 @@ type PRInfo struct {
 	// doesn't request it (e.g. the REST search path).
 	NodeID            string       `json:"nodeId,omitempty"`
 	Title             string       `json:"title"`
+	Body              string       `json:"body,omitempty"`
 	Author            PRAuthor     `json:"author"`
 	HeadRefName       string       `json:"headRefName"`
 	BaseRefName       string       `json:"baseRefName"`
@@ -26,11 +27,40 @@ type PRInfo struct {
 	ReviewDecision    string       `json:"reviewDecision"`
 	Mergeable         string       `json:"mergeable"`
 	URL               string       `json:"url"`
+	Additions         int          `json:"additions"`
+	Deletions         int          `json:"deletions"`
+	ChangedFiles      int          `json:"changedFiles"`
 	StatusCheckRollup StatusChecks `json:"statusCheckRollup"`
+	// PRCommits are the commits in the PR, populated from the GraphQL detail query.
+	PRCommits []PRCommitInfo `json:"prCommits,omitempty"`
+	// PRFiles are the changed files in the PR, populated from the GraphQL detail query.
+	PRFiles []PRFileInfo `json:"prFiles,omitempty"`
 	// Comments and ReviewThreads are populated by FetchPR in a single GraphQL request.
 	// Callers typically pass them through prwatch.MergeAndFilter to produce the actionable set.
 	Comments      []PRComment `json:"comments,omitempty"`
 	ReviewThreads []PRComment `json:"reviewThreads,omitempty"`
+}
+
+// PRCommitInfo is a commit in the PR.
+type PRCommitInfo struct {
+	OID             string `json:"oid"`
+	MessageHeadline string `json:"messageHeadline"`
+	MessageBody     string `json:"messageBody,omitempty"`
+	CommittedDate   string `json:"committedDate"`
+	AuthorName      string `json:"authorName,omitempty"`
+	AuthorLogin     string `json:"authorLogin,omitempty"`
+	AuthorAvatarURL string `json:"authorAvatarUrl,omitempty"`
+	Additions       int    `json:"additions"`
+	Deletions       int    `json:"deletions"`
+	ChangedFiles    int    `json:"changedFiles"`
+}
+
+// PRFileInfo is a changed file in the PR.
+type PRFileInfo struct {
+	Path       string `json:"path"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
+	ChangeType string `json:"changeType"`
 }
 
 type PRAuthor struct {

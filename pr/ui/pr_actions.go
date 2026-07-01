@@ -105,3 +105,39 @@ func (s *Server) handlePRApprove(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"status":"ok"}`)
 }
+
+// handlePRUpdateBranch updates the PR's head branch by merging the base branch
+// into it — the equivalent of GitHub's "Update branch" button. This is used
+// when the PR is behind its target branch.
+func (s *Server) handlePRUpdateBranch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Repo   string `json:"repo"`
+		Number int    `json:"number"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(body.Repo) == "" || body.Number == 0 {
+		http.Error(w, `{"error":"repo and number are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	opts := s.ghOpts
+	opts.Repo = body.Repo
+
+	if err := github.UpdatePullRequestBranch(opts, body.Number); err != nil {
+		logger.Warnf("update branch PR %s#%d: %v", body.Repo, body.Number, err)
+		writeJSONError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	s.afterPRAction(body.Repo, body.Number)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"status":"ok"}`)
+}
