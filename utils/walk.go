@@ -245,30 +245,40 @@ func stopAtNestedProjectRoot(root, path string, d fs.DirEntry) (bool, error) {
 // by .gitignore patterns. Uses go-git's ReadPatterns to recursively load all
 // .gitignore files. If no git root is found, all paths are returned.
 func FilterGitIgnored(paths []string, dir string) []string {
+	kept, _ := PartitionGitIgnored(paths, dir)
+	return kept
+}
+
+// PartitionGitIgnored splits absolute paths into those NOT matched by
+// .gitignore (kept) and those matched (ignored). It honors !-negation via
+// go-git's matcher. Fail-open: if no git root is found or no patterns load,
+// every path is kept and ignored is empty.
+func PartitionGitIgnored(paths []string, dir string) (kept, ignored []string) {
 	dir, _ = filepath.Abs(dir)
 	gitRoot := FindGitRoot(dir)
 	if gitRoot == "" {
-		return paths
+		return paths, nil
 	}
 
 	fs := osfs.New(gitRoot)
 	patterns, err := gitignore.ReadPatterns(fs, nil)
 	if err != nil || len(patterns) == 0 {
-		return paths
+		return paths, nil
 	}
 
 	matcher := gitignore.NewMatcher(patterns)
-	var result []string
 	for _, p := range paths {
 		rel, err := filepath.Rel(gitRoot, p)
 		if err != nil {
-			result = append(result, p)
+			kept = append(kept, p)
 			continue
 		}
 		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if !matcher.Match(parts, false) {
-			result = append(result, p)
+		if matcher.Match(parts, false) {
+			ignored = append(ignored, p)
+		} else {
+			kept = append(kept, p)
 		}
 	}
-	return result
+	return kept, ignored
 }

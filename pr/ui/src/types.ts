@@ -18,6 +18,9 @@ export interface PRItem {
   title: string;
   author: string;
   authorAvatarUrl?: string;
+  // True when the author is a GitHub App bot whose login lacks a "bot" suffix
+  // (e.g. renovate); lets the @bots chip group it without the suffix heuristic.
+  authorIsApp?: boolean;
   repo: string;
   repoAvatarUrl?: string;
   repoHomepageUrl?: string;
@@ -40,12 +43,381 @@ export interface SearchConfig {
   repos: string[];
   all?: boolean;
   org?: string;
-  author?: string;
-  any?: boolean;
-  bots?: boolean;
   // GitHub org logins the user has chosen to hide from the chooser and
   // exclude from default-org resolution. Persists across daemon restarts.
   ignoredOrgs?: string[];
+}
+
+// Project associates one or more repos with a local workspace directory where
+// Gavel discovers a Procfile. Mirrors pr/ui.Project / projectInfo.
+export interface Project {
+  name: string;
+  dir: string;
+  repos: string[];
+  hasProcfile?: boolean;
+  // Pinned todo backend for this workspace; absent means auto-detect.
+  todoProvider?: TodoProvider;
+  todoCounts?: TodoCounts;
+}
+
+export type TodoProvider = 'grite' | 'todos';
+export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'verified' | 'skipped';
+export type TodoPriority = 'high' | 'medium' | 'low';
+// Row density for the todo lists: 'comfortable' is the two-line default,
+// 'compact' collapses each todo onto a single line.
+export type TodoDensity = 'comfortable' | 'compact';
+// Grouping dimension for the todo lists: 'workspace' is the default per-workspace
+// grouping; 'severity' buckets by priority and 'age' by last activity, both
+// across all workspaces.
+export type TodoGroupBy = 'workspace' | 'severity' | 'age';
+
+export interface TodoCounts {
+  total: number;
+  open: number;
+  draft: number;
+  pending: number;
+  inProgress: number;
+  failed: number;
+  verified: number;
+  completed: number;
+  skipped: number;
+}
+
+export interface TodoEvent {
+  id?: string;
+  short_id?: string;
+  kind?: string;
+  actor?: string;
+  timestamp?: string;
+  title?: string;
+  body?: string;
+  label?: string;
+  old_label?: string;
+  new_label?: string;
+}
+
+export interface TodoItem {
+  ref: string;
+  id?: string;
+  shortId?: string;
+  title: string;
+  status: TodoStatus;
+  priority: TodoPriority;
+  provider?: TodoProvider | string;
+  providerState?: string;
+  filePath?: string;
+  cwd?: string;
+  labels?: string[];
+  attempts?: number;
+  // ISO timestamp the todo was created (grite's created time); absent for
+  // file-backed todos that record no creation time.
+  created?: string;
+  lastRun?: string;
+  // Agent session id of the most recent run, used to follow the session live
+  // and to resume it. Recorded from the issue's session:<id> label / frontmatter.
+  sessionId?: string;
+  body?: string;
+  implementation?: string;
+  events?: TodoEvent[];
+  // Aggregated git diff footprint of the todo's commits (those carrying its
+  // Gavel-Issue-Id trailer); absent when no commit references the todo.
+  diff?: TodoDiffStat;
+  // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
+  // section; present on detail responses.
+  criteria?: AcceptanceCriterion[];
+}
+
+// AcceptanceCriterion is one done-ness criterion. checkId is set when the line
+// maps to a static verify check (rendered as "<id>: text"); empty checkId marks
+// a custom, functionality-specific criterion.
+export interface AcceptanceCriterion {
+  text: string;
+  checkId?: string;
+  done?: boolean;
+}
+
+// CriteriaCatalogItem is one standard verify check offered in the add-criteria
+// combobox (from /api/todos/criteria/catalog).
+export interface CriteriaCatalogItem {
+  id: string;
+  category: string;
+  description: string;
+}
+
+// TodoDiffStat is the aggregated change footprint of a todo's linked commits,
+// mirroring the server's git.DiffStat.
+export interface TodoDiffStat {
+  commits: number;
+  files: number;
+  adds: number;
+  dels: number;
+}
+
+// Evidence points at a file (and optionally line) supporting a verify verdict.
+export interface VerifyEvidence {
+  file: string;
+  line?: number;
+  message: string;
+}
+
+// CriterionResult is the AI verdict for one stored acceptance criterion.
+export interface CriterionResult {
+  criterion: string;
+  met: boolean;
+  evidence?: VerifyEvidence[];
+}
+
+// VerifyCheck is a boolean pass/fail static check from a verification run.
+export interface VerifyCheck {
+  pass: boolean;
+  evidence?: VerifyEvidence[];
+}
+
+// VerifyResult mirrors the server's verify.VerifyResult for an issue-aware run:
+// an overall score + implemented verdict, per-criterion results, static checks,
+// and a completeness assessment.
+export interface VerifyResult {
+  score: number;
+  implemented?: boolean;
+  acceptance_criteria?: CriterionResult[];
+  checks?: Record<string, VerifyCheck>;
+  completeness?: { pass: boolean; summary?: string; evidence?: VerifyEvidence[] };
+}
+
+// TodoVerifyResponse is the /api/todos/verify payload: the structured verdict
+// plus the refreshed todo (whose status may have moved to verified/pending).
+export interface TodoVerifyResponse {
+  result: VerifyResult;
+  todo: TodoItem;
+}
+
+// Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
+// identity (agent/model/effort), elapsed time, token usage and derived cost.
+// Mirrors cmux.SessionStats. found=false means the session produced no log yet.
+export interface SessionStats {
+  sessionId?: string;
+  agent?: string;
+  model?: string;
+  effort?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  // Live context-window occupancy (latest turn's input + cache), reset by each
+  // compaction — surfaced as the token figure instead of the ever-growing total.
+  contextTokens: number;
+  // Total context-window size (tokens) for the model, from captain's pricing
+  // registry; 0 when the model is unknown. Denominator for the context bar.
+  contextWindow: number;
+  turns: number;
+  // Number of context compactions seen so far; each shrinks contextTokens.
+  compactions: number;
+  costUsd: number;
+  inProgress: boolean;
+  found: boolean;
+  // High-level agent state from the latest session-log event: thinking | working
+  // | ask | completed | error. 'approval' is set when a tool-permission request
+  // is pending (see approval). Empty before the first event.
+  state?: 'thinking' | 'working' | 'ask' | 'approval' | 'completed' | 'error';
+  // API/network failure reason when state === 'error' (the "API Error: …" message).
+  error?: string;
+  // A pending tool-permission request awaiting the user's Allow/Deny. Present
+  // (and state === 'approval') only while a driver is blocked on it.
+  approval?: TodoSessionApproval;
+}
+
+// TodoSessionApproval is a tool-permission request a driver surfaced for human
+// review; the dashboard answers it via POST /api/todos/session/approve.
+export interface TodoSessionApproval {
+  sessionId: string;
+  toolUseId?: string;
+  tool: string;
+  input?: Record<string, unknown>;
+}
+
+export type TodoRunAgent = 'claude' | 'codex';
+export type TodoRunMode = 'cmux' | 'inline';
+export type TodoRunEffort = 'low' | 'medium' | 'high';
+// TodoRunDriver selects the agent driver: <agent>-<mechanism>. cmux drives the
+// interactive TUI; headless drives `-p --output-format stream-json`; sdk drives
+// the @anthropic-ai/claude-agent-sdk bridge; api drives the direct Anthropic API.
+export type TodoRunDriver =
+  | 'claude-cmux'
+  | 'claude-headless'
+  | 'claude-sdk'
+  | 'claude-api'
+  | 'codex-cmux'
+  | 'codex-headless';
+
+export interface TodoRunOptions {
+  // Driver is the authoritative selection; agent/mode are the legacy pair the
+  // server still accepts and derives a driver from when driver is absent.
+  driver?: TodoRunDriver;
+  agent?: TodoRunAgent;
+  mode?: TodoRunMode;
+  model?: string;
+  effort?: TodoRunEffort;
+  // Plan-only run: the agent proposes an implementation plan without changing
+  // code. Requires cmux mode.
+  plan?: boolean;
+  // Resume the todo's prior agent session (claude --resume) instead of starting
+  // a fresh one, so the agent keeps the earlier conversation's context.
+  resume?: boolean;
+  timeout?: string;
+  maxCost?: number;
+  maxTurns?: number;
+  dirty?: boolean;
+  dryRun?: boolean;
+  // Auto-commit the agent's changes once the run finishes (defaults to true on
+  // the server). Set false in the advanced dialog to disable it.
+  commit?: boolean;
+  // Run the configured `checks` test/lint suite after the agent completes and
+  // feed any failures back to it for another iteration. Opt-in (defaults off on
+  // the server), mirroring the CLI's `todos run --check`.
+  check?: boolean;
+  // Prompt, when set, overrides the auto-built prompt body verbatim — the
+  // dashboard's editable prompt. The implement/plan scaffolding still follows
+  // the run mode.
+  prompt?: string;
+}
+
+export interface TodoRunResponse {
+  status: 'started' | 'dry_run';
+  ref: string;
+  // refs/count echo the full set when several todos run together in one session.
+  refs?: string[];
+  count?: number;
+  dir: string;
+  provider: TodoProvider | string;
+  agent: TodoRunAgent;
+  mode: TodoRunMode;
+  driver?: TodoRunDriver;
+  model?: string;
+  effort?: TodoRunEffort;
+  plan?: boolean;
+  resume?: boolean;
+  // Session id the run uses; lets the UI follow the session log immediately.
+  sessionId?: string;
+  timeout: string;
+  maxBudget?: number;
+  maxTurns?: number;
+  // Whether the run will auto-commit the agent's changes when it finishes.
+  commit?: boolean;
+  message: string;
+}
+
+// Preview of the exact prompt a run would dispatch, shown in the advanced run
+// dialog before the user starts the run.
+export interface TodoRunPreviewResponse {
+  prompt: string;
+  mode: TodoRunMode;
+  agent: TodoRunAgent;
+  effort?: TodoRunEffort;
+  plan?: boolean;
+  count: number;
+}
+
+export interface TodoListResponse {
+  provider: TodoProvider | string;
+  dir?: string;
+  counts: TodoCounts;
+  items: TodoItem[];
+}
+
+// One git commit linked to a todo via its Gavel-Issue-Id trailer. url is the
+// commit's page on the origin remote, absent for a local-only repo.
+export interface TodoCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author?: string;
+  date?: string;
+  url?: string;
+}
+
+export interface TodoCommitsResponse {
+  // issueId is the todo's id that commits were matched against; absent for
+  // file-backed todos that carry no id.
+  issueId?: string;
+  commits: TodoCommit[];
+}
+
+// One commit's rendered diff (ANSI-colored `git show` output). truncated is set
+// when the diff exceeded the server's size cap. When the request scopes to a
+// single file the diff is just that path's patch.
+export interface TodoCommitDiffResponse {
+  hash: string;
+  diff: string;
+  truncated?: boolean;
+}
+
+// One file changed in a commit, mirroring git.CommitFile: its path (and previous
+// path for a rename), change kind, line counts, and repomap classification.
+export interface TodoCommitFile {
+  path: string;
+  previousPath?: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  adds: number;
+  dels: number;
+  binary?: boolean;
+  language?: string;
+  scopes?: string[];
+}
+
+export interface TodoCommitFilesResponse {
+  hash: string;
+  files: TodoCommitFile[];
+}
+
+// ProcProcess mirrors procfile.ProcState — one supervised process.
+export interface ProcProcess {
+  name: string;
+  command: string;
+  pid?: number;
+  status: string;
+  started?: string;
+  restarts: number;
+  exitCode?: number;
+  logFile: string;
+  ports?: number[];
+  // Live resource sample of the process group. openFiles is -1 where the
+  // platform cannot report it. All omitted/zero for a stopped process.
+  cpuPercent?: number;
+  memoryRss?: number;
+  openFiles?: number;
+  // Per-process breakdown of the process group (leader + descendants).
+  tree?: ProcNode[];
+}
+
+// ProcNode mirrors procfile.ProcNode — one process in a supervised group's tree.
+export interface ProcNode {
+  pid: number;
+  ppid: number;
+  command: string;
+  cpuPercent?: number;
+  memoryRss?: number;
+  openFiles?: number;
+}
+
+// ProcStatus mirrors pr/ui.procStatus — a project's Procfile supervision state.
+// hasProcfile=false is the normal "no Procfile here" state, not an error.
+export interface ProcStatus {
+  hasProcfile: boolean;
+  running: boolean;
+  supervisorPid?: number;
+  processes?: ProcProcess[];
+  // profiles declared in the Procfile; profile is the active one (running
+  // supervisor's, else the .gavel.yaml default).
+  profiles?: string[];
+  profile?: string;
+  // Uncommitted changes (staged, unstaged, and untracked) in the project's
+  // directory. Absent when the directory is not a git work tree.
+  gitChanges?: number;
+  error?: string;
 }
 
 export interface RateLimit {
@@ -64,6 +436,15 @@ export interface Snapshot {
   paused: boolean;
   error?: string;
   config: SearchConfig;
+  // Login of the authenticated GitHub user, used to resolve the @me author
+  // filter client-side. Empty until the auth probe completes.
+  viewer?: string;
+  // True once the server has learned of any bot author, so the @bots chip stays
+  // available even while bots are excluded from the fetch.
+  botsAvailable?: boolean;
+  // The server's current bot-fetch state; the UI only posts a change when the
+  // @bots chip disagrees with this.
+  includeBots?: boolean;
   rateLimit?: RateLimit;
   // Sparse map keyed by `${repo}#${number}`. A PR is unread iff its key
   // appears here. Absent key = read. Server omits the field entirely when

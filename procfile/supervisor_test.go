@@ -1,0 +1,356 @@
+package procfile_test
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	pf "github.com/flanksource/gavel/procfile"
+	"github.com/flanksource/gavel/utils"
+	"github.com/flanksource/gavel/verify"
+)
+
+// newSupervisor writes a Procfile into a fresh temp root and returns a started
+// supervisor plus its state dir. The caller is responsible for Shutdown.
+func newSupervisor(procfile string, cfg verify.ProcfileConfig) (*pf.Supervisor, string) {
+	root := GinkgoT().TempDir()
+	Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte(procfile), 0o644)).To(Succeed())
+	dir, err := pf.StateDir(root)
+	Expect(err).NotTo(HaveOccurred())
+
+	sup, err := pf.NewSupervisor(pf.Options{
+		Root:     root,
+		Procfile: filepath.Join(root, "Procfile"),
+		Config:   cfg,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(sup.Start()).To(Succeed())
+	return sup, dir
+}
+
+// newSupervisorWith starts a supervisor for the given Procfile + options (Root
+// and Procfile are filled in). The caller is responsible for Shutdown.
+func newSupervisorWith(procfile string, opts pf.Options) (*pf.Supervisor, string) {
+	root := GinkgoT().TempDir()
+	Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte(procfile), 0o644)).To(Succeed())
+	dir, err := pf.StateDir(root)
+	Expect(err).NotTo(HaveOccurred())
+	opts.Root = root
+	opts.Procfile = filepath.Join(root, "Procfile")
+	sup, err := pf.NewSupervisor(opts)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(sup.Start()).To(Succeed())
+	return sup, dir
+}
+
+// liveProc reads a process's live state straight off the supervisor (clicky owns
+// status/ports/metrics; state.json is only the out-of-process fallback).
+func liveProc(sup *pf.Supervisor, name string) (pf.ProcState, bool) {
+	return sup.State().Process(name)
+}
+
+func statusOf(sup *pf.Supervisor, name string) string {
+	p, _ := liveProc(sup, name)
+	return p.Status
+}
+
+// waitFor polls cond up to timeout, failing the spec if it never holds.
+func waitFor(timeout time.Duration, cond func() bool) {
+	EventuallyWithOffset(1, cond, timeout, 25*time.Millisecond).Should(BeTrue())
+}
+
+// freePort binds an ephemeral TCP port, then releases it so a supervised process
+// can claim it. A small reuse race is acceptable for a test.
+func freePort() int {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	Expect(err).NotTo(HaveOccurred())
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func containsInt(xs []int, x int) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+var _ = Describe("Supervisor", func() {
+	It("starts processes, records pids and captures their output", func() {
+		sup, dir := newSupervisor("ticker: sh -c 'echo hello-from-ticker; sleep 30'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		var pid int
+		waitFor(3*time.Second, func() bool {
+			p, ok := liveProc(sup, "ticker")
+			if ok && p.Status == pf.StatusRunning && p.PID > 0 {
+				pid = p.PID
+				return true
+			}
+			return false
+		})
+		Expect(utils.ProcessAlive(pid)).To(BeTrue())
+
+		waitFor(3*time.Second, func() bool {
+			out, _ := utils.TailFile(pf.LogPath(dir, "ticker"), 10)
+			for _, line := range out {
+				if line == "hello-from-ticker" {
+					return true
+				}
+			}
+			return false
+		})
+
+		sup.Shutdown()
+		waitFor(3*time.Second, func() bool { return !utils.ProcessAlive(pid) })
+	})
+
+	It("injects env vars and leaves shell-internal expansion to the process", func() {
+		// PORT comes from config env; $((1+1)) is shell arithmetic that must NOT
+		// be pre-expanded by the supervisor.
+		cfg := verify.ProcfileConfig{Env: map[string]string{"PORT": "9999"}}
+		sup, dir := newSupervisor("envtest: sh -c 'echo port=$PORT count=$((1+1)); sleep 30'\n", cfg)
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool {
+			out, _ := utils.TailFile(pf.LogPath(dir, "envtest"), 10)
+			for _, line := range out {
+				if line == "port=9999 count=2" {
+					return true
+				}
+			}
+			return false
+		})
+	})
+
+	It("injects the captured login-shell environment into supervised processes", func() {
+		// The fake shell exports only INJECTED_MARKER (no PATH), so the child
+		// keeps its real PATH and `sh` still resolves while the captured var
+		// flows through as the lowest-priority overlay layer.
+		restore := pf.SetShellForHome(func(string) string {
+			return writeFakeShell("INJECTED_MARKER=fromloginshell\n")
+		})
+		defer restore()
+
+		sup, dir := newSupervisor("probe: sh -c 'echo marker=$INJECTED_MARKER; sleep 30'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool {
+			out, _ := utils.TailFile(pf.LogPath(dir, "probe"), 10)
+			for _, line := range out {
+				if line == "marker=fromloginshell" {
+					return true
+				}
+			}
+			return false
+		})
+	})
+
+	It("detects the TCP port a supervised process listens on", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		port := freePort()
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(10*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && containsInt(p.Ports, port)
+		})
+	})
+
+	It("detects every port a single process listens on", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		p1 := freePort()
+		p2 := freePort()
+		for p2 == p1 {
+			p2 = freePort()
+		}
+		// One process binds two TCP ports; both must surface in ProcState.Ports.
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; ss=[socket.socket(),socket.socket()]; [(s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1), s.bind(("127.0.0.1",p)), s.listen()) for s,p in zip(ss,(%d,%d))]; time.sleep(60)'`+"\n", py, p1, p2)
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(10*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && containsInt(p.Ports, p1) && containsInt(p.Ports, p2)
+		})
+	})
+
+	It("stays 'starting' until the port is re-detected on restart", func() {
+		if _, err := exec.LookPath("lsof"); err != nil {
+			Skip("lsof not installed")
+		}
+		py, err := exec.LookPath("python3")
+		if err != nil {
+			Skip("python3 not installed")
+		}
+		port := freePort()
+		// Sleep before binding so the pre-listen window is long enough to observe
+		// the gated "starting" status after a restart.
+		listen := fmt.Sprintf(`srv: %s -c 'import socket,time; time.sleep(1); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(60)'`+"\n", py, port)
+		sup, _ := newSupervisor(listen, verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		// First start is not gated (never listened yet): it reaches running, then
+		// the port appears once it binds.
+		waitFor(10*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
+		})
+
+		sup.RestartProc("srv")
+
+		// Now a known server: it holds at "starting" with no port until it rebinds.
+		waitFor(5*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && p.Status == pf.StatusStarting && len(p.Ports) == 0
+		})
+
+		// And only flips to running once the port is detected again.
+		waitFor(10*time.Second, func() bool {
+			p, ok := liveProc(sup, "srv")
+			return ok && p.Status == pf.StatusRunning && containsInt(p.Ports, port)
+		})
+	})
+
+	It("does not restart a process under the default 'no' policy", func() {
+		sup, _ := newSupervisor("once: sh -c 'exit 3'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool {
+			p, ok := liveProc(sup, "once")
+			return ok && p.Status == pf.StatusCrashed
+		})
+		p, _ := liveProc(sup, "once")
+		Expect(p.Restarts).To(Equal(0))
+		// A non-zero exit is captured so the UI/CLI can show "crashed (exit 3)".
+		Expect(p.ExitCode).NotTo(BeNil())
+		Expect(*p.ExitCode).To(Equal(3))
+	})
+
+	It("restarts a failing process up to maxRestarts under on-failure", func() {
+		cfg := verify.ProcfileConfig{AutoRestart: verify.RestartOnFailure, MaxRestarts: 2}
+		sup, _ := newSupervisor("flaky: sh -c 'exit 1'\n", cfg)
+		defer sup.Shutdown()
+
+		// Restarts honour a 500ms backoff, so 2 retries take ~1.5s.
+		waitFor(8*time.Second, func() bool {
+			p, ok := liveProc(sup, "flaky")
+			return ok && p.Status == pf.StatusCrashed && p.Restarts == 2
+		})
+	})
+
+	It("keeps a crashed post-mortem in state.json after the daemon self-exits", func() {
+		// A single process that crashes brings the whole daemon down. Run() (Start
+		// + Wait) takes the self-exit path, which must preserve the crashed status
+		// and exit code so `proc start`'s readiness can fail the start.
+		root := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(root, "Procfile"), []byte("boom: sh -c 'exit 7'\n"), 0o644)).To(Succeed())
+		dir, err := pf.StateDir(root)
+		Expect(err).NotTo(HaveOccurred())
+		sup, err := pf.NewSupervisor(pf.Options{Root: root, Procfile: filepath.Join(root, "Procfile")})
+		Expect(err).NotTo(HaveOccurred())
+
+		done := make(chan struct{})
+		go func() { defer close(done); _ = sup.Run() }()
+		Eventually(done, 5*time.Second).Should(BeClosed())
+
+		st, err := pf.ReadState(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(st.Running()).To(BeFalse())
+		p, ok := st.Process("boom")
+		Expect(ok).To(BeTrue())
+		Expect(p.Status).To(Equal(pf.StatusCrashed))
+		Expect(p.ExitCode).NotTo(BeNil())
+		Expect(*p.ExitCode).To(Equal(7))
+	})
+
+	It("stops every process and cleans up on Shutdown", func() {
+		sup, dir := newSupervisor("a: sh -c 'sleep 30'\nb: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
+
+		var pids []int
+		waitFor(3*time.Second, func() bool {
+			pids = nil
+			for _, p := range sup.State().Processes {
+				if p.Status == pf.StatusRunning && p.PID > 0 {
+					pids = append(pids, p.PID)
+				}
+			}
+			return len(pids) == 2
+		})
+
+		sup.Shutdown()
+
+		for _, pid := range pids {
+			pidCopy := pid
+			waitFor(3*time.Second, func() bool { return !utils.ProcessAlive(pidCopy) })
+		}
+		Expect(pf.StatePath(dir)).NotTo(BeAnExistingFile())
+		Expect(pf.SupervisorPidPath(dir)).NotTo(BeAnExistingFile())
+	})
+})
+
+var _ = Describe("Supervisor profiles and defaults", func() {
+	// web: default, no profile (always). mailcatcher: dev-profile only.
+	// worker: default:false (registered, not auto-started).
+	const procfile = `web: sh -c 'sleep 30'
+mailcatcher:
+  command: sh -c 'sleep 30'
+  profiles: [dev]
+worker:
+  command: sh -c 'sleep 30'
+  default: false
+`
+
+	It("auto-starts only the default, in-profile processes", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		// mailcatcher (inactive profile) and worker (default:false) stay registered-but-stopped.
+		Consistently(func() string { return statusOf(sup, "mailcatcher") }, "750ms", "150ms").Should(Equal(pf.StatusStopped))
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
+	})
+
+	It("auto-starts a profiled process when its profile is active", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{Profile: "dev"})
+		defer sup.Shutdown()
+
+		waitFor(4*time.Second, func() bool {
+			return statusOf(sup, "web") == pf.StatusRunning && statusOf(sup, "mailcatcher") == pf.StatusRunning
+		})
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped), "default:false stays stopped")
+	})
+
+	It("starts a default:false process on demand by name", func() {
+		sup, _ := newSupervisorWith(procfile, pf.Options{})
+		defer sup.Shutdown()
+
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "web") == pf.StatusRunning })
+		Expect(statusOf(sup, "worker")).To(Equal(pf.StatusStopped))
+
+		sup.StartProc("worker")
+		waitFor(3*time.Second, func() bool { return statusOf(sup, "worker") == pf.StatusRunning })
+	})
+})

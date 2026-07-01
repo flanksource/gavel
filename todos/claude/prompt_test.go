@@ -52,14 +52,14 @@ func TestBuildGroupPrompt(t *testing.T) {
 	prompt := BuildGroupPrompt(todos, "")
 
 	for _, want := range []string{
-		"implementing multiple related fixes",
-		"## fix-auth",
-		"## fix-db",
-		"## fix-cache",
+		"implementing the 3 todo items listed below",
+		"## 1. fix-auth",
+		"## 2. fix-db",
+		"## 3. fix-cache",
 		"Fix the auth handler",
 		"Fix the database query",
 		"Fix the cache invalidation",
-		"Implement ALL TODOs",
+		"Implement ALL todo items",
 		"Do NOT run git add or git commit",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -155,6 +155,58 @@ func TestBuildGroupPromptExcludesPRButIncludesSource(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Fix the auth handler") {
 		t.Error("grouped prompt should still contain implementation")
+	}
+}
+
+func TestBuildPromptIncludesComments(t *testing.T) {
+	todo := newTestTODO("fix-auth", "Fix the auth handler")
+	todo.ProviderEvents = []types.ProviderEvent{
+		{Kind: "IssueCreated", Actor: "agent", Body: "initial body"},
+		{Kind: "CommentAdded", Actor: "reviewer", Body: "Please include history"},
+		{Kind: "LabelChanged", Actor: "agent", OldLabel: "status:pending", NewLabel: "status:in-progress"},
+		{Kind: "CommentAdded", Actor: "maintainer", Body: "Reuse the existing helper"},
+		{Kind: "CommentAdded", Actor: "bot", Body: "   "},
+	}
+	prompt := BuildPrompt(todo, "")
+
+	for _, want := range []string{
+		"## Comments",
+		"**reviewer:**",
+		"Please include history",
+		"**maintainer:**",
+		"Reuse the existing helper",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("BuildPrompt missing comment content %q", want)
+		}
+	}
+	if strings.Contains(prompt, "status:in-progress") {
+		t.Error("non-comment events should not leak into the prompt")
+	}
+	if strings.Contains(prompt, "**bot:**") {
+		t.Error("blank-body comments should be skipped")
+	}
+}
+
+func TestBuildPromptOmitsCommentsWhenAbsent(t *testing.T) {
+	todo := newTestTODO("fix-auth", "Fix the auth handler")
+	prompt := BuildPrompt(todo, "")
+	if strings.Contains(prompt, "## Comments") {
+		t.Error("prompt should not contain a Comments section when there are no comments")
+	}
+}
+
+func TestBuildGroupPromptIncludesComments(t *testing.T) {
+	todo := newTestTODO("fix-auth", "Fix the auth handler")
+	todo.ProviderEvents = []types.ProviderEvent{
+		{Kind: "CommentAdded", Actor: "reviewer", Body: "Group context matters"},
+	}
+	prompt := BuildGroupPrompt([]*types.TODO{todo}, "")
+
+	for _, want := range []string{"## Comments", "**reviewer:**", "Group context matters"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("BuildGroupPrompt missing comment content %q", want)
+		}
 	}
 }
 

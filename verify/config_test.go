@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	yamlv3 "gopkg.in/yaml.v3"
 )
 
 func TestLintIgnoreRule_MatchesViolation(t *testing.T) {
@@ -187,6 +189,52 @@ func TestLoadGavelConfig_WithFixtures(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.Fixtures.Enabled)
 	assert.Equal(t, []string{"specs/*.fixture.md", "tests/**/*.fixture.md"}, cfg.Fixtures.Files)
+}
+
+func TestLoadGavelConfig_WithChecks(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`checks:
+  enabled: true
+  maxIterations: 5
+  test:
+    changed: true
+    timeout: 3m
+  lint:
+    changed: true
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Checks.Enabled)
+	assert.True(t, *cfg.Checks.Enabled)
+	assert.Equal(t, 5, cfg.Checks.MaxIterations)
+	require.NotNil(t, cfg.Checks.Test)
+	assert.True(t, cfg.Checks.Test.Changed)
+	assert.Equal(t, "3m", cfg.Checks.Test.Timeout)
+	require.NotNil(t, cfg.Checks.Lint)
+	assert.True(t, cfg.Checks.Lint.Changed)
+}
+
+func TestMergeChecksConfig_RepoOverridesHome(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+
+	t.Setenv("HOME", home)
+	homeCfg := []byte("checks:\n  enabled: false\n  maxIterations: 2\n")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), homeCfg, 0o644))
+	repoCfg := []byte("checks:\n  enabled: true\n")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), repoCfg, 0o644))
+
+	cfg, err := LoadGavelConfig(repo)
+	require.NoError(t, err)
+	// repo turns checks on; home's maxIterations survives where repo is silent.
+	require.NotNil(t, cfg.Checks.Enabled)
+	assert.True(t, *cfg.Checks.Enabled)
+	assert.Equal(t, 2, cfg.Checks.MaxIterations)
 }
 
 func TestFixturesConfig_ResolvedFiles_Default(t *testing.T) {
@@ -525,6 +573,100 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 		out := MergeCommitConfig(base, CommitConfig{})
 		assert.Equal(t, CheckMode("skip"), out.Compatibility.Mode)
 	})
+}
+
+func TestRestartPolicyUnmarshal(t *testing.T) {
+	jsonCases := map[string]RestartPolicy{
+		`"on-failure"`: RestartOnFailure,
+		`"always"`:     RestartAlways,
+		`"no"`:         RestartNo,
+		`true`:         RestartOnFailure,
+		`false`:        RestartNo,
+		`null`:         "",
+	}
+	for in, want := range jsonCases {
+		var p RestartPolicy
+		require.NoError(t, json.Unmarshal([]byte(in), &p), in)
+		assert.Equal(t, want, p, in)
+	}
+	var bad RestartPolicy
+	assert.Error(t, json.Unmarshal([]byte(`"maybe"`), &bad), "invalid enum is a loud error")
+
+	yamlCases := map[string]RestartPolicy{
+		"on-failure": RestartOnFailure,
+		"always":     RestartAlways,
+		"no":         RestartNo, // YAML 1.2 string "no"
+		"true":       RestartOnFailure,
+		"false":      RestartNo,
+	}
+	for in, want := range yamlCases {
+		var p RestartPolicy
+		require.NoError(t, yamlv3.Unmarshal([]byte(in), &p), in)
+		assert.Equal(t, want, p, in)
+	}
+}
+
+func TestMergeProcfileConfig(t *testing.T) {
+	t.Run("scalar overrides win when set, omitted keep base", func(t *testing.T) {
+		base := ProcfileConfig{Path: "Procfile", AutoRestart: RestartNo, MaxRestarts: 3, Profile: "dev"}
+		out := MergeProcfileConfig(base, ProcfileConfig{AutoRestart: RestartAlways, MaxRestarts: 9})
+		assert.Equal(t, "Procfile", out.Path)
+		assert.Equal(t, RestartAlways, out.AutoRestart)
+		assert.Equal(t, 9, out.MaxRestarts)
+		assert.Equal(t, "dev", out.Profile, "omitted profile override keeps base")
+	})
+
+	t.Run("empty override preserves base scalars", func(t *testing.T) {
+		base := ProcfileConfig{Path: "Procfile.dev", AutoRestart: RestartOnFailure, MaxRestarts: 2, Profile: "prod"}
+		out := MergeProcfileConfig(base, ProcfileConfig{})
+		assert.Equal(t, "Procfile.dev", out.Path)
+		assert.Equal(t, RestartOnFailure, out.AutoRestart)
+		assert.Equal(t, 2, out.MaxRestarts)
+		assert.Equal(t, "prod", out.Profile)
+	})
+
+	t.Run("env merges key-by-key with override winning", func(t *testing.T) {
+		base := ProcfileConfig{Env: map[string]string{"A": "1", "B": "2"}}
+		override := ProcfileConfig{Env: map[string]string{"B": "20", "C": "3"}}
+		out := MergeProcfileConfig(base, override)
+		assert.Equal(t, map[string]string{"A": "1", "B": "20", "C": "3"}, out.Env)
+	})
+
+	t.Run("resource limits + profile override when set and persist when omitted", func(t *testing.T) {
+		base := ProcfileConfig{Mem: "256Mi", CPU: 50, Profile: "dev"}
+		out := MergeProcfileConfig(base, ProcfileConfig{Mem: "1Gi", Profile: "prod"})
+		assert.Equal(t, "1Gi", out.Mem, "non-empty override wins")
+		assert.Equal(t, 50.0, out.CPU, "omitted override keeps base")
+		assert.Equal(t, "prod", out.Profile)
+
+		kept := MergeProcfileConfig(base, ProcfileConfig{})
+		assert.Equal(t, "256Mi", kept.Mem)
+		assert.Equal(t, 50.0, kept.CPU)
+		assert.Equal(t, "dev", kept.Profile)
+	})
+}
+
+func TestLoadGavelConfig_WithProcfile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+
+	cfgData := []byte(`procfile:
+  profile: dev
+  autoRestart: on-failure
+  maxRestarts: 5
+  mem: 512Mi
+  env:
+    RAILS_ENV: development
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), cfgData, 0o644))
+
+	cfg, err := LoadGavelConfig(dir)
+	require.NoError(t, err)
+	assert.Equal(t, RestartOnFailure, cfg.Procfile.AutoRestart)
+	assert.Equal(t, 5, cfg.Procfile.MaxRestarts)
+	assert.Equal(t, "dev", cfg.Procfile.Profile)
+	assert.Equal(t, "512Mi", cfg.Procfile.Mem)
+	assert.Equal(t, "development", cfg.Procfile.Env["RAILS_ENV"])
 }
 
 func TestLoadSingleGavelConfig(t *testing.T) {

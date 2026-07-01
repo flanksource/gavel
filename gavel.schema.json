@@ -1,0 +1,456 @@
+{
+  "$id": "https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, or the target directory; layers merge in that order with later layers overriding earlier ones. Run `gavel config [path]` to inspect the merged result.",
+  "properties": {
+    "checks": {
+      "additionalProperties": false,
+      "description": "Post-completion check loop for `gavel todos run --check`: after an agent reports done, run these tests/lint and feed failures back to the agent until they pass. Opt-in — runs only when enabled here, by a TODO's frontmatter `checks`, or by the --check flag. Frontmatter overrides these project defaults.",
+      "properties": {
+        "enabled": {
+          "description": "Turn the loop on. Omitted leaves it off unless --check or a TODO's frontmatter enables it.",
+          "type": "boolean"
+        },
+        "lint": {
+          "additionalProperties": false,
+          "description": "gavel lint options for the check run. Omit to skip linting.",
+          "properties": {
+            "changed": {
+              "description": "Only report new violations versus the base ref.",
+              "type": "boolean"
+            },
+            "linters": {
+              "description": "Linters to run. Empty runs every detected linter.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Per-linter deadline (e.g. 5m).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "maxIterations": {
+          "default": 3,
+          "description": "Maximum agent re-runs before giving up.",
+          "type": "integer"
+        },
+        "test": {
+          "additionalProperties": false,
+          "description": "gavel test options for the check run. Omit to skip tests.",
+          "properties": {
+            "changed": {
+              "description": "Only test packages affected by the agent's changes.",
+              "type": "boolean"
+            },
+            "paths": {
+              "description": "Package paths to test. Empty discovers all.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Global wall-clock deadline (e.g. 5m).",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "commit": {
+      "additionalProperties": false,
+      "description": "Settings for `gavel commit`.",
+      "properties": {
+        "allow": {
+          "description": "Paths allowed through even when a broader commit.gitignore glob matches. Useful for generated artifacts you intentionally commit. Appended and deduped across layers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "compatibility": {
+          "additionalProperties": false,
+          "description": "Gate for the AI warning that surfaces removed functionality and backward-compatibility issues.",
+          "properties": {
+            "mode": {
+              "default": "skip",
+              "description": "Gate behavior. Use false as an alias for skip.",
+              "oneOf": [
+                {
+                  "enum": [
+                    "prompt",
+                    "fail",
+                    "skip"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "gitignore": {
+          "description": "Extra ignore globs applied when selecting files to commit. Appended and deduped across layers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hooks": {
+          "description": "Hooks run during `gavel commit` before the final commit is written. Appended across layers in declaration order.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A commit hook.",
+            "properties": {
+              "files": {
+                "description": "Glob patterns; the hook runs only when staged files match one of them. Runs unconditionally when omitted.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Display name for the hook.",
+                "type": "string"
+              },
+              "run": {
+                "description": "Shell command to execute.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "linkedDeps": {
+          "additionalProperties": false,
+          "description": "Deprecated: superseded by commit.precommit. Retained for backward-compatible loading; prefer commit.precommit.mode in new config.",
+          "properties": {
+            "mode": {
+              "default": "prompt",
+              "description": "Gate behavior. Use false as an alias for skip.",
+              "oneOf": [
+                {
+                  "enum": [
+                    "prompt",
+                    "fail",
+                    "skip"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "lint": {
+          "additionalProperties": false,
+          "description": "Gates that run linters over the staged file set before the commit is created. CLI flags --lint and --lint-secrets override these per invocation.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Toggle every non-secrets linter. Omit to keep off.",
+              "type": "boolean"
+            },
+            "secrets": {
+              "default": true,
+              "description": "Toggle the betterleaks/secrets linter. Omit to keep on (the highest-value pre-commit check).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "model": {
+          "description": "AI CLI / model used for commit-message generation and compatibility analysis. Last-write-wins across layers.",
+          "type": "string"
+        },
+        "precommit": {
+          "additionalProperties": false,
+          "description": "Gate for commit.gitignore prompts and linked-dependency checks (package.json file:/link: refs and go.mod replace directives pointing outside the repo).",
+          "properties": {
+            "mode": {
+              "default": "prompt",
+              "description": "Gate behavior. Use false as an alias for skip.",
+              "oneOf": [
+                {
+                  "enum": [
+                    "prompt",
+                    "fail",
+                    "skip"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "enum": [
+                    false
+                  ],
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "tidy": {
+          "additionalProperties": false,
+          "description": "Controls whether `gavel commit` runs `go mod tidy` in every Go module and stages the resulting go.mod/go.sum changes. CLI flag --tidy overrides per invocation.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Toggle the tidy step. Omit to keep on.",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "fixtures": {
+      "additionalProperties": false,
+      "description": "Fixture-test discovery for `gavel test`.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Auto-discover fixture files when running `gavel test`. Sticky: once true in any layer it stays true.",
+          "type": "boolean"
+        },
+        "files": {
+          "default": [
+            "**/*.fixture.md"
+          ],
+          "description": "Globs used to discover fixtures. Replaces (does not append to) the parent layer.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "lint": {
+      "additionalProperties": false,
+      "description": "Settings for `gavel lint`.",
+      "properties": {
+        "ignore": {
+          "description": "Rules that suppress matching lint violations. Each rule matches when every populated field matches; an empty rule never matches. Appended across layers.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A single lint-ignore rule. At least one of rule/source/file must be set.",
+            "properties": {
+              "file": {
+                "description": "Match the violation's file path using doublestar globs (e.g. \"pkg/**/*.go\").",
+                "type": "string"
+              },
+              "rule": {
+                "description": "Match the violation's rule ID. Accepts literals, `*` globs (\"acme-*\"), and `!`-prefixed negations.",
+                "type": "string"
+              },
+              "source": {
+                "description": "Match the emitting linter (e.g. golangci-lint, eslint, betterleaks). Accepts literals, `*` globs, and `!`-prefixed negations.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "linters": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Override for one linter.",
+            "properties": {
+              "enabled": {
+                "description": "Force the linter on (true) or off (false). Omit to keep the linter's built-in default.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Per-linter overrides keyed by linter name. Useful for opt-in linters like jscpd or disabling a single tool.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "post": {
+      "description": "Top-level hooks run after the main pipeline as non-blocking cleanup/reporting. Appended across layers.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A hook step.",
+        "properties": {
+          "name": {
+            "description": "Optional display name for the step.",
+            "type": "string"
+          },
+          "run": {
+            "description": "Shell command to execute.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "pre": {
+      "description": "Top-level hooks run before the main test/lint pipeline, in declaration order. Appended across layers.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A hook step.",
+        "properties": {
+          "name": {
+            "description": "Optional display name for the step.",
+            "type": "string"
+          },
+          "run": {
+            "description": "Shell command to execute.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "procfile": {
+      "additionalProperties": false,
+      "description": "Global defaults for `gavel proc`. Per-process settings live in the Procfile, whose entries are either `name: command` or `name:` with command/default/autoRestart/cpu/mem/profiles/env/maxRestarts. This section holds only defaults + the active profile.",
+      "properties": {
+        "autoRestart": {
+          "default": "no",
+          "description": "Default restart policy for every process. Accepts a bool (true=on-failure, false=no) or an enum: no (never restart), on-failure (restart only on a non-zero exit), or always (restart on any exit).",
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "no",
+                "on-failure",
+                "always"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "cpu": {
+          "description": "Default sustained CPU cap per process, as a percentage (100 = one full core). 0 disables it. A process that stays above it is killed.",
+          "type": "number"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment injected into every process, on top of the parent environment and any sibling .env file. Merged key-by-key across layers.",
+          "type": "object"
+        },
+        "maxRestarts": {
+          "default": 0,
+          "description": "Cap on automatic restarts per process. 0 means unlimited.",
+          "type": "integer"
+        },
+        "mem": {
+          "description": "Default resident-memory cap per process (e.g. \"512Mi\", \"2g\"). Empty disables it. A process whose group exceeds it is killed.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Override Procfile discovery. Relative paths resolve against the .gavel.yaml directory. If omitted, the nearest Procfile up to the git root is used.",
+          "type": "string"
+        },
+        "profile": {
+          "description": "Default active profile. A Procfile entry with `profiles` auto-starts only when one of them is the active profile; `gavel proc --profile \u003cname\u003e` overrides this.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "secrets": {
+      "additionalProperties": false,
+      "description": "betterleaks / gitleaks secret-scanning orchestration. Rule authoring lives in the TOML files themselves; Gavel only discovers and merges them.",
+      "properties": {
+        "configs": {
+          "description": "Additional .betterleaks.toml / .gitleaks.toml paths to merge in, beyond those discovered in the home dir, git root, and cwd. Relative paths resolve against the .gavel.yaml directory. Appended and deduped across layers.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disabled": {
+          "default": false,
+          "description": "Disable the betterleaks linter even when the binary is on PATH. Sticky: once true in any layer it stays true.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ssh": {
+      "additionalProperties": false,
+      "description": "SSH post-receive hook / push backend.",
+      "properties": {
+        "cmd": {
+          "default": "gavel test --lint",
+          "description": "Command executed by the SSH post-receive hook. Last-write-wins; an empty override inherits the parent value.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "verify": {
+      "additionalProperties": false,
+      "description": "Settings for `gavel verify`, the AI code-review engine.",
+      "properties": {
+        "checks": {
+          "additionalProperties": false,
+          "description": "Selectively disable checks emitted by the verify engine.",
+          "properties": {
+            "disabled": {
+              "description": "Individual check IDs to disable (e.g. SEC-1, PERF-2). Appended across layers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disabledCategories": {
+              "description": "Whole check categories to disable. Known categories: completeness, code-quality, testing, consistency, security, performance. Appended across layers.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "model": {
+          "default": "claude",
+          "description": "AI CLI / model used for review. Common values: claude, gemini, codex, or a fully qualified model name. Last-write-wins across layers.",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Optional repo-specific review policy appended to Gavel's built-in verify prompt. Last-write-wins across layers.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "title": "Gavel configuration (.gavel.yaml)",
+  "type": "object"
+}

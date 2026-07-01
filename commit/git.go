@@ -107,13 +107,47 @@ func stagedFiles(workDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git diff --cached --name-only: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	return splitLines(string(out)), nil
+}
+
+// gitAddUpdate stages modifications and deletions of already-tracked files
+// (`git add -u`). It never aborts on ignored paths because it only touches
+// tracked files. Tracked-but-gitignored bundles (e.g. pr/ui/dist/prui.js) get
+// staged here too, then stripped by unstageGitIgnored so they stay out of the
+// commit while remaining tracked.
+func gitAddUpdate(workDir string) error {
+	cmd := exec.Command("git", "add", "-u")
+	cmd.Dir = workDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add -u: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// untrackedFiles lists untracked files git itself does not ignore
+// (`git ls-files --others --exclude-standard`). Embedded git repositories are
+// reported as a single "<dir>/" entry, which `git add` would refuse; callers
+// filter those out.
+func untrackedFiles(workDir string) ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd.Dir = workDir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files --others: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return splitLines(string(out)), nil
+}
+
+func splitLines(out string) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
-			files = append(files, line)
+			lines = append(lines, line)
 		}
 	}
-	return files, nil
+	return lines
 }
 
 func addFiles(workDir string, files []string) error {

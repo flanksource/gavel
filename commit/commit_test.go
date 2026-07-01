@@ -100,4 +100,37 @@ var _ = Describe("verify.MergeCommitConfig", func() {
 		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Model).To(Equal("claude-haiku-4.5"))
 		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{Model: "gpt-4o"}).Model).To(Equal("gpt-4o"))
 	})
+
+	It("overrides GroupModel when non-empty, preserves otherwise", func() {
+		base := verify.CommitConfig{GroupModel: "claude-sonnet-4-5"}
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).GroupModel).To(Equal("claude-sonnet-4-5"))
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{GroupModel: "claude-opus-4-1"}).GroupModel).To(Equal("claude-opus-4-1"))
+	})
+})
+
+var _ = Describe("Options model resolution", func() {
+	DescribeTable("messageModel prefers --model over commit.model, else empty",
+		func(opts Options, expected string) {
+			Expect(opts.messageModel()).To(Equal(expected))
+		},
+		Entry("flag wins", Options{Model: "haiku-flag", Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-flag"),
+		Entry("config used when no flag", Options{Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-cfg"),
+		Entry("empty when neither set", Options{}, ""),
+	)
+
+	DescribeTable("groupModel cascades group flag -> group config -> message model -> default",
+		func(opts Options, expected string) {
+			Expect(opts.groupModel()).To(Equal(expected))
+		},
+		Entry("--group-model wins over everything",
+			Options{GroupModel: "opus-flag", Config: verify.CommitConfig{GroupModel: "sonnet-cfg", Model: "haiku-cfg"}}, "opus-flag"),
+		Entry("commit.groupModel used when no group flag",
+			Options{Config: verify.CommitConfig{GroupModel: "sonnet-cfg", Model: "haiku-cfg"}}, "sonnet-cfg"),
+		Entry("falls back to --model when no group model",
+			Options{Model: "haiku-flag"}, "haiku-flag"),
+		Entry("falls back to commit.model when no group model",
+			Options{Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-cfg"),
+		Entry("defaults to sonnet-class when nothing set",
+			Options{}, defaultGroupModel),
+	)
 })

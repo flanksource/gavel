@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  "jsPlugins": [{ "name": "clicky-ui", "specifier": "@flanksource/clicky-ui/oxlint-plugins" }],
+
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "clicky-ui/prefer-clicky-components": "warn",
+    "clicky-ui/no-adhoc-overlay": "error",
+    "clicky-ui/prefer-tailwind-classes": "warn",
+    "clicky-ui/prefer-theme-tokens": "error",
+    "clicky-ui/prefer-clicky-icons": "warn"
+  },
+  "env": {
+    "builtin": true
+  }
+}

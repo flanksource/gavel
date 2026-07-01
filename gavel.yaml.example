@@ -1,4 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json
 # Example `.gavel.yaml` for Gavel.
+# See SCHEMA.md and gavel.schema.json for the full field reference.
 #
 # You can place `.gavel.yaml` in any of these locations:
 #   1. ~/.gavel.yaml
@@ -126,6 +128,27 @@ fixtures:
     - "tests/**/*.fixture.md"
     - "fixtures/**/*.md"
 
+checks:
+  # The post-completion check loop for `gavel todos run --check`. Once an agent
+  # reports it is done, gavel runs the configured test/lint suite below; if it
+  # fails, gavel feeds a compact failure summary back to the agent and re-runs,
+  # looping until the checks pass or maxIterations is reached. Opt-in: the loop
+  # runs only when enabled here (or forced on by --check / the dashboard toggle).
+  # A TODO's frontmatter `checks:` block overrides these project defaults.
+  enabled: true
+  # Maximum number of agent re-runs before giving up (default 3).
+  maxIterations: 3
+  # Omit `test` to skip tests; omit `lint` to skip linting. When the loop is
+  # enabled with neither set, it defaults to running both against changed files.
+  test:
+    changed: true        # only packages affected by the agent's changes
+    timeout: 5m          # global wall-clock deadline for the test run
+    # paths: ["./pkg/..."]  # restrict to specific package paths
+  lint:
+    changed: true        # only report new violations vs the base ref
+    timeout: 5m          # per-linter deadline
+    # linters: ["golangci-lint"]  # restrict to specific linters
+
 ssh:
   # Overrides the command executed by the SSH post-receive hook / push backend.
   # If omitted, the fallback is `gavel test --lint`.
@@ -159,3 +182,52 @@ secrets:
   configs:
     - ".betterleaks.toml"
     - "security/custom-gitleaks.toml"
+
+procfile:
+  # Global defaults for `gavel proc`. Per-process settings (command, default,
+  # autoRestart, cpu, mem, profiles, env, maxRestarts) live in the Procfile
+  # itself — this section only holds defaults and the active profile.
+
+  # Override Procfile discovery. Relative paths resolve from this file's dir.
+  # If omitted, the nearest `Procfile` up to the git root is used.
+  path: Procfile
+
+  # Default active profile. A Procfile entry with `profiles` auto-starts only
+  # when one of them is active; `gavel proc --profile <name>` overrides this.
+  profile: dev
+
+  # Default restart policy for every process. A bool (true=on-failure,
+  # false=no) or an enum: no (never), on-failure (non-zero exit), always.
+  autoRestart: on-failure
+
+  # Cap automatic restarts per process (0 = unlimited).
+  maxRestarts: 5
+
+  # Environment injected into every process, on top of the parent environment
+  # and any sibling .env file. Env maps merge key-by-key across layers.
+  env:
+    RAILS_ENV: development
+
+  # Default resource limits per process. Both are off unless set. A process
+  # whose process group exceeds a limit is killed (and restarted per policy).
+  #   mem  resident-memory cap (e.g. "512Mi", "2g")
+  #   cpu  sustained CPU percentage (100 = one full core)
+  mem: 2Gi
+  cpu: 400
+
+# Per-process settings live in the Procfile (YAML). A string entry is the
+# command (started by default, runs in every profile); an object entry adds
+# default/autoRestart/cpu/mem/profiles/env/maxRestarts:
+#
+#   web: npm start
+#   worker:
+#     command: rake jobs:work
+#     default: false            # registered but not auto-started
+#     autoRestart: on-failure   # bool or no|on-failure|always
+#     cpu: 100
+#     mem: 512Mi
+#     maxRestarts: 10
+#     env: { WORKER_CONCURRENCY: "4" }
+#   mailcatcher:
+#     command: mailcatcher
+#     profiles: [dev]           # only runs when the dev profile is active

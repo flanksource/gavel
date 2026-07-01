@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/jscpd"
 	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/pyright"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/tsc"
@@ -34,6 +35,7 @@ import (
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
+	"github.com/flanksource/gavel/todosync"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -52,7 +54,7 @@ type LintOptions struct {
 	Changed      bool            `flag:"changed" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since        string          `flag:"since" help:"Only report new issues since <ref> (merge-base with HEAD)"`
 	UI           bool            `flag:"ui" help:"Launch browser UI to view violations"`
-	Addr         string          `flag:"addr" help:"Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	Addr         string          `flag:"addr" help:"Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	DryRun       bool            `flag:"dry-run" help:"Print the linter commands that would run without executing them"`
 	Baseline     string          `flag:"baseline" help:"Path to previous results JSON; only report NEW violations not in baseline"`
 	Failed       string          `flag:"failed" help:"Path to previous results JSON; re-run only linters/files that had violations"`
@@ -105,7 +107,7 @@ func (o LintOptions) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd, betterleaks.
+Supports: golangci-lint, ruff, eslint, oxlint, pyright, markdownlint, vale, jscpd, betterleaks.
 
 Examples:
   gavel lint
@@ -142,6 +144,7 @@ func runLint(opts LintOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+	runStarted := time.Now().UTC()
 	if opts.Failed == failedAutoSentinel {
 		resolved, err := snapshots.ResolveLast(opts.WorkDir)
 		if err != nil {
@@ -288,7 +291,7 @@ func runLint(opts LintOptions) (any, error) {
 
 	if opts.SyncTodos != "" {
 		todosDir := filepath.Join(opts.SyncTodos, "lint")
-		syncResult, err := linters.SyncLintTodos(allResults, linters.SyncOptions{
+		syncResult, err := todosync.SyncLintTodos(allResults, todosync.SyncOptions{
 			TodosDir: todosDir,
 			GroupBy:  opts.GroupBy,
 			WorkDir:  opts.WorkDir,
@@ -301,6 +304,12 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	snap := &testui.Snapshot{
+		Metadata: &testui.SnapshotMetadata{
+			Version: version,
+			Started: runStarted,
+			Ended:   time.Now().UTC(),
+			Kind:    "lint",
+		},
 		Git: snapshotGitInfo(opts.WorkDir),
 		Status: testui.SnapshotStatus{
 			LintRun: true,
@@ -311,6 +320,14 @@ func runLint(opts LintOptions) (any, error) {
 		logger.Warnf("persist snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote snapshot to %s", path)
+	}
+	// Per-run snapshot so lint-only runs appear in the .gavel run history
+	// (the Tests dashboard scans run-*.json); Save() above only writes the
+	// sha-keyed latest.
+	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted); err != nil {
+		logger.Warnf("persist per-run snapshot: %v", err)
+	} else {
+		logger.V(1).Infof("wrote per-run snapshot to %s", path)
 	}
 
 	if opts.Summary {
@@ -373,6 +390,7 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(golangci.NewGolangciLint(workDir))
 	registry.Register(ruff.NewRuff(workDir))
 	registry.Register(eslint.NewESLint(workDir))
+	registry.Register(oxlint.NewOxlint(workDir))
 	registry.Register(pyright.NewPyright(workDir))
 	registry.Register(tsc.NewTSC(workDir))
 	registry.Register(markdownlint.NewMarkdownlint(workDir))

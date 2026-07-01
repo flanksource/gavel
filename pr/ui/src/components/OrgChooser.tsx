@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
 import type { Org, SearchConfig } from '../types';
+import { GavelIcon } from './GavelIcon';
 
 interface Props {
   config: SearchConfig;
@@ -9,8 +12,9 @@ interface Props {
 // OrgChooser shows the currently-selected org (or "@me" when no org is
 // selected) and lets the user switch between org-wide browsing and
 // personal-only browsing. Selecting an org writes `{ org, all: true }`;
-// selecting @me clears to `{ org: '', all: false }` so SearchControls'
-// @me/all/bots buttons stay in control of that scope.
+// selecting @me clears to `{ org: '', all: false }`, scoping the fetch to the
+// local repo. Author/bot narrowing is handled client-side by the Authors
+// filter, not here.
 //
 // Orgs are fetched lazily on first open via /api/orgs?include-ignored=1 —
 // the server caches the underlying list for 5 minutes, so the dropdown
@@ -89,7 +93,7 @@ export function OrgChooser({ config, onChange }: Props) {
     setOpen(false);
   }
 
-  function hideOrg(login: string, e: MouseEvent) {
+  function hideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation(); // don't also select it
     const next = Array.from(new Set([...ignoredOrgs, login]));
     const patch: Partial<SearchConfig> = { ignoredOrgs: next };
@@ -103,114 +107,121 @@ export function OrgChooser({ config, onChange }: Props) {
     onChange(patch);
   }
 
-  function unhideOrg(login: string, e: MouseEvent) {
+  function unhideOrg(login: string, e: ReactMouseEvent) {
     e.stopPropagation();
     onChange({ ignoredOrgs: ignoredOrgs.filter(o => o !== login) });
   }
 
   return (
-    <div class="relative" ref={rootRef}>
-      <button
-        class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+    <div className="relative" ref={rootRef}>
+      <Button
+        variant="ghost"
+        className="inline-flex items-center justify-start gap-1.5 text-xs h-auto px-2 py-1 rounded border border-border text-muted-foreground hover:bg-muted transition-colors"
         onClick={() => setOpen(!open)}
         title="Switch GitHub org / scope"
       >
         {activeOrgMeta?.avatarUrl ? (
-          <img src={activeOrgMeta.avatarUrl} alt={activeOrg} class="w-4 h-4 rounded-sm" />
+          <img src={activeOrgMeta.avatarUrl} alt={activeOrg} className="w-4 h-4 rounded-sm" />
         ) : (
-          <iconify-icon icon="codicon:organization" class="text-sm" />
+          <GavelIcon name="codicon:organization" className="text-sm" />
         )}
-        <span class="font-medium">{label}</span>
-        <iconify-icon icon="codicon:chevron-down" class="text-[10px]" />
-      </button>
+        <span className="font-medium">{label}</span>
+        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
+      </Button>
 
       {open && (
-        <div class="absolute top-full right-0 mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 text-sm">
-          <button
-            class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-              !config.all ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+        <div className="absolute top-full right-0 mt-1 w-72 bg-popover rounded-lg shadow-lg border border-border z-50 py-1 text-sm">
+          <Button
+            variant="ghost"
+            className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+              !config.all ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseMe}
           >
-            <iconify-icon icon="codicon:person" class="text-base" />
-            <span class="flex-1">@me (my PRs)</span>
-            {!config.all && <iconify-icon icon="codicon:check" class="text-xs" />}
-          </button>
+            <GavelIcon name="codicon:person" className="text-base" />
+            <span className="flex-1">@me (my PRs)</span>
+            {!config.all && <GavelIcon name="codicon:check" className="text-xs" />}
+          </Button>
 
-          <button
-            class={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-              config.all && !activeOrg ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+          <Button
+            variant="ghost"
+            className={`w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-left transition-colors ${
+              config.all && !activeOrg ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
             }`}
             onClick={chooseAllOrgs}
           >
-            <iconify-icon icon="codicon:globe" class="text-base" />
-            <span class="flex-1">All orgs (default)</span>
-            {config.all && !activeOrg && <iconify-icon icon="codicon:check" class="text-xs" />}
-          </button>
+            <GavelIcon name="codicon:globe" className="text-base" />
+            <span className="flex-1">All orgs (default)</span>
+            {config.all && !activeOrg && <GavelIcon name="codicon:check" className="text-xs" />}
+          </Button>
 
-          <div class="border-t border-gray-100 my-1" />
+          <div className="border-t border-border my-1" />
 
-          {loading && <div class="px-3 py-2 text-xs text-gray-400">Loading orgs…</div>}
-          {err && <div class="px-3 py-2 text-xs text-red-500">{err}</div>}
+          {loading && <div className="px-3 py-2 text-xs text-muted-foreground">Loading orgs…</div>}
+          {err && <div className="px-3 py-2 text-xs text-red-500">{err}</div>}
           {!loading && !err && visibleOrgs.length === 0 && hiddenOrgs.length === 0 && (
-            <div class="px-3 py-2 text-xs text-gray-400">No orgs — token has no org memberships</div>
+            <div className="px-3 py-2 text-xs text-muted-foreground">No orgs — token has no org memberships</div>
           )}
           {visibleOrgs.map(o => {
             const selected = config.all && config.org === o.login;
             return (
               <div
                 key={o.login}
-                class={`group flex items-center gap-2 px-3 py-1.5 transition-colors ${
-                  selected ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+                className={`group flex items-center gap-2 px-3 py-1.5 transition-colors ${
+                  selected ? 'bg-primary/10 text-primary' : 'hover:bg-muted text-foreground'
                 }`}
               >
-                <button
-                  class="flex-1 flex items-center gap-2 text-left"
+                <Button
+                  variant="ghost"
+                  className="flex-1 flex items-center justify-start gap-2 h-auto p-0 text-left"
                   onClick={() => chooseOrg(o.login)}
                 >
                   {o.avatarUrl
-                    ? <img src={o.avatarUrl} alt={o.login} class="w-4 h-4 rounded-sm shrink-0" />
-                    : <iconify-icon icon="codicon:organization" class="text-base" />}
-                  <span class="flex-1 truncate">{o.login}</span>
-                  {selected && <iconify-icon icon="codicon:check" class="text-xs" />}
-                </button>
-                <button
-                  class="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                    ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0" />
+                    : <GavelIcon name="codicon:organization" className="text-base" />}
+                  <span className="flex-1 truncate">{o.login}</span>
+                  {selected && <GavelIcon name="codicon:check" className="text-xs" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-auto p-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
-                  <iconify-icon icon="codicon:eye-closed" class="text-xs" />
-                </button>
+                  <GavelIcon name="codicon:eye-closed" className="text-xs" />
+                </Button>
               </div>
             );
           })}
 
           {hiddenOrgs.length > 0 && (
             <>
-              <div class="border-t border-gray-100 my-1" />
-              <button
-                class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50"
+              <div className="border-t border-border my-1" />
+              <Button
+                variant="ghost"
+                className="w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 onClick={() => setShowHidden(v => !v)}
               >
-                <iconify-icon icon={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} class="text-[10px]" />
-                <span class="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
-              </button>
+                <GavelIcon name={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
+                <span className="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
+              </Button>
               {showHidden && hiddenOrgs.map(o => (
                 <div
                   key={o.login}
-                  class="group flex items-center gap-2 px-3 py-1.5 text-xs text-gray-400 hover:bg-gray-50"
+                  className="group flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 >
                   {o.avatarUrl
-                    ? <img src={o.avatarUrl} alt={o.login} class="w-4 h-4 rounded-sm shrink-0 opacity-60" />
-                    : <iconify-icon icon="codicon:organization" class="text-base" />}
-                  <span class="flex-1 truncate">{o.login}</span>
-                  <button
-                    class="text-gray-400 hover:text-blue-600 transition-colors"
+                    ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
+                    : <GavelIcon name="codicon:organization" className="text-base" />}
+                  <span className="flex-1 truncate">{o.login}</span>
+                  <Button
+                    variant="ghost"
+                    className="h-auto p-0 text-muted-foreground hover:text-primary transition-colors"
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >
-                    <iconify-icon icon="codicon:eye" class="text-xs" />
-                  </button>
+                    <GavelIcon name="codicon:eye" className="text-xs" />
+                  </Button>
                 </div>
               ))}
             </>

@@ -2,16 +2,16 @@ import { Marked, Renderer } from 'marked';
 
 interface Props {
   text: string;
-  class?: string;
+  className?: string;
 }
 
 const renderer = new Renderer();
 
 renderer.code = ({ text, lang }: { text: string; lang?: string }) =>
-  `<pre class="bg-gray-50 rounded p-2 text-xs overflow-x-auto border border-gray-100 my-1.5"><code${lang ? ` class="language-${lang}"` : ''}>${text}</code></pre>`;
+  `<pre class="bg-muted rounded p-2 text-xs overflow-x-auto border border-border my-1.5"><code${lang ? ` class="language-${lang}"` : ''}>${text}</code></pre>`;
 
 renderer.codespan = ({ text }: { text: string }) =>
-  `<code class="bg-gray-100 rounded px-1 text-xs">${text}</code>`;
+  `<code class="bg-muted rounded px-1 text-xs">${text}</code>`;
 
 renderer.heading = ({ text, depth }: { text: string; depth: number }) => {
   const cls = depth <= 1
@@ -23,10 +23,10 @@ renderer.heading = ({ text, depth }: { text: string; depth: number }) => {
 };
 
 renderer.link = ({ href, text }: { href: string; text: string }) =>
-  `<a href="${href}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">${text}</a>`;
+  `<a href="${href}" target="_blank" rel="noopener" class="text-primary hover:underline">${text}</a>`;
 
 renderer.blockquote = ({ text }: { text: string }) =>
-  `<blockquote class="border-l-2 border-gray-300 pl-2 text-gray-500 italic my-1">${text}</blockquote>`;
+  `<blockquote class="border-l-2 border-border pl-2 text-muted-foreground italic my-1">${text}</blockquote>`;
 
 renderer.table = function (token) {
   const head = token.header
@@ -44,13 +44,13 @@ renderer.table = function (token) {
 };
 
 renderer.tablerow = ({ text }) =>
-  `<tr class="border-b border-gray-100">${text}</tr>`;
+  `<tr class="border-b border-border">${text}</tr>`;
 
 renderer.tablecell = function (token) {
   const tag = token.header ? 'th' : 'td';
   const cls = token.header
-    ? 'px-2 py-1 text-left font-medium text-gray-600 bg-gray-50 border border-gray-200'
-    : 'px-2 py-1 border border-gray-100';
+    ? 'px-2 py-1 text-left font-medium text-muted-foreground bg-muted border border-border'
+    : 'px-2 py-1 border border-border';
   const inner = this.parser.parseInline(token.tokens);
   return `<${tag} class="${cls}">${inner}</${tag}>`;
 };
@@ -68,7 +68,7 @@ renderer.listitem = ({ text }: { text: string }) =>
 renderer.image = ({ href, text }: { href: string; text: string }) =>
   `<img src="${href}" alt="${text}" class="max-w-full rounded my-1" />`;
 
-renderer.hr = () => '<hr class="border-gray-200 my-2" />';
+renderer.hr = () => '<hr class="border-border my-2" />';
 
 renderer.paragraph = ({ text }: { text: string }) =>
   `<p class="mt-1.5">${text}</p>`;
@@ -81,7 +81,7 @@ const marked = new Marked({
   breaks: true,
 });
 
-export function Markdown({ text, class: cls }: Props) {
+export function Markdown({ text, className: cls }: Props) {
   const html = marked.parse(text) as string;
-  return <div class={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className={`prose prose-sm max-w-none ${cls || ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }

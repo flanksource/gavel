@@ -16,6 +16,7 @@ import (
 type StateUpdate struct {
 	SessionID *string
 	Status    *types.Status
+	Priority  *types.Priority
 	Attempts  *int
 	LastRun   *time.Time
 }
@@ -35,6 +36,9 @@ func UpdateTODOState(todo *types.TODO, updates StateUpdate) error {
 	// Apply updates
 	if updates.Status != nil {
 		frontmatter.Status = *updates.Status
+	}
+	if updates.Priority != nil {
+		frontmatter.Priority = *updates.Priority
 	}
 	if updates.Attempts != nil {
 		frontmatter.Attempts = *updates.Attempts
@@ -68,6 +72,128 @@ func UpdateTODOState(todo *types.TODO, updates StateUpdate) error {
 	// Update in-memory TODO object
 	todo.TODOFrontmatter = frontmatter
 
+	return nil
+}
+
+// EditTODOContent updates a file-backed TODO's title (frontmatter) and/or body
+// (markdown content), preserving everything not being edited. Only the non-nil
+// fields in EditRequest are applied. The in-memory TODO is updated to match.
+func EditTODOContent(todo *types.TODO, edit EditRequest) error {
+	if edit.IsEmpty() {
+		return fmt.Errorf("nothing to edit: title or body is required")
+	}
+	result, err := ParseFrontmatterFromFile(todo.FilePath)
+	if err != nil {
+		return err
+	}
+	frontmatter := result.Frontmatter
+	markdown := result.MarkdownContent
+
+	if edit.Title != nil {
+		title := strings.TrimSpace(*edit.Title)
+		if title == "" {
+			return fmt.Errorf("title cannot be empty")
+		}
+		frontmatter.Title = title
+	}
+	if edit.Body != nil {
+		markdown = normalizeMarkdownBody(*edit.Body)
+	}
+
+	newContent, err := WriteFrontmatter(&frontmatter, markdown)
+	if err != nil {
+		return err
+	}
+	if err := atomicWriteFile(todo.FilePath, newContent); err != nil {
+		return err
+	}
+
+	todo.TODOFrontmatter = frontmatter
+	todo.MarkdownBody = markdown
+	return nil
+}
+
+// AppendComment records a comment in a file-backed TODO's "## Comments" section,
+// creating the section when absent. File TODOs have no event log, so comments
+// live inline in the markdown the way attempts and failures already do.
+func AppendComment(todo *types.TODO, body string) error {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fmt.Errorf("comment body is required")
+	}
+	content, err := os.ReadFile(todo.FilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read TODO file: %w", err)
+	}
+	entry := fmt.Sprintf("### %s\n\n%s", time.Now().Format("2006-01-02 15:04"), body)
+	updated := appendCommentSection(string(content), entry)
+	if err := atomicWriteFile(todo.FilePath, updated); err != nil {
+		return err
+	}
+	if parsed, perr := ParseFrontmatter(updated); perr == nil {
+		todo.MarkdownBody = parsed.MarkdownContent
+	}
+	return nil
+}
+
+// normalizeMarkdownBody ensures the edited body starts on its own line so it
+// sits cleanly after the frontmatter's closing delimiter.
+func normalizeMarkdownBody(body string) string {
+	body = strings.TrimRight(body, "\n")
+	if body == "" {
+		return ""
+	}
+	return "\n" + strings.TrimLeft(body, "\n") + "\n"
+}
+
+const commentsSectionHeader = "## Comments"
+
+// appendCommentSection inserts entry at the end of the "## Comments" section,
+// creating that section at the end of the file when it does not yet exist.
+// Mirrors upsertAttemptsSection so comments group under a single heading.
+func appendCommentSection(content, entry string) string {
+	idx := strings.Index(content, commentsSectionHeader)
+	if idx < 0 {
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		return content + "\n" + commentsSectionHeader + "\n\n" + entry + "\n"
+	}
+
+	rest := content[idx:]
+	lines := strings.Split(rest, "\n")
+	sectionEnd := len(lines)
+	for i := 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
+			sectionEnd = i
+			break
+		}
+	}
+	insertAt := sectionEnd
+	for insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) == "" {
+		insertAt--
+	}
+
+	result := content[:idx]
+	result += strings.Join(lines[:insertAt], "\n") + "\n\n"
+	result += entry + "\n"
+	if sectionEnd < len(lines) {
+		result += "\n" + strings.Join(lines[sectionEnd:], "\n")
+	}
+	return result
+}
+
+// atomicWriteFile writes content to path via a temp file + rename so a reader
+// never observes a half-written TODO file.
+func atomicWriteFile(path, content string) error {
+	tmpFile := path + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := os.Rename(tmpFile, path); err != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
 	return nil
 }
 

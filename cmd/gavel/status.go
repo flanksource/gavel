@@ -3,17 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
-	gavelai "github.com/flanksource/gavel/ai"
+	clickytask "github.com/flanksource/clicky/task"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
-	"github.com/flanksource/gavel/internal/ttyrender"
 	"github.com/flanksource/gavel/status"
 	"github.com/flanksource/repomap"
 	"github.com/spf13/cobra"
@@ -104,7 +101,7 @@ func runStatus(opts StatusOptions) (any, error) {
 		})
 	}
 
-	agent, err := gavelai.NewAgent(clickyai.DefaultConfig())
+	agent, err := clickyai.NewAgent(clickyai.DefaultConfig())
 	if err != nil {
 		return nil, fmt.Errorf("create AI agent for status: %w", err)
 	}
@@ -126,10 +123,21 @@ func runStatus(opts StatusOptions) (any, error) {
 
 	prompting.Prepare()
 	result.PrepareAISummaries()
+
+	// Render the status table through clicky's task manager so it owns the
+	// terminal, ClearLines accounting, and the logger serializer — the AI
+	// agent's per-call log lines then interleave cleanly instead of corrupting
+	// an in-place redraw. The renderer paints result.Pretty() each tick; the
+	// batch's updates are folded into result via renderer.Apply.
+	renderer := status.NewStatusRenderer(result)
+	clickytask.SetLiveRenderer(renderer)
+	defer clickytask.SetLiveRenderer(nil)
+
 	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers)
-	if err := renderStatusOutput(os.Stdout, result, updates, ttyrender.IsTerminal(os.Stdout)); err != nil {
-		return nil, err
+	for update := range updates {
+		renderer.Apply(update)
 	}
+	clicky.WaitForGlobalCompletion()
 
 	return nil, nil
 }
@@ -195,34 +203,4 @@ func resolveStatusWorkDir(workDirFlag string, args []string) (string, string, er
 	}
 
 	return absRoot, rel, nil
-}
-
-func renderStatusOutput(w io.Writer, result *status.Result, updates <-chan status.AISummaryUpdate, interactive bool) error {
-	if !interactive {
-		for update := range updates {
-			result.ApplyAISummaryUpdate(update)
-		}
-		_, err := io.WriteString(w, formatStatusResult(result))
-		return err
-	}
-
-	state := ttyrender.State{}
-	if err := state.Write(w, formatStatusResult(result)); err != nil {
-		return err
-	}
-	for update := range updates {
-		result.ApplyAISummaryUpdate(update)
-		if err := state.Write(w, formatStatusResult(result)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func formatStatusResult(result *status.Result) string {
-	rendered := result.Pretty().ANSI()
-	if !strings.HasSuffix(rendered, "\n") {
-		rendered += "\n"
-	}
-	return rendered
 }

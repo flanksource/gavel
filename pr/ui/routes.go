@@ -14,7 +14,12 @@ import (
 	"github.com/flanksource/gavel/github"
 )
 
-const viewTabPRs = "prs"
+const (
+	viewTabPRs      = "prs"
+	viewTabTodos    = "todos"
+	viewTabActivity = "activity"
+	viewTabTests    = "tests"
+)
 
 type routeRequest struct {
 	Tab       string
@@ -70,8 +75,9 @@ func (n *PRViewNode) Pretty() api.Text {
 	text := clicky.Text("")
 	icon, style := prStateIconStyle(n.State, n.IsDraft)
 	text = text.Append(icon, style)
-	text = text.Space().Append(fmt.Sprintf("%s#%d", n.Repo, n.Number), "text-muted")
-	text = text.Space().Append(n.Title, "bold")
+	text = text.Space().Append(n.Repo, "bold").
+		Append(fmt.Sprintf("#%d", n.Number), "text-muted")
+	text = text.Space().Append(n.Title, "")
 	if n.Author != "" {
 		text = text.Space().Append("@"+n.Author, "text-muted")
 	}
@@ -219,6 +225,13 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
+	// todos/activity/tests are client-rendered SPA tabs with no server-side node
+	// path or export; accept them (and any deeper segments like
+	// /tests/{project}/{runId}) so a hard load serves the app.
+	if tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTests {
+		req.Tab = tabSeg
+		return req, true
+	}
 	if tabSeg != viewTabPRs {
 		return routeRequest{}, false
 	}

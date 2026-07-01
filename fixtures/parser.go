@@ -265,18 +265,42 @@ func ParseFixtureForTest(filePath string) (*FixtureNode, error) {
 	return ParseMarkdownFixturesWithTree(filePath)
 }
 
-// ParseMarkdownFixturesWithTree parses markdown files into a hierarchical tree structure
-func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
+// ParseMarkdownContentWithTree parses markdown content into a fixture tree.
+// It is used by callers whose fixture source is not a local file, such as
+// issue bodies fetched from external task providers.
+func ParseMarkdownContentWithTree(name, content, sourceDir string, frontMatter *FrontMatter) (*FixtureNode, error) {
+	if sourceDir == "" {
+		sourceDir = "."
+	}
 	fileTree := &FixtureNode{
-		Name:     filepath.Base(filePath),
+		Name:     name,
 		Type:     FileNode,
 		Children: make([]*FixtureNode, 0),
 		Origin: &FixtureOrigin{
-			File: filePath,
-			Kind: "file",
+			File: name,
+			Kind: "content",
 		},
 	}
 
+	contentTree, err := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse markdown content: %w", err)
+	}
+
+	for _, child := range contentTree.Children {
+		fileTree.AddChild(child)
+	}
+	setOriginFile(fileTree, name)
+
+	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
+		return nil, fmt.Errorf("expand row globs: %w", err)
+	}
+
+	return fileTree, nil
+}
+
+// ParseMarkdownFixturesWithTree parses markdown files into a hierarchical tree structure
+func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 	// Get the directory containing the fixture file
 	sourceDir := filepath.Dir(filePath)
 
@@ -307,25 +331,15 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 		content = strings.Join(lines, "\n")
 	}
 
-	// Use the new AST-based parser to build the tree directly
-	contentTree, err := parseMarkdownWithGoldmarkTree(content, frontMatter, sourceDir)
+	fileTree, err := ParseMarkdownContentWithTree(filepath.Base(filePath), content, sourceDir, frontMatter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse markdown content: %w", err)
-	}
-
-	// Move children from content tree to file tree
-	for _, child := range contentTree.Children {
-		fileTree.AddChild(child)
+		return nil, err
 	}
 	setOriginFile(fileTree, filePath)
-
-	// Expand any @-glob references in row cells (stdout/stderr) into
-	// one row per matched file. Runs after frontmatter `files:`
-	// expansion so the two mechanisms compose.
-	if err := expandGlobInRows(fileTree, sourceDir); err != nil {
-		return nil, fmt.Errorf("expand row globs: %w", err)
+	if fileTree.Origin != nil {
+		fileTree.Origin.File = filePath
+		fileTree.Origin.Kind = "file"
 	}
-
 	return fileTree, nil
 }
 

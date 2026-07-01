@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -42,6 +42,7 @@ type pushDeps struct {
 	generatePRPrompt    func(ctx context.Context, agent clickyai.Agent, in PRContentInput) (PRContent, error)
 	aheadCommits        func(workDir, branch, defaultBase string) ([]CommitResult, error)
 	confirmProtectedRef func(branch string) bool
+	enableAutoMerge     func(github.Options, string, string) error
 }
 
 func defaultPushDeps() pushDeps {
@@ -56,6 +57,7 @@ func defaultPushDeps() pushDeps {
 		generatePRPrompt:    GeneratePRContent,
 		aheadCommits:        loadAheadCommits,
 		confirmProtectedRef: confirmProtectedBranchPush,
+		enableAutoMerge:     github.EnableAutoMerge,
 	}
 }
 
@@ -77,7 +79,7 @@ func isProtectedBranch(name string) bool {
 // protected remote branch. Returns true if the user confirmed.
 func confirmProtectedBranchPush(branch string) bool {
 	header := fmt.Sprintf("Pushing to protected branch %q bypasses PR review. Proceed?", branch)
-	idx, ok := promptSelectIndex(header, []string{
+	idx, ok := promptSelectIndex(context.Background(), header, []string{
 		fmt.Sprintf("No, cancel push to %s", branch),
 		fmt.Sprintf("Yes, push directly to %s", branch),
 	})
@@ -147,6 +149,10 @@ func pushWithDeps(ctx context.Context, opts Options, result *Result, deps pushDe
 	target, candidates, err := decidePushTarget(ctx, ghOpts, branch, deps)
 	if err != nil {
 		return err
+	}
+
+	if opts.AutoMerge && target.kind != pushTargetNewPR {
+		logger.Warnf("--auto-merge only applies to newly opened PRs; pushing to an existing PR, auto-merge not changed")
 	}
 
 	switch target.kind {
@@ -237,7 +243,7 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
 	base, _ := deps.defaultBranch(ghOpts)
 
-	agent, err := BuildAgent(opts)
+	agent, err := BuildAgent(opts, opts.messageModel())
 	if err != nil {
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}
@@ -266,6 +272,9 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		fmt.Fprintf(dryRunOutput, "title: %s\n", content.Title)
 		if content.Body != "" {
 			fmt.Fprintf(dryRunOutput, "body:\n%s\n", content.Body)
+		}
+		if opts.AutoMerge {
+			fmt.Fprintf(dryRunOutput, "would enable auto-merge (%s) on the new PR\n", opts.MergeType)
 		}
 		return nil
 	}
@@ -300,6 +309,14 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 		return fmt.Errorf("create PR: %w", err)
 	}
 	logger.Infof("Opened PR #%d against %s: %s", created.Number, created.Base, created.URL)
+
+	if opts.AutoMerge {
+		if err := deps.enableAutoMerge(ghOpts, created.NodeID, opts.MergeType); err != nil {
+			return fmt.Errorf("enable auto-merge on PR #%d: %w", created.Number, err)
+		}
+		logger.Infof("Enabled auto-merge (%s) on PR #%d", opts.MergeType, created.Number)
+	}
+
 	printNewPRSummary(created, content)
 	return nil
 }
@@ -382,7 +399,7 @@ func choosePR(header string, prs []github.PRListItem) (*github.PRListItem, error
 	for i, pr := range prs {
 		items[i] = fmt.Sprintf("#%d  %s  (%s → %s)", pr.Number, pr.Title, pr.Source, pr.Target)
 	}
-	index, ok := promptSelectIndex(header, items)
+	index, ok := promptSelectIndex(context.Background(), header, items)
 	if !ok {
 		return nil, nil
 	}

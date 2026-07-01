@@ -34,6 +34,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
       - name: Install Task
         uses: arduino/setup-task@v2
         with:

@@ -67,9 +67,8 @@ func defaultPRCreateDeps() prCreateDeps {
 		openBrowser: openBrowser,
 		generateContent: func(ctx context.Context, in commitpkg.PRContentInput) (commitpkg.PRContent, error) {
 			agent, err := commitpkg.BuildAgent(commitpkg.Options{
-				Model:   prCreateModel,
 				NoCache: prCreateNoCache,
-			})
+			}, prCreateModel)
 			if err != nil {
 				return commitpkg.PRContent{}, err
 			}

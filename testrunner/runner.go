@@ -124,7 +124,7 @@ type RunOptions struct {
 	Nodes         int                   `json:"nodes,omitempty" flag:"nodes" short:"p"`                       // Number of parallel ginkgo nodes (0 = default, -1 = auto)
 	Concurrency   int                   `json:"concurrency,omitempty" flag:"concurrency"`                     // Max test package subprocesses to run at once. 0 = auto-bounded default.
 	UI            bool                  `json:"ui,omitempty" flag:"ui"`                                       // Launch browser with real-time task progress dashboard
-	Addr          string                `json:"addr,omitempty" flag:"addr" default:"localhost"`               // Interface to bind --ui HTTP server. Use 0.0.0.0 to expose on the LAN.
+	Addr          string                `json:"addr,omitempty" flag:"addr" default:"0.0.0.0"`                 // Interface to bind --ui HTTP server. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine.
 	Diagnostics   bool                  `json:"diagnostics,omitempty" flag:"diagnostics"`                     // Capture a final diagnostics snapshot and embed it in JSON results / detached UI handoff artifacts.
 	SkipHooks     bool                  `json:"skip_hooks,omitempty" flag:"skip-hooks"`                       // When true, .gavel.yaml pre/post hooks do not run. Default is computed in runTests from $CI: skip when unset, run when set.
 	AutoStop      time.Duration         `json:"auto_stop,omitempty"`                                          // Hard wall-clock deadline for the detached UI child. Passed through when --detach is set. 0 = use default (30m). Flag wired imperatively from cmd/gavel/test.go because clicky doesn't bind time.Duration.
@@ -147,6 +147,11 @@ type RunOptions struct {
 	OutputTee     io.Writer             `json:"-"`                                                            // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind       string                `json:"run_kind,omitempty"`                                           // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
 	SummaryOut    *parsers.TestSummary  `json:"-"`                                                            // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
+	// TodoSync, when set, records a failing test as a TODO and returns its path.
+	// It is supplied by the caller (see todosync.NewTestFailureRecorder) so the
+	// testrunner needn't import the todos package. Only invoked when SyncTodos is
+	// true and at least one test failed.
+	TodoSync func(failure TestFailure) (todoPath string, err error) `json:"-"`
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -2039,14 +2044,16 @@ func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
 }
 
 func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
-	sync := NewTodoSync(o.TodosDir, o.TodoTemplate)
+	if o.TodoSync == nil {
+		return fmt.Errorf("SyncTodos is enabled but no TodoSync recorder was provided (set RunOptions.TodoSync)")
+	}
 
 	for _, failure := range failures {
 		failure := failure // Capture for goroutine
 		taskName := fmt.Sprintf("Creating TODO for %s", failure.Name)
 
 		taskFunc := func(ctx commonsCtx.Context, t *task.Task) (string, error) {
-			return sync.SyncFailure(failure)
+			return o.TodoSync(failure)
 		}
 
 		clickyTask := clicky.StartTask[string](taskName, taskFunc)

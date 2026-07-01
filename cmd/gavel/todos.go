@@ -18,25 +18,38 @@ import (
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
+	"github.com/flanksource/gavel/todos/cmux"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
 var (
-	todosDir     string
-	maxRetries   int
-	filterStatus string
-	checkTimeout time.Duration
-	maxBudget    float64
-	maxTurns     int
-	interactive  bool
-	groupBy      string
-	dirty        bool
-	dryRun       bool
+	todosDir      string
+	maxRetries    int
+	filterStatus  string
+	checkTimeout  time.Duration
+	maxBudget     float64
+	maxTurns      int
+	interactive   bool
+	groupBy       string
+	dirty         bool
+	dryRun        bool
+	commitAfter   bool
+	checkAfter    bool
+	verifyAfter   bool
+	verifyModel   string
+	todosProvider string
+	todosMode     string
+	todosDriver   string
+	todoModel     string
+	todoEffort    string
+	resumeSession bool
 )
 
 var todosCmd = &cobra.Command{
 	Use:          "todos",
+	Aliases:      []string{"todo"},
 	SilenceUsage: true,
 	Short:        "Automated TODO execution system with Claude Code integration",
 }
@@ -51,15 +64,16 @@ var todosRunCmd = &cobra.Command{
 type TodosListOptions struct {
 	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
-	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, all, or none"`
+	All     bool   `json:"all" flag:"all" help:"Show completed TODOs too"`
+	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
 }
 
 func (opts TodosListOptions) GetName() string { return "list" }
 
 var todosGetCmd = &cobra.Command{
-	Use:          "get <todo-file>",
+	Use:          "get <id-or-file>",
 	SilenceUsage: true,
-	Short:        "Display detailed information about a TODO",
+	Short:        "Display detailed information about a TODO (accepts a full or short id, or a file path)",
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTodosGet,
 }
@@ -72,20 +86,20 @@ var todosCheckCmd = &cobra.Command{
 }
 
 func runTodosRun(cmd *cobra.Command, args []string) error {
+	if err := validateTodosRunOptions(); err != nil {
+		return err
+	}
+
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
+	provider, err := newTodosProvider(workDir, todosDir)
+	if err != nil {
+		return err
 	}
-
-	if _, err := os.Stat(todosDir); os.IsNotExist(err) {
-		return fmt.Errorf(".todos directory not found: %s", todosDir)
-	}
-
-	logger.Infof("Discovering TODOs in: %s", todosDir)
+	logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
 
 	filters := todos.DiscoveryFilters{
 		ExcludeStatuses: []types.Status{types.StatusCompleted},
@@ -95,32 +109,13 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
 	}
 
-	todoList, err := todos.DiscoverTODOs(todosDir, filters)
+	todoList, err := provider.List(context.Background(), filters)
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
 
 	if len(args) > 0 {
-		var filtered []*types.TODO
-		for _, todo := range todoList {
-			for _, arg := range args {
-				matched := false
-				if strings.Contains(arg, string(filepath.Separator)) || strings.HasSuffix(arg, ".md") {
-					absArg := arg
-					if !filepath.IsAbs(arg) {
-						absArg = filepath.Join(workDir, arg)
-					}
-					matched = filepath.Clean(absArg) == filepath.Clean(todo.FilePath)
-				} else {
-					matched = strings.EqualFold(todo.Filename(), arg)
-				}
-				if matched {
-					filtered = append(filtered, todo)
-					break
-				}
-			}
-		}
-		todoList = filtered
+		todoList = filterTODOsByArgs(todoList, args, workDir)
 	}
 
 	if interactive && len(args) == 0 && len(todoList) > 0 {
@@ -140,9 +135,14 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	effectiveGroupBy := groupBy
+	if todosMode == "cmux" && effectiveGroupBy == "" {
+		effectiveGroupBy = todos.GroupByRepo
+	}
+
 	logger.Infof("Found %d TODOs", len(todoList))
 
-	groups := todos.GroupTODOs(todoList, groupBy)
+	groups := todos.GroupTODOsWithWorkDir(todoList, effectiveGroupBy, workDir)
 	fmt.Println(clicky.MustFormat(todos.FlattenGrouped(groups)))
 	fmt.Println()
 
@@ -152,8 +152,8 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 
 	interaction := newInteraction()
 
-	if groupBy != "" && groupBy != todos.GroupByNone {
-		return executeGroups(workDir, groups, interaction)
+	if effectiveGroupBy != "" && effectiveGroupBy != todos.GroupByNone {
+		return executeGroups(workDir, groups, interaction, provider)
 	}
 
 	// Flatten groups to ordered list for individual execution
@@ -161,7 +161,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	for _, group := range groups {
 		orderedTodos = append(orderedTodos, group.TODOs...)
 	}
-	return executeSingleTODOs(workDir, orderedTodos, interaction)
+	return executeSingleTODOs(workDir, orderedTodos, interaction, provider)
 }
 
 func newInteraction() *todos.UserInteraction {
@@ -208,6 +208,9 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 			config.Model = todo.LLM.Model
 		}
 	}
+	if todoModel != "" {
+		config.Model = todoModel
+	}
 	if maxBudget > 0 {
 		config.MaxBudgetUsd = maxBudget
 	}
@@ -217,7 +220,91 @@ func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConf
 	return config
 }
 
-func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction) error {
+func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, error) {
+	kind, err := resolveDriverKind(todo)
+	if err != nil {
+		return nil, "", err
+	}
+	return drivers.New(kind, newDriverConfig(kind, workDir, todo))
+}
+
+// resolveDriverKind selects the driver: the explicit --driver flag when set,
+// otherwise the legacy --mode + model pair (cmux → "<agent>-cmux", inline →
+// claude-sdk, the SDK bridge that "inline" used to launch).
+func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
+	if strings.TrimSpace(todosDriver) != "" {
+		return drivers.Parse(todosDriver)
+	}
+	model := todoModel
+	if model == "" && todo != nil && todo.LLM != nil {
+		model = todo.LLM.Model
+	}
+	agent, _ := cmux.ResolveAgent(model)
+	switch todosMode {
+	case "cmux":
+		return drivers.Parse(agent + "-cmux")
+	case "", "inline":
+		if agent == "codex" {
+			return "", fmt.Errorf("codex runs require a cmux driver (set --driver codex-cmux)")
+		}
+		return drivers.ClaudeSDK, nil
+	default:
+		return "", fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
+	}
+}
+
+// newDriverConfig assembles the shared driver config from flags and the todo.
+// cmux mints and manages its own --session-id (reading any prior session from
+// the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
+// resume by carrying the prior session id explicitly.
+func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) drivers.Config {
+	model := ""
+	prior := ""
+	var maxCost float64
+	var turns int
+	if todo != nil && todo.LLM != nil {
+		model = todo.LLM.Model
+		prior = todo.LLM.SessionId
+		maxCost = todo.LLM.MaxCost
+		turns = todo.LLM.MaxTurns
+	}
+	if todoModel != "" {
+		model = todoModel
+	}
+	if maxBudget > 0 {
+		maxCost = maxBudget
+	}
+	if maxTurns > 0 {
+		turns = maxTurns
+	}
+
+	cwd := workDir
+	if todo != nil && todo.CWD != "" {
+		if filepath.IsAbs(todo.CWD) {
+			cwd = todo.CWD
+		} else {
+			cwd = filepath.Join(workDir, todo.CWD)
+		}
+	}
+
+	cfg := drivers.Config{
+		WorkDir:      cwd,
+		Model:        model,
+		Effort:       todoEffort,
+		Resume:       resumeSession,
+		Timeout:      30 * time.Minute,
+		MaxBudgetUsd: maxCost,
+		MaxTurns:     turns,
+		Tools:        drivers.DefaultTools(),
+		Dirty:        dirty,
+	}
+	if kind.Mechanism() != "cmux" {
+		cfg.SessionID = prior
+	}
+	return cfg
+}
+
+func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction, provider todos.Provider) error {
 	for gi, group := range groups {
 		if len(group.TODOs) == 0 {
 			continue
@@ -228,9 +315,13 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		config := newClaudeConfig(workDir, group.TODOs[0])
-		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID)
+		executor, sessionID, err := newExecutor(workDir, group.TODOs[0])
+		if err != nil {
+			cancel()
+			return err
+		}
+		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -281,6 +372,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		if execErr != nil {
 			logger.Errorf("Group execution failed: %v", execErr)
 		}
+		maybeCommitAfter(workDir, provider, group.TODOs[0], safeResult(results, 0))
 	}
 
 	fmt.Println()
@@ -288,16 +380,20 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 	return nil
 }
 
-func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos.UserInteraction) error {
+func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos.UserInteraction, provider todos.Provider) error {
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		config := newClaudeConfig(workDir, todo)
-		claudeExec := claude.NewClaudeExecutor(config)
-		todoExec := todos.NewTODOExecutor(workDir, claudeExec, config.SessionID)
+		executor, sessionID, err := newExecutor(workDir, todo)
+		if err != nil {
+			cancel()
+			return err
+		}
+		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -347,6 +443,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		if execErr != nil {
 			logger.Errorf("TODO execution failed: %v", execErr)
 		}
+		maybeCommitAfter(workDir, provider, todo, result)
 	}
 
 	fmt.Println()
@@ -388,6 +485,11 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			continue
 		}
 
+		if todosMode == "cmux" {
+			printCmuxDryRun(group, workDir)
+			continue
+		}
+
 		if isGrouped {
 			fmt.Printf("=== Group: %s ===\n\n", group.Name)
 			printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
@@ -405,6 +507,76 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 		}
 	}
 	return nil
+}
+
+func validateTodosRunOptions() error {
+	if strings.TrimSpace(todosDriver) != "" {
+		if _, err := drivers.Parse(todosDriver); err != nil {
+			return err
+		}
+	}
+
+	switch todosMode {
+	case "", "inline":
+	case "cmux":
+	default:
+		return fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
+	}
+
+	switch todoEffort {
+	case "", "low", "medium", "high":
+	default:
+		return fmt.Errorf("invalid --effort %q: expected low, medium, or high", todoEffort)
+	}
+	return nil
+}
+
+func printCmuxDryRun(group todos.TODOGroup, workDir string) {
+	groupWorkDir := workDir
+	if group.Name != "" && group.Name != todos.UngroupedLabel && filepath.IsAbs(group.Name) {
+		groupWorkDir = group.Name
+	}
+	agent, model := resolveTodoAgent(todoModel)
+	sessionID := ""
+	if agent == "claude" {
+		sessionID = "<session-id>"
+	}
+	agentCmd := cmux.AgentCommand(cmux.AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID})
+	name := cmux.AgentWorkspaceName(groupWorkDir, agent)
+
+	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
+	fmt.Println("### Commands")
+	fmt.Println("  cmux list-workspaces --json")
+	fmt.Printf("  cmux new-workspace --cwd %q --name %q --focus true --id-format both  # if missing\n", groupWorkDir, name)
+	fmt.Printf("  cmux new-surface --type terminal --workspace <workspace-ref> --working-directory %q --focus true\n", groupWorkDir)
+	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	fmt.Printf("  cmux send --workspace <workspace-ref> --surface <surface-ref> -- %q\n", agentCmd)
+	fmt.Println("  cmux send-key --workspace <workspace-ref> --surface <surface-ref> Enter")
+	fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	fmt.Println("  cmux send --workspace <workspace-ref> --surface <surface-ref> -- <prompt>")
+	fmt.Println("  cmux send-key --workspace <workspace-ref> --surface <surface-ref> Enter")
+	if agent == "claude" {
+		fmt.Println("  # then tail ~/.claude/projects/<cwd>/<session-id>.jsonl for progress until the turn ends")
+	} else {
+		fmt.Println("  cmux read-screen --workspace <workspace-ref> --surface <surface-ref> --lines 120")
+	}
+	fmt.Println()
+	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
+	fmt.Println("### Prompt")
+	fmt.Println(buildCmuxPrompt(group.TODOs, workDir))
+	printSectionCommands("Verification commands", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.Verification })
+}
+
+func buildCmuxPrompt(todoList []*types.TODO, workDir string) string {
+	return cmux.BuildPrompt(todoList, workDir, todoEffort)
+}
+
+func effortDirective(effort string) string {
+	return cmux.EffortDirective(effort)
+}
+
+func resolveTodoAgent(model string) (agent string, modelFlag string) {
+	return cmux.ResolveAgent(model)
 }
 
 func printSectionCommands(header string, todoList []*types.TODO, getNodes func(*types.TODO) []*fixtures.FixtureNode) {

@@ -1,7 +1,9 @@
-import { useState } from 'preact/hooks';
+import { useState } from 'react';
 import type { WorkflowRun, Job } from '../types';
 import { statusIcon, statusColor } from '../utils';
+import { useNow } from '../useNow';
 import { LogViewer } from './LogViewer';
+import { GavelIcon } from './GavelIcon';
 
 interface JobLogsResponse {
   jobId: number;
@@ -28,15 +30,33 @@ export function formatDuration(start?: string, end?: string): string {
   return `(${Math.floor(secs / 60)}m ${secs % 60}s)`;
 }
 
+// JobDuration shows a job's elapsed time. A still-running job (no completedAt)
+// renders a leaf that subscribes to the shared useNow() clock so its
+// '(running Xs...)' counter advances each second without reconciling the job
+// row; a completed job's duration is fixed, so it stays a plain static span.
+function JobDuration({ startedAt, completedAt }: { startedAt?: string; completedAt?: string }) {
+  if (completedAt) {
+    const fixed = formatDuration(startedAt, completedAt);
+    return fixed ? <span className="text-muted-foreground">{fixed}</span> : null;
+  }
+  return <RunningDuration startedAt={startedAt} />;
+}
+
+function RunningDuration({ startedAt }: { startedAt?: string }) {
+  useNow();
+  if (!startedAt) return null;
+  return <span className="text-muted-foreground">{formatDuration(startedAt)}</span>;
+}
+
 function IndeterminateProgress() {
   return (
-    <div class="ml-4 mt-1 mb-1">
-      <div class="flex items-center gap-1.5 text-[10px] text-blue-600 mb-0.5">
-        <iconify-icon icon="svg-spinners:ring-resize" />
+    <div className="ml-4 mt-1 mb-1">
+      <div className="flex items-center gap-1.5 text-[10px] text-blue-600 mb-0.5">
+        <GavelIcon name="svg-spinners:ring-resize" />
         <span>Fetching logs from GitHub…</span>
       </div>
-      <div class="h-1 w-full max-w-xs bg-blue-100 rounded overflow-hidden relative">
-        <div class="gavel-progress-bar absolute inset-y-0 w-1/3 bg-blue-500 rounded" />
+      <div className="h-1 w-full max-w-xs bg-blue-100 rounded overflow-hidden relative">
+        <div className="gavel-progress-bar absolute inset-y-0 w-1/3 bg-blue-500 rounded" />
       </div>
     </div>
   );
@@ -56,29 +76,29 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
   const summary = runSummary(run);
 
   return (
-    <div class="mb-3">
+    <div className="mb-3">
       <div
-        class="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 py-0.5"
+        className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
         onClick={() => setExpanded(!expanded)}
       >
-        <iconify-icon
-          icon={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          class="text-gray-400 text-[10px]"
+        <GavelIcon
+          name={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+          className="text-muted-foreground text-[10px]"
         />
-        <span class={statusColor(run.status, run.conclusion)}>
+        <span className={statusColor(run.status, run.conclusion)}>
           {statusIcon(run.status, run.conclusion)}
         </span>
         <span>{run.name}</span>
-        {summary && <span class="text-gray-400 text-xs font-normal">· {summary}</span>}
+        {summary && <span className="text-muted-foreground text-xs font-normal">· {summary}</span>}
         {run.url && (
           <a
             href={run.url}
             target="_blank"
             rel="noopener"
-            class="text-gray-400 hover:text-blue-500"
+            className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <iconify-icon icon="codicon:link-external" class="text-xs" />
+            <GavelIcon name="codicon:link-external" className="text-xs" />
           </a>
         )}
       </div>
@@ -91,7 +111,6 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
 
 function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }) {
   const failed = job.conclusion?.toLowerCase() === 'failure';
-  const duration = formatDuration(job.startedAt, job.completedAt);
 
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -144,25 +163,25 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
   const hasSteps = failed && job.steps && job.steps.some(s => s.conclusion?.toLowerCase() === 'failure');
 
   return (
-    <div class="ml-4 mt-1">
+    <div className="ml-4 mt-1">
       <div
-        class={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1' : ''}`}
+        className={`flex items-center gap-1.5 text-xs ${failed && !hasSteps ? 'cursor-pointer hover:bg-muted rounded px-1 -mx-1' : ''}`}
         onClick={failed && !hasSteps ? toggleJobFallback : undefined}
       >
-        <span class={statusColor(job.status, job.conclusion)}>
+        <span className={statusColor(job.status, job.conclusion)}>
           {statusIcon(job.status, job.conclusion)}
         </span>
-        <span class={failed ? 'text-red-700 font-medium' : 'text-gray-700'}>{job.name}</span>
-        {duration && <span class="text-gray-400">{duration}</span>}
+        <span className={failed ? 'text-red-700 font-medium' : 'text-foreground'}>{job.name}</span>
+        <JobDuration startedAt={job.startedAt} completedAt={job.completedAt} />
         {job.url && (
           <a
             href={job.url}
             target="_blank"
             rel="noopener"
-            class="text-gray-400 hover:text-blue-500"
+            className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <iconify-icon icon="codicon:link-external" class="text-[10px]" />
+            <GavelIcon name="codicon:link-external" className="text-[10px]" />
           </a>
         )}
       </div>
@@ -174,34 +193,34 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         const logs = stepLogs.get(step.number) || jobLogs;
         const isFallback = !stepLogs.get(step.number) && !!jobLogs;
         return (
-          <div key={step.number} class="ml-4 mt-0.5 text-xs">
+          <div key={step.number} className="ml-4 mt-0.5 text-xs">
             <div
-              class="cursor-pointer hover:bg-gray-50 rounded px-1 -mx-1 inline-flex items-center gap-1"
+              className="cursor-pointer hover:bg-muted rounded px-1 -mx-1 inline-flex items-center gap-1"
               onClick={() => toggleStep(step.number)}
             >
-              <iconify-icon
-                icon={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-                class="text-gray-400 text-[9px]"
+              <GavelIcon
+                name={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
+                className="text-muted-foreground text-[9px]"
               />
-              <span class={statusColor(step.status, step.conclusion)}>
+              <span className={statusColor(step.status, step.conclusion)}>
                 {statusIcon(step.status, step.conclusion)}
               </span>
-              <span class="text-red-600">{step.name}</span>
+              <span className="text-red-600">{step.name}</span>
             </div>
             {isOpen && loading && !loaded && <IndeterminateProgress />}
             {isOpen && loaded && logs && (
               <>
                 {isFallback && (
-                  <div class="ml-4 mt-0.5 text-[10px] text-gray-400 italic">Showing job log tail (step-level logs unavailable)</div>
+                  <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground italic">Showing job log tail (step-level logs unavailable)</div>
                 )}
-                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-gray-50'} borderClass={isFallback ? 'border-red-100' : 'border-gray-100'} />
+                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-muted'} borderClass={isFallback ? 'border-red-100' : 'border-border'} />
               </>
             )}
             {isOpen && loaded && !logs && !error && (
-              <div class="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this step.</div>
+              <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this step.</div>
             )}
             {isOpen && error && (
-              <div class="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
+              <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
             )}
           </div>
         );
@@ -210,10 +229,10 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         <LogViewer logs={jobLogs} bgClass="bg-red-50" borderClass="border-red-100" />
       )}
       {failed && !hasSteps && expandedJobFallback && loaded && !jobLogs && !error && (
-        <div class="ml-4 mt-0.5 text-[10px] text-gray-400">No logs captured for this job.</div>
+        <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this job.</div>
       )}
       {failed && !hasSteps && expandedJobFallback && error && (
-        <div class="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
+        <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
       )}
     </div>
   );

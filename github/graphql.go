@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -189,6 +188,9 @@ type graphQLThreadCommentNode struct {
 type graphQLAuthor struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatarUrl"`
+	// TypeName is GraphQL's __typename: "Bot" for GitHub App bots (whose login
+	// lacks the "[bot]" suffix the search API expects), "User" otherwise.
+	TypeName string `json:"__typename"`
 }
 
 type graphQLCommits struct {
@@ -380,51 +382,15 @@ func FetchPR(opts Options, prNumber int) (*PRInfo, error) {
 		variables["branch"] = branch
 	}
 
-	body := map[string]any{"query": query, "variables": variables}
-
-	ctx := context.Background()
-	client := newClient(token)
-
 	logger.Tracef("fetching PR via GraphQL (pr=%s, repo=%s)", formatPRArg(prNumber), repo)
-	start := time.Now()
-	resp, err := client.R(ctx).
-		Header("Content-Type", "application/json").
-		Post("https://api.github.com/graphql", body)
+	respBody, _, err := postGraphQL(token, graphqlEndpoint(), activity.KindGraphQL, query, variables)
 	if err != nil {
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindGraphQL,
-			Duration: time.Since(start), Error: err.Error(),
-		})
-		return nil, fmt.Errorf("GraphQL request: %w", err)
+		return nil, err
 	}
-	if !resp.IsOK() {
-		respBody, _ := resp.AsString()
-		activity.Shared().Record(activity.Entry{
-			Method: "POST", URL: "/graphql", Kind: activity.KindGraphQL,
-			StatusCode: resp.StatusCode, Duration: time.Since(start),
-			SizeBytes: len(respBody),
-			Error:     fmt.Sprintf("status %d", resp.StatusCode),
-		})
-		return nil, fmt.Errorf("GraphQL request: status %d: %s", resp.StatusCode, respBody)
-	}
-
-	respBody, _ := resp.AsString()
-	activity.Shared().Record(activity.Entry{
-		Method: "POST", URL: "/graphql", Kind: activity.KindGraphQL,
-		StatusCode: resp.StatusCode, Duration: time.Since(start),
-		SizeBytes: len(respBody),
-	})
 
 	var result graphQLResponse
-	if err := json.Unmarshal([]byte(respBody), &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("parse GraphQL response: %w", err)
-	}
-	if len(result.Errors) > 0 {
-		msgs := make([]string, len(result.Errors))
-		for i, e := range result.Errors {
-			msgs[i] = e.Message
-		}
-		return nil, fmt.Errorf("GraphQL errors: %s", strings.Join(msgs, "; "))
 	}
 
 	var gqlPR *graphQLPR

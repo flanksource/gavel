@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/ai/aifix"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -73,7 +71,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 			turn.Prompt = prompt
 			return turn, true
 		},
-		OnEvent: aifix.NewStderrRenderer(os.Stderr),
+		OnEvent: newAIFixRenderer(aiCfg),
 	})
 	if err != nil {
 		return err

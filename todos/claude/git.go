@@ -6,9 +6,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/flanksource/clicky/ai"
-	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
@@ -322,7 +321,7 @@ func generateCommitMessage(ctx context.Context, workDir string, todo *types.TODO
 		commit.Changes = models.Changes(changes)
 	}
 
-	agent, err := llm.NewLLMAgent(ai.DefaultConfig())
+	agent, err := ai.NewAgent(ai.DefaultConfig())
 	if err != nil {
 		return "", fmt.Errorf("failed to create AI agent: %w", err)
 	}

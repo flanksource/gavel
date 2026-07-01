@@ -226,7 +226,7 @@ func TestResolveScope(t *testing.T) {
 
 func TestBuildSchema(t *testing.T) {
 	checks := EnabledChecks(ChecksConfig{})
-	schemaJSON, err := BuildSchema(checks)
+	schemaJSON, err := BuildSchema(checks, false, nil)
 	if err != nil {
 		t.Fatalf("BuildSchema() error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestBuildSchema(t *testing.T) {
 
 func TestBuildSchemaWithDisabled(t *testing.T) {
 	checks := EnabledChecks(ChecksConfig{Disabled: []string{"tests-added"}})
-	schemaJSON, err := BuildSchema(checks)
+	schemaJSON, err := BuildSchema(checks, false, nil)
 	if err != nil {
 		t.Fatalf("BuildSchema() error: %v", err)
 	}
@@ -269,8 +269,145 @@ func TestBuildSchemaWithDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildSchemaIssueAware(t *testing.T) {
+	checks := EnabledChecks(issueChecksConfig([]string{"tests-added"}))
+	schemaJSON, err := BuildSchema(checks, true, []string{"endpoint streams NDJSON"})
+	if err != nil {
+		t.Fatalf("BuildSchema() error: %v", err)
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	props := schema["properties"].(map[string]any)
+	for _, field := range []string{"implemented", "acceptance_criteria"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("issue-aware schema missing property %q", field)
+		}
+	}
+
+	required := make(map[string]bool)
+	for _, r := range schema["required"].([]any) {
+		required[r.(string)] = true
+	}
+	for _, field := range []string{"implemented", "acceptance_criteria"} {
+		if !required[field] {
+			t.Errorf("issue-aware schema does not require %q", field)
+		}
+	}
+}
+
+// TestBuildSchemaCriteriaDriven asserts the acceptance_criteria schema is
+// generated FROM the criteria: bounded to one entry per criterion, with the
+// {criteria, pass, comments} item shape, and the criteria text in the description
+// (so the prompt no longer has to enumerate them).
+func TestBuildSchemaCriteriaDriven(t *testing.T) {
+	criteria := []string{"streams NDJSON for >10k rows", "returns 400 on bad input"}
+	schemaJSON, err := BuildSchema(EnabledChecks(ChecksConfig{}), true, criteria)
+	if err != nil {
+		t.Fatalf("BuildSchema() error: %v", err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(schemaJSON), &schema); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	ac := schema["properties"].(map[string]any)["acceptance_criteria"].(map[string]any)
+	if ac["minItems"].(float64) != 2 || ac["maxItems"].(float64) != 2 {
+		t.Errorf("acceptance_criteria should be bounded to %d entries; got min=%v max=%v", len(criteria), ac["minItems"], ac["maxItems"])
+	}
+	itemProps := ac["items"].(map[string]any)["properties"].(map[string]any)
+	for _, f := range []string{"criteria", "pass", "comments"} {
+		if _, ok := itemProps[f]; !ok {
+			t.Errorf("acceptance_criteria item missing field %q", f)
+		}
+	}
+	desc := ac["description"].(string)
+	for _, c := range criteria {
+		if !strings.Contains(desc, c) {
+			t.Errorf("acceptance_criteria description should enumerate criterion %q\n%s", c, desc)
+		}
+	}
+}
+
+func TestResolveVerifyPrompt_OverrideBypassesRender(t *testing.T) {
+	// With an override set, the verbatim text is returned and renderPrompt is not
+	// consulted (a zero scope/cfg would otherwise render the default diff prompt).
+	got, err := resolveVerifyPrompt(RunOptions{PromptOverride: "MY EDITED VERIFY PROMPT"}, ReviewScope{}, VerifyConfig{})
+	if err != nil {
+		t.Fatalf("resolveVerifyPrompt: %v", err)
+	}
+	if got != "MY EDITED VERIFY PROMPT" {
+		t.Errorf("got %q, want the override verbatim", got)
+	}
+
+	// Without an override it renders (non-empty) and is not the override text.
+	rendered, err := resolveVerifyPrompt(RunOptions{}, ReviewScope{Type: "diff"}, VerifyConfig{})
+	if err != nil {
+		t.Fatalf("resolveVerifyPrompt(render): %v", err)
+	}
+	if rendered == "" || rendered == "MY EDITED VERIFY PROMPT" {
+		t.Errorf("expected a rendered prompt, got %q", rendered)
+	}
+}
+
+func TestIssueChecksConfigKeepsDefinitionOfDone(t *testing.T) {
+	enabled := EnabledChecks(issueChecksConfig([]string{"tests-added"}))
+	ids := make(map[string]bool, len(enabled))
+	for _, c := range enabled {
+		ids[c.ID] = true
+	}
+	if !ids["definition-of-done"] {
+		t.Error("issueChecksConfig must always keep definition-of-done")
+	}
+	if !ids["tests-added"] {
+		t.Error("issueChecksConfig must keep the selected check")
+	}
+	if ids["no-hardcoded-secrets"] {
+		t.Error("issueChecksConfig must disable unselected checks")
+	}
+}
+
+func TestComputeOverallScoreFoldsAcceptanceCriteria(t *testing.T) {
+	// 2 of 4 criteria met, no checks/ratings; completeness fail.
+	r := VerifyResult{
+		AcceptanceCriteria: []CriterionResult{
+			{Pass: true}, {Pass: true}, {Pass: false}, {Pass: false},
+		},
+	}
+	// checkScore = 50 (2/4), ratingScore 0, completeness 0 → 50*0.5 = 25.
+	if got := ComputeOverallScore(r); got != 25 {
+		t.Errorf("ComputeOverallScore() = %d, want 25", got)
+	}
+}
+
+func TestRenderPromptIncludesIssueAndCommits(t *testing.T) {
+	issue := &IssueContext{
+		Title:       "Add NDJSON export",
+		Description: "Stream rows for large payloads",
+		Criteria:    []string{"endpoint streams NDJSON for >10k rows"},
+		CommitSHAs:  []string{"abc1234", "def5678"},
+	}
+	scope := ReviewScope{Type: "commits", Commits: issue.CommitSHAs}
+	prompt, err := renderPrompt(scope, VerifyConfig{}, issue)
+	if err != nil {
+		t.Fatalf("renderPrompt() error: %v", err)
+	}
+	for _, want := range []string{"Issue Being Implemented", "Add NDJSON export", "abc1234", "def5678"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q\n%s", want, prompt)
+		}
+	}
+	// Acceptance criteria are carried by the JSON schema now, not the prompt text.
+	if strings.Contains(prompt, "endpoint streams NDJSON for >10k rows") {
+		t.Errorf("criterion text should be in the schema, not the prompt:\n%s", prompt)
+	}
+}
+
 func TestSchemaFile(t *testing.T) {
-	path, err := SchemaFile(ChecksConfig{})
+	path, err := SchemaFile(ChecksConfig{}, false, nil)
 	if err != nil {
 		t.Fatalf("SchemaFile() error: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -34,6 +35,8 @@ type ClaudeExecutorConfig struct {
 	Tools        []string
 	Timeout      time.Duration
 	Dirty        bool
+	// PromptOverride, when set, is used verbatim instead of BuildPrompt.
+	PromptOverride string
 }
 
 type ClaudeExecutor struct {
@@ -89,7 +92,10 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := BuildPrompt(todo, e.config.WorkDir)
+	prompt := e.config.PromptOverride
+	if prompt == "" {
+		prompt = BuildPrompt(todo, e.config.WorkDir)
+	}
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 
@@ -158,7 +164,10 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+	prompt := e.config.PromptOverride
+	if prompt == "" {
+		prompt = BuildGroupPrompt(todosInGroup, e.config.WorkDir)
+	}
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 
@@ -219,6 +228,7 @@ func (e *ClaudeExecutor) runAgent(ctx *todos.ExecutorContext, agentDir, prompt s
 	cmd := exec.CommandContext(cmdCtx, tsxPath, agentTSPath, promptFile.Name())
 	cmd.Dir = agentDir
 	cmd.Env = append(filterEnv(os.Environ()), "AGENT_CONFIG="+string(configJSON))
+	cmd.Env = append(cmd.Env, agentRunEnv(config.SessionID, todo)...)
 
 	// Create pipes manually so we control close behavior.
 	// cmd.StdoutPipe() leaves the parent holding write ends, which prevents
@@ -395,6 +405,23 @@ func ensureDependencies(agentDir string) error {
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// agentRunEnv exports the gavel issue and agent session ids so a `gavel commit`
+// the agent runs itself stamps the matching Gavel-Issue-Id / Claude-Session-Id
+// trailers (see commit.applyCommitMetadata).
+func agentRunEnv(sessionID string, todo *types.TODO) []string {
+	var env []string
+	if todo != nil && todo.ID != "" {
+		env = append(env, commit.EnvIssueID+"="+todo.ID)
+	}
+	if sessionID == "" && todo != nil && todo.LLM != nil {
+		sessionID = todo.LLM.SessionId
+	}
+	if sessionID != "" {
+		env = append(env, commit.EnvSessionID+"="+sessionID)
+	}
+	return env
 }
 
 func filterEnv(env []string) []string {

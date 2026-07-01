@@ -1,6 +1,8 @@
-import { useState } from 'preact/hooks';
+import { useState } from 'react';
 import type { PRSyncStatus } from '../types';
 import { timeAgo } from '../utils';
+import { GavelIcon } from './GavelIcon';
+import { RelativeTime } from './RelativeTime';
 
 interface Props {
   status: PRSyncStatus;
@@ -38,11 +40,11 @@ export function SyncIndicator({ status }: Props) {
 
   return (
     <span
-      class="relative inline-flex items-center"
+      className="relative inline-flex items-center"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <iconify-icon icon={cfg.icon} class={`${cfg.color} text-[11px]`} title={cfg.title} />
+      <GavelIcon name={cfg.icon} className={`${cfg.color} text-[11px]`} title={cfg.title} />
       {hover && <HoverCard status={status} />}
     </span>
   );
@@ -66,21 +68,21 @@ function HoverCard({ status }: { status: PRSyncStatus }) {
   };
 
   return (
-    <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-20 bg-white border border-gray-200 rounded-md shadow-lg px-2.5 py-1.5 whitespace-nowrap text-[11px]">
-      <div class={`font-medium ${stateColors[status.state] || 'text-gray-600'}`}>
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-20 bg-white border border-gray-200 rounded-md shadow-lg px-2.5 py-1.5 whitespace-nowrap text-[11px]">
+      <div className={`font-medium ${stateColors[status.state] || 'text-gray-600'}`}>
         {stateLabels[status.state] || status.state}
       </div>
       {status.state === 'syncing' && status.phase && (
-        <div class="text-gray-500 mt-0.5">Fetching {phaseLabel(status.phase)}...</div>
+        <div className="text-gray-500 mt-0.5">Fetching {phaseLabel(status.phase)}...</div>
       )}
       {status.lastSynced && (
-        <div class="text-gray-400 mt-0.5">Last synced: {timeAgo(status.lastSynced)}</div>
+        <div className="text-gray-400 mt-0.5">Last synced: <RelativeTime iso={status.lastSynced} /></div>
       )}
       {status.error && (
-        <div class="text-red-500 mt-0.5 max-w-48 truncate">{status.error}</div>
+        <div className="text-red-500 mt-0.5 max-w-48 truncate">{status.error}</div>
       )}
-      <div class="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
-        <div class="w-1.5 h-1.5 bg-white border-b border-r border-gray-200 rotate-45 -translate-y-1" />
+      <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+        <div className="w-1.5 h-1.5 bg-white border-b border-r border-gray-200 rotate-45 -translate-y-1" />
       </div>
     </div>
   );

@@ -1,0 +1,77 @@
+# Link the sibling @flanksource/clicky-ui checkout as a workspace package so
+# local clicky-ui edits are picked up without publishing. The package.json keeps
+# a published range ("^0.2.x"), and linkWorkspacePackages tells pnpm to symlink
+# the local package when its version satisfies that range. When the sibling is
+# absent (CI), the path below matches nothing and pnpm resolves clicky-ui from
+# the npm registry instead. See xero-cli/webapp/pnpm-workspace.yaml.
+#
+# The catalog mirrors clicky-ui/pnpm-workspace.yaml so the `catalog:` specifiers
+# declared by the linked clicky-ui package resolve. Keep in sync with clicky-ui.
+packages:
+  - "."
+  - "../../../clicky-ui/packages/ui"
+catalog:
+  "@ai-sdk/react": ^3.0.201
+  "@floating-ui/react": ^0.27.19
+  '@mdxeditor/editor': ^4.0.4
+  "@oxlint/plugins": ^1.60.0
+  "@playwright/test": ^1.49.1
+  "@preact/preset-vite": ^2.9.3
+  "@radix-ui/react-accordion": ^1.2.2
+  "@radix-ui/react-avatar": ^1.1.2
+  "@radix-ui/react-collapsible": ^1.1.2
+  "@radix-ui/react-compose-refs": ^1.1.2
+  "@radix-ui/react-dialog": ^1.1.4
+  "@radix-ui/react-dropdown-menu": ^2.1.4
+  "@radix-ui/react-menubar": ^1.1.4
+  "@radix-ui/react-progress": ^1.1.1
+  "@radix-ui/react-separator": ^1.1.1
+  "@radix-ui/react-slot": ^1.1.1
+  "@radix-ui/react-tabs": ^1.1.2
+  "@radix-ui/react-tooltip": ^1.1.6
+  "@shikijs/langs": ^1.24.0
+  "@shikijs/themes": ^1.24.0
+  "@shikijs/transformers": ^1.24.0
+  "@storybook/addon-essentials": ^8.6.18
+  "@storybook/react": ^8.6.18
+  "@storybook/react-vite": ^8.6.18
+  "@storybook/test": ^8.6.18
+  "@tailwindcss/forms": ^0.5.9
+  "@tanstack/react-query": ^5.101.1
+  "@testing-library/jest-dom": ^6.6.3
+  "@testing-library/react": ^16.1.0
+  "@types/node": ^24
+  "@types/react": ^18.3.12
+  "@types/react-dom": ^18.3.1
+  ai: ^6.0.199
+  autoprefixer: ^10.4.20
+  class-variance-authority: ^0.7.1
+  clsx: ^2.1.1
+  cmdk: ^1.0.4
+  dompurify: ^3.4.7
+  jotai: ^2.20.1
+  jsdom: ^26.0.0
+  marked: ^15.0.0
+  oxlint: ^1.71.0
+  postcss: ^8.4.49
+  preact: ^10.25.3
+  prettier: ^3.8.3
+  react: ^18.3.1
+  react-dom: ^18.3.1
+  react-grab: ^0.1.47
+  shiki: ^1.24.0
+  sonner: ^1.7.1
+  storybook: ^8.6.18
+  tailwind-merge: ^2.6.0
+  tailwindcss: ^3.4.17
+  typescript: ^5.7.2
+  vite: ^6.0.3
+  vite-plugin-dts: ^4.3.0
+  vitest: ^3.0.5
+catalogMode: prefer
+
+linkWorkspacePackages: true
+# Prefer the linked local clicky-ui even when the registry has a newer matching
+# version, so local edits always win. When the sibling is absent (CI) there is
+# no workspace package and clicky-ui resolves from the registry.
+preferWorkspacePackages: true

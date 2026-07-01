@@ -13,23 +13,38 @@ import (
 // BuildPrompt constructs a structured prompt from a TODO for Claude Code execution.
 func BuildPrompt(todo *types.TODO, workDir string) string {
 	prompt := "You are fixing a failing test in a Go codebase.\n\n"
-	prompt += buildTODOSection(todo, workDir, false)
+	prompt += buildTODOSection(todo, workDir, false, 0)
 	prompt += singleTODOInstructions
 	return prompt
 }
 
-// BuildGroupPrompt constructs a combined prompt for multiple related TODOs.
+// BuildGroupPrompt constructs a combined prompt for multiple related TODOs,
+// structured as intro → numbered list of items → outro instructions. A single
+// item keeps the plain framing (no numbering); several items are numbered so the
+// agent can address each in turn.
 func BuildGroupPrompt(todoList []*types.TODO, workDir string) string {
-	prompt := "You are implementing multiple related fixes in a codebase.\nEach TODO below describes a separate task. Implement ALL of them.\n\n"
-	for _, todo := range todoList {
-		prompt += buildTODOSection(todo, workDir, true)
+	var prompt string
+	if len(todoList) > 1 {
+		prompt = fmt.Sprintf("You are implementing the %d todo items listed below. Each is a separate task — implement ALL of them.\n\n", len(todoList))
+	} else {
+		prompt = "You are implementing the todo item below in a codebase.\n\n"
+	}
+	for i, todo := range todoList {
+		number := 0
+		if len(todoList) > 1 {
+			number = i + 1
+		}
+		prompt += buildTODOSection(todo, workDir, true, number)
 	}
 	prompt += "---\n"
 	prompt += groupTODOInstructions
 	return prompt
 }
 
-func buildTODOSection(todo *types.TODO, workDir string, grouped bool) string {
+// buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
+// group framing carries it instead); number, when > 0, prefixes the heading with
+// its position in the list so multi-todo runs read as a numbered checklist.
+func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int) string {
 	var section string
 
 	if todo.Prompt != "" {
@@ -60,7 +75,11 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool) string {
 		heading = todo.Path[0]
 	}
 	if heading != "" {
-		section += fmt.Sprintf("## %s\n\n", heading)
+		if number > 0 {
+			section += fmt.Sprintf("## %d. %s\n\n", number, heading)
+		} else {
+			section += fmt.Sprintf("## %s\n\n", heading)
+		}
 	}
 
 	if refs := todo.PathRefs(); len(refs) > 0 && workDir != "" {
@@ -77,6 +96,8 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool) string {
 	if body := readTODOMarkdownBody(todo); body != "" {
 		section += stripFileRefLine(body) + "\n\n"
 	}
+
+	section += buildCommentsSection(todo.ProviderEvents)
 
 	if len(todo.StepsToReproduce) > 0 {
 		section += "## Steps to Reproduce\n\nRun the following to reproduce the failure:\n\n"
@@ -100,6 +121,32 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool) string {
 		}
 	}
 
+	return section
+}
+
+// buildCommentsSection renders issue comments so the agent sees the discussion
+// (clarifications, decisions, extra context) that accompanies the issue body.
+// Only CommentAdded events with a non-empty body are included; other event kinds
+// (label changes, status updates) are timeline noise for an implementation prompt.
+func buildCommentsSection(events []types.ProviderEvent) string {
+	var section string
+	for _, event := range events {
+		if event.Kind != "CommentAdded" {
+			continue
+		}
+		body := strings.TrimSpace(event.Body)
+		if body == "" {
+			continue
+		}
+		if section == "" {
+			section = "## Comments\n\n"
+		}
+		author := event.Actor
+		if author == "" {
+			author = "unknown"
+		}
+		section += fmt.Sprintf("**%s:**\n\n%s\n\n", author, body)
+	}
 	return section
 }
 
@@ -137,6 +184,9 @@ func langFromExt(ext string) string {
 }
 
 func readTODOMarkdownBody(todo *types.TODO) string {
+	if todo.MarkdownBody != "" {
+		return strings.TrimSpace(todo.MarkdownBody)
+	}
 	if todo.FilePath == "" {
 		return ""
 	}
@@ -164,10 +214,10 @@ Your fix should:
 
 const groupTODOInstructions = `## Instructions
 
-1. Implement ALL TODOs listed above
-3. Investigate the codebase to understand the root cause of each issue
-4. Implement fixes that address the underlying issues
-5. Do NOT run git add or git commit — gavel manages commits automatically
+1. Implement ALL todo items listed above
+2. Investigate the codebase to understand the root cause of each issue
+3. Implement fixes that address the underlying issues
+4. Do NOT run git add or git commit — gavel manages commits automatically
 
 Your fixes should:
 - Address root causes, not mask symptoms

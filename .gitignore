@@ -1,4 +1,4 @@
-# Binaries for programs and plugins
+ Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
@@ -55,7 +55,7 @@ coverage.html
 node_modules/
 
 # Build artifacts
-/gavel
+
 .task
 .cache
 __debug*
@@ -76,6 +76,17 @@ pr/ui/dist/
 .tmp/
 .claude
 /*.json
+!/gavel.schema.json
 .gavel/
 .vitest/
 testrunner/ui/dist/testui.js
+.handoff/
+pr/ui/dist/prui.js
+.playwright-cli/
+.todos/
+go.work.sum
+.grite/
+go.work.sum
+# The built CLI binary at the repo root. Anchored so it does not also ignore the
+# cmd/gavel/ source directory (an unanchored "gavel" hides new files there).
+/gavel

@@ -17,11 +17,11 @@ ensure-task:
 deps: ensure-task
 	@echo "Ensuring Go module dependencies are available"
 	@go mod download
+	@command -v corepack >/dev/null 2>&1 || { echo "corepack (bundled with Node.js >= 16.9) is required to install UI dependencies"; exit 1; }
 	@for dir in $(UI_DIRS); do \
 		if [ ! -d "$$dir/node_modules" ]; then \
 			echo "Installing $$dir dependencies"; \
-			command -v npm >/dev/null 2>&1 || { echo "npm is required to install $$dir dependencies"; exit 1; }; \
-			( cd "$$dir" && npm install ); \
+			( cd "$$dir" && CI=true corepack pnpm install --no-frozen-lockfile ); \
 		fi; \
 	done
 

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/snapshots"
@@ -178,6 +178,58 @@ func TestGatherFromRepo(t *testing.T) {
 	assert.Equal(t, StateUnstaged, byPath["README.md"].State)
 	assert.Equal(t, StateUntracked, byPath["untracked.go"].State)
 	assert.Equal(t, "go", byPath["staged.go"].FileMap.Language)
+}
+
+func TestGatherHidesGitIgnoredTrackedFiles(t *testing.T) {
+	repo := initStatusRepo(t)
+	gitRun(t, repo, "config", "core.excludesFile", "/dev/null")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("dist/*\n!dist/keep.js\n"), 0o644))
+	gitRun(t, repo, "add", ".gitignore")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "dist"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "keep.js"), []byte("v1\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "app.go"), []byte("package x\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")   // force-track the ignored bundle
+	gitRun(t, repo, "add", "dist/keep.js", "app.go") // keep.js is !-negated, so a plain add works
+	gitRun(t, repo, "commit", "-m", "baseline")
+
+	// Modify all three; leave them unstaged.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v2\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "keep.js"), []byte("v2\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "app.go"), []byte("package x\n// edit\n"), 0o644))
+
+	result, err := Gather(repo, Options{NoRepomap: true})
+	require.NoError(t, err)
+	paths := pathsOf(result.Files)
+	assert.NotContains(t, paths, "dist/bundle.js", "force-tracked .gitignore'd file must be hidden")
+	assert.Contains(t, paths, "dist/keep.js", "!-negated file must remain visible")
+	assert.Contains(t, paths, "app.go", "normal tracked modification must remain visible")
+}
+
+func TestGatherKeepsStagedGitIgnoredFiles(t *testing.T) {
+	repo := initStatusRepo(t)
+	gitRun(t, repo, "config", "core.excludesFile", "/dev/null")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("dist/\n"), 0o644))
+	gitRun(t, repo, "add", ".gitignore")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "dist"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v1\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")
+	gitRun(t, repo, "commit", "-m", "baseline")
+
+	// Modify and stage the ignored bundle: an explicit `git add` keeps it visible.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "dist", "bundle.js"), []byte("v2\n"), 0o644))
+	gitRun(t, repo, "add", "-f", "dist/bundle.js")
+
+	result, err := Gather(repo, Options{NoRepomap: true})
+	require.NoError(t, err)
+	byPath := map[string]FileStatus{}
+	for _, f := range result.Files {
+		byPath[f.Path] = f
+	}
+	f, ok := byPath["dist/bundle.js"]
+	require.True(t, ok, "manually staged .gitignore'd file must stay visible")
+	assert.Equal(t, StateStaged, f.State)
 }
 
 func TestGatherWithFolderFilter(t *testing.T) {

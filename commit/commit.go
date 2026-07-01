@@ -6,40 +6,44 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/clicky"
-	clickyai "github.com/flanksource/clicky/ai"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
-	gavelai "github.com/flanksource/gavel/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/internal/changegraph"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
 var (
 	ErrNothingStaged            = errors.New("nothing staged to commit")
+	ErrSessionNoFiles           = errors.New("session edited no stageable files")
 	ErrNothingToPush            = errors.New("nothing to commit and no local commits ahead of upstream")
 	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
-	ErrInvalidStage             = errors.New("invalid --stage value")
 	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
+	ErrAIGroupWithMessage       = errors.New("--ai-group does not support --message")
+	ErrAIGroupWithInteractive   = errors.New("--ai-group cannot be combined with --interactive")
 	ErrInteractiveWithCommitAll = errors.New("--interactive cannot be combined with --commit-all")
 	ErrInteractiveWithMessage   = errors.New("--interactive cannot be combined with --message")
 	ErrInteractiveNonTTY        = errors.New("--interactive requires an interactive terminal")
 	ErrInteractiveCancelled     = errors.New("commit cancelled: interactive selection aborted")
 	ErrInteractiveEmpty         = errors.New("commit cancelled: no files selected in interactive prompt")
 
-	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return gavelai.NewAgent(cfg) }
+	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return clickyai.NewAgent(cfg) }
 	analyzeCommitMessageWithAIFunc                  = git.AnalyzeWithAI
 	analyzeCompatibilityPromptsWithAIFunc           = git.AnalyzeCompatibilityPromptsWithAI
 	dryRunOutput                          io.Writer = os.Stdout
 )
 
 const (
-	defaultMaxFiles = 7
-	defaultMaxLines = 500
+	defaultMaxFiles   = 7
+	defaultMaxLines   = 500
+	defaultMaxCommits = 7
 )
 
 const (
@@ -52,18 +56,40 @@ const (
 )
 
 type Options struct {
-	WorkDir       string
-	Stage         string
-	CommitAll     bool
-	Interactive   bool
-	Summary       bool
-	MaxFiles      int
-	MaxLines      int
-	DryRun        bool
-	Force         bool
-	NoCache       bool
-	Push          bool
+	WorkDir   string
+	Stage     string
+	CommitAll bool
+	// AIGroup asks the LLM to split the change set into logical commit groups
+	// (plus a separate chore commit for lock/generated files) instead of
+	// grouping by directory. Combine with CommitAll to stage all changes first;
+	// otherwise it groups only the staged set.
+	AIGroup     bool
+	Interactive bool
+	Summary     bool
+	MaxFiles    int
+	MaxLines    int
+	// MaxCommits caps how many commits AI grouping (--ai-group) produces,
+	// excluding the trailing chore commit for lock/generated files. It is fed to
+	// the grouping prompt and re-enforced via a consolidation feedback prompt when
+	// the LLM exceeds it. Defaults to defaultMaxCommits.
+	MaxCommits int
+	// GroupByScope makes AI grouping treat repomap scope as the primary commit
+	// boundary. Default (false) groups by logical change with scope as a hint.
+	GroupByScope bool
+	DryRun       bool
+	Force        bool
+	NoCache      bool
+	Push         bool
+	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
+	// it merges once required checks pass. Only applies to PRs this run opens.
+	AutoMerge bool
+	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
+	MergeType string
+	// Model overrides the LLM for commit-message and PR-content generation
+	// (CLI --model). GroupModel overrides the LLM for AI grouping (CLI
+	// --group-model); both fall back to .gavel.yaml commit.{model,groupModel}.
 	Model         string
+	GroupModel    string
 	Message       string
 	PrecommitMode string
 	CompatMode    string
@@ -86,11 +112,25 @@ type Options struct {
 	// FixupAuto value triggers per-file routing by last-touching commit on
 	// base..HEAD; any other value is treated as an explicit target hash.
 	Fixup string
+	// Since, when non-empty, switches Run() to runIssueIdSquash: review
+	// <Since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into a
+	// single commit. History-only — staged files are ignored.
+	Since string
 	// Autosquash controls whether `git rebase -i --autosquash` runs after
 	// fixup commits are created. Defaults to true at the CLI; tests / direct
 	// callers must opt in explicitly.
 	Autosquash bool
-	Config     verify.CommitConfig
+	// AddMetadata appends git trailers identifying the gavel todo issue and
+	// agent session to each generated commit message. Defaults to true at the
+	// CLI; direct callers must opt in. See applyCommitMetadata.
+	AddMetadata bool
+	// IssueID and SessionID are the gavel todo issue id and agent session id to
+	// stamp when AddMetadata is set. Populated in-process by RunAfterAgent; when
+	// empty applyCommitMetadata falls back to the GAVEL_ISSUE_ID /
+	// GAVEL_SESSION_ID env vars.
+	IssueID   string
+	SessionID string
+	Config    verify.CommitConfig
 
 	// lintGates is the resolved on/off state. Populated by Run() before
 	// dispatching into runSingleCommit / runCommitAll so the gate runs with
@@ -145,6 +185,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := validateFixupOptions(opts); err != nil {
 		return nil, err
 	}
+	if err := validateSinceOptions(opts); err != nil {
+		return nil, err
+	}
 	precommitMode, err := resolvePrecommitMode(opts.PrecommitMode, opts.Config)
 	if err != nil {
 		return nil, err
@@ -167,8 +210,27 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		result *Result
 	)
 	switch {
+	case opts.Since != "":
+		result, err = runIssueIdSquash(ctx, opts)
 	case opts.Fixup != "":
 		result, err = runFixup(ctx, opts)
+	case opts.AIGroup:
+		if opts.Message != "" {
+			return nil, ErrAIGroupWithMessage
+		}
+		if opts.Interactive {
+			return nil, ErrAIGroupWithInteractive
+		}
+		if opts.MaxFiles == 0 {
+			opts.MaxFiles = defaultMaxFiles
+		}
+		if opts.MaxLines == 0 {
+			opts.MaxLines = defaultMaxLines
+		}
+		if opts.MaxCommits == 0 {
+			opts.MaxCommits = defaultMaxCommits
+		}
+		result, err = runCommitAIGroup(ctx, opts)
 	case opts.CommitAll:
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
@@ -209,7 +271,7 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 	} else {
-		if err := stageFiles(opts.WorkDir, opts.Stage); err != nil {
+		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
 			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
 		}
 	}
@@ -222,36 +284,9 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 		return nil, ErrNothingStaged
 	}
 
-	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	source, err = applyPrecommitChecks(ctx, opts, source)
 	if err != nil {
 		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyFileSizeCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyLinkedDepsCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyGoModTidy(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
 	}
 
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
@@ -283,8 +318,13 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 
 	analysis, err := generateCommitAnalysis(ctx, opts, source.Diff)
 	if err != nil {
+		if isTokenLimitError(err) {
+			logger.Infof("staged diff exceeds model context window, splitting commit by directory")
+			return commitByDirectory(ctx, opts, source, result)
+		}
 		return result, fmt.Errorf("generate commit analysis: %w", err)
 	}
+	analysis.Message = applyCommitMetadata(opts, analysis.Message)
 	result.Message = analysis.Message
 	result.Commits = []CommitResult{{
 		Message:              analysis.Message,
@@ -372,48 +412,65 @@ func mergeResults(agg, single *Result) *Result {
 }
 
 func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
-	if err := stageCommitAllSource(opts.WorkDir); err != nil {
+	if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
 		return nil, err
 	}
 
+	source, result, err := prepareMultiCommit(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+
+	return commitByDirectory(ctx, opts, source, result)
+}
+
+// runCommitAIGroup stages the change set (all changes when --commit-all is also
+// set, otherwise just the staged set), asks the LLM to split it into logical
+// commit groups plus a chore group for lock/generated files, and creates one
+// commit per group.
+func runCommitAIGroup(ctx context.Context, opts Options) (*Result, error) {
+	if opts.CommitAll {
+		if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
+			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
+		}
+	}
+
+	source, result, err := prepareMultiCommit(ctx, opts)
+	if err != nil {
+		return result, err
+	}
+
+	groups, err := groupChangesByAIFunc(ctx, opts, source)
+	if err != nil {
+		return result, fmt.Errorf("ai grouping: %w", err)
+	}
+
+	return commitGroups(ctx, opts, source, result, groups)
+}
+
+// prepareMultiCommit runs the shared staging-completion pipeline for the
+// multi-commit flows (runCommitAll, runCommitAIGroup): it reads the staged
+// source, applies the precommit gates, runs hooks, re-reads the staged source,
+// and applies the lint gate. Callers are responsible for staging beforehand
+// (stageCommitAllSource for --commit-all, stageFiles for --ai-group). It
+// returns the final staged source and a Result pre-populated with Staged/Hooks/
+// Lint so error returns carry partial state.
+func prepareMultiCommit(ctx context.Context, opts Options) (stagedSource, *Result, error) {
 	source, err := readStagedSource(opts.WorkDir)
 	if err != nil {
-		return nil, err
+		return source, nil, err
 	}
 	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, nil, ErrNothingStaged
 	}
 
-	source, err = applyGitIgnoreCheck(ctx, opts, source)
+	source, err = applyPrecommitChecks(ctx, opts, source)
 	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyFileSizeCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyLinkedDepsCheck(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	source, err = applyGoModTidy(ctx, opts, source)
-	if err != nil {
-		return nil, err
-	}
-	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, nil, err
 	}
 
 	result := &Result{Staged: source.Files, DryRun: opts.DryRun}
@@ -422,7 +479,7 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		hookResults, hookErr := RunHooks(opts.WorkDir, opts.Config.Hooks, source.Files)
 		result.Hooks = hookResults
 		if hookErr != nil {
-			return result, hookErr
+			return source, result, hookErr
 		}
 	} else if len(opts.Config.Hooks) > 0 {
 		logger.Infof("Skipping %d commit hook(s) due to --force", len(opts.Config.Hooks))
@@ -430,33 +487,87 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 
 	source, err = readStagedSource(opts.WorkDir)
 	if err != nil {
-		return result, err
+		return source, result, err
 	}
 	if len(source.Files) == 0 {
-		return nil, ErrNothingStaged
+		return source, result, ErrNothingStaged
 	}
 	result.Staged = source.Files
 
 	lintRes, lintErr := applyLintGate(ctx, opts.WorkDir, source.Files, opts.lintGates)
 	result.Lint = lintRes
 	if lintErr != nil {
-		return result, lintErr
+		return source, result, lintErr
+	}
+
+	return source, result, nil
+}
+
+// applyPrecommitChecks runs the gitignore, file-size, linked-deps and
+// go-mod-tidy gates in order over the staged source, returning ErrNothingStaged
+// as soon as any gate empties the staged set. Shared by runSingleCommit and
+// prepareMultiCommit.
+func applyPrecommitChecks(ctx context.Context, opts Options, source stagedSource) (stagedSource, error) {
+	checks := []func(context.Context, Options, stagedSource) (stagedSource, error){
+		applyGitIgnoreCheck,
+		applyFileSizeCheck,
+		applyLinkedDepsCheck,
+		applyGoModTidy,
+	}
+	for _, check := range checks {
+		var err error
+		source, err = check(ctx, opts, source)
+		if err != nil {
+			return source, err
+		}
+		if len(source.Files) == 0 {
+			return source, ErrNothingStaged
+		}
+	}
+	return source, nil
+}
+
+// commitByDirectory groups the staged changes by directory and creates one
+// commit per group. It backs `--commit-all` and is also the fallback when a
+// single-commit AI analysis overflows the model context window.
+func commitByDirectory(ctx context.Context, opts Options, source stagedSource, result *Result) (*Result, error) {
+	if opts.MaxFiles == 0 {
+		opts.MaxFiles = defaultMaxFiles
+	}
+	if opts.MaxLines == 0 {
+		opts.MaxLines = defaultMaxLines
 	}
 
 	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)
+	return commitGroups(ctx, opts, source, result, groups)
+}
+
+// commitGroups generates a message for each commit group and creates one commit
+// per group. A group carrying a preset Message (e.g. the --ai-group chore group
+// for lock/generated files) skips the LLM and uses it verbatim. It backs both
+// the directory grouper and the AI grouper.
+func commitGroups(ctx context.Context, opts Options, source stagedSource, result *Result, groups []commitGroup) (*Result, error) {
 	if len(groups) == 0 {
 		return result, ErrNothingStaged
 	}
 
 	result.Commits = make([]CommitResult, 0, len(groups))
 	for _, group := range groups {
+		if group.Message != "" {
+			result.Commits = append(result.Commits, CommitResult{
+				Label:   group.Label,
+				Message: applyCommitMetadata(opts, group.Message),
+				Files:   group.Files(),
+			})
+			continue
+		}
 		analysis, msgErr := generateCommitAnalysis(ctx, opts, group.diff())
 		if msgErr != nil {
 			return result, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), msgErr)
 		}
 		result.Commits = append(result.Commits, CommitResult{
 			Label:                group.Label,
-			Message:              analysis.Message,
+			Message:              applyCommitMetadata(opts, analysis.Message),
 			Files:                group.Files(),
 			FunctionalityRemoved: analysis.FunctionalityRemoved,
 			CompatibilityIssues:  analysis.CompatibilityIssues,
@@ -495,26 +606,223 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	return result, nil
 }
 
-func stageFiles(workDir, mode string) error {
+// stageFiles stages changes for the given mode using git's own ignore-aware
+// semantics, so an ignored path can never abort the whole `git add`:
+//   - tracked modifications/deletions go in via `git add -u`, then
+//     unstageGitIgnored removes any that match the repo's .gitignore (a
+//     force-tracked bundle like testrunner/ui/dist/testui.js is left out of the
+//     commit but stays tracked); files staged manually before the call are
+//     preserved, and a !-negation in .gitignore re-includes a path;
+//   - StageAll additionally adds untracked files that are matched by neither
+//     .gitignore (handled by git) nor the repo's .gavel.yaml commit.gitignore.
+//
+// StageStaged is left untouched: an explicit `git add` is an intentional
+// override of .gitignore for that commit.
+//
+// Any other mode value is a Claude session id: stageSessionFiles stages exactly
+// the files that session's Edit/Write tools touched (see --stage=<session-id>).
+func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 	switch mode {
 	case StageStaged:
 		return nil
 	case StageUnstaged, StageAll:
-		opts := changegraph.DiffOptions{IncludeUnstaged: true}
-		if mode == StageAll {
-			opts.IncludeUntracked = true
-		}
-		fs, err := changegraph.ComputeFileSet(workDir, opts)
+		preStaged, err := stagedFiles(workDir)
 		if err != nil {
-			return fmt.Errorf("compute file set: %w", err)
+			return fmt.Errorf("list pre-staged files: %w", err)
 		}
-		return addFiles(workDir, fs.Sorted())
+		if err := gitAddUpdate(workDir); err != nil {
+			return err
+		}
+		if mode == StageAll {
+			if err := addUntracked(workDir, cfg); err != nil {
+				return err
+			}
+		}
+		return unstageGitIgnored(workDir, preStaged)
 	default:
-		return fmt.Errorf("%w: %q", ErrInvalidStage, mode)
+		return stageSessionFiles(workDir, mode, cfg)
 	}
 }
 
-func stageCommitAllSource(workDir string) error {
+// stageSessionFiles stages exactly the files an agent wrote to during the Claude
+// session identified by sessionID — the file_path of every Edit/Write/MultiEdit/
+// NotebookEdit tool call — filtered by .gitignore and the repo's .gavel.yaml
+// commit.gitignore. It scopes a commit to what the agent changed rather than the
+// whole working tree, and backs both `gavel commit --stage=<session-id>` and the
+// todo runner's auto-commit. Files edited outside workDir, no longer present, or
+// matching an ignore rule are skipped (each logged).
+func stageSessionFiles(workDir, sessionID string, cfg verify.CommitConfig) error {
+	sessionFile, err := history.FindSessionFile(sessionID)
+	if err != nil {
+		return fmt.Errorf("stage session %q: no Claude session log found: %w", sessionID, err)
+	}
+	logger.Infof("commit: staging files from claude session %s (%s)", sessionID, sessionFile)
+
+	modified, err := history.SessionModifiedFiles(sessionFile)
+	if err != nil {
+		return fmt.Errorf("stage session %q: read session log %s: %w", sessionID, sessionFile, err)
+	}
+	logger.Infof("commit: session %s edited %d file(s)", sessionID, len(modified))
+	for _, p := range modified {
+		logger.V(1).Infof("commit:   edited %s", p)
+	}
+
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("resolve work dir %q: %w", workDir, err)
+	}
+
+	candidates := make([]string, 0, len(modified))
+	for _, p := range modified {
+		abs := p
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(absWork, abs)
+		}
+		rel, err := filepath.Rel(absWork, abs)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			logger.Infof("commit: skipping %s (edited outside %s)", p, absWork)
+			continue
+		}
+		if _, statErr := os.Stat(abs); statErr != nil {
+			logger.Infof("commit: skipping %s (no longer present)", rel)
+			continue
+		}
+		candidates = append(candidates, rel)
+	}
+
+	keep, err := filterIgnoredPaths(absWork, candidates, cfg)
+	if err != nil {
+		return err
+	}
+	logger.Infof("commit: staging %d of %d session file(s)", len(keep), len(modified))
+	if len(keep) == 0 {
+		return fmt.Errorf("stage session %q (%d edited, all skipped): %w", sessionID, len(modified), ErrSessionNoFiles)
+	}
+	return addFiles(workDir, keep)
+}
+
+// filterIgnoredPaths drops paths the repo's .gitignore (naming one to `git add`
+// would error) or .gavel.yaml commit.gitignore excludes, logging each skip.
+func filterIgnoredPaths(workDir string, candidates []string, cfg verify.CommitConfig) ([]string, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	ignored := make(map[string]struct{})
+
+	absToRel := make(map[string]string, len(candidates))
+	abs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		p := filepath.Join(workDir, c)
+		absToRel[p] = c
+		abs = append(abs, p)
+	}
+	_, gitIgnored := utils.PartitionGitIgnored(abs, workDir)
+	for _, p := range gitIgnored {
+		rel := absToRel[p]
+		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
+		ignored[rel] = struct{}{}
+	}
+
+	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	for _, v := range violations {
+		logger.Infof("commit: skipping %s (matches .gavel.yaml commit.gitignore %q)", v.File, v.Pattern)
+		ignored[v.File] = struct{}{}
+	}
+
+	keep := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if _, skip := ignored[c]; !skip {
+			keep = append(keep, c)
+		}
+	}
+	return keep, nil
+}
+
+// unstageGitIgnored removes from the index any staged file that matches the
+// repo's .gitignore, except files in preStaged (staged by the user before
+// gavel ran). It uses `git reset --` so the working tree and tracking are
+// untouched — the modification simply won't be in the commit. A !-negation in
+// .gitignore keeps a path staged.
+func unstageGitIgnored(workDir string, preStaged []string) error {
+	staged, err := stagedFiles(workDir)
+	if err != nil {
+		return fmt.Errorf("list staged files: %w", err)
+	}
+	if len(staged) == 0 {
+		return nil
+	}
+
+	absToRel := make(map[string]string, len(staged))
+	abs := make([]string, 0, len(staged))
+	for _, f := range staged {
+		p := filepath.Join(workDir, f)
+		absToRel[p] = f
+		abs = append(abs, p)
+	}
+
+	preStagedSet := make(map[string]struct{}, len(preStaged))
+	for _, f := range preStaged {
+		preStagedSet[f] = struct{}{}
+	}
+
+	_, ignored := utils.PartitionGitIgnored(abs, workDir)
+	toReset := make([]string, 0, len(ignored))
+	for _, p := range ignored {
+		rel := absToRel[p]
+		if _, kept := preStagedSet[rel]; kept {
+			continue
+		}
+		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
+		toReset = append(toReset, rel)
+	}
+	return resetFiles(workDir, toReset)
+}
+
+// addUntracked stages untracked files that git does not ignore, minus the
+// repo's .gavel.yaml commit.gitignore rules (commit.allow re-includes) and minus
+// embedded git repositories, which `git add` refuses. Every skip is logged so a
+// dropped file is never silent.
+func addUntracked(workDir string, cfg verify.CommitConfig) error {
+	untracked, err := untrackedFiles(workDir)
+	if err != nil {
+		return fmt.Errorf("list untracked files: %w", err)
+	}
+	if len(untracked) == 0 {
+		return nil
+	}
+
+	candidates := make([]string, 0, len(untracked))
+	for _, f := range untracked {
+		if strings.HasSuffix(f, "/") {
+			logger.Infof("commit: skipping embedded repo or directory %s", f)
+			continue
+		}
+		candidates = append(candidates, f)
+	}
+
+	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)
+	if err != nil {
+		return fmt.Errorf("evaluate .gavel.yaml commit.gitignore: %w", err)
+	}
+	ignored := make(map[string]struct{}, len(violations))
+	for _, v := range violations {
+		logger.Infof("commit: skipping %s (matches .gavel.yaml commit.gitignore %q)", v.File, v.Pattern)
+		ignored[v.File] = struct{}{}
+	}
+
+	keep := make([]string, 0, len(candidates))
+	for _, f := range candidates {
+		if _, skip := ignored[f]; !skip {
+			keep = append(keep, f)
+		}
+	}
+	return addFiles(workDir, keep)
+}
+
+func stageCommitAllSource(workDir string, cfg verify.CommitConfig) error {
 	files, err := stagedFiles(workDir)
 	if err != nil {
 		return fmt.Errorf("list staged files: %w", err)
@@ -522,7 +830,7 @@ func stageCommitAllSource(workDir string) error {
 	if len(files) > 0 {
 		return nil
 	}
-	if err := stageFiles(workDir, StageAll); err != nil {
+	if err := stageFiles(workDir, StageAll, cfg); err != nil {
 		return fmt.Errorf("stage files (%s): %w", StageAll, err)
 	}
 	return nil
@@ -542,7 +850,7 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
-	agent, err := BuildAgent(opts)
+	agent, err := BuildAgent(opts, opts.messageModel())
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
@@ -553,7 +861,8 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
 	message := explicitMessage
 	if message == "" {
-		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{})
+		maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
+		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines})
 		if err != nil {
 			return commitAIAnalysis{}, err
 		}
@@ -587,12 +896,77 @@ func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage,
 	}, nil
 }
 
-func BuildAgent(opts Options) (clickyai.Agent, error) {
-	cfg := clickyai.DefaultConfig()
+// countDiffLines counts changed content lines in a unified diff: lines starting
+// with '+' or '-', excluding the '+++'/'---' file headers.
+func countDiffLines(diff string) int {
+	n := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+			continue
+		}
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			n++
+		}
+	}
+	return n
+}
+
+// maxBodyLinesForDiff scales the commit-message body cap to the diff size:
+// trivial diffs get a subject only (0), larger diffs allow a longer body.
+func maxBodyLinesForDiff(changedLines int) int {
+	switch {
+	case changedLines <= 20:
+		return 0
+	case changedLines <= 100:
+		return 3
+	case changedLines <= 300:
+		return 6
+	case changedLines <= 800:
+		return 10
+	default:
+		return 15
+	}
+}
+
+// defaultGroupModel is the model used for AI commit grouping when neither
+// --group-model nor commit.{groupModel,model} is set. Grouping reasons over the
+// whole change set, so it defaults to a more capable tier than the haiku-class
+// model used for message generation.
+const defaultGroupModel = "claude-sonnet-4-5"
+
+// messageModel resolves the LLM for commit-message and PR-content generation:
+// the CLI --model override, then .gavel.yaml commit.model, else the clicky
+// default (a fast haiku-class model).
+func (opts Options) messageModel() string {
 	if opts.Model != "" {
-		cfg.Model = opts.Model
-	} else if opts.Config.Model != "" {
-		cfg.Model = opts.Config.Model
+		return opts.Model
+	}
+	return opts.Config.Model
+}
+
+// groupModel resolves the LLM for AI commit grouping. Precedence: --group-model,
+// then commit.groupModel, then the shared message model (--model / commit.model),
+// else defaultGroupModel.
+func (opts Options) groupModel() string {
+	if opts.GroupModel != "" {
+		return opts.GroupModel
+	}
+	if opts.Config.GroupModel != "" {
+		return opts.Config.GroupModel
+	}
+	if m := opts.messageModel(); m != "" {
+		return m
+	}
+	return defaultGroupModel
+}
+
+// BuildAgent constructs an LLM agent for opts using model. An empty model falls
+// back to the clicky default. Callers resolve model per task via
+// Options.messageModel / Options.groupModel.
+func BuildAgent(opts Options, model string) (clickyai.Agent, error) {
+	cfg := clickyai.DefaultConfig()
+	if model != "" {
+		cfg.Model = model
 	}
 	if opts.NoCache {
 		cfg.NoCache = true

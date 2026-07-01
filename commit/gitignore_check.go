@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/verify"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
@@ -172,7 +173,7 @@ func RunGitIgnoreCheck(ctx context.Context, p CheckParams) (CheckOutcome, error)
 	// Only escalate on non-TTY if we'd otherwise fall through to the real
 	// interactive prompt. Callers that inject a Decider (tests, future
 	// non-interactive flows) have already decided how to answer.
-	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
+	if mode == IgnoreCheckModePrompt && p.Decider == nil && !stdinIsTerminal() && !prompt.HasInteractiveSink() {
 		logger.Warnf("gitignore check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = IgnoreCheckModeFail
 	}
@@ -619,14 +620,14 @@ func applyGitIgnoreCheck(ctx context.Context, opts Options, source stagedSource)
 	return refreshed, nil
 }
 
-func runPromptDecider(_ context.Context, v Violation) (Decision, error) {
+func runPromptDecider(ctx context.Context, v Violation) (Decision, error) {
 	header := fmt.Sprintf("Staged %q matches commit.gitignore pattern %q", v.File, v.Pattern)
 	choices := gitIgnoreChoices(v)
 	items := make([]string, len(choices))
 	for i, choice := range choices {
 		items[i] = choice.Text
 	}
-	idx, ok := promptSelectIndex(header, items)
+	idx, ok := promptSelectIndex(ctx, header, items)
 	if !ok {
 		return DecisionCancel, nil
 	}

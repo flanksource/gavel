@@ -10,28 +10,78 @@ tasks:
     cmds:
       - task --list
 
+  clicky-ui:build:
+    desc: |
+      Rebuild the local @flanksource/clicky-ui sibling when it is checked out
+      next to gavel, so its dist/ reflects local edits before a UI bundle links
+      against it. A no-op in CI (and anywhere without the sibling), where
+      clicky-ui is resolved from the npm registry instead. Builds via --filter
+      from the workspace so it reuses the deps pnpm already installed.
+    sources:
+      - ../clicky-ui/packages/ui/src/**/*
+      - ../clicky-ui/packages/ui/package.json
+      - ../clicky-ui/packages/ui/vite.config.ts
+    generates:
+      - ../clicky-ui/packages/ui/dist/index.js
+    cmds:
+      - cmd: |
+          if [ -d ../clicky-ui/packages/ui ]; then
+            echo "Rebuilding local @flanksource/clicky-ui sibling..."
+            (cd ../clicky-ui && corepack pnpm --filter @flanksource/clicky-ui run build)
+          else
+            echo "No local clicky-ui sibling; using published @flanksource/clicky-ui from npm"
+          fi
+
+  ui-install:
+    desc: |
+      Install UI deps serially. Both pr/ui and testrunner/ui link the sibling
+      clicky-ui as a workspace package, so each install writes into the SHARED
+      ../clicky-ui/packages/ui/node_modules. Running the two installs in parallel
+      (as build's deps did) races on those symlinks -> "EEXIST ... jsdom".
+      Serial installs avoid the race; the vite builds that follow only read
+      clicky-ui/dist, so they can still run in parallel.
+    deps:
+      - clicky-ui:build
+    cmds:
+      - cd testrunner/ui && CI=true corepack pnpm install --no-frozen-lockfile
+      - cd pr/ui && CI=true corepack pnpm install --no-frozen-lockfile
+    sources:
+      - testrunner/ui/package.json
+      - testrunner/ui/pnpm-lock.yaml
+      - pr/ui/package.json
+      - pr/ui/pnpm-lock.yaml
+    generates:
+      - testrunner/ui/node_modules/.modules.yaml
+      - pr/ui/node_modules/.modules.yaml
+
   test-ui:
     desc: Build the test UI frontend bundle (Preact + Vite)
     dir: testrunner/ui
+    deps:
+      - ui-install
     cmds:
-      - npm install
-      - npm run build
+      - corepack pnpm run build
     sources:
       - testrunner/ui/src/**/*
       - testrunner/ui/package.json
+      - testrunner/ui/pnpm-workspace.yaml
+      - testrunner/ui/pnpm-lock.yaml
       - testrunner/ui/vite.config.ts
     generates:
       - testrunner/ui/dist/testui.js
 
   pr-ui:
-    desc: Build the PR review UI frontend bundle (Preact + Vite)
+    desc: Build the PR review UI frontend bundle (React + Vite)
     dir: pr/ui
+    deps:
+      - ui-install
     cmds:
-      - npm install
-      - npm run build
+      - corepack pnpm run build
     sources:
       - pr/ui/src/**/*
       - pr/ui/package.json
+      - pr/ui/pnpm-workspace.yaml
+      - pr/ui/pnpm-lock.yaml
       - pr/ui/vite.config.ts
     generates:
       - pr/ui/dist/prui.js
@@ -53,12 +103,14 @@ tasks:
     env:
       NODE_AUTH_TOKEN: "$NPM_TOKEN"
     cmds:
-      - npm ci
-      - npm run check
-      - npm test
-      - npm run build:lib
-      # No --provenance here: it requires a CI OIDC provider (the release
-      # workflow supplies that). Manual local publishes omit it.
+      - CI=true corepack pnpm install --no-frozen-lockfile
+      - corepack pnpm run check
+      - corepack pnpm test
+      - corepack pnpm run build:lib
+      # Publish via the npm CLI (not pnpm): the package keeps a published
+      # clicky-ui range — no workspace: protocol to rewrite — and npm is the
+      # proven path for OIDC/provenance. No --provenance here: it requires a CI
+      # OIDC provider (the release workflow supplies that). Manual local publishes omit it.
       - npm publish --access public
 
   build:

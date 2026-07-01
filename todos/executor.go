@@ -13,6 +13,8 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+const providerPersistenceTimeout = 30 * time.Second
+
 // Executor represents any AI system that can execute TODOs.
 // Implementations include ClaudeExecutor, and potentially OpenAI, Anthropic API, etc.
 type Executor interface {
@@ -22,6 +24,15 @@ type Executor interface {
 
 	// Name returns the executor name (e.g., "claude-code", "openai-gpt4")
 	Name() string
+}
+
+// FeedbackExecutor is implemented by executors that can resume the agent with a
+// follow-up message. The post-completion check loop uses it to hand failing
+// test/lint output back to the agent so it can fix the issues. Executors that
+// do not implement it (or whose SendFeedback returns an error) make the loop
+// report the failures without iterating.
+type FeedbackExecutor interface {
+	SendFeedback(ctx *ExecutorContext, todos []*types.TODO, feedback string) (*ExecutionResult, error)
 }
 
 // ExecutionResult contains the outcome from any executor.
@@ -38,6 +49,16 @@ type ExecutionResult struct {
 	ErrorMessage     string
 	CommitSHA        string
 	Transcript       *ExecutionTranscript
+}
+
+// ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
+// TODO's agent completes: only when enabled, the run succeeded, and the executor
+// did not already commit. The inline claude executor sets CommitSHA after its own
+// commit, so committing again would either duplicate that change set or sweep up
+// the user's restored working-tree changes; the cmux executor leaves CommitSHA
+// empty — that is the path auto-commit is meant to cover.
+func ShouldCommitAfter(result *ExecutionResult, enabled bool) bool {
+	return enabled && result != nil && result.Success && result.CommitSHA == ""
 }
 
 func (e ExecutionResult) Pretty() api.Text {
@@ -80,14 +101,29 @@ type TODOExecutor struct {
 	workDir   string
 	executor  Executor // Pluggable executor implementation
 	sessionID string   // Session ID for resumption across runs
+	provider  Provider
+	// forceChecks turns the post-completion check loop on regardless of config
+	// (the --check flag / dashboard toggle). The loop also runs when .gavel.yaml
+	// or a TODO's frontmatter enables `checks` — see runCheckLoop.
+	forceChecks bool
 }
 
+// EnableChecks forces the post-completion check loop on for this executor,
+// matching `gavel todos run --check`. Without it, the loop still runs when
+// .gavel.yaml or a TODO's frontmatter enables `checks`.
+func (e *TODOExecutor) EnableChecks(force bool) { e.forceChecks = force }
+
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
-func NewTODOExecutor(workDir string, executor Executor, sessionID string) *TODOExecutor {
+func NewTODOExecutor(workDir string, executor Executor, sessionID string, provider ...Provider) *TODOExecutor {
+	var p Provider
+	if len(provider) > 0 {
+		p = provider[0]
+	}
 	return &TODOExecutor{
 		workDir:   workDir,
 		executor:  executor,
 		sessionID: sessionID,
+		provider:  p,
 	}
 }
 
@@ -108,6 +144,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	if e.sessionID != "" {
 		todo.LLM.SessionId = e.sessionID
 	}
+	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 
 	// Check if test already passes (skip if so)
 	if len(todo.StepsToReproduce) > 0 {
@@ -120,6 +157,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		if e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
 			ctx.Logger.Infof("Test already passes, skipping execution")
 			todo.Status = types.StatusSkipped
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now})
 			return &ExecutionResult{
 				Skipped:      true,
 				ExecutorName: e.executor.Name(),
@@ -130,16 +168,21 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 
 	// Execute with configured executor (Claude, OpenAI, etc.)
 	ctx.Logger.Infof("Executing with %s", e.executor.Name())
+	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	result, err := e.executor.Execute(ctx, todo)
+	// The executor may generate its own session id (e.g. cmux's claude
+	// --session-id); persist it now that it is known, regardless of outcome.
+	e.persistSessionID(ctx, todo)
 	if err != nil {
 		ctx.Logger.Errorf("Execution failed: %v", err)
 		todo.Status = types.StatusFailed
 		todo.Attempts++
 		if result != nil {
-			if saveErr := saveAttempt(todo, result); saveErr != nil {
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 			}
 		}
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 		return result, err
 	}
 
@@ -157,16 +200,35 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 			result.Success = false
 			result.ErrorMessage = "Verification tests failed"
 			todo.Attempts++
-			if saveErr := saveAttempt(todo, result); saveErr != nil {
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 			}
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 			return result, fmt.Errorf("verification failed")
+		}
+	}
+
+	// Post-completion check loop: run configured tests/lint and feed failures
+	// back to the agent until they pass (opt-in; no-op when not enabled). Only
+	// gate a run the executor reported successful — runCheckLoop flips Success to
+	// false only when the checks themselves fail.
+	if result.Success {
+		e.runCheckLoop(ctx, []*types.TODO{todo}, result)
+		if !result.Success {
+			ctx.Logger.Errorf("Post-completion checks failed: %s", result.ErrorMessage)
+			todo.Status = types.StatusFailed
+			todo.Attempts++
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
+			}
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+			return result, fmt.Errorf("post-completion checks failed: %s", result.ErrorMessage)
 		}
 	}
 
 	// Update frontmatter with results
 	ctx.Logger.Infof("TODO execution completed successfully")
-	e.updateFrontmatter(todo, result)
+	e.updateFrontmatter(ctx, todo, result)
 
 	return result, nil
 }
@@ -194,6 +256,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		if e.sessionID != "" {
 			todo.LLM.SessionId = e.sessionID
 		}
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 	}
 
 	// Pre-check: filter out TODOs whose steps already pass
@@ -203,6 +266,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		if len(todo.StepsToReproduce) > 0 && e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
 			ctx.Logger.Infof("TODO %s already passes, skipping", todo.Filename())
 			todo.Status = types.StatusSkipped
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now})
 			results[todo.FilePath] = &ExecutionResult{
 				Skipped:      true,
 				ExecutorName: e.executor.Name(),
@@ -217,17 +281,24 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 	var groupResult *ExecutionResult
 	if len(needsExecution) > 0 {
 		var err error
+		ctx.SetSessionIDHook(e.sessionIDPersister(ctx, needsExecution))
 		groupResult, err = groupExec.ExecuteGroup(ctx, needsExecution)
+		// The group executor may generate a session id per todo (e.g. cmux's
+		// claude --session-id); persist it now that it is known.
+		for _, todo := range needsExecution {
+			e.persistSessionID(ctx, todo)
+		}
 		if err != nil {
 			for _, todo := range needsExecution {
 				todo.Status = types.StatusFailed
 				todo.Attempts++
 				if groupResult != nil {
 					perTodo := e.splitResult(groupResult, len(needsExecution))
-					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+					if saveErr := e.saveAttempt(ctx, todo, perTodo); saveErr != nil {
 						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 					}
 				}
+				e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 			}
 			return e.collectResults(todosInGroup, results), err
 		}
@@ -246,16 +317,28 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 					perTodo.Success = false
 					perTodo.ErrorMessage = "Verification tests failed"
 					todo.Attempts++
-					if saveErr := saveAttempt(todo, perTodo); saveErr != nil {
+					if saveErr := e.saveAttempt(ctx, todo, perTodo); saveErr != nil {
 						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
 					}
+					e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 					results[todo.FilePath] = perTodo
 					continue
 				}
 			}
 
-			e.updateFrontmatter(todo, perTodo)
+			e.updateFrontmatter(ctx, todo, perTodo)
 			results[todo.FilePath] = perTodo
+		}
+
+		// Group-level post-completion checks: run the suite once for the shared
+		// agent session and feed failures back to it, but only when every todo
+		// that needed work verified cleanly. On failure, flip the whole group.
+		if e.allGroupResultsOK(needsExecution, results) {
+			checkResult := &ExecutionResult{Success: true, ExecutorName: e.executor.Name()}
+			e.runCheckLoop(ctx, needsExecution, checkResult)
+			if !checkResult.Success {
+				e.markGroupCheckFailure(ctx, needsExecution, results, checkResult)
+			}
 		}
 	}
 
@@ -291,7 +374,7 @@ func (e *TODOExecutor) collectResults(todosInGroup []*types.TODO, resultMap map[
 }
 
 // updateFrontmatter updates the TODO's frontmatter with execution results.
-func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResult) {
+func (e *TODOExecutor) updateFrontmatter(ctx context.Context, todo *types.TODO, result *ExecutionResult) {
 	todo.Status = types.StatusCompleted
 	todo.Attempts++
 
@@ -303,9 +386,72 @@ func (e *TODOExecutor) updateFrontmatter(todo *types.TODO, result *ExecutionResu
 	todo.LLM.TokensUsed = result.TokensUsed
 	todo.LLM.CostIncurred = result.CostUSD
 
-	if err := saveAttempt(todo, result); err != nil {
+	if err := e.saveAttempt(ctx, todo, result); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", err)
 	}
+	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+}
+
+func (e *TODOExecutor) activeProvider() Provider {
+	if e.provider != nil {
+		return e.provider
+	}
+	return &FileProvider{}
+}
+
+func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
+	persistCtx, cancel := providerPersistenceContext(ctx)
+	defer cancel()
+	return e.activeProvider().SaveAttempt(persistCtx, todo, result)
+}
+
+// persistSessionID records the executor's session id (e.g. the cmux/claude
+// --session-id) on the provider so the issue carries a session:<id> label.
+func (e *TODOExecutor) persistSessionID(ctx context.Context, todo *types.TODO) {
+	if todo.LLM == nil || todo.LLM.SessionId == "" {
+		return
+	}
+	e.updateProviderState(ctx, todo, StateUpdate{SessionID: &todo.LLM.SessionId})
+}
+
+// sessionIDPersister builds the SetSessionIDHook callback for a run: when the
+// executor reports its session id (before launching the agent), record it on
+// each todo and persist the session:<id> label immediately, so an interrupted
+// run still carries — and can resume — this session.
+func (e *TODOExecutor) sessionIDPersister(ctx context.Context, todoList []*types.TODO) func(string) {
+	return func(sessionID string) {
+		if sessionID == "" {
+			return
+		}
+		for _, todo := range todoList {
+			if todo == nil {
+				continue
+			}
+			if todo.LLM == nil {
+				todo.LLM = &types.LLM{}
+			}
+			todo.LLM.SessionId = sessionID
+			e.updateProviderState(ctx, todo, StateUpdate{SessionID: &sessionID})
+		}
+	}
+}
+
+func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {
+	persistCtx, cancel := providerPersistenceContext(ctx)
+	defer cancel()
+	if err := e.activeProvider().UpdateState(persistCtx, todo, updates); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to update TODO state: %v\n", err)
+	}
+}
+
+func providerPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), providerPersistenceTimeout)
+	}
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), providerPersistenceTimeout)
 }
 
 // stepsAlreadyPass checks if reproduction steps already pass.

@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	clickyai "github.com/flanksource/clicky/ai"
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/github"
 )
 
@@ -323,6 +323,9 @@ func pushAfterCommitForTest(ctx context.Context, opts Options, result *Result, d
 	}
 	if deps.confirmProtectedRef != nil {
 		d.confirmProtectedRef = deps.confirmProtectedRef
+	}
+	if deps.enableAutoMerge != nil {
+		d.enableAutoMerge = deps.enableAutoMerge
 	}
 	return pushWithDeps(ctx, opts, result, d)
 }

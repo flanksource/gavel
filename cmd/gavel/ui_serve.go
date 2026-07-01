@@ -31,7 +31,7 @@ import (
 // time.Duration as a field type.
 type UIServeOptions struct {
 	Port         int           `flag:"port" help:"Bind this port (0 = pick ephemeral). Ignored when --listener-fd is set." default:"0"`
-	Addr         string        `flag:"addr" help:"Interface to bind. Use 0.0.0.0 to expose on the LAN." default:"localhost"`
+	Addr         string        `flag:"addr" help:"Interface to bind. Defaults to 0.0.0.0 (all interfaces); set localhost to restrict to this machine." default:"0.0.0.0"`
 	ListenerFD   int           `flag:"listener-fd" help:"Adopt an inherited socket FD from the parent (internal: set by gavel test --ui --detach)."`
 	ResultsFiles []string      `json:"-" args:"true"`
 	AutoStop     time.Duration `json:"-"`
@@ -289,6 +289,23 @@ func announceHost(requested string) string {
 			return ip
 		}
 		logger.Warnf("--addr=%s but no non-loopback IPv4 interface found; printing localhost", requested)
+		return "localhost"
+	default:
+		return requested
+	}
+}
+
+// menubarHost picks the hostname the native macOS menu-bar webview should load
+// from. The webview always runs on the same machine, so it must reach gavel over
+// loopback: WKWebView blocks cleartext HTTP to non-loopback hosts under App
+// Transport Security (which would render a blank popover), and a LAN IP is
+// fragile across VPN/offline state. So unlike announceHost — which prints an
+// externally-reachable LAN IP for the wildcard binds — every loopback/wildcard
+// bind resolves to "localhost". An explicit interface (the user pinned --addr to
+// one NIC) is kept as-is since that is the only address the server listens on.
+func menubarHost(requested string) string {
+	switch requested {
+	case "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
 		return "localhost"
 	default:
 		return requested

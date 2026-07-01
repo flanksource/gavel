@@ -4,17 +4,18 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"sort"
 	"strings"
 
-	"github.com/flanksource/clicky/ai"
+	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gomplate/v3"
 	"github.com/ghodss/yaml"
 )
 
-//go:embed ai-summary-group.md
+//go:embed ai-summary-group.prompt
 var summaryGroupPrompt string
 
 type AISummaryOutput struct {
@@ -22,13 +23,12 @@ type AISummaryOutput struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
-func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent) (string, string, error) {
+func renderSummaryPrompt(scope models.ScopeType, window string, commits models.CommitAnalyses) (string, error) {
 	if summaryGroupPrompt == "" {
-		return "", "", fmt.Errorf("AI summary group prompt template is empty")
+		return "", fmt.Errorf("AI summary group prompt template is empty")
 	}
 
 	filesSet := make(map[string]struct{})
-
 	for _, commit := range commits {
 		for _, change := range commit.Changes {
 			filesSet[change.File] = struct{}{}
@@ -39,25 +39,35 @@ func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window st
 	for file := range filesSet {
 		files = append(files, file)
 	}
+	sort.Strings(files)
 
-	templateData := map[string]any{
-		"window":  window,
-		"scope":   scope,
-		"commits": commits,
-		"files":   files,
+	commitMaps := make([]map[string]any, 0, len(commits))
+	for _, commit := range commits {
+		commitMaps = append(commitMaps, commit.AsMap())
 	}
 
-	prompt, err := gomplate.RunTemplate(templateData, gomplate.Template{
-		Template: summaryGroupPrompt,
-	})
+	req, _, err := prompt.Load(summaryGroupPrompt).Render(map[string]any{
+		"window":  window,
+		"scope":   scope,
+		"commits": commitMaps,
+		"files":   files,
+	}, nil)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to render AI prompt template: %w", err)
+		return "", fmt.Errorf("failed to render AI prompt template: %w", err)
+	}
+	return req.Prompt, nil
+}
+
+func GenerateGroupSummary(ctx context.Context, scope models.ScopeType, window string, commits models.CommitAnalyses, agent ai.Agent) (string, string, error) {
+	promptText, err := renderSummaryPrompt(scope, window, commits)
+	if err != nil {
+		return "", "", err
 	}
 
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
 		Name:   fmt.Sprintf("Summary: %s - %s", scope, window),
-		Prompt: prompt,
+		Prompt: promptText,
 	})
 	if err != nil {
 		logger.Warnf("AI prompt execution failed: %v", err)

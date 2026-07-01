@@ -1,8 +1,12 @@
 package main
 
 import (
+	"os"
+
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/pricing"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/gavel/ai/aifix"
 )
 
 // defaultAIRuntimeOptions mirrors the boolean defaults clicky sets on
@@ -39,4 +43,15 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions) (captainai.Config, capt
 	req.Verbose = true
 	req.StrictMCP = true
 	return cfg, req
+}
+
+// newAIFixRenderer builds the stderr event renderer for an ai-fix run, prefixing
+// each line with `[<model> <pct>%]`. The context window is looked up once from
+// captain's pricing registry; an unknown model yields a model-only prefix.
+func newAIFixRenderer(aiCfg captainai.Config) func(int, captainai.Event) {
+	contextWindow := 0
+	if info, ok := pricing.GetModelInfo(aiCfg.Model); ok {
+		contextWindow = info.ContextWindow
+	}
+	return aifix.NewStderrRenderer(os.Stderr, aiCfg.Model, contextWindow)
 }

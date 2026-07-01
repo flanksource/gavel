@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/clicky/prompt"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/verify"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
@@ -203,7 +204,7 @@ func RunFileSizeCheck(ctx context.Context, p FileSizeParams) (CheckOutcome, erro
 		return CheckOutcome{}, nil
 	}
 
-	if mode == CheckModePrompt && p.Decider == nil && !stdinIsTerminal() {
+	if mode == CheckModePrompt && p.Decider == nil && !stdinIsTerminal() && !prompt.HasInteractiveSink() {
 		logger.Warnf("file-size check: stdin is not a terminal; escalating to --precommit=fail")
 		mode = CheckModeFail
 	}
@@ -439,14 +440,14 @@ func fileSizeChoices(v FileSizeViolation) []fileSizeChoice {
 	return choices
 }
 
-func runPromptFileSizeDecider(_ context.Context, v FileSizeViolation) (FileSizeDecision, error) {
+func runPromptFileSizeDecider(ctx context.Context, v FileSizeViolation) (FileSizeDecision, error) {
 	header := fileSizePromptHeader(v)
 	choices := fileSizeChoices(v)
 	items := make([]string, len(choices))
 	for i, c := range choices {
 		items[i] = c.Text
 	}
-	idx, ok := promptSelectIndex(header, items)
+	idx, ok := promptSelectIndex(ctx, header, items)
 	if !ok {
 		return FileSizeDecisionCancel, nil
 	}

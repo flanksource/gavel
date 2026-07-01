@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/github"
@@ -165,6 +167,103 @@ func TestParseRouteRequestAcceptHeader(t *testing.T) {
 			t.Errorf("expected markdown export, got ok=%v export=%v format=%q", ok, req.IsExport, req.Format)
 		}
 	})
+}
+
+func TestParseRouteRequestTabs(t *testing.T) {
+	for _, path := range []string{"/todos", "/activity"} {
+		t.Run(path, func(t *testing.T) {
+			req, ok := parseRouteRequest(httptest.NewRequest(http.MethodGet, path, nil))
+			if !ok || req.IsExport {
+				t.Errorf("%s: expected SPA render, got ok=%v export=%v", path, ok, req.IsExport)
+			}
+		})
+	}
+	t.Run("unknown tab is rejected", func(t *testing.T) {
+		if _, ok := parseRouteRequest(httptest.NewRequest(http.MethodGet, "/bogus", nil)); ok {
+			t.Error("expected /bogus to be rejected (404), got ok=true")
+		}
+	})
+}
+
+func TestHandleRouteTabsServeShell(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	for _, path := range []string{"/prs", "/todos", "/activity"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.handleRoute(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s status: got %d want 200", path, rec.Code)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+				t.Fatalf("%s content-type: got %q want text/html", path, ct)
+			}
+		})
+	}
+}
+
+// The ES-module bundle is served from /_assets/ (entry + code-split chunks) and
+// the page loads it as a module — not inlined — so the lazy editor chunk can load.
+func TestServesESModuleBundle(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_assets/prui.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/_assets/prui.js status: got %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("/_assets/prui.js content-type: got %q want a javascript type", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("/_assets/prui.js served an empty body")
+	}
+
+	page := httptest.NewRecorder()
+	s.handleRoute(page, httptest.NewRequest(http.MethodGet, "/prs", nil))
+	if !strings.Contains(page.Body.String(), `<script type="module" src="/_assets/prui.js">`) {
+		t.Error("page should load the bundle as an ES module from /_assets/prui.js")
+	}
+}
+
+// A GET /todos/new must serve the SPA shell (the focused new-todo form) even
+// though POST /todos/new is registered as the create endpoint — the Go mux falls
+// the GET through to the "/" catch-all. Routed through the full Handler so the
+// method/path coexistence is exercised, not just handleRoute.
+func TestHandleRouteTodosNewServesShell(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/todos/new", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /todos/new status: got %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("GET /todos/new content-type: got %q want text/html", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "gavel · PR Dashboard") {
+		t.Fatal("GET /todos/new body does not look like the PR UI shell")
+	}
+}
+
+func TestHandleRouteMenubar(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	for _, path := range []string{"/menubar", "/processes"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+
+			s.handleRoute(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status: got %d want %d", rec.Code, http.StatusOK)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+				t.Fatalf("content-type: got %q want text/html", ct)
+			}
+			if body := rec.Body.String(); !strings.Contains(body, "gavel · PR Dashboard") {
+				t.Fatalf("body does not look like the PR UI shell")
+			}
+		})
+	}
 }
 
 func TestFindPRNode(t *testing.T) {

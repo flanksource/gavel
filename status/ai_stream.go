@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	clickyai "github.com/flanksource/clicky/ai"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
 )
 
 type AISummaryStatus string
@@ -109,10 +109,6 @@ func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent
 
 	go func() {
 		defer close(updates)
-
-		previousNoRender := clickytask.IsNoRender()
-		clickytask.SetNoRender(true)
-		defer clickytask.SetNoRender(previousNoRender)
 
 		batch := clickytask.Batch[aiSummaryResult]{
 			Name:        "status ai summaries",

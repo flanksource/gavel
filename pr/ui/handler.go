@@ -3,11 +3,15 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/metrics"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
@@ -18,9 +22,6 @@ type SearchConfig struct {
 	Repos       []string `json:"repos"`
 	All         bool     `json:"all,omitempty"`
 	Org         string   `json:"org,omitempty"`
-	Author      string   `json:"author,omitempty"`
-	Any         bool     `json:"any,omitempty"`
-	Bots        bool     `json:"bots,omitempty"`
 	IgnoredOrgs []string `json:"ignoredOrgs,omitempty"`
 }
 
@@ -47,10 +48,21 @@ type Server struct {
 	detailCache  *DetailCache
 	detailSyncer *DetailSyncer
 
+	// testRunSyncer scans registered workspaces' .gavel/run-*.json files into
+	// the DB cache that the Tests tab is served from. nil until wired by the
+	// CLI; the read endpoints degrade to a direct filesystem scan without it.
+	testRunSyncer *TestRunSyncer
+
 	// gavelCache stores the last computed GavelResultsSummary per PR
 	// (keyed by "repo#number"). Populated as a side-effect of detail
 	// fetches so sidebar badges light up lazily without extra traffic.
 	gavelCache map[string]*GavelResultsSummary
+
+	// knownBots is the set of bot author logins learned from fetch results.
+	// The poller excludes them at the source (`-author:`) unless includeBots
+	// is set, keeping the default fetch lean without a hardcoded bot list.
+	knownBots   map[string]struct{}
+	includeBots bool
 
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
@@ -68,6 +80,18 @@ type Server struct {
 	// masking fresh memberships for long.
 	orgs         []github.Org
 	orgsCachedAt time.Time
+
+	// procMetrics stores recent per-process CPU/memory points so the process
+	// dashboard gauges can poll a real timeseries (served under
+	// /api/proc/metrics/{id}) instead of a frozen one-shot value. Written by
+	// procMetricsLoop; lastProcPoll gates that loop to recent UI activity.
+	procMetrics  metrics.Timeseries
+	lastProcPoll time.Time
+
+	// devProxy, when set via SetDevProxy, reverse-proxies the "/" catch-all to
+	// a running Vite dev server so `pr list --ui --dev` serves HMR'd modules
+	// instead of the embedded bundle. nil in production. See devproxy.go.
+	devProxy http.Handler
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -85,7 +109,16 @@ type snapshot struct {
 	Paused      bool                   `json:"paused"`
 	Error       string                 `json:"error,omitempty"`
 	Config      SearchConfig           `json:"config"`
-	RateLimit   *github.RateLimit      `json:"rateLimit,omitempty"`
+	// Viewer is the authenticated GitHub login, surfaced so the UI can resolve
+	// the @me author filter client-side. Empty until the auth probe completes.
+	Viewer string `json:"viewer,omitempty"`
+	// BotsAvailable is true once any bot author has been learned, so the UI can
+	// keep showing the @bots chip even while bots are excluded from the fetch.
+	BotsAvailable bool `json:"botsAvailable,omitempty"`
+	// IncludeBots mirrors the server's current bot-fetch state so the UI only
+	// posts a change (and triggers a refetch) when the @bots chip disagrees.
+	IncludeBots bool              `json:"includeBots,omitempty"`
+	RateLimit   *github.RateLimit `json:"rateLimit,omitempty"`
 	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
 	// newer than the recorded SeenAt (or that have never been seen). PRs
 	// marked as read are omitted to keep the map sparse on the wire.
@@ -106,12 +139,15 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 		refreshCh:   make(chan struct{}, 1),
 		detailCache: NewDetailCache(),
 		gavelCache:  make(map[string]*GavelResultsSummary),
+		knownBots:   make(map[string]struct{}),
+		procMetrics: metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
 	// treats as "probing" (degraded, "checking token...").
 	go s.refreshAuthProbe()
 	go s.authProbeLoop()
+	go s.procMetricsLoop()
 	return s
 }
 
@@ -152,6 +188,16 @@ func (s *Server) notifyDetailSyncer() {
 	}
 }
 
+func (s *Server) SetTestRunSyncer(trs *TestRunSyncer) {
+	s.testRunSyncer = trs
+}
+
+func (s *Server) notifyTestRunSyncer() {
+	if s.testRunSyncer != nil {
+		s.testRunSyncer.Notify()
+	}
+}
+
 func (s *Server) GetConfig() SearchConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -164,11 +210,55 @@ func (s *Server) SetConfig(cfg SearchConfig) {
 	s.mu.Unlock()
 }
 
+// KnownBots returns the learned bot author logins, sorted for a stable query.
+func (s *Server) KnownBots() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.knownBots))
+	for login := range s.knownBots {
+		out = append(out, login)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IncludeBots reports whether the poller should fetch bot-authored PRs (the UI
+// sets this when the @bots author chip is not excluding them).
+func (s *Server) IncludeBots() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.includeBots
+}
+
+// SetIncludeBots toggles bot fetching and requests an immediate refetch so the
+// change is reflected without waiting for the next poll tick.
+func (s *Server) SetIncludeBots(include bool) {
+	s.mu.Lock()
+	changed := s.includeBots != include
+	s.includeBots = include
+	s.mu.Unlock()
+	if changed {
+		select {
+		case s.refreshCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
 	s.mu.Lock()
 	s.prs = prs
 	s.fetchedAt = time.Now()
 	s.err = nil
+	// Learn bot authors from whatever came back so subsequent fetches can
+	// exclude them at the source via a search-compatible `-author:` qualifier.
+	// New bots leak through for one cycle (the UI hides them client-side)
+	// before being caught here.
+	for _, pr := range prs {
+		if q := github.BotExcludeQualifier(pr.Author, pr.AuthorIsApp); q != "" {
+			s.knownBots[q] = struct{}{}
+		}
+	}
 	subs := s.subscribers
 	s.mu.Unlock()
 	s.notify()
@@ -230,10 +320,18 @@ func (s *Server) RefreshCh() chan struct{} {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRoute)
+	if s.devProxy != nil {
+		mux.HandleFunc("/", s.handleDevRoute)
+	} else {
+		mux.HandleFunc("/", s.handleRoute)
+		// The ES-module bundle entry + code-split chunks (production only; in dev
+		// the bundle is served by the proxied Vite server).
+		mux.Handle("/_assets/", assetsHandler())
+	}
 	mux.HandleFunc("/api/prs", s.handleJSON)
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
+	mux.HandleFunc("/api/prs/bots", s.handleBots)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
@@ -245,12 +343,57 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/activity/stream", s.handleActivityStream)
 	mux.HandleFunc("/api/activity/reset", s.handleActivityReset)
 	mux.HandleFunc("/api/activity/cache", s.handleActivityCache)
+	mux.HandleFunc("/api/tests", s.handleTestRuns)
+	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
+	mux.HandleFunc("/api/tests/run", s.handleTestRun)
+	mux.HandleFunc("/api/todos", s.handleTodos)
+	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
+	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
+	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
+	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
+	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
+	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
+	mux.HandleFunc("GET /api/todos/criteria/catalog", s.handleCriteriaCatalog)
+	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
+	mux.HandleFunc("POST /api/todos/criteria/generate", s.handleTodoCriteriaGenerate)
+	mux.HandleFunc("POST /api/todos/verify", s.handleTodoVerify)
+	mux.HandleFunc("POST /api/todos/verify/preview", s.handleTodoVerifyPreview)
+	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
+	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
+	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
+	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
+	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
+	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
+	mux.HandleFunc("POST /api/todos/session/approve", s.handleTodoSessionApprove)
+	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
+	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)
+	mux.HandleFunc("/react-grab", handleReactGrabInstall)
 	mux.HandleFunc("/brand/gavel-logo.svg", handleLogo)
 	mux.HandleFunc("/brand/menubar.png", handleMenubarIcon)
 	mux.HandleFunc("/brand/menubar-unread.png", handleMenubarUnreadIcon)
+	mux.HandleFunc("/manifest.webmanifest", handleManifest)
+	mux.HandleFunc("/brand/apple-touch-icon.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, appleTouchIconPNG) })
+	mux.HandleFunc("/brand/icon-192.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon192PNG) })
+	mux.HandleFunc("/brand/icon-512.png", func(w http.ResponseWriter, r *http.Request) { servePNG(w, icon512PNG) })
 	mux.HandleFunc("/api/prs/seen", s.handleSeen)
+	mux.HandleFunc("/api/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
+	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)
+	mux.HandleFunc("/api/proc/favicon", s.handleProcFavicon)
+	mux.HandleFunc("/api/proc/start", s.handleProcControl)
+	mux.HandleFunc("/api/proc/stop", s.handleProcControl)
+	mux.HandleFunc("/api/proc/restart", s.handleProcControl)
+	mux.HandleFunc("/api/proc/logs", s.handleProcLogs)
+	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
+	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
+	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
+	registerPromptRoutes(mux)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }
@@ -259,6 +402,56 @@ func handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	fmt.Fprint(w, faviconSVG)
+}
+
+// assetsHandler serves the embedded ES-module bundle (prui.js + chunks/*.js)
+// under /_assets/. Hashed chunks are immutable; the stable entry gets a short
+// cache so a new build is picked up promptly.
+func assetsHandler() http.Handler {
+	sub, err := fs.Sub(distFS, "dist")
+	if err != nil {
+		panic("ui: embedded dist FS: " + err.Error()) // static embed; failure is a build error
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.StripPrefix("/_assets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/chunks/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=300")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
+}
+
+// requestOrigin reconstructs the scheme+host this request was served from so an
+// asset can target gavel itself even when injected into a different app's page
+// (e.g. via the React Grab bookmarklet, where window.location is the host app).
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	return scheme + "://" + r.Host
+}
+
+// handleReactGrabPlugin serves the React Grab plugin script with __GAVEL_ORIGIN__
+// substituted for this server's origin. It is intentionally uncached so the
+// origin always matches the host that served it.
+func handleReactGrabPlugin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabPluginJS, "__GAVEL_ORIGIN__", requestOrigin(r)))
+}
+
+// handleReactGrabInstall serves the install page (bookmarklet + console snippet)
+// for loading the React Grab plugin into any running dev app.
+func handleReactGrabInstall(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	fmt.Fprint(w, strings.ReplaceAll(reactGrabInstallHTML, "__GAVEL_ORIGIN__", requestOrigin(r)))
 }
 
 func handleLogo(w http.ResponseWriter, r *http.Request) {
@@ -283,9 +476,32 @@ func handleMenubarUnreadIcon(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleManifest serves the PWA web app manifest so the dashboard can be added to
+// an iOS/Android home screen as a standalone app.
+func handleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	fmt.Fprint(w, webManifest)
+}
+
+// servePNG writes an embedded PNG asset (home-screen / manifest icons) with the
+// shared cache policy.
+func servePNG(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := w.Write(data); err != nil {
+		logger.Debugf("write png asset: %v", err)
+	}
+}
+
 func (s *Server) handleRoute(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" && r.URL.RawQuery == "" {
 		http.Redirect(w, r, "/prs", http.StatusFound)
+		return
+	}
+	if (r.URL.Path == "/menubar" || r.URL.Path == "/processes") && r.URL.RawQuery == "" {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, pageHTML())
 		return
 	}
 	req, ok := parseRouteRequest(r)
@@ -322,8 +538,17 @@ func pageHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>gavel · PR Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://code.iconify.design/iconify-icon/2.0.0/iconify-icon.min.js"></script>
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#3578e5">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="gavel">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>` + bundleCSS + `</style>
     <style>
         @keyframes gavel-progress-slide {
             0%   { left: -35%; }
@@ -334,9 +559,10 @@ func pageHTML() string {
         }
     </style>
 </head>
-<body>
+<body class="bg-background text-foreground">
     <div id="root"></div>
-    <script>` + bundleJS + `</script>
+    <script>` + buildGlobalJS() + `</script>
+    <script type="module" src="/_assets/prui.js"></script>
 </body>
 </html>`
 }
@@ -346,12 +572,15 @@ func pageHTML() string {
 // populated by withUnread() outside the lock.
 func (s *Server) snapshotLocked() snapshot {
 	snap := snapshot{
-		PRs:         s.prs,
-		FetchedAt:   s.fetchedAt,
-		NextFetchIn: int(s.interval.Seconds()),
-		Paused:      s.paused,
-		Config:      s.config,
-		RateLimit:   s.rateLimit,
+		PRs:           s.prs,
+		FetchedAt:     s.fetchedAt,
+		NextFetchIn:   int(s.interval.Seconds()),
+		Paused:        s.paused,
+		Config:        s.config,
+		Viewer:        s.auth.Login,
+		BotsAvailable: len(s.knownBots) > 0,
+		IncludeBots:   s.includeBots,
+		RateLimit:     s.rateLimit,
 	}
 	if s.err != nil {
 		snap.Error = s.err.Error()
@@ -579,6 +808,26 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"status":"refresh requested"}`)
 }
 
+// handleBots sets whether the poller fetches bot-authored PRs. The UI calls it
+// when the @bots author chip switches between excluding and showing bots; a
+// change triggers an immediate refetch.
+func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Include bool `json:"include"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetIncludeBots(body.Include)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"includeBots":%v}`, body.Include)
+}
+
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -609,9 +858,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetConfig(cfg)
 		go SaveSettings(UISettings{
 			Repos:       cfg.Repos,
-			Author:      cfg.Author,
-			Any:         cfg.Any,
-			Bots:        cfg.Bots,
 			IgnoredOrgs: cfg.IgnoredOrgs,
 		})
 		select {

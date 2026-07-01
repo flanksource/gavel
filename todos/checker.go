@@ -16,9 +16,10 @@ import (
 
 // CheckOptions configures the TODO check operation.
 type CheckOptions struct {
-	WorkDir string        // Working directory for test execution
-	Timeout time.Duration // Timeout for each test execution
-	Logger  logger.Logger // Logger for output
+	WorkDir  string        // Working directory for test execution
+	Timeout  time.Duration // Timeout for each test execution
+	Logger   logger.Logger // Logger for output
+	Provider Provider
 }
 
 // CheckTODOs executes verification tests for the given TODOs in parallel and returns results.
@@ -43,7 +44,7 @@ func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) 
 			workDir = todoRef.CWD
 		}
 
-		executor := &TODOExecutor{workDir: workDir}
+		executor := &TODOExecutor{workDir: workDir, provider: opts.Provider}
 
 		typedTask := todoGroup.Add(
 			todoRef.Filename(),
@@ -81,7 +82,7 @@ func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) 
 
 		// Update TODO state
 		if todo, exists := taskToTODO[typedTask]; exists {
-			updateTODOAfterCheck(todo, result, opts.Logger)
+			updateTODOAfterCheck(ctx, opts.Provider, todo, result, opts.Logger)
 		}
 	}
 
@@ -89,7 +90,7 @@ func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) 
 }
 
 // updateTODOAfterCheck updates the TODO frontmatter and persists state after a check completes.
-func updateTODOAfterCheck(todo *types.TODO, result *types.CheckResult, log logger.Logger) {
+func updateTODOAfterCheck(ctx context.Context, provider Provider, todo *types.TODO, result *types.CheckResult, log logger.Logger) {
 	now := time.Now()
 	todo.LastRun = &now
 	attempts := todo.Attempts + 1
@@ -108,12 +109,15 @@ func updateTODOAfterCheck(todo *types.TODO, result *types.CheckResult, log logge
 		Attempts: &attempts,
 		Status:   &status,
 	}
-	if err := UpdateTODOState(todo, updates); err != nil {
+	if provider == nil {
+		provider = &FileProvider{}
+	}
+	if err := provider.UpdateState(ctx, todo, updates); err != nil {
 		log.Warnf("Failed to update TODO state for %s: %v", todo.FilePath, err)
 	}
 
 	if result.TestResult != nil {
-		if err := UpdateLatestFailure(todo, result.TestResult); err != nil {
+		if err := provider.UpdateLatestFailure(ctx, todo, result.TestResult); err != nil {
 			log.Warnf("Failed to update Latest Failure section for %s: %v", todo.FilePath, err)
 		}
 	}

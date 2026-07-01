@@ -21,6 +21,7 @@ type ExecutorContext struct {
 	Logger      logger.Logger // For executor internal logging
 	interaction *UserInteraction
 	transcript  *ExecutionTranscript
+	onSessionID func(sessionID string)
 }
 
 // UserInteraction handles user-facing communication during TODO execution.
@@ -89,6 +90,7 @@ const (
 	NotifyProgress   NotificationType = "progress"   // Progress update
 	NotifyCompletion NotificationType = "completion" // Task completed
 	NotifyError      NotificationType = "error"      // Error occurred
+	NotifyApproval   NotificationType = "approval"   // Agent is awaiting human approval to use a tool
 )
 
 // Pretty returns a formatted text representation of the NotificationType with appropriate styling
@@ -104,6 +106,8 @@ func (nt NotificationType) Pretty() api.Text {
 		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
 	case NotifyError:
 		return clicky.Text("").Add(icons.Error).Append(" ERROR", "text-red-600 font-bold")
+	case NotifyApproval:
+		return clicky.Text(" APPROVAL", "text-amber-600 font-bold")
 	default:
 		return clicky.Text(string(nt), "text-gray-500")
 	}
@@ -203,6 +207,23 @@ func (ctx *ExecutorContext) Notify(notification Notification) {
 // GetTranscript returns the complete execution transcript.
 func (ctx *ExecutorContext) GetTranscript() *ExecutionTranscript {
 	return ctx.transcript
+}
+
+// SetSessionIDHook registers a callback an executor invokes (via RecordSessionID)
+// as soon as it has finalized the run's session id and before it launches the
+// agent. The orchestrator uses it to persist the session id up front so it
+// survives a mid-run crash and remains resumable.
+func (ctx *ExecutorContext) SetSessionIDHook(fn func(sessionID string)) {
+	ctx.onSessionID = fn
+}
+
+// RecordSessionID reports the run's session id to the registered hook (if any).
+// Executors call it once, before launching the agent. A blank id is ignored.
+func (ctx *ExecutorContext) RecordSessionID(sessionID string) {
+	if sessionID == "" || ctx.onSessionID == nil {
+		return
+	}
+	ctx.onSessionID(sessionID)
 }
 
 // ExecutionTranscript records the complete interaction history during TODO execution.

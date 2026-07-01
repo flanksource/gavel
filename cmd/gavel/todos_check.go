@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
@@ -21,27 +21,25 @@ func runTodosList(opts TodosListOptions) (any, error) {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	dir := opts.Dir
-	if dir == "" {
-		dir = filepath.Join(workDir, ".todos")
-	}
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, fmt.Errorf(".todos directory not found: %s", dir)
+	provider, err := newTodosProvider(workDir, opts.Dir)
+	if err != nil {
+		return nil, err
 	}
 
 	filters := todos.DiscoveryFilters{}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
+	} else if !opts.All {
+		filters.ExcludeStatuses = []types.Status{types.StatusCompleted}
 	}
 
-	todoList, err := todos.DiscoverTODOs(dir, filters)
+	todoList, err := provider.List(context.Background(), filters)
 	if err != nil {
 		return nil, err
 	}
 
 	if opts.GroupBy != "" && opts.GroupBy != todos.GroupByNone {
-		groups := todos.GroupTODOs(todoList, opts.GroupBy)
+		groups := todos.GroupTODOsWithWorkDir(todoList, opts.GroupBy, workDir)
 		return todos.FlattenGrouped(groups), nil
 	}
 
@@ -54,22 +52,13 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
-	}
-
-	todoPath := args[0]
-	if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-		todoPath = filepath.Join(todosDir, todoPath)
-	}
-
-	if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-		return fmt.Errorf("TODO file not found: %s", todoPath)
-	}
-
-	todo, err := todos.ParseTODO(todoPath)
+	provider, err := newTodosProvider(workDir, todosDir)
 	if err != nil {
-		return fmt.Errorf("failed to parse TODO: %w", err)
+		return err
+	}
+	todo, err := provider.Get(context.Background(), args[0])
+	if err != nil {
+		return err
 	}
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
@@ -82,57 +71,39 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if todosDir == "" {
-		todosDir = filepath.Join(workDir, ".todos")
+	provider, err := newTodosProvider(workDir, todosDir)
+	if err != nil {
+		return err
 	}
 
 	var todoList []*types.TODO
 
-	hasFilePaths := len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
+	hasFilePaths := selectedTodosProvider() == todos.ProviderFiles && len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
 
 	if hasFilePaths {
 		logger.Infof("Checking specific TODO files...")
 		for _, arg := range args {
-			todoPath := arg
-			if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-				todoPath = filepath.Join(todosDir, todoPath)
-			}
-			if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-				return fmt.Errorf("TODO file not found: %s", todoPath)
-			}
-			todo, err := todos.ParseTODO(todoPath)
+			todo, err := provider.Get(context.Background(), arg)
 			if err != nil {
-				return fmt.Errorf("failed to parse TODO %s: %w", todoPath, err)
+				return err
 			}
 			todoList = append(todoList, todo)
 		}
 	} else {
-		if _, err := os.Stat(todosDir); os.IsNotExist(err) {
-			return fmt.Errorf(".todos directory not found: %s", todosDir)
-		}
-		logger.Infof("Discovering TODOs in: %s", todosDir)
+		logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
 
 		filters := todos.DiscoveryFilters{}
 		if filterStatus != "" {
 			filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
 		}
 
-		todoList, err = todos.DiscoverTODOs(todosDir, filters)
+		todoList, err = provider.List(context.Background(), filters)
 		if err != nil {
 			return fmt.Errorf("failed to discover TODOs: %w", err)
 		}
 
 		if len(args) > 0 {
-			var filtered []*types.TODO
-			for _, todo := range todoList {
-				for _, arg := range args {
-					if strings.EqualFold(todo.Filename(), arg) {
-						filtered = append(filtered, todo)
-						break
-					}
-				}
-			}
-			todoList = filtered
+			todoList = filterTODOsByArgs(todoList, args, workDir)
 		}
 	}
 
@@ -144,9 +115,10 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 	logger.Infof("Found %d TODOs to check", len(todoList))
 
 	checkOpts := todos.CheckOptions{
-		WorkDir: workDir,
-		Timeout: checkTimeout,
-		Logger:  logger.StandardLogger(),
+		WorkDir:  workDir,
+		Timeout:  checkTimeout,
+		Logger:   logger.StandardLogger(),
+		Provider: provider,
 	}
 
 	ctx := context.Background()
@@ -187,6 +159,7 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
+	todosCmd.PersistentFlags().StringVar(&todosProvider, "provider", todos.ProviderGrite, "TODO provider: grite or todos")
 	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
 	todosCmd.AddCommand(todosGetCmd)
@@ -198,13 +171,79 @@ func init() {
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
-	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, all, or none")
+	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
+	todosRunCmd.Flags().StringVar(&todosMode, "mode", "inline", "Execution mode: inline or cmux (legacy; prefer --driver)")
+	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Agent driver: claude-cmux, claude-headless, claude-sdk, claude-api, codex-cmux, codex-headless (overrides --mode)")
+	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution")
+	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "medium", "Reasoning effort directive for cmux mode: low, medium, or high")
+	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
 	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
+	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
+	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
+	todosRunCmd.Flags().BoolVar(&verifyAfter, "verify", false, "After each TODO is committed, run an AI issue verification scoring the commits against the issue's acceptance criteria; promotes the TODO to verified on success")
+	todosRunCmd.Flags().StringVar(&verifyModel, "verify-model", "", "Model for issue verification (default: .gavel.yaml verify.model)")
 
 	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 
 	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
+}
+
+func selectedTodosProvider() string {
+	if todosProvider == "" {
+		return todos.ProviderGrite
+	}
+	return todosProvider
+}
+
+func newTodosProvider(workDir, dir string) (todos.Provider, error) {
+	switch selectedTodosProvider() {
+	case todos.ProviderGrite:
+		if dir != "" {
+			return nil, fmt.Errorf("--dir is only supported with --provider=todos")
+		}
+		return todos.ResolveGriteProvider(workDir, cache.Shared(), 0), nil
+	case todos.ProviderFiles:
+		return todos.NewFileProvider(workDir, dir), nil
+	default:
+		return nil, fmt.Errorf("unknown todos provider %q (expected grite or todos)", selectedTodosProvider())
+	}
+}
+
+func filterTODOsByArgs(todoList types.TODOS, args []string, workDir string) types.TODOS {
+	var filtered types.TODOS
+	for _, todo := range todoList {
+		for _, arg := range args {
+			if todoMatchesArg(todo, arg, workDir) {
+				filtered = append(filtered, todo)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+func todoMatchesArg(todo *types.TODO, arg, workDir string) bool {
+	if todo == nil {
+		return false
+	}
+	if todo.ID != "" && (strings.EqualFold(todo.ID, arg) || strings.HasPrefix(todo.ID, arg)) {
+		return true
+	}
+	if todo.Title != "" && strings.EqualFold(todo.Title, arg) {
+		return true
+	}
+	if strings.EqualFold(todo.Filename(), arg) {
+		return true
+	}
+	if todo.FilePath == "" || !(strings.Contains(arg, string(filepath.Separator)) || strings.HasSuffix(arg, ".md")) {
+		return false
+	}
+	absArg := arg
+	if !filepath.IsAbs(arg) {
+		absArg = filepath.Join(workDir, arg)
+	}
+	return filepath.Clean(absArg) == filepath.Clean(todo.FilePath)
 }

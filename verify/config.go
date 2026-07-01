@@ -10,9 +10,83 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/repomap"
 	"github.com/ghodss/yaml"
+	yamlv3 "gopkg.in/yaml.v3"
 )
+
+// RestartPolicy is the supervisor restart policy for a process. It accepts a
+// bool (true→on-failure, false→no) or an enum string (no|on-failure|always)
+// from both .gavel.yaml (JSON via ghodss/yaml) and the Procfile (yaml.v3). The
+// empty value means "unset" so the resolver applies the default (no).
+type RestartPolicy string
+
+const (
+	RestartNo        RestartPolicy = "no"
+	RestartOnFailure RestartPolicy = "on-failure"
+	RestartAlways    RestartPolicy = "always"
+)
+
+func (p RestartPolicy) String() string { return string(p) }
+
+// restartPolicyFromString validates an enum string, mapping "" to unset.
+func restartPolicyFromString(s string) (RestartPolicy, error) {
+	switch RestartPolicy(s) {
+	case "", RestartNo, RestartOnFailure, RestartAlways:
+		return RestartPolicy(s), nil
+	default:
+		return "", fmt.Errorf("invalid restart policy %q (want no, on-failure, always, or a bool)", s)
+	}
+}
+
+func (p *RestartPolicy) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*p = ""
+		return nil
+	}
+	if bytes.Equal(data, []byte("true")) {
+		*p = RestartOnFailure
+		return nil
+	}
+	if bytes.Equal(data, []byte("false")) {
+		*p = RestartNo
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	v, err := restartPolicyFromString(s)
+	if err != nil {
+		return err
+	}
+	*p = v
+	return nil
+}
+
+func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
+	var b bool
+	if err := node.Decode(&b); err == nil {
+		if b {
+			*p = RestartOnFailure
+		} else {
+			*p = RestartNo
+		}
+		return nil
+	}
+	var s string
+	if err := node.Decode(&s); err != nil {
+		return err
+	}
+	v, err := restartPolicyFromString(s)
+	if err != nil {
+		return err
+	}
+	*p = v
+	return nil
+}
 
 type ChecksConfig struct {
 	Disabled           []string `yaml:"disabled" json:"disabled"`
@@ -116,7 +190,15 @@ func (m *CheckMode) UnmarshalJSON(data []byte) error {
 }
 
 type CommitConfig struct {
-	Model         string              `yaml:"model,omitempty" json:"model,omitempty"`
+	// Model is the LLM used for commit-message and PR-content generation. These
+	// are prose tasks that run well on a fast, cheap model (the default is a
+	// haiku-class model). GroupModel overrides the model for AI commit grouping.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// GroupModel is the LLM used for AI commit grouping (`gavel commit -G`).
+	// Grouping reasons over the whole change set and benefits from a more capable
+	// model than message generation; when unset it falls back to Model and then
+	// to a sonnet-class default.
+	GroupModel    string              `yaml:"groupModel,omitempty" json:"groupModel,omitempty"`
 	Hooks         []CommitHook        `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 	GitIgnore     []string            `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
 	Allow         []string            `yaml:"allow,omitempty" json:"allow,omitempty"`
@@ -208,6 +290,35 @@ type GavelConfig struct {
 	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty"`
 	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
 	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
+	// Checks is the project default for the post-completion agent check loop
+	// (`gavel todos run --check`). A TODO's frontmatter `checks:` overrides it.
+	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
+}
+
+// ProcfileConfig configures `gavel proc` — global defaults for the processes
+// declared in the Procfile (per-process settings live in the Procfile itself).
+// Every field is optional.
+type ProcfileConfig struct {
+	// Path overrides Procfile discovery. Relative paths resolve against the
+	// directory of the .gavel.yaml that declared them.
+	Path string `yaml:"path,omitempty" json:"path,omitempty"`
+	// Profile is the default active profile: a Procfile entry with `profiles`
+	// auto-starts only when one of them is active. `gavel proc --profile` overrides.
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	// AutoRestart is the default restart policy for every process (bool or enum).
+	AutoRestart RestartPolicy `yaml:"autoRestart,omitempty" json:"autoRestart,omitempty"`
+	// MaxRestarts caps automatic restarts per process (0 = unlimited).
+	MaxRestarts int `yaml:"maxRestarts,omitempty" json:"maxRestarts,omitempty"`
+	// Env is injected into every process on top of the parent environment and
+	// any sibling .env file.
+	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	// Mem caps resident memory per process (e.g. "512Mi", "2g"). Empty disables
+	// the limit. A process whose tree exceeds it is killed.
+	Mem string `yaml:"mem,omitempty" json:"mem,omitempty"`
+	// CPU caps sustained CPU per process as a percentage (100 = one full core).
+	// 0 disables the limit. A process that stays above it is killed.
+	CPU float64 `yaml:"cpu,omitempty" json:"cpu,omitempty"`
 }
 
 // SecretsConfig turns the betterleaks linter on/off and optionally points at
@@ -386,7 +497,51 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Pre = append(base.Pre, override.Pre...)
 	base.Post = append(base.Post, override.Post...)
 	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
+	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
+	base.Checks = base.Checks.Overlay(&override.Checks)
 	return base
+}
+
+// MergeProcfileConfig merges override onto base. Scalars are last-write-wins
+// (a non-empty/non-zero override replaces the base); Env is merged key-by-key so
+// a repo config can add to a home default without discarding it.
+func MergeProcfileConfig(base, override ProcfileConfig) ProcfileConfig {
+	if override.Path != "" {
+		base.Path = override.Path
+	}
+	if override.Profile != "" {
+		base.Profile = override.Profile
+	}
+	if override.AutoRestart != "" {
+		base.AutoRestart = override.AutoRestart
+	}
+	if override.MaxRestarts != 0 {
+		base.MaxRestarts = override.MaxRestarts
+	}
+	if override.Mem != "" {
+		base.Mem = override.Mem
+	}
+	if override.CPU != 0 {
+		base.CPU = override.CPU
+	}
+	base.Env = mergeStringMap(base.Env, override.Env)
+	return base
+}
+
+// mergeStringMap returns base with override's keys layered on top. A nil result
+// is returned only when both inputs are empty.
+func mergeStringMap(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return base
+	}
+	merged := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
 }
 
 func MergeGavelConfig(base, override GavelConfig) GavelConfig {
@@ -483,6 +638,9 @@ func MergeLintConfig(base, override LintConfig) LintConfig {
 func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	if override.Model != "" {
 		base.Model = override.Model
+	}
+	if override.GroupModel != "" {
+		base.GroupModel = override.GroupModel
 	}
 	if len(override.Hooks) > 0 {
 		base.Hooks = append(base.Hooks, override.Hooks...)
