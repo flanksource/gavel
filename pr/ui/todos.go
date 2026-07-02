@@ -31,6 +31,8 @@ type todoCounts struct {
 	Draft      int `json:"draft"`
 	Pending    int `json:"pending"`
 	InProgress int `json:"inProgress"`
+	Review     int `json:"review"`
+	Ask        int `json:"ask"`
 	Failed     int `json:"failed"`
 	Verified   int `json:"verified"`
 	Completed  int `json:"completed"`
@@ -70,6 +72,15 @@ type todoSummary struct {
 	// Diff is the aggregated git diff footprint of the todo's commits (those
 	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
 	Diff *todoDiffStat `json:"diff,omitempty"`
+	// Envelope-driven fields from the last agent run: the native plan file the
+	// agent reported (rendered by the Plan tab / review mode), its status, the
+	// run mode an answer-resume continues in, the final summary, and the
+	// questions blocking an ask todo.
+	PlanPath       string                `json:"planPath,omitempty"`
+	PlanStatus     types.PlanStatus      `json:"planStatus,omitempty"`
+	RunMode        types.RunMode         `json:"runMode,omitempty"`
+	LastRunSummary string                `json:"lastRunSummary,omitempty"`
+	Questions      []types.AgentQuestion `json:"questions,omitempty"`
 }
 
 // todoDiffStat is the JSON shape of a todo's aggregated git diff footprint,
@@ -168,10 +179,14 @@ type todoRunPayload struct {
 	// Driver selects the agent driver (claude-cmux, claude-headless, claude-sdk,
 	// claude-api, codex-cmux, codex-headless). When empty it is derived from the
 	// legacy agent+mode pair for backward compatibility.
-	Driver    string  `json:"driver,omitempty"`
-	Backend   string  `json:"backend,omitempty"`
-	Model     string  `json:"model,omitempty"`
-	Effort    string  `json:"effort,omitempty"`
+	Driver  string `json:"driver,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	// RunMode selects the built-in prompt: run (implement) or plan (read-only
+	// investigation producing a reviewable plan). It supersedes the legacy Plan
+	// bool, which is still accepted until the dashboard sends runMode.
+	RunMode   string  `json:"runMode,omitempty"`
 	Plan      bool    `json:"plan,omitempty"`
 	Resume    bool    `json:"resume,omitempty"`
 	Timeout   string  `json:"timeout,omitempty"`
@@ -216,6 +231,7 @@ type todoRunResponse struct {
 	Backend   string   `json:"backend,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
 	Driver    string   `json:"driver,omitempty"`
+	RunMode   string   `json:"runMode,omitempty"`
 	Plan      bool     `json:"plan,omitempty"`
 	Resume    bool     `json:"resume,omitempty"`
 	SessionID string   `json:"sessionId,omitempty"`
@@ -232,6 +248,7 @@ type todoRunPreviewResponse struct {
 	Agent   string `json:"agent"`
 	Backend string `json:"backend,omitempty"`
 	Effort  string `json:"effort,omitempty"`
+	RunMode string `json:"runMode,omitempty"`
 	Plan    bool   `json:"plan,omitempty"`
 	Count   int    `json:"count"`
 }
@@ -253,7 +270,7 @@ type todoRunOptions struct {
 	Backend         string
 	Model           string
 	Effort          string
-	Plan            bool
+	RunMode         types.RunMode
 	Resume          bool
 	SessionID       string
 	Timeout         time.Duration
@@ -725,7 +742,8 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Backend:   opts.Backend,
 		Model:     opts.Model,
 		Effort:    opts.Effort,
-		Plan:      opts.Plan,
+		RunMode:   string(opts.RunMode),
+		Plan:      opts.RunMode == types.ModePlan,
 		Resume:    opts.Resume,
 		SessionID: opts.SessionID,
 		Timeout:   opts.Timeout.String(),
@@ -772,7 +790,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		Agent:   opts.Agent,
 		Backend: opts.Backend,
 		Effort:  opts.Effort,
-		Plan:    opts.Plan,
+		RunMode: string(opts.RunMode),
+		Plan:    opts.RunMode == types.ModePlan,
 		Count:   len(todoList),
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
@@ -784,9 +803,9 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 // schema instruction is always re-appended, so the preview shows the full
 // contract the agent receives.
 func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
-	mode := types.ModeRun
-	if opts.Plan {
-		mode = types.ModePlan
+	mode := opts.RunMode
+	if mode == "" {
+		mode = types.ModeRun
 	}
 	tmpl, err := todoprompt.ResolveTemplate(dir, mode)
 	if err != nil {
@@ -982,6 +1001,11 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		if out.Body == "" {
 			out.Body = out.Implementation
 		}
+		out.PlanPath = todo.PlanPath
+		out.PlanStatus = todo.PlanStatus
+		out.RunMode = todo.RunMode
+		out.LastRunSummary = todo.LastRunSummary
+		out.Questions = todo.Questions
 	}
 	return out
 }
@@ -999,6 +1023,12 @@ func summarizeTodos(items types.TODOS) todoCounts {
 		case types.StatusInProgress:
 			counts.Open++
 			counts.InProgress++
+		case types.StatusReview:
+			counts.Open++
+			counts.Review++
+		case types.StatusAsk:
+			counts.Open++
+			counts.Ask++
 		case types.StatusFailed:
 			counts.Open++
 			counts.Failed++
@@ -1202,8 +1232,20 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if kind.Mechanism() == "cmux" {
 		mode = "cmux"
 	}
-	if payload.Plan && kind.Mechanism() != "cmux" {
-		return todoRunOptions{}, fmt.Errorf("plan mode requires a cmux driver")
+
+	// RunMode selects the built-in prompt; the legacy plan bool maps to plan
+	// until the dashboard sends runMode. Plan works on every driver now (the
+	// plan template's frontmatter carries the plan permission posture).
+	runModeValue := payload.RunMode
+	if runModeValue == "" && payload.Plan {
+		runModeValue = string(types.ModePlan)
+	}
+	runMode, err := types.ParseRunMode(runModeValue)
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+	if runMode == types.ModeVerify {
+		return todoRunOptions{}, fmt.Errorf("verify runs through POST /api/todos/verify, not the run endpoint")
 	}
 
 	effort := strings.ToLower(strings.TrimSpace(payload.Effort))
@@ -1272,7 +1314,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Backend:         backend,
 		Model:           model,
 		Effort:          effort,
-		Plan:            payload.Plan,
+		RunMode:         runMode,
 		Resume:          payload.Resume,
 		Timeout:         timeout,
 		MaxBudget:       maxBudget,
@@ -1344,9 +1386,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
-		if req.Options.Plan {
-			runner.SetMode(types.ModePlan)
-		}
+		runner.SetMode(req.Options.RunMode)
 		var runErr error
 		var result *todos.ExecutionResult
 		// A single selection runs through Execute; a multi-select runs every todo
@@ -1383,7 +1423,7 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	// An ask outcome has half-done work by design: committing it is a decision
 	// for the answer turn, not the run tail.
 	askEnded := result != nil && result.EndStatus == types.EndAsk
-	if enabled := req.Options.Commit && !req.Options.Plan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
+	if enabled := req.Options.Commit && req.Options.RunMode != types.ModePlan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
 		meta := commit.AgentRunMetadata{IssueID: todo.ID}
 		if todo.LLM != nil {
 			meta.SessionID = todo.LLM.SessionId
@@ -1463,9 +1503,9 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	// cmux returns "" as the orchestrator session id (it manages its own
 	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
 	// todo's recorded prior session.
-	mode := types.ModeRun
-	if req.Options.Plan {
-		mode = types.ModePlan
+	mode := req.Options.RunMode
+	if mode == "" {
+		mode = types.ModeRun
 	}
 	// Post-run checks run inside the agent loop as fixture-backed verify
 	// plugins; a failing round's feedback re-runs the same session.

@@ -950,15 +950,18 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if !resp.Plan {
-		t.Fatalf("response did not echo plan: %+v", resp)
+	if !resp.Plan || resp.RunMode != "plan" {
+		t.Fatalf("response did not echo plan mode: %+v", resp)
 	}
-	if !got.Options.Plan {
-		t.Fatalf("run starter did not receive plan option: %+v", got.Options)
+	if got.Options.RunMode != types.ModePlan {
+		t.Fatalf("run starter did not receive plan mode: %+v", got.Options)
 	}
 }
 
-func TestTodoAPIRunRejectsPlanWithInlineMode(t *testing.T) {
+// Plan runs work on every driver now (the plan template's frontmatter carries
+// the plan posture), so a non-cmux plan run is accepted, and the new runMode
+// field supersedes the plan bool.
+func TestTodoAPIRunModeField(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
@@ -969,21 +972,40 @@ func TestTodoAPIRunRejectsPlanWithInlineMode(t *testing.T) {
 		t.Fatalf("seed create: %v", err)
 	}
 
+	oldStart := startTodoRun
+	var got todoRunRequest
+	startTodoRun = func(req todoRunRequest) error {
+		got = req
+		return nil
+	}
+	t.Cleanup(func() { startTodoRun = oldStart })
+
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Agent:  "claude",
-		Mode:   "inline",
-		Model:  "claude",
-		Effort: "medium",
-		Plan:   true,
+		Ref:     todos.TODOReference(created),
+		Driver:  "claude-headless",
+		Model:   "claude",
+		Effort:  "medium",
+		RunMode: "plan",
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "plan mode requires a cmux driver") {
-		t.Fatalf("unexpected error body: %q", rec.Body.String())
+	if got.Options.RunMode != types.ModePlan {
+		t.Fatalf("runMode not resolved: %+v", got.Options)
+	}
+
+	// verify routes through its own endpoint, not the run endpoint.
+	body, _ = json.Marshal(todoRunPayload{
+		Ref:     todos.TODOReference(created),
+		Driver:  "claude-headless",
+		RunMode: "verify",
+	})
+	rec = httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("verify runMode status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
 }
 

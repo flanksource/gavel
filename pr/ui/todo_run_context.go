@@ -9,8 +9,11 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 type todoRunContextResponse struct {
@@ -20,6 +23,11 @@ type todoRunContextResponse struct {
 	// Tools is the catalog the run dialog's tool-permissions control renders, so
 	// the per-tool Auto/Ask/Off choices map to real agent tools.
 	Tools []todoRunToolOption `json:"tools"`
+	// InputSchemas maps a run mode to the JSON Schema of its prompt inputs (the
+	// test/lint options reflected from the engine structs, yaml-keyed like
+	// fixture fences) so the dashboard can render the schema-driven run form
+	// (clicky PromptDialog/JsonSchemaForm). Modes with no inputs are omitted.
+	InputSchemas map[string]json.RawMessage `json:"inputSchemas,omitempty"`
 }
 
 type todoRunToolOption struct {
@@ -142,7 +150,28 @@ func todoRunContext() todoRunContextResponse {
 		Efforts:        todoRunEfforts(),
 		DefaultBackend: string(captainai.BackendClaudeAgent),
 		Tools:          todoRunToolCatalog(),
+		InputSchemas:   todoRunInputSchemas(),
 	}
+}
+
+// todoRunInputSchemas collects each mode's prompt input schema; a mode with no
+// inputs (plan, verify) is simply absent.
+func todoRunInputSchemas() map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for _, mode := range []types.RunMode{types.ModeRun, types.ModePlan} {
+		raw, err := todoprompt.InputSchema(mode)
+		if err != nil {
+			logger.Warnf("todo run context: input schema for %s: %v", mode, err)
+			continue
+		}
+		if raw != nil {
+			out[string(mode)] = json.RawMessage(raw)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {

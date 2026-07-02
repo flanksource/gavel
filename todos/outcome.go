@@ -91,12 +91,19 @@ func (e *TODOExecutor) applyPlanOutcome(todo *types.TODO, result *ExecutionResul
 		todo.Status = types.StatusPending
 		update.PlanStatus = &result.Plan.Status
 	case types.PlanNew, types.PlanUpdated:
-		if err := ValidatePlanFile(result.Plan.Path); err != nil {
-			return fmt.Errorf("plan run reported an invalid plan file: %w", err)
+		path := result.Plan.Path
+		if err := ValidatePlanFile(path); err != nil {
+			// The agent misreported its plan file; captain's session plan
+			// resolver is the canonical fallback before failing the run.
+			if resolved := ResolveSessionPlanPath(todo); resolved != "" && ValidatePlanFile(resolved) == nil {
+				path = resolved
+			} else {
+				return fmt.Errorf("plan run reported an invalid plan file: %w", err)
+			}
 		}
 		todo.Status = types.StatusReview
 		update.PlanStatus = &result.Plan.Status
-		update.PlanPath = &result.Plan.Path
+		update.PlanPath = &path
 	default:
 		return fmt.Errorf("plan run reported unknown plan.status %q", result.Plan.Status)
 	}
