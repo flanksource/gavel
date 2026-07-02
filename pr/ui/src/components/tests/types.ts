@@ -45,7 +45,9 @@ export interface LinterResult {
   work_dir?: string;
   success?: boolean;
   skipped?: boolean;
-  violations: LintViolation[];
+  // null when the linter errored before producing findings (Go marshals a nil slice as null).
+  violations: LintViolation[] | null;
+  error?: string;
   file_count?: number;
   rule_count?: number;
 }

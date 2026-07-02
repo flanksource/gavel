@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SplitPane } from '@flanksource/clicky-ui/components';
 import { useDocumentVisible } from '../useDocumentVisible';
+import { ErrorBoundary } from './ErrorBoundary';
 import { GavelIcon } from './GavelIcon';
 import { TestRunList } from './tests/TestRunList';
 import { TestRunDetail } from './tests/TestRunDetail';
@@ -50,7 +51,10 @@ export function TestsView({
       left={<TestRunList projects={data.projects} selectedPath={selectedPath} onSelect={onSelect} />}
       right={
         runId ? (
-          <TestRunDetail project={project} runId={runId} />
+          // Keyed on the path so navigating to another run resets a tripped boundary.
+          <ErrorBoundary key={selectedPath}>
+            <TestRunDetail project={project} runId={runId} />
+          </ErrorBoundary>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             <div className="text-center">

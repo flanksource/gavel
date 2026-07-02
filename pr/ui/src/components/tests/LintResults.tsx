@@ -11,32 +11,43 @@ export function LintResults({ lint }: { lint: LinterResult[] }) {
   }
   return (
     <div className="h-full space-y-4 overflow-auto p-3">
-      {lint.map(result => (
-        <LinterSection key={result.linter} result={result} />
+      {lint.map((result, i) => (
+        // A run can hold several sections for the same linter (one per work_dir).
+        <LinterSection key={`${result.linter}:${result.work_dir ?? i}`} result={result} />
       ))}
     </div>
   );
 }
 
 function LinterSection({ result }: { result: LinterResult }) {
-  const count = result.violations.length;
+  const violations = result.violations ?? [];
+  const errored = !!result.error && !result.skipped;
+  const count = violations.length;
   return (
     <div>
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
         <GavelIcon
-          name={count > 0 ? 'codicon:warning' : 'codicon:pass'}
-          className={count > 0 ? 'text-amber-500' : 'text-green-500'}
+          name={errored ? 'codicon:error' : count > 0 ? 'codicon:warning' : 'codicon:pass'}
+          className={errored ? 'text-red-500' : count > 0 ? 'text-amber-500' : 'text-green-500'}
         />
         {result.linter}
+        {result.work_dir && (
+          <span className="truncate font-mono text-xs font-normal text-muted-foreground">{result.work_dir}</span>
+        )}
         <span className="text-xs font-normal text-muted-foreground">
-          {count} violation{count !== 1 ? 's' : ''}
+          {errored ? 'failed' : `${count} violation${count !== 1 ? 's' : ''}`}
         </span>
       </div>
       <div className="divide-y divide-border rounded border border-border">
+        {errored && (
+          <pre className="overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs text-red-500">
+            {result.error}
+          </pre>
+        )}
         {count === 0 ? (
-          <div className="px-3 py-2 text-xs text-muted-foreground">No violations</div>
+          !errored && <div className="px-3 py-2 text-xs text-muted-foreground">No violations</div>
         ) : (
-          result.violations.map((v, i) => <ViolationRow key={i} violation={v} />)
+          violations.map((v, i) => <ViolationRow key={i} violation={v} />)
         )}
       </div>
     </div>

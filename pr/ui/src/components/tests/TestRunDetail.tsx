@@ -34,7 +34,7 @@ export function TestRunDetail({ project, runId }: { project: string; runId: stri
   const lint = useMemo(() => (snap?.lint ?? []).filter(l => !l.skipped), [snap]);
   const hasTests = tests.length > 0;
   const hasLint = lint.length > 0;
-  const lintCount = useMemo(() => lint.reduce((n, l) => n + l.violations.length, 0), [lint]);
+  const lintCount = useMemo(() => lint.reduce((n, l) => n + (l.violations?.length ?? 0), 0), [lint]);
   const visible = useMemo(() => filterTests(tests, filters.status, filters.framework), [tests, filters]);
 
   // Default to whichever section the run actually has, re-evaluated per run.
