@@ -231,15 +231,15 @@ type graphQLCommitNode struct {
 }
 
 type graphQLCommit struct {
-	OID                       string                   `json:"oid"`
-	MessageHeadline           string                   `json:"messageHeadline"`
-	MessageBody               string                   `json:"messageBody"`
-	CommittedDate             time.Time                `json:"committedDate"`
-	Author                    graphQLCommitAuthor      `json:"author"`
-	Additions                 int                      `json:"additions"`
-	Deletions                 int                      `json:"deletions"`
-	ChangedFilesIfAvailable   *int                     `json:"changedFilesIfAvailable"`
-	StatusCheckRollup         *graphQLStatusCheckRollup `json:"statusCheckRollup"`
+	OID                     string                    `json:"oid"`
+	MessageHeadline         string                    `json:"messageHeadline"`
+	MessageBody             string                    `json:"messageBody"`
+	CommittedDate           time.Time                 `json:"committedDate"`
+	Author                  graphQLCommitAuthor       `json:"author"`
+	Additions               int                       `json:"additions"`
+	Deletions               int                       `json:"deletions"`
+	ChangedFilesIfAvailable *int                      `json:"changedFilesIfAvailable"`
+	StatusCheckRollup       *graphQLStatusCheckRollup `json:"statusCheckRollup"`
 }
 
 type graphQLCommitAuthor struct {
