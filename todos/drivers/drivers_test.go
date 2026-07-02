@@ -3,6 +3,8 @@ package drivers
 import (
 	"strings"
 	"testing"
+
+	"github.com/flanksource/gavel/todos/types"
 )
 
 func TestKindAgentAndMechanism(t *testing.T) {
@@ -61,16 +63,19 @@ func TestNewCmuxDriversCarryAgentAndNoOrchestratorSession(t *testing.T) {
 	}
 }
 
-func TestNewSDKReturnsConfiguredSessionID(t *testing.T) {
-	exec, sessionID, err := New(ClaudeSDK, Config{WorkDir: "/repo", SessionID: "sess-123"})
-	if err != nil {
-		t.Fatalf("New(claude-sdk): %v", err)
+func TestNewSDKDriverRemoved(t *testing.T) {
+	if ClaudeSDK.Implemented() {
+		t.Error("claude-sdk reported Implemented(); the tsx bridge was removed")
 	}
-	if sessionID != "sess-123" {
-		t.Errorf("sdk orchestrator sessionID = %q, want sess-123", sessionID)
+	_, _, err := New(ClaudeSDK, Config{WorkDir: "/repo"})
+	if err == nil || !strings.Contains(err.Error(), "removed") {
+		t.Fatalf("New(claude-sdk) = %v, want a removal error naming the replacement", err)
 	}
-	if got := exec.Name(); got != "claude-code" {
-		t.Errorf("claude-sdk Name() = %q, want claude-code", got)
+}
+
+func TestNewRejectsVerifyMode(t *testing.T) {
+	if _, _, err := New(ClaudeHeadless, Config{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
+		t.Fatal("New(mode=verify) must error — verify runs through the verify engine")
 	}
 }
 

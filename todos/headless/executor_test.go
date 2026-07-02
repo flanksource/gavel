@@ -242,15 +242,26 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		}
 	})
 
-	t.Run("cmux plan run forces plan mode", func(t *testing.T) {
+	// The plan posture comes from the plan template's frontmatter now, not a
+	// Plan flag: the rendered request carries permissions.mode: plan.
+	t.Run("cmux plan run forces plan mode via the template", func(t *testing.T) {
 		var req captainai.Request
 		e := NewExecutor(Config{
 			WorkDir: t.TempDir(),
 			Agent:   "claude",
 			Backend: string(captainai.BackendClaudeCmux),
-			Plan:    true,
+			Mode:    types.ModePlan,
 			Stream:  capture(&req),
 		})
+		// A plan run demands an envelope; serve one via the capture stream.
+		e.config.Stream = func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+			req = r
+			ch := make(chan captainai.Event, 2)
+			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/tmp/plan.md"}}`}
+			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+			close(ch)
+			return ch, nil
+		}
 		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
@@ -258,17 +269,42 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 			t.Errorf("mode = %q, want plan", req.Permissions.Mode)
 		}
 	})
+
+	t.Run("explicit user permission mode beats the template", func(t *testing.T) {
+		var req captainai.Request
+		e := NewExecutor(Config{
+			WorkDir:        t.TempDir(),
+			Agent:          "claude",
+			Backend:        string(captainai.BackendClaudeAgent),
+			Mode:           types.ModePlan,
+			PermissionMode: "default",
+			Stream: func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+				req = r
+				ch := make(chan captainai.Event, 2)
+				ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/tmp/plan.md"}}`}
+				ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+				close(ch)
+				return ch, nil
+			},
+		})
+		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if req.Permissions.Mode != api.PermissionDefault {
+			t.Errorf("mode = %q, want default (explicit user override)", req.Permissions.Mode)
+		}
+	})
 }
 
 func TestHeadlessModelDefaults(t *testing.T) {
-	claudeP, err := (&Executor{config: Config{Agent: "claude", Model: "claude"}}).newStreamer(nil, "")
+	claudeP, err := (&Executor{config: Config{Agent: "claude"}}).newStreamer(nil, "", "claude", "")
 	if err != nil {
 		t.Fatalf("claude streamer: %v", err)
 	}
 	if claudeP.GetBackend() != captainai.BackendClaudeAgent {
 		t.Errorf("claude backend = %v, want claude-agent", claudeP.GetBackend())
 	}
-	codexP, err := (&Executor{config: Config{Agent: "codex", Model: "codex"}}).newStreamer(nil, "")
+	codexP, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "codex", "")
 	if err != nil {
 		t.Fatalf("codex streamer: %v", err)
 	}

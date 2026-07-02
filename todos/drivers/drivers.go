@@ -18,9 +18,11 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/headless"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 // Kind identifies an agent driver as "<agent>-<mechanism>". The agent is the
@@ -82,7 +84,7 @@ func (k Kind) Mechanism() string {
 // back to another driver.
 func (k Kind) Implemented() bool {
 	switch k {
-	case ClaudeCmux, ClaudeSDK, ClaudeHeadless, CodexHeadless:
+	case ClaudeCmux, ClaudeHeadless, CodexHeadless:
 		return true
 	default:
 		return false
@@ -102,18 +104,28 @@ func Parse(s string) (Kind, error) {
 // the subset relevant to it (cmux ignores MaxBudgetUsd; the sdk path ignores
 // Effort, etc.).
 type Config struct {
-	WorkDir      string
-	Model        string
-	Backend      string
-	Effort       string
-	Plan         bool
-	Resume       bool
-	SessionID    string
-	Timeout      time.Duration
-	MaxBudgetUsd float64
-	MaxTurns     int
-	Tools        []string
-	Dirty        bool
+	WorkDir string
+	Model   string
+	Backend string
+	Effort  string
+	// Mode selects the built-in prompt: run (implement) or plan (read-only
+	// investigation producing a reviewable plan). Verify never constructs a
+	// driver — it routes through the verify engine.
+	Mode types.RunMode
+	// ExistingPlan is the current content of the todo's recorded plan file
+	// (plan mode); empty means no prior plan.
+	ExistingPlan string
+	// Verifiers gate each run-mode iteration (captain agent.Runner plugins);
+	// a failing verdict's feedback drives another attempt in the same session.
+	Verifiers     []agent.Plugin
+	MaxIterations int
+	Resume        bool
+	SessionID     string
+	Timeout       time.Duration
+	MaxBudgetUsd  float64
+	MaxTurns      int
+	Tools         []string
+	Dirty         bool
 	// ToolModes is the per-tool exposure (tool name → enabled/ask/disabled) and
 	// PermissionMode the base permission posture (a clicky ClaudePermissionMode),
 	// both honoured by the captain-backed executor (cmux and headless).
@@ -140,69 +152,49 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 	if !kind.Valid() {
 		return nil, "", fmt.Errorf("invalid driver %q", kind)
 	}
+	if cfg.Mode == types.ModeVerify {
+		return nil, "", fmt.Errorf("verify runs through the verify engine, not an agent driver")
+	}
 	model, err := resolveModel(kind, cfg.Model)
 	if err != nil {
 		return nil, "", err
 	}
 
+	backend := cfg.Backend
 	switch kind.Mechanism() {
 	case "cmux":
-		// cmux now drives the captain cmux provider through the same captain-backed
+		// cmux drives the captain cmux provider through the same captain-backed
 		// executor as headless, selected by a cmux backend. It returns "" as the
 		// orchestrator session id (it manages its own --session-id via Config.SessionID).
-		return headless.NewExecutor(headless.Config{
-			WorkDir:        cfg.WorkDir,
-			Agent:          kind.Agent(),
-			Model:          model,
-			Backend:        string(cmuxBackend(kind.Agent())),
-			Effort:         cfg.Effort,
-			MaxTurns:       cfg.MaxTurns,
-			Tools:          cfg.Tools,
-			Timeout:        cfg.Timeout,
-			PromptOverride: cfg.PromptOverride,
-			Approvals:      cfg.Approvals,
-			Plan:           cfg.Plan,
-			Resume:         cfg.Resume,
-			SessionID:      cfg.SessionID,
-			ToolModes:      cfg.ToolModes,
-			PermissionMode: cfg.PermissionMode,
-		}), "", nil
-	case "sdk":
-		tools := cfg.Tools
-		if len(tools) == 0 {
-			tools = DefaultTools()
-		}
-		return claude.NewClaudeExecutor(claude.ClaudeExecutorConfig{
-			WorkDir:        cfg.WorkDir,
-			SessionID:      cfg.SessionID,
-			MaxBudgetUsd:   cfg.MaxBudgetUsd,
-			MaxTurns:       cfg.MaxTurns,
-			Model:          model,
-			Timeout:        cfg.Timeout,
-			Tools:          tools,
-			Dirty:          cfg.Dirty,
-			PromptOverride: cfg.PromptOverride,
-		}), cfg.SessionID, nil
+		backend = string(cmuxBackend(kind.Agent()))
 	case "headless":
-		return headless.NewExecutor(headless.Config{
-			WorkDir:        cfg.WorkDir,
-			Agent:          kind.Agent(),
-			Model:          model,
-			Backend:        cfg.Backend,
-			Effort:         cfg.Effort,
-			MaxTurns:       cfg.MaxTurns,
-			Tools:          cfg.Tools,
-			Timeout:        cfg.Timeout,
-			PromptOverride: cfg.PromptOverride,
-			Approvals:      cfg.Approvals,
-			ToolModes:      cfg.ToolModes,
-			PermissionMode: cfg.PermissionMode,
-		}), "", nil
+	case "sdk":
+		return nil, "", fmt.Errorf("the claude-sdk driver was removed; use claude-headless (the same agent via captain)")
 	case "api":
 		return nil, "", fmt.Errorf("driver %q is not yet implemented", kind)
 	default:
 		return nil, "", fmt.Errorf("unhandled driver mechanism %q", kind.Mechanism())
 	}
+	return headless.NewExecutor(headless.Config{
+		WorkDir:        cfg.WorkDir,
+		Agent:          kind.Agent(),
+		Model:          model,
+		Backend:        backend,
+		Effort:         cfg.Effort,
+		MaxTurns:       cfg.MaxTurns,
+		Tools:          cfg.Tools,
+		Timeout:        cfg.Timeout,
+		Mode:           cfg.Mode,
+		ExistingPlan:   cfg.ExistingPlan,
+		Verifiers:      cfg.Verifiers,
+		MaxIterations:  cfg.MaxIterations,
+		PromptOverride: cfg.PromptOverride,
+		Approvals:      cfg.Approvals,
+		Resume:         cfg.Resume,
+		SessionID:      cfg.SessionID,
+		ToolModes:      cfg.ToolModes,
+		PermissionMode: cfg.PermissionMode,
+	}), "", nil
 }
 
 // DefaultTools is the standard tool allowlist for the sdk/api drivers.

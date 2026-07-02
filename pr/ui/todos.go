@@ -1457,12 +1457,16 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	// cmux returns "" as the orchestrator session id (it manages its own
 	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
 	// todo's recorded prior session.
+	mode := types.ModeRun
+	if req.Options.Plan {
+		mode = types.ModePlan
+	}
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
 		Model:          req.Options.Model,
 		Backend:        req.Options.Backend,
 		Effort:         req.Options.Effort,
-		Plan:           req.Options.Plan,
+		Mode:           mode,
 		Resume:         req.Options.Resume,
 		SessionID:      req.Options.SessionID,
 		Timeout:        req.Options.Timeout,

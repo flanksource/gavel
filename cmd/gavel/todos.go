@@ -184,43 +184,6 @@ func newInteraction() *todos.UserInteraction {
 	}
 }
 
-func newClaudeConfig(workDir string, todo *types.TODO) claude.ClaudeExecutorConfig {
-	var sessionID string
-	if todo.LLM != nil && todo.LLM.SessionId != "" {
-		sessionID = todo.LLM.SessionId
-		logger.Infof("Resuming session: %s", sessionID)
-	}
-
-	config := claude.ClaudeExecutorConfig{
-		WorkDir:   workDir,
-		SessionID: sessionID,
-		Timeout:   30 * time.Minute,
-		Tools:     []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
-		Dirty:     dirty,
-	}
-	if todo.LLM != nil {
-		if todo.LLM.MaxCost > 0 {
-			config.MaxBudgetUsd = todo.LLM.MaxCost
-		}
-		if todo.LLM.MaxTurns > 0 {
-			config.MaxTurns = todo.LLM.MaxTurns
-		}
-		if todo.LLM.Model != "" {
-			config.Model = todo.LLM.Model
-		}
-	}
-	if todoModel != "" {
-		config.Model = todoModel
-	}
-	if maxBudget > 0 {
-		config.MaxBudgetUsd = maxBudget
-	}
-	if maxTurns > 0 {
-		config.MaxTurns = maxTurns
-	}
-	return config
-}
-
 func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, error) {
 	kind, err := resolveDriverKind(todo)
 	if err != nil {
@@ -231,7 +194,8 @@ func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, erro
 
 // resolveDriverKind selects the driver: the explicit --driver flag when set,
 // otherwise the legacy --mode + model pair (cmux → "<agent>-cmux", inline →
-// claude-sdk, the SDK bridge that "inline" used to launch).
+// "<agent>-headless" — the SDK bridge "inline" used to launch was removed;
+// headless is the same agent via captain).
 func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 	if strings.TrimSpace(todosDriver) != "" {
 		return drivers.Parse(todosDriver)
@@ -245,10 +209,7 @@ func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 	case "cmux":
 		return drivers.Parse(agent + "-cmux")
 	case "", "inline":
-		if agent == "codex" {
-			return "", fmt.Errorf("codex runs require a cmux driver (set --driver codex-cmux)")
-		}
-		return drivers.ClaudeSDK, nil
+		return drivers.Parse(agent + "-headless")
 	default:
 		return "", fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
 	}

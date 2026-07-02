@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -120,14 +121,16 @@ func TestValidateTodosRunOptions(t *testing.T) {
 	}
 }
 
-func TestNewClaudeConfigModelOverride(t *testing.T) {
+// TestNewDriverConfigModelOverride pins the CLI --model flag beating the
+// todo's recorded model (the sdk-specific config builder it replaced is gone).
+func TestNewDriverConfigModelOverride(t *testing.T) {
 	oldModel := todoModel
 	defer func() { todoModel = oldModel }()
 
 	todoModel = "opus"
 	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
 
-	cfg := newClaudeConfig("/repo", todo)
+	cfg := newDriverConfig(drivers.ClaudeHeadless, "/repo", todo)
 
 	if cfg.Model != "opus" {
 		t.Fatalf("expected CLI model override, got %q", cfg.Model)

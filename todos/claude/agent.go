@@ -1,29 +1,8 @@
+// Package claude maps coding-agent model names to their agent; execution
+// itself is fully captain-provided (see todos/headless).
 package claude
 
-import (
-	"strings"
-
-	captainai "github.com/flanksource/captain/pkg/ai"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
-	"github.com/flanksource/gavel/todos/types"
-)
-
-// renderRunPrompt renders the run-mode prompt for the SDK bridge: the resolved
-// .gavel.yaml template with the group sections, or the verbatim body override,
-// always carrying the envelope schema instruction.
-func renderRunPrompt(todoList []*types.TODO, workDir, bodyOverride string) (captainai.Request, error) {
-	tmpl, err := todoprompt.ResolveTemplate(workDir, types.ModeRun)
-	if err != nil {
-		return captainai.Request{}, err
-	}
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
-		WorkDir:      workDir,
-		Mode:         types.ModeRun,
-		Template:     tmpl,
-		BodyOverride: bodyOverride,
-	})
-	return req, err
-}
+import "strings"
 
 // ResolveAgent maps a model name to the coding agent that serves it ("claude" or
 // "codex") and the residual model flag. An empty model defaults to claude; codex

@@ -49,6 +49,13 @@ type ExecutionResult struct {
 	ErrorMessage     string
 	CommitSHA        string
 	Transcript       *ExecutionTranscript
+	// Envelope fields — the agent's structured final result. EndStatus is empty
+	// when no envelope was captured (the executor logged the degradation and the
+	// transport Success decides).
+	Summary   string
+	EndStatus types.EndStatus
+	Questions []types.AgentQuestion
+	Plan      *types.PlanResult
 }
 
 // ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
@@ -358,6 +365,10 @@ func (e *TODOExecutor) splitResult(groupResult *ExecutionResult, count int) *Exe
 		NumTurns:     groupResult.NumTurns,
 		CommitSHA:    groupResult.CommitSHA,
 		Transcript:   groupResult.Transcript,
+		Summary:      groupResult.Summary,
+		EndStatus:    groupResult.EndStatus,
+		Questions:    groupResult.Questions,
+		Plan:         groupResult.Plan,
 	}
 }
 
