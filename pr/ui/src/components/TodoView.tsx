@@ -108,7 +108,7 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 // todos, grouped and independently scrollable beside the detail pane. The
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
-export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
+export function TodoWorkspaceList({ todos, query = '' }: { todos: WorkspaceTodos; query?: string }) {
   const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
@@ -132,6 +132,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             hiddenStatuses={hiddenStatuses}
             onToggleStatus={toggleStatus}
             range={range}
+            query={query}
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
@@ -159,6 +160,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
             hiddenStatuses={hiddenStatuses}
             range={range}
+            query={query}
             density={density}
           />
         ))}

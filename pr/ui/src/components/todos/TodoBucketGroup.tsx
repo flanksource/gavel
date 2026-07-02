@@ -25,17 +25,18 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // owning workspace and there is no batch-run control (a run targets a single
 // workspace dir/provider). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
-export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, density = 'comfortable' }: {
+export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, query = '', density = 'comfortable' }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
   onSelect: (entry: TodoEntry) => void;
   hiddenStatuses?: Set<TodoStatus>;
   range?: ResolvedRange | null;
+  query?: string;
   density?: TodoDensity;
 }) {
   const [open, setOpen] = useState(true);
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
-  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, hidden, range));
+  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, hidden, range, query));
   const hiddenCount = bucket.entries.length - visible.length;
   const counts = countsFromItems(bucket.entries.map(e => e.todo));
 

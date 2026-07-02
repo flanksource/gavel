@@ -17,7 +17,7 @@ const KIND_COLORS: Record<string, string> = {
   search: 'bg-amber-100 text-amber-700',
 };
 
-export function ActivityView() {
+export function ActivityView({ query = '' }: { query?: string }) {
   const [snap, setSnap] = useState<ActivitySnapshot>({
     entries: [],
     stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
@@ -57,10 +57,15 @@ export function ActivityView() {
     return () => { es.close(); clearInterval(cacheTimer); };
   }, [visible]);
 
-  const filtered = useMemo(
-    () => kindFilter ? snap.entries.filter(e => e.kind === kindFilter) : snap.entries,
-    [snap.entries, kindFilter],
-  );
+  // The kind chips and the global search compose: a row shows only when it
+  // matches the selected kind (if any) and the free-text query over URL/method/kind.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return snap.entries.filter(e =>
+      (!kindFilter || e.kind === kindFilter) &&
+      (!q || e.url.toLowerCase().includes(q) || e.method.toLowerCase().includes(q) || e.kind.toLowerCase().includes(q)),
+    );
+  }, [snap.entries, kindFilter, query]);
 
   const handleReset = () => {
     fetch('/api/activity/reset', { method: 'POST' })

@@ -27,12 +27,28 @@ export function defaultHiddenStatuses(): Set<TodoStatus> {
   return new Set<TodoStatus>([CLOSED_STATUS]);
 }
 
-// isTodoVisible applies the status filter and, when an activity range is active,
-// the time filter: a row shows only when its status is not hidden and its
-// activity falls within the range.
-export function isTodoVisible(item: TodoItem, hidden: Set<TodoStatus>, range?: ResolvedRange | null): boolean {
+// todoMatchesQuery is the free-text search over a todo's identity fields — title,
+// its short/ref/full ids, and labels — mirroring the PR tab's title/#id search.
+// An empty query matches everything.
+export function todoMatchesQuery(item: TodoItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    item.title.toLowerCase().includes(q) ||
+    (item.shortId || '').toLowerCase().includes(q) ||
+    (item.ref || '').toLowerCase().includes(q) ||
+    (item.id || '').toLowerCase().includes(q) ||
+    (item.labels || []).some(label => label.toLowerCase().includes(q))
+  );
+}
+
+// isTodoVisible applies the status filter, the activity-range filter (when one is
+// active), and the free-text search query: a row shows only when its status is
+// not hidden, its activity falls within the range, and it matches the query.
+export function isTodoVisible(item: TodoItem, hidden: Set<TodoStatus>, range?: ResolvedRange | null, query = ''): boolean {
   if (hidden.has(item.status)) return false;
   if (range && !withinActivityRange(item, range)) return false;
+  if (!todoMatchesQuery(item, query)) return false;
   return true;
 }
 

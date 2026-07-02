@@ -19,6 +19,7 @@ import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
+import { SearchBar } from './components/SearchBar';
 import { WorkspaceGroup } from './components/ProcessTable';
 import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
@@ -570,31 +571,7 @@ export function App() {
       <AppShell
         brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
         nav={<TabBar active={activeTab} onChange={changeTab} />}
-        search={
-          activeTab === 'prs' ? (
-            <div className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5">
-              <GavelIcon name="codicon:search" className="text-muted-foreground text-sm shrink-0" />
-              <input
-                value={query}
-                onChange={(e) => setQuery((e.target as HTMLInputElement).value)}
-                placeholder="Search pull requests, branches, #id…"
-                aria-label="Search pull requests"
-                className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              />
-              {query && (
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => setQuery('')}
-                  className="text-muted-foreground hover:text-foreground shrink-0 h-auto p-0"
-                  aria-label="Clear search"
-                >
-                  <GavelIcon name="codicon:close" className="text-xs" />
-                </Button>
-              )}
-            </div>
-          ) : undefined
-        }
+        search={<SearchBar tab={activeTab} query={query} onChange={setQuery} />}
         actions={
           <>
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
@@ -649,7 +626,7 @@ export function App() {
             />
           ) : undefined
         }
-        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} /> : undefined}
+        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} query={query} /> : undefined}
         bodySplit={38}
         contentClassName="overflow-hidden"
       >
@@ -677,9 +654,9 @@ export function App() {
         ) : activeTab === 'todos' ? (
           <TodoDetailPane todos={todos} />
         ) : activeTab === 'tests' ? (
-          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} />
+          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} query={query} />
         ) : (
-          <ActivityView />
+          <ActivityView query={query} />
         )}
       </AppShell>
 
