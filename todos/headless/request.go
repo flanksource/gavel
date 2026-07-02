@@ -33,10 +33,10 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	}
 	// Explicit user model/backend overrides win over the template frontmatter.
 	if m := strings.TrimSpace(e.config.Model); m != "" {
-		req.Model.Name = m
+		req.Name = m
 	}
 	if b := strings.TrimSpace(e.config.Backend); b != "" {
-		req.Model.Backend = captainai.Backend(b)
+		req.Backend = captainai.Backend(b)
 	}
 
 	templateMode := base.Permissions.Mode
@@ -165,9 +165,9 @@ func splitToolModes(modes map[string]string) (allow, deny []string) {
 // otherwise a captain provider built from the request's resolved model/backend.
 func (e *Executor) provider(req captainai.Request, canUseTool captainai.PermissionFunc, providerSessionID string) (captainai.StreamingProvider, error) {
 	if e.config.Stream != nil {
-		return seamProvider{fn: e.config.Stream, canUseTool: canUseTool, model: req.Model.Name, backend: req.Model.Backend}, nil
+		return seamProvider{fn: e.config.Stream, canUseTool: canUseTool, model: req.Name, backend: req.Backend}, nil
 	}
-	return e.newStreamer(canUseTool, providerSessionID, req.Model.Name, string(req.Model.Backend))
+	return e.newStreamer(canUseTool, providerSessionID, req.Name, string(req.Backend))
 }
 
 // seamProvider adapts the streamFunc test seam to captain's StreamingProvider.
