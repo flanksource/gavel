@@ -63,7 +63,7 @@ export interface Project {
 }
 
 export type TodoProvider = 'grite' | 'todos';
-export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'completed' | 'failed' | 'verified' | 'skipped';
+export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'ask' | 'completed' | 'failed' | 'verified' | 'skipped';
 export type TodoPriority = 'high' | 'medium' | 'low';
 // Row density for the todo lists: 'comfortable' is the two-line default,
 // 'compact' collapses each todo onto a single line.
@@ -82,6 +82,10 @@ export interface TodoCounts {
   draft: number;
   pending: number;
   inProgress: number;
+  // review/ask are absent from server counts until Phase 6 lands; client-side
+  // aggregation defaults them to 0 (see addCounts).
+  review: number;
+  ask: number;
   failed: number;
   verified: number;
   completed: number;
@@ -460,6 +464,9 @@ export interface Snapshot {
   // The server's current bot-fetch state; the UI only posts a change when the
   // @bots chip disagrees with this.
   includeBots?: boolean;
+  // The server's current closed-PR fetch state; the UI only posts a change when
+  // the Closed/Merged State chips disagree with this.
+  showClosed?: boolean;
   rateLimit?: RateLimit;
   // Sparse map keyed by `${repo}#${number}`. A PR is unread iff its key
   // appears here. Absent key = read. Server omits the field entirely when
@@ -488,6 +495,7 @@ export interface PRInfo {
   // auto-merge actions. Present once PR detail has loaded.
   nodeId?: string;
   title: string;
+  body?: string;
   author: { login: string; name?: string; avatarUrl?: string };
   headRefName: string;
   baseRefName: string;
@@ -496,7 +504,34 @@ export interface PRInfo {
   reviewDecision: string;
   mergeable: string;
   url: string;
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
   statusCheckRollup?: StatusCheck[];
+  prCommits?: PRCommitInfo[];
+  prFiles?: PRFileInfo[];
+}
+
+// PRCommitInfo is a commit in the PR.
+export interface PRCommitInfo {
+  oid: string;
+  messageHeadline: string;
+  messageBody?: string;
+  committedDate: string;
+  authorName?: string;
+  authorLogin?: string;
+  authorAvatarUrl?: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+// PRFileInfo is a changed file in the PR.
+export interface PRFileInfo {
+  path: string;
+  additions: number;
+  deletions: number;
+  changeType: string;
 }
 
 export interface StatusCheck {

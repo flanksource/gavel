@@ -13,6 +13,8 @@ export const STATUS_FILTER_DEFS: { status: TodoStatus; label: string; countKey: 
   { status: 'draft', label: 'Draft', countKey: 'draft' },
   { status: 'pending', label: 'Pending', countKey: 'pending' },
   { status: 'in_progress', label: 'In progress', countKey: 'inProgress' },
+  { status: 'review', label: 'Review', countKey: 'review' },
+  { status: 'ask', label: 'Ask', countKey: 'ask' },
   { status: 'failed', label: 'Failed', countKey: 'failed' },
   { status: 'verified', label: 'Verified', countKey: 'verified' },
   { status: 'skipped', label: 'Skipped', countKey: 'skipped' },

@@ -11,10 +11,9 @@ interface Props {
   /** Status keyed by project name (and repo) from /api/proc/status. */
   procStatus: Record<string, ProcStatus>;
   onChanged: () => void;
-  onEdit: (project: Project) => void;
   /** Opens the add-workspace-directory dialog. */
   onAdd: () => void;
-  /** Opens the per-project .gavel.yaml settings editor. */
+  /** Opens the per-project settings dialog (registration + .gavel.yaml). */
   onSettings: (project: Project) => void;
 }
 
@@ -22,7 +21,7 @@ interface Props {
 // independent of the GitHub PR fetch, so a project never vanishes when one of
 // its repos gains an open PR. The section is always shown so its "Add directory"
 // action stays available even when no projects are configured yet.
-export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd, onSettings }: Props) {
+export function ProjectsBar({ projects, procStatus, onChanged, onAdd, onSettings }: Props) {
   return (
     <div className="border-b border-border">
       <div className="px-3 py-1 bg-muted text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
@@ -52,7 +51,6 @@ export function ProjectsBar({ projects, procStatus, onChanged, onEdit, onAdd, on
               project={p}
               status={procStatus[p.name]}
               onChanged={onChanged}
-              onEdit={onEdit}
             />
           </div>
         );

@@ -1,11 +1,13 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCounts, TodoStatus } from '../../types';
 import {
+  StatusAsk,
   StatusBlocked,
   StatusClosed,
   StatusInProgress,
   StatusOpen,
   StatusResolved,
+  StatusReview,
   StatusTriage,
   StatusWontFix,
   type IssueIconProps,
@@ -17,6 +19,8 @@ const STATUS_FILTER_ICONS: Record<TodoStatus, (props: IssueIconProps) => JSX.Ele
   draft: StatusTriage,
   pending: StatusOpen,
   in_progress: StatusInProgress,
+  review: StatusReview,
+  ask: StatusAsk,
   failed: StatusBlocked,
   verified: StatusResolved,
   completed: StatusClosed,

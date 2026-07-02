@@ -19,7 +19,6 @@ interface Props {
   projectsByRepo?: Record<string, Project>;
   procStatus?: Record<string, ProcStatus>;
   onProcChanged?: () => void;
-  onProcEdit?: (project: Project) => void;
 }
 
 // GroupCounts shows per-group open (green) and failing (red) totals on the
@@ -43,7 +42,7 @@ function GroupCounts({ items }: { items: PRItem[] }) {
   );
 }
 
-export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, procStatus, onProcChanged, onProcEdit }: Props) {
+export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResults, projectsByRepo, procStatus, onProcChanged }: Props) {
   if (prs.length === 0) {
     return (
       <div className="p-6 text-center text-muted-foreground">
@@ -102,7 +101,6 @@ export function PRList({ prs, selected, onSelect, unread, syncStatus, gavelResul
                     project={projectsByRepo?.[group.repo]}
                     status={procStatus?.[group.repo]}
                     onChanged={onProcChanged}
-                    onEdit={onProcEdit}
                   />
                 )}
                 <TodoBadge counts={projectsByRepo?.[group.repo]?.todoCounts} />

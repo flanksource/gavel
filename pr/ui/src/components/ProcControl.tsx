@@ -1,4 +1,3 @@
-import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { aggregateDotClass, crashedSummary } from '../utils';
 import { ProcessPortLink } from './ProcessTable';
@@ -9,29 +8,13 @@ interface Props {
   project?: Project;
   status?: ProcStatus;
   onChanged: () => void;
-  onEdit?: (project: Project) => void;
-}
-
-// IconBtn is a clicky ghost icon button wrapping an offline SVG glyph, so we
-// keep the codicon vocabulary while using clicky-ui's button chrome.
-function IconBtn({ icon, title, onClick }: { icon: string; title: string; onClick: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      title={title}
-      aria-label={title}
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-    >
-      <GavelIcon name={icon} className="text-sm" />
-    </Button>
-  );
 }
 
 // ProcControl is the compact inline indicator shown next to a repo/project: a
-// health dot plus listening ports. Starting, stopping, restarting, viewing
-// logs and resource metrics all live in the top-right ProcessManager dropdown.
-export function ProcControl({ project, status, onEdit }: Props) {
+// health dot plus listening ports. Editing the workspace lives in the row's
+// settings gear; starting, stopping, restarting, viewing logs and resource
+// metrics all live in the top-right ProcessManager dropdown.
+export function ProcControl({ project, status }: Props) {
   // Repos without a configured project (or without a Procfile) show nothing;
   // the header "+ Add dir" button is the single entry point for adding one.
   if (!project || !status?.hasProcfile) return null;
@@ -67,8 +50,6 @@ export function ProcControl({ project, status, onEdit }: Props) {
       )}
 
       {ports.map(port => <ProcessPortLink key={port} project={project.name} port={port} />)}
-
-      {onEdit && <IconBtn icon="codicon:gear" title="Edit directory" onClick={() => onEdit(project)} />}
     </span>
   );
 }

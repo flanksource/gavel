@@ -76,6 +76,8 @@ export const ISSUE_ICONS: Record<string, IssueIconMeta> = {
   open: { key: 'open', name: 'Open', group: 'status', color: '#3578e5', meaning: ACTIONABLE, description: 'Filed and awaiting triage or pickup.' },
   triage: { key: 'triage', name: 'Triage', group: 'status', color: '#7c3aed', meaning: CLASSIFY, description: 'Being categorised, deduped, and prioritised.' },
   in_progress: { key: 'in_progress', name: 'In progress', group: 'status', color: '#d97706', meaning: IN_FLIGHT, description: 'Actively being worked.' },
+  review: { key: 'review', name: 'Plan review', group: 'status', color: '#d97706', meaning: 'Needs human decision', description: 'Agent proposed a plan; awaiting human approval.' },
+  ask: { key: 'ask', name: 'Ask', group: 'status', color: '#7c3aed', meaning: 'Blocked on a question', description: 'Agent is blocked on a question for a human.' },
   in_review: { key: 'in_review', name: 'In review', group: 'status', color: '#6366f1', meaning: REVIEW, description: 'Fix proposed; under review.' },
   blocked: { key: 'blocked', name: 'Blocked', group: 'status', color: '#e11d48', meaning: ACT_NOW, description: 'Waiting on a dependency or decision.' },
   resolved: { key: 'resolved', name: 'Resolved', group: 'status', color: '#059669', meaning: DELIVERED, description: 'Fixed and verified.' },
@@ -134,6 +136,8 @@ export const SeverityTrivial = make(infoThin, ISSUE_ICONS.trivial.color);
 export const StatusOpen = make(circleThin, ISSUE_ICONS.open.color);
 export const StatusTriage = make(funnelThin, ISSUE_ICONS.triage.color);
 export const StatusInProgress = make(circleHalfThin, ISSUE_ICONS.in_progress.color);
+export const StatusReview = make(eyeThin, ISSUE_ICONS.review.color);
+export const StatusAsk = make(questionThin, ISSUE_ICONS.ask.color);
 export const StatusInReview = make(eyeThin, ISSUE_ICONS.in_review.color);
 export const StatusBlocked = make(prohibitThin, ISSUE_ICONS.blocked.color);
 export const StatusResolved = make(checkCircleThin, ISSUE_ICONS.resolved.color);

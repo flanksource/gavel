@@ -6,6 +6,7 @@ import { GavelIcon } from '../GavelIcon';
 import { TodoTimeline } from './TodoTimeline';
 import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
+import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
@@ -40,7 +41,7 @@ export function TodoDetail({
   const [busy, setBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'overview' | 'session'>('overview');
+  const [tab, setTab] = useState<'overview' | 'session' | 'plan'>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -404,10 +405,13 @@ export function TodoDetail({
       <div className="flex shrink-0 gap-1 border-b border-border bg-background px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon="codicon:list-flat" label="Overview" />
         <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon="codicon:comment-discussion" label="Session" />
+        <DetailTab active={tab === 'plan'} onClick={() => setTab('plan')} icon="codicon:checklist" label="Plan" />
       </div>
       <div className="flex min-h-0 flex-1 flex-col bg-[#f4f6f9] dark:bg-[#0a1020]">
         {tab === 'session' ? (
           <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
+        ) : tab === 'plan' ? (
+          <TodoPlan dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'plan'} />
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {loading ? (
@@ -990,6 +994,10 @@ function statusIcon(status: TodoStatus | string): string {
       return 'codicon:circle-large-outline';
     case 'in_progress':
       return 'svg-spinners:ring-resize';
+    case 'review':
+      return 'codicon:eye';
+    case 'ask':
+      return 'codicon:question';
     case 'failed':
       return 'octicon:x-circle-fill-16';
     case 'verified':

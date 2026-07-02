@@ -140,6 +140,7 @@ export function App() {
   const [viewer, setViewer] = useState('');
   const [botsAvailable, setBotsAvailable] = useState(false);
   const [includeBotsServer, setIncludeBotsServer] = useState(false);
+  const [showClosedServer, setShowClosedServer] = useState(false);
   const [unread, setUnread] = useState<Record<string, boolean>>({});
   const [fetchedAt, setFetchedAt] = useState('');
   const [nextFetchIn, setNextFetchIn] = useState(60);
@@ -160,7 +161,6 @@ export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
-  const [editProject, setEditProject] = useState<Project | null>(null);
   const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
   const visible = useDocumentVisible();
   const isMobile = useIsMobile();
@@ -264,6 +264,7 @@ export function App() {
     if (snap.viewer) setViewer(snap.viewer);
     setBotsAvailable(!!snap.botsAvailable);
     setIncludeBotsServer(!!snap.includeBots);
+    setShowClosedServer(!!snap.showClosed);
     setUnread(snap.unread || {});
     setFetchedAt(snap.fetchedAt);
     setNextFetchIn(snap.nextFetchIn);
@@ -342,11 +343,10 @@ export function App() {
     return m;
   }, [projects]);
 
-  const openAdd = useCallback(() => { setEditProject(null); setAddOpen(true); }, []);
-  const openEdit = useCallback((p: Project) => { setEditProject(p); setAddOpen(true); }, []);
+  const openAdd = useCallback(() => setAddOpen(true), []);
   const openGlobalSettings = useCallback(() => setSettingsScope({ kind: 'global' }), []);
   const openProjectSettings = useCallback(
-    (p: Project) => setSettingsScope({ kind: 'project', project: p.name, label: p.name }),
+    (p: Project) => setSettingsScope({ kind: 'project', project: p }),
     [],
   );
 
@@ -498,6 +498,20 @@ export function App() {
       body: JSON.stringify({ include: wantBots }),
     }).catch(() => {});
   }, [filters.authors, includeBotsServer]);
+
+  // Selecting the Closed or Merged State chip opts into fetching closed PRs (the
+  // daemon syncs open-only by default). Asking the server to widen the fetch
+  // triggers a refetch; deselecting both narrows it back to open. Converges since
+  // the snapshot echoes the server's showClosed back into showClosedServer.
+  useEffect(() => {
+    const wantClosed = filters.state['closed'] === 'include' || filters.state['merged'] === 'include';
+    if (wantClosed === showClosedServer) return;
+    fetch('/api/prs/closed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: wantClosed }),
+    }).catch(() => {});
+  }, [filters.state, showClosedServer]);
   const filtered = useMemo(
     () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors, viewer),
     [prs, filters, viewer],
@@ -643,8 +657,8 @@ export function App() {
           <SplitPane
             left={
               <>
-                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onEdit={openEdit} onAdd={openAdd} onSettings={openProjectSettings} />
-                <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} onProcEdit={openEdit} />
+                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onAdd={openAdd} onSettings={openProjectSettings} />
+                <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
               </>
             }
             right={
@@ -670,8 +684,8 @@ export function App() {
       </AppShell>
 
       <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} defaultDir={todos.selected?.dir} />
-      <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} edit={editProject} />
-      <SettingsDialog open={!!settingsScope} scope={settingsScope ?? { kind: 'global' }} onClose={() => setSettingsScope(null)} />
+      <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
+      <SettingsDialog open={!!settingsScope} scope={settingsScope ?? { kind: 'global' }} onClose={() => setSettingsScope(null)} repoOptions={reposList} onSaved={onProcChanged} />
     </>
   );
 }

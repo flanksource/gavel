@@ -31,10 +31,13 @@ interface Props {
   authors: string[];
 }
 
-const STATE_DEFS: { key: string; label: string }[] = [
+// `always` keeps a chip visible even at count 0 so it can be used to opt in.
+// Closed/Merged aren't synced by default (see App's showClosed wiring), so their
+// counts start at 0 — the chip is what triggers the on-demand fetch.
+const STATE_DEFS: { key: string; label: string; always?: boolean }[] = [
   { key: 'open', label: 'Open' },
-  { key: 'merged', label: 'Merged' },
-  { key: 'closed', label: 'Closed' },
+  { key: 'merged', label: 'Merged', always: true },
+  { key: 'closed', label: 'Closed', always: true },
   { key: 'draft', label: 'Draft' },
 ];
 
@@ -66,7 +69,7 @@ export function FilterBar({ filters, onChange, counts, repos, authors }: Props) 
 
   const c = counts as Record<string, number>;
   const stateOpts: MultiSelectOption[] = STATE_DEFS
-    .filter(d => c[d.key] > 0)
+    .filter(d => d.always || c[d.key] > 0)
     .map(d => ({ value: d.key, label: `${d.label} (${c[d.key]})` }));
   const checkOpts: MultiSelectOption[] = CHECK_DEFS
     .filter(d => c[d.key] > 0)

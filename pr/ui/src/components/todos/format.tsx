@@ -2,13 +2,13 @@ import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import { GavelIcon } from '../GavelIcon';
-import { ISSUE_ICONS, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusTriage, StatusWontFix } from '../../icons/issues';
+import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
-export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'failed', 'verified', 'completed', 'skipped'];
+export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'review', 'ask', 'failed', 'verified', 'completed', 'skipped'];
 export const priorities: TodoPriority[] = ['high', 'medium', 'low'];
 
 export const emptyCounts: TodoCounts = {
@@ -17,6 +17,8 @@ export const emptyCounts: TodoCounts = {
   draft: 0,
   pending: 0,
   inProgress: 0,
+  review: 0,
+  ask: 0,
   failed: 0,
   verified: 0,
   completed: 0,
@@ -39,6 +41,10 @@ export function addCounts(a: TodoCounts, b: TodoCounts): TodoCounts {
     draft: a.draft + b.draft,
     pending: a.pending + b.pending,
     inProgress: a.inProgress + b.inProgress,
+    // Server counts omit review/ask until Phase 6; default them to 0 so
+    // aggregation never produces NaN.
+    review: (a.review ?? 0) + (b.review ?? 0),
+    ask: (a.ask ?? 0) + (b.ask ?? 0),
     failed: a.failed + b.failed,
     verified: a.verified + b.verified,
     completed: a.completed + b.completed,
@@ -57,6 +63,8 @@ export function countsFromItems(items: TodoItem[]): TodoCounts {
       case 'completed': counts.completed++; break;
       case 'draft': counts.open++; counts.draft++; break;
       case 'in_progress': counts.open++; counts.inProgress++; break;
+      case 'review': counts.open++; counts.review++; break;
+      case 'ask': counts.open++; counts.ask++; break;
       case 'failed': counts.open++; counts.failed++; break;
       case 'verified': counts.open++; counts.verified++; break;
       case 'skipped': counts.open++; counts.skipped++; break;
@@ -80,6 +88,10 @@ export function statusClass(status: TodoStatus | string) {
       return 'text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
     case 'in_progress':
       return 'text-blue-600 bg-blue-500/10 border-blue-500/20';
+    case 'review':
+      return 'text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/20';
+    case 'ask':
+      return 'text-purple-700 dark:text-purple-400 bg-purple-500/10 border-purple-500/20';
     case 'failed':
       return 'text-red-600 bg-red-500/10 border-red-500/20';
     case 'skipped':
@@ -108,6 +120,10 @@ function StatusIcon({ status }: { status: TodoStatus | string }) {
         return StatusTriage;
       case 'in_progress':
         return StatusInProgress;
+      case 'review':
+        return StatusReview;
+      case 'ask':
+        return StatusAsk;
       case 'failed':
         return StatusBlocked;
       case 'verified':
@@ -248,6 +264,8 @@ export function TodoCountsBar({ counts, hidden, onToggle }: {
       <CountBadge icon="codicon:check" value={counts.open} label="Open todos" className="text-blue-600" />
       <CountBadge icon="codicon:clock" value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon="codicon:debug-start" value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="codicon:eye" value={counts.review} label="Review" className="text-amber-600" status="review" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon="codicon:question" value={counts.ask} label="Ask" className="text-purple-600" status="ask" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon="codicon:error" value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon="octicon:check-circle-fill-16" value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon="codicon:pass" value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
