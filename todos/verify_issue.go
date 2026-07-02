@@ -136,6 +136,7 @@ func RunIssueVerification(ctx context.Context, provider Provider, todo *types.TO
 	if opts.Model != "" {
 		cfg.Model = opts.Model
 	}
+	applyTodoVerifyPrompt(&cfg, opts.WorkDir)
 
 	agentCfg := resolveTodoAgentConfig(todo, opts.Model, opts.Backend)
 	result, err := verify.RunVerify(verify.RunOptions{
@@ -171,11 +172,26 @@ func PreviewIssueVerification(todo *types.TODO, opts VerifyOptions) (string, err
 	if opts.Model != "" {
 		cfg.Model = opts.Model
 	}
+	applyTodoVerifyPrompt(&cfg, opts.WorkDir)
 	return verify.PreviewPrompt(verify.RunOptions{
 		Config:   cfg,
 		RepoPath: opts.WorkDir,
 		Issue:    BuildIssueContext(todo, shas),
 	})
+}
+
+// applyTodoVerifyPrompt overlays the todos.verifyPrompt override onto the
+// verify config so TODO verification uses the todo-specific template while
+// `gavel verify` keeps verify.promptTemplate.
+func applyTodoVerifyPrompt(cfg *verify.VerifyConfig, workDir string) {
+	gcfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		logger.Warnf("verify: failed to load .gavel.yaml for todos.verifyPrompt: %v", err)
+		return
+	}
+	if !gcfg.Todos.VerifyPrompt.IsZero() {
+		cfg.PromptTemplate = gcfg.Todos.VerifyPrompt
+	}
 }
 
 // persistVerificationVerdict saves the verdict comment and transitions the TODO:

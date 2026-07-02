@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -776,24 +777,25 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-// buildTodoRunPromptPreview renders the prompt BODY a run would dispatch — the
-// same unit the editable prompt override replaces (drivers.Config.PromptOverride,
-// honored at each executor's body-build call). It deliberately returns the body
-// only: the cmux title header and implement/plan suffix are run-mode scaffolding
-// applied around it (the Run/Plan mode selector controls the suffix), not part of
-// the editable prompt.
+// buildTodoRunPromptPreview renders the exact prompt a run would dispatch:
+// framing, TODO sections, effort directive, and the mode's structured-output
+// schema instruction. The editable prompt override replaces the body but the
+// schema instruction is always re-appended, so the preview shows the full
+// contract the agent receives.
 func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
-	tmpl, err := claude.ResolveRunTemplate(dir)
+	mode := types.ModeRun
+	if opts.Plan {
+		mode = types.ModePlan
+	}
+	tmpl, err := todoprompt.ResolveTemplate(dir, mode)
 	if err != nil {
 		return "", err
 	}
-	if opts.Mode == "inline" {
-		if len(todoList) == 1 {
-			return claude.BuildPrompt(todoList[0], dir), nil
-		}
-		return claude.BuildGroupPrompt(todoList, claude.GroupPromptOptions{WorkDir: dir, Template: tmpl})
+	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: dir, Mode: mode, Effort: opts.Effort, Template: tmpl})
+	if err != nil {
+		return "", err
 	}
-	return claude.BuildRunPrompt(todoList, claude.RunPromptOptions{WorkDir: dir, Effort: opts.Effort, Template: tmpl})
+	return req.Prompt.User, nil
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,

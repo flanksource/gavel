@@ -21,7 +21,7 @@ import (
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/commit"
 	todopkg "github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/claude"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -103,18 +103,25 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		return nil, fmt.Errorf("no todos supplied")
 	}
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-	prompt := e.config.PromptOverride
-	if prompt == "" {
-		tmpl, err := claude.ResolveRunTemplate(workDir)
-		if err != nil {
-			return nil, err
-		}
-		prompt, err = claude.BuildRunPrompt(todosInGroup, claude.RunPromptOptions{WorkDir: workDir, Effort: e.config.Effort, Template: tmpl})
-		if err != nil {
-			return nil, err
-		}
+	mode := types.ModeRun
+	if e.config.Plan {
+		mode = types.ModePlan
 	}
-	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, prompt, e.config.Resume)
+	tmpl, err := todoprompt.ResolveTemplate(workDir, mode)
+	if err != nil {
+		return nil, err
+	}
+	rendered, _, err := todoprompt.Render(todosInGroup, todoprompt.Options{
+		WorkDir:      workDir,
+		Mode:         mode,
+		Effort:       e.config.Effort,
+		Template:     tmpl,
+		BodyOverride: e.config.PromptOverride,
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, rendered.Prompt.User, e.config.Resume)
 	return e.runStream(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 

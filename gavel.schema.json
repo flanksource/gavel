@@ -516,6 +516,25 @@
       "additionalProperties": false,
       "description": "Settings for `gavel todos run`.",
       "properties": {
+        "planPrompt": {
+          "additionalProperties": false,
+          "description": "Override the built-in plan-mode prompt (dotprompt template): the read-only investigation framing that produces a reviewable implementation plan. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.plan"
+        },
         "runPrompt": {
           "additionalProperties": false,
           "description": "Override the built-in todo run prompt (dotprompt template): the framing, the TODO items injected as {{{body}}}, and the instructions. Last-write-wins across layers.",
@@ -534,6 +553,25 @@
             "object"
           ],
           "x-prompt-id": "todos.run"
+        },
+        "verifyPrompt": {
+          "additionalProperties": false,
+          "description": "Override the verify reviewer template for TODO verification only; `gavel verify` keeps verify.promptTemplate. Last-write-wins across layers.",
+          "properties": {
+            "file": {
+              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "inline": {
+              "description": "Inline prompt template text used verbatim.",
+              "type": "string"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "todos.verify"
         }
       },
       "type": "object"

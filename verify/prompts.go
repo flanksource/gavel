@@ -2,6 +2,10 @@ package verify
 
 import "github.com/flanksource/gavel/prompts"
 
+// DefaultPromptTemplate is the embedded verify reviewer template — the default
+// other packages' prompt descriptors resolve against (todos.verifyPrompt).
+func DefaultPromptTemplate() string { return verifyPromptTemplate }
+
 // Prompts returns the overridable prompt templates owned by the verify package.
 // The settings UI composes this with the other packages' Prompts() to render an
 // editor per prompt; the override itself is the typed verify.promptTemplate

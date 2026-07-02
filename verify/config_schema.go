@@ -198,6 +198,13 @@ func todosSchema() map[string]any {
 			"runPrompt": promptOverrideSchema(prompts.TodosRun,
 				"Override the built-in todo run prompt (dotprompt template): the framing, the TODO "+
 					"items injected as {{{body}}}, and the instructions. Last-write-wins across layers."),
+			"planPrompt": promptOverrideSchema(prompts.TodosPlan,
+				"Override the built-in plan-mode prompt (dotprompt template): the read-only "+
+					"investigation framing that produces a reviewable implementation plan. "+
+					"Last-write-wins across layers."),
+			"verifyPrompt": promptOverrideSchema(prompts.TodosVerify,
+				"Override the verify reviewer template for TODO verification only; `gavel verify` "+
+					"keeps verify.promptTemplate. Last-write-wins across layers."),
 		},
 	)
 }

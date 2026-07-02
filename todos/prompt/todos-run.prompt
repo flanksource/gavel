@@ -1,3 +1,6 @@
+---
+model: claude
+---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 
 {{{body}}}---
@@ -13,3 +16,5 @@ Your fixes should:
 - Follow existing code patterns and style
 - Pass all verification tests (if specified)
 - Be minimal and focused
+
+If you are blocked on a decision only a human can make, stop and report endStatus "ask" with your questions in the final result instead of guessing.

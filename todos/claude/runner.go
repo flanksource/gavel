@@ -92,10 +92,11 @@ func (e *ClaudeExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := e.config.PromptOverride
-	if prompt == "" {
-		prompt = BuildPrompt(todo, e.config.WorkDir)
+	req, err := renderRunPrompt([]*types.TODO{todo}, e.config.WorkDir, e.config.PromptOverride)
+	if err != nil {
+		return result, err
 	}
+	prompt := req.Prompt.User
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 
@@ -164,18 +165,11 @@ func (e *ClaudeExecutor) ExecuteGroup(ctx *todos.ExecutorContext, todosInGroup [
 		return result, fmt.Errorf("failed to ensure dependencies: %w", err)
 	}
 
-	prompt := e.config.PromptOverride
-	if prompt == "" {
-		tmpl, terr := ResolveRunTemplate(e.config.WorkDir)
-		if terr != nil {
-			return result, terr
-		}
-		p, perr := BuildGroupPrompt(todosInGroup, GroupPromptOptions{WorkDir: e.config.WorkDir, Template: tmpl})
-		if perr != nil {
-			return result, perr
-		}
-		prompt = p
+	req, err := renderRunPrompt(todosInGroup, e.config.WorkDir, e.config.PromptOverride)
+	if err != nil {
+		return result, err
 	}
+	prompt := req.Prompt.User
 
 	before, _ := gitSnapshot(e.config.WorkDir)
 

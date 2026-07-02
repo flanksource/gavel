@@ -1,97 +1,14 @@
-package claude
+package prompt
 
 import (
-	_ "embed"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/flanksource/captain/pkg/ai/prompt"
-	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
-
-//go:embed todos-run.prompt
-var todosRunPrompt string
-
-// GroupPromptOptions configures BuildGroupPrompt.
-type GroupPromptOptions struct {
-	WorkDir string
-	// Template is the resolved .gavel.yaml todos.runPrompt override (dotprompt
-	// source); empty uses the embedded default. Resolve it with ResolveRunTemplate.
-	Template string
-}
-
-// ResolveRunTemplate reads the .gavel.yaml todos.runPrompt override for dir,
-// returning the inline/file template source or "" when unset (the embedded
-// default is then used). A configured-but-missing file is a hard error.
-func ResolveRunTemplate(dir string) (string, error) {
-	cfg, err := verify.LoadGavelConfig(dir)
-	if err != nil {
-		return "", fmt.Errorf("load .gavel.yaml for todos.runPrompt: %w", err)
-	}
-	tmpl, err := cfg.Todos.RunPrompt.Resolve(dir, "")
-	if err != nil {
-		return "", fmt.Errorf("resolve todos.runPrompt override: %w", err)
-	}
-	return tmpl, nil
-}
-
-// BuildPrompt constructs a structured prompt from a TODO for Claude Code execution.
-func BuildPrompt(todo *types.TODO, workDir string) string {
-	prompt := "You are fixing a failing test in a Go codebase.\n\n"
-	prompt += buildTODOSection(todo, workDir, false, 0)
-	prompt += singleTODOInstructions
-	return prompt
-}
-
-// BuildGroupPrompt renders the run prompt for a group of TODOs from the dotprompt
-// template (opts.Template or the embedded default). The per-TODO sections are
-// assembled in Go and injected as {{{body}}}; the template owns the framing and
-// instructions so .gavel.yaml todos.runPrompt can override them. A single item
-// keeps the plain framing (no numbering); several items are numbered so the agent
-// can address each in turn.
-func BuildGroupPrompt(todoList []*types.TODO, opts GroupPromptOptions) (string, error) {
-	multiple := len(todoList) > 1
-	var body strings.Builder
-	for i, todo := range todoList {
-		number := 0
-		if multiple {
-			number = i + 1
-		}
-		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number))
-	}
-
-	template := opts.Template
-	if strings.TrimSpace(template) == "" {
-		template = todosRunPrompt
-	}
-	req, _, err := prompt.Load(template).Render(map[string]any{
-		"multiple": multiple,
-		"count":    len(todoList),
-		"body":     body.String(),
-	}, nil)
-	if err != nil {
-		return "", fmt.Errorf("render todo run prompt: %w", err)
-	}
-	return req.Prompt.User, nil
-}
-
-// Prompts returns the overridable prompt templates owned by the claude todo
-// runner: the run prompt assembled for a coding-agent session. The override is
-// the typed todos.runPrompt field, resolved against Default by ResolveRunTemplate.
-func Prompts() []prompts.Prompt {
-	return []prompts.Prompt{{
-		ID:          prompts.TodosRun,
-		Title:       "Todo run prompt",
-		Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
-		ConfigPath:  "todos.runPrompt",
-		Default:     todosRunPrompt,
-	}}
-}
 
 // buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
 // group framing carries it instead); number, when > 0, prefixes the heading with
@@ -248,18 +165,3 @@ func readTODOMarkdownBody(todo *types.TODO) string {
 	}
 	return parsed.MarkdownContent
 }
-
-const singleTODOInstructions = `## Instructions
-
-1. Analyze the test failure and reproduction steps
-2. Investigate the codebase to understand the root cause
-3. Implement a fix that addresses the underlying issue
-4. Run verification tests (if any) to confirm the fix works
-5. Do NOT run git add or git commit — gavel manages commits automatically
-
-Your fix should:
-- Address the root cause, not mask symptoms
-- Follow existing code patterns and style
-- Pass all verification tests
-- Be minimal and focused
-`

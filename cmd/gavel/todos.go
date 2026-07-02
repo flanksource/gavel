@@ -20,6 +20,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
+	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -496,11 +497,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			fmt.Printf("=== Group: %s ===\n\n", group.Name)
 			printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 			fmt.Println("### Prompt")
-			tmpl, err := claude.ResolveRunTemplate(workDir)
-			if err != nil {
-				return err
-			}
-			groupPrompt, err := claude.BuildGroupPrompt(group.TODOs, claude.GroupPromptOptions{WorkDir: workDir, Template: tmpl})
+			groupPrompt, err := buildTodoRunPrompt(group.TODOs, workDir)
 			if err != nil {
 				return err
 			}
@@ -511,7 +508,11 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 				fmt.Printf("=== TODO: %s ===\n\n", todo.Filename())
 				printTodoCommands("Pre-check commands (steps_to_reproduce)", todo.StepsToReproduce)
 				fmt.Println("### Prompt")
-				fmt.Println(claude.BuildPrompt(todo, workDir))
+				todoPrompt, err := buildTodoRunPrompt([]*types.TODO{todo}, workDir)
+				if err != nil {
+					return err
+				}
+				fmt.Println(todoPrompt)
 				printTodoCommands("Verification commands", todo.Verification)
 			}
 		}
@@ -573,7 +574,7 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 	fmt.Println()
 	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 	fmt.Println("### Prompt")
-	cmuxPrompt, err := buildCmuxPrompt(group.TODOs, workDir)
+	cmuxPrompt, err := buildTodoRunPrompt(group.TODOs, workDir)
 	if err != nil {
 		return err
 	}
@@ -582,16 +583,22 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 	return nil
 }
 
-func buildCmuxPrompt(todoList []*types.TODO, workDir string) (string, error) {
-	tmpl, err := claude.ResolveRunTemplate(workDir)
+// buildTodoRunPrompt renders the run-mode prompt exactly as a dispatch would:
+// framing, sections, effort directive, and the envelope schema instruction.
+func buildTodoRunPrompt(todoList []*types.TODO, workDir string) (string, error) {
+	tmpl, err := todoprompt.ResolveTemplate(workDir, types.ModeRun)
 	if err != nil {
 		return "", err
 	}
-	return claude.BuildRunPrompt(todoList, claude.RunPromptOptions{WorkDir: workDir, Effort: todoEffort, Template: tmpl})
+	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: workDir, Mode: types.ModeRun, Effort: todoEffort, Template: tmpl})
+	if err != nil {
+		return "", err
+	}
+	return req.Prompt.User, nil
 }
 
 func effortDirective(effort string) string {
-	return claude.EffortDirective(effort)
+	return todoprompt.EffortDirective(effort)
 }
 
 func resolveTodoAgent(model string) (agent string, modelFlag string) {

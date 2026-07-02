@@ -316,6 +316,12 @@ type TodosConfig struct {
 	// RunPrompt overrides the built-in todo run prompt template (inline or a file
 	// reference). Empty uses the embedded default. See prompts.TodosRun.
 	RunPrompt PromptOverride `yaml:"runPrompt,omitempty" json:"runPrompt,omitempty"`
+	// PlanPrompt overrides the built-in plan-mode prompt template. Empty uses the
+	// embedded default. See prompts.TodosPlan.
+	PlanPrompt PromptOverride `yaml:"planPrompt,omitempty" json:"planPrompt,omitempty"`
+	// VerifyPrompt overrides the verify template for TODO verification only
+	// (`gavel verify` keeps verify.promptTemplate). See prompts.TodosVerify.
+	VerifyPrompt PromptOverride `yaml:"verifyPrompt,omitempty" json:"verifyPrompt,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -525,10 +531,16 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	return base
 }
 
-// MergeTodosConfig merges override onto base: a set runPrompt override wins.
+// MergeTodosConfig merges override onto base: each set prompt override wins.
 func MergeTodosConfig(base, override TodosConfig) TodosConfig {
 	if !override.RunPrompt.IsZero() {
 		base.RunPrompt = override.RunPrompt
+	}
+	if !override.PlanPrompt.IsZero() {
+		base.PlanPrompt = override.PlanPrompt
+	}
+	if !override.VerifyPrompt.IsZero() {
+		base.VerifyPrompt = override.VerifyPrompt
 	}
 	return base
 }

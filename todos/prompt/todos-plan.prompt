@@ -1,0 +1,26 @@
+---
+model: claude
+permissions:
+  mode: plan
+---
+{{#if multiple}}You are planning the implementation of the {{count}} todo items listed below. Produce ONE plan that covers all of them.{{else}}You are planning the implementation of the todo item below in this codebase.{{/if}}
+
+{{{body}}}---
+## Instructions
+
+You are running in your native plan mode: investigate the codebase (read-only) and author a complete implementation plan in your plan-mode plan file. Do NOT modify any source files.
+
+1. Explore the code paths the todo touches; understand the root cause or design before planning.
+2. Write a step-by-step implementation plan into your plan file: the files to change, new types/functions and their signatures, what gets deleted, the testing strategy, and risks.
+3. Report the plan file's ABSOLUTE path in the final result's plan.path — gavel records it on the todo and renders the plan from that file for human review.
+{{#if existingPlan}}
+4. An earlier plan for this todo already exists (below). Re-evaluate it against the current code: if it still stands as written, report plan.status "unchanged" (no rewrite needed); if it needs revision, write the revised plan and report plan.status "updated".
+
+## Existing Plan
+
+{{{existingPlan}}}
+{{else}}
+4. This todo has no prior plan; author one and report plan.status "new".
+{{/if}}
+
+If you are blocked on a decision only a human can make, stop and report endStatus "ask" with your questions in the final result instead of guessing.

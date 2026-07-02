@@ -21,6 +21,8 @@ const (
 	CommitSummary       = "commit.summary"
 	PRContent           = "pr.content"
 	TodosRun            = "todos.run"
+	TodosPlan           = "todos.plan"
+	TodosVerify         = "todos.verify"
 )
 
 // Prompt describes one overridable AI prompt template for the settings UI.

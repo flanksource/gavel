@@ -54,7 +54,10 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	}
 }
 
-func TestHeadlessUsesPromptOverrideVerbatim(t *testing.T) {
+// TestHeadlessPromptOverrideReplacesBody pins the override contract: the edited
+// prompt replaces the auto-built body, but the structured-output schema
+// instruction is still appended so an override cannot break the envelope.
+func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 	var gotPrompt string
 	capture := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		gotPrompt = req.Prompt.User
@@ -64,11 +67,17 @@ func TestHeadlessUsesPromptOverrideVerbatim(t *testing.T) {
 		return ch, nil
 	}
 	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", PromptOverride: "EDITED PROMPT BODY", Stream: capture})
-	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+	if _, err := e.Execute(newTestCtx(), &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "auto section"}}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if gotPrompt != "EDITED PROMPT BODY" {
-		t.Errorf("dispatched prompt = %q, want the override used verbatim", gotPrompt)
+	if !strings.Contains(gotPrompt, "EDITED PROMPT BODY") {
+		t.Errorf("dispatched prompt missing the override body: %q", gotPrompt)
+	}
+	if strings.Contains(gotPrompt, "auto section") {
+		t.Error("override should replace the auto-built todo sections")
+	}
+	if !strings.Contains(gotPrompt, "conforms to this JSON Schema") {
+		t.Error("override must not drop the envelope schema instruction")
 	}
 }
 
