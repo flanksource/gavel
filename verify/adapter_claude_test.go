@@ -82,23 +82,3 @@ func TestClaudeBuildVerifyArgs(t *testing.T) {
 		})
 	}
 }
-
-func TestExtractJSONFromText(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"embedded object", `text {"a":1} more`, `{"a":1}`},
-		{"nested braces", `prefix {"a":{"b":2}} suffix`, `{"a":{"b":2}}`},
-		{"no JSON", "just text", ""},
-		{"unmatched brace", "prefix { no close", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := extractJSONFromText(tt.input); got != tt.want {
-				t.Errorf("extractJSONFromText() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}

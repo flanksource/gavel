@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -10,6 +11,7 @@ func TestParseVerifyResponse(t *testing.T) {
 		raw  string
 	}{
 		{"bare json", `{"checks":{"a":{"pass":true}},"ratings":{},"completeness":{"pass":true}}`},
+		{"bare yaml", "checks:\n  a:\n    pass: true\nratings: {}\ncompleteness:\n  pass: true"},
 		{"fenced json", "```json\n{\"checks\":{\"a\":{\"pass\":true}},\"ratings\":{},\"completeness\":{\"pass\":true}}\n```"},
 		{"json in prose", "Here is my review:\n{\"checks\":{\"a\":{\"pass\":false}},\"ratings\":{},\"completeness\":{\"pass\":false}}\nDone."},
 		{"json envelope", `{"result":"{\"checks\":{\"a\":{\"pass\":true}},\"ratings\":{},\"completeness\":{\"pass\":true}}"}`},
@@ -30,5 +32,11 @@ func TestParseVerifyResponse(t *testing.T) {
 func TestParseVerifyResponseError(t *testing.T) {
 	if _, err := parseVerifyResponse("not json, just an apology"); err == nil {
 		t.Fatal("expected an error for a non-JSON reply")
+	}
+
+	// A reply that decodes but scored nothing is invalid — and says so.
+	_, err := parseVerifyResponse(`{"checks":{},"ratings":{}}`)
+	if err == nil || !strings.Contains(err.Error(), "no checks") {
+		t.Fatalf("empty-checks reply: err = %v, want validation failure naming checks", err)
 	}
 }

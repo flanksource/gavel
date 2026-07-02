@@ -1,9 +1,7 @@
 package verify
 
 import (
-	"encoding/json"
 	"os"
-	"strings"
 )
 
 type Claude struct{}
@@ -38,43 +36,4 @@ func (Claude) ListModels() ([]string, error) {
 		return nil, nil
 	}
 	return fetchModelIDs("https://api.anthropic.com/v1/models", "x-api-key", key, "2023-06-01")
-}
-
-func extractTextFromJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if !strings.HasPrefix(raw, "{") {
-		return raw
-	}
-	var wrapper map[string]any
-	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
-		return raw
-	}
-	for _, key := range []string{"result", "text", "response", "content"} {
-		if v, ok := wrapper[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-	}
-	return raw
-}
-
-func extractJSONFromText(text string) string {
-	start := strings.Index(text, "{")
-	if start < 0 {
-		return ""
-	}
-	depth := 0
-	for i := start; i < len(text); i++ {
-		switch text[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return text[start : i+1]
-			}
-		}
-	}
-	return ""
 }

@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -71,15 +72,17 @@ func runAgentic(opts RunOptions, scope ReviewScope, cfg VerifyConfig, prompt str
 		return VerifyResult{}, fmt.Errorf("failed to build schema: %w", err)
 	}
 	logger.Infof("Verifying %s using %s", scope, opts.AgentConfig.Model)
-	raw, err := executeAgentic(*opts.AgentConfig, prompt, schema, opts.RepoPath)
+	result, err := ai.ExecuteStructured(context.Background(), ai.StructuredRequest{
+		Config:     *opts.AgentConfig,
+		Prompt:     prompt,
+		SchemaJSON: schema,
+		RepoPath:   opts.RepoPath,
+		Source:     "verify",
+	}, validateVerifyResult)
 	if err != nil {
 		return VerifyResult{}, err
 	}
-	result, err := parseVerifyResponse(raw)
-	if err != nil {
-		return VerifyResult{}, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return result, nil
+	return *result, nil
 }
 
 // runAdapter executes the review with the legacy per-provider CLI adapters.

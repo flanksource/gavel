@@ -1,7 +1,5 @@
 package verify
 
-import "strings"
-
 type Gemini struct{}
 
 func (Gemini) Name() string { return "gemini" }
@@ -18,14 +16,7 @@ func (Gemini) BuildVerifyArgs(prompt, model, _ string, debug bool) []string {
 }
 
 func (Gemini) ParseResponse(raw string) (VerifyResult, error) {
-	if result, ok := tryUnmarshalResult(raw); ok {
-		return result, nil
-	}
-	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
-	if result, ok := tryUnmarshalResult(cleaned); ok {
-		return result, nil
-	}
-	return VerifyResult{}, parseError(raw)
+	return parseVerifyResponse(raw)
 }
 
 func (Gemini) PostExecute(string) {}

@@ -28,15 +28,11 @@ func (Codex) BuildVerifyArgs(prompt, model, schemaFile string, _ bool) []string 
 
 func (Codex) ParseResponse(raw string) (VerifyResult, error) {
 	if text := extractFromJSONL(raw); text != "" {
-		cleaned := strings.TrimSpace(stripMarkdownFences(text))
-		if result, ok := tryUnmarshalResult(cleaned); ok {
+		if result, err := parseVerifyResponse(text); err == nil {
 			return result, nil
 		}
 	}
-	if result, ok := tryUnmarshalResult(raw); ok {
-		return result, nil
-	}
-	return VerifyResult{}, parseError(raw)
+	return parseVerifyResponse(raw)
 }
 
 func (Codex) PostExecute(raw string) {
