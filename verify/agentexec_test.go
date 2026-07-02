@@ -2,8 +2,6 @@ package verify
 
 import (
 	"testing"
-
-	"github.com/flanksource/gavel/ai"
 )
 
 func TestParseVerifyResponse(t *testing.T) {
@@ -32,31 +30,5 @@ func TestParseVerifyResponse(t *testing.T) {
 func TestParseVerifyResponseError(t *testing.T) {
 	if _, err := parseVerifyResponse("not json, just an apology"); err == nil {
 		t.Fatal("expected an error for a non-JSON reply")
-	}
-}
-
-func TestExecuteAgenticMockDefault(t *testing.T) {
-	raw, err := executeAgentic(ai.AgentConfig{Model: "claude-code-sonnet"}, "prompt", "{}", ".")
-	if err != nil {
-		t.Fatalf("executeAgentic: %v", err)
-	}
-	res, err := parseVerifyResponse(raw)
-	if err != nil {
-		t.Fatalf("parse mock: %v", err)
-	}
-	if res.Implemented == nil || !*res.Implemented {
-		t.Errorf("default mock should report implemented=true, got %+v", res.Implemented)
-	}
-}
-
-func TestExecuteAgenticMockOverride(t *testing.T) {
-	override := `{"checks":{"x":{"pass":false}},"ratings":{},"completeness":{"pass":false}}`
-	t.Setenv("MOCK_VERIFY_JSON", override)
-	raw, err := executeAgentic(ai.AgentConfig{Model: "claude-code-sonnet"}, "prompt", "{}", ".")
-	if err != nil {
-		t.Fatalf("executeAgentic: %v", err)
-	}
-	if raw != override {
-		t.Errorf("override not returned verbatim:\n got %q\nwant %q", raw, override)
 	}
 }

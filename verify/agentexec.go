@@ -3,7 +3,6 @@ package verify
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
@@ -12,27 +11,11 @@ import (
 	"github.com/flanksource/gavel/ai"
 )
 
-// mockVerifyResult is returned by executeAgentic when MOCK is active and no
-// MOCK_VERIFY_JSON override is set. It parses to a passing VerifyResult (one
-// check, full ratings, complete, implemented) so MOCK runs exercise the full
-// orchestration without calling a real agent.
-const mockVerifyResult = `{"checks":{"definition-of-done":{"pass":true}},` +
-	`"ratings":{"duplication":{"score":100},"consistency":{"score":100},"security":{"score":100},"coverage":{"score":100}},` +
-	`"completeness":{"pass":true,"summary":"mock"},"implemented":true}`
-
 // executeAgentic runs the verification prompt through a captain agentic backend
 // (claude-code / claude-agent). The agent fetches the diff itself via its tools
 // and is instructed to emit JSON matching the output schema, which the caller
-// parses. The MOCK env short-circuits to a deterministic reply (override with
-// MOCK_VERIFY_JSON; set MOCK=false to hit the real agent).
+// parses.
 func executeAgentic(cfg ai.AgentConfig, prompt, schema, repoPath string) (string, error) {
-	if os.Getenv("MOCK") != "false" {
-		if override := os.Getenv("MOCK_VERIFY_JSON"); override != "" {
-			return override, nil
-		}
-		return mockVerifyResult, nil
-	}
-
 	provider, err := ai.NewProvider(cfg)
 	if err != nil {
 		return "", fmt.Errorf("build verify agent: %w", err)

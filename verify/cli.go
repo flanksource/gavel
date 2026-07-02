@@ -33,10 +33,6 @@ func ResolveAdapter(model string) (Adapter, string) {
 }
 
 func Execute(adapter Adapter, prompt, model, schemaFile, workDir string, debug bool) (string, error) {
-	if os.Getenv("MOCK") != "false" {
-		return `{"checks":{},"ratings":{},"completeness":{"pass":true}}`, nil
-	}
-
 	args := adapter.BuildVerifyArgs(prompt, model, schemaFile, debug)
 	name := adapter.Name()
 
