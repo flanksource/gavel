@@ -64,6 +64,12 @@ type Server struct {
 	knownBots   map[string]struct{}
 	includeBots bool
 
+	// showClosed widens the poller's fetch from open-only to every state
+	// (open/closed/merged). It's off by default and deliberately transient
+	// (not persisted to settings) so closed PRs are only synced on demand and
+	// the fetch resets to open-only on restart.
+	showClosed bool
+
 	RepoSearchFn func() (github.PRSearchResults, error)
 	repoCache    []repoInfo
 	repoCacheAt  time.Time
@@ -117,8 +123,12 @@ type snapshot struct {
 	BotsAvailable bool `json:"botsAvailable,omitempty"`
 	// IncludeBots mirrors the server's current bot-fetch state so the UI only
 	// posts a change (and triggers a refetch) when the @bots chip disagrees.
-	IncludeBots bool              `json:"includeBots,omitempty"`
-	RateLimit   *github.RateLimit `json:"rateLimit,omitempty"`
+	IncludeBots bool `json:"includeBots,omitempty"`
+	// ShowClosed mirrors the server's current closed-PR fetch state so the UI
+	// only posts a change (and triggers a refetch) when the Closed/Merged State
+	// chips disagree.
+	ShowClosed bool              `json:"showClosed,omitempty"`
+	RateLimit  *github.RateLimit `json:"rateLimit,omitempty"`
 	// Unread maps prKey("repo#number") → true for PRs whose UpdatedAt is
 	// newer than the recorded SeenAt (or that have never been seen). PRs
 	// marked as read are omitted to keep the map sparse on the wire.
@@ -245,6 +255,31 @@ func (s *Server) SetIncludeBots(include bool) {
 	}
 }
 
+// ShowClosed reports whether the poller should fetch closed/merged PRs in
+// addition to open ones (the UI sets this when the "Show closed" toggle is on).
+func (s *Server) ShowClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.showClosed
+}
+
+// SetShowClosed toggles closed-PR fetching and requests an immediate refetch so
+// the change is reflected without waiting for the next poll tick. Turning it off
+// triggers a full refetch too, which drops the now-unwanted closed PRs from the
+// poller's known set.
+func (s *Server) SetShowClosed(show bool) {
+	s.mu.Lock()
+	changed := s.showClosed != show
+	s.showClosed = show
+	s.mu.Unlock()
+	if changed {
+		select {
+		case s.refreshCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *Server) SetResults(prs github.PRSearchResults, incremental bool) {
 	s.mu.Lock()
 	s.prs = prs
@@ -332,10 +367,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/stream", s.handleSSE)
 	mux.HandleFunc("/api/prs/refresh", s.handleRefresh)
 	mux.HandleFunc("/api/prs/bots", s.handleBots)
+	mux.HandleFunc("/api/prs/closed", s.handleClosed)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
 	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
 	mux.HandleFunc("POST /api/prs/approve", s.handlePRApprove)
+	mux.HandleFunc("POST /api/prs/update-branch", s.handlePRUpdateBranch)
 	mux.HandleFunc("/api/prs/job-logs", s.handleJobLogs)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/repos", s.handleRepos)
@@ -368,6 +405,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
 	mux.HandleFunc("POST /api/todos/session/approve", s.handleTodoSessionApprove)
+	mux.HandleFunc("GET /api/todos/session/plan", s.handleTodoSessionPlan)
+	mux.HandleFunc("POST /api/todos/session/plan", s.handleTodoSessionPlanSave)
+	mux.HandleFunc("POST /api/todos/plan/approve", s.handleTodoPlanApprove)
+	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
@@ -586,6 +627,7 @@ func (s *Server) snapshotLocked() snapshot {
 		Viewer:        s.auth.Login,
 		BotsAvailable: len(s.knownBots) > 0,
 		IncludeBots:   s.includeBots,
+		ShowClosed:    s.showClosed,
 		RateLimit:     s.rateLimit,
 	}
 	if s.err != nil {
@@ -832,6 +874,27 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 	s.SetIncludeBots(body.Include)
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"includeBots":%v}`, body.Include)
+}
+
+// handleClosed sets whether the poller fetches closed/merged PRs alongside open
+// ones. The UI calls it when the Closed/Merged State chips are toggled; a change
+// triggers an immediate refetch (widening to every state, or dropping closed PRs
+// back out when turned off).
+func (s *Server) handleClosed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Show bool `json:"show"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	s.SetShowClosed(body.Show)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"showClosed":%v}`, body.Show)
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {

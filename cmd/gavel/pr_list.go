@@ -49,6 +49,11 @@ type PRListOptions struct {
 
 var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)
 
+// closedPRLookback bounds how far back an on-demand closed-PR sync reaches on a
+// full fetch. Closed/merged PRs accumulate without limit, so the UI's "show
+// closed" opt-in caps the window at 30 days rather than pulling the whole history.
+const closedPRLookback = 30 * 24 * time.Hour
+
 func parseSince(s string) (time.Time, error) {
 	if bareDurationRe.MatchString(s) {
 		s = "now-" + s
@@ -270,6 +275,16 @@ func runPRUI(opts PRListOptions) error {
 		so := searchOpts
 		if !since.IsZero() {
 			so.Since = since
+		}
+		// When the user opts into closed PRs, widen the fetch from open-only to
+		// every state. Cap the lookback at closedPRLookback on a full fetch so an
+		// on-demand sync pulls a bounded recent window rather than the whole
+		// closed history; incremental fetches keep their narrower `since`.
+		if srv.ShowClosed() {
+			so.State = "all"
+			if since.IsZero() {
+				so.Since = time.Now().Add(-closedPRLookback)
+			}
 		}
 		if len(cfg.Repos) > 0 {
 			so.Repos = cfg.Repos
