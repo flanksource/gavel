@@ -176,7 +176,12 @@ func validateFrontmatter(fm *types.TODOFrontmatter) error {
 
 	// Validate status value
 	if !types.IsKnownStatus(fm.Status) {
-		return fmt.Errorf("invalid status: must be draft, pending, in_progress, completed, failed, verified, or skipped")
+		known := types.KnownStatuses()
+		names := make([]string, len(known))
+		for i, s := range known {
+			names[i] = string(s)
+		}
+		return fmt.Errorf("invalid status %q: must be one of %s", fm.Status, strings.Join(names, ", "))
 	}
 
 	// Validate language value

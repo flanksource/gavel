@@ -440,6 +440,13 @@ type TODOFrontmatter struct {
 	Checks        *AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
 	PR            *PR                `yaml:"pr,omitempty" json:"pr,omitempty"`
 	Prompt        string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	// PlanPath is the agent's native plan-mode file from the last plan run
+	// (reported in the run envelope); the plan is read from there, never copied.
+	PlanPath   string     `yaml:"plan_path,omitempty" json:"plan_path,omitempty"`
+	PlanStatus PlanStatus `yaml:"plan_status,omitempty" json:"plan_status,omitempty"`
+	// RunMode records the mode of the last agent run so an answer-resume
+	// continues in the same mode.
+	RunMode RunMode `yaml:"run_mode,omitempty" json:"run_mode,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -468,6 +475,9 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "max_turns")
 	delete(f.Metadata, "pr")
 	delete(f.Metadata, "prompt")
+	delete(f.Metadata, "plan_path")
+	delete(f.Metadata, "plan_status")
+	delete(f.Metadata, "run_mode")
 }
 
 // Pretty returns a formatted text representation of the TODOFrontmatter
@@ -707,6 +717,10 @@ const (
 	StatusPending Status = "pending"
 	// StatusInProgress indicates the TODO is currently being worked on.
 	StatusInProgress Status = "in_progress"
+	// StatusReview indicates a proposed plan awaits human approval.
+	StatusReview Status = "review"
+	// StatusAsk indicates the agent is blocked on questions a human must answer.
+	StatusAsk Status = "ask"
 	// StatusVerified indicates the TODO has been verified but not closed.
 	StatusVerified Status = "verified"
 	// StatusCompleted indicates the TODO has been successfully completed.
@@ -723,6 +737,8 @@ func KnownStatuses() []Status {
 		StatusDraft,
 		StatusPending,
 		StatusInProgress,
+		StatusReview,
+		StatusAsk,
 		StatusFailed,
 		StatusVerified,
 		StatusCompleted,
@@ -748,6 +764,10 @@ func (s Status) Pretty() api.Text {
 		return clicky.Text("").Add(icons.Info).Append(" PENDING", "text-gray-600")
 	case StatusInProgress:
 		return clicky.Text("").Add(icons.ArrowRight).Append(" IN PROGRESS", "text-blue-600 font-medium")
+	case StatusReview:
+		return clicky.Text("").Add(icons.Search).Append(" REVIEW", "text-amber-600 font-medium")
+	case StatusAsk:
+		return clicky.Text("").Add(icons.QuestionRed).Append(" ASK", "text-purple-600 font-medium")
 	case StatusVerified:
 		return clicky.Text("").Add(icons.Pass).Append(" VERIFIED", "text-emerald-600 font-medium")
 	case StatusCompleted:
