@@ -46,6 +46,9 @@ var (
 	todoModel     string
 	todoEffort    string
 	resumeSession bool
+	// todosRunMode is the parsed --mode (run/plan); verify short-circuits to the
+	// verification loop before it is set. Resolved once in runTodosRun.
+	todosRunMode types.RunMode
 )
 
 var todosCmd = &cobra.Command{
@@ -90,6 +93,15 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	if err := validateTodosRunOptions(); err != nil {
 		return err
 	}
+	mode, err := types.ParseRunMode(todosMode)
+	if err != nil {
+		return err
+	}
+	if mode == types.ModeVerify {
+		// `todos run --mode verify` is the same operation as `todos verify`.
+		return runTodosVerify(cmd, args)
+	}
+	todosRunMode = mode
 
 	workDir, err := getWorkingDir()
 	if err != nil {
@@ -137,7 +149,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	}
 
 	effectiveGroupBy := groupBy
-	if todosMode == "cmux" && effectiveGroupBy == "" {
+	if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" && effectiveGroupBy == "" {
 		effectiveGroupBy = todos.GroupByRepo
 	}
 
@@ -190,21 +202,23 @@ func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, erro
 		return nil, "", err
 	}
 	cfg := newDriverConfig(kind, workDir, todo)
-	// Post-run checks are fixture-backed verify plugins inside the agent loop
-	// (--check forces them on; .gavel.yaml/frontmatter `checks` enable them too).
-	verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, checkAfter)
-	if err != nil {
-		return nil, "", err
+	if todosRunMode != types.ModePlan {
+		// Post-run checks are fixture-backed verify plugins inside the agent loop
+		// (--check forces them on; .gavel.yaml/frontmatter `checks` enable them too).
+		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, checkAfter)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg.Verifiers = verifiers
+		cfg.MaxIterations = maxIter
 	}
-	cfg.Verifiers = verifiers
-	cfg.MaxIterations = maxIter
 	return drivers.New(kind, cfg)
 }
 
 // resolveDriverKind selects the driver: the explicit --driver flag when set,
-// otherwise the legacy --mode + model pair (cmux → "<agent>-cmux", inline →
-// "<agent>-headless" — the SDK bridge "inline" used to launch was removed;
-// headless is the same agent via captain).
+// otherwise "<agent>-cmux" for the model's agent (cmux is the default —
+// drivers.Default; headless is the non-interactive opt-in). --mode selects the
+// todo OPERATION (run/plan/verify), not the mechanism.
 func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 	if strings.TrimSpace(todosDriver) != "" {
 		return drivers.Parse(todosDriver)
@@ -214,14 +228,7 @@ func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 		model = todo.LLM.Model
 	}
 	agent, _ := claude.ResolveAgent(model)
-	switch todosMode {
-	case "cmux":
-		return drivers.Parse(agent + "-cmux")
-	case "", "inline":
-		return drivers.Parse(agent + "-headless")
-	default:
-		return "", fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
-	}
+	return drivers.Parse(agent + "-cmux")
 }
 
 // newDriverConfig assembles the shared driver config from flags and the todo.
@@ -262,12 +269,21 @@ func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) driver
 		WorkDir:      cwd,
 		Model:        model,
 		Effort:       todoEffort,
+		Mode:         todosRunMode,
 		Resume:       resumeSession,
 		Timeout:      30 * time.Minute,
 		MaxBudgetUsd: maxCost,
 		MaxTurns:     turns,
 		Tools:        drivers.DefaultTools(),
 		Dirty:        dirty,
+	}
+	if todosRunMode == types.ModePlan && todo != nil {
+		// The recorded plan feeds a re-plan so the agent reports updated/unchanged.
+		content, _, _, err := todos.ReadPlanFile(todo.PlanPath)
+		if err != nil {
+			logger.Warnf("read recorded plan %s: %v", todo.PlanPath, err)
+		}
+		cfg.ExistingPlan = content
 	}
 	if kind.Mechanism() != "cmux" {
 		cfg.SessionID = prior
@@ -292,6 +308,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.SetMode(todosRunMode)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -363,6 +380,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+		todoExec.SetMode(todosRunMode)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -454,7 +472,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			continue
 		}
 
-		if todosMode == "cmux" {
+		if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" {
 			if err := printCmuxDryRun(group, workDir); err != nil {
 				return err
 			}
@@ -495,17 +513,14 @@ func validateTodosRunOptions() error {
 		}
 	}
 
-	switch todosMode {
-	case "", "inline":
-	case "cmux":
-	default:
-		return fmt.Errorf("invalid --mode %q: expected inline or cmux", todosMode)
+	if _, err := types.ParseRunMode(todosMode); err != nil {
+		return err
 	}
 
 	switch todoEffort {
-	case "", "low", "medium", "high":
+	case "", "low", "medium", "high", "xhigh":
 	default:
-		return fmt.Errorf("invalid --effort %q: expected low, medium, or high", todoEffort)
+		return fmt.Errorf("invalid --effort %q: expected low, medium, high, or xhigh", todoEffort)
 	}
 	return nil
 }
@@ -551,14 +566,18 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 	return nil
 }
 
-// buildTodoRunPrompt renders the run-mode prompt exactly as a dispatch would:
+// buildTodoRunPrompt renders the mode's prompt exactly as a dispatch would:
 // framing, sections, effort directive, and the envelope schema instruction.
 func buildTodoRunPrompt(todoList []*types.TODO, workDir string) (string, error) {
-	tmpl, err := todoprompt.ResolveTemplate(workDir, types.ModeRun)
+	mode := todosRunMode
+	if mode == "" {
+		mode = types.ModeRun
+	}
+	tmpl, err := todoprompt.ResolveTemplate(workDir, mode)
 	if err != nil {
 		return "", err
 	}
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: workDir, Mode: types.ModeRun, Effort: todoEffort, Template: tmpl})
+	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: workDir, Mode: mode, Effort: todoEffort, Template: tmpl})
 	if err != nil {
 		return "", err
 	}

@@ -103,21 +103,39 @@ func TestValidateTodosRunOptions(t *testing.T) {
 		todoEffort = oldEffort
 	}()
 
-	todosMode = "cmux"
-	todoEffort = "high"
-	if err := validateTodosRunOptions(); err != nil {
-		t.Fatalf("expected cmux/high to validate: %v", err)
+	for _, mode := range []string{"", "run", "plan", "verify"} {
+		todosMode = mode
+		todoEffort = "xhigh"
+		if err := validateTodosRunOptions(); err != nil {
+			t.Fatalf("expected mode %q to validate: %v", mode, err)
+		}
 	}
 
-	todosMode = "bad"
-	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "--mode") {
-		t.Fatalf("expected mode validation error, got %v", err)
+	// The legacy mechanism values are rejected — --mode is the todo operation
+	// now; the mechanism is --driver.
+	for _, mode := range []string{"cmux", "inline", "bad"} {
+		todosMode = mode
+		if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "run mode") {
+			t.Fatalf("expected mode %q to be rejected, got %v", mode, err)
+		}
 	}
 
-	todosMode = "inline"
+	todosMode = "run"
 	todoEffort = "too-much"
 	if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "--effort") {
 		t.Fatalf("expected effort validation error, got %v", err)
+	}
+}
+
+// Review/ask todos must survive the CLI's post-run status cleanup — only
+// in_progress gets reconciled.
+func TestCleanupTODOStatusKeepsReviewAndAsk(t *testing.T) {
+	for _, status := range []types.Status{types.StatusReview, types.StatusAsk} {
+		todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: status}}
+		cleanupTODOStatus(todo, &todos.ExecutionResult{Success: true})
+		if todo.Status != status {
+			t.Errorf("cleanup rewrote %s to %s", status, todo.Status)
+		}
 	}
 }
 

@@ -12,8 +12,16 @@ import (
 )
 
 // shouldCommitAfter reports whether `gavel commit` should run after a TODO's
-// agent completes, honoring the `--commit` flag.
+// agent completes, honoring the `--commit` flag. Plan runs change nothing, and
+// an ask outcome has half-done work by design — committing it is a decision for
+// the answer turn.
 func shouldCommitAfter(result *todos.ExecutionResult) bool {
+	if todosRunMode == types.ModePlan {
+		return false
+	}
+	if result != nil && result.EndStatus == types.EndAsk {
+		return false
+	}
 	return todos.ShouldCommitAfter(result, commitAfter)
 }
 
