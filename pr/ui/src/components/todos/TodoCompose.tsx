@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { GavelIcon } from '../GavelIcon';
 import { inputClass } from './format';
 
 // EditActions is the shared Cancel/Save row for the inline field editors.
@@ -92,40 +91,27 @@ export function TodoCommentBox({
   }
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
-        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-          <GavelIcon name="codicon:comment" className="text-xs" />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">Add comment</span>
-      </div>
-      <div className="space-y-2 px-3 py-3">
-        <textarea
-          className={`${inputClass} h-20 resize-y`}
-          value={text}
-          disabled={busy}
-          onChange={e => setText(e.currentTarget.value)}
-          onKeyDown={e => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-              e.preventDefault();
-              submit(false);
-            }
-          }}
-          placeholder="Leave a comment…"
-          aria-label="Comment body"
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">Markdown supported · Cmd/Ctrl+Enter to comment</span>
-          <span className="flex items-center gap-2">
-            {closed && (
-              <Button variant="outline" onClick={() => submit(true)} loading={busy} disabled={!trimmed}>
-                Reopen &amp; comment
-              </Button>
-            )}
-            <Button onClick={() => submit(false)} loading={busy} disabled={!trimmed}>Comment</Button>
-          </span>
-        </div>
-      </div>
-    </section>
+    <div className="flex items-center gap-2">
+      <input
+        className={inputClass}
+        value={text}
+        disabled={busy}
+        onChange={e => setText(e.currentTarget.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            submit(false);
+          }
+        }}
+        placeholder="Leave a comment…"
+        aria-label="Comment body"
+      />
+      {closed && (
+        <Button variant="outline" onClick={() => submit(true)} loading={busy} disabled={!trimmed}>
+          Reopen &amp; comment
+        </Button>
+      )}
+      <Button onClick={() => submit(false)} loading={busy} disabled={!trimmed}>Comment</Button>
+    </div>
   );
 }

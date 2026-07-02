@@ -195,7 +195,6 @@ require (
 	github.com/hairyhenderson/yaml v0.0.0-20220618171115-2d35fca545ce // indirect
 	github.com/henvic/httpretty v0.1.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/itchyny/gojq v0.12.19 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
