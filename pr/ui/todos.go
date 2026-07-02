@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/ai/agent"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
@@ -1343,7 +1344,9 @@ func defaultStartTodoRun(req todoRunRequest) error {
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
-		runner.EnableChecks(req.Options.Check)
+		if req.Options.Plan {
+			runner.SetMode(types.ModePlan)
+		}
 		var runErr error
 		var result *todos.ExecutionResult
 		// A single selection runs through Execute; a multi-select runs every todo
@@ -1377,7 +1380,10 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	todo := req.Todos[0]
 
 	var hashes []string
-	if enabled := req.Options.Commit && !req.Options.Plan; todos.ShouldCommitAfter(result, enabled) {
+	// An ask outcome has half-done work by design: committing it is a decision
+	// for the answer turn, not the run tail.
+	askEnded := result != nil && result.EndStatus == types.EndAsk
+	if enabled := req.Options.Commit && !req.Options.Plan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
 		meta := commit.AgentRunMetadata{IssueID: todo.ID}
 		if todo.LLM != nil {
 			meta.SessionID = todo.LLM.SessionId
@@ -1461,12 +1467,36 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	if req.Options.Plan {
 		mode = types.ModePlan
 	}
+	// Post-run checks run inside the agent loop as fixture-backed verify
+	// plugins; a failing round's feedback re-runs the same session.
+	var verifiers []agent.Plugin
+	var maxIterations int
+	if mode == types.ModeRun {
+		var err error
+		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, req.Options.Check)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	// The todo's recorded plan feeds a re-plan so the agent can report
+	// updated/unchanged instead of starting over.
+	existingPlan := ""
+	if mode == types.ModePlan && len(req.Todos) == 1 {
+		content, _, _, err := todos.ReadPlanFile(req.Todos[0].PlanPath)
+		if err != nil {
+			return nil, "", err
+		}
+		existingPlan = content
+	}
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
 		Model:          req.Options.Model,
 		Backend:        req.Options.Backend,
 		Effort:         req.Options.Effort,
 		Mode:           mode,
+		ExistingPlan:   existingPlan,
+		Verifiers:      verifiers,
+		MaxIterations:  maxIterations,
 		Resume:         req.Options.Resume,
 		SessionID:      req.Options.SessionID,
 		Timeout:        req.Options.Timeout,

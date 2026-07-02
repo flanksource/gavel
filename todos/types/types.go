@@ -447,6 +447,10 @@ type TODOFrontmatter struct {
 	// RunMode records the mode of the last agent run so an answer-resume
 	// continues in the same mode.
 	RunMode RunMode `yaml:"run_mode,omitempty" json:"run_mode,omitempty"`
+	// LastRunSummary is the final summary from the most recent run's envelope.
+	LastRunSummary string `yaml:"last_run_summary,omitempty" json:"last_run_summary,omitempty"`
+	// Questions are the agent's blocking questions while Status is ask.
+	Questions []AgentQuestion `yaml:"questions,omitempty" json:"questions,omitempty"`
 }
 
 // CleanMetadata removes keys from Metadata that match struct field yaml tags.
@@ -478,6 +482,8 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	delete(f.Metadata, "plan_path")
 	delete(f.Metadata, "plan_status")
 	delete(f.Metadata, "run_mode")
+	delete(f.Metadata, "last_run_summary")
+	delete(f.Metadata, "questions")
 }
 
 // Pretty returns a formatted text representation of the TODOFrontmatter

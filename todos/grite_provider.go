@@ -87,6 +87,7 @@ func (p *GriteProvider) Get(ctx context.Context, ref string) (*types.TODO, error
 	}
 	applyGriteIdentity(todo, data.Issue)
 	todo.ProviderEvents = providerEventsFromGriteEvents(data.Events)
+	applyAgentStateFromEvents(todo, todo.ProviderEvents)
 	return todo, nil
 }
 
@@ -202,6 +203,9 @@ func (p *GriteProvider) UpdateState(ctx context.Context, todo *types.TODO, updat
 		if err := p.applySessionLabel(ctx, id, todo, *updates.SessionID); err != nil {
 			return err
 		}
+	}
+	if err := p.applyAgentStateUpdates(ctx, id, todo, updates); err != nil {
+		return err
 	}
 	if updates.Status == nil {
 		return nil
@@ -569,6 +573,8 @@ func frontmatterFromGriteIssue(issue griteIssue, workDir string) types.TODOFront
 	if sid := sessionIDFromLabels(issue.Labels); sid != "" {
 		fm.LLM = &types.LLM{SessionId: sid}
 	}
+	fm.PlanStatus = planStatusFromLabels(issue.Labels)
+	fm.RunMode = runModeFromLabels(issue.Labels)
 	return fm
 }
 

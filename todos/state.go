@@ -19,6 +19,14 @@ type StateUpdate struct {
 	Priority  *types.Priority
 	Attempts  *int
 	LastRun   *time.Time
+	// Envelope-driven fields from an agent run's structured result: the native
+	// plan-mode file the agent reported, the plan/run mode bookkeeping an
+	// answer-resume needs, and the summary/questions surfaced in the dashboard.
+	PlanPath       *string
+	PlanStatus     *types.PlanStatus
+	RunMode        *types.RunMode
+	LastRunSummary *string
+	Questions      *[]types.AgentQuestion
 }
 
 // UpdateTODOState atomically updates the frontmatter of a TODO file with the provided updates.
@@ -51,6 +59,21 @@ func UpdateTODOState(todo *types.TODO, updates StateUpdate) error {
 			frontmatter.LLM = &types.LLM{}
 		}
 		frontmatter.LLM.SessionId = *updates.SessionID
+	}
+	if updates.PlanPath != nil {
+		frontmatter.PlanPath = *updates.PlanPath
+	}
+	if updates.PlanStatus != nil {
+		frontmatter.PlanStatus = *updates.PlanStatus
+	}
+	if updates.RunMode != nil {
+		frontmatter.RunMode = *updates.RunMode
+	}
+	if updates.LastRunSummary != nil {
+		frontmatter.LastRunSummary = *updates.LastRunSummary
+	}
+	if updates.Questions != nil {
+		frontmatter.Questions = *updates.Questions
 	}
 
 	newContent, err := WriteFrontmatter(&frontmatter, result.MarkdownContent)

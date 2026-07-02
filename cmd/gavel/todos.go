@@ -189,7 +189,16 @@ func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, erro
 	if err != nil {
 		return nil, "", err
 	}
-	return drivers.New(kind, newDriverConfig(kind, workDir, todo))
+	cfg := newDriverConfig(kind, workDir, todo)
+	// Post-run checks are fixture-backed verify plugins inside the agent loop
+	// (--check forces them on; .gavel.yaml/frontmatter `checks` enable them too).
+	verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, checkAfter)
+	if err != nil {
+		return nil, "", err
+	}
+	cfg.Verifiers = verifiers
+	cfg.MaxIterations = maxIter
+	return drivers.New(kind, cfg)
 }
 
 // resolveDriverKind selects the driver: the explicit --driver flag when set,
@@ -283,7 +292,6 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
-		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -355,7 +363,6 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
-		todoExec.EnableChecks(checkAfter)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)

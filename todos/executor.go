@@ -109,16 +109,11 @@ type TODOExecutor struct {
 	executor  Executor // Pluggable executor implementation
 	sessionID string   // Session ID for resumption across runs
 	provider  Provider
-	// forceChecks turns the post-completion check loop on regardless of config
-	// (the --check flag / dashboard toggle). The loop also runs when .gavel.yaml
-	// or a TODO's frontmatter enables `checks` — see runCheckLoop.
-	forceChecks bool
+	// mode drives the envelope→status mapping (see applyOutcome). Post-run
+	// checks live in the run loop itself now: fixture-backed verify plugins
+	// built by BuildCheckVerifiers and threaded through drivers.Config.
+	mode types.RunMode
 }
-
-// EnableChecks forces the post-completion check loop on for this executor,
-// matching `gavel todos run --check`. Without it, the loop still runs when
-// .gavel.yaml or a TODO's frontmatter enables `checks`.
-func (e *TODOExecutor) EnableChecks(force bool) { e.forceChecks = force }
 
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
 func NewTODOExecutor(workDir string, executor Executor, sessionID string, provider ...Provider) *TODOExecutor {
@@ -153,8 +148,9 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	}
 	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 
-	// Check if test already passes (skip if so)
-	if len(todo.StepsToReproduce) > 0 {
+	// Check if test already passes (skip if so). A plan run changes nothing, so
+	// neither the pre-check nor post-verification applies to it.
+	if e.Mode() != types.ModePlan && len(todo.StepsToReproduce) > 0 {
 		ctx.Logger.Debugf("Checking if test already passes")
 		ctx.Notify(Notification{
 			Type:    NotifyProgress,
@@ -194,7 +190,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	}
 
 	// Verify the fix
-	if len(todo.Verification) > 0 {
+	if e.Mode() != types.ModePlan && len(todo.Verification) > 0 {
 		ctx.Logger.Debugf("Running verification tests")
 		ctx.Notify(Notification{
 			Type:    NotifyProgress,
@@ -215,27 +211,16 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		}
 	}
 
-	// Post-completion check loop: run configured tests/lint and feed failures
-	// back to the agent until they pass (opt-in; no-op when not enabled). Only
-	// gate a run the executor reported successful — runCheckLoop flips Success to
-	// false only when the checks themselves fail.
-	if result.Success {
-		e.runCheckLoop(ctx, []*types.TODO{todo}, result)
-		if !result.Success {
-			ctx.Logger.Errorf("Post-completion checks failed: %s", result.ErrorMessage)
-			todo.Status = types.StatusFailed
-			todo.Attempts++
-			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
-			}
-			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
-			return result, fmt.Errorf("post-completion checks failed: %s", result.ErrorMessage)
-		}
-	}
-
-	// Update frontmatter with results
+	// Map the run's envelope onto the todo (status/plan/summary/questions).
 	ctx.Logger.Infof("TODO execution completed successfully")
-	e.updateFrontmatter(ctx, todo, result)
+	if applyErr := e.applyOutcome(ctx, todo, result); applyErr != nil {
+		todo.Status = types.StatusFailed
+		todo.Attempts++
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+		result.Success = false
+		result.ErrorMessage = applyErr.Error()
+		return result, applyErr
+	}
 
 	return result, nil
 }
@@ -266,11 +251,12 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now, SessionID: &todo.LLM.SessionId})
 	}
 
-	// Pre-check: filter out TODOs whose steps already pass
+	// Pre-check: filter out TODOs whose steps already pass (never for plan runs —
+	// they change nothing and always need the investigation).
 	var needsExecution []*types.TODO
 	results := make(map[string]*ExecutionResult)
 	for _, todo := range todosInGroup {
-		if len(todo.StepsToReproduce) > 0 && e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
+		if e.Mode() != types.ModePlan && len(todo.StepsToReproduce) > 0 && e.stepsAlreadyPass(ctx, todo.StepsToReproduce) {
 			ctx.Logger.Infof("TODO %s already passes, skipping", todo.Filename())
 			todo.Status = types.StatusSkipped
 			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, LastRun: &now})
@@ -314,7 +300,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		for _, todo := range needsExecution {
 			perTodo := e.splitResult(groupResult, len(needsExecution))
 
-			if len(todo.Verification) > 0 {
+			if e.Mode() != types.ModePlan && len(todo.Verification) > 0 {
 				ctx.Notify(Notification{
 					Type:    NotifyProgress,
 					Message: fmt.Sprintf("Verifying %s", todo.Filename()),
@@ -333,19 +319,13 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 				}
 			}
 
-			e.updateFrontmatter(ctx, todo, perTodo)
-			results[todo.FilePath] = perTodo
-		}
-
-		// Group-level post-completion checks: run the suite once for the shared
-		// agent session and feed failures back to it, but only when every todo
-		// that needed work verified cleanly. On failure, flip the whole group.
-		if e.allGroupResultsOK(needsExecution, results) {
-			checkResult := &ExecutionResult{Success: true, ExecutorName: e.executor.Name()}
-			e.runCheckLoop(ctx, needsExecution, checkResult)
-			if !checkResult.Success {
-				e.markGroupCheckFailure(ctx, needsExecution, results, checkResult)
+			if applyErr := e.applyOutcome(ctx, todo, perTodo); applyErr != nil {
+				todo.Status = types.StatusFailed
+				e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+				perTodo.Success = false
+				perTodo.ErrorMessage = applyErr.Error()
 			}
+			results[todo.FilePath] = perTodo
 		}
 	}
 
@@ -385,24 +365,6 @@ func (e *TODOExecutor) collectResults(todosInGroup []*types.TODO, resultMap map[
 }
 
 // updateFrontmatter updates the TODO's frontmatter with execution results.
-func (e *TODOExecutor) updateFrontmatter(ctx context.Context, todo *types.TODO, result *ExecutionResult) {
-	todo.Status = types.StatusCompleted
-	todo.Attempts++
-
-	// Update LLM usage metrics
-	if todo.LLM == nil {
-		todo.LLM = &types.LLM{}
-	}
-	todo.LLM.Model = result.ExecutorName
-	todo.LLM.TokensUsed = result.TokensUsed
-	todo.LLM.CostIncurred = result.CostUSD
-
-	if err := e.saveAttempt(ctx, todo, result); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", err)
-	}
-	e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
-}
-
 func (e *TODOExecutor) activeProvider() Provider {
 	if e.provider != nil {
 		return e.provider
