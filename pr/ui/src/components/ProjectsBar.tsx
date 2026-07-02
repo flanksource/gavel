@@ -1,7 +1,7 @@
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { ProcControl } from './ProcControl';
-import { GavelIcon } from './GavelIcon';
+import { UiFolder, UiCog, UiAdd } from '@flanksource/clicky-ui/icons';
 import { TodoBadge } from './TodoBadge';
 import { GitChangesBadge } from './GitChangesBadge';
 
@@ -31,7 +31,7 @@ export function ProjectsBar({ projects, procStatus, onChanged, onAdd, onSettings
         const key = p.repos[0] || p.name;
         return (
           <div key={p.name} className="pl-6 pr-3 py-1.5 flex items-center gap-2 hover:bg-muted">
-            <GavelIcon name="codicon:folder" className="text-muted-foreground shrink-0" />
+            <UiFolder className="text-muted-foreground shrink-0" />
             <span className="text-sm font-medium text-foreground truncate flex-1" title={p.dir}>{p.name}</span>
             <TodoBadge counts={p.todoCounts} />
             <GitChangesBadge count={procStatus[p.name]?.gitChanges} />
@@ -44,7 +44,7 @@ export function ProjectsBar({ projects, procStatus, onChanged, onAdd, onSettings
               aria-label={`Edit ${p.name} settings`}
               className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
             >
-              <GavelIcon name="codicon:settings-gear" />
+              <UiCog />
             </Button>
             <ProcControl
               repo={key}
@@ -62,7 +62,7 @@ export function ProjectsBar({ projects, procStatus, onChanged, onAdd, onSettings
         title="Add a local workspace directory"
         className="w-full pl-6 pr-3 py-1.5 h-auto flex items-center justify-start gap-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
-        <GavelIcon name="codicon:add" className="shrink-0" />
+        <UiAdd className="shrink-0" />
         Add directory
       </Button>
     </div>

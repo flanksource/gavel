@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, type ReactNode } from 'react';
+import { useState, useMemo, useRef, type ReactNode, type ComponentType } from 'react';
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
 import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
@@ -10,8 +10,38 @@ import { Avatar } from './Avatar';
 import { WorkflowRunView } from './WorkflowView';
 import { BotCommentBody, BotBadge } from './BotComment';
 import type { WorkflowRun } from '../types';
-import { GavelIcon } from './GavelIcon';
+import {
+  UiActivity,
+  UiAdd,
+  UiArrowDown,
+  UiBeaker,
+  UiCancel,
+  UiCheck,
+  UiChevronDown,
+  UiChevronRight,
+  UiChevronUp,
+  UiClock,
+  UiComment,
+  UiCopy,
+  UiDebugStepOver,
+  UiDiff,
+  UiError,
+  UiEye,
+  UiGitGraph,
+  UiGitMerge,
+  UiGraph,
+  UiJson,
+  UiLinkExternal,
+  UiMarkdown,
+  UiPass,
+  UiServerProcess,
+  UiWarningTriangle,
+} from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../icons/Spinner';
+import { VercelIcon } from '../icons/VercelIcon';
 import { Button } from '@flanksource/clicky-ui/components';
+import { GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitDiffPayload, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
@@ -82,6 +112,26 @@ function formatGavelMarkdown(g: GavelResultsSummary): string {
   return lines.join('\n');
 }
 
+type PRDiffAPIResponse = GitDiffPayload & { error?: string };
+
+async function loadGitDiff(url: string): Promise<GitDiffPayload> {
+  const response = await fetch(url);
+  let payload: PRDiffAPIResponse = { diff: '' };
+  try {
+    payload = await response.json();
+  } catch {
+    payload = { diff: '', error: await response.text().catch(() => '') };
+  }
+  if (!response.ok) {
+    throw new Error(payload.error || `Failed to load diff (${response.status})`);
+  }
+  return {
+    diff: payload.diff || '',
+    truncated: !!payload.truncated,
+    binary: !!payload.binary,
+  };
+}
+
 interface Props {
   pr: PRItem;
   detail: PRDetail | null;
@@ -123,7 +173,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
                 onClick={() => setShowCreate(true)}
                 title="Create a todo from this PR's failures and comments"
               >
-                <GavelIcon name="codicon:add" className="text-xs" />
+                <UiAdd className="text-xs" />
                 New todo
               </Button>
             )}
@@ -138,14 +188,14 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
 
       {loading && !detail && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground mt-4">
-          <GavelIcon name="svg-spinners:ring-resize" className="text-blue-500" />
+          <Spinner className="text-blue-500" />
           Loading details...
         </div>
       )}
 
       {detail?.error && (
         <div className="mt-3 p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700">
-          <GavelIcon name="codicon:error" className="mr-1" />
+          <UiError className="mr-1" />
           {detail.error}
         </div>
       )}
@@ -198,7 +248,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
       <div className="pt-3 mt-3 border-t border-border">
         <a href={pr.url} target="_blank" rel="noopener"
           className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline">
-          <GavelIcon name="codicon:link-external" />
+          <UiLinkExternal />
           Open on GitHub
         </a>
       </div>
@@ -246,15 +296,17 @@ function DetailTabBar({ active, onChange, commitCount, fileCount }: {
   commitCount: number;
   fileCount: number;
 }) {
-  const tabs: { id: DetailTab; label: string; icon: string; count?: number }[] = [
-    { id: 'overview', label: 'Overview', icon: 'codicon:pulse' },
-    { id: 'commits', label: 'Commits', icon: 'codicon:git-commit', count: commitCount },
-    { id: 'files', label: 'Files', icon: 'codicon:diff', count: fileCount },
+  const tabs: { id: DetailTab; label: string; icon: ComponentType<IconProps>; count?: number }[] = [
+    { id: 'overview', label: 'Overview', icon: UiActivity },
+    { id: 'commits', label: 'Commits', icon: UiGitGraph, count: commitCount },
+    { id: 'files', label: 'Files', icon: UiDiff, count: fileCount },
   ];
 
   return (
     <div className="flex items-center gap-1 mt-3 mb-1 border-b border-border">
-      {tabs.map(t => (
+      {tabs.map(t => {
+        const Icon = t.icon;
+        return (
         <Button
           key={t.id}
           variant="ghost"
@@ -265,169 +317,92 @@ function DetailTabBar({ active, onChange, commitCount, fileCount }: {
           }`}
           onClick={() => onChange(t.id)}
         >
-          <GavelIcon name={t.icon} className="text-xs" />
+          <Icon className="text-xs" />
           {t.label}
           {t.count != null && t.count > 0 && (
             <span className="text-[10px] bg-muted rounded-full px-1.5 py-0 font-medium">{t.count}</span>
           )}
         </Button>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
 function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
-  if (commits.length === 0) {
-    return <div className="text-xs text-muted-foreground py-4">No commits found</div>;
-  }
-  return (
-    <div className="mt-2 divide-y divide-border border border-border rounded">
-      {commits.map(c => (
-        <CommitRow key={c.oid} commit={c} pr={pr} />
-      ))}
-    </div>
+  const items = useMemo<GitCommitItem[]>(() => commits.map(commit => ({
+    id: commit.oid,
+    sha: commit.oid,
+    shortSha: commit.oid.slice(0, 7),
+    title: commit.messageHeadline,
+    body: commit.messageBody,
+    authorName: commit.authorName,
+    authorLogin: commit.authorLogin,
+    authorAvatarUrl: commit.authorAvatarUrl,
+    committedAt: commit.committedDate,
+    additions: commit.additions,
+    deletions: commit.deletions,
+    changedFiles: commit.changedFiles,
+    href: `https://github.com/${pr.repo}/commit/${commit.oid}`,
+  })), [commits, pr.repo]);
+
+  const loadDiff = (commit: GitCommitItem) => loadGitDiff(
+    `/api/prs/commits/diff?repo=${encodeURIComponent(pr.repo)}&sha=${encodeURIComponent(commit.sha)}`,
   );
-}
-
-function CommitRow({ commit, pr }: { commit: PRCommitInfo; pr: PRItem }) {
-  const [expanded, setExpanded] = useState(false);
-  const shortSha = commit.oid.slice(0, 7);
-  const displayAuthor = commit.authorLogin || commit.authorName || '';
-  const commitUrl = `https://github.com/${pr.repo}/commit/${commit.oid}`;
-  const adds = commit.additions;
-  const dels = commit.deletions;
 
   return (
-    <div>
-      <div
-        className="flex items-start gap-2 py-2 px-3 text-xs cursor-pointer hover:bg-muted transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <GavelIcon name="codicon:git-commit" className="text-muted-foreground mt-0.5 shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="font-medium text-foreground truncate" title={commit.messageHeadline}>
-            {commit.messageHeadline}
-          </div>
-          <div className="flex items-center gap-2 mt-0.5 text-muted-foreground">
-            {commit.authorAvatarUrl && (
-              <Avatar
-                src={commit.authorAvatarUrl}
-                alt={displayAuthor}
-                size={14}
-                href={commit.authorLogin ? `https://github.com/${commit.authorLogin}` : undefined}
-                title={displayAuthor}
-              />
-            )}
-            {displayAuthor && <span>{displayAuthor}</span>}
-            <span>·</span>
-            <RelativeTime iso={commit.committedDate} />
-            {(adds > 0 || dels > 0) && (
-              <>
-                <span>·</span>
-                {adds > 0 && <span className="text-green-600">+{adds}</span>}
-                {dels > 0 && <span className="text-red-600">-{dels}</span>}
-              </>
-            )}
-          </div>
-        </div>
-        <a
-          href={commitUrl}
-          target="_blank"
-          rel="noopener"
-          className="text-cyan-600 font-mono hover:underline shrink-0"
-          onClick={e => e.stopPropagation()}
-          title="View on GitHub"
-        >
-          {shortSha}
-        </a>
-        {commit.messageBody && (
-          <GavelIcon
-            name={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
-            className="text-muted-foreground shrink-0 text-[10px] mt-1"
-          />
-        )}
-      </div>
-      {expanded && commit.messageBody && (
-        <div className="px-3 pb-2 ml-5">
-          <pre className="text-[11px] text-muted-foreground whitespace-pre-wrap font-mono bg-muted rounded p-2">
-            {commit.messageBody}
-          </pre>
-        </div>
-      )}
-    </div>
+    <GitCommitList
+      commits={items}
+      loadDiff={loadDiff}
+      renderTime={iso => <RelativeTime iso={iso} />}
+      className="mt-2"
+      diffMaxHeightClassName="max-h-[560px]"
+    />
   );
 }
 
 function FilesTab({ files, pr, info }: { files: PRFileInfo[]; pr: PRItem; info?: import('../types').PRInfo }) {
-  if (files.length === 0) {
-    return <div className="text-xs text-muted-foreground py-4">No changed files found</div>;
-  }
-
   const totalAdds = info?.additions ?? files.reduce((s, f) => s + f.additions, 0);
   const totalDels = info?.deletions ?? files.reduce((s, f) => s + f.deletions, 0);
+  const items = useMemo<GitFileChangeItem[]>(() => files.map(file => ({
+    id: file.path,
+    path: file.path,
+    status: normalizePRFileStatus(file.changeType),
+    additions: file.additions,
+    deletions: file.deletions,
+    href: `${pr.url}/files#diff-${btoa(file.path).replace(/=/g, '')}`,
+  })), [files, pr.url]);
+
+  const loadDiff = (file: GitFileChangeItem) => loadGitDiff(
+    `/api/prs/files/diff?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}&path=${encodeURIComponent(file.path)}`,
+  );
 
   return (
-    <div className="mt-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-        <span className="font-medium">{files.length} file{files.length !== 1 ? 's' : ''} changed</span>
-        <span>·</span>
-        <span className="text-green-600">+{totalAdds}</span>
-        <span className="text-red-600">-{totalDels}</span>
-      </div>
-      <div className="divide-y divide-border border border-border rounded">
-        {files.map(f => (
-          <FileRow key={f.path} file={f} pr={pr} />
-        ))}
-      </div>
+    <div className="mt-2 space-y-2">
+      <GitChangedFilesSummary files={files.length} additions={totalAdds} deletions={totalDels} />
+      <GitFileList
+        files={items}
+        loadDiff={loadDiff}
+        diffMaxHeightClassName="max-h-[560px]"
+      />
     </div>
   );
 }
 
-function FileRow({ file, pr }: { file: PRFileInfo; pr: PRItem }) {
-  const total = file.additions + file.deletions;
-  const maxBars = 5;
-  const addBars = total > 0 ? Math.round((file.additions / total) * maxBars) : 0;
-  const delBars = total > 0 ? maxBars - addBars : 0;
-
-  const changeTypeIcon = {
-    ADDED: { icon: 'codicon:diff-added', color: 'text-green-600' },
-    DELETED: { icon: 'codicon:diff-removed', color: 'text-red-600' },
-    RENAMED: { icon: 'codicon:diff-renamed', color: 'text-blue-600' },
-    MODIFIED: { icon: 'codicon:diff-modified', color: 'text-yellow-600' },
-    COPIED: { icon: 'codicon:copy', color: 'text-blue-600' },
-  }[file.changeType] ?? { icon: 'codicon:diff-modified', color: 'text-yellow-600' };
-
-  const fileUrl = `${pr.url}/files#diff-${btoa(file.path).replace(/=/g, '')}`;
-
-  return (
-    <div className="flex items-center gap-2 py-1.5 px-3 text-xs hover:bg-muted transition-colors">
-      <GavelIcon name={changeTypeIcon.icon} className={`${changeTypeIcon.color} shrink-0`} />
-      <a
-        href={fileUrl}
-        target="_blank"
-        rel="noopener"
-        className="flex-1 min-w-0 font-mono text-foreground hover:text-blue-600 hover:underline truncate"
-        title={file.path}
-      >
-        {file.path}
-      </a>
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className="text-green-600 tabular-nums w-8 text-right">+{file.additions}</span>
-        <span className="text-red-600 tabular-nums w-8 text-right">-{file.deletions}</span>
-        <span className="inline-flex gap-px">
-          {Array.from({ length: addBars }).map((_, i) => (
-            <span key={`a${i}`} className="inline-block w-1.5 h-2 bg-green-500 rounded-sm" />
-          ))}
-          {Array.from({ length: delBars }).map((_, i) => (
-            <span key={`d${i}`} className="inline-block w-1.5 h-2 bg-red-500 rounded-sm" />
-          ))}
-          {total === 0 && (
-            <span className="inline-block w-1.5 h-2 bg-muted-foreground/30 rounded-sm" />
-          )}
-        </span>
-      </div>
-    </div>
-  );
+function normalizePRFileStatus(changeType: string): string {
+  switch (changeType.toUpperCase()) {
+    case 'ADDED':
+      return 'added';
+    case 'DELETED':
+    case 'REMOVED':
+      return 'deleted';
+    case 'RENAMED':
+      return 'renamed';
+    case 'COPIED':
+      return 'copied';
+    default:
+      return 'modified';
+  }
 }
 
 function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null; action?: ReactNode }) {
@@ -497,7 +472,7 @@ function PRHeader({ pr, detail, action }: { pr: PRItem; detail: PRDetail | null;
               <>
                 <span className="text-muted-foreground/50">|</span>
                 <span className={m === 'MERGEABLE' ? 'text-green-600' : m === 'CONFLICTING' ? 'text-red-600' : 'text-yellow-600'}>
-                  {m === 'CONFLICTING' && <GavelIcon name="codicon:git-merge" className="mr-0.5" />}
+                  {m === 'CONFLICTING' && <UiGitMerge className="mr-0.5" />}
                   {m}
                 </span>
               </>
@@ -545,10 +520,9 @@ function CommentView({ comment }: { comment: PRComment }) {
           @{comment.author}
           {comment.botType && <BotBadge botType={comment.botType} />}
         </span>
-        <GavelIcon
-          name={expanded ? 'codicon:chevron-up' : 'codicon:chevron-down'}
-          className="text-muted-foreground shrink-0 text-[10px] mt-1"
-        />
+        {expanded
+          ? <UiChevronUp className="text-muted-foreground shrink-0 text-[10px] mt-1" />
+          : <UiChevronDown className="text-muted-foreground shrink-0 text-[10px] mt-1" />}
       </div>
       {expanded && (
         <div className="ml-5 mb-2 mt-1">
@@ -588,25 +562,26 @@ function parseVercelProjects(body: string): VercelProject[] {
   } catch { return []; }
 }
 
-const deployStatusConfig: Record<string, { icon: string; color: string; label: string }> = {
-  DEPLOYED:  { icon: 'codicon:pass',           color: 'text-green-600', label: 'Deployed' },
-  BUILDING:  { icon: 'svg-spinners:ring-resize', color: 'text-yellow-600', label: 'Building' },
-  QUEUED:    { icon: 'codicon:clock',           color: 'text-muted-foreground',  label: 'Queued' },
-  ERROR:     { icon: 'codicon:error',           color: 'text-red-600',   label: 'Error' },
-  CANCELED:  { icon: 'codicon:circle-slash',    color: 'text-muted-foreground',  label: 'Canceled' },
+const deployStatusConfig: Record<string, { icon: ComponentType<IconProps>; color: string; label: string }> = {
+  DEPLOYED:  { icon: UiPass,    color: 'text-green-600', label: 'Deployed' },
+  BUILDING:  { icon: Spinner,   color: 'text-yellow-600', label: 'Building' },
+  QUEUED:    { icon: UiClock,   color: 'text-muted-foreground',  label: 'Queued' },
+  ERROR:     { icon: UiError,   color: 'text-red-600',   label: 'Error' },
+  CANCELED:  { icon: UiCancel,  color: 'text-muted-foreground',  label: 'Canceled' },
 };
 
 function DeploymentRow({ project }: { project: VercelProject }) {
   const [hover, setHover] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const st = deployStatusConfig[project.status] || deployStatusConfig.QUEUED;
+  const StatusIcon = st.icon;
 
   return (
     <div className="relative" ref={ref}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
     >
       <div className="flex items-center gap-2 py-1.5 px-1 -mx-1 rounded hover:bg-muted text-sm transition-colors">
-        <GavelIcon name={st.icon} className={`${st.color} text-xs`} />
+        <StatusIcon className={`${st.color} text-xs`} />
         <a href={project.previewUrl} target="_blank" rel="noopener"
           className="text-blue-600 hover:underline font-medium flex-1 truncate"
         >
@@ -617,29 +592,29 @@ function DeploymentRow({ project }: { project: VercelProject }) {
           title="Build output"
           onClick={(e) => e.stopPropagation()}
         >
-          <GavelIcon name="codicon:server-process" className="text-xs" />
+          <UiServerProcess className="text-xs" />
         </a>
       </div>
       {hover && (
         <div className="absolute left-0 top-full z-50 mt-0.5 w-72 bg-popover border border-border rounded-lg shadow-lg p-3 text-xs">
           <div className="flex items-center gap-1.5 mb-2">
-            <GavelIcon name="simple-icons:vercel" className="text-sm" />
+            <VercelIcon className="text-sm" />
             <span className="font-semibold text-foreground">{project.name}</span>
             <span className={`ml-auto inline-flex items-center gap-1 ${st.color}`}>
-              <GavelIcon name={st.icon} className="text-[10px]" />
+              <StatusIcon className="text-[10px]" />
               {st.label}
             </span>
           </div>
           <div className="space-y-1.5 text-muted-foreground">
             <div className="flex items-center gap-1.5">
-              <GavelIcon name="codicon:link-external" className="text-muted-foreground text-[10px] shrink-0" />
+              <UiLinkExternal className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.previewUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 {project.previewUrl.replace(/^https?:\/\//, '')}
               </a>
             </div>
             <div className="flex items-center gap-1.5">
-              <GavelIcon name="codicon:server-process" className="text-muted-foreground text-[10px] shrink-0" />
+              <UiServerProcess className="text-muted-foreground text-[10px] shrink-0" />
               <a href={project.inspectorUrl} target="_blank" rel="noopener"
                 className="text-blue-600 hover:underline truncate">
                 Build output
@@ -751,7 +726,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
             }`}
             onClick={() => toggleSeverity('')}
           >
-            <GavelIcon name="codicon:comment-discussion" className="text-[11px]" />
+            <UiComment className="text-[11px]" />
             <span>{severityCounts['']}</span>
           </Button>
         )}
@@ -765,7 +740,7 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
               }`}
               onClick={() => setShowOutdated(!showOutdated)}
             >
-              <GavelIcon name="codicon:eye" className="text-[10px]" />
+              <UiEye className="text-[10px]" />
               {severityCounts._outdated} resolved
             </Button>
           </>
@@ -789,14 +764,14 @@ function CommentsSection({ comments }: { comments: PRComment[] }) {
 
 interface MetricCardProps {
   href?: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   label: string;
   value: string | number;
   sub?: string;
   tone: 'pass' | 'fail' | 'warn' | 'info' | 'neutral';
 }
 
-function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
+function MetricCard({ href, icon: Icon, label, value, sub, tone }: MetricCardProps) {
   const toneClass = {
     pass: href ? 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100' : 'bg-green-50 border-green-200 text-green-700',
     fail: href ? 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100' : 'bg-red-50 border-red-200 text-red-700',
@@ -807,8 +782,8 @@ function MetricCard({ href, icon, label, value, sub, tone }: MetricCardProps) {
   const body = (
     <>
       <div className="flex items-center justify-between">
-        <GavelIcon name={icon} className="text-lg" />
-        {href && <GavelIcon name="codicon:chevron-right" className="text-xs opacity-30 group-hover:opacity-70" />}
+        <Icon className="text-lg" />
+        {href && <UiChevronRight className="text-xs opacity-30 group-hover:opacity-70" />}
       </div>
       <div className="text-2xl font-semibold tabular-nums leading-tight mt-1">{value}</div>
       <div className="text-[11px] font-medium uppercase tracking-wide opacity-80">{label}</div>
@@ -908,10 +883,9 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
             onClick={() => setBreakdownOpen(o => !o)}
             aria-expanded={breakdownOpen}
           >
-            <GavelIcon
-              name={breakdownOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-              className="text-muted-foreground"
-            />
+            {breakdownOpen
+              ? <UiChevronDown className="text-muted-foreground" />
+              : <UiChevronRight className="text-muted-foreground" />}
             <span className="font-semibold">Per-shard breakdown</span>
             <span className="text-muted-foreground normal-case tracking-normal">
               ({shards.length} shard{shards.length !== 1 ? 's' : ''})
@@ -946,7 +920,7 @@ function buildMetricCards(
   if (results.testsTotal > 0) {
     cards.push({
       href: href('tests?filter=passed'),
-      icon: 'codicon:pass',
+      icon: UiPass,
       label: 'Passed',
       value: results.testsPassed,
       sub: `of ${results.testsTotal} test${results.testsTotal !== 1 ? 's' : ''}`,
@@ -954,7 +928,7 @@ function buildMetricCards(
     });
     cards.push({
       href: href('tests?filter=failed'),
-      icon: 'codicon:error',
+      icon: UiError,
       label: 'Failed',
       value: results.testsFailed,
       sub: results.testsFailed > 0 ? 'need triage' : 'none',
@@ -963,7 +937,7 @@ function buildMetricCards(
     if (results.testsSkipped > 0) {
       cards.push({
         href: href('tests?filter=skipped'),
-        icon: 'codicon:debug-step-over',
+        icon: UiDebugStepOver,
         label: 'Skipped',
         value: results.testsSkipped,
         sub: 'not run',
@@ -975,7 +949,7 @@ function buildMetricCards(
   if (results.lintLinters > 0) {
     cards.push({
       href: href('lint'),
-      icon: results.lintViolations > 0 ? 'codicon:warning' : 'codicon:pass',
+      icon: results.lintViolations > 0 ? UiWarningTriangle : UiPass,
       label: 'Lint',
       value: results.lintViolations,
       sub: results.lintViolations > 0
@@ -989,7 +963,7 @@ function buildMetricCards(
     const regs = results.benchRegressions ?? 0;
     cards.push({
       href: href('bench'),
-      icon: regs > 0 ? 'codicon:arrow-down' : 'codicon:graph',
+      icon: regs > 0 ? UiArrowDown : UiGraph,
       label: 'Bench',
       value: regs,
       sub: regs > 0
@@ -1010,7 +984,7 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
       {failures.length > 0 && (
         <FailureList
           title="Test failures"
-          icon="codicon:beaker-stop"
+          icon={UiBeaker}
           iconColor="text-red-600"
           total={results.testsFailed}
         >
@@ -1020,7 +994,7 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
       {lintHits.length > 0 && (
         <FailureList
           title="Lint violations"
-          icon="codicon:warning"
+          icon={UiWarningTriangle}
           iconColor="text-yellow-600"
           total={results.lintViolations}
         >
@@ -1035,35 +1009,38 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
   if (g.error) {
     return (
       <span className="inline-flex items-center text-yellow-600" title={g.error}>
-        <GavelIcon name="codicon:warning" />
+        <UiWarningTriangle />
       </span>
     );
   }
-  const items: { icon: string; color: string; count: number; title: string }[] = [];
+  const items: { icon: ComponentType<IconProps>; color: string; count: number; title: string }[] = [];
   if (g.testsPassed > 0) {
-    items.push({ icon: 'codicon:pass', color: 'text-green-600', count: g.testsPassed, title: `${g.testsPassed} passed` });
+    items.push({ icon: UiPass, color: 'text-green-600', count: g.testsPassed, title: `${g.testsPassed} passed` });
   }
   if (g.testsFailed > 0) {
-    items.push({ icon: 'codicon:error', color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
+    items.push({ icon: UiError, color: 'text-red-600', count: g.testsFailed, title: `${g.testsFailed} failed` });
   }
   if (g.testsSkipped > 0) {
-    items.push({ icon: 'codicon:debug-step-over', color: 'text-muted-foreground', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
+    items.push({ icon: UiDebugStepOver, color: 'text-muted-foreground', count: g.testsSkipped, title: `${g.testsSkipped} skipped` });
   }
   if (g.lintViolations > 0) {
-    items.push({ icon: 'codicon:warning', color: 'text-yellow-600', count: g.lintViolations, title: `${g.lintViolations} lint` });
+    items.push({ icon: UiWarningTriangle, color: 'text-yellow-600', count: g.lintViolations, title: `${g.lintViolations} lint` });
   }
   if ((g.benchRegressions ?? 0) > 0) {
-    items.push({ icon: 'codicon:arrow-down', color: 'text-red-600', count: g.benchRegressions ?? 0, title: `${g.benchRegressions} bench regression` });
+    items.push({ icon: UiArrowDown, color: 'text-red-600', count: g.benchRegressions ?? 0, title: `${g.benchRegressions} bench regression` });
   }
   if (items.length === 0) return null;
   return (
     <span className="inline-flex items-center gap-1 tabular-nums">
-      {items.map((it, i) => (
+      {items.map((it, i) => {
+        const Icon = it.icon;
+        return (
         <span key={i} className={`inline-flex items-center ${it.color} leading-none`} title={it.title}>
-          <GavelIcon name={it.icon} className="text-[12px]" />
+          <Icon className="text-[12px]" />
           <span className="text-[11px] font-medium">{it.count}</span>
         </span>
-      ))}
+        );
+      })}
     </span>
   );
 }
@@ -1083,10 +1060,9 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
       >
-        <GavelIcon
-          name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          className="text-muted-foreground text-[12px] shrink-0"
-        />
+        {open
+          ? <UiChevronDown className="text-muted-foreground text-[12px] shrink-0" />
+          : <UiChevronRight className="text-muted-foreground text-[12px] shrink-0" />}
         <span className="text-xs font-mono text-foreground truncate">{label}</span>
         <ShardSummaryBadges g={results} />
       </Button>
@@ -1094,7 +1070,7 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
         <div className="px-2 pb-3 pt-1">
           {results.error ? (
             <div className="text-xs text-muted-foreground py-1">
-              <GavelIcon name="codicon:warning" className="text-yellow-500 mr-1" />
+              <UiWarningTriangle className="text-yellow-500 mr-1" />
               {results.error}
             </div>
           ) : cards.length === 0 ? (
@@ -1118,9 +1094,9 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
   );
 }
 
-function FailureList({ title, icon, iconColor, total, children }: {
+function FailureList({ title, icon: Icon, iconColor, total, children }: {
   title: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   iconColor: string;
   total: number;
   children: any;
@@ -1130,7 +1106,7 @@ function FailureList({ title, icon, iconColor, total, children }: {
   return (
     <div className="mt-3">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
-        <GavelIcon name={icon} className={iconColor} />
+        <Icon className={iconColor} />
         <span className="font-semibold">{title}</span>
         <span className="text-muted-foreground normal-case tracking-normal">
           showing {shown} of {total}
@@ -1150,9 +1126,9 @@ function FailureHeader({ f, withChevron }: { f: TestFailure; withChevron: boolea
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
       {withChevron && (
-        <GavelIcon name="codicon:chevron-right" className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
+        <UiChevronRight className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
       )}
-      <GavelIcon name="codicon:error" className="text-red-600 mt-0.5 shrink-0" />
+      <UiError className="text-red-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="font-medium text-foreground truncate" title={f.name}>
           {f.suite ? <span className="text-muted-foreground">{f.suite} › </span> : null}
@@ -1191,7 +1167,7 @@ function LintViolationRow({ v }: { v: LintViolation }) {
   const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
   return (
     <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
-      <GavelIcon name="codicon:warning" className="text-yellow-600 mt-0.5 shrink-0" />
+      <UiWarningTriangle className="text-yellow-600 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
         <div className="font-medium text-foreground truncate">
           <span className="text-muted-foreground">{v.linter}</span>
@@ -1242,7 +1218,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'text' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('text', actions.text!()); }}
         >
-          <GavelIcon name={copied === 'text' ? 'codicon:check' : 'codicon:copy'} className="text-sm" />
+          {copied === 'text' ? <UiCheck className="text-sm" /> : <UiCopy className="text-sm" />}
         </Button>
       )}
       {actions.markdown && (
@@ -1253,7 +1229,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'markdown' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('markdown', actions.markdown!()); }}
         >
-          <GavelIcon name={copied === 'markdown' ? 'codicon:check' : 'codicon:markdown'} className="text-sm" />
+          {copied === 'markdown' ? <UiCheck className="text-sm" /> : <UiMarkdown className="text-sm" />}
         </Button>
       )}
       {actions.json && (
@@ -1264,7 +1240,7 @@ function SectionActionsBar({ actions, title }: { actions: SectionActions; title:
           className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'json' ? 'text-green-600' : ''}`}
           onClick={(e) => { e.stopPropagation(); flash('json', JSON.stringify(actions.json!(), null, 2)); }}
         >
-          <GavelIcon name={copied === 'json' ? 'codicon:check' : 'codicon:json'} className="text-sm" />
+          {copied === 'json' ? <UiCheck className="text-sm" /> : <UiJson className="text-sm" />}
         </Button>
       )}
     </div>

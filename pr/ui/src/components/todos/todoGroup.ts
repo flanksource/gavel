@@ -1,13 +1,16 @@
+import type { ComponentType } from 'react';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiArrowDown, UiChevronUp, UiFolder, UiHistory, UiListFlat, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoGroupBy, TodoItem, TodoListResponse, TodoSortBy } from '../../types';
 
 // Group-by is a per-user view preference for the todo lists, persisted alongside
 // density and the status filter so it survives reloads. 'workspace' keeps the
 // per-workspace grouping (the default, the only mode that supports batch runs);
 // 'severity' and 'age' re-bucket todos across every workspace.
-export const GROUP_BY_OPTIONS: { value: TodoGroupBy; label: string; icon: string }[] = [
-  { value: 'workspace', label: 'Workspace', icon: 'codicon:folder' },
-  { value: 'severity', label: 'Severity', icon: 'codicon:warning' },
-  { value: 'age', label: 'Age', icon: 'codicon:history' },
+export const GROUP_BY_OPTIONS: { value: TodoGroupBy; label: string; icon: ComponentType<IconProps> }[] = [
+  { value: 'workspace', label: 'Workspace', icon: UiFolder },
+  { value: 'severity', label: 'Severity', icon: UiWarningTriangle },
+  { value: 'age', label: 'Age', icon: UiHistory },
 ];
 
 const STORAGE_KEY = 'gavel.pr-ui.todoGroupBy.v1';
@@ -37,11 +40,11 @@ export function saveGroupBy(groupBy: TodoGroupBy): void {
 
 // Sort-by is the row order within each group (workspace section or severity/age
 // bucket), persisted alongside group-by so the chosen order survives reloads.
-export const SORT_BY_OPTIONS: { value: TodoSortBy; label: string; icon: string }[] = [
-  { value: 'priority', label: 'Priority', icon: 'codicon:warning' },
-  { value: 'newest', label: 'Newest', icon: 'codicon:arrow-down' },
-  { value: 'oldest', label: 'Oldest', icon: 'codicon:chevron-up' },
-  { value: 'title', label: 'Title', icon: 'codicon:list-flat' },
+export const SORT_BY_OPTIONS: { value: TodoSortBy; label: string; icon: ComponentType<IconProps> }[] = [
+  { value: 'priority', label: 'Priority', icon: UiWarningTriangle },
+  { value: 'newest', label: 'Newest', icon: UiArrowDown },
+  { value: 'oldest', label: 'Oldest', icon: UiChevronUp },
+  { value: 'title', label: 'Title', icon: UiListFlat },
 ];
 
 const SORT_STORAGE_KEY = 'gavel.pr-ui.todoSortBy.v1';

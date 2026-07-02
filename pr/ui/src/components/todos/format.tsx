@@ -1,7 +1,10 @@
+import type { ComponentType } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiPass, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
-import { GavelIcon } from '../GavelIcon';
+import { Spinner } from '../../icons/Spinner';
 import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
@@ -157,7 +160,7 @@ function severityColor(priority: TodoPriority | string): string {
 
 interface SessionBadgeView {
   className: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   label: string;
 }
 
@@ -170,21 +173,21 @@ interface SessionBadgeView {
 function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
   if (stats && stats.found && !stats.inProgress) {
     if (stats.state === 'completed') {
-      return { className: statusClass('completed'), icon: 'codicon:pass', label: 'Done' };
+      return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
     }
-    return { className: statusClass('draft'), icon: 'codicon:clock', label: 'Ended' };
+    return { className: statusClass('draft'), icon: UiClock, label: 'Ended' };
   }
   switch (stats?.state) {
     case 'thinking':
-      return { className: statusClass('in_progress'), icon: 'codicon:lightbulb', label: 'Thinking' };
+      return { className: statusClass('in_progress'), icon: UiLightbulb, label: 'Thinking' };
     case 'working':
-      return { className: statusClass('in_progress'), icon: 'svg-spinners:ring-resize', label: 'Working' };
+      return { className: statusClass('in_progress'), icon: Spinner, label: 'Working' };
     case 'ask':
-      return { className: statusClass('skipped'), icon: 'codicon:comment-discussion', label: 'Awaiting input' };
+      return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
     case 'completed':
-      return { className: statusClass('completed'), icon: 'codicon:pass', label: 'Done' };
+      return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
     default:
-      return { className: statusClass('in_progress'), icon: 'svg-spinners:ring-resize', label: 'In progress' };
+      return { className: statusClass('in_progress'), icon: Spinner, label: 'In progress' };
   }
 }
 
@@ -196,21 +199,22 @@ function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
 function InProgressBadge({ dir, provider, sessionId }: { dir: string; provider: string; sessionId?: string }) {
   const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, true);
   const view = sessionBadgeView(stats);
+  const ViewIcon = view.icon;
   const cost = stats ? formatCost(stats.costUsd) : '';
   return (
     <span
       className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${view.className}`}
       title={`${view.label} · agent session`}
     >
-      <GavelIcon name={view.icon} className="text-[11px]" />
+      <ViewIcon className="text-[11px]" />
       {stats?.found ? formatDuration(elapsedMs) : view.label}
       {cost && <span className="opacity-80">{cost}</span>}
     </span>
   );
 }
 
-function CountBadge({ icon, value, label, className = 'text-muted-foreground', status, hidden, onToggle }: {
-  icon: string;
+function CountBadge({ icon: Icon, value, label, className = 'text-muted-foreground', status, hidden, onToggle }: {
+  icon: ComponentType<IconProps>;
   value: number;
   label: string;
   className?: string;
@@ -221,7 +225,7 @@ function CountBadge({ icon, value, label, className = 'text-muted-foreground', s
   if (!value) return null;
   const content = (
     <>
-      <GavelIcon name={icon} className="text-[12px]" />
+      <Icon className="text-[12px]" />
       {value}
     </>
   );
@@ -261,14 +265,14 @@ export function TodoCountsBar({ counts, hidden, onToggle }: {
 }) {
   return (
     <div className="flex shrink-0 items-center gap-1.5 text-xs font-normal tabular-nums">
-      <CountBadge icon="codicon:check" value={counts.open} label="Open todos" className="text-blue-600" />
-      <CountBadge icon="codicon:clock" value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="codicon:debug-start" value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="codicon:eye" value={counts.review} label="Review" className="text-amber-600" status="review" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="codicon:question" value={counts.ask} label="Ask" className="text-purple-600" status="ask" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="codicon:error" value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="octicon:check-circle-fill-16" value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon="codicon:pass" value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiCheck} value={counts.open} label="Open todos" className="text-blue-600" />
+      <CountBadge icon={UiClock} value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiPlay} value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiEye} value={counts.review} label="Review" className="text-amber-600" status="review" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiQuestion} value={counts.ask} label="Ask" className="text-purple-600" status="ask" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiError} value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiCheckFilled} value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiPass} value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
       <span className="text-muted-foreground tabular-nums" title="Total todos">{counts.total}</span>
     </div>
   );
@@ -283,7 +287,7 @@ function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
       className="inline-flex shrink-0 items-center gap-1 tabular-nums"
       title={`${diff.commits} commit${diff.commits === 1 ? '' : 's'}, ${diff.files} file${diff.files === 1 ? '' : 's'} changed`}
     >
-      <GavelIcon name="codicon:git-commit" className="text-[11px]" />
+      <UiGitGraph className="text-[11px]" />
       {diff.adds > 0 && <span className="text-green-600">+{diff.adds}</span>}
       {diff.dels > 0 && <span className="text-red-600">-{diff.dels}</span>}
       {diff.adds === 0 && diff.dels === 0 && <span>{diff.commits}</span>}
@@ -304,7 +308,7 @@ function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) 
         className="inline-flex shrink-0 items-center gap-1 tabular-nums"
         title={todo.created ? `Created ${new Date(todo.created).toLocaleString()}` : `Last activity ${new Date(todo.lastRun!).toLocaleString()}`}
       >
-        <GavelIcon name="codicon:clock" className="text-[11px]" />
+        <UiClock className="text-[11px]" />
         {ageShort(anchor)}
       </span>
     );
@@ -314,13 +318,13 @@ function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) 
     <>
       {todo.created && (
         <span className="inline-flex shrink-0 items-center gap-1" title={`Created ${new Date(todo.created).toLocaleString()}`}>
-          <GavelIcon name="codicon:add" className="text-[11px]" />
+          <UiAdd className="text-[11px]" />
           {timeAgo(todo.created)}
         </span>
       )}
       {showLast && (
         <span className="inline-flex shrink-0 items-center gap-1" title={`Last activity ${new Date(todo.lastRun!).toLocaleString()}`}>
-          <GavelIcon name="codicon:history" className="text-[11px]" />
+          <UiHistory className="text-[11px]" />
           {timeAgo(todo.lastRun!)}
         </span>
       )}
@@ -405,7 +409,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
           <div className="mt-1 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 overflow-hidden text-xs text-muted-foreground">
             {workspace && (
               <span className="inline-flex min-w-0 max-w-[10rem] items-center gap-1" title={workspace}>
-                <GavelIcon name="codicon:folder" className="text-[11px]" />
+                <UiFolder className="text-[11px]" />
                 <span className="truncate">{workspace}</span>
               </span>
             )}
@@ -429,6 +433,7 @@ export function TodoDensityPicker({ density, onChange }: {
     <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5" role="group" aria-label="Row density">
       {DENSITY_OPTIONS.map(opt => {
         const active = density === opt.value;
+        const OptIcon = opt.icon;
         return (
           <Button
             key={opt.value}
@@ -443,7 +448,7 @@ export function TodoDensityPicker({ density, onChange }: {
               active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
-            <GavelIcon name={opt.icon} className="text-sm" />
+            <OptIcon className="text-sm" />
           </Button>
         );
       })}

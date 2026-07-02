@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { SessionViewer, type SessionEntry } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoSessionApproval } from '../../types';
-import { GavelIcon } from '../GavelIcon';
+import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 import { TodoSessionTimer } from './TodoSessionTimer';
 
 interface SessionStateView {
   label: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   className: string;
 }
 
@@ -17,13 +18,13 @@ interface SessionStateView {
 // read on both the light and dark dashboard themes. The empty key is the initial
 // "no event yet" state.
 const STATE_VIEWS: Record<string, SessionStateView> = {
-  '': { label: 'Waiting', icon: 'svg-spinners:ring-resize', className: 'text-muted-foreground bg-muted/50 border-border' },
-  thinking: { label: 'Thinking', icon: 'codicon:lightbulb', className: 'text-amber-600 bg-amber-500/15 border-amber-500/30' },
-  working: { label: 'Working', icon: 'svg-spinners:ring-resize', className: 'text-cyan-600 bg-cyan-500/15 border-cyan-500/30' },
-  ask: { label: 'Awaiting input', icon: 'codicon:comment-discussion', className: 'text-purple-600 bg-purple-500/15 border-purple-500/30' },
-  approval: { label: 'Needs approval', icon: 'codicon:shield', className: 'text-amber-600 bg-amber-500/15 border-amber-500/30' },
-  completed: { label: 'Completed', icon: 'codicon:pass', className: 'text-emerald-600 bg-emerald-500/15 border-emerald-500/30' },
-  error: { label: 'Error', icon: 'codicon:error', className: 'text-red-600 bg-red-500/15 border-red-500/30' },
+  '': { label: 'Waiting', icon: Spinner, className: 'text-muted-foreground bg-muted/50 border-border' },
+  thinking: { label: 'Thinking', icon: UiLightbulb, className: 'text-amber-600 bg-amber-500/15 border-amber-500/30' },
+  working: { label: 'Working', icon: Spinner, className: 'text-cyan-600 bg-cyan-500/15 border-cyan-500/30' },
+  ask: { label: 'Awaiting input', icon: UiComment, className: 'text-purple-600 bg-purple-500/15 border-purple-500/30' },
+  approval: { label: 'Needs approval', icon: UiShield, className: 'text-amber-600 bg-amber-500/15 border-amber-500/30' },
+  completed: { label: 'Completed', icon: UiPass, className: 'text-emerald-600 bg-emerald-500/15 border-emerald-500/30' },
+  error: { label: 'Error', icon: UiError, className: 'text-red-600 bg-red-500/15 border-red-500/30' },
 };
 
 function stateView(state: string, error: string): SessionStateView {
@@ -171,7 +172,7 @@ export function TodoSession({
   if (!sessionId) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-6 text-center text-sm text-muted-foreground">
-        <GavelIcon name="codicon:comment-discussion" className="mb-2 text-3xl" />
+        <UiComment className="mb-2 text-3xl" />
         <p>No agent session yet. Run this todo to start one.</p>
       </div>
     );
@@ -184,7 +185,7 @@ export function TodoSession({
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
         <SessionStateBadge view={view} />
         <span className="inline-flex items-center gap-1">
-          <GavelIcon name="octicon:dot-fill-16" className={`text-[7px] ${connected ? 'text-emerald-500' : 'text-muted-foreground'}`} />
+          <UiCircleFilled className={`text-[7px] ${connected ? 'text-emerald-500' : 'text-muted-foreground'}`} />
           {connected ? 'Following session' : 'Session idle'}
         </span>
         <span className="font-mono">{sessionId.slice(0, 8)}</span>
@@ -219,7 +220,7 @@ function ApprovalBanner({
   const summary = approvalInputSummary(approval.input);
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700">
-      <GavelIcon name="codicon:shield" className="shrink-0 text-amber-600" />
+      <UiShield className="shrink-0 text-amber-600" />
       <span className="min-w-0 flex-1 break-words">
         Needs approval: <span className="font-medium">{approval.tool}</span>
         {summary && <span className="ml-1 opacity-80">{summary}</span>}
@@ -260,9 +261,10 @@ function approvalInputSummary(input?: Record<string, unknown>): string {
 }
 
 function SessionStateBadge({ view }: { view: SessionStateView }) {
+  const Icon = view.icon;
   return (
     <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium uppercase ${view.className}`}>
-      <GavelIcon name={view.icon} className="text-[11px]" />
+      <Icon className="text-[11px]" />
       {view.label}
     </span>
   );

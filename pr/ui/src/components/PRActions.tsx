@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Button, SplitButton, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
+import { UiCheck, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSync } from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import type { ComponentType } from 'react';
 import type { PRItem, PRDetail } from '../types';
-import { GavelIcon } from './GavelIcon';
 
 type MergeMethod = 'rebase' | 'squash' | 'merge';
 
@@ -13,14 +15,14 @@ type Pending =
   | { type: 'approve' }
   | { type: 'update-branch' };
 
-// menuLabel pairs a (working) GavelIcon with text. clicky-ui's own Icon renders
-// string names as broken boxes here (no fallback provider), so action icons must
-// go through GavelIcon's <iconify-icon> inside the label rather than the `icon`
-// prop of Button/SplitButton/DropdownMenuItem.
-function menuLabel(icon: string, text: string) {
+// menuLabel pairs an icon component with text, rendered inside the label of a
+// Button/SplitButton/DropdownMenuItem (rather than via their `icon` prop) so the
+// label controls the icon's sizing and spacing.
+function menuLabel(icon: ComponentType<IconProps>, text: string) {
+  const Icon = icon;
   return (
     <span className="inline-flex items-center gap-1.5">
-      <GavelIcon name={icon} className="text-xs" />
+      <Icon className="text-xs" />
       {text}
     </span>
   );
@@ -87,20 +89,20 @@ export function PRActions({
 
   const mergeItems: DropdownMenuItem[] = [
     {
-      label: menuLabel('codicon:git-pull-request', 'Squash and merge'),
+      label: menuLabel(UiGitPr, 'Squash and merge'),
       onSelect: () => open({ type: 'merge', method: 'squash' }),
     },
     {
-      label: menuLabel('codicon:git-commit', 'Create a merge commit'),
+      label: menuLabel(UiGitGraph, 'Create a merge commit'),
       onSelect: () => open({ type: 'merge', method: 'merge' }),
     },
     {
-      label: menuLabel('codicon:rocket', 'Enable auto-merge (rebase)'),
+      label: menuLabel(UiRocket, 'Enable auto-merge (rebase)'),
       title: 'Merge automatically once all required checks pass',
       onSelect: () => open({ type: 'automerge', method: 'rebase' }),
     },
     {
-      label: menuLabel('codicon:repo-sync', 'Update branch'),
+      label: menuLabel(UiSync, 'Update branch'),
       title: `Merge ${base} into this PR's branch to bring it up to date`,
       onSelect: () => open({ type: 'update-branch' }),
     },
@@ -158,7 +160,7 @@ export function PRActions({
         disabled={loading}
         title="Submit an approving review"
       >
-        <GavelIcon name="codicon:check" className="text-xs" />
+        <UiCheck className="text-xs" />
         Approve
       </Button>
 
@@ -166,7 +168,7 @@ export function PRActions({
         <SplitButton
           variant="outline"
           size="sm"
-          label={menuLabel('codicon:git-merge', 'Merge')}
+          label={menuLabel(UiGitMerge, 'Merge')}
           title="Merge options"
           disabled={mergeDisabled}
           onClick={() => open({ type: 'merge', method: 'rebase' })}
@@ -183,7 +185,7 @@ export function PRActions({
           disabled={loading}
           title={`Branch is ${behind} commit${behind !== 1 ? 's' : ''} behind ${base} — update to bring it up to date`}
         >
-          <GavelIcon name="codicon:repo-sync" className="text-xs" />
+          <UiSync className="text-xs" />
           Update
         </Button>
       )}

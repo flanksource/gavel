@@ -1,6 +1,7 @@
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiClock, UiPause, UiPlay, UiRefresh, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { RateLimit } from '../types';
-import { GavelIcon } from './GavelIcon';
+import { Spinner } from '../icons/Spinner';
 
 interface Props {
   fetchedAt: string;
@@ -22,11 +23,13 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
     ? Math.max(0, nextFetchIn - Math.floor((Date.now() - new Date(fetchedAt).getTime()) / 1000))
     : nextFetchIn;
   const rlLow = rateLimit && rateLimit.remaining < 100;
+  const PauseIcon = paused ? UiPlay : UiPause;
+  const RefreshIcon = networkBusy ? Spinner : UiRefresh;
 
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <span className="inline-flex items-center gap-1 font-mono" title={`Refreshes every ${nextFetchIn}s`}>
-        <GavelIcon name="codicon:clock" />
+        <UiClock />
         {ago}
         {paused
           ? <span className="text-yellow-600 dark:text-yellow-400">(paused)</span>
@@ -38,7 +41,7 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
         className={`h-auto p-0 transition-colors ${paused ? 'text-yellow-600 hover:text-foreground' : 'hover:text-foreground'}`}
         title={paused ? 'Resume polling' : 'Pause polling'}
       >
-        <GavelIcon name={paused ? 'codicon:debug-start' : 'codicon:debug-pause'} />
+        <PauseIcon />
       </Button>
       <Button
         variant="ghost"
@@ -46,7 +49,7 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
         className={`h-auto p-0 transition-colors ${networkBusy ? 'text-primary' : 'hover:text-primary'}`}
         title={networkBusy ? 'Loading...' : 'Refresh now'}
       >
-        <GavelIcon name={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:refresh'} />
+        <RefreshIcon />
       </Button>
       {rateLimit && (
         <span
@@ -59,7 +62,7 @@ export function PollStatus({ fetchedAt, nextFetchIn, paused, rateLimit, error, o
       )}
       {error && (
         <span className="text-red-600 dark:text-red-400 inline-flex items-center gap-1" title={error}>
-          <GavelIcon name="codicon:warning" />
+          <UiWarningTriangle />
         </span>
       )}
     </div>

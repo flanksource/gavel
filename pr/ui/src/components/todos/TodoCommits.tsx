@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiChevronDown, UiChevronRight, UiGitGraph } from '@flanksource/clicky-ui/icons';
 import type { TodoCommit, TodoCommitsResponse } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { RelativeTime } from '../RelativeTime';
 import { CommitFiles } from './TodoCommitFiles';
 import { todoQuery } from './format';
@@ -52,6 +52,7 @@ function useTodoCommits(dir: string, provider: string, todoRef: string) {
 // hash still links out to the commit on the origin remote.
 function CommitRow({ dir, provider, commit }: { dir: string; provider: string; commit: TodoCommit }) {
   const [open, setOpen] = useState(false);
+  const ChevronIcon = open ? UiChevronDown : UiChevronRight;
   return (
     <li>
       <div className="flex items-start gap-2 px-3 py-2.5 hover:bg-muted/30">
@@ -64,10 +65,10 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
           title={open ? 'Hide files' : 'Show files'}
           className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-xs" />
+          <ChevronIcon className="text-xs" />
         </Button>
         <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border bg-muted/30 text-muted-foreground">
-          <GavelIcon name="codicon:git-commit" className="text-xs" />
+          <UiGitGraph className="text-xs" />
         </span>
         <div className="min-w-0 flex-1">
           <Button
@@ -116,7 +117,7 @@ export function TodoCommits({ dir, provider, todoRef }: { dir: string; provider:
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
         <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-          <GavelIcon name="codicon:git-commit" className="text-xs" />
+          <UiGitGraph className="text-xs" />
         </span>
         <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commits</span>
         <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{commits.length}</span>

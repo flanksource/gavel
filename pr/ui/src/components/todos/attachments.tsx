@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { GavelIcon } from '../GavelIcon';
+import { UiClose, UiImage } from '@flanksource/clicky-ui/icons';
 
 // Attachment is one image picked for a new todo: the raw bytes plus a filename
 // the server stores and embeds into the todo body.
@@ -72,6 +72,19 @@ export function todoFormData(
   form.append('priority', fields.priority);
   form.append('status', fields.status);
   if (fields.autoSave !== undefined) form.append('autoSave', String(fields.autoSave));
+  attachments.forEach(a => form.append('attachment', a.blob, a.name));
+  return form;
+}
+
+// todoCommentFormData builds the multipart body for appending a comment with
+// screenshots to an existing todo via PATCH /api/todos/item.
+export function todoCommentFormData(
+  fields: { ref: string; comment: string },
+  attachments: Attachment[],
+): FormData {
+  const form = new FormData();
+  form.append('ref', fields.ref);
+  form.append('comment', fields.comment);
   attachments.forEach(a => form.append('attachment', a.blob, a.name));
   return form;
 }
@@ -162,7 +175,7 @@ export function ScreenshotPicker({ previews, onAdd, onRemove, disabled }: {
           dragging ? 'border-primary bg-primary/5' : 'border-border'
         }`}
       >
-        <GavelIcon name="codicon:device-camera" className="text-base" />
+        <UiImage className="text-base" />
         <span>
           <span className="font-medium text-primary underline">Choose an image</span>, or drag, drop, or paste a screenshot
         </span>
@@ -193,7 +206,7 @@ export function ScreenshotPicker({ previews, onAdd, onRemove, disabled }: {
                 aria-label={`Remove ${p.name}`}
                 className="absolute -right-2 -top-2 h-5 w-5 rounded-full border border-border bg-background text-muted-foreground shadow hover:text-destructive"
               >
-                <GavelIcon name="codicon:close" className="text-[11px]" />
+                <UiClose className="text-[11px]" />
               </Button>
             </div>
           ))}

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button, ListMenu, TimeRange } from '@flanksource/clicky-ui/components';
-import { GavelIcon } from './GavelIcon';
+import { UiAdd, UiCheck, UiClose, UiRefresh } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../icons/Spinner';
 import { TodoDensityPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
@@ -31,7 +32,7 @@ export function TodoNewButton({ todos }: { todos: WorkspaceTodos }) {
       title="New todo"
       className="inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
     >
-      <GavelIcon name="codicon:add" className="text-xs" />
+      <UiAdd className="text-xs" />
       New
     </Button>
   );
@@ -51,6 +52,7 @@ export function TodoNavbarDensityPicker({ todos }: { todos: WorkspaceTodos }) {
 // grouping, status filters, time filtering, and refresh.
 export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
   const { aggregate, hiddenStatuses, toggleStatus, groupBy, setGroupBy, sortBy, setSortBy, timeRange, setTimeRange, loadingList, refresh } = todos;
+  const RefreshIcon = loadingList ? Spinner : UiRefresh;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
       {aggregate.total > 0 && (
@@ -83,7 +85,7 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
               aria-label="Clear time filter"
               className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <GavelIcon name="codicon:close" className="text-xs" />
+              <UiClose className="text-xs" />
             </Button>
           )}
         </div>
@@ -98,7 +100,7 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
         className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
         aria-label="Refresh todos"
       >
-        <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:refresh'} className="text-sm" />
+        <RefreshIcon className="text-sm" />
       </Button>
     </div>
   );
@@ -108,16 +110,17 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 // todos, grouped and independently scrollable beside the detail pane. The
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
-export function TodoWorkspaceList({ todos, query = '' }: { todos: WorkspaceTodos; query?: string }) {
+export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
   const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
+  const EmptyIcon = loadingList ? Spinner : UiCheck;
   let content: ReactNode;
   if (workspaces.length === 0) {
     content = (
       <div className="p-6 text-center text-sm text-muted-foreground">
-        <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-3xl" />
+        <EmptyIcon className="mb-2 text-3xl" />
         <p>{loadingList ? 'Loading' : 'No workspaces configured'}</p>
       </div>
     );
@@ -132,7 +135,6 @@ export function TodoWorkspaceList({ todos, query = '' }: { todos: WorkspaceTodos
             hiddenStatuses={hiddenStatuses}
             onToggleStatus={toggleStatus}
             range={range}
-            query={query}
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
@@ -147,7 +149,7 @@ export function TodoWorkspaceList({ todos, query = '' }: { todos: WorkspaceTodos
     const buckets = bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now(), sortBy);
     content = buckets.length === 0 ? (
       <div className="p-6 text-center text-sm text-muted-foreground">
-        <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-3xl" />
+        <EmptyIcon className="mb-2 text-3xl" />
         <p>{loadingList ? 'Loading' : 'No todos'}</p>
       </div>
     ) : (
@@ -160,7 +162,6 @@ export function TodoWorkspaceList({ todos, query = '' }: { todos: WorkspaceTodos
             onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
             hiddenStatuses={hiddenStatuses}
             range={range}
-            query={query}
             density={density}
           />
         ))}

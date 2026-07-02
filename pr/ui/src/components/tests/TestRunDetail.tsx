@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
   TestRunner,
   emptyTestFilters,
@@ -6,7 +6,7 @@ import {
   type Test,
   type TestFilters,
 } from '@flanksource/clicky-ui/data';
-import { GavelIcon } from '../GavelIcon';
+import { UiBeaker, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { LintResults } from './LintResults';
 import type { RunSnapshot } from './types';
 
@@ -50,10 +50,10 @@ export function TestRunDetail({ project, runId }: { project: string; runId: stri
     <div className="flex h-full flex-col">
       {hasTests && hasLint && (
         <div className="flex gap-1 border-b border-border px-2 py-1.5">
-          <ToggleButton active={view === 'tests'} onClick={() => setView('tests')} icon="codicon:beaker">
+          <ToggleButton active={view === 'tests'} onClick={() => setView('tests')} icon={UiBeaker}>
             Tests {tests.length > 0 && <Count>{summaryTotal(snap)}</Count>}
           </ToggleButton>
-          <ToggleButton active={view === 'lint'} onClick={() => setView('lint')} icon="codicon:warning">
+          <ToggleButton active={view === 'lint'} onClick={() => setView('lint')} icon={UiWarningTriangle}>
             Lint <Count>{lintCount}</Count>
           </ToggleButton>
         </div>
@@ -100,9 +100,10 @@ function ToggleButton({
 }: {
   active: boolean;
   onClick: () => void;
-  icon: string;
+  icon: ComponentType<IconProps>;
   children: React.ReactNode;
 }) {
+  const Icon = icon;
   return (
     <button
       type="button"
@@ -111,7 +112,7 @@ function ToggleButton({
         active ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-muted'
       }`}
     >
-      <GavelIcon name={icon} />
+      <Icon />
       {children}
     </button>
   );

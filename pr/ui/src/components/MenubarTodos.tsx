@@ -1,6 +1,7 @@
 import { Button, ListMenu } from '@flanksource/clicky-ui/components';
+import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import type { Project } from '../types';
-import { GavelIcon } from './GavelIcon';
+import { Spinner } from '../icons/Spinner';
 import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
@@ -47,6 +48,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
   // default 'workspace' grouping keeps the per-workspace sections (the only mode
   // that supports batch runs on the dashboard).
   const buckets = groupBy === 'workspace' ? null : bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
+  const StatusIcon = loadingList ? Spinner : UiCheck;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -65,7 +67,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
             title="New todo"
             className="ml-auto inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <GavelIcon name="codicon:add" className="text-xs" />
+            <UiAdd className="text-xs" />
             New
           </Button>
         </div>
@@ -74,7 +76,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {workspaces.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            <GavelIcon name={loadingList ? 'svg-spinners:ring-resize' : 'codicon:check'} className="mb-2 text-2xl" />
+            <StatusIcon className="mb-2 text-2xl" />
             <p>{loadingList ? 'Loading' : 'No workspaces configured'}</p>
           </div>
         ) : buckets ? (

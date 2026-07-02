@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Button, Combobox } from '@flanksource/clicky-ui/components';
+import { UiBeaker, UiEdit, UiError, UiListDashes, UiPass, UiSparkles, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { AcceptanceCriterion, CriteriaCatalogItem, CriterionResult, TodoItem, VerifyResult } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { inputClass, todoQuery } from './format';
 
 // AcceptanceCriteria renders a todo's acceptance criteria as a structured,
@@ -156,7 +156,7 @@ export function AcceptanceCriteria({
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
         <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-          <GavelIcon name="codicon:checklist" className="text-xs" />
+          <UiListDashes className="text-xs" />
         </span>
         <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase text-muted-foreground">
           Acceptance Criteria
@@ -175,7 +175,7 @@ export function AcceptanceCriteria({
           title="Draft acceptance criteria with AI"
           className="h-7 gap-1 px-2 text-xs"
         >
-          <GavelIcon name="codicon:sparkle" className="text-xs" />
+          <UiSparkles className="text-xs" />
           Draft with AI
         </Button>
         <Button
@@ -187,7 +187,7 @@ export function AcceptanceCriteria({
           title="Verify the committed work against these criteria"
           className="h-7 gap-1 px-2 text-xs"
         >
-          <GavelIcon name="codicon:beaker" className="text-xs" />
+          <UiBeaker className="text-xs" />
           Verify
         </Button>
       </div>
@@ -234,8 +234,8 @@ export function AcceptanceCriteria({
               )}
               {editing !== i && (
                 <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                  <IconButton icon="codicon:edit" label="Edit criterion" disabled={busy} onClick={() => { setDraft(c.text); setEditing(i); }} />
-                  <IconButton icon="codicon:trash" label="Remove criterion" disabled={busy} onClick={() => save(criteria.filter((_, idx) => idx !== i))} />
+                  <IconButton icon={UiEdit} label="Edit criterion" disabled={busy} onClick={() => { setDraft(c.text); setEditing(i); }} />
+                  <IconButton icon={UiTrash} label="Remove criterion" disabled={busy} onClick={() => save(criteria.filter((_, idx) => idx !== i))} />
                 </span>
               )}
             </li>
@@ -260,7 +260,8 @@ export function AcceptanceCriteria({
   );
 }
 
-function IconButton({ icon, label, onClick, disabled }: { icon: string; label: string; onClick: () => void; disabled?: boolean }) {
+function IconButton({ icon, label, onClick, disabled }: { icon: ComponentType<IconProps>; label: string; onClick: () => void; disabled?: boolean }) {
+  const Icon = icon;
   return (
     <Button
       variant="ghost"
@@ -272,7 +273,7 @@ function IconButton({ icon, label, onClick, disabled }: { icon: string; label: s
       aria-label={label}
       className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
     >
-      <GavelIcon name={icon} className="text-xs" />
+      <Icon className="text-xs" />
     </Button>
   );
 }
@@ -281,13 +282,14 @@ function IconButton({ icon, label, onClick, disabled }: { icon: string; label: s
 // per-criterion met/unmet rows, failed static checks, and completeness.
 function VerifyReview({ verdict, failedChecks }: { verdict: VerifyResult; failedChecks: [string, { pass: boolean }][] }) {
   const scoreColor = verdict.score >= 80 ? 'text-emerald-600' : verdict.score >= 60 ? 'text-amber-600' : 'text-red-600';
+  const ImplementedIcon = verdict.implemented ? UiPass : UiError;
   return (
     <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5">
       <div className="flex items-center gap-2 text-sm">
         <span className={`font-semibold ${scoreColor}`}>Score {verdict.score}/100</span>
         {verdict.implemented !== undefined && (
           <span className={`inline-flex items-center gap-1 font-medium ${verdict.implemented ? 'text-emerald-600' : 'text-red-600'}`}>
-            <GavelIcon name={verdict.implemented ? 'codicon:pass' : 'codicon:error'} className="text-sm" />
+            <ImplementedIcon className="text-sm" />
             {verdict.implemented ? 'Implemented' : 'Not implemented'}
           </span>
         )}
@@ -303,7 +305,7 @@ function VerifyReview({ verdict, failedChecks }: { verdict: VerifyResult; failed
           <ul className="mt-1 space-y-0.5">
             {failedChecks.map(([id]) => (
               <li key={id} className="flex items-center gap-1.5 text-sm text-red-600">
-                <GavelIcon name="codicon:error" className="text-xs" />
+                <UiError className="text-xs" />
                 {id}
               </li>
             ))}
@@ -320,13 +322,11 @@ function VerifyReview({ verdict, failedChecks }: { verdict: VerifyResult; failed
 }
 
 function ResultRow({ result }: { result: CriterionResult }) {
+  const ResultIcon = result.met ? UiPass : UiError;
   return (
     <li className="text-sm">
       <span className="flex items-start gap-1.5">
-        <GavelIcon
-          name={result.met ? 'codicon:pass' : 'codicon:error'}
-          className={`mt-0.5 shrink-0 text-sm ${result.met ? 'text-emerald-600' : 'text-red-600'}`}
-        />
+        <ResultIcon className={`mt-0.5 shrink-0 text-sm ${result.met ? 'text-emerald-600' : 'text-red-600'}`} />
         <span className="min-w-0">{result.criterion}</span>
       </span>
       {result.evidence?.map((e, i) => (

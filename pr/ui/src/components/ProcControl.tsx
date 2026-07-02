@@ -1,7 +1,7 @@
 import type { Project, ProcStatus } from '../types';
 import { aggregateDotClass, crashedSummary } from '../utils';
 import { ProcessPortLink } from './ProcessTable';
-import { GavelIcon } from './GavelIcon';
+import { Spinner } from '../icons/Spinner';
 
 interface Props {
   repo: string;
@@ -36,7 +36,7 @@ export function ProcControl({ project, status }: Props) {
     <span className="inline-flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
       {transitioning ? (
         <span className="inline-flex items-center gap-0.5 mr-0.5" title={`${running}/${total} running`}>
-          <GavelIcon name="svg-spinners:ring-resize" className="text-yellow-500 text-xs" />
+          <Spinner className="text-yellow-500 text-xs" />
           <span className="text-[10px] text-muted-foreground">{restarting ? 'restarting' : 'starting'}…</span>
         </span>
       ) : (

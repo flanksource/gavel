@@ -2,7 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { useDocumentVisible } from '../useDocumentVisible';
-import { GavelIcon } from './GavelIcon';
+import { UiActivity, UiCheck, UiCloudDownload, UiDatabase, UiGlobe, UiTrash, UiWarningTriangle, UiWatch } from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import type { ComponentType } from 'react';
 import { RelativeTime } from './RelativeTime';
 
 const KIND_LABELS: Record<string, string> = {
@@ -17,7 +19,7 @@ const KIND_COLORS: Record<string, string> = {
   search: 'bg-amber-100 text-amber-700',
 };
 
-export function ActivityView({ query = '' }: { query?: string }) {
+export function ActivityView() {
   const [snap, setSnap] = useState<ActivitySnapshot>({
     entries: [],
     stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
@@ -57,15 +59,10 @@ export function ActivityView({ query = '' }: { query?: string }) {
     return () => { es.close(); clearInterval(cacheTimer); };
   }, [visible]);
 
-  // The kind chips and the global search compose: a row shows only when it
-  // matches the selected kind (if any) and the free-text query over URL/method/kind.
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return snap.entries.filter(e =>
-      (!kindFilter || e.kind === kindFilter) &&
-      (!q || e.url.toLowerCase().includes(q) || e.method.toLowerCase().includes(q) || e.kind.toLowerCase().includes(q)),
-    );
-  }, [snap.entries, kindFilter, query]);
+  const filtered = useMemo(
+    () => kindFilter ? snap.entries.filter(e => e.kind === kindFilter) : snap.entries,
+    [snap.entries, kindFilter],
+  );
 
   const handleReset = () => {
     fetch('/api/activity/reset', { method: 'POST' })
@@ -82,7 +79,7 @@ export function ActivityView({ query = '' }: { query?: string }) {
       <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-foreground">
-            <GavelIcon name="codicon:pulse" className="mr-1.5 text-blue-600" />
+            <UiActivity className="mr-1.5 text-blue-600" />
             HTTP Activity
           </h2>
           <Button
@@ -91,7 +88,7 @@ export function ActivityView({ query = '' }: { query?: string }) {
             className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground h-auto"
             title="Clear all recorded activity"
           >
-            <GavelIcon name="codicon:trash" className="mr-1" />
+            <UiTrash className="mr-1" />
             Reset
           </Button>
         </div>
@@ -102,28 +99,28 @@ export function ActivityView({ query = '' }: { query?: string }) {
             value={stats.total.toLocaleString()}
             sub={stats.errors > 0 ? `${stats.errors} errors` : 'no errors'}
             subClass={stats.errors > 0 ? 'text-red-600' : 'text-green-600'}
-            icon="codicon:globe"
+            icon={UiGlobe}
           />
           <KPI
             label="Cache hit rate"
             value={`${hitRate.toFixed(1)}%`}
             sub={`${stats.cacheHits.toLocaleString()} / ${stats.total.toLocaleString()}`}
             subClass="text-muted-foreground"
-            icon="codicon:database"
+            icon={UiDatabase}
           />
           <KPI
             label="Bandwidth"
             value={formatBytes(stats.totalBytes)}
             sub={stats.total > 0 ? `${formatBytes(stats.totalBytes / stats.total)} avg` : '—'}
             subClass="text-muted-foreground"
-            icon="codicon:cloud-download"
+            icon={UiCloudDownload}
           />
           <KPI
             label="Avg latency"
             value={`${avgMs.toFixed(0)} ms`}
             sub={`${(stats.totalNs / 1e9).toFixed(1)}s total`}
             subClass="text-muted-foreground"
-            icon="codicon:watch"
+            icon={UiWatch}
           />
         </div>
 
@@ -180,11 +177,11 @@ export function ActivityView({ query = '' }: { query?: string }) {
   );
 }
 
-function KPI({ label, value, sub, subClass, icon }: { label: string; value: string; sub: string; subClass: string; icon: string }) {
+function KPI({ label, value, sub, subClass, icon: Icon }: { label: string; value: string; sub: string; subClass: string; icon: ComponentType<IconProps> }) {
   return (
     <div className="bg-card border border-border rounded-md p-3">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <GavelIcon name={icon} />
+        <Icon />
         {label}
       </div>
       <div className="text-2xl font-semibold text-foreground mt-1">{value}</div>
@@ -242,7 +239,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       <td className="px-3 py-1.5 text-center">
         {entry.fromCache ? (
           <span className="text-green-600" title="Served from cache (304)">
-            <GavelIcon name="codicon:check" />
+            <UiCheck />
           </span>
         ) : (
           <span className="text-muted-foreground/50">—</span>
@@ -258,7 +255,7 @@ function CachePanel({ cache }: { cache: CacheStatus }) {
     <div className={`bg-card border rounded-md mb-4 p-3 ${cache.enabled ? 'border-border' : 'border-amber-300 bg-amber-50'}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <GavelIcon name="codicon:database" className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
+          <UiDatabase className={cache.enabled ? 'text-green-600' : 'text-amber-600'} />
           <span className="text-xs font-semibold text-muted-foreground uppercase">Cache</span>
           <span className={`text-xs px-2 py-0.5 rounded ${cache.enabled ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
             {cache.enabled ? 'ENABLED' : 'DISABLED'}
@@ -266,7 +263,7 @@ function CachePanel({ cache }: { cache: CacheStatus }) {
         </div>
         {cache.error && (
           <span className="text-xs text-amber-700" title={cache.error}>
-            <GavelIcon name="codicon:warning" className="mr-1" />
+            <UiWarningTriangle className="mr-1" />
             {cache.error}
           </span>
         )}

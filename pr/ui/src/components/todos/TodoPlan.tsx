@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { GavelIcon } from '../GavelIcon';
+import { UiSave } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
 
 // MdxEditorField lazily pulls in the heavy @mdxeditor/editor (the same markdown
@@ -99,7 +100,7 @@ export function TodoPlan({
   if (loading) {
     return (
       <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
-        <GavelIcon name="svg-spinners:ring-resize" />
+        <Spinner />
         Loading plan
       </div>
     );
@@ -116,7 +117,7 @@ export function TodoPlan({
           {path}
         </div>
         <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={() => void save()}>
-          <GavelIcon name={saving ? 'svg-spinners:ring-resize' : 'codicon:save'} />
+          {saving ? <Spinner /> : <UiSave />}
           Save
         </Button>
       </div>

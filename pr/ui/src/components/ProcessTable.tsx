@@ -1,11 +1,21 @@
-import { useState, useEffect, useMemo, type ComponentProps } from "react";
+import { useState, useEffect, useMemo, type ComponentProps, type ComponentType } from "react";
 import { Button, Modal, Select } from "@flanksource/clicky-ui/components";
 import { AnsiHtml, TimeseriesCoreBars } from "@flanksource/clicky-ui/data";
-import { UiActivity, UiDatabase } from "@flanksource/clicky-ui/icons";
+import type { IconProps } from "@flanksource/clicky-ui/icons";
+import {
+  UiActivity,
+  UiDatabase,
+  UiFullscreen,
+  UiChevronDown,
+  UiChevronRight,
+  UiPlay,
+  UiRestart,
+  UiStop,
+  UiLayers,
+} from "@flanksource/clicky-ui/icons";
 import type { FlatProc } from "../utils";
 import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from "../utils";
 import type { ProcNode, ProcProcess, Project, ProcStatus } from "../types";
-import { GavelIcon } from "./GavelIcon";
 import { TodoBadge } from "./TodoBadge";
 import { useNow } from "../useNow";
 
@@ -321,7 +331,7 @@ function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess })
       <div>
         <div className="flex items-center justify-between mb-0.5">
           <span className="text-[10px] uppercase tracking-wide text-gray-400">Logs</span>
-          <IconBtn icon="codicon:screen-full" title="Open logs in dialog" onClick={() => setLogsOpen(true)} />
+          <IconBtn icon={UiFullscreen} title="Open logs in dialog" onClick={() => setLogsOpen(true)} />
         </div>
         <ProcLogPreview project={project} name={proc.name} />
       </div>
@@ -347,12 +357,14 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
     onChanged();
   }
 
+  const ChevronIcon = open ? UiChevronDown : UiChevronRight;
+
   return (
     <>
       <tr className="border-b border-gray-100 hover:bg-gray-50">
         <td className="py-1 pl-1 pr-2">
           <Button variant="ghost" className="flex items-center gap-1.5 justify-start h-auto p-0" onClick={() => setOpen((o) => !o)} title="Toggle logs">
-            <GavelIcon name={open ? "codicon:chevron-down" : "codicon:chevron-right"} className="text-gray-400 text-xs" />
+            <ChevronIcon className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="font-medium truncate max-w-[180px]">{showWorkspace ? project.name : proc.name}</span>
@@ -373,9 +385,9 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
           ))}
         </td>
         <td className="px-1 text-right whitespace-nowrap">
-          {!active && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => act("start")} />}
-          {active && <IconBtn icon="codicon:debug-restart" title="Restart" disabled={busy} onClick={() => act("restart")} />}
-          {active && <IconBtn icon="codicon:debug-stop" title="Stop" disabled={busy} onClick={() => act("stop")} />}
+          {!active && <IconBtn icon={UiPlay} title="Start" disabled={busy} onClick={() => act("start")} />}
+          {active && <IconBtn icon={UiRestart} title="Restart" disabled={busy} onClick={() => act("restart")} />}
+          {active && <IconBtn icon={UiStop} title="Stop" disabled={busy} onClick={() => act("stop")} />}
         </td>
       </tr>
       {open && (
@@ -389,7 +401,8 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
   );
 }
 
-function IconBtn({ icon, title, onClick, disabled }: { icon: string; title: string; onClick: () => void; disabled?: boolean }) {
+function IconBtn({ icon, title, onClick, disabled }: { icon: ComponentType<IconProps>; title: string; onClick: () => void; disabled?: boolean }) {
+  const Icon = icon;
   return (
     <Button
       variant="ghost"
@@ -402,7 +415,7 @@ function IconBtn({ icon, title, onClick, disabled }: { icon: string; title: stri
         onClick();
       }}
     >
-      <GavelIcon name={icon} className="text-sm" />
+      <Icon className="text-sm" />
     </Button>
   );
 }
@@ -505,7 +518,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     <>
       {profiles.length > 0 && (
         <label className="flex items-center gap-1 text-[10px] text-gray-500" title="Profile to start">
-          <GavelIcon name="codicon:layers" className="text-gray-400" />
+          <UiLayers className="text-gray-400" />
           <Select value={profile} disabled={busy || anyActive} onChange={(e) => setProfile(e.target.value)} className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white disabled:opacity-60 w-auto">
             <option value="">(default)</option>
             {profiles.map((pr) => (
@@ -516,9 +529,9 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
           </Select>
         </label>
       )}
-      {!anyActive && <IconBtn icon="codicon:play" title="Start" disabled={busy} onClick={() => control("start", true)} />}
-      {anyActive && <IconBtn icon="codicon:debug-restart" title={single ? "Restart" : "Restart all"} disabled={busy} onClick={() => control("restart", false)} />}
-      {anyActive && <IconBtn icon="codicon:debug-stop" title={single ? "Stop" : "Stop all"} disabled={busy} onClick={() => control("stop", false)} />}
+      {!anyActive && <IconBtn icon={UiPlay} title="Start" disabled={busy} onClick={() => control("start", true)} />}
+      {anyActive && <IconBtn icon={UiRestart} title={single ? "Restart" : "Restart all"} disabled={busy} onClick={() => control("restart", false)} />}
+      {anyActive && <IconBtn icon={UiStop} title={single ? "Stop" : "Stop all"} disabled={busy} onClick={() => control("stop", false)} />}
     </>
   );
 
@@ -529,11 +542,12 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
     const proc = procs[0];
     const ports = (proc.ports ?? []).slice().sort((a, b) => a - b);
     const faviconPort = firstPort(proc);
+    const ChevronIcon = open ? UiChevronDown : UiChevronRight;
     return (
       <div className="py-1.5">
         <div className="flex items-center gap-2 px-1">
           <Button variant="ghost" className="flex min-w-0 items-center gap-1.5 justify-start h-auto p-0" onClick={() => setOpen((o) => !o)} title="Toggle logs">
-            <GavelIcon name={open ? "codicon:chevron-down" : "codicon:chevron-right"} className="text-gray-400 text-xs" />
+            <ChevronIcon className="text-gray-400 text-xs" />
             <span className={`inline-block w-2 h-2 rounded-full ${statusDotClass(proc.status)}`} />
             <ProcessFavicon project={project.name} port={faviconPort} />
             <span className="text-sm font-medium truncate max-w-[200px]" title={project.dir}>

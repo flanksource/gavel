@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { PRItem, PRDetail, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
+import type { PRItem, PRDetail, PRInfo, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
@@ -8,6 +8,7 @@ import { ActivityView } from './components/ActivityView';
 import { TestsView } from './components/TestsView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
+import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
 import { TodoNewPage } from './components/todos/TodoNewPage';
 import { MenubarTodos } from './components/MenubarTodos';
@@ -19,7 +20,8 @@ import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
-import { SearchBar } from './components/SearchBar';
+import { CommandPalette, SearchTrigger } from './components/CommandPalette';
+import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
 import { WorkspaceGroup } from './components/ProcessTable';
 import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
@@ -35,7 +37,10 @@ import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useIsMobile } from './useIsMobile';
-import { GavelIcon } from './components/GavelIcon';
+import { UiActivity, UiArrowLeft, UiBeaker, UiCheck, UiClose, UiCog, UiCopy, UiGitPr, UiJson, UiMarkdown } from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import type { ComponentType } from 'react';
+import { Spinner } from './icons/Spinner';
 
 const defaultConfig: SearchConfig = { repos: [] };
 
@@ -122,6 +127,44 @@ function aggregateShards(shards: GavelResultsSummary[]): GavelResultsSummary | n
   return agg;
 }
 
+function prFromRoutePath(path: string): PRItem | null {
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length !== 3) return null;
+  const number = Number(parts[2]);
+  if (!Number.isInteger(number) || number <= 0) return null;
+  const repo = `${parts[0]}/${parts[1]}`;
+  return {
+    number,
+    repo,
+    title: `${repo}#${number}`,
+    author: 'unknown',
+    source: '...',
+    target: '...',
+    state: 'OPEN',
+    isDraft: false,
+    url: `https://github.com/${repo}/pull/${number}`,
+    updatedAt: new Date().toISOString(),
+    route_path: path,
+  };
+}
+
+function mergePRItemFromDetail(pr: PRItem, info: PRInfo): PRItem {
+  const author = info.author?.login || pr.author;
+  return {
+    ...pr,
+    title: info.title || pr.title,
+    author,
+    authorAvatarUrl: info.author?.avatarUrl || pr.authorAvatarUrl,
+    source: info.headRefName || pr.source,
+    target: info.baseRefName || pr.target,
+    state: info.state || pr.state,
+    isDraft: info.isDraft,
+    reviewDecision: info.reviewDecision || pr.reviewDecision,
+    mergeable: info.mergeable || pr.mergeable,
+    url: info.url || pr.url,
+  };
+}
+
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
@@ -155,7 +198,7 @@ export function App() {
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
   const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
-  const [query, setQuery] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
@@ -220,10 +263,25 @@ export function App() {
   }, [commitRoute, filters]);
 
   // The Todos data layer is mounted permanently so its chrome can live in the
-  // AppShell's body slots, but only fetches while the Todos tab is active. The
-  // selectedPath is the todo ref on that tab (a PR route path otherwise).
+  // AppShell's body slots, but only fetches while the Todos tab is active — or
+  // while the ⌘K palette is open, so its global search can span todos from any
+  // tab. The selectedPath is the todo ref on that tab (a PR route path otherwise).
   const onTodosTab = activeTab === 'todos' && !isTodoNewPage;
-  const todos = useWorkspaceTodos(projects, onTodosTab ? selectedPath : '', navigateTodo, onTodosTab);
+  const todos = useWorkspaceTodos(projects, onTodosTab ? selectedPath : '', navigateTodo, onTodosTab || paletteOpen);
+  const review = useReviewMode(todos);
+
+  // ⌘K / Ctrl+K toggles the global search palette from anywhere (even while a
+  // field is focused — it isn't a text-editing shortcut).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     const onPopState = () => {
@@ -297,6 +355,11 @@ export function App() {
     const target = findPRByRoutePath(prs, selectedPath);
     if (target) {
       loadPR(target);
+      return;
+    }
+    const direct = prFromRoutePath(selectedPath);
+    if (direct) {
+      loadPR(direct);
     }
   }, [selectedPath, prs]);
 
@@ -391,6 +454,11 @@ export function App() {
     es.addEventListener('pr', (e: MessageEvent) => {
       const data = JSON.parse(e.data);
       setDetail(prev => ({ ...prev, pr: data.pr, comments: data.comments }));
+      if (data.pr) {
+        setSelected(current => current && current.repo === pr.repo && current.number === pr.number
+          ? mergePRItemFromDetail(current, data.pr as PRInfo)
+          : current);
+      }
       setDetailLoading(false);
     });
 
@@ -517,23 +585,23 @@ export function App() {
     () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors, viewer),
     [prs, filters, viewer],
   );
-  // Free-text search over title / branches / #number / repo, applied on top of
-  // the structured (tri-state) facet filters.
-  const searched = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return filtered;
-    return filtered.filter(pr =>
-      pr.title.toLowerCase().includes(q) ||
-      String(pr.number).includes(q) ||
-      pr.repo.toLowerCase().includes(q) ||
-      (pr.source || '').toLowerCase().includes(q) ||
-      (pr.target || '').toLowerCase().includes(q));
-  }, [filtered, query]);
+
+  // The ⌘K palette searches the full PR list and every workspace's todos (flattened
+  // across workspaces), independent of the structured facet filters, and jumps to
+  // the chosen item — switching tabs as needed.
+  const todoEntries = useMemo(() => flattenTodos(todos.workspaces, todos.byDir), [todos.workspaces, todos.byDir]);
+  function selectPRFromPalette(pr: PRItem) {
+    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, filters });
+    loadPR(pr);
+  }
+  function selectTodoFromPalette(entry: TodoEntry) {
+    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, filters });
+  }
 
   if (useMenubarLayout) {
     return (
       <MenubarView
-        prs={searched}
+        prs={filtered}
         selected={selected}
         detail={detail}
         detailLoading={detailLoading}
@@ -563,7 +631,7 @@ export function App() {
   }
 
   if (isTodoNewPage) {
-    return <TodoNewPage projects={projects} />;
+    return <TodoNewPage projects={projects} procStatus={procStatus} />;
   }
 
   return (
@@ -571,9 +639,10 @@ export function App() {
       <AppShell
         brand={<img src="/brand/gavel-logo.svg" alt="gavel" className="h-7" />}
         nav={<TabBar active={activeTab} onChange={changeTab} />}
-        search={<SearchBar tab={activeTab} query={query} onChange={setQuery} />}
+        search={<SearchTrigger onOpen={() => setPaletteOpen(true)} />}
         actions={
           <>
+            {activeTab === 'todos' && <TodoReviewButton review={review} />}
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
@@ -598,7 +667,7 @@ export function App() {
               aria-label="Global settings"
               className="text-muted-foreground hover:text-foreground"
             >
-              <GavelIcon name="codicon:settings-gear" />
+              <UiCog />
             </Button>
             <ThemeToggle />
           </>
@@ -611,7 +680,7 @@ export function App() {
         bodyHeader={
           activeTab === 'prs' ? (
             <span className="text-xs text-muted-foreground">
-              {searched.length} pull request{searched.length !== 1 ? 's' : ''}
+              {filtered.length} pull request{filtered.length !== 1 ? 's' : ''}
             </span>
           ) : undefined
         }
@@ -626,7 +695,7 @@ export function App() {
             />
           ) : undefined
         }
-        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} query={query} /> : undefined}
+        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} /> : undefined}
         bodySplit={38}
         contentClassName="overflow-hidden"
       >
@@ -635,7 +704,7 @@ export function App() {
             left={
               <>
                 <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onAdd={openAdd} onSettings={openProjectSettings} />
-                <PRList prs={searched} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
+                <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
               </>
             }
             right={
@@ -644,7 +713,7 @@ export function App() {
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   <div className="text-center">
-                    <GavelIcon name="codicon:git-pull-request" className="text-4xl mb-2" />
+                    <UiGitPr className="text-4xl mb-2" />
                     <p>Select a PR to view details</p>
                   </div>
                 </div>
@@ -652,13 +721,28 @@ export function App() {
             }
           />
         ) : activeTab === 'todos' ? (
-          <TodoDetailPane todos={todos} />
+          <div className="flex h-full min-h-0 flex-col">
+            <PlanReviewBar review={review} todos={todos} />
+            <div className="min-h-0 flex-1">
+              <TodoDetailPane todos={todos} />
+            </div>
+          </div>
         ) : activeTab === 'tests' ? (
-          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} query={query} />
+          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} />
         ) : (
-          <ActivityView query={query} />
+          <ActivityView />
         )}
       </AppShell>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        prs={prs}
+        todos={todoEntries}
+        todosLoading={todos.loadingList}
+        onSelectPR={selectPRFromPalette}
+        onSelectTodo={selectTodoFromPalette}
+      />
 
       <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} defaultDir={todos.selected?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
@@ -703,7 +787,7 @@ function ProcessesPage({
           title="Back to PR dashboard"
           aria-label="Back to PR dashboard"
         >
-          <GavelIcon name="codicon:close" className="text-base" />
+          <UiClose className="text-base" />
         </a>
       </header>
 
@@ -791,7 +875,7 @@ function MenubarView({
               title="Back to pull requests"
               aria-label="Back to pull requests"
             >
-              <GavelIcon name="codicon:arrow-left" className="text-base" />
+              <UiArrowLeft className="text-base" />
             </Button>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{selected.repo}#{selected.number}</div>
@@ -838,7 +922,7 @@ function MenubarView({
         />
         <MenubarTab
           label="PRs"
-          icon="codicon:git-pull-request"
+          icon={UiGitPr}
           count={prs.length}
           badge={failed > 0 ? failed : undefined}
           active={menubarTab === 'prs'}
@@ -846,7 +930,7 @@ function MenubarView({
         />
         <MenubarTab
           label="Todos"
-          icon="codicon:check"
+          icon={UiCheck}
           count={openTodos}
           badge={failedTodos > 0 ? failedTodos : undefined}
           active={menubarTab === 'todos'}
@@ -888,9 +972,9 @@ function MenubarView({
 // MenubarTab is one segment of the menubar's Processes/PRs switcher. A status
 // dot (process health) or an icon leads the label; count is the inline subtotal
 // and badge is an attention-grabbing count (e.g. failing PRs).
-function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
+function MenubarTab({ label, icon: Icon, dot, count, badge, active, onClick }: {
   label: string;
-  icon?: string;
+  icon?: ComponentType<IconProps>;
   dot?: string;
   count?: number | string;
   badge?: number;
@@ -906,7 +990,7 @@ function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
         active ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-muted'
       }`}
     >
-      {dot ? <span className={`inline-block h-2 w-2 rounded-full ${dot}`} /> : icon ? <GavelIcon name={icon} /> : null}
+      {dot ? <span className={`inline-block h-2 w-2 rounded-full ${dot}`} /> : Icon ? <Icon /> : null}
       <span>{label}</span>
       {count !== undefined && count !== '' && (
         <span className="tabular-nums text-[10px] text-muted-foreground">{count}</span>
@@ -919,29 +1003,32 @@ function MenubarTab({ label, icon, dot, count, badge, active, onClick }: {
 }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: 'prs', label: 'PRs', icon: 'codicon:git-pull-request' },
-    { id: 'todos', label: 'Todos', icon: 'codicon:check' },
-    { id: 'tests', label: 'Tests', icon: 'codicon:beaker' },
-    { id: 'activity', label: 'Activity', icon: 'codicon:pulse' },
+  const tabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
+    { id: 'prs', label: 'PRs', icon: UiGitPr },
+    { id: 'todos', label: 'Todos', icon: UiCheck },
+    { id: 'tests', label: 'Tests', icon: UiBeaker },
+    { id: 'activity', label: 'Activity', icon: UiActivity },
   ];
   return (
     <div className="flex gap-1 border-b border-transparent">
-      {tabs.map(t => (
-        <Button
-          variant="ghost"
-          key={t.id}
-          onClick={() => onChange(t.id)}
-          className={`px-3 py-1.5 text-sm rounded-md transition h-auto justify-start ${
-            active === t.id
-              ? 'bg-primary/10 text-primary font-medium'
-              : 'text-muted-foreground hover:bg-muted'
-          }`}
-        >
-          <GavelIcon name={t.icon} className="mr-1" />
-          {t.label}
-        </Button>
-      ))}
+      {tabs.map(t => {
+        const Icon = t.icon;
+        return (
+          <Button
+            variant="ghost"
+            key={t.id}
+            onClick={() => onChange(t.id)}
+            className={`px-3 py-1.5 text-sm rounded-md transition h-auto justify-start ${
+              active === t.id
+                ? 'bg-primary/10 text-primary font-medium'
+                : 'text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <Icon className="mr-1" />
+            {t.label}
+          </Button>
+        );
+      })}
     </div>
   );
 }
@@ -953,6 +1040,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
   copyState: 'idle' | 'copying' | 'copied' | 'error';
   copyError: string;
 }) {
+  const CopyIcon = copyState === 'copied' ? UiCheck : copyState === 'copying' ? Spinner : UiCopy;
   return (
     <div className="flex items-center gap-1">
       <Button
@@ -961,7 +1049,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onJSON}
         title="Download current view as JSON"
       >
-        <GavelIcon name="codicon:json" className="mr-0.5" />
+        <UiJson className="mr-0.5" />
         JSON
       </Button>
       <Button
@@ -970,7 +1058,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onMarkdown}
         title="Download current view as Markdown"
       >
-        <GavelIcon name="codicon:markdown" className="mr-0.5" />
+        <UiMarkdown className="mr-0.5" />
         Markdown
       </Button>
       <Button
@@ -985,10 +1073,7 @@ function ExportButtons({ onJSON, onMarkdown, onCopy, copyState, copyError }: {
         onClick={onCopy}
         title={copyError || 'Copy Markdown export for agent'}
       >
-        <GavelIcon
-          name={copyState === 'copied' ? 'codicon:check' : copyState === 'copying' ? 'svg-spinners:ring-resize' : 'codicon:copy'}
-          className="mr-0.5"
-        />
+        <CopyIcon className="mr-0.5" />
         {copyState === 'copying' ? 'Copying...' : copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy for Agent'}
       </Button>
     </div>

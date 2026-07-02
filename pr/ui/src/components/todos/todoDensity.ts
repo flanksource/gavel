@@ -1,12 +1,15 @@
+import type { ComponentType } from 'react';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiListFlat, UiRows } from '@flanksource/clicky-ui/icons';
 import type { TodoDensity } from '../../types';
 
 // Row density is a per-user view preference for the todo lists, persisted
 // alongside the status filter so it survives reloads. 'comfortable' keeps the
 // two-line layout (status + title, then id/priority/provider); 'compact'
 // collapses each todo onto a single line.
-export const DENSITY_OPTIONS: { value: TodoDensity; label: string; icon: string }[] = [
-  { value: 'comfortable', label: 'Comfortable', icon: 'codicon:rows' },
-  { value: 'compact', label: 'Compact', icon: 'codicon:list-flat' },
+export const DENSITY_OPTIONS: { value: TodoDensity; label: string; icon: ComponentType<IconProps> }[] = [
+  { value: 'comfortable', label: 'Comfortable', icon: UiRows },
+  { value: 'compact', label: 'Compact', icon: UiListFlat },
 ];
 
 const STORAGE_KEY = 'gavel.pr-ui.todoDensity.v1';

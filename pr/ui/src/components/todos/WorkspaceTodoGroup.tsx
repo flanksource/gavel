@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
+import { UiChevronDown, UiChevronRight, UiClose, UiFolder } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoSortBy, TodoStatus } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
 import { defaultSortBy, todoComparator } from './todoGroup';
@@ -18,7 +18,7 @@ import type { ResolvedRange } from './todoTimeRange';
 // for a "Run N" control once any are checked, dispatching the whole selection to
 // one agent session via /api/todos/run. Selection is per-workspace because a run
 // targets a single workspace dir/provider. The menubar omits multiSelect.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, range, query = '', density = 'comfortable', sortBy = defaultSortBy(), multiSelect = false, onRunStarted }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, range, density = 'comfortable', sortBy = defaultSortBy(), multiSelect = false, onRunStarted }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
@@ -26,7 +26,6 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   hiddenStatuses?: Set<TodoStatus>;
   onToggleStatus?: (status: TodoStatus) => void;
   range?: ResolvedRange | null;
-  query?: string;
   density?: TodoDensity;
   sortBy?: TodoSortBy;
   multiSelect?: boolean;
@@ -40,7 +39,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
   const allItems = data?.items ?? [];
   // Order rows by the chosen sort preference (defaults to severity-then-recent).
-  const items = allItems.filter(item => isTodoVisible(item, hidden, range, query)).sort(todoComparator(sortBy));
+  const items = allItems.filter(item => isTodoVisible(item, hidden, range)).sort(todoComparator(sortBy));
   const hiddenCount = allItems.length - items.length;
   const counts = data?.counts ?? workspace.todoCounts ?? emptyCounts;
 
@@ -110,7 +109,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
           onClick={() => setOpen(o => !o)}
           className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 p-0 text-left hover:opacity-80"
         >
-          <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
+          {open ? <UiChevronDown className="text-muted-foreground text-xs" /> : <UiChevronRight className="text-muted-foreground text-xs" />}
           {repo ? (
             <>
               <RepoIcon repo={repo} size={16} />
@@ -118,7 +117,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             </>
           ) : (
             <>
-              <GavelIcon name="codicon:folder" className="text-muted-foreground text-xs" />
+              <UiFolder className="text-muted-foreground text-xs" />
               <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={workspace.dir}>{workspace.name}</span>
             </>
           )}
@@ -143,7 +142,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
               aria-label="Clear selection"
               className="h-8 w-7 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <GavelIcon name="codicon:close" className="text-xs" />
+              <UiClose className="text-xs" />
             </Button>
           </div>
         ) : (

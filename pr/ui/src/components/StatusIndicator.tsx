@@ -1,11 +1,13 @@
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Version } from '@flanksource/clicky-ui/data';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiWarningTriangle, UiPause, UiPlay, UiSync, UiRefresh } from '@flanksource/clicky-ui/icons';
 import type { HealthStatus, RateLimit, Severity } from '../types';
 import { timeAgoShort } from '../utils';
 import { useNow } from '../useNow';
-import { GavelIcon } from './GavelIcon';
+import { Spinner } from '../icons/Spinner';
 import { RelativeTime } from './RelativeTime';
 
 // Colored dot in the PR UI header. The dropdown owns the operational status,
@@ -231,17 +233,18 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
     : nextFetchIn;
 
   const cfg = error
-    ? { icon: 'codicon:warning', color: 'text-red-500', label: 'Sync error' }
+    ? { icon: UiWarningTriangle, color: 'text-red-500', label: 'Sync error' }
     : networkBusy
-      ? { icon: 'svg-spinners:ring-resize', color: 'text-blue-500', label: 'Syncing' }
+      ? { icon: Spinner, color: 'text-blue-500', label: 'Syncing' }
       : paused
-        ? { icon: 'codicon:debug-pause', color: 'text-yellow-500', label: 'Paused' }
-        : { icon: 'codicon:sync', color: 'text-green-500', label: 'Synced' };
+        ? { icon: UiPause, color: 'text-yellow-500', label: 'Paused' }
+        : { icon: UiSync, color: 'text-green-500', label: 'Synced' };
+  const CfgIcon = cfg.icon;
 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <GavelIcon name={cfg.icon} className={`${cfg.color} text-sm`} />
+        <CfgIcon className={`${cfg.color} text-sm`} />
         <div className="min-w-0 flex-1">
           <div className={`font-medium ${cfg.color}`}>{cfg.label}</div>
           <div className="text-[11px] text-muted-foreground">
@@ -254,14 +257,14 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
       </div>
       {error && <div className="truncate text-red-500" title={error}>{error}</div>}
       <div className="flex items-center justify-end gap-1.5">
-        <ActionButton icon={networkBusy ? 'svg-spinners:ring-resize' : 'codicon:sync'} label="Resync" onClick={onRefresh} />
+        <ActionButton icon={networkBusy ? Spinner : UiSync} label="Resync" onClick={onRefresh} />
         <ActionButton
-          icon={paused ? 'codicon:debug-start' : 'codicon:debug-pause'}
+          icon={paused ? UiPlay : UiPause}
           label={paused ? 'Resume' : 'Pause'}
           onClick={onPause}
         />
         <ActionButton
-          icon={healthLoading ? 'svg-spinners:ring-resize' : 'codicon:refresh'}
+          icon={healthLoading ? Spinner : UiRefresh}
           label="Refresh"
           onClick={onStatusRefresh}
         />
@@ -270,7 +273,8 @@ function SyncStatus({ fetchedAt, nextFetchIn, paused, error, networkBusy, health
   );
 }
 
-function ActionButton({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+function ActionButton({ icon, label, onClick }: { icon: ComponentType<IconProps>; label: string; onClick: () => void }) {
+  const Icon = icon;
   return (
     <Button
       variant="ghost"
@@ -279,7 +283,7 @@ function ActionButton({ icon, label, onClick }: { icon: string; label: string; o
       title={label}
       className="inline-flex h-7 items-center justify-start gap-1 rounded border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
-      <GavelIcon name={icon} className="text-xs" />
+      <Icon className="text-xs" />
       {label}
     </Button>
   );

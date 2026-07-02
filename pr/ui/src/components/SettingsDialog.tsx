@@ -9,7 +9,7 @@ import type {
 } from '@flanksource/clicky-ui/components';
 import { UiFolder } from '@flanksource/clicky-ui/icons';
 import type { Project } from '../types';
-import { GavelIcon } from './GavelIcon';
+import { Spinner } from '../icons/Spinner';
 import { sectionIcon } from '../icons/settings';
 import { useProjectRegistration, ProjectFields } from './ProjectForm';
 import { PromptOverrideField, type PromptOverrideValue } from './PromptOverrideField';
@@ -370,7 +370,7 @@ export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: P
             <ProjectFields reg={reg} repoOptions={repoOptions} />
           ) : loading || !configReady ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <GavelIcon name="svg-spinners:ring-resize" /> Loading…
+              <Spinner /> Loading…
             </div>
           ) : (
             <Suspense fallback={<div className="py-8 text-sm text-muted-foreground">Loading editor…</div>}>

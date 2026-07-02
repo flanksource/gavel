@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Org, SearchConfig } from '../types';
-import { GavelIcon } from './GavelIcon';
+import { UiCheck, UiChevronDown, UiChevronRight, UiEye, UiEyeClosed, UiGlobe, UiOrganization, UiUser } from '@flanksource/clicky-ui/icons';
 
 interface Props {
   config: SearchConfig;
@@ -112,6 +112,8 @@ export function OrgChooser({ config, onChange }: Props) {
     onChange({ ignoredOrgs: ignoredOrgs.filter(o => o !== login) });
   }
 
+  const HiddenChevron = showHidden ? UiChevronDown : UiChevronRight;
+
   return (
     <div className="relative" ref={rootRef}>
       <Button
@@ -123,10 +125,10 @@ export function OrgChooser({ config, onChange }: Props) {
         {activeOrgMeta?.avatarUrl ? (
           <img src={activeOrgMeta.avatarUrl} alt={activeOrg} className="w-4 h-4 rounded-sm" />
         ) : (
-          <GavelIcon name="codicon:organization" className="text-sm" />
+          <UiOrganization className="text-sm" />
         )}
         <span className="font-medium">{label}</span>
-        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
+        <UiChevronDown className="text-[10px]" />
       </Button>
 
       {open && (
@@ -138,9 +140,9 @@ export function OrgChooser({ config, onChange }: Props) {
             }`}
             onClick={chooseMe}
           >
-            <GavelIcon name="codicon:person" className="text-base" />
+            <UiUser className="text-base" />
             <span className="flex-1">@me (my PRs)</span>
-            {!config.all && <GavelIcon name="codicon:check" className="text-xs" />}
+            {!config.all && <UiCheck className="text-xs" />}
           </Button>
 
           <Button
@@ -150,9 +152,9 @@ export function OrgChooser({ config, onChange }: Props) {
             }`}
             onClick={chooseAllOrgs}
           >
-            <GavelIcon name="codicon:globe" className="text-base" />
+            <UiGlobe className="text-base" />
             <span className="flex-1">All orgs (default)</span>
-            {config.all && !activeOrg && <GavelIcon name="codicon:check" className="text-xs" />}
+            {config.all && !activeOrg && <UiCheck className="text-xs" />}
           </Button>
 
           <div className="border-t border-border my-1" />
@@ -178,9 +180,9 @@ export function OrgChooser({ config, onChange }: Props) {
                 >
                   {o.avatarUrl
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0" />
-                    : <GavelIcon name="codicon:organization" className="text-base" />}
+                    : <UiOrganization className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
-                  {selected && <GavelIcon name="codicon:check" className="text-xs" />}
+                  {selected && <UiCheck className="text-xs" />}
                 </Button>
                 <Button
                   variant="ghost"
@@ -188,7 +190,7 @@ export function OrgChooser({ config, onChange }: Props) {
                   title={`Hide ${o.login} from this list`}
                   onClick={(e) => hideOrg(o.login, e)}
                 >
-                  <GavelIcon name="codicon:eye-closed" className="text-xs" />
+                  <UiEyeClosed className="text-xs" />
                 </Button>
               </div>
             );
@@ -202,7 +204,7 @@ export function OrgChooser({ config, onChange }: Props) {
                 className="w-full flex items-center justify-start gap-2 h-auto px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"
                 onClick={() => setShowHidden(v => !v)}
               >
-                <GavelIcon name={showHidden ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[10px]" />
+                <HiddenChevron className="text-[10px]" />
                 <span className="flex-1 text-left">Manage hidden ({hiddenOrgs.length})</span>
               </Button>
               {showHidden && hiddenOrgs.map(o => (
@@ -212,7 +214,7 @@ export function OrgChooser({ config, onChange }: Props) {
                 >
                   {o.avatarUrl
                     ? <img src={o.avatarUrl} alt={o.login} className="w-4 h-4 rounded-sm shrink-0 opacity-60" />
-                    : <GavelIcon name="codicon:organization" className="text-base" />}
+                    : <UiOrganization className="text-base" />}
                   <span className="flex-1 truncate">{o.login}</span>
                   <Button
                     variant="ghost"
@@ -220,7 +222,7 @@ export function OrgChooser({ config, onChange }: Props) {
                     title={`Unhide ${o.login}`}
                     onClick={(e) => unhideOrg(o.login, e)}
                   >
-                    <GavelIcon name="codicon:eye" className="text-xs" />
+                    <UiEye className="text-xs" />
                   </Button>
                 </div>
               ))}

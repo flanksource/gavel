@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { AnsiHtml } from '@flanksource/clicky-ui/data';
 import type { TodoCommitDiffResponse, TodoCommitFile, TodoCommitFilesResponse } from '../../types';
-import { GavelIcon } from '../GavelIcon';
+import { UiDiff } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 
 // fileStatusView maps a commit file's change kind to its diff icon, accent
@@ -11,13 +12,13 @@ import { todoQuery } from './format';
 function fileStatusView(status: TodoCommitFile['status']) {
   switch (status) {
     case 'added':
-      return { icon: 'codicon:diff-added', color: 'text-green-600', label: 'Added' };
+      return { icon: UiDiff, color: 'text-green-600', label: 'Added' };
     case 'deleted':
-      return { icon: 'codicon:diff-removed', color: 'text-red-600', label: 'Deleted' };
+      return { icon: UiDiff, color: 'text-red-600', label: 'Deleted' };
     case 'renamed':
-      return { icon: 'codicon:diff-renamed', color: 'text-blue-600', label: 'Renamed' };
+      return { icon: UiDiff, color: 'text-blue-600', label: 'Renamed' };
     default:
-      return { icon: 'codicon:diff-modified', color: 'text-amber-600', label: 'Modified' };
+      return { icon: UiDiff, color: 'text-amber-600', label: 'Modified' };
   }
 }
 
@@ -117,7 +118,7 @@ function FileDiffCard({ dir, provider, hash, file }: { dir: string; provider: st
         </div>
         {loading ? (
           <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-            <GavelIcon name="svg-spinners:ring-resize" className="text-xs" />
+            <Spinner className="text-xs" />
             Loading diff…
           </div>
         ) : error ? (
@@ -148,6 +149,7 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
   const view = fileStatusView(file.status);
+  const Icon = view.icon;
   const { dir: pathDir, base } = splitPath(file.path);
   const open = hover || pinned;
 
@@ -165,7 +167,7 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
         title={`${view.label} — ${file.path}`}
         className={`flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted ${pinned ? 'bg-muted' : ''}`}
       >
-        <GavelIcon name={view.icon} className={`shrink-0 text-xs ${view.color}`} />
+        <Icon className={`shrink-0 text-xs ${view.color}`} />
         <span className="flex min-w-0 flex-1 items-baseline truncate font-mono">
           {pathDir && <span className="truncate text-muted-foreground">{pathDir}</span>}
           <span className="truncate font-medium text-foreground">{base}</span>
@@ -194,7 +196,7 @@ export function CommitFiles({ dir, provider, hash }: { dir: string; provider: st
   if (loading) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
-        <GavelIcon name="svg-spinners:ring-resize" className="text-xs" />
+        <Spinner className="text-xs" />
         Loading files…
       </div>
     );

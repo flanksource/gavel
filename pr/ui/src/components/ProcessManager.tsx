@@ -3,7 +3,7 @@ import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import type { Project, ProcStatus } from '../types';
 import { flattenProcesses, aggregateDotClass, emptyProcStatus } from '../utils';
 import { WorkspaceGroup } from './ProcessTable';
-import { GavelIcon } from './GavelIcon';
+import { UiServerProcess, UiWarningTriangle, UiLinkExternal } from '@flanksource/clicky-ui/icons';
 
 interface Props {
   projects: Project[];
@@ -47,12 +47,12 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
       title="Processes"
       aria-label="Processes"
     >
-      <GavelIcon name="codicon:server-process" className="text-gray-500 text-sm" />
+      <UiServerProcess className="text-gray-500 text-sm" />
       <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
       <span className="tabular-nums text-gray-700">{running}/{procs.length}</span>
       {crashed > 0 && (
         <span className="inline-flex items-center gap-0.5 tabular-nums text-red-600">
-          <GavelIcon name="codicon:warning" />
+          <UiWarningTriangle />
           {crashed}
         </span>
       )}
@@ -76,7 +76,7 @@ export function ProcessManager({ projects, procStatus, onProcChanged }: Props) {
               className="inline-flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700"
               onClick={e => e.stopPropagation()}
             >
-              <GavelIcon name="codicon:link-external" className="text-sm" />
+              <UiLinkExternal className="text-sm" />
             </a>
           </div>
           <div className="max-h-[60vh] overflow-y-auto divide-y divide-gray-100">

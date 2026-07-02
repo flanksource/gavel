@@ -1,4 +1,4 @@
-import { GavelIcon } from '../GavelIcon';
+import { UiError, UiPass, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { LinterResult, LintViolation } from './types';
 
 export function LintResults({ lint }: { lint: LinterResult[] }) {
@@ -23,13 +23,11 @@ function LinterSection({ result }: { result: LinterResult }) {
   const violations = result.violations ?? [];
   const errored = !!result.error && !result.skipped;
   const count = violations.length;
+  const StatusIcon = errored ? UiError : count > 0 ? UiWarningTriangle : UiPass;
   return (
     <div>
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-        <GavelIcon
-          name={errored ? 'codicon:error' : count > 0 ? 'codicon:warning' : 'codicon:pass'}
-          className={errored ? 'text-red-500' : count > 0 ? 'text-amber-500' : 'text-green-500'}
-        />
+        <StatusIcon className={errored ? 'text-red-500' : count > 0 ? 'text-amber-500' : 'text-green-500'} />
         {result.linter}
         {result.work_dir && (
           <span className="truncate font-mono text-xs font-normal text-muted-foreground">{result.work_dir}</span>

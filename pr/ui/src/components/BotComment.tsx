@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { PRComment } from '../types';
 import { Markdown } from './Markdown';
-import { GavelIcon } from './GavelIcon';
+import { UiBeaker, UiChevronDown, UiChevronRight, UiComment, UiHubot, UiLightbulb, UiLinkExternal, UiRobotAi } from '@flanksource/clicky-ui/icons';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import type { ComponentType } from 'react';
+import { VercelIcon } from '../icons/VercelIcon';
 
 interface Props {
   comment: PRComment;
@@ -30,6 +33,7 @@ function extractVercelPreviewUrl(body: string): string | null {
 function VercelComment({ comment }: Props) {
   const previewUrl = extractVercelPreviewUrl(comment.body);
   const [showFull, setShowFull] = useState(false);
+  const ChevronIcon = showFull ? UiChevronDown : UiChevronRight;
 
   return (
     <div className="text-xs">
@@ -40,7 +44,7 @@ function VercelComment({ comment }: Props) {
           rel="noopener"
           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-md text-blue-700 hover:bg-blue-100 transition-colors mb-2"
         >
-          <GavelIcon name="codicon:link-external" className="text-xs" />
+          <UiLinkExternal className="text-xs" />
           <span className="font-medium">Preview Deployment</span>
         </a>
       )}
@@ -49,7 +53,7 @@ function VercelComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
-        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <ChevronIcon className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
       </Button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
@@ -89,7 +93,7 @@ function CopilotComment({ comment }: Props) {
         part.type === 'suggestion' ? (
           <div key={i} className="my-1.5">
             <div className="text-[10px] text-green-700 font-medium mb-0.5 flex items-center gap-1">
-              <GavelIcon name="codicon:lightbulb" />
+              <UiLightbulb />
               Suggested change
             </div>
             <pre className="bg-green-50 border border-green-200 rounded p-2 text-xs overflow-x-auto">
@@ -115,12 +119,13 @@ function CodeRabbitComment({ comment }: Props) {
   const actionableCount = actionableMatch ? parseInt(actionableMatch[1], 10) : null;
 
   const [showFull, setShowFull] = useState(false);
+  const ChevronIcon = showFull ? UiChevronDown : UiChevronRight;
 
   return (
     <div className="text-xs">
       {actionableCount !== null && (
         <div className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
-          <GavelIcon name="codicon:comment-discussion" className="text-purple-500" />
+          <UiComment className="text-purple-500" />
           {actionableCount} actionable comment{actionableCount !== 1 ? 's' : ''} posted
         </div>
       )}
@@ -129,7 +134,7 @@ function CodeRabbitComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
-        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <ChevronIcon className="text-[9px]" />
         {showFull ? 'Hide full review' : 'Show full review'}
       </Button>
       {showFull && <Markdown text={comment.body} className="text-xs text-gray-600 mt-1" />}
@@ -161,6 +166,7 @@ function GavelComment({ comment }: Props) {
   const testMatch = body.match(gavelSummaryRegex);
   const lintMatch = body.match(gavelLintRegex);
   const [showFull, setShowFull] = useState(false);
+  const ChevronIcon = showFull ? UiChevronDown : UiChevronRight;
 
   return (
     <div className="text-xs">
@@ -186,7 +192,7 @@ function GavelComment({ comment }: Props) {
         className="text-[11px] text-gray-400 hover:text-gray-600 flex items-center gap-1 h-auto p-0 justify-start"
         onClick={() => setShowFull(!showFull)}
       >
-        <GavelIcon name={showFull ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-[9px]" />
+        <ChevronIcon className="text-[9px]" />
         {showFull ? 'Hide details' : 'Show details'}
       </Button>
       {showFull && <Markdown text={body} className="text-xs text-gray-600 mt-1" />}
@@ -196,19 +202,20 @@ function GavelComment({ comment }: Props) {
 
 // --- Bot badge ---
 
-const botLabels: Record<string, { icon: string; label: string; color: string }> = {
-  vercel: { icon: 'simple-icons:vercel', label: 'Vercel', color: 'text-gray-700' },
-  copilot: { icon: 'simple-icons:githubcopilot', label: 'Copilot', color: 'text-purple-600' },
-  coderabbit: { icon: 'codicon:hubot', label: 'CodeRabbit', color: 'text-orange-600' },
-  gavel: { icon: 'codicon:beaker', label: 'Gavel', color: 'text-blue-600' },
+const botLabels: Record<string, { icon: ComponentType<IconProps>; label: string; color: string }> = {
+  vercel: { icon: VercelIcon, label: 'Vercel', color: 'text-gray-700' },
+  copilot: { icon: UiRobotAi, label: 'Copilot', color: 'text-purple-600' },
+  coderabbit: { icon: UiHubot, label: 'CodeRabbit', color: 'text-orange-600' },
+  gavel: { icon: UiBeaker, label: 'Gavel', color: 'text-blue-600' },
 };
 
 export function BotBadge({ botType }: { botType: string }) {
   const info = botLabels[botType];
   if (!info) return null;
+  const Icon = info.icon;
   return (
     <span className={`inline-flex items-center gap-0.5 text-[10px] ${info.color} opacity-70`}>
-      <GavelIcon name={info.icon} className="text-[10px]" />
+      <Icon className="text-[10px]" />
       {info.label}
     </span>
   );

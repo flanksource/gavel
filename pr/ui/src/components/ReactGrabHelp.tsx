@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Modal, Button } from '@flanksource/clicky-ui/components';
-import { GavelIcon } from './GavelIcon';
+import { UiSearch } from '@flanksource/clicky-ui/icons';
 
 // ReactGrabHelp surfaces how to capture UI elements into gavel todos with React
 // Grab. The bookmarklet and console snippet both load this gavel server's plugin
@@ -21,7 +21,7 @@ export function ReactGrabHelp() {
         title="Install React Grab → todo"
         className="inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted"
       >
-        <GavelIcon name="codicon:inspect" className="text-xs" />
+        <UiSearch className="text-xs" />
         React Grab
       </Button>
       {open && (
@@ -43,7 +43,7 @@ export function ReactGrabHelp() {
                 React Grab
               </a>{' '}
               and run the <strong>Add to gavel todo</strong> action — a dialog opens with this gavel's
-              new-todo form prefilled from the component and its source.
+              todo form prefilled from the component and its source, with options for a new or existing issue.
             </p>
 
             <div>
@@ -58,7 +58,7 @@ export function ReactGrabHelp() {
                 onClick={e => e.preventDefault()}
                 className="inline-flex items-center gap-1 rounded-md bg-foreground px-3 py-1.5 font-medium text-background"
               >
-                <GavelIcon name="codicon:inspect" className="text-xs" />
+                <UiSearch className="text-xs" />
                 Add to gavel todo
               </a>
             </div>

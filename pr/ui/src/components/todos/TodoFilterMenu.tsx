@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiCheck, UiChevronDown, UiCircleOutline } from '@flanksource/clicky-ui/icons';
 import type { TodoCounts, TodoStatus } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { STATUS_FILTER_DEFS } from './todoFilter';
 
 // TodoFilterMenu is the compact dropdown counterpart to TodoFilterBar: a single
@@ -44,7 +44,7 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
         {hiddenCount > 0 && (
           <span className="rounded-full bg-muted px-1 text-[10px] tabular-nums text-muted-foreground">{hiddenCount} hidden</span>
         )}
-        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
+        <UiChevronDown className="text-[10px]" />
       </Button>
 
       {open && (
@@ -58,6 +58,7 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
           ) : (
             defs.map(def => {
               const active = !hidden.has(def.status);
+              const StatusIcon = active ? UiCheck : UiCircleOutline;
               return (
                 <Button
                   key={def.status}
@@ -68,8 +69,7 @@ export function TodoFilterMenu({ counts, hidden, onToggle }: {
                   onClick={() => onToggle(def.status)}
                   className="flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted"
                 >
-                  <GavelIcon
-                    name={active ? 'codicon:check' : 'codicon:circle-large-outline'}
+                  <StatusIcon
                     className={`text-xs ${active ? 'text-primary' : 'text-muted-foreground opacity-50'}`}
                   />
                   <span className={`flex-1 ${active ? 'text-foreground' : 'text-muted-foreground line-through opacity-60'}`}>{def.label}</span>

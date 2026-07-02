@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiCheck, UiChevronDown } from '@flanksource/clicky-ui/icons';
 import type { TodoSortBy } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { SORT_BY_OPTIONS } from './todoGroup';
 
 // TodoSortByMenu is the sidebar dropdown that picks the row order within each todo
@@ -27,6 +27,7 @@ export function TodoSortByMenu({ sortBy, onChange }: {
   }, [open]);
 
   const active = SORT_BY_OPTIONS.find(opt => opt.value === sortBy) ?? SORT_BY_OPTIONS[0];
+  const ActiveIcon = active.icon;
 
   return (
     <div className="relative" ref={rootRef}>
@@ -39,9 +40,9 @@ export function TodoSortByMenu({ sortBy, onChange }: {
         title="Sort todos by"
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
-        <GavelIcon name={active.icon} className="text-xs" />
+        <ActiveIcon className="text-xs" />
         <span className="font-medium">Sort: {active.label}</span>
-        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
+        <UiChevronDown className="text-[10px]" />
       </Button>
 
       {open && (
@@ -52,6 +53,7 @@ export function TodoSortByMenu({ sortBy, onChange }: {
         >
           {SORT_BY_OPTIONS.map(opt => {
             const selected = opt.value === sortBy;
+            const OptIcon = opt.icon;
             return (
               <Button
                 key={opt.value}
@@ -64,9 +66,9 @@ export function TodoSortByMenu({ sortBy, onChange }: {
                   selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
                 }`}
               >
-                <GavelIcon name={opt.icon} className="text-base" />
+                <OptIcon className="text-base" />
                 <span className="flex-1">{opt.label}</span>
-                {selected && <GavelIcon name="codicon:check" className="text-xs" />}
+                {selected && <UiCheck className="text-xs" />}
               </Button>
             );
           })}

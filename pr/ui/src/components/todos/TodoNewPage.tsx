@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Field, Button, Select } from '@flanksource/clicky-ui/components';
-import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
-import { GavelIcon } from '../GavelIcon';
-import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
+import { UiClose } from '@flanksource/clicky-ui/icons';
+import type { ProcStatus, Project, TodoItem, TodoListResponse, TodoPriority, TodoStatus } from '../../types';
+import { ScreenshotPicker, todoCommentFormData, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
 // firstParam reads the first present query value across a set of aliases so
@@ -40,20 +40,98 @@ function oneOf<T extends string>(value: string, allowed: readonly T[], fallback:
   return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
 }
 
+type TodoNewMode = 'new' | 'existing';
+
+const closedStatuses = new Set<TodoStatus>(['completed', 'skipped']);
+
+function modeFromParams(params: URLSearchParams): TodoNewMode {
+  const mode = firstParam(params, 'mode', 'target');
+  if (mode === 'existing' || firstParam(params, 'ref', 'todo', 'issue')) return 'existing';
+  return 'new';
+}
+
+function sourcePort(raw: string): number | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.port) return Number(url.port);
+    if (url.protocol === 'http:') return 80;
+    if (url.protocol === 'https:') return 443;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function statusForProject(project: Project, procStatus: Record<string, ProcStatus>): ProcStatus | undefined {
+  if (procStatus[project.name]) return procStatus[project.name];
+  for (const repo of project.repos || []) {
+    if (procStatus[repo]) return procStatus[repo];
+  }
+  return undefined;
+}
+
+function detectProjectDir(sourceUrl: string, workspaces: Project[], procStatus: Record<string, ProcStatus>): string {
+  const port = sourcePort(sourceUrl);
+  if (!port) return '';
+  for (const workspace of workspaces) {
+    const status = statusForProject(workspace, procStatus);
+    if (status?.processes?.some(proc => proc.ports?.includes(port))) return workspace.dir;
+  }
+  return '';
+}
+
+function todoMatchesSearch(todo: TodoItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return todo.title.toLowerCase().includes(q) ||
+    todo.ref.toLowerCase().includes(q) ||
+    (todo.shortId || '').toLowerCase().includes(q) ||
+    (todo.id || '').toLowerCase().includes(q);
+}
+
+function todoActivityMs(todo: TodoItem): number | null {
+  const raw = todo.lastRun || todo.created;
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function compareRecentTodos(a: TodoItem, b: TodoItem): number {
+  const am = todoActivityMs(a);
+  const bm = todoActivityMs(b);
+  if (am !== bm) {
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return bm - am;
+  }
+  return (a.title || '').localeCompare(b.title || '');
+}
+
 // TodoNewPage is the focused, full-page todo form served at /todos/new. Unlike
 // the in-dashboard CreateTodoDialog modal it is meant to be linked to (from the
 // menubar, a bookmarklet, or another app): every field can be pre-filled from
 // query params and, on submit or cancel, it navigates back to the referer (or an
 // explicit ?return= path), falling back to the newly-created todo otherwise.
-export function TodoNewPage({ projects }: { projects: Project[] }) {
+export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]; procStatus?: Record<string, ProcStatus> }) {
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const back = useMemo(() => returnTarget(params), [params]);
   const embed = useMemo(() => parseBool(firstParam(params, 'embed')), [params]);
 
   const queryDir = useMemo(() => firstParam(params, 'dir', 'workspace'), [params]);
+  const queryProject = useMemo(() => firstParam(params, 'project'), [params]);
+  const queryRef = useMemo(() => firstParam(params, 'ref', 'todo', 'issue'), [params]);
+  const sourceUrl = useMemo(() => firstParam(params, 'sourceUrl', 'sourceURL', 'url'), [params]);
   const queryProvider = useMemo(() => firstParam(params, 'provider', 'todoProvider'), [params]);
   const autoSave = useMemo(() => parseBool(firstParam(params, 'autoSave', 'autosave', 'auto_save')), [params]);
+  const initialMode = useMemo(() => modeFromParams(params), [params]);
+  const queryProjectDir = useMemo(() => {
+    if (!queryProject) return '';
+    return workspaces.find(w => w.name === queryProject)?.dir || '';
+  }, [queryProject, workspaces]);
+  const detectedDir = useMemo(() => detectProjectDir(sourceUrl, workspaces, procStatus), [sourceUrl, workspaces, procStatus]);
+  const preferredDir = queryDir || queryProjectDir || detectedDir || workspaces[0]?.dir || '';
 
   // The workspace options are every configured workspace plus an explicit ?dir=
   // that isn't one of them (so external links can target any directory). An
@@ -67,15 +145,33 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
     return opts;
   }, [workspaces, queryDir]);
 
-  const [dir, setDir] = useState(() => queryDir || workspaces[0]?.dir || '');
+  const [mode, setMode] = useState<TodoNewMode>(initialMode);
+  const [dir, setDirState] = useState(() => preferredDir);
+  const [dirTouched, setDirTouched] = useState(() => !!queryDir || !!queryProjectDir);
   const [title, setTitle] = useState(() => firstParam(params, 'title', 'name'));
   const [body, setBody] = useState(() => firstParam(params, 'body', 'description', 'text'));
   const [priority, setPriority] = useState<TodoPriority>(() => oneOf(firstParam(params, 'priority', 'severity'), priorities, 'medium'));
   const [status, setStatus] = useState<TodoStatus>(() => oneOf(firstParam(params, 'status'), statuses, autoSave ? 'pending' : 'draft'));
+  const [todoSearch, setTodoSearch] = useState('');
+  const [selectedRef, setSelectedRef] = useState(queryRef);
+  const [existingTodos, setExistingTodos] = useState<TodoItem[]>([]);
+  const [loadingTodos, setLoadingTodos] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [created, setCreated] = useState(false);
+  const [completeMessage, setCompleteMessage] = useState('');
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
+  const showModeSwitch = embed || initialMode === 'existing';
+
+  const setDir = useCallback((next: string) => {
+    setDirTouched(true);
+    setDirState(next);
+  }, []);
+
+  useEffect(() => {
+    if (!dirTouched && preferredDir && dir !== preferredDir) {
+      setDirState(preferredDir);
+    }
+  }, [dir, dirTouched, preferredDir]);
 
   // In embed mode the React Grab plugin hands us a captured screenshot: we tell
   // the parent we're ready, then receive the image Blob over postMessage (a Blob
@@ -92,10 +188,52 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
     return () => window.removeEventListener('message', onMessage);
   }, [embed, add]);
 
-  function providerForDir(target: string): string {
+  const providerForDir = useCallback((target: string): string => {
+    if (queryProvider) return queryProvider;
     const ws = workspaces.find(w => w.dir === target);
-    return ws?.todoProvider || queryProvider || 'auto';
-  }
+    return ws?.todoProvider || 'auto';
+  }, [queryProvider, workspaces]);
+
+  useEffect(() => {
+    if (mode !== 'existing') return;
+    if (!dir) {
+      setExistingTodos([]);
+      return;
+    }
+    const controller = new AbortController();
+    setLoadingTodos(true);
+    setError('');
+    (async () => {
+      try {
+        const res = await fetch(`/api/todos?${todoQuery(dir, providerForDir(dir))}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Load failed');
+        setExistingTodos((data as TodoListResponse).items || []);
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          setExistingTodos([]);
+          setError(err?.message || 'Load failed');
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoadingTodos(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [dir, mode, providerForDir]);
+
+  const selectableTodos = useMemo(
+    () => existingTodos
+      .filter(todo => !closedStatuses.has(todo.status))
+      .filter(todo => todoMatchesSearch(todo, todoSearch))
+      .sort(compareRecentTodos),
+    [existingTodos, todoSearch],
+  );
+
+  useEffect(() => {
+    if (mode !== 'existing' || !selectedRef || loadingTodos) return;
+    if (existingTodos.length === 0) return;
+    if (!existingTodos.some(todo => todo.ref === selectedRef)) setSelectedRef('');
+  }, [existingTodos, loadingTodos, mode, selectedRef]);
 
   function leave(to: string) {
     window.location.href = to;
@@ -104,7 +242,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
   // In embed mode (rendered inside the React Grab dialog iframe) the form reports
   // its outcome to the parent window — which closes the dialog — instead of
   // navigating this iframe.
-  function finish(type: 'todo-created' | 'cancel', ref?: string) {
+  function finish(type: 'todo-created' | 'todo-commented' | 'cancel', ref?: string) {
     window.parent.postMessage({ source: 'gavel-react-grab', type, ref }, '*');
   }
 
@@ -114,6 +252,14 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
   }
 
   async function submit() {
+    if (mode === 'existing') {
+      await submitExisting();
+      return;
+    }
+    await submitNew();
+  }
+
+  async function submitNew() {
     if (!title.trim() || busy) return;
     setBusy(true);
     setError('');
@@ -132,7 +278,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
       if (!response.ok) throw new Error(data.error || 'Create failed');
       const todo = data.todo as TodoItem | undefined;
       if (embed) {
-        setCreated(true);
+        setCompleteMessage('Todo created');
         finish('todo-created', todo?.ref);
         return;
       }
@@ -143,10 +289,43 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
     }
   }
 
-  if (created) {
+  async function submitExisting() {
+    if (!selectedRef || busy || (!body.trim() && attachments.length === 0)) return;
+    setBusy(true);
+    setError('');
+    try {
+      const url = `/api/todos/item?${todoQuery(dir, providerForDir(dir))}`;
+      const response = attachments.length
+        ? await fetch(url, { method: 'PATCH', body: todoCommentFormData({ ref: selectedRef, comment: body }, attachments) })
+        : await fetch(url, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref: selectedRef, comment: body }),
+          });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Comment failed');
+      const todo = data as TodoItem | undefined;
+      const ref = todo?.ref || selectedRef;
+      if (embed) {
+        setCompleteMessage('Comment added');
+        finish('todo-commented', ref);
+        return;
+      }
+      leave(back ?? `/todos/${encodeURIComponent(ref)}`);
+    } catch (err: any) {
+      setError(err?.message || 'Comment failed');
+      setBusy(false);
+    }
+  }
+
+  const submitDisabled = mode === 'existing'
+    ? !selectedRef || busy || (!body.trim() && attachments.length === 0)
+    : !title.trim() || busy;
+
+  if (completeMessage) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
-        <div className="text-sm font-medium">Todo created ✓</div>
+        <div className="text-sm font-medium">{completeMessage}</div>
       </div>
     );
   }
@@ -156,7 +335,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <img src="/brand/gavel-logo.svg" alt="gavel" className="h-7 shrink-0" />
-          <span className="text-sm font-semibold">New todo</span>
+          <span className="text-sm font-semibold">{mode === 'existing' ? 'Add to issue' : 'New todo'}</span>
         </div>
         <a
           href={back ?? '/todos'}
@@ -170,7 +349,7 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
           title={back ? 'Back' : 'Back to todos'}
           aria-label={back ? 'Back' : 'Back to todos'}
         >
-          <GavelIcon name="codicon:close" className="text-base" />
+          <UiClose className="text-base" />
         </a>
       </header>
 
@@ -183,50 +362,104 @@ export function TodoNewPage({ projects }: { projects: Project[] }) {
           }}
         >
           {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
+          {showModeSwitch && (
+            <div className="grid grid-cols-2 rounded-md border border-border bg-muted p-1">
+              {(['new', 'existing'] as const).map(next => (
+                <button
+                  key={next}
+                  type="button"
+                  onClick={() => setMode(next)}
+                  className={`h-8 rounded px-3 text-sm font-medium ${mode === next ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  {next === 'new' ? 'New issue' : 'Existing issue'}
+                </button>
+              ))}
+            </div>
+          )}
           <Field label="Workspace">
             <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
               {dirOptions.map(o => <option key={o.value || '(default)'} value={o.value}>{o.label}</option>)}
             </Select>
           </Field>
-          <Field label="Title" required>
-            <input
-              className={inputClass}
-              value={title}
-              placeholder="What needs doing?"
-              onChange={e => setTitle(e.currentTarget.value)}
-              autoFocus
-            />
-          </Field>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Field label="Priority">
-                <Select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
-                  {priorities.map(p => <option key={p} value={p}>{p}</option>)}
-                </Select>
+          {mode === 'existing' ? (
+            <>
+              <Field label="Issue">
+                <div className="space-y-2">
+                  <input
+                    className={inputClass}
+                    value={todoSearch}
+                    placeholder="Search issues"
+                    onChange={e => setTodoSearch(e.currentTarget.value)}
+                    autoFocus
+                  />
+                  <Select
+                    value={selectedRef}
+                    onChange={e => setSelectedRef(e.currentTarget.value)}
+                    className={inputClass}
+                    aria-label="Issue"
+                    disabled={loadingTodos}
+                  >
+                    <option value="">{loadingTodos ? 'Loading issues...' : 'Select issue'}</option>
+                    {selectableTodos.map(todo => (
+                      <option key={todo.ref} value={todo.ref}>
+                        {todo.shortId || todo.ref} - {todo.title}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
               </Field>
-            </div>
-            <div className="flex-1">
-              <Field label="Status">
-                <Select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
-                  {statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-                </Select>
+              <Field label="Comment">
+                <textarea
+                  className={`${inputClass} h-40 resize-none`}
+                  value={body}
+                  placeholder="Comment"
+                  onChange={e => setBody(e.currentTarget.value)}
+                />
               </Field>
-            </div>
-          </div>
-          <Field label="Body">
-            <textarea
-              className={`${inputClass} h-40 resize-none`}
-              value={body}
-              placeholder="Details (optional)"
-              onChange={e => setBody(e.currentTarget.value)}
-            />
-          </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Title" required>
+                <input
+                  className={inputClass}
+                  value={title}
+                  placeholder="What needs doing?"
+                  onChange={e => setTitle(e.currentTarget.value)}
+                  autoFocus
+                />
+              </Field>
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <Field label="Priority">
+                    <Select value={priority} onChange={e => setPriority(e.currentTarget.value as TodoPriority)} className={inputClass} aria-label="Priority">
+                      {priorities.map(p => <option key={p} value={p}>{p}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+                <div className="flex-1">
+                  <Field label="Status">
+                    <Select value={status} onChange={e => setStatus(e.currentTarget.value as TodoStatus)} className={inputClass} aria-label="Status">
+                      {statuses.map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+              </div>
+              <Field label="Body">
+                <textarea
+                  className={`${inputClass} h-40 resize-none`}
+                  value={body}
+                  placeholder="Details (optional)"
+                  onChange={e => setBody(e.currentTarget.value)}
+                />
+              </Field>
+            </>
+          )}
           <Field label="Screenshot">
             <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
           </Field>
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" onClick={cancel}>Cancel</Button>
-            <Button type="submit" loading={busy} disabled={!title.trim()}>Add todo</Button>
+            <Button type="submit" loading={busy} disabled={submitDisabled}>{mode === 'existing' ? 'Add comment' : 'Add todo'}</Button>
           </div>
         </form>
       </main>

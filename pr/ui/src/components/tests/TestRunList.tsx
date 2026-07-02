@@ -1,4 +1,5 @@
-import { GavelIcon } from '../GavelIcon';
+import type { ComponentType } from 'react';
+import { UiBeaker, UiDebugStepOver, UiError, UiFolder, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { RelativeTime } from '../RelativeTime';
 import type { ProjectRuns, TestRunView } from './types';
 
@@ -22,7 +23,7 @@ export function TestRunList({
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
         <div>
-          <GavelIcon name="codicon:beaker" className="mb-2 text-4xl" />
+          <UiBeaker className="mb-2 text-4xl" />
           <p>No test runs found.</p>
           <p className="mt-1 text-xs">
             Run <code className="rounded bg-muted px-1">gavel test</code> in a registered workspace.
@@ -37,7 +38,7 @@ export function TestRunList({
       {withRuns.map(project => (
         <div key={project.name}>
           <div className="sticky top-0 z-10 flex items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-            <GavelIcon name="codicon:folder" />
+            <UiFolder />
             {project.name}
             <span className="tabular-nums text-[10px] opacity-70">{project.runs.length}</span>
           </div>
@@ -54,6 +55,7 @@ export function TestRunList({
 }
 
 function TestRunRow({ run, selected, onClick }: { run: TestRunView; selected: boolean; onClick: () => void }) {
+  const KindIcon = run.kind === 'lint' ? UiWarningTriangle : UiBeaker;
   return (
     <button
       type="button"
@@ -64,7 +66,7 @@ function TestRunRow({ run, selected, onClick }: { run: TestRunView; selected: bo
     >
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs font-medium">
-          <GavelIcon name={run.kind === 'lint' ? 'codicon:warning' : 'codicon:beaker'} />
+          <KindIcon />
           {KIND_LABEL[run.kind]}
         </span>
         {run.started && <RelativeTime iso={run.started} title={run.started} />}
@@ -79,15 +81,15 @@ function Counts({ run }: { run: TestRunView }) {
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] tabular-nums">
       {run.total > 0 && (
         <>
-          <Pill icon="codicon:pass" tone="text-green-600" value={run.passed} />
-          <Pill icon="codicon:error" tone={run.failed > 0 ? 'text-red-600' : 'text-muted-foreground'} value={run.failed} />
-          {run.skipped > 0 && <Pill icon="codicon:debug-step-over" tone="text-muted-foreground" value={run.skipped} />}
-          {run.warned > 0 && <Pill icon="codicon:warning" tone="text-amber-600" value={run.warned} />}
+          <Pill icon={UiPass} tone="text-green-600" value={run.passed} />
+          <Pill icon={UiError} tone={run.failed > 0 ? 'text-red-600' : 'text-muted-foreground'} value={run.failed} />
+          {run.skipped > 0 && <Pill icon={UiDebugStepOver} tone="text-muted-foreground" value={run.skipped} />}
+          {run.warned > 0 && <Pill icon={UiWarningTriangle} tone="text-amber-600" value={run.warned} />}
         </>
       )}
       {run.lintLinters > 0 && (
         <Pill
-          icon="codicon:warning"
+          icon={UiWarningTriangle}
           tone={run.lintViolations > 0 ? 'text-amber-600' : 'text-green-600'}
           value={run.lintViolations}
           label="lint"
@@ -97,10 +99,11 @@ function Counts({ run }: { run: TestRunView }) {
   );
 }
 
-function Pill({ icon, tone, value, label }: { icon: string; tone: string; value: number; label?: string }) {
+function Pill({ icon, tone, value, label }: { icon: ComponentType<IconProps>; tone: string; value: number; label?: string }) {
+  const Icon = icon;
   return (
     <span className={`flex items-center gap-0.5 ${tone}`}>
-      <GavelIcon name={icon} />
+      <Icon />
       {value}
       {label && <span className="text-muted-foreground">{label}</span>}
     </span>

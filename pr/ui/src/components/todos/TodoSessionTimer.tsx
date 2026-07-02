@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiClock, UiCollapseAll, UiError, UiEye, UiHubot, UiUnknown } from '@flanksource/clicky-ui/icons';
 import type { SessionStats } from '../../types';
-import { GavelIcon } from '../GavelIcon';
+import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 
 // useSessionStats polls /api/todos/session/stats for one agent session. The
@@ -136,14 +137,14 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
   return (
     <>
       <span className="inline-flex items-center gap-1" title={`${stats.agent || 'claude'} session`}>
-        <GavelIcon name="codicon:hubot" className="text-[12px]" />
+        <UiHubot className="text-[12px]" />
         <span className="font-medium text-foreground">{modelLabel(stats)}</span>
         {stats.effort && (
           <span className="rounded bg-border/60 px-1 uppercase tracking-wide">{stats.effort}</span>
         )}
       </span>
       <span className="inline-flex items-center gap-1 tabular-nums" title="Session time">
-        <GavelIcon name={stats.inProgress ? 'svg-spinners:ring-resize' : 'codicon:clock'} className="text-[12px]" />
+        {stats.inProgress ? <Spinner className="text-[12px]" /> : <UiClock className="text-[12px]" />}
         {formatDuration(elapsedMs)}
       </span>
       {stats.contextTokens > 0 && (
@@ -151,7 +152,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           className="inline-flex items-center gap-1.5 tabular-nums"
           title={`Context: ${stats.contextTokens.toLocaleString()}${stats.contextWindow > 0 ? ` / ${stats.contextWindow.toLocaleString()} tokens (${Math.round(ctxPct)}%)` : ' tokens'}${stats.compactions ? ` · compacted ${stats.compactions}×` : ''}\n${stats.inputTokens.toLocaleString()} in / ${stats.outputTokens.toLocaleString()} out${stats.turns ? ` · ${stats.turns} turns` : ''} · ${formatTokens(stats.totalTokens)} total`}
         >
-          <GavelIcon name="codicon:symbol-number" className="text-[12px]" />
+          <UiUnknown className="text-[12px]" />
           {stats.contextWindow > 0 ? (
             <>
               <span className="h-1.5 w-16 overflow-hidden rounded-full bg-border/60">
@@ -167,7 +168,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           )}
           {stats.compactions > 0 && (
             <span className="inline-flex items-center gap-0.5" title={`Context compacted ${stats.compactions}×`}>
-              <GavelIcon name="codicon:fold" className="text-[11px]" />
+              <UiCollapseAll className="text-[11px]" />
               {stats.compactions}
             </span>
           )}
@@ -175,7 +176,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
       )}
       {cost && (
         <span className="inline-flex items-center gap-1 tabular-nums" title="Estimated cost">
-          <GavelIcon name="codicon:credit-card" className="text-[12px]" />
+          <UiUnknown className="text-[12px]" />
           {cost}
         </span>
       )}
@@ -184,7 +185,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           className="inline-flex max-w-full items-center gap-1 rounded border border-red-500/30 bg-red-500/15 px-1.5 py-0.5 font-medium text-red-300"
           title={stats.error || 'Session ended on an API/network error'}
         >
-          <GavelIcon name="codicon:error" className="text-[12px]" />
+          <UiError className="text-[12px]" />
           <span className="truncate">{stats.error || 'API error'}</span>
         </span>
       )}
@@ -196,7 +197,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
         title={focusError || 'Focus this session’s terminal in cmux'}
         className={`ml-auto inline-flex h-auto items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50 ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
       >
-        <GavelIcon name={focusBusy ? 'svg-spinners:ring-resize' : focusError ? 'codicon:error' : 'codicon:eye'} className="text-[12px]" />
+        {focusBusy ? <Spinner className="text-[12px]" /> : focusError ? <UiError className="text-[12px]" /> : <UiEye className="text-[12px]" />}
         cmux
       </Button>
     </>

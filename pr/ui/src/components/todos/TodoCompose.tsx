@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiComment } from '@flanksource/clicky-ui/icons';
 import { inputClass } from './format';
 
 // EditActions is the shared Cancel/Save row for the inline field editors.
@@ -92,6 +93,7 @@ export function TodoCommentBox({
 
   return (
     <div className="flex items-center gap-2">
+      <UiComment className="shrink-0 text-lg text-muted-foreground" />
       <input
         className={inputClass}
         value={text}

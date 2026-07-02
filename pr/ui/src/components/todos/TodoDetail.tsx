@@ -1,8 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
+import type { IconProps } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiCog, UiComment, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiEye, UiFolder, UiListDashes, UiListFlat, UiMarkdown, UiPass, UiPlay, UiQuestion, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import { Markdown } from '../Markdown';
-import { GavelIcon } from '../GavelIcon';
+import { Spinner } from '../../icons/Spinner';
 import { TodoTimeline } from './TodoTimeline';
 import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
@@ -12,6 +14,7 @@ import { priorities, statusClass, statuses, statusLabel, todoQuery } from './for
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
+import { TodoReviewBanner } from './planActions';
 
 export function TodoDetail({
   todo,
@@ -41,7 +44,7 @@ export function TodoDetail({
   const [busy, setBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'overview' | 'session' | 'plan'>('overview');
+  const [tab, setTab] = useState<'overview' | 'criteria' | 'session' | 'plan'>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -55,6 +58,7 @@ export function TodoDetail({
   const closed = todo?.status === 'completed' || todo?.providerState === 'closed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
+  const criteriaCount = todo?.criteria?.length ?? 0;
   const fullTodoId = todo ? todoFullId(todo, provider) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const { stats: headerSessionStats } = useSessionStats(dir, provider, todo?.sessionId, !!todo?.sessionId);
@@ -220,12 +224,14 @@ export function TodoDetail({
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         <div className="text-center">
-          <GavelIcon name="codicon:check" className="mb-2 text-4xl" />
+          <UiCheck className="mb-2 text-4xl" />
           <p>Select a todo</p>
         </div>
       </div>
     );
   }
+
+  const HeaderStatusIcon = statusIcon(todo.status);
 
   return (
     <div className="flex h-full flex-col">
@@ -243,7 +249,7 @@ export function TodoDetail({
                   aria-label="Back to todos"
                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
-                  <GavelIcon name="codicon:arrow-left" className="text-base" />
+                  <UiArrowLeft className="text-base" />
                 </Button>
               )}
               <div className="min-w-0 flex-1">
@@ -263,7 +269,7 @@ export function TodoDetail({
                       aria-label={statusLabel(todo.status)}
                       role="img"
                     >
-                      <GavelIcon name={statusIcon(todo.status)} className="text-xs" />
+                      <HeaderStatusIcon className="text-xs" />
                     </span>
                     <h1 className="min-w-0 flex-1 truncate text-xl font-semibold leading-8 text-foreground">
                       {todo.title}
@@ -319,34 +325,34 @@ export function TodoDetail({
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
                   aria-label="Resume prior agent session"
                 >
-                  <GavelIcon name={runBusy ? 'svg-spinners:ring-resize' : 'codicon:debug-step-over'} className="text-sm" />
+                  {runBusy ? <Spinner className="text-sm" /> : <UiDebugStepOver className="text-sm" />}
                 </Button>
               )}
               <TodoRunSplitButton
                 disabled={busy || runBusy || sessionInProgress}
                 loading={runBusy}
                 label={sessionInProgress ? 'Stop' : 'Run'}
-                icon={sessionInProgress ? 'codicon:debug-stop' : 'codicon:play'}
+                icon={sessionInProgress ? UiStop : UiPlay}
                 tone={sessionInProgress ? 'danger' : 'default'}
                 title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : 'Run todo'}
                 onRun={runTodo}
                 onAdvanced={() => setAdvancedOpen(true)}
               />
               <HeaderIconButton
-                icon={busy ? 'svg-spinners:ring-resize' : 'octicon:check-circle-fill-16'}
+                icon={busy ? Spinner : UiCheckFilled}
                 label={todo.status === 'verified' ? 'Already verified' : 'Mark verified'}
                 onClick={() => patch({ status: 'verified' })}
                 disabled={busy || todo.status === 'verified'}
                 className="text-emerald-600 hover:text-emerald-700"
               />
               <HeaderIconButton
-                icon={busy ? 'svg-spinners:ring-resize' : closed ? 'codicon:debug-restart' : 'codicon:pass'}
+                icon={busy ? Spinner : closed ? UiRestart : UiPass}
                 label={closed ? 'Reopen todo' : 'Close todo'}
                 onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
                 disabled={busy}
               />
               <HeaderIconButton
-                icon={busy ? 'svg-spinners:ring-resize' : 'codicon:trash'}
+                icon={busy ? Spinner : UiTrash}
                 label={isGrite ? 'Archive issue' : 'Delete file'}
                 onClick={archiveTodo}
                 disabled={busy}
@@ -374,10 +380,13 @@ export function TodoDetail({
                 title={copyState === 'copied' ? 'Copied' : 'Copy full issue ID'}
                 className="hidden h-auto min-w-0 max-w-full items-center gap-1.5 rounded border border-border bg-muted/20 px-2 py-1 text-left font-mono text-[11px] hover:bg-muted md:flex"
               >
-                <GavelIcon
-                  name={copyState === 'copied' ? 'codicon:check' : copyState === 'error' ? 'codicon:error' : 'codicon:copy'}
-                  className={copyState === 'error' ? 'shrink-0 text-red-600' : 'shrink-0 text-muted-foreground'}
-                />
+                {copyState === 'copied' ? (
+                  <UiCheck className="shrink-0 text-muted-foreground" />
+                ) : copyState === 'error' ? (
+                  <UiError className="shrink-0 text-red-600" />
+                ) : (
+                  <UiCopy className="shrink-0 text-muted-foreground" />
+                )}
                 <span className="min-w-0 truncate">{fullTodoId}</span>
               </Button>
               <span className="hidden items-center gap-2 md:flex">
@@ -402,21 +411,27 @@ export function TodoDetail({
         provider={provider}
         refs={[todo.ref]}
       />
+      <TodoReviewBanner todo={todo} dir={dir} provider={provider} onChanged={onChanged} />
       <div className="flex shrink-0 gap-1 border-b border-border bg-background px-4 pt-2">
-        <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon="codicon:list-flat" label="Overview" />
-        <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon="codicon:comment-discussion" label="Session" />
-        <DetailTab active={tab === 'plan'} onClick={() => setTab('plan')} icon="codicon:checklist" label="Plan" />
+        <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon={UiListFlat} label="Overview" />
+        <DetailTab active={tab === 'criteria'} onClick={() => setTab('criteria')} icon={UiListDashes} label="Criteria" count={criteriaCount} />
+        <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon={UiComment} label="Session" />
+        <DetailTab active={tab === 'plan'} onClick={() => setTab('plan')} icon={UiListDashes} label="Plan" />
       </div>
       <div className="flex min-h-0 flex-1 flex-col bg-[#f4f6f9] dark:bg-[#0a1020]">
         {tab === 'session' ? (
           <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'plan'} />
+        ) : tab === 'criteria' ? (
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            <AcceptanceCriteria dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
+          </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {loading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <GavelIcon name="svg-spinners:ring-resize" />
+                <Spinner />
                 Loading
               </div>
             ) : (
@@ -432,7 +447,7 @@ export function TodoDetail({
                 ) : body ? (
                   <TodoSection
                     title="Body"
-                    icon="codicon:markdown"
+                    icon={UiMarkdown}
                     defaultOpen
                     resetKey={`${todo.ref}:body`}
                     action={<EditPencil label="Edit body" onClick={startEditBody} disabled={busy} />}
@@ -442,7 +457,7 @@ export function TodoDetail({
                 ) : (
                   <TodoSection
                     title="Body"
-                    icon="codicon:markdown"
+                    icon={UiMarkdown}
                     defaultOpen
                     resetKey={`${todo.ref}:body-empty`}
                     action={<EditPencil label="Add body" onClick={startEditBody} disabled={busy} />}
@@ -450,7 +465,6 @@ export function TodoDetail({
                     <p className="text-sm text-muted-foreground">No body yet.</p>
                   </TodoSection>
                 )}
-                <AcceptanceCriteria dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
                 <TodoCommentBox
                   closed={closed}
                   busy={busy}
@@ -496,6 +510,7 @@ function StatusMenu({
   compact?: boolean;
   onSelect: (status: TodoStatus) => void;
 }) {
+  const ValueIcon = statusIcon(value);
   return (
     <DropdownMenu
       align="left"
@@ -514,16 +529,18 @@ function StatusMenu({
         >
           {compact && <span>Status</span>}
           <span className={compact ? `inline-flex h-4 w-4 items-center justify-center rounded-full border ${statusClass(value)}` : ''}>
-            <GavelIcon name={statusIcon(value)} className="text-xs" />
+            <ValueIcon className="text-xs" />
           </span>
           <span className={compact ? 'capitalize text-foreground' : ''}>{statusLabel(value)}</span>
-          <GavelIcon name="codicon:chevron-down" className="text-[11px] opacity-70" />
+          <UiChevronDown className="text-[11px] opacity-70" />
         </Button>
       }
     >
       {close => (
         <div className="p-1 text-xs">
-          {statuses.map(status => (
+          {statuses.map(status => {
+            const StatusItemIcon = statusIcon(status);
+            return (
             <Button
               key={status}
               variant="ghost"
@@ -536,12 +553,13 @@ function StatusMenu({
               className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
             >
               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${statusClass(status)}`}>
-                <GavelIcon name={statusIcon(status)} className="text-xs" />
+                <StatusItemIcon className="text-xs" />
               </span>
               <span className="min-w-0 flex-1 capitalize text-foreground">{statusLabel(status)}</span>
-              {status === value && <GavelIcon name="codicon:check" className="text-xs text-primary" />}
+              {status === value && <UiCheck className="text-xs text-primary" />}
             </Button>
-          ))}
+            );
+          })}
         </div>
       )}
     </DropdownMenu>
@@ -559,6 +577,7 @@ function PriorityMenu({
   compact?: boolean;
   onSelect: (priority: TodoPriority) => void;
 }) {
+  const ValueIcon = priorityIcon(value);
   return (
     <DropdownMenu
       align="left"
@@ -577,16 +596,18 @@ function PriorityMenu({
         >
           {compact && <span>Severity</span>}
           <span className={compact ? `inline-flex h-4 w-4 items-center justify-center rounded-full border ${priorityBadgeClass(value)}` : ''}>
-            <GavelIcon name={priorityIcon(value)} className="text-xs" />
+            <ValueIcon className="text-xs" />
           </span>
           <span className={compact ? 'capitalize text-foreground' : ''}>{value}</span>
-          <GavelIcon name="codicon:chevron-down" className="text-[11px] opacity-70" />
+          <UiChevronDown className="text-[11px] opacity-70" />
         </Button>
       }
     >
       {close => (
         <div className="p-1 text-xs">
-          {priorities.map(priority => (
+          {priorities.map(priority => {
+            const PriorityItemIcon = priorityIcon(priority);
+            return (
             <Button
               key={priority}
               variant="ghost"
@@ -599,12 +620,13 @@ function PriorityMenu({
               className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
             >
               <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${priorityBadgeClass(priority)}`}>
-                <GavelIcon name={priorityIcon(priority)} className="text-xs" />
+                <PriorityItemIcon className="text-xs" />
               </span>
               <span className="min-w-0 flex-1 capitalize text-foreground">{priority}</span>
-              {priority === value && <GavelIcon name="codicon:check" className="text-xs text-primary" />}
+              {priority === value && <UiCheck className="text-xs text-primary" />}
             </Button>
-          ))}
+            );
+          })}
         </div>
       )}
     </DropdownMenu>
@@ -695,7 +717,7 @@ function MobileHeaderMenu({
           aria-label="Issue actions"
           className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          <GavelIcon name="codicon:kebab-vertical" className="text-sm" />
+          <UiDotsVertical className="text-sm" />
         </Button>
       }
     >
@@ -703,7 +725,7 @@ function MobileHeaderMenu({
         <div className="p-1 text-xs">
           <MobileMenuSection title="Issue">
             <MobileMenuItem
-              icon="codicon:copy"
+              icon={UiCopy}
               label="Copy issue ID"
               detail={fullTodoId}
               onClick={() => {
@@ -712,7 +734,7 @@ function MobileHeaderMenu({
               }}
             />
             <MobileMenuItem
-              icon="codicon:edit"
+              icon={UiEdit}
               label="Edit title"
               disabled={busy}
               onClick={() => {
@@ -725,7 +747,7 @@ function MobileHeaderMenu({
           <MobileMenuSection title="Run">
             {todo.sessionId && (
               <MobileMenuItem
-                icon="codicon:debug-step-over"
+                icon={UiDebugStepOver}
                 label="Resume session"
                 disabled={busy || runBusy || sessionInProgress}
                 onClick={() => {
@@ -735,7 +757,7 @@ function MobileHeaderMenu({
               />
             )}
             <MobileMenuItem
-              icon={sessionInProgress ? 'codicon:debug-stop' : runBusy ? 'svg-spinners:ring-resize' : 'codicon:play'}
+              icon={sessionInProgress ? UiStop : runBusy ? Spinner : UiPlay}
               label={sessionInProgress ? 'Stop unavailable' : 'Run todo'}
               detail={sessionInProgress ? 'Session interrupt is not supported yet' : undefined}
               disabled={busy || runBusy || sessionInProgress}
@@ -745,7 +767,7 @@ function MobileHeaderMenu({
               }}
             />
             <MobileMenuItem
-              icon="codicon:gear"
+              icon={UiCog}
               label="Advanced run"
               disabled={busy || runBusy}
               onClick={() => {
@@ -792,7 +814,7 @@ function MobileHeaderMenu({
               {transferTargets.map(target => (
                 <MobileMenuItem
                   key={target.dir}
-                  icon="codicon:folder"
+                  icon={UiFolder}
                   label={target.name || target.dir}
                   detail={target.dir}
                   disabled={busy}
@@ -807,7 +829,7 @@ function MobileHeaderMenu({
 
           <MobileMenuSection title="Actions">
             <MobileMenuItem
-              icon="octicon:check-circle-fill-16"
+              icon={UiCheckFilled}
               label={todo.status === 'verified' ? 'Already verified' : 'Mark verified'}
               disabled={busy || todo.status === 'verified'}
               onClick={() => {
@@ -816,7 +838,7 @@ function MobileHeaderMenu({
               }}
             />
             <MobileMenuItem
-              icon={closed ? 'codicon:debug-restart' : 'codicon:pass'}
+              icon={closed ? UiRestart : UiPass}
               label={closed ? 'Reopen todo' : 'Close todo'}
               disabled={busy}
               onClick={() => {
@@ -825,7 +847,7 @@ function MobileHeaderMenu({
               }}
             />
             <MobileMenuItem
-              icon="codicon:trash"
+              icon={UiTrash}
               label={isGrite ? 'Archive issue' : 'Delete file'}
               disabled={busy}
               danger
@@ -869,7 +891,7 @@ function MobileMenuSection({ title, children }: { title: string; children: React
 }
 
 function MobileMenuItem({
-  icon,
+  icon: Icon,
   label,
   detail,
   selected,
@@ -877,7 +899,7 @@ function MobileMenuItem({
   danger,
   onClick,
 }: {
-  icon: string;
+  icon: ComponentType<IconProps>;
   label: string;
   detail?: string;
   selected?: boolean;
@@ -893,12 +915,12 @@ function MobileMenuItem({
       onClick={onClick}
       className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
     >
-      <GavelIcon name={icon} className={`mt-0.5 shrink-0 text-sm ${danger ? 'text-red-600' : 'text-muted-foreground'}`} />
+      <Icon className={`mt-0.5 shrink-0 text-sm ${danger ? 'text-red-600' : 'text-muted-foreground'}`} />
       <span className="min-w-0 flex-1">
         <span className={`block truncate font-medium capitalize ${danger ? 'text-red-600' : 'text-foreground'}`}>{label}</span>
         {detail && <span className="block truncate font-mono text-[10px] text-muted-foreground">{detail}</span>}
       </span>
-      {selected && <GavelIcon name="codicon:check" className="mt-0.5 text-xs text-primary" />}
+      {selected && <UiCheck className="mt-0.5 text-xs text-primary" />}
     </Button>
   );
 }
@@ -926,9 +948,9 @@ function MoveMenu({
           title="Move todo to another project"
           aria-label="Move todo to another project"
         >
-          <GavelIcon name="codicon:folder" className="text-xs" />
+          <UiFolder className="text-xs" />
           Move to…
-          <GavelIcon name="codicon:chevron-down" className="text-[11px] opacity-70" />
+          <UiChevronDown className="text-[11px] opacity-70" />
         </Button>
       }
     >
@@ -946,7 +968,7 @@ function MoveMenu({
               }}
               className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
             >
-              <GavelIcon name="codicon:folder" className="mt-0.5 shrink-0 text-sm text-muted-foreground" />
+              <UiFolder className="mt-0.5 shrink-0 text-sm text-muted-foreground" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium text-foreground">{target.name || target.dir}</span>
                 <span className="block truncate font-mono text-[10px] text-muted-foreground">{target.dir}</span>
@@ -960,13 +982,13 @@ function MoveMenu({
 }
 
 function HeaderIconButton({
-  icon,
+  icon: Icon,
   label,
   onClick,
   disabled,
   className = '',
 }: {
-  icon: string;
+  icon: ComponentType<IconProps>;
   label: string;
   onClick: () => void;
   disabled?: boolean;
@@ -983,42 +1005,42 @@ function HeaderIconButton({
       aria-label={label}
       className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 ${className}`}
     >
-      <GavelIcon name={icon} className="text-sm" />
+      <Icon className="text-sm" />
     </Button>
   );
 }
 
-function statusIcon(status: TodoStatus | string): string {
+function statusIcon(status: TodoStatus | string): ComponentType<IconProps> {
   switch (status) {
     case 'draft':
-      return 'codicon:circle-large-outline';
+      return UiCircleOutline;
     case 'in_progress':
-      return 'svg-spinners:ring-resize';
+      return Spinner;
     case 'review':
-      return 'codicon:eye';
+      return UiEye;
     case 'ask':
-      return 'codicon:question';
+      return UiQuestion;
     case 'failed':
-      return 'octicon:x-circle-fill-16';
+      return UiCircleXFilled;
     case 'verified':
-      return 'octicon:check-circle-fill-16';
+      return UiCheckFilled;
     case 'completed':
-      return 'codicon:pass';
+      return UiPass;
     case 'skipped':
-      return 'codicon:circle-slash';
+      return UiCancel;
     default:
-      return 'codicon:circle-large-outline';
+      return UiCircleOutline;
   }
 }
 
-function priorityIcon(priority: TodoPriority | string): string {
+function priorityIcon(priority: TodoPriority | string): ComponentType<IconProps> {
   switch (priority) {
     case 'high':
-      return 'codicon:chevron-up';
+      return UiChevronUp;
     case 'low':
-      return 'codicon:chevron-down';
+      return UiChevronDown;
     default:
-      return 'codicon:circle-large-outline';
+      return UiCircleOutline;
   }
 }
 
@@ -1033,7 +1055,7 @@ function priorityBadgeClass(priority: TodoPriority | string): string {
   }
 }
 
-function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: string; label: string }) {
+function DetailTab({ active, onClick, icon: Icon, label, count }: { active: boolean; onClick: () => void; icon: ComponentType<IconProps>; label: string; count?: number }) {
   return (
     <Button
       variant="ghost"
@@ -1046,8 +1068,13 @@ function DetailTab({ active, onClick, icon, label }: { active: boolean; onClick:
           : 'border-transparent text-muted-foreground hover:text-foreground'
       }`}
     >
-      <GavelIcon name={icon} className="text-sm" />
+      <Icon className="text-sm" />
       {label}
+      {typeof count === 'number' && count > 0 && (
+        <span className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+          {count}
+        </span>
+      )}
     </Button>
   );
 }
@@ -1064,14 +1091,14 @@ function EditPencil({ label, onClick, disabled }: { label: string; onClick: () =
       aria-label={label}
       className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
     >
-      <GavelIcon name="codicon:edit" className="text-xs" />
+      <UiEdit className="text-xs" />
     </Button>
   );
 }
 
 function TodoSection({
   title,
-  icon,
+  icon: Icon,
   count,
   defaultOpen = false,
   resetKey,
@@ -1079,7 +1106,7 @@ function TodoSection({
   children,
 }: {
   title: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   count?: number;
   defaultOpen?: boolean;
   resetKey: string;
@@ -1104,9 +1131,9 @@ function TodoSection({
           className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 rounded-none px-3 py-2.5 text-left hover:bg-muted/70"
           aria-expanded={open}
         >
-          <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="shrink-0 text-xs text-muted-foreground" />
+          {open ? <UiChevronDown className="shrink-0 text-xs text-muted-foreground" /> : <UiChevronRight className="shrink-0 text-xs text-muted-foreground" />}
           <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-            <GavelIcon name={icon} className="text-xs" />
+            <Icon className="text-xs" />
           </span>
           <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
           {typeof count === 'number' && (

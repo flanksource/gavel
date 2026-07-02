@@ -3,7 +3,8 @@ import type { WorkflowRun, Job } from '../types';
 import { statusIcon, statusColor } from '../utils';
 import { useNow } from '../useNow';
 import { LogViewer } from './LogViewer';
-import { GavelIcon } from './GavelIcon';
+import { UiChevronDown, UiChevronRight, UiLinkExternal } from '@flanksource/clicky-ui/icons';
+import { Spinner } from '../icons/Spinner';
 
 interface JobLogsResponse {
   jobId: number;
@@ -52,7 +53,7 @@ function IndeterminateProgress() {
   return (
     <div className="ml-4 mt-1 mb-1">
       <div className="flex items-center gap-1.5 text-[10px] text-blue-600 mb-0.5">
-        <GavelIcon name="svg-spinners:ring-resize" />
+        <Spinner />
         <span>Fetching logs from GitHub…</span>
       </div>
       <div className="h-1 w-full max-w-xs bg-blue-100 rounded overflow-hidden relative">
@@ -74,6 +75,7 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
   const isFailure = run.conclusion?.toLowerCase() === 'failure';
   const [expanded, setExpanded] = useState(isFailure);
   const summary = runSummary(run);
+  const ChevronIcon = expanded ? UiChevronDown : UiChevronRight;
 
   return (
     <div className="mb-3">
@@ -81,10 +83,7 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
         className="flex items-center gap-1.5 text-sm font-medium cursor-pointer hover:bg-muted rounded px-1 -mx-1 py-0.5"
         onClick={() => setExpanded(!expanded)}
       >
-        <GavelIcon
-          name={expanded ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-          className="text-muted-foreground text-[10px]"
-        />
+        <ChevronIcon className="text-muted-foreground text-[10px]" />
         <span className={statusColor(run.status, run.conclusion)}>
           {statusIcon(run.status, run.conclusion)}
         </span>
@@ -98,7 +97,7 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
             className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <GavelIcon name="codicon:link-external" className="text-xs" />
+            <UiLinkExternal className="text-xs" />
           </a>
         )}
       </div>
@@ -181,7 +180,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
             className="text-muted-foreground hover:text-primary"
             onClick={e => e.stopPropagation()}
           >
-            <GavelIcon name="codicon:link-external" className="text-[10px]" />
+            <UiLinkExternal className="text-[10px]" />
           </a>
         )}
       </div>
@@ -192,16 +191,14 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         const isOpen = expandedSteps.has(step.number);
         const logs = stepLogs.get(step.number) || jobLogs;
         const isFallback = !stepLogs.get(step.number) && !!jobLogs;
+        const ChevronIcon = isOpen ? UiChevronDown : UiChevronRight;
         return (
           <div key={step.number} className="ml-4 mt-0.5 text-xs">
             <div
               className="cursor-pointer hover:bg-muted rounded px-1 -mx-1 inline-flex items-center gap-1"
               onClick={() => toggleStep(step.number)}
             >
-              <GavelIcon
-                name={isOpen ? 'codicon:chevron-down' : 'codicon:chevron-right'}
-                className="text-muted-foreground text-[9px]"
-              />
+              <ChevronIcon className="text-muted-foreground text-[9px]" />
               <span className={statusColor(step.status, step.conclusion)}>
                 {statusIcon(step.status, step.conclusion)}
               </span>

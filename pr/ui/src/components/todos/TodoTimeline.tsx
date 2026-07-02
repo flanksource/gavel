@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
-import { UiAdd, UiCircleFilled, UiComment, UiDiff } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiHistory } from '@flanksource/clicky-ui/icons';
 import type { TodoEvent } from '../../types';
 import { timeAgo } from '../../utils';
-import { GavelIcon } from '../GavelIcon';
 import { Markdown } from '../Markdown';
 import { RelativeTime } from '../RelativeTime';
 
@@ -126,7 +125,7 @@ export function TodoTimeline({ events }: { events: TodoEvent[] }) {
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
         <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground">
-          <GavelIcon name="codicon:history" className="text-xs" />
+          <UiHistory className="text-xs" />
         </span>
         <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">History</span>
         <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{events.length}</span>
@@ -138,7 +137,7 @@ export function TodoTimeline({ events }: { events: TodoEvent[] }) {
           title={desc ? 'Newest first' : 'Oldest first'}
           aria-label="Toggle timeline sort order"
         >
-          <GavelIcon name={desc ? 'codicon:chevron-down' : 'codicon:chevron-up'} className="text-xs" />
+          {desc ? <UiChevronDown className="text-xs" /> : <UiChevronUp className="text-xs" />}
           {desc ? 'Newest' : 'Oldest'}
         </Button>
       </div>

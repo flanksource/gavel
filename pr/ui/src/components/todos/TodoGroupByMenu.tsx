@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
+import { UiCheck, UiChevronDown } from '@flanksource/clicky-ui/icons';
 import type { TodoGroupBy } from '../../types';
-import { GavelIcon } from '../GavelIcon';
 import { GROUP_BY_OPTIONS } from './todoGroup';
 
 // TodoGroupByMenu is the tab-strip dropdown that switches how the todo lists are
@@ -29,6 +29,7 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
   }, [open]);
 
   const active = GROUP_BY_OPTIONS.find(opt => opt.value === groupBy) ?? GROUP_BY_OPTIONS[0];
+  const ActiveIcon = active.icon;
 
   return (
     <div className="relative" ref={rootRef}>
@@ -41,9 +42,9 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
         title="Group todos by"
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
-        <GavelIcon name={active.icon} className="text-xs" />
+        <ActiveIcon className="text-xs" />
         <span className="font-medium">Group: {active.label}</span>
-        <GavelIcon name="codicon:chevron-down" className="text-[10px]" />
+        <UiChevronDown className="text-[10px]" />
       </Button>
 
       {open && (
@@ -54,6 +55,7 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
         >
           {GROUP_BY_OPTIONS.map(opt => {
             const selected = opt.value === groupBy;
+            const OptIcon = opt.icon;
             return (
               <Button
                 key={opt.value}
@@ -66,9 +68,9 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
                   selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
                 }`}
               >
-                <GavelIcon name={opt.icon} className="text-base" />
+                <OptIcon className="text-base" />
                 <span className="flex-1">{opt.label}</span>
-                {selected && <GavelIcon name="codicon:check" className="text-xs" />}
+                {selected && <UiCheck className="text-xs" />}
               </Button>
             );
           })}

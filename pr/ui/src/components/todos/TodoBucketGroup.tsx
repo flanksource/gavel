@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
 import type { TodoDensity, TodoStatus } from '../../types';
-import { GavelIcon } from '../GavelIcon';
+import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
 import { countsFromItems, TodoCountsBar, TodoRow } from './format';
 import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
@@ -25,20 +25,20 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // owning workspace and there is no batch-run control (a run targets a single
 // workspace dir/provider). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
-export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, query = '', density = 'comfortable' }: {
+export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, density = 'comfortable' }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
   onSelect: (entry: TodoEntry) => void;
   hiddenStatuses?: Set<TodoStatus>;
   range?: ResolvedRange | null;
-  query?: string;
   density?: TodoDensity;
 }) {
   const [open, setOpen] = useState(true);
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
-  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, hidden, range, query));
+  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, hidden, range));
   const hiddenCount = bucket.entries.length - visible.length;
   const counts = countsFromItems(bucket.entries.map(e => e.todo));
+  const ChevronIcon = open ? UiChevronDown : UiChevronRight;
 
   return (
     <ListMenuSection>
@@ -49,7 +49,7 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
           onClick={() => setOpen(o => !o)}
           className="flex h-auto min-w-0 flex-1 items-center justify-start gap-2 p-0 text-left hover:opacity-80"
         >
-          <GavelIcon name={open ? 'codicon:chevron-down' : 'codicon:chevron-right'} className="text-muted-foreground text-xs" />
+          <ChevronIcon className="text-muted-foreground text-xs" />
           <BucketIcon bucket={bucket} />
           <span className={`min-w-0 flex-1 truncate text-sm font-semibold ${bucket.tone}`}>{bucket.label}</span>
         </Button>

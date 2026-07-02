@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   Modal,
   Field,
@@ -15,7 +15,7 @@ import { extractCommentTitle, isDeploymentComment } from '../../utils';
 import { ansiToHtml } from '../../ansi';
 import { Markdown } from '../Markdown';
 import { Avatar } from '../Avatar';
-import { GavelIcon } from '../GavelIcon';
+import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 
 // SourceGroup is the kind of PR signal a candidate criterion came from.
@@ -57,11 +57,11 @@ interface Candidate {
 // GROUPS drives both the grouped checkbox lists and the one-click presets: each
 // preset titles the todo and narrows the selection to that group ("Fix failing
 // tests in repo#7", etc.).
-const GROUPS: { id: SourceGroup; label: string; icon: string; preset: string }[] = [
-  { id: 'tests', label: 'Failing tests', icon: 'codicon:beaker-stop', preset: 'Fix failing tests' },
-  { id: 'lint', label: 'Lint violations', icon: 'codicon:warning', preset: 'Fix lint violations' },
-  { id: 'checks', label: 'Failing checks', icon: 'codicon:error', preset: 'Fix failing checks' },
-  { id: 'comments', label: 'Review comments', icon: 'codicon:comment-discussion', preset: 'Resolve review comments' },
+const GROUPS: { id: SourceGroup; label: string; icon: ComponentType<IconProps>; preset: string }[] = [
+  { id: 'tests', label: 'Failing tests', icon: UiBeaker, preset: 'Fix failing tests' },
+  { id: 'lint', label: 'Lint violations', icon: UiWarningTriangle, preset: 'Fix lint violations' },
+  { id: 'checks', label: 'Failing checks', icon: UiError, preset: 'Fix failing checks' },
+  { id: 'comments', label: 'Review comments', icon: UiComment, preset: 'Resolve review comments' },
 ];
 
 function location(file?: string, line?: number): string {
@@ -142,7 +142,7 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
 interface Section {
   id: string;
   label: string;
-  icon: string;
+  icon: ComponentType<IconProps>;
   avatarUrl?: string;
   isAuthor?: boolean;
   items: Candidate[];
@@ -227,7 +227,7 @@ function DetailPane({ detail }: { detail?: CandidateDetail }) {
       )}
       {detail.url && (
         <a href={detail.url} target="_blank" rel="noopener" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-          <GavelIcon name="codicon:link-external" />
+          <UiLinkExternal />
           View on GitHub
         </a>
       )}
@@ -410,7 +410,7 @@ export function CreateTodoFromPRDialog({
       {created ? (
         <div className="space-y-3">
           <div className="flex items-start gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800">
-            <GavelIcon name="codicon:pass" className="mt-0.5 shrink-0 text-green-600" />
+            <UiPass className="mt-0.5 shrink-0 text-green-600" />
             <div className="min-w-0">
               <div className="font-medium">{created.title}</div>
               <div className="mt-0.5 text-xs text-green-700">
@@ -422,7 +422,7 @@ export function CreateTodoFromPRDialog({
             href={todoHref(created)}
             className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline"
           >
-            <GavelIcon name="codicon:link-external" />
+            <UiLinkExternal />
             Open todo
           </a>
         </div>
@@ -433,18 +433,21 @@ export function CreateTodoFromPRDialog({
           {presets.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quick todo:</span>
-              {presets.map(g => (
-                <Button
-                  key={g.id}
-                  variant="outline"
-                  size="sm"
-                  className="h-7 gap-1 px-2 text-xs"
-                  onClick={() => applyPreset(g)}
-                >
-                  <GavelIcon name={g.icon} className="text-xs" />
-                  {g.preset}
-                </Button>
-              ))}
+              {presets.map(g => {
+                const Icon = g.icon;
+                return (
+                  <Button
+                    key={g.id}
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => applyPreset(g)}
+                  >
+                    <Icon className="text-xs" />
+                    {g.preset}
+                  </Button>
+                );
+              })}
             </div>
           )}
 
@@ -499,13 +502,14 @@ export function CreateTodoFromPRDialog({
                     <ListMenu selection={selection}>
                       {sections.map(sec => {
                         const allOn = sec.items.every(c => selection.isSelected(c.key));
+                        const Icon = sec.icon;
                         return (
                           <div key={sec.id}>
                             <ListMenuHeader>
                               {sec.isAuthor && sec.avatarUrl ? (
                                 <Avatar src={sec.avatarUrl} alt={sec.label} size={16} />
                               ) : (
-                                <GavelIcon name={sec.icon} className="text-sm text-muted-foreground" />
+                                <Icon className="text-sm text-muted-foreground" />
                               )}
                               <span className={`flex-1 truncate text-xs font-semibold tracking-wide text-muted-foreground ${sec.isAuthor ? '' : 'uppercase'}`}>{sec.label}</span>
                               <span className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground">{sec.items.length}</span>
