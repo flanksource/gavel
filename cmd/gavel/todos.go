@@ -277,8 +277,9 @@ func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) driver
 		Tools:        drivers.DefaultTools(),
 		Dirty:        dirty,
 	}
-	if todosRunMode == types.ModePlan && todo != nil {
-		// The recorded plan feeds a re-plan so the agent reports updated/unchanged.
+	if todo != nil && (todosRunMode == types.ModePlan || todosRunMode == types.ModeRun) {
+		// Plan mode: the recorded plan feeds a re-plan (updated/unchanged). Run
+		// mode: the approved/edited plan steers the implementation.
 		content, _, _, err := todos.ReadPlanFile(todo.PlanPath)
 		if err != nil {
 			logger.Warnf("read recorded plan %s: %v", todo.PlanPath, err)
@@ -577,7 +578,15 @@ func buildTodoRunPrompt(todoList []*types.TODO, workDir string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: workDir, Mode: mode, Effort: todoEffort, Template: tmpl})
+	opts := todoprompt.Options{WorkDir: workDir, Mode: mode, Effort: todoEffort, Template: tmpl}
+	// Mirror the executor: a single todo's recorded plan feeds the prompt, so the
+	// dry-run preview matches the run (an approved plan for run mode, the prior
+	// plan for a re-plan).
+	if len(todoList) == 1 && (mode == types.ModePlan || mode == types.ModeRun) {
+		content, _, _, _ := todos.ReadPlanFile(todoList[0].PlanPath)
+		opts.ExistingPlan = content
+	}
+	req, _, err := todoprompt.Render(todoList, opts)
 	if err != nil {
 		return "", err
 	}

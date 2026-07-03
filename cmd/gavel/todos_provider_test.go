@@ -96,6 +96,48 @@ func TestRunTodosCreateFileProvider(t *testing.T) {
 	}
 }
 
+func TestTodosPlanCommandsRegistered(t *testing.T) {
+	if todosPlanRejectCmd.Flags().Lookup("dir") == nil {
+		t.Error("expected plan reject --dir flag")
+	}
+	if todosPlanReviseCmd.Flags().Lookup("feedback") == nil {
+		t.Error("expected plan revise --feedback flag")
+	}
+}
+
+func TestTodosPlanRejectReturnsToPending(t *testing.T) {
+	workDir := t.TempDir()
+	provider := todos.NewFileProvider(workDir, "")
+	created, err := provider.Create(context.Background(), todos.CreateRequest{Title: "Reviewable plan", Status: types.StatusPending})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	review := types.StatusReview
+	planPath := "/plans/p.md"
+	planNew := types.PlanNew
+	if err := todos.UpdateTODOState(created, todos.StateUpdate{Status: &review, PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
+		t.Fatalf("seed review: %v", err)
+	}
+
+	oldProvider, oldWorkingDir, oldDir := todosProvider, workingDir, todosDir
+	todosProvider, workingDir, todosDir = todos.ProviderFiles, workDir, ""
+	t.Cleanup(func() { todosProvider, workingDir, todosDir = oldProvider, oldWorkingDir, oldDir })
+
+	if err := runTodosPlanReject(todosPlanRejectCmd, []string{"Reviewable plan"}); err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	reloaded, err := provider.Get(context.Background(), created.FilePath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Status != types.StatusPending {
+		t.Errorf("status = %s, want pending", reloaded.Status)
+	}
+	if reloaded.PlanPath != "" {
+		t.Errorf("plan path not cleared: %q", reloaded.PlanPath)
+	}
+}
+
 func TestValidateTodosRunOptions(t *testing.T) {
 	oldMode, oldEffort := todosMode, todoEffort
 	defer func() {
