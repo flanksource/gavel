@@ -8,7 +8,7 @@ unmarshalled directly onto `gavel test` / `gavel lint` options. Run with:
 ## Run the sample tests
 
 ```yaml test
-paths: [./runstep_sample]
+paths: [./fixtures/testdata/runstep_sample]
 framework: [go]
 show-passed: true
 test-timeout: 60s
@@ -18,5 +18,6 @@ test-timeout: 60s
 
 ```yaml lint
 linters: [golangci-lint]
+files: [./fixtures/testdata/runstep_sample]
 timeout: 60s
 ```

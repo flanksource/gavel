@@ -727,8 +727,13 @@ const (
 	StatusReview Status = "review"
 	// StatusAsk indicates the agent is blocked on questions a human must answer.
 	StatusAsk Status = "ask"
-	// StatusVerified indicates the TODO has been verified but not closed.
+	// StatusVerified indicates the TODO's implementation met its definition of
+	// done (the run's fixture verifiers passed).
 	StatusVerified Status = "verified"
+	// StatusUnverified indicates the TODO was implemented but its definition of
+	// done was still failing when the run's iteration budget ran out — it needs
+	// another look or another iteration, distinct from an outright failed run.
+	StatusUnverified Status = "unverified"
 	// StatusCompleted indicates the TODO has been successfully completed.
 	StatusCompleted Status = "completed"
 	// StatusFailed indicates the TODO execution failed.
@@ -746,6 +751,7 @@ func KnownStatuses() []Status {
 		StatusReview,
 		StatusAsk,
 		StatusFailed,
+		StatusUnverified,
 		StatusVerified,
 		StatusCompleted,
 		StatusSkipped,
@@ -776,6 +782,8 @@ func (s Status) Pretty() api.Text {
 		return clicky.Text("").Add(icons.QuestionRed).Append(" ASK", "text-purple-600 font-medium")
 	case StatusVerified:
 		return clicky.Text("").Add(icons.Pass).Append(" VERIFIED", "text-emerald-600 font-medium")
+	case StatusUnverified:
+		return clicky.Text("").Add(icons.Warning).Append(" UNVERIFIED", "text-orange-600 font-medium")
 	case StatusCompleted:
 		return clicky.Text("").Add(icons.Pass).Append(" COMPLETED", "text-green-600 font-bold")
 	case StatusFailed:

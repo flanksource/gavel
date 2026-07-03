@@ -89,7 +89,7 @@ func UpdatePullRequestBranch(opts Options, prNumber int) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/repos/%s/pulls/%d/update-branch", apiBaseURL, repo, prNumber)
+	url := fmt.Sprintf("%s/repos/%s/pulls/%d/update-branch", githubAPIBase(), repo, prNumber)
 	client := newClient(token).
 		Header("Content-Type", "application/json").
 		// The update-branch endpoint requires the lydian-mass preview header.

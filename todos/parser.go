@@ -20,7 +20,7 @@ import (
 //
 //	---
 //	priority: high|medium|low
-//	status: draft|pending|in_progress|completed|failed|verified|skipped
+//	status: draft|pending|in_progress|review|ask|failed|unverified|verified|completed|skipped
 //	language: go|typescript|python
 //	cwd: /path/to/working/dir
 //	---

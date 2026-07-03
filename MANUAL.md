@@ -406,6 +406,8 @@ gavel fixtures --no-progress tests.md
 
 If your repo enables fixture discovery in `.gavel.yaml`, `gavel test --fixtures` can run the same files as part of the broader test pass.
 
+Ready-made workflow templates live in `examples/` (they run against the bundled `examples/sample-app`): `precommit.fixture.md` (lint + test the files you changed), `pre-release.fixture.md` (build, then the full suite and every linter), `smoke-test.fixture.md` (fast smoke tests + a `/health` probe), and `ai-review.fixture.md` (an AI reviewer scores the change against an acceptance-criteria checklist — needs `captain configure`). Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
+
 ### `gavel bench`
 
 `bench` is for controlled Go benchmark runs and base-vs-head comparisons. Use it when you want a machine-readable benchmark artifact, not just terminal output from `go test -bench`.

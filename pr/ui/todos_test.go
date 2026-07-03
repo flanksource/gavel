@@ -347,6 +347,64 @@ func TestTodoAPIPatchEditsTitleBodyAndComments(t *testing.T) {
 	}
 }
 
+func TestTodoAPIPatchMultipartCommentWithAttachment(t *testing.T) {
+	origAttachmentsDir := attachmentsDir
+	attachmentsDir = t.TempDir()
+	t.Cleanup(func() { attachmentsDir = origAttachmentsDir })
+
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Existing issue",
+		Body:   "Original body",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	ref := todos.TODOReference(created)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range map[string]string{
+		"ref":     ref,
+		"comment": "Captured UI element",
+	} {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("write field %s: %v", key, err)
+		}
+	}
+	part, err := writer.CreateFormFile("attachment", "screen.png")
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := part.Write([]byte("png bytes")); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos&dir="+url.QueryEscape(workDir), &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	s.handleTodoItem(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("multipart patch status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var patched todoSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &patched); err != nil {
+		t.Fatalf("unmarshal patch response: %v", err)
+	}
+	if !strings.Contains(patched.Body, "Captured UI element") {
+		t.Fatalf("comment not recorded: %q", patched.Body)
+	}
+	if !strings.Contains(patched.Body, "## Attachments") || !strings.Contains(patched.Body, "screen.png") || !strings.Contains(patched.Body, attachmentURLPrefix) {
+		t.Fatalf("attachment not appended to comment: %q", patched.Body)
+	}
+}
+
 func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}

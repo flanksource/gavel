@@ -370,6 +370,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prs/closed", s.handleClosed)
 	mux.HandleFunc("/api/prs/pause", s.handlePause)
 	mux.HandleFunc("/api/prs/detail", s.handleDetail)
+	mux.HandleFunc("GET /api/prs/commits/diff", s.handlePRCommitDiff)
+	mux.HandleFunc("GET /api/prs/files/diff", s.handlePRFileDiff)
 	mux.HandleFunc("POST /api/prs/merge", s.handlePRMerge)
 	mux.HandleFunc("POST /api/prs/approve", s.handlePRApprove)
 	mux.HandleFunc("POST /api/prs/update-branch", s.handlePRUpdateBranch)

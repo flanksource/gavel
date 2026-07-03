@@ -490,9 +490,9 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
-	var payload todoUpdatePayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+	payload, attachments, err := parseTodoUpdatePayload(r)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	ref := strings.TrimSpace(payload.Ref)
@@ -534,6 +534,9 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 		edit.Body = payload.Body
 	}
 	comment := strings.TrimSpace(payload.Comment)
+	if len(attachments) > 0 {
+		comment = todoBodyWithAttachments(comment, attachments)
+	}
 
 	hasState := update.Status != nil || update.Priority != nil
 	if !hasState && edit.IsEmpty() && comment == "" {
@@ -1111,6 +1114,86 @@ func parseTodoNewPayload(r *http.Request) (todoNewPayload, []todoAttachmentSumma
 		return payload, nil, err
 	}
 	return payload, attachments, nil
+}
+
+func parseTodoUpdatePayload(r *http.Request) (todoUpdatePayload, []todoAttachmentSummary, error) {
+	var payload todoUpdatePayload
+	var attachments []todoAttachmentSummary
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+
+	switch {
+	case strings.HasPrefix(contentType, "multipart/form-data"):
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			return payload, nil, fmt.Errorf("invalid multipart form: %w", err)
+		}
+		if r.MultipartForm != nil {
+			applyTodoUpdateValues(&payload, r.MultipartForm.Value)
+			stored, err := persistMultipartAttachments(r.MultipartForm)
+			if err != nil {
+				return payload, nil, err
+			}
+			attachments = stored
+		}
+	case strings.HasPrefix(contentType, "application/x-www-form-urlencoded"):
+		if err := r.ParseForm(); err != nil {
+			return payload, nil, fmt.Errorf("invalid form: %w", err)
+		}
+		applyTodoUpdateValues(&payload, r.PostForm)
+	case strings.HasPrefix(contentType, "application/json"), contentType == "":
+		// A body with no explicit Content-Type is treated as JSON — many clients
+		// (and httptest.NewRequest) omit the header. A bodyless request decodes
+		// nothing and falls through to the later "operation is required"
+		// validation, so query-only PATCHes still work.
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return payload, nil, fmt.Errorf("invalid json")
+			}
+		}
+	default:
+		return payload, nil, fmt.Errorf("unsupported content type %q", r.Header.Get("Content-Type"))
+	}
+	return payload, attachments, nil
+}
+
+func applyTodoUpdateValues(payload *todoUpdatePayload, values map[string][]string) {
+	assignString := func(target *string, keys ...string) {
+		if value, ok := firstTodoUpdateValue(values, keys...); ok {
+			*target = strings.TrimSpace(value)
+		}
+	}
+	assignPointer := func(target **string, trim bool, keys ...string) {
+		if value, ok := firstTodoUpdateValue(values, keys...); ok {
+			if trim {
+				value = strings.TrimSpace(value)
+			}
+			*target = &value
+		}
+	}
+
+	assignString(&payload.Provider, "provider", "todoProvider")
+	assignString(&payload.Dir, "dir")
+	assignString(&payload.Ref, "ref")
+	if value, ok := firstTodoUpdateValue(values, "status"); ok {
+		payload.Status = types.Status(strings.TrimSpace(value))
+	}
+	if value, ok := firstTodoUpdateValue(values, "priority", "severity"); ok {
+		payload.Priority = types.Priority(strings.TrimSpace(value))
+	}
+	assignPointer(&payload.Title, true, "title", "name")
+	assignPointer(&payload.Body, false, "body", "description", "text")
+	assignString(&payload.Comment, "comment")
+}
+
+func firstTodoUpdateValue(values map[string][]string, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if vals, ok := values[key]; ok {
+			if len(vals) == 0 {
+				return "", true
+			}
+			return vals[0], true
+		}
+	}
+	return "", false
 }
 
 func applyTodoNewValues(payload *todoNewPayload, values map[string][]string, overwrite bool) error {

@@ -234,6 +234,15 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		return result, fmt.Errorf("%s: %w", e.Name(), runErr)
 	}
 
+	// Definition-of-done verdict: when the run had verifiers, the loop stops
+	// "condition-met" only if every verifier passed; any other stop reason
+	// (budget/cost exhausted, timeout) means a check is still red. This drives
+	// the verified/unverified terminal status in applyOutcome.
+	if len(plugins) > 0 {
+		passed := rres != nil && rres.Loop != nil && rres.Loop.StopReason == "condition-met"
+		result.DoD = &todopkg.DoDOutcome{Ran: true, Passed: passed}
+	}
+
 	envErr := e.captureEnvelope(ctx, provider, result, rres, todosInGroup, timedOut)
 	return e.classify(result, sawResult, timedOut, envErr)
 }

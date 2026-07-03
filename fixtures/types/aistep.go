@@ -70,17 +70,24 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	if err != nil {
 		return result.Errorf(err, "verify failed")
 	}
+	return scoreAIStep(fixture, result, vr, now)
+}
 
+// scoreAIStep maps a completed verify result onto the fixture result: the step's
+// CEL/expectations over the JSON output govern when present, otherwise the
+// implicit implemented && score >= threshold rule.
+func scoreAIStep(fixture fixtures.FixtureTest, result fixtures.FixtureResult, vr *verify.VerifyResult, start time.Time) fixtures.FixtureResult {
 	jsonBytes, err := json.Marshal(vr)
 	if err != nil {
 		return result.Errorf(err, "marshal verify result")
+	}
+	if result.Metadata == nil {
+		result.Metadata = map[string]interface{}{}
 	}
 	result.Actual = vr
 	result.Metadata["verify"] = vr
 	result.Stdout = string(jsonBytes)
 
-	// CEL/expectations over the JSON output govern when present; otherwise the
-	// implicit threshold.
 	if fixture.Expected.CEL != "" {
 		return fixture.Expected.Evaluate(result,
 			exec.ExecResult{Stdout: string(jsonBytes), ExitCode: 0},
@@ -88,13 +95,13 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	}
 
 	threshold := defaultAIStepThreshold
-	if fm.Verify != nil && fm.Verify.Threshold > 0 {
-		threshold = fm.Verify.Threshold
+	if fixture.Verify != nil && fixture.Verify.Threshold > 0 {
+		threshold = fixture.Verify.Threshold
 	}
 	implemented := vr.Implemented != nil && *vr.Implemented
 	if implemented && vr.Score >= threshold {
 		result.Status = task.StatusPASS
-		result.Duration = time.Since(now)
+		result.Duration = time.Since(start)
 		return result
 	}
 	return result.Failf("verify score %d/%d (implemented=%v)", vr.Score, threshold, implemented)

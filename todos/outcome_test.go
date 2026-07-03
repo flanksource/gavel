@@ -128,6 +128,53 @@ func TestApplyOutcomeRunTransitions(t *testing.T) {
 			t.Errorf("status = %s, want completed", todo.Status)
 		}
 	})
+
+	// The definition-of-done verdict lands the run verified or unverified; a run
+	// with no DoD stays completed.
+	t.Run("DoD verdict maps to verified/unverified", func(t *testing.T) {
+		cases := []struct {
+			name string
+			dod  *DoDOutcome
+			want types.Status
+		}{
+			{"passed → verified", &DoDOutcome{Ran: true, Passed: true}, types.StatusVerified},
+			{"failed → unverified", &DoDOutcome{Ran: true, Passed: false}, types.StatusUnverified},
+			{"no DoD → completed", nil, types.StatusCompleted},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				todo := writeOutcomeTodo(t, dir)
+				e := NewTODOExecutor(dir, plainExec{}, "")
+				result := &ExecutionResult{Success: true, ExecutorName: "plain", EndStatus: types.EndCompleted, DoD: tc.dod}
+				if err := e.applyOutcome(context.Background(), todo, result); err != nil {
+					t.Fatalf("applyOutcome: %v", err)
+				}
+				if todo.Status != tc.want {
+					t.Errorf("status = %s, want %s", todo.Status, tc.want)
+				}
+			})
+		}
+	})
+
+	// An ask outcome wins even when a DoD verdict is present (the agent parked
+	// before the checks could pass).
+	t.Run("ask beats DoD", func(t *testing.T) {
+		dir := t.TempDir()
+		todo := writeOutcomeTodo(t, dir)
+		e := NewTODOExecutor(dir, plainExec{}, "")
+		result := &ExecutionResult{
+			Success: true, ExecutorName: "plain", EndStatus: types.EndAsk,
+			Questions: []types.AgentQuestion{{Text: "which?"}},
+			DoD:       &DoDOutcome{Ran: true, Passed: false},
+		}
+		if err := e.applyOutcome(context.Background(), todo, result); err != nil {
+			t.Fatalf("applyOutcome: %v", err)
+		}
+		if todo.Status != types.StatusAsk {
+			t.Errorf("status = %s, want ask", todo.Status)
+		}
+	})
 }
 
 func TestApplyOutcomePlanTransitions(t *testing.T) {
@@ -274,6 +321,23 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		}
 		if maxIter != 3 {
 			t.Errorf("maxIter = %d, want initial run + 2 feedback rounds", maxIter)
+		}
+	})
+
+	t.Run("verification fixture auto-enables a DoD verifier", func(t *testing.T) {
+		// No checks config at all, but the todo carries a `## Verification`
+		// fixture — its definition of done gates the loop regardless.
+		todo := &types.TODO{}
+		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
+		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, false)
+		if err != nil {
+			t.Fatalf("BuildCheckVerifiers: %v", err)
+		}
+		if len(plugins) != 1 || plugins[0].Name() != "verification" {
+			t.Fatalf("plugins = %d, want one 'verification' verifier", len(plugins))
+		}
+		if maxIter != types.DefaultMaxCheckIterations+1 {
+			t.Errorf("maxIter = %d, want default budget %d", maxIter, types.DefaultMaxCheckIterations+1)
 		}
 	})
 }

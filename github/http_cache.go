@@ -10,8 +10,6 @@ import (
 	"github.com/flanksource/gavel/github/cache"
 )
 
-const apiBaseURL = "https://api.github.com"
-
 // cachedGetResult is the output of cachedGet — either fresh bytes from the
 // upstream (FromCache=false) or previously-cached bytes served after a 304
 // (FromCache=true).
@@ -35,7 +33,7 @@ type cachedGetResult struct {
 //  6. On 5xx with a stale cached body, log a warning and return the stale
 //     body so the caller can degrade gracefully.
 func cachedGet(ctx context.Context, token, path string, extraHeaders map[string]string) (*cachedGetResult, error) {
-	absURL := apiBaseURL + path
+	absURL := githubAPIBase() + path
 	store := cache.Shared()
 	entry := store.LookupHTTP(absURL, "GET")
 

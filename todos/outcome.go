@@ -63,6 +63,15 @@ func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, resul
 		}
 	case result.EndStatus == types.EndAsk:
 		todo.Status = types.StatusAsk
+	case result.DoD != nil && result.DoD.Ran:
+		// The run iterated against its definition-of-done fixture: verified when
+		// every check passed within the budget, unverified when it ran out with a
+		// check still red.
+		if result.DoD.Passed {
+			todo.Status = types.StatusVerified
+		} else {
+			todo.Status = types.StatusUnverified
+		}
 	default:
 		todo.Status = types.StatusCompleted
 	}

@@ -3,7 +3,16 @@ model: claude
 ---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 
-{{{body}}}---
+{{{body}}}{{#if existingPlan}}---
+## Approved Plan
+
+A human has reviewed and approved this implementation plan. Follow it — do not
+re-derive a different approach. If a step is wrong or blocked, report `endStatus`
+"ask" with the specifics instead of silently diverging.
+
+{{{existingPlan}}}
+
+{{/if}}---
 ## Instructions
 
 1. Implement ALL todo items listed above

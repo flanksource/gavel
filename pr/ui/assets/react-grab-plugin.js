@@ -2,9 +2,9 @@
  *
  * Registers an "Add to gavel todo" action with React Grab. When invoked on a
  * grabbed element it opens a modal dialog embedding gavel's /todos/new form,
- * prefilled with the component name (title) and its source/component stack
- * (body), and closes the dialog once the form posts back that a todo was
- * created (or cancelled).
+ * prefilled with the component name (title), its source/component stack (body),
+ * and the grabbed page URL so the form can create a new todo or comment on an
+ * existing one in the right project.
  *
  * gavel serves this file with __GAVEL_ORIGIN__ replaced by its own origin, so
  * the iframe + API calls always target the serving gavel server — even when the
@@ -124,11 +124,12 @@
     document.head.appendChild(style);
   }
 
-  function buildUrl(title, body) {
+  function buildUrl(title, body, sourceUrl) {
     var u = new URL(GAVEL_ORIGIN + "/todos/new");
     u.searchParams.set("embed", "1");
     if (title) u.searchParams.set("title", title);
     if (body) u.searchParams.set("body", body);
+    if (sourceUrl) u.searchParams.set("sourceUrl", sourceUrl);
     return u.toString();
   }
 
@@ -167,7 +168,7 @@
     var bar = document.createElement("div");
     bar.className = "gavel-rg-bar";
     var label = document.createElement("span");
-    label.textContent = "New gavel todo";
+    label.textContent = "Gavel issue";
     var close = document.createElement("button");
     close.type = "button";
     close.setAttribute("aria-label", "Close");
@@ -205,7 +206,7 @@
             GAVEL_ORIGIN,
           );
         }
-      } else if (d.type === "todo-created" || d.type === "cancel") {
+      } else if (d.type === "todo-created" || d.type === "todo-commented" || d.type === "cancel") {
         teardown();
       }
     }
@@ -235,6 +236,7 @@
     var fileLine = ctx.filePath ? ctx.filePath + ":" + (ctx.lineNumber || "") : "";
     // Snapshot the markup now, before cleanup() unfreezes and may re-render the page.
     var html = grabHtml(el);
+    var sourceUrl = window.location.href;
     dismissGrab(ctx);
 
     // Open the dialog from the best context we can get without ever blocking:
@@ -244,7 +246,7 @@
     var open = function (source) {
       if (done) return;
       done = true;
-      openDialog(buildUrl(title, buildBody(ctx.componentName, source || fileLine, html)), attachment);
+      openDialog(buildUrl(title, buildBody(ctx.componentName, source || fileLine, html), sourceUrl), attachment);
     };
     var api = window.__REACT_GRAB__;
     if (api && api.getStackContext) {

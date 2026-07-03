@@ -77,10 +77,42 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 	return strings.Join(lines, "\n")
 }
 
-// BuildCheckVerifiers resolves the todos' checks configuration (.gavel.yaml
-// `checks`, frontmatter `checks:`, or the --check flag via force) into
-// fixture-backed verify plugins for the run loop, plus the loop's iteration
-// budget (initial run + feedback rounds). Empty when checks are disabled.
+// verificationVerifier runs a todo's `## Verification` fixture nodes — its
+// definition of done — as a captain verifier: OK when every node passes, else
+// feedback naming the failing ones. This is the fixture the run iterates
+// against, and its terminal verdict decides verified vs unverified.
+type verificationVerifier struct {
+	name    string
+	nodes   []*fixtures.FixtureNode
+	workDir string
+}
+
+func (v *verificationVerifier) Name() string { return v.name }
+
+func (v *verificationVerifier) Verify(rc *agent.RunContext, _ *captainai.LoopIteration) (agent.Verdict, error) {
+	var failures []string
+	for _, res := range runFixtureSection(rc.Ctx, v.nodes, v.workDir) {
+		switch res.Status {
+		case task.StatusPASS, task.StatusSKIP, task.StatusWarning:
+			continue
+		}
+		if fb := fixtureFeedback(res); fb != "" {
+			failures = append(failures, fb)
+		}
+	}
+	if len(failures) == 0 {
+		return agent.Verdict{OK: true}, nil
+	}
+	return agent.Verdict{OK: false, Reason: "verification fixture failing", Feedback: strings.Join(failures, "\n")}, nil
+}
+
+// BuildCheckVerifiers assembles the run's definition-of-done verifiers and the
+// loop's iteration budget (initial run + feedback rounds). The DoD is the todo's
+// `## Verification` fixture (always, when present) plus the configured `checks`
+// test/lint suite (.gavel.yaml `checks`, frontmatter `checks:`, or --check via
+// force). It returns no plugins (and a zero budget) only when the todo has no
+// definition of done at all — such a run ends `completed` rather than
+// verified/unverified.
 func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool) ([]agent.Plugin, int, error) {
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
@@ -88,26 +120,45 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 		return nil, 0, fmt.Errorf("checks: load .gavel.yaml: %w", err)
 	}
 	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), force)
-	if !cfg.IsEnabled() {
-		return nil, 0, nil
-	}
 
 	var plugins []agent.Plugin
-	if cfg.Test != nil {
-		v, err := newStepVerifier("checks:test", fixtures.RunnerKindTest, cfg.Test, fixtures.TestStepRunner, gitRoot)
-		if err != nil {
-			return nil, 0, err
+	// The `checks` test/lint suite is opt-in (enabled config / --check).
+	if cfg.IsEnabled() {
+		if cfg.Test != nil {
+			v, err := newStepVerifier("checks:test", fixtures.RunnerKindTest, cfg.Test, fixtures.TestStepRunner, gitRoot)
+			if err != nil {
+				return nil, 0, err
+			}
+			plugins = append(plugins, v)
 		}
-		plugins = append(plugins, v)
-	}
-	if cfg.Lint != nil {
-		v, err := newStepVerifier("checks:lint", fixtures.RunnerKindLint, cfg.Lint, fixtures.LintStepRunner, gitRoot)
-		if err != nil {
-			return nil, 0, err
+		if cfg.Lint != nil {
+			v, err := newStepVerifier("checks:lint", fixtures.RunnerKindLint, cfg.Lint, fixtures.LintStepRunner, gitRoot)
+			if err != nil {
+				return nil, 0, err
+			}
+			plugins = append(plugins, v)
 		}
-		plugins = append(plugins, v)
 	}
-	return plugins, cfg.MaxIterations + 1, nil
+	// The todo's own `## Verification` fixture is the definition of done — it
+	// gates the loop whenever present, independent of the `checks` toggle.
+	var verNodes []*fixtures.FixtureNode
+	for _, todo := range todosInGroup {
+		if todo != nil {
+			verNodes = append(verNodes, todo.Verification...)
+		}
+	}
+	if len(verNodes) > 0 {
+		plugins = append(plugins, &verificationVerifier{name: "verification", nodes: verNodes, workDir: gitRoot})
+	}
+
+	if len(plugins) == 0 {
+		return nil, 0, nil
+	}
+	maxIter := cfg.MaxIterations
+	if maxIter <= 0 {
+		maxIter = types.DefaultMaxCheckIterations
+	}
+	return plugins, maxIter + 1, nil
 }
 
 // newStepVerifier marshals an options struct into the fixture step's YAML body

@@ -2,9 +2,11 @@ package types
 
 import (
 	"testing"
+	"time"
 
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/verify"
 )
 
 func aiStepFixture() fixtures.FixtureTest {
@@ -23,35 +25,48 @@ func aiStepFixture() fixtures.FixtureTest {
 	return f
 }
 
-func TestRunAIStepImplicitThresholdPass(t *testing.T) {
-	res := RunAIStep(aiStepFixture(), fixtures.RunOptions{WorkDir: "."})
+func baseResult(f fixtures.FixtureTest) fixtures.FixtureResult {
+	return fixtures.FixtureResult{Name: f.Name, Type: "verify", Test: f, Metadata: map[string]interface{}{}}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestScoreAIStepImplicitThresholdPass(t *testing.T) {
+	f := aiStepFixture()
+	vr := &verify.VerifyResult{Score: 100, Implemented: boolPtr(true)}
+	res := scoreAIStep(f, baseResult(f), vr, time.Now())
 	if res.Status != task.StatusPASS {
 		t.Fatalf("status = %v, want PASS (error=%q)", res.Status, res.Error)
 	}
 }
 
-func TestRunAIStepImplicitThresholdFail(t *testing.T) {
-	t.Setenv("MOCK_VERIFY_JSON", `{"checks":{"x":{"pass":false}},"ratings":{},"completeness":{"pass":false},"implemented":false}`)
-	res := RunAIStep(aiStepFixture(), fixtures.RunOptions{WorkDir: "."})
+func TestScoreAIStepImplicitThresholdFail(t *testing.T) {
+	f := aiStepFixture()
+	// Below the default threshold (80) and not implemented → fail.
+	vr := &verify.VerifyResult{Score: 40, Implemented: boolPtr(false)}
+	res := scoreAIStep(f, baseResult(f), vr, time.Now())
 	if res.Status != task.StatusFAIL {
 		t.Fatalf("status = %v, want FAIL", res.Status)
 	}
 }
 
-func TestRunAIStepCELOverridePass(t *testing.T) {
+func TestScoreAIStepCELOverridePass(t *testing.T) {
 	f := aiStepFixture()
 	f.Expected.CEL = "json.score >= 80"
-	res := RunAIStep(f, fixtures.RunOptions{WorkDir: "."})
+	vr := &verify.VerifyResult{Score: 100, Implemented: boolPtr(true)}
+	res := scoreAIStep(f, baseResult(f), vr, time.Now())
 	if res.Status != task.StatusPASS {
 		t.Fatalf("status = %v, want PASS (error=%q)", res.Status, res.Error)
 	}
 }
 
-func TestRunAIStepCELOverrideFail(t *testing.T) {
+func TestScoreAIStepCELOverrideFail(t *testing.T) {
 	f := aiStepFixture()
-	// Default mock scores 100; an impossible threshold makes CEL govern a failure.
+	// A score of 100 can't satisfy an impossible threshold, so CEL fails the step
+	// even though the implicit rule would have passed.
 	f.Expected.CEL = "json.score >= 200"
-	res := RunAIStep(f, fixtures.RunOptions{WorkDir: "."})
+	vr := &verify.VerifyResult{Score: 100, Implemented: boolPtr(true)}
+	res := scoreAIStep(f, baseResult(f), vr, time.Now())
 	if res.Status != task.StatusFAIL {
 		t.Fatalf("status = %v, want FAIL", res.Status)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
+	"github.com/flanksource/repomap"
 	"github.com/goccy/go-yaml"
 )
 
@@ -126,13 +127,19 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	return result
 }
 
-// resolveStepWorkDir defaults a runner step to the fixture's own directory so
-// relative paths in the YAML body resolve against the markdown file.
+// resolveStepWorkDir defaults a runner step to the git root of the fixture, so
+// paths in the YAML body are repo-root-relative and consistent with the
+// daemon:/build: front-matter and `gavel test` / `gavel lint`. Falls back to the
+// fixture's own directory (then opts.WorkDir) when it is not inside a git repo.
 func resolveStepWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
-	if fixture.SourceDir != "" {
-		return fixture.SourceDir
+	dir := fixture.SourceDir
+	if dir == "" {
+		dir = opts.WorkDir
 	}
-	return opts.WorkDir
+	if root := repomap.FindGitRoot(dir); root != "" {
+		return root
+	}
+	return dir
 }
 
 func testChildNodes(tests parsers.Tests, disp stepDisplay) []*fixtures.FixtureNode {

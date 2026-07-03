@@ -56,6 +56,20 @@ type ExecutionResult struct {
 	EndStatus types.EndStatus
 	Questions []types.AgentQuestion
 	Plan      *types.PlanResult
+	// DoD is the definition-of-done verdict for an implement run: nil when the
+	// todo had no verifiers (Verification fixture / configured checks), else Ran
+	// is true and Passed reports whether every verifier passed within the
+	// iteration budget. It drives the verified/unverified terminal status.
+	DoD *DoDOutcome
+}
+
+// DoDOutcome is the terminal verdict of a run's definition-of-done verifiers:
+// Passed is true only when the agent loop stopped because all verifiers passed
+// (captain "condition-met"), false when the iteration budget ran out with a
+// verifier still failing.
+type DoDOutcome struct {
+	Ran    bool
+	Passed bool
 }
 
 // ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
@@ -189,27 +203,10 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		return result, err
 	}
 
-	// Verify the fix
-	if e.Mode() != types.ModePlan && len(todo.Verification) > 0 {
-		ctx.Logger.Debugf("Running verification tests")
-		ctx.Notify(Notification{
-			Type:    NotifyProgress,
-			Message: "Running verification tests",
-		})
-
-		if !e.verificationPasses(ctx, todo.Verification) {
-			ctx.Logger.Errorf("Verification tests failed")
-			todo.Status = types.StatusFailed
-			result.Success = false
-			result.ErrorMessage = "Verification tests failed"
-			todo.Attempts++
-			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
-				fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
-			}
-			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
-			return result, fmt.Errorf("verification failed")
-		}
-	}
+	// The todo's `## Verification` fixture is its definition of done: it runs
+	// inside the agent loop as a verifier (BuildCheckVerifiers), so the run
+	// iterates against it and its terminal verdict lands the todo verified or
+	// unverified in applyOutcome — no separate post-run gate.
 
 	// Map the run's envelope onto the todo (status/plan/summary/questions).
 	ctx.Logger.Infof("TODO execution completed successfully")
@@ -296,28 +293,11 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 			return e.collectResults(todosInGroup, results), err
 		}
 
-		// Verify each TODO independently
+		// Map each TODO's envelope + definition-of-done verdict onto its status.
+		// Verification runs in-loop as a DoD verifier (see the single-todo path),
+		// so there is no separate post-run verification gate here either.
 		for _, todo := range needsExecution {
 			perTodo := e.splitResult(groupResult, len(needsExecution))
-
-			if e.Mode() != types.ModePlan && len(todo.Verification) > 0 {
-				ctx.Notify(Notification{
-					Type:    NotifyProgress,
-					Message: fmt.Sprintf("Verifying %s", todo.Filename()),
-				})
-				if !e.verificationPasses(ctx, todo.Verification) {
-					todo.Status = types.StatusFailed
-					perTodo.Success = false
-					perTodo.ErrorMessage = "Verification tests failed"
-					todo.Attempts++
-					if saveErr := e.saveAttempt(ctx, todo, perTodo); saveErr != nil {
-						fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", saveErr)
-					}
-					e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
-					results[todo.FilePath] = perTodo
-					continue
-				}
-			}
 
 			if applyErr := e.applyOutcome(ctx, todo, perTodo); applyErr != nil {
 				todo.Status = types.StatusFailed
@@ -349,6 +329,7 @@ func (e *TODOExecutor) splitResult(groupResult *ExecutionResult, count int) *Exe
 		EndStatus:    groupResult.EndStatus,
 		Questions:    groupResult.Questions,
 		Plan:         groupResult.Plan,
+		DoD:          groupResult.DoD,
 	}
 }
 
@@ -433,18 +414,16 @@ func (e *TODOExecutor) stepsAlreadyPass(ctx *ExecutorContext, steps []*fixtures.
 	return AllPassed(results)
 }
 
-// verificationPasses checks if verification tests pass.
-func (e *TODOExecutor) verificationPasses(ctx *ExecutorContext, verification []*fixtures.FixtureNode) bool {
-	results := e.ExecuteSection(ctx, verification)
-	return AllPassed(results)
-}
-
 // ExecuteSection runs all fixture nodes in a section.
 // Returns the results of executing each node using the fixtures runner infrastructure.
 func (e *TODOExecutor) ExecuteSection(ctx context.Context, nodes []*fixtures.FixtureNode) []fixtures.FixtureResult {
-	var results []fixtures.FixtureResult
+	return runFixtureSection(ctx, nodes, e.workDir)
+}
 
-	// Create CEL evaluator for fixture execution
+// runFixtureSection runs a list of fixture nodes in workDir via the fixtures
+// runner infrastructure, returning one result per test node. Shared by the
+// reproduction/verification section runners and the in-loop DoD verifier.
+func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workDir string) []fixtures.FixtureResult {
 	evaluator, err := fixtures.NewCELEvaluator()
 	if err != nil {
 		return []fixtures.FixtureResult{{
@@ -452,22 +431,13 @@ func (e *TODOExecutor) ExecuteSection(ctx context.Context, nodes []*fixtures.Fix
 			Error:  fmt.Sprintf("failed to create CEL evaluator: %v", err),
 		}}
 	}
+	opts := fixtures.RunOptions{WorkDir: workDir, Evaluator: evaluator}
 
-	// Prepare run options
-	opts := fixtures.RunOptions{
-		WorkDir:   e.workDir,
-		Verbose:   false,
-		NoCache:   false,
-		Evaluator: evaluator,
-	}
-
-	// Execute each test node
+	var results []fixtures.FixtureResult
 	for _, node := range nodes {
-		if node.Test == nil {
+		if node == nil || node.Test == nil {
 			continue
 		}
-
-		// Get the appropriate fixture type from registry
 		fixtureType, err := fixtures.DefaultRegistry.GetForFixture(*node.Test)
 		if err != nil {
 			results = append(results, fixtures.FixtureResult{
@@ -478,12 +448,8 @@ func (e *TODOExecutor) ExecuteSection(ctx context.Context, nodes []*fixtures.Fix
 			})
 			continue
 		}
-
-		// Run the fixture test
-		result := fixtureType.Run(ctx, *node.Test, opts)
-		results = append(results, result)
+		results = append(results, fixtureType.Run(ctx, *node.Test, opts))
 	}
-
 	return results
 }
 

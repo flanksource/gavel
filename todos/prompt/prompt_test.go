@@ -118,6 +118,22 @@ func TestRenderPlanExistingPlan(t *testing.T) {
 	}
 }
 
+// TestRenderRunApprovedPlan pins that a run (implement) prompt carries the
+// approved/edited plan when one is supplied, so human plan review actually
+// steers the run — and omits the section otherwise.
+func TestRenderRunApprovedPlan(t *testing.T) {
+	plan := "1. Edit the parser\n2. Wire the flag\n3. Add tests"
+	with := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModeRun, ExistingPlan: plan})
+	if !strings.Contains(with, "## Approved Plan") || !strings.Contains(with, plan) {
+		t.Errorf("run prompt should embed the approved plan; got:\n%s", with)
+	}
+
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Mode: types.ModeRun})
+	if strings.Contains(without, "## Approved Plan") {
+		t.Error("no plan → no Approved Plan section")
+	}
+}
+
 // TestRenderOverridesKeepSchema pins the output contract: neither a hostile
 // template override nor a verbatim body override can drop the envelope schema
 // instruction.

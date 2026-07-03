@@ -313,6 +313,15 @@ See `gavel fixtures --help` for the full reference including CEL variables, vali
 
 </details>
 
+**Example workflows** — ready-made templates in [`examples/`](examples/) that run against the bundled [`examples/sample-app`](examples/sample-app); compose the `yaml test` / `yaml lint` steps and AI verification:
+
+- [`examples/precommit.fixture.md`](examples/precommit.fixture.md) — lint + test only the files you changed, plus a `gofmt` check
+- [`examples/pre-release.fixture.md`](examples/pre-release.fixture.md) — build, then the full test suite and every linter
+- [`examples/smoke-test.fixture.md`](examples/smoke-test.fixture.md) — start the app, run fast smoke tests, and probe `/health`
+- [`examples/ai-review.fixture.md`](examples/ai-review.fixture.md) — AI reviews the change against an acceptance-criteria checklist and scores it (needs `captain configure`)
+
+Run one with `gavel fixtures examples/precommit.fixture.md`, or copy it into your project.
+
 #### `gavel bench`
 
 Run Go benchmarks and compare base vs head results for regression detection.

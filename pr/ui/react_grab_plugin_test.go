@@ -29,6 +29,8 @@ func TestHandleReactGrabPluginSubstitutesOrigin(t *testing.T) {
 		`"http://gavel.example:9092"`, // GAVEL_ORIGIN baked to the serving origin
 		"/todos/new",                  // iframe target path the plugin builds
 		"gavel-todo",                  // registered action id
+		"sourceUrl",                   // grabbed page URL lets /todos/new auto-detect the project
+		"todo-commented",              // embedded existing-issue flow closes the plugin dialog
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("plugin body missing %q", want)

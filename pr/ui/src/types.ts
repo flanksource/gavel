@@ -134,6 +134,32 @@ export interface TodoItem {
   // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
   // section; present on detail responses.
   criteria?: AcceptanceCriterion[];
+  // Plan-run bookkeeping (present on detail responses once a plan run finishes):
+  // the native plan file's absolute path, whether the last plan was new/updated/
+  // unchanged, and the mode of the last run. The plan CONTENT is fetched lazily
+  // by the Plan tab via /api/todos/session/plan.
+  planPath?: string;
+  planStatus?: TodoPlanStatus;
+  runMode?: TodoRunModeValue;
+  // Free-text summary the agent reported in its final-result envelope.
+  lastRunSummary?: string;
+  // Questions blocking an `ask` todo — the agent needs a human decision before
+  // it can continue. Answered via /api/todos/answer, which resumes the session.
+  questions?: TodoQuestion[];
+}
+
+// TodoPlanStatus is how a plan run classified its plan relative to any prior one.
+export type TodoPlanStatus = 'new' | 'updated' | 'unchanged';
+
+// TodoRunModeValue is the operation a run performed: implement, propose a plan,
+// or score committed work. (Distinct from the legacy TodoRunMode mechanism.)
+export type TodoRunModeValue = 'run' | 'plan' | 'verify';
+
+// TodoQuestion is one blocking question from an agent that parked in `ask`.
+export interface TodoQuestion {
+  text: string;
+  context?: string;
+  options?: string[];
 }
 
 // AcceptanceCriterion is one done-ness criterion. checkId is set when the line
@@ -271,8 +297,11 @@ export interface TodoRunOptions {
   backend?: string;
   model?: string;
   effort?: TodoRunEffort;
+  // runMode is the operation the run performs (run/plan/verify). Supersedes the
+  // `plan` bool; the server accepts both (plan:true is treated as runMode:plan).
+  runMode?: TodoRunModeValue;
   // Plan-only run: the agent proposes an implementation plan without changing
-  // code. Requires cmux mode.
+  // code. Requires cmux mode. Legacy — prefer runMode.
   plan?: boolean;
   // Resume the todo's prior agent session (claude --resume) instead of starting
   // a fresh one, so the agent keeps the earlier conversation's context.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	todopkg "github.com/flanksource/gavel/todos"
@@ -311,4 +312,57 @@ func TestHeadlessModelDefaults(t *testing.T) {
 	if codexP.GetBackend() != captainai.BackendCodexCLI {
 		t.Errorf("codex backend = %v, want codex-cli", codexP.GetBackend())
 	}
+}
+
+// fakeVerifier votes a fixed verdict every iteration.
+type fakeVerifier struct{ ok bool }
+
+func (f fakeVerifier) Name() string { return "fake" }
+func (f fakeVerifier) Verify(*agent.RunContext, *captainai.LoopIteration) (agent.Verdict, error) {
+	return agent.Verdict{OK: f.ok, Feedback: "fix it"}, nil
+}
+
+// TestHeadlessDoDVerdict pins the definition-of-done capture: the loop stops
+// "condition-met" only when the verifier passes (→ DoD.Passed), otherwise the
+// iteration budget runs out (→ not passed); with no verifiers there is no DoD.
+func TestHeadlessDoDVerdict(t *testing.T) {
+	events := []captainai.Event{
+		{Kind: captainai.EventSystem, SessionID: "s"},
+		{Kind: captainai.EventResult, Success: true},
+	}
+
+	t.Run("verifier passes → DoD passed", func(t *testing.T) {
+		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 3,
+			Verifiers: []agent.Plugin{fakeVerifier{ok: true}}, Stream: fakeStream(events...)})
+		result, err := e.Execute(newTestCtx(), &types.TODO{})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if result.DoD == nil || !result.DoD.Ran || !result.DoD.Passed {
+			t.Fatalf("DoD = %+v, want ran+passed", result.DoD)
+		}
+	})
+
+	t.Run("verifier keeps failing → DoD not passed", func(t *testing.T) {
+		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 2,
+			Verifiers: []agent.Plugin{fakeVerifier{ok: false}}, Stream: fakeStream(events...)})
+		result, err := e.Execute(newTestCtx(), &types.TODO{})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if result.DoD == nil || !result.DoD.Ran || result.DoD.Passed {
+			t.Fatalf("DoD = %+v, want ran+not-passed", result.DoD)
+		}
+	})
+
+	t.Run("no verifiers → no DoD", func(t *testing.T) {
+		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(events...)})
+		result, err := e.Execute(newTestCtx(), &types.TODO{})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if result.DoD != nil {
+			t.Fatalf("DoD = %+v, want nil (no definition of done)", result.DoD)
+		}
+	})
 }
