@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -438,19 +439,45 @@ func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workD
 		if node == nil || node.Test == nil {
 			continue
 		}
-		fixtureType, err := fixtures.DefaultRegistry.GetForFixture(*node.Test)
-		if err != nil {
-			results = append(results, fixtures.FixtureResult{
-				Name:   node.Test.Name,
-				Status: "error",
-				Test:   *node.Test,
-				Error:  err.Error(),
-			})
-			continue
-		}
-		results = append(results, fixtureType.Run(ctx, *node.Test, opts))
+		results = append(results, dispatchFixture(ctx, *node.Test, opts))
 	}
 	return results
+}
+
+// dispatchFixture runs one fixture test with the same node-type dispatch the
+// fixture engine's (unexported) executeFixture uses: `ai` steps via the
+// AIStepRunner hook, `yaml test`/`yaml lint` fences via the runner-step hooks,
+// everything else via the type registry. Replicated here because the section
+// runner works on a node list, not a whole fixture file.
+func dispatchFixture(ctx context.Context, test fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
+	if reason := test.ShouldSkip(); reason != "" {
+		return fixtures.FixtureResult{Name: test.Name, Status: task.StatusSKIP, Test: test, Error: reason}
+	}
+	if test.IsAIStep() {
+		if fixtures.AIStepRunner == nil {
+			return fixtureErr(test, "AI step runner not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
+		}
+		return fixtures.AIStepRunner(test, opts)
+	}
+	if test.IsRunnerStep() {
+		runner := fixtures.TestStepRunner
+		if test.IsLintStep() {
+			runner = fixtures.LintStepRunner
+		}
+		if runner == nil {
+			return fixtureErr(test, "runner step hook not registered; import _ \"github.com/flanksource/gavel/fixtures/types\"")
+		}
+		return runner(test, opts)
+	}
+	fixtureType, err := fixtures.DefaultRegistry.GetForFixture(test)
+	if err != nil {
+		return fixtureErr(test, err.Error())
+	}
+	return fixtureType.Run(ctx, test, opts)
+}
+
+func fixtureErr(test fixtures.FixtureTest, msg string) fixtures.FixtureResult {
+	return fixtures.FixtureResult{Name: test.Name, Status: task.StatusERR, Test: test, Error: msg}
 }
 
 // AllPassed checks if all fixture results passed.

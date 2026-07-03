@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
@@ -19,35 +18,13 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// The run loop's verifiers are gavel fixtures: each check is the same
-// `yaml test` / `yaml lint` step a fixture file would declare, executed through
-// the fixture engine's step runners. A failing step's children become the
+// The run loop's definition of done is a gavel fixture: the configured `checks`
+// test/lint steps and the todo's `## Verification` section, run through the
+// fixture engine and aggregated into one TestResults tree that the CEL retry
+// predicate (celVerifier, celverify.go) reads. A failing/warned node becomes the
 // feedback the agent sees on the next iteration.
 
 const maxVerifierFeedbackLines = 50
-
-// fixtureVerifier adapts one fixture runner step to captain's agent.VerifyPlugin.
-type fixtureVerifier struct {
-	name    string
-	fixture fixtures.FixtureTest
-	runner  func(fixtures.FixtureTest, fixtures.RunOptions) fixtures.FixtureResult
-	workDir string
-}
-
-func (v *fixtureVerifier) Name() string { return v.name }
-
-func (v *fixtureVerifier) Verify(rc *agent.RunContext, _ *captainai.LoopIteration) (agent.Verdict, error) {
-	res := v.runner(v.fixture, fixtures.RunOptions{WorkDir: v.workDir})
-	switch res.Status {
-	case task.StatusPASS, task.StatusSKIP, task.StatusWarning:
-		return agent.Verdict{OK: true}, nil
-	}
-	return agent.Verdict{
-		OK:       false,
-		Reason:   res.Error,
-		Feedback: fixtureFeedback(res),
-	}, nil
-}
 
 // fixtureFeedback renders a failing fixture result as the compact failure
 // summary fed back to the agent: the step error plus each failing child.
@@ -77,42 +54,14 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 	return strings.Join(lines, "\n")
 }
 
-// verificationVerifier runs a todo's `## Verification` fixture nodes — its
-// definition of done — as a captain verifier: OK when every node passes, else
-// feedback naming the failing ones. This is the fixture the run iterates
-// against, and its terminal verdict decides verified vs unverified.
-type verificationVerifier struct {
-	name    string
-	nodes   []*fixtures.FixtureNode
-	workDir string
-}
-
-func (v *verificationVerifier) Name() string { return v.name }
-
-func (v *verificationVerifier) Verify(rc *agent.RunContext, _ *captainai.LoopIteration) (agent.Verdict, error) {
-	var failures []string
-	for _, res := range runFixtureSection(rc.Ctx, v.nodes, v.workDir) {
-		switch res.Status {
-		case task.StatusPASS, task.StatusSKIP, task.StatusWarning:
-			continue
-		}
-		if fb := fixtureFeedback(res); fb != "" {
-			failures = append(failures, fb)
-		}
-	}
-	if len(failures) == 0 {
-		return agent.Verdict{OK: true}, nil
-	}
-	return agent.Verdict{OK: false, Reason: "verification fixture failing", Feedback: strings.Join(failures, "\n")}, nil
-}
-
-// BuildCheckVerifiers assembles the run's definition-of-done verifiers and the
-// loop's iteration budget (initial run + feedback rounds). The DoD is the todo's
-// `## Verification` fixture (always, when present) plus the configured `checks`
-// test/lint suite (.gavel.yaml `checks`, frontmatter `checks:`, or --check via
-// force). It returns no plugins (and a zero budget) only when the todo has no
-// definition of done at all — such a run ends `completed` rather than
-// verified/unverified.
+// BuildCheckVerifiers assembles the run's single definition-of-done verifier and
+// the loop's iteration budget (initial run + feedback rounds). The DoD is the
+// todo's `## Verification` fixture (always, when present) plus the configured
+// `checks` test/lint suite (.gavel.yaml `checks`, frontmatter `checks:`, or
+// --check via force), aggregated into one TestResults tree; the resolved
+// `checks.retry` CEL predicate decides verified vs unverified. It returns no
+// plugins (and a zero budget) only when the todo has no definition of done at
+// all — such a run ends `completed`.
 func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool) ([]agent.Plugin, int, error) {
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
@@ -121,22 +70,22 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 	}
 	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), force)
 
-	var plugins []agent.Plugin
+	var steps []stepFixture
 	// The `checks` test/lint suite is opt-in (enabled config / --check).
 	if cfg.IsEnabled() {
 		if cfg.Test != nil {
-			v, err := newStepVerifier("checks:test", fixtures.RunnerKindTest, cfg.Test, fixtures.TestStepRunner, gitRoot)
+			s, err := newStepFixture("checks:test", fixtures.RunnerKindTest, cfg.Test, fixtures.TestStepRunner, gitRoot)
 			if err != nil {
 				return nil, 0, err
 			}
-			plugins = append(plugins, v)
+			steps = append(steps, s)
 		}
 		if cfg.Lint != nil {
-			v, err := newStepVerifier("checks:lint", fixtures.RunnerKindLint, cfg.Lint, fixtures.LintStepRunner, gitRoot)
+			s, err := newStepFixture("checks:lint", fixtures.RunnerKindLint, cfg.Lint, fixtures.LintStepRunner, gitRoot)
 			if err != nil {
 				return nil, 0, err
 			}
-			plugins = append(plugins, v)
+			steps = append(steps, s)
 		}
 	}
 	// The todo's own `## Verification` fixture is the definition of done — it
@@ -147,34 +96,37 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 			verNodes = append(verNodes, todo.Verification...)
 		}
 	}
-	if len(verNodes) > 0 {
-		plugins = append(plugins, &verificationVerifier{name: "verification", nodes: verNodes, workDir: gitRoot})
-	}
 
-	if len(plugins) == 0 {
+	if len(steps) == 0 && len(verNodes) == 0 {
 		return nil, 0, nil
 	}
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
 		maxIter = types.DefaultMaxCheckIterations
 	}
-	return plugins, maxIter + 1, nil
+	verifier := &celVerifier{
+		name:      "definition-of-done",
+		retryExpr: cfg.Retry,
+		steps:     steps,
+		nodes:     verNodes,
+		workDir:   gitRoot,
+	}
+	return []agent.Plugin{verifier}, maxIter + 1, nil
 }
 
-// newStepVerifier marshals an options struct into the fixture step's YAML body
-// (the same wire contract as a fixture file's `yaml test` / `yaml lint` fence).
-func newStepVerifier(name, kind string, options any, runner func(fixtures.FixtureTest, fixtures.RunOptions) fixtures.FixtureResult, workDir string) (agent.Plugin, error) {
+// newStepFixture marshals an options struct into a fixture step's YAML body (the
+// same wire contract as a fixture file's `yaml test` / `yaml lint` fence) and
+// pairs it with its registered runner for the aggregate DoD verifier.
+func newStepFixture(name, kind string, options any, runner func(fixtures.FixtureTest, fixtures.RunOptions) fixtures.FixtureResult, workDir string) (stepFixture, error) {
 	if runner == nil {
-		return nil, fmt.Errorf("%s: fixture step runner not registered (import gavel/fixtures/types)", name)
+		return stepFixture{}, fmt.Errorf("%s: fixture step runner not registered (import gavel/fixtures/types)", name)
 	}
 	body, err := yaml.Marshal(options)
 	if err != nil {
-		return nil, fmt.Errorf("%s: marshal step options: %w", name, err)
+		return stepFixture{}, fmt.Errorf("%s: marshal step options: %w", name, err)
 	}
-	return &fixtureVerifier{
-		name:    name,
-		workDir: workDir,
-		runner:  runner,
+	return stepFixture{
+		runner: runner,
 		fixture: fixtures.FixtureTest{
 			Name:      name,
 			SourceDir: workDir,

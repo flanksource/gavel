@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flanksource/captain/pkg/ai/agent"
-	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
@@ -314,9 +312,9 @@ func TestBuildCheckVerifiers(t *testing.T) {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
 		if len(plugins) != 1 {
-			t.Fatalf("plugins = %d, want 1 (lint)", len(plugins))
+			t.Fatalf("plugins = %d, want 1 aggregate DoD verifier", len(plugins))
 		}
-		if plugins[0].Name() != "checks:lint" {
+		if plugins[0].Name() != "definition-of-done" {
 			t.Errorf("plugin name = %q", plugins[0].Name())
 		}
 		if maxIter != 3 {
@@ -324,7 +322,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		}
 	})
 
-	t.Run("verification fixture auto-enables a DoD verifier", func(t *testing.T) {
+	t.Run("verification fixture auto-enables the DoD verifier", func(t *testing.T) {
 		// No checks config at all, but the todo carries a `## Verification`
 		// fixture — its definition of done gates the loop regardless.
 		todo := &types.TODO{}
@@ -333,45 +331,11 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
-		if len(plugins) != 1 || plugins[0].Name() != "verification" {
-			t.Fatalf("plugins = %d, want one 'verification' verifier", len(plugins))
+		if len(plugins) != 1 || plugins[0].Name() != "definition-of-done" {
+			t.Fatalf("plugins = %d, want one 'definition-of-done' verifier", len(plugins))
 		}
 		if maxIter != types.DefaultMaxCheckIterations+1 {
 			t.Errorf("maxIter = %d, want default budget %d", maxIter, types.DefaultMaxCheckIterations+1)
 		}
 	})
-}
-
-func TestFixtureVerifierVerdicts(t *testing.T) {
-	failing := fixtures.FixtureResult{
-		Name: "checks:test", Status: task.StatusFAIL, Error: "2/10 tests failed",
-		Children: []*fixtures.FixtureNode{
-			{Results: &fixtures.FixtureResult{Name: "TestA", Status: task.StatusFAIL, Error: "assertion blew up"}},
-			{Results: &fixtures.FixtureResult{Name: "TestB", Status: task.StatusPASS}},
-		},
-	}
-	v := &fixtureVerifier{
-		name:   "checks:test",
-		runner: func(fixtures.FixtureTest, fixtures.RunOptions) fixtures.FixtureResult { return failing },
-	}
-	verdict, err := v.Verify(&agent.RunContext{}, nil)
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if verdict.OK {
-		t.Fatal("failing fixture must produce a not-OK verdict")
-	}
-	if !strings.Contains(verdict.Feedback, "TestA") || !strings.Contains(verdict.Feedback, "assertion blew up") {
-		t.Errorf("feedback missing failing child: %q", verdict.Feedback)
-	}
-	if strings.Contains(verdict.Feedback, "TestB") {
-		t.Errorf("feedback should omit passing children: %q", verdict.Feedback)
-	}
-
-	passing := fixtures.FixtureResult{Name: "checks:test", Status: task.StatusPASS}
-	v.runner = func(fixtures.FixtureTest, fixtures.RunOptions) fixtures.FixtureResult { return passing }
-	verdict, err = v.Verify(&agent.RunContext{}, nil)
-	if err != nil || !verdict.OK {
-		t.Fatalf("passing fixture must produce OK, got %+v, %v", verdict, err)
-	}
 }

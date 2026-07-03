@@ -534,6 +534,12 @@ type TODOVerifyConfig struct {
 // failing test/lint feedback before the post-completion check loop gives up.
 const DefaultMaxCheckIterations = 3
 
+// DefaultRetryExpr is the definition-of-done retry predicate when none is
+// configured: re-run the agent while the run's TestResults have any errors or
+// warnings. It is a CEL expression evaluated over {results, test_results,
+// changed_files, session_log, iteration}.
+const DefaultRetryExpr = "results.failed > 0 || results.warned > 0"
+
 // AgentChecksConfig configures the post-completion check loop: the gavel test
 // and lint options gavel runs once an agent reports done, feeding any failures
 // back to the agent. It is read from .gavel.yaml (project default) and from a
@@ -546,6 +552,11 @@ type AgentChecksConfig struct {
 	// MaxIterations caps the number of agent re-runs. <=0 resolves to
 	// DefaultMaxCheckIterations.
 	MaxIterations int `yaml:"maxIterations,omitempty" json:"maxIterations,omitempty"`
+	// Retry is the CEL definition-of-done predicate: while it evaluates true the
+	// agent is re-run with the failing/warned nodes as feedback; when it is false
+	// the run is verified. Empty resolves to DefaultRetryExpr. It reads
+	// {results, test_results, changed_files, session_log, iteration}.
+	Retry string `yaml:"retry,omitempty" json:"retry,omitempty"`
 	// Test, when non-nil, runs `gavel test` with these options. nil skips tests.
 	Test *AgentTestConfig `yaml:"test,omitempty" json:"test,omitempty"`
 	// Lint, when non-nil, runs `gavel lint` with these options. nil skips lint.
@@ -590,6 +601,9 @@ func (base AgentChecksConfig) Overlay(override *AgentChecksConfig) AgentChecksCo
 	if override.MaxIterations != 0 {
 		base.MaxIterations = override.MaxIterations
 	}
+	if override.Retry != "" {
+		base.Retry = override.Retry
+	}
 	if override.Test != nil {
 		base.Test = override.Test
 	}
@@ -613,6 +627,9 @@ func ResolveAgentChecks(project AgentChecksConfig, frontmatter *AgentChecksConfi
 	}
 	if resolved.MaxIterations <= 0 {
 		resolved.MaxIterations = DefaultMaxCheckIterations
+	}
+	if resolved.Retry == "" {
+		resolved.Retry = DefaultRetryExpr
 	}
 	if resolved.IsEnabled() && !resolved.HasChecks() {
 		resolved.Test = &AgentTestConfig{Changed: true}
