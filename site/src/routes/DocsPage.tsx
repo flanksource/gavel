@@ -32,7 +32,7 @@ export default function DocsPage() {
         </nav>
       </aside>
 
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         {active ? (
           <MdxLayout>
             <h1>{active.frontmatter.title}</h1>

@@ -1,17 +1,17 @@
 import type { ComponentType } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiAdd, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiPass, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import { Spinner } from '../../icons/Spinner';
-import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusWontFix } from '../../icons/issues';
+import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusUnverified, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
-export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'review', 'ask', 'failed', 'verified', 'completed', 'skipped'];
+export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'review', 'ask', 'failed', 'unverified', 'verified', 'completed', 'skipped'];
 export const priorities: TodoPriority[] = ['high', 'medium', 'low'];
 
 export const emptyCounts: TodoCounts = {
@@ -23,6 +23,7 @@ export const emptyCounts: TodoCounts = {
   review: 0,
   ask: 0,
   failed: 0,
+  unverified: 0,
   verified: 0,
   completed: 0,
   skipped: 0,
@@ -49,6 +50,7 @@ export function addCounts(a: TodoCounts, b: TodoCounts): TodoCounts {
     review: (a.review ?? 0) + (b.review ?? 0),
     ask: (a.ask ?? 0) + (b.ask ?? 0),
     failed: a.failed + b.failed,
+    unverified: (a.unverified ?? 0) + (b.unverified ?? 0),
     verified: a.verified + b.verified,
     completed: a.completed + b.completed,
     skipped: a.skipped + b.skipped,
@@ -69,6 +71,7 @@ export function countsFromItems(items: TodoItem[]): TodoCounts {
       case 'review': counts.open++; counts.review++; break;
       case 'ask': counts.open++; counts.ask++; break;
       case 'failed': counts.open++; counts.failed++; break;
+      case 'unverified': counts.open++; counts.unverified++; break;
       case 'verified': counts.open++; counts.verified++; break;
       case 'skipped': counts.open++; counts.skipped++; break;
       default: counts.open++; counts.pending++; break;
@@ -89,6 +92,8 @@ export function statusClass(status: TodoStatus | string) {
       return 'text-green-600 bg-green-500/10 border-green-500/20';
     case 'verified':
       return 'text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+    case 'unverified':
+      return 'text-orange-700 dark:text-orange-400 bg-orange-500/10 border-orange-500/20';
     case 'in_progress':
       return 'text-blue-600 bg-blue-500/10 border-blue-500/20';
     case 'review':
@@ -131,6 +136,8 @@ function StatusIcon({ status }: { status: TodoStatus | string }) {
         return StatusBlocked;
       case 'verified':
         return StatusResolved;
+      case 'unverified':
+        return StatusUnverified;
       case 'completed':
         return StatusClosed;
       case 'skipped':
@@ -271,6 +278,7 @@ export function TodoCountsBar({ counts, hidden, onToggle }: {
       <CountBadge icon={UiEye} value={counts.review} label="Review" className="text-amber-600" status="review" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon={UiQuestion} value={counts.ask} label="Ask" className="text-purple-600" status="ask" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon={UiError} value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiWarningTriangle} value={counts.unverified} label="Unverified" className="text-orange-600" status="unverified" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon={UiCheckFilled} value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
       <CountBadge icon={UiPass} value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
       <span className="text-muted-foreground tabular-nums" title="Total todos">{counts.total}</span>

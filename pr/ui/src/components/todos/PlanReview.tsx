@@ -97,13 +97,18 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const detail = todos.detail && sel && todos.detail.ref === sel.ref ? todos.detail : null;
   const queueTodo = review.queue[review.index]?.todo;
   const current: TodoItem | null = detail ?? queueTodo ?? null;
-  const { busy, error, reset, approve, answer } = usePlanActions(sel?.dir ?? '', sel?.provider ?? 'auto');
+  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(sel?.dir ?? '', sel?.provider ?? 'auto');
   const [answerText, setAnswerText] = useState('');
+  const [changesText, setChangesText] = useState('');
+  const [showChanges, setShowChanges] = useState(false);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
+  const changesRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Reset the draft answer and any stale error whenever the focused todo changes.
+  // Reset the drafts and any stale error whenever the focused todo changes.
   useEffect(() => {
     setAnswerText('');
+    setChangesText('');
+    setShowChanges(false);
     reset();
   }, [sel?.ref, sel?.dir, reset]);
 
@@ -131,6 +136,26 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
     review.advanceAfterAction();
     todos.refresh();
   }, [ref, answerText, answer, todos, review]);
+
+  const onReject = useCallback(async () => {
+    if (!ref) return;
+    const result = await reject(ref);
+    if (!result) return;
+    todos.updateItem(result.todo);
+    review.advanceAfterAction();
+    todos.refresh();
+  }, [ref, reject, todos, review]);
+
+  const onRevise = useCallback(async () => {
+    if (!ref || !changesText.trim()) return;
+    const result = await revise(ref, changesText);
+    if (!result) return;
+    todos.updateItem(result.todo);
+    setChangesText('');
+    setShowChanges(false);
+    review.advanceAfterAction();
+    todos.refresh();
+  }, [ref, changesText, revise, todos, review]);
 
   // Keyboard shortcuts while review mode is active. Editable targets keep their
   // own keys (the answer textarea handles Cmd/Ctrl+Enter itself); only Escape is
@@ -184,11 +209,25 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
             answerRef.current?.focus();
           }
           break;
+        case 'x':
+          if (status === 'review') {
+            e.preventDefault();
+            void onReject();
+          }
+          break;
+        case 'c':
+          if (status === 'review') {
+            e.preventDefault();
+            setShowChanges(true);
+            // Focus after the box mounts.
+            setTimeout(() => changesRef.current?.focus(), 0);
+          }
+          break;
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [review, status, onApprove]);
+  }, [review, status, onApprove, onReject]);
 
   if (!review.active) return null;
 
@@ -219,13 +258,31 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={current?.title}>
           {current?.title}
         </span>
-        {status === 'review' && <PlanApproveButtons busy={busy} onApprove={run => void onApprove(run)} />}
-        <span className="hidden text-[11px] text-muted-foreground md:inline">a approve · ⇧a &amp; run · r reply · s skip · esc exit</span>
+        {status === 'review' && (
+          <PlanApproveButtons
+            busy={busy}
+            onApprove={run => void onApprove(run)}
+            onReject={() => void onReject()}
+            onRequestChanges={() => setShowChanges(v => !v)}
+          />
+        )}
+        <span className="hidden text-[11px] text-muted-foreground lg:inline">a approve · ⇧a run · c changes · x reject · r reply · s skip · esc exit</span>
         <Button type="button" variant="ghost" size="icon" onClick={review.exit} title="Exit review (Esc)" aria-label="Exit review" className="h-7 w-7 text-muted-foreground hover:bg-muted">
           <UiClose className="text-xs" />
         </Button>
       </div>
       {total === 0 && <div className="text-xs text-muted-foreground">All caught up — no plans or questions waiting.</div>}
+      {status === 'review' && showChanges && (
+        <AnswerBox
+          value={changesText}
+          onChange={setChangesText}
+          onSubmit={() => void onRevise()}
+          busy={busy}
+          label="Send changes & re-plan"
+          placeholder="Describe what to change in the plan… (Cmd/Ctrl+Enter to send)"
+          inputRef={el => (changesRef.current = el)}
+        />
+      )}
       {status === 'ask' && current && (
         <div className="flex flex-col gap-2">
           {current.questions && current.questions.length > 0 && <QuestionsPanel questions={current.questions} />}

@@ -81,6 +81,7 @@ export const ISSUE_ICONS: Record<string, IssueIconMeta> = {
   in_review: { key: 'in_review', name: 'In review', group: 'status', color: '#6366f1', meaning: REVIEW, description: 'Fix proposed; under review.' },
   blocked: { key: 'blocked', name: 'Blocked', group: 'status', color: '#e11d48', meaning: ACT_NOW, description: 'Waiting on a dependency or decision.' },
   resolved: { key: 'resolved', name: 'Resolved', group: 'status', color: '#059669', meaning: DELIVERED, description: 'Fixed and verified.' },
+  unverified: { key: 'unverified', name: 'Unverified', group: 'status', color: '#ea580c', meaning: 'Needs another look', description: 'Implemented, but the definition of done was still failing when the run ran out of turns.' },
   closed: { key: 'closed', name: 'Closed', group: 'status', color: '#6b7280', meaning: NEUTRAL, description: 'Done and archived; no further action.' },
   reopened: { key: 'reopened', name: 'Reopened', group: 'status', color: '#d97706', meaning: IN_FLIGHT, description: 'Recurred or regressed; back in flow.' },
   wont_fix: { key: 'wont_fix', name: "Won't fix", group: 'status', color: '#6b7280', meaning: NEUTRAL, description: 'Acknowledged but will not be addressed.' },
@@ -141,6 +142,7 @@ export const StatusAsk = make(questionThin, ISSUE_ICONS.ask.color);
 export const StatusInReview = make(eyeThin, ISSUE_ICONS.in_review.color);
 export const StatusBlocked = make(prohibitThin, ISSUE_ICONS.blocked.color);
 export const StatusResolved = make(checkCircleThin, ISSUE_ICONS.resolved.color);
+export const StatusUnverified = make(warningCircleThin, ISSUE_ICONS.unverified.color);
 export const StatusClosed = make(archiveThin, ISSUE_ICONS.closed.color);
 export const StatusReopened = make(arrowCounterClockwiseThin, ISSUE_ICONS.reopened.color);
 export const StatusWontFix = make(xCircleThin, ISSUE_ICONS.wont_fix.color);

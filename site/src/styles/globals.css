@@ -82,10 +82,104 @@
   }
 }
 
-/* Shiki light/dark switch via [data-theme] on <code> */
-html:not(.dark) [data-theme="dark"] {
-  display: none;
+/* Shiki output from rehype-pretty-code. */
+code[data-theme*=" "],
+code[data-theme*=" "] span {
+  color: var(--shiki-light);
+  background-color: transparent;
 }
-html.dark [data-theme="light"] {
-  display: none;
+
+.dark code[data-theme*=" "],
+.dark code[data-theme*=" "] span {
+  color: var(--shiki-dark);
+  background-color: transparent;
+}
+
+[data-rehype-pretty-code-figure] {
+  margin-block: 1.5rem;
+}
+
+pre[data-language] {
+  position: relative;
+}
+
+pre[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin: -0.25rem -0.25rem 0.75rem auto;
+  width: max-content;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--background) / 0.78);
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  text-transform: uppercase;
+}
+
+[data-rehype-pretty-code-title] {
+  border: 1px solid hsl(var(--border));
+  border-bottom: 0;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: hsl(var(--muted) / 0.72);
+  color: hsl(var(--muted-foreground));
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  overflow-x: auto;
+  padding: 0.625rem 1rem;
+}
+
+[data-rehype-pretty-code-title] + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+[data-rehype-pretty-code-caption] {
+  margin-top: -1rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.35rem;
+}
+
+[data-line] {
+  display: inline-block;
+  min-width: 100%;
+  padding-inline: 1rem;
+}
+
+pre [data-line] {
+  margin-inline: -1rem;
+}
+
+[data-highlighted-line] {
+  background: hsl(var(--primary) / 0.1);
+  border-left: 2px solid hsl(var(--primary));
+  padding-left: calc(1rem - 2px);
+}
+
+[data-highlighted-chars] {
+  background: hsl(var(--primary) / 0.16);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.15rem;
+}
+
+code[data-theme] {
+  counter-reset: line;
+}
+
+code[data-theme] > [data-line]::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  margin-right: 1rem;
+  min-width: 1.25rem;
+  text-align: right;
+  color: hsl(var(--muted-foreground));
+  opacity: 0.75;
 }

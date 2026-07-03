@@ -63,7 +63,7 @@ export interface Project {
 }
 
 export type TodoProvider = 'grite' | 'todos';
-export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'ask' | 'completed' | 'failed' | 'verified' | 'skipped';
+export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'ask' | 'completed' | 'failed' | 'unverified' | 'verified' | 'skipped';
 export type TodoPriority = 'high' | 'medium' | 'low';
 // Row density for the todo lists: 'comfortable' is the two-line default,
 // 'compact' collapses each todo onto a single line.
@@ -87,6 +87,7 @@ export interface TodoCounts {
   review: number;
   ask: number;
   failed: number;
+  unverified: number;
   verified: number;
   completed: number;
   skipped: number;

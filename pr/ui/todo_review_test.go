@@ -98,6 +98,99 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 	}
 }
 
+func TestTodoAPIPlanReject(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedReviewTodo(t, workDir, types.StatusReview)
+	// Record a plan pointer so we can assert reject clears it.
+	planPath := "/plans/plan-x.md"
+	planNew := types.PlanNew
+	if err := todos.UpdateTODOState(created, todos.StateUpdate{PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+
+	body, _ := json.Marshal(todoRejectPayload{Ref: todos.TODOReference(created)})
+	rec := httptest.NewRecorder()
+	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reject status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoApproveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Todo.Status != types.StatusPending {
+		t.Errorf("status = %s, want pending", resp.Todo.Status)
+	}
+	if resp.Todo.PlanPath != "" {
+		t.Errorf("plan pointer not cleared: %q", resp.Todo.PlanPath)
+	}
+
+	// A second reject hits a todo no longer in review: 409.
+	rec = httptest.NewRecorder()
+	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second reject status = %d, want 409", rec.Code)
+	}
+}
+
+func TestTodoAPIPlanRevise(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedReviewTodo(t, workDir, types.StatusReview)
+	sid := "sess-revise-1"
+	mode := types.ModePlan
+	if err := todos.UpdateTODOState(created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	oldStart := startTodoAnswer
+	var gotReq todoRunRequest
+	var gotFeedback string
+	startTodoAnswer = func(req todoRunRequest, feedback string) error {
+		gotReq = req
+		gotFeedback = feedback
+		return nil
+	}
+	t.Cleanup(func() { startTodoAnswer = oldStart })
+
+	body, _ := json.Marshal(todoRevisePayload{
+		Ref:      todos.TODOReference(created),
+		Feedback: "use a bounded queue, not unbounded",
+		Options:  &todoRunPayload{Model: "claude", Effort: "medium"},
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revise status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if gotFeedback != "use a bounded queue, not unbounded" {
+		t.Errorf("feedback = %q", gotFeedback)
+	}
+	if gotReq.Options.RunMode != types.ModePlan {
+		t.Errorf("revise mode = %q, want plan", gotReq.Options.RunMode)
+	}
+	if !gotReq.Options.Resume {
+		t.Error("resume flag not set")
+	}
+	var resp todoAnswerResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Status != "revising" || resp.SessionID != sid {
+		t.Errorf("response = %+v", resp)
+	}
+
+	// A revise without a recorded session is a 409 (nothing to resume).
+	noSession := seedReviewTodo(t, workDir, types.StatusReview)
+	body2, _ := json.Marshal(todoRevisePayload{Ref: todos.TODOReference(noSession), Feedback: "x"})
+	rec = httptest.NewRecorder()
+	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise?provider=todos", strings.NewReader(string(body2))))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("no-session revise status = %d, want 409", rec.Code)
+	}
+}
+
 func TestTodoAPIAnswer(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}

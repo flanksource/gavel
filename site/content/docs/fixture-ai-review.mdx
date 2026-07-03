@@ -1,0 +1,100 @@
+---
+title: AI review fixtures
+description: Score a diff with an AI prompt, acceptance checklist, and CEL threshold.
+order: 5
+---
+
+AI review fixtures turn a markdown document into one verification step. The fixture describes the review scope, model options, prompt, acceptance criteria, and score threshold.
+
+```bash
+gavel fixtures examples/ai-review.fixture.md
+```
+
+AI review needs a configured backend. Run `captain configure`, set a supported provider key such as `ANTHROPIC_API_KEY`, or use a model alias that is already configured for the local environment.
+
+## Minimal AI fixture
+
+````markdown
+---
+ai:
+  model: claude-code-sonnet
+verify:
+  threshold: 80
+---
+
+# Verify parser changes
+
+```prompt
+Focus on parser behavior, actionable errors, and regression coverage.
+```
+
+## Acceptance Criteria
+
+- [ ] Parser errors are actionable
+- [ ] Existing fixture formats still pass
+- [ ] User-facing behavior is documented
+
+- cel: json.score >= 80
+````
+
+Lines 2-3 choose the AI model. Lines 4-5 set the passing threshold for the verifier. Lines 10-12 are the review prompt; this is where you tell the model what to focus on. Lines 16-18 become scored acceptance criteria. Line 20 asserts on the structured JSON result so the fixture fails when the score is too low.
+
+The first `prompt` or `ai` code block becomes the reviewer instructions. GitHub task-list items become scored acceptance criteria. The AI result is JSON, so the fixture can assert on `json.score`, `json.implemented`, `json.rationale`, or any other structured field returned by the verifier.
+
+## Front matter
+
+`ai:` controls model execution:
+
+```yaml
+ai:
+  model: claude-code-sonnet
+  temperature: 0
+  maxTokens: 10000
+  maxConcurrent: 4
+  cacheTTL: 10m
+  noCache: false
+```
+
+`model` selects the backend/model alias. `temperature: 0` makes review output more stable. `maxTokens` bounds the response. `maxConcurrent`, `cacheTTL`, and `noCache` control throughput and repeatability for larger fixture suites.
+
+`verify:` controls review behavior:
+
+```yaml
+verify:
+  scope: diff
+  threshold: 80
+  disabled: [style]
+```
+
+`scope: diff` reviews the working tree by default. `threshold` is the minimum passing score. `disabled` removes checks that are not relevant for this fixture.
+
+`scope` defaults to the working-tree diff. Use a ref or range when the review should inspect something else.
+
+## Built-in and custom criteria
+
+Checklist items can be static check IDs or plain English criteria.
+
+```markdown
+## Acceptance Criteria
+
+- [ ] tests-added
+- [ ] error-paths-tested
+- [ ] no-hardcoded-secrets
+- [ ] The change is covered by a test that fails without it
+- [ ] User-facing behavior changes are reflected in README or docs
+```
+
+Lines 3-5 are built-in check IDs. Lines 6-7 are project-specific criteria scored by the model. Keep custom criteria concrete enough that the model can cite evidence from the diff.
+
+Static check IDs map to built-in verify checks. Custom text is scored by the model. This lets one fixture combine deterministic policy checks with project-specific review goals.
+
+## When to use AI fixtures
+
+Use AI fixtures when the question is broader than command output:
+
+- Does this diff satisfy the acceptance criteria?
+- Did the implementation cover failure paths?
+- Is the migration or compatibility story safe?
+- Did the docs change with the behavior?
+
+Use regular command/table fixtures when the expected result can be asserted directly with stdout, stderr, exit code, JSON, or files.

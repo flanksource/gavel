@@ -9,6 +9,7 @@ import {
   StatusResolved,
   StatusReview,
   StatusTriage,
+  StatusUnverified,
   StatusWontFix,
   type IssueIconProps,
 } from '../../icons/issues';
@@ -22,6 +23,7 @@ const STATUS_FILTER_ICONS: Record<TodoStatus, (props: IssueIconProps) => JSX.Ele
   review: StatusReview,
   ask: StatusAsk,
   failed: StatusBlocked,
+  unverified: StatusUnverified,
   verified: StatusResolved,
   completed: StatusClosed,
   skipped: StatusWontFix,

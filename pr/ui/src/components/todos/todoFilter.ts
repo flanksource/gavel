@@ -16,6 +16,7 @@ export const STATUS_FILTER_DEFS: { status: TodoStatus; label: string; countKey: 
   { status: 'review', label: 'Review', countKey: 'review' },
   { status: 'ask', label: 'Ask', countKey: 'ask' },
   { status: 'failed', label: 'Failed', countKey: 'failed' },
+  { status: 'unverified', label: 'Unverified', countKey: 'unverified' },
   { status: 'verified', label: 'Verified', countKey: 'verified' },
   { status: 'skipped', label: 'Skipped', countKey: 'skipped' },
   { status: 'completed', label: 'Closed', countKey: 'completed' },

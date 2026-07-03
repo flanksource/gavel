@@ -156,6 +156,84 @@
     return parts.join("\n");
   }
 
+  function fileLine(filePath, lineNumber) {
+    if (!filePath) return "";
+    return filePath + ":" + (lineNumber || "");
+  }
+
+  function resolveWithTimeout(promise, fallback, timeoutMs) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        resolve(fallback);
+      }, timeoutMs);
+      Promise.resolve(promise).then(
+        function (value) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(value || fallback);
+        },
+        function () {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        },
+      );
+    });
+  }
+
+  function displayNameForElement(el, fallback) {
+    var api = window.__REACT_GRAB__;
+    if (fallback) return fallback;
+    try {
+      if (api && api.getDisplayName) return api.getDisplayName(el) || "";
+    } catch {
+      /* noop */
+    }
+    return "";
+  }
+
+  function fallbackSourceForElement(el, fallback) {
+    if (fallback) return Promise.resolve(fallback);
+    var api = window.__REACT_GRAB__;
+    if (!api || !api.getSource) return Promise.resolve("");
+    return Promise.resolve()
+      .then(function () { return api.getSource(el); })
+      .then(function (source) { return source ? fileLine(source.filePath, source.lineNumber) : ""; })
+      .catch(function () { return ""; });
+  }
+
+  function stackSourceForElement(el, fallback) {
+    var api = window.__REACT_GRAB__;
+    if (!api || !api.getStackContext) return Promise.resolve(fallback);
+    return resolveWithTimeout(
+      Promise.resolve().then(function () { return api.getStackContext(el); }),
+      fallback,
+      1500,
+    );
+  }
+
+  // todoBodyForElement is the single capture formatter used by both the gavel
+  // todo dialog and React Grab's built-in Copy command, so clipboard content and
+  // created/commented todos stay identical.
+  function todoBodyForElement(opts) {
+    var el = opts.element;
+    var html = opts.html != null ? opts.html : grabHtml(el);
+    var componentName = displayNameForElement(el, opts.componentName);
+    var fallback = fileLine(opts.filePath, opts.lineNumber);
+    return fallbackSourceForElement(el, fallback)
+      .then(function (sourceFallback) {
+        return stackSourceForElement(el, sourceFallback);
+      })
+      .then(function (source) {
+        return buildBody(componentName, source, html);
+      });
+  }
+
   // openDialog shows the todo form in a modal iframe. When attachment ({blob,name})
   // is set it ships the blob into the iframe once the form signals "embed-ready" —
   // the form (same-origin to gavel) then uploads it as multipart, so no CORS is
@@ -233,33 +311,24 @@
   function openTodo(ctx, attachment) {
     var el = ctx.element;
     var title = ctx.componentName || ctx.tagName || "UI element";
-    var fileLine = ctx.filePath ? ctx.filePath + ":" + (ctx.lineNumber || "") : "";
     // Snapshot the markup now, before cleanup() unfreezes and may re-render the page.
     var html = grabHtml(el);
     var sourceUrl = window.location.href;
+    var body = todoBodyForElement({
+      element: el,
+      componentName: ctx.componentName,
+      filePath: ctx.filePath,
+      lineNumber: ctx.lineNumber,
+      html: html,
+    });
     dismissGrab(ctx);
 
     // Open the dialog from the best context we can get without ever blocking:
     // getStackContext is richer but may be slow/hang for some elements, so race
     // it against a short timeout and fall back to the synchronous file:line.
-    var done = false;
-    var open = function (source) {
-      if (done) return;
-      done = true;
-      openDialog(buildUrl(title, buildBody(ctx.componentName, source || fileLine, html), sourceUrl), attachment);
-    };
-    var api = window.__REACT_GRAB__;
-    if (api && api.getStackContext) {
-      var timer = setTimeout(function () { open(fileLine); }, 1500);
-      Promise.resolve()
-        .then(function () { return api.getStackContext(el); })
-        .then(
-          function (source) { clearTimeout(timer); open(source); },
-          function () { clearTimeout(timer); open(fileLine); },
-        );
-    } else {
-      open(fileLine);
-    }
+    body.then(function (markdown) {
+      openDialog(buildUrl(title, markdown, sourceUrl), attachment);
+    });
   }
 
   function onAction(ctx) {
@@ -276,8 +345,21 @@
     });
   }
 
+  function onCopyContent(content, elements) {
+    var selected = Array.isArray(elements) ? elements.filter(Boolean) : [];
+    if (selected.length === 0) return content;
+    return Promise.all(selected.map(function (el) {
+      return todoBodyForElement({ element: el });
+    })).then(function (parts) {
+      return parts.filter(Boolean).join("\n\n---\n\n") || content;
+    });
+  }
+
   var plugin = {
     name: PLUGIN_NAME,
+    hooks: {
+      transformCopyContent: onCopyContent,
+    },
     actions: [
       { id: "gavel-todo", label: "Add to gavel todo", shortcut: "T", onAction: onAction },
       { id: "gavel-screenshot", label: "Screenshot to gavel todo", shortcut: "S", onAction: onScreenshot },

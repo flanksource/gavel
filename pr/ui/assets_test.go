@@ -61,6 +61,31 @@ func TestReactGrabPluginCapturesHTML(t *testing.T) {
 	}
 }
 
+// React Grab's built-in Copy command must use the same Markdown body formatter
+// as "Add to gavel todo", so copied content and created/commented todos stay
+// aligned.
+func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"transformCopyContent",
+		"todoBodyForElement",
+		"buildBody(componentName, source, html)",
+		"getStackContext",
+		"getSource",
+		`join("\n\n---\n\n")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plugin JS missing %q", want)
+		}
+	}
+}
+
 // The plugin must offer screenshot capture: a getDisplayMedia stream cropped to
 // the grabbed element via Region Capture (CropTarget/cropTo), shipped to the todo
 // form. Guards against the capture path being dropped.

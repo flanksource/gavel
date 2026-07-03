@@ -1601,10 +1601,11 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 			return nil, "", err
 		}
 	}
-	// The todo's recorded plan feeds a re-plan so the agent can report
-	// updated/unchanged instead of starting over.
+	// The todo's recorded plan feeds both flows: a plan re-run reports
+	// updated/unchanged, and an implement run follows the approved/edited plan.
+	// Single-todo only — a group run has no single plan to attribute.
 	existingPlan := ""
-	if mode == types.ModePlan && len(req.Todos) == 1 {
+	if len(req.Todos) == 1 && (mode == types.ModePlan || mode == types.ModeRun) {
 		content, _, _, err := todos.ReadPlanFile(req.Todos[0].PlanPath)
 		if err != nil {
 			return nil, "", err

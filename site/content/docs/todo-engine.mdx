@@ -1,0 +1,115 @@
+---
+title: Todo engine
+description: Store, list, create, run, and verify work items with Grite or markdown-backed providers.
+order: 6
+---
+
+The todo engine is Gavel's task execution layer. It turns work items into structured agent runs, records status, persists session metadata, and connects acceptance criteria to verification.
+
+```bash
+gavel todos list
+gavel todos create "Fix flaky parser"
+gavel todos get 90ec80f0
+gavel todos run 90ec80f0
+gavel todos verify 90ec80f0
+```
+
+Line 1 lists active work. Line 2 creates a provider-backed issue. Line 3 prints the full todo body, status, provider history, and parsed sections. Line 4 starts the agent loop. Line 5 scores committed work against the todo's acceptance criteria.
+
+`gavel todo` is an alias for `gavel todos`.
+
+## Providers
+
+Gavel has two todo providers:
+
+| Provider | Select with | Storage |
+|----------|-------------|---------|
+| Grite | default, or `--provider=grite` | Grite issues, labels, comments, and event history |
+| Markdown files | `--provider=todos` | files in `.todos` or `--dir` |
+
+The Grite provider is the default. Use the file provider when you want portable markdown files inside a repository.
+
+```bash
+gavel todos list --provider=grite
+gavel todos list --provider=todos --dir .todos
+```
+
+The first command uses Grite issues. The second reads markdown files from `.todos`. `--dir` is only meaningful for the file provider; Grite stores content in its issue database.
+
+Provider behavior is shared through one interface: list, get, create, delete, edit, comment, update state, save attempts, update latest failure, and save verification. The CLI and PR UI both use that provider boundary.
+
+## Creating todos
+
+```bash
+gavel todos create "Fix parser error messages"
+gavel todos new --title "Add fixture docs" --body-file todo.md
+gavel todos create --priority high --status pending "Stop leaking stderr"
+```
+
+Line 1 is the shortest path: the title comes from positional arguments. Line 2 uses the `new` alias and reads a full markdown body from a file. Line 3 sets priority and initial status explicitly.
+
+Create defaults:
+
+- priority: `medium`
+- status: `pending`
+- provider: Grite
+- acceptance criteria generation: enabled when a model is available
+
+Use `--criteria=false` to skip AI-drafted acceptance criteria. Use `--model` to choose the model for criteria generation.
+
+## Statuses
+
+Todos use these statuses:
+
+| Status | Meaning |
+|--------|---------|
+| `draft` | not ready to run |
+| `pending` | ready, not started |
+| `in_progress` | currently running |
+| `review` | a plan is waiting for human approval |
+| `ask` | the agent is blocked on questions |
+| `verified` | the run met its definition of done |
+| `unverified` | implementation finished but checks still failed |
+| `completed` | finished without a definition-of-done gate |
+| `failed` | execution failed |
+| `skipped` | reproduction steps already pass |
+
+`gavel todos list` hides completed todos by default. Pass `--all` to include them.
+
+## Todo front matter
+
+File-backed todos use YAML front matter. Grite-backed todos map the same fields onto labels, issue state, and comments where possible.
+
+```yaml
+---
+title: Fix parser error messages
+priority: high
+status: pending
+cwd: ./services/api
+llm:
+  model: claude-code-sonnet
+  max_turns: 12
+checks:
+  enabled: true
+  maxIterations: 3
+  test:
+    changed: true
+  lint:
+    changed: true
+---
+```
+
+Lines 2-5 describe the work item and where the agent should run. Lines 6-8 choose model/session constraints. Lines 9-15 enable the fixture-backed test/lint loop for this todo. A Grite-backed todo stores equivalent state through labels and comments instead of local front matter.
+
+Useful fields include `title`, `priority`, `status`, `cwd`, `path`, `llm`, `checks`, `verify`, `plan_path`, `plan_status`, `run_mode`, `last_run_summary`, and `questions`.
+
+## Sections
+
+A todo body can include normal markdown plus structured sections:
+
+- `## Steps To Reproduce` as fixture nodes used for the pre-check.
+- `## Acceptance Criteria` as editable done-ness criteria.
+- `## Verification` as fixture nodes used by the run loop.
+- comments, provider events, latest failure, attempts, and verification results.
+
+The todo engine deliberately reuses fixture parsing for verification sections. That keeps command checks, test/lint runner steps, and AI review in one format.

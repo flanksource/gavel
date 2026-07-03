@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type KeyboardEvent } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiEye, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
+import { UiCancel, UiCheck, UiEdit, UiEye, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoQuestion, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
@@ -86,7 +86,56 @@ export function usePlanActions(dir: string, provider: string) {
     [dir, provider, busy],
   );
 
-  return { busy, error, reset, approve, answer };
+  const reject = useCallback(
+    async (ref: string): Promise<PlanApproveResult | null> => {
+      if (busy || !ref.trim()) return null;
+      setBusy(true);
+      setError('');
+      try {
+        const res = await fetch(`/api/todos/plan/reject?${todoQuery(dir, provider)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref: ref.trim() }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Reject failed');
+        return data as PlanApproveResult;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Reject failed');
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dir, provider, busy],
+  );
+
+  const revise = useCallback(
+    async (ref: string, feedback: string): Promise<PlanAnswerResult | null> => {
+      const trimmed = feedback.trim();
+      if (busy || !ref.trim() || !trimmed) return null;
+      setBusy(true);
+      setError('');
+      try {
+        const res = await fetch(`/api/todos/plan/revise?${todoQuery(dir, provider)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref: ref.trim(), feedback: trimmed }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Revise failed');
+        return data as PlanAnswerResult;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Revise failed');
+        return null;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dir, provider, busy],
+  );
+
+  return { busy, error, reset, approve, answer, reject, revise };
 }
 
 // PlanApproveButtons is the review action pair: primary "Approve & Run" (→ the
@@ -95,15 +144,22 @@ export function usePlanActions(dir: string, provider: string) {
 export function PlanApproveButtons({
   busy,
   onApprove,
+  onReject,
+  onRequestChanges,
   size = 'sm',
 }: {
   busy?: boolean;
   onApprove: (run: boolean) => void;
+  // Optional secondary actions: reject the plan (→ pending) and request changes
+  // (reveal a feedback box that re-plans on the same session). Rendered only when
+  // the caller wires them.
+  onReject?: () => void;
+  onRequestChanges?: () => void;
   size?: 'sm' | 'default';
 }) {
   const Icon = busy ? Spinner : UiPlay;
   return (
-    <div className="inline-flex items-center gap-1.5">
+    <div className="inline-flex flex-wrap items-center gap-1.5">
       <Button
         type="button"
         size={size}
@@ -128,6 +184,34 @@ export function PlanApproveButtons({
         <UiCheck className="text-xs" />
         Approve
       </Button>
+      {onRequestChanges && (
+        <Button
+          type="button"
+          size={size}
+          variant="outline"
+          disabled={busy}
+          onClick={onRequestChanges}
+          className="inline-flex items-center gap-1 disabled:opacity-50"
+          title="Send the agent feedback and re-plan on the same session"
+        >
+          <UiEdit className="text-xs" />
+          Request changes
+        </Button>
+      )}
+      {onReject && (
+        <Button
+          type="button"
+          size={size}
+          variant="ghost"
+          disabled={busy}
+          onClick={onReject}
+          className="inline-flex items-center gap-1 text-red-600 hover:bg-red-500/10 hover:text-red-700 disabled:opacity-50"
+          title="Reject the plan; the todo returns to pending"
+        >
+          <UiCancel className="text-xs" />
+          Reject
+        </Button>
+      )}
     </div>
   );
 }
@@ -178,11 +262,15 @@ export function TodoReviewBanner({
   provider: string;
   onChanged: (todo: TodoItem) => void;
 }) {
-  const { busy, error, reset, approve, answer } = usePlanActions(dir, provider);
+  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(dir, provider);
   const [answerText, setAnswerText] = useState('');
+  const [changesText, setChangesText] = useState('');
+  const [showChanges, setShowChanges] = useState(false);
 
   useEffect(() => {
     setAnswerText('');
+    setChangesText('');
+    setShowChanges(false);
     reset();
   }, [todo.ref, reset]);
 
@@ -193,6 +281,20 @@ export function TodoReviewBanner({
     },
     [approve, todo.ref, onChanged],
   );
+
+  const onReject = useCallback(async () => {
+    const result = await reject(todo.ref);
+    if (result) onChanged(result.todo);
+  }, [reject, todo.ref, onChanged]);
+
+  const onRevise = useCallback(async () => {
+    const result = await revise(todo.ref, changesText);
+    if (result) {
+      setChangesText('');
+      setShowChanges(false);
+      onChanged(result.todo);
+    }
+  }, [revise, todo.ref, changesText, onChanged]);
 
   const onAnswer = useCallback(async () => {
     const result = await answer(todo.ref, answerText);
@@ -210,8 +312,24 @@ export function TodoReviewBanner({
             <UiEye className="text-xs" />
             Plan ready for review
           </span>
-          <PlanApproveButtons busy={busy} onApprove={run => void onApprove(run)} />
+          <PlanApproveButtons
+            busy={busy}
+            onApprove={run => void onApprove(run)}
+            onReject={() => void onReject()}
+            onRequestChanges={() => setShowChanges(v => !v)}
+          />
         </div>
+        {showChanges && (
+          <AnswerBox
+            value={changesText}
+            onChange={setChangesText}
+            onSubmit={() => void onRevise()}
+            busy={busy}
+            label="Send changes & re-plan"
+            placeholder="Describe what to change in the plan… (Cmd/Ctrl+Enter to send)"
+            autoFocus
+          />
+        )}
         {error && <div className="text-xs text-red-600">{error}</div>}
       </div>
     );
@@ -244,6 +362,8 @@ export function AnswerBox({
   busy,
   autoFocus,
   inputRef,
+  label = 'Send & resume',
+  placeholder = "Answer the agent's questions… (Cmd/Ctrl+Enter to send)",
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -251,6 +371,10 @@ export function AnswerBox({
   busy?: boolean;
   autoFocus?: boolean;
   inputRef?: (el: HTMLTextAreaElement | null) => void;
+  // label/placeholder let the same box serve answering an `ask` and requesting
+  // changes on a `review` plan.
+  label?: string;
+  placeholder?: string;
 }) {
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -264,7 +388,7 @@ export function AnswerBox({
         ref={inputRef}
         autoFocus={autoFocus}
         className={`${inputClass} h-auto min-h-[4rem] resize-y`}
-        placeholder="Answer the agent's questions… (Cmd/Ctrl+Enter to send)"
+        placeholder={placeholder}
         value={value}
         onChange={e => onChange(e.currentTarget.value)}
         onKeyDown={onKeyDown}
@@ -279,7 +403,7 @@ export function AnswerBox({
           className="inline-flex items-center gap-1 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
         >
           {busy ? <Spinner className="text-xs" /> : <UiCheck className="text-xs" />}
-          Send &amp; resume
+          {label}
         </Button>
       </div>
     </div>

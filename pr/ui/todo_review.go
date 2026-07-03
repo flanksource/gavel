@@ -99,6 +99,109 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
+// todoRejectPayload rejects a reviewed plan: the todo returns to pending and its
+// recorded plan pointer is cleared, so a later run re-plans from scratch rather
+// than following the discarded plan.
+type todoRejectPayload struct {
+	Provider string `json:"provider,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+	Ref      string `json:"ref"`
+}
+
+func (s *Server) handleTodoPlanReject(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var payload todoRejectPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	if todo.Status != types.StatusReview {
+		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status))
+		return
+	}
+	pending := types.StatusPending
+	clearedPath := ""
+	clearedStatus := types.PlanStatus("")
+	todo.Status = pending
+	if err := provider.UpdateState(r.Context(), todo, todos.StateUpdate{Status: &pending, PlanPath: &clearedPath, PlanStatus: &clearedStatus}); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoApproveResponse{Todo: summarizeTodo(todo, true)}) //nolint:errcheck
+}
+
+// todoRevisePayload asks the agent to revise a reviewed plan with the reviewer's
+// feedback: the plan session resumes, the agent updates its native plan file,
+// and the todo returns to review with the revised plan.
+type todoRevisePayload struct {
+	Provider string          `json:"provider,omitempty"`
+	Dir      string          `json:"dir,omitempty"`
+	Ref      string          `json:"ref"`
+	Feedback string          `json:"feedback"`
+	Options  *todoRunPayload `json:"options,omitempty"`
+}
+
+func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var payload todoRevisePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	feedback := strings.TrimSpace(payload.Feedback)
+	if feedback == "" {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("feedback is required"))
+		return
+	}
+	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	if todo.Status != types.StatusReview {
+		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status))
+		return
+	}
+	if todo.LLM == nil || todo.LLM.SessionId == "" {
+		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo has no recorded plan session to revise"))
+		return
+	}
+
+	// Record the feedback so the resumed prompt and the timeline see it.
+	if err := provider.Comment(r.Context(), todo, "**Requested changes:** "+feedback); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	runPayload := todoRunPayload{}
+	if payload.Options != nil {
+		runPayload = *payload.Options
+	}
+	runPayload.Resume = true
+	runPayload.RunMode = string(types.ModePlan) // revise re-enters plan mode on the same session
+	runPayload.Plan = true
+	opts, err := normalizeTodoRunOptions(runPayload)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: source.Provider, Options: opts}
+	if err := startTodoAnswer(req, feedback); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	json.NewEncoder(w).Encode(todoAnswerResponse{ //nolint:errcheck
+		Todo:      summarizeTodo(todo, true),
+		SessionID: todo.LLM.SessionId,
+		Status:    "revising",
+	})
+}
+
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's
 // prior session is resumed with the answer as the next user turn.
 type todoAnswerPayload struct {
