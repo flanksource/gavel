@@ -402,7 +402,12 @@ gavel fixtures tests/api.fixture.md
 gavel fixtures fixtures/**/*.md
 gavel fixtures -v tests.md
 gavel fixtures --no-progress tests.md
+gavel fixtures outline fixtures/**/*.md
 ```
+
+Use `gavel fixtures outline` to inspect fixture structure, source locations, and
+fixture kind counts without running build commands, daemons, fixture commands,
+test/lint runner steps, skip commands, or AI checks.
 
 If your repo enables fixture discovery in `.gavel.yaml`, `gavel test --fixtures` can run the same files as part of the broader test pass.
 
@@ -540,7 +545,13 @@ gavel todos check
 gavel todos run
 gavel todos run --interactive
 gavel todos run --group-by directory
+gavel todos run --mode plan                # propose a plan; approve/reject via `gavel todos plan`
+gavel todos verify --strict                # AI-score committed work vs acceptance criteria
 ```
+
+`--mode` selects the agent's task: `run` (implement, default), `plan` (read-only plan
+that parks the TODO in `review`), or `verify`. `--driver` selects the agent and
+mechanism: `claude-cmux` (default), `claude-headless`, or `codex-headless`.
 
 #### Run the tests and linters when the agent is done (`--check`)
 
@@ -552,7 +563,7 @@ finished, it has to leave the suite green.
 
 ```bash
 gavel todos run --check
-gavel todos run --check --mode cmux        # primary path: resumes the live agent REPL
+gavel todos run --check --driver claude-cmux   # primary path: resumes the live agent REPL
 ```
 
 The loop is **opt-in**. It runs when any of these enable it:
@@ -576,7 +587,7 @@ checks:
 ```
 
 When enabled with neither `test` nor `lint` set, both run against changed files.
-Feedback works best with `--mode cmux` (it resumes the live agent session); the
+Feedback works best with a cmux driver such as `--driver claude-cmux` (it resumes the live agent session); the
 inline agent resumes via its session id, and agents that can't resume fall back to
 reporting the failures without iterating. See the [`checks`](SCHEMA.md#checks)
 schema for every field.

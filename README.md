@@ -195,7 +195,12 @@ gavel fixtures fixtures/**/*.md
 gavel fixtures -v tests.md                  # verbose (stderr on pass, stdout+stderr on fail)
 gavel fixtures -vv tests.md                 # more verbose
 gavel fixtures --no-progress tests.md       # disable progress display
+gavel fixtures outline fixtures/**/*.md     # parse and summarize without executing
 ```
+
+Use `gavel fixtures outline` when you want to inspect fixture files, sections,
+tables, runner steps, AI checks, and source locations without running any build,
+daemon, command, test/lint, skip, or AI work.
 
 The same runner can be used from Go tests. Import the default fixture types when
 using `exec` fixtures:
@@ -693,9 +698,13 @@ Manage and execute TODO items with Claude Code integration.
 gavel todos list
 gavel todos list --status pending
 gavel todos run .todos/fix-bug.md
+gavel todos run --mode plan              # propose a reviewable plan first (read-only)
 gavel todos run --check                  # run tests/lint when the agent finishes, feed failures back to it
-gavel todos check .todos/fix-bug.md
+gavel todos check .todos/fix-bug.md      # run a TODO's verification fixtures only
+gavel todos verify --strict              # AI-score committed work vs acceptance criteria
 ```
+
+`--mode` selects what the agent does: `run` (implement, default), `plan` (produce a plan that parks the TODO in `review` for approval via `gavel todos plan reject|revise`), or `verify` (score committed work). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
 
 `--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt-in via the flag, `.gavel.yaml` `checks:`, or a TODO's frontmatter `checks:` block.
 
