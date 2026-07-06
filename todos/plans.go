@@ -10,19 +10,30 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// ResolveSessionPlanPath recovers the native plan file from the todo's agent
-// session via captain's canonical plan resolver (the same one the dashboard's
-// Plan tab uses), for when the envelope's reported path is missing or wrong.
-// Empty when the todo has no session or the session has no on-disk plan.
-func ResolveSessionPlanPath(todo *types.TODO) string {
+// ResolveSessionPlan recovers the plan from the todo's agent session via
+// captain's canonical plan resolver (the same one the dashboard's Plan tab
+// uses), for when the envelope's reported path/content is missing or wrong.
+// File-backed sessions return path+content; inline-only sessions return content
+// with an empty path.
+func ResolveSessionPlan(todo *types.TODO) (path string, content string) {
 	if todo == nil || todo.LLM == nil || todo.LLM.SessionId == "" {
-		return ""
+		return "", ""
 	}
 	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: todo.LLM.SessionId})
-	if err != nil || !res.OnDisk {
-		return ""
+	if err != nil {
+		return "", ""
 	}
-	return res.Path
+	if res.OnDisk {
+		path = res.Path
+	}
+	return path, res.Content
+}
+
+// ResolveSessionPlanPath recovers the native plan file from the todo's agent
+// session. Empty when the todo has no session or the session has no on-disk plan.
+func ResolveSessionPlanPath(todo *types.TODO) string {
+	path, _ := ResolveSessionPlan(todo)
+	return path
 }
 
 // ValidatePlanFile verifies the agent-reported native plan file exists and is

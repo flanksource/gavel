@@ -11,8 +11,9 @@ import (
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
-// stubSummaryAgent answers every prompt with a summary per requested id by
-// filling the StructuredOutput schema, mimicking the real agent.
+// stubSummaryAgent answers every prompt with a summary per requested id,
+// returning the structured JSON the real agent would produce from the
+// frontmatter schema.
 type stubSummaryAgent struct {
 	requests []clickyai.PromptRequest
 	fail     bool
@@ -23,12 +24,10 @@ func (s *stubSummaryAgent) ExecutePrompt(_ context.Context, req clickyai.PromptR
 	if s.fail {
 		return nil, fmt.Errorf("stub agent failure")
 	}
-	schema := req.StructuredOutput.(*fileSummariesSchema)
-	schema.Tests = []testSummaryItem{
+	data, _ := json.Marshal(fileSummariesSchema{Tests: []testSummaryItem{
 		{ID: "gotest/sample_test.go:8 TestAdd", Summary: "verifies add returns the arithmetic sum"},
-	}
-	data, _ := json.Marshal(schema)
-	return &clickyai.PromptResponse{Result: string(data)}, nil
+	}})
+	return &clickyai.PromptResponse{StructuredData: json.RawMessage(data)}, nil
 }
 
 var _ = Describe("applyAISummaries", func() {

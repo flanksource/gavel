@@ -91,13 +91,26 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 	// The todo's own `## Verification` fixture is the definition of done — it
 	// gates the loop whenever present, independent of the `checks` toggle.
 	var verNodes []*fixtures.FixtureNode
+	var criteria []string
 	for _, todo := range todosInGroup {
-		if todo != nil {
-			verNodes = append(verNodes, todo.Verification...)
+		if todo == nil {
+			continue
+		}
+		verNodes = append(verNodes, todo.Verification...)
+		for _, c := range todo.AcceptanceCriteria {
+			criteria = append(criteria, c.Text)
 		}
 	}
 
-	if len(steps) == 0 && len(verNodes) == 0 {
+	// Acceptance criteria become an LLM checklist step whose per-item
+	// {item, passed, message} results are exposed to the predicate as
+	// results.checklist.
+	aiStep, err := newChecklistStep(criteria, gitRoot)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(steps) == 0 && len(verNodes) == 0 && aiStep == nil {
 		return nil, 0, nil
 	}
 	maxIter := cfg.MaxIterations
@@ -109,9 +122,37 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 		retryExpr: cfg.Retry,
 		steps:     steps,
 		nodes:     verNodes,
+		aiStep:    aiStep,
 		workDir:   gitRoot,
 	}
 	return []agent.Plugin{verifier}, maxIter + 1, nil
+}
+
+// newChecklistStep builds the acceptance-criteria checklist step: an ai fixture
+// that has the LLM evaluate each criterion against the change and return a
+// per-item {item, passed, message} result. nil when there are no criteria.
+func newChecklistStep(criteria []string, workDir string) (*stepFixture, error) {
+	if len(criteria) == 0 {
+		return nil, nil
+	}
+	if fixtures.AIStepRunner == nil {
+		return nil, fmt.Errorf("acceptance-criteria checklist: AI step runner not registered (import gavel/fixtures/types)")
+	}
+	items := make([]fixtures.ChecklistItem, 0, len(criteria))
+	for _, c := range criteria {
+		items = append(items, fixtures.ChecklistItem{Text: c})
+	}
+	return &stepFixture{
+		runner: fixtures.AIStepRunner,
+		fixture: fixtures.FixtureTest{
+			Name:      "acceptance-criteria",
+			SourceDir: workDir,
+			AIStep: &fixtures.AIStepSpec{
+				Description: "Verify the implementation satisfies each acceptance criterion.",
+				Criteria:    items,
+			},
+		},
+	}, nil
 }
 
 // newStepFixture marshals an options struct into a fixture step's YAML body (the

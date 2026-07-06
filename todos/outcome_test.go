@@ -204,6 +204,25 @@ func TestApplyOutcomePlanTransitions(t *testing.T) {
 		}
 	})
 
+	t.Run("inline plan content → review without path", func(t *testing.T) {
+		dir := t.TempDir()
+		todo := writeOutcomeTodo(t, dir)
+		e := NewTODOExecutor(dir, plainExec{}, "")
+		e.SetMode(types.ModePlan)
+		result := newPlanResult(types.PlanNew, "")
+		result.Plan.Content = "- [x] inspect\n- [ ] implement"
+
+		if err := e.applyOutcome(context.Background(), todo, result); err != nil {
+			t.Fatalf("applyOutcome: %v", err)
+		}
+		if todo.Status != types.StatusReview {
+			t.Errorf("status = %s, want review", todo.Status)
+		}
+		if todo.PlanPath != "" || todo.PlanStatus != types.PlanNew {
+			t.Errorf("plan bookkeeping = %q/%q", todo.PlanPath, todo.PlanStatus)
+		}
+	})
+
 	t.Run("unchanged plan → pending, path kept", func(t *testing.T) {
 		dir := t.TempDir()
 		todo := writeOutcomeTodo(t, dir)
@@ -336,6 +355,23 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		}
 		if maxIter != types.DefaultMaxCheckIterations+1 {
 			t.Errorf("maxIter = %d, want default budget %d", maxIter, types.DefaultMaxCheckIterations+1)
+		}
+	})
+
+	t.Run("acceptance criteria auto-enable the DoD verifier as a checklist", func(t *testing.T) {
+		// No checks and no `## Verification`, just criteria — they become the
+		// checklist ai step feeding results.checklist.
+		todo := &types.TODO{}
+		todo.AcceptanceCriteria = []types.AcceptanceCriterion{{Text: "retries on 5xx"}}
+		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, false)
+		if err != nil {
+			t.Fatalf("BuildCheckVerifiers: %v", err)
+		}
+		if len(plugins) != 1 || plugins[0].Name() != "definition-of-done" {
+			t.Fatalf("plugins = %d, want one 'definition-of-done' verifier from criteria", len(plugins))
+		}
+		if v, ok := plugins[0].(*celVerifier); !ok || v.aiStep == nil {
+			t.Fatal("criteria should synthesize the checklist ai step on the verifier")
 		}
 	})
 }

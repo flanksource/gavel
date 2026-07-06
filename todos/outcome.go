@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/flanksource/gavel/todos/types"
@@ -104,10 +105,16 @@ func (e *TODOExecutor) applyPlanOutcome(todo *types.TODO, result *ExecutionResul
 		if err := ValidatePlanFile(path); err != nil {
 			// The agent misreported its plan file; captain's session plan
 			// resolver is the canonical fallback before failing the run.
-			if resolved := ResolveSessionPlanPath(todo); resolved != "" && ValidatePlanFile(resolved) == nil {
-				path = resolved
-			} else {
-				return fmt.Errorf("plan run reported an invalid plan file: %w", err)
+			resolvedPath, resolvedContent := ResolveSessionPlan(todo)
+			switch {
+			case resolvedPath != "" && ValidatePlanFile(resolvedPath) == nil:
+				path = resolvedPath
+			case strings.TrimSpace(result.Plan.Content) != "":
+				path = ""
+			case strings.TrimSpace(resolvedContent) != "":
+				path = ""
+			default:
+				return fmt.Errorf("plan run reported an invalid plan file and no inline plan content: %w", err)
 			}
 		}
 		todo.Status = types.StatusReview

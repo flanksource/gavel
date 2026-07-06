@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 	"github.com/google/cel-go/cel"
 )
 
@@ -49,7 +50,12 @@ type celVerifier struct {
 	retryExpr string
 	steps     []stepFixture
 	nodes     []*fixtures.FixtureNode
-	workDir   string
+	// aiStep, when set, is the acceptance-criteria checklist: an LLM executes
+	// each item against the change and returns {item, passed, message} per item,
+	// exposed to the predicate as results.checklist (so a rule can require
+	// `results.checklist.all(i, i.passed)`).
+	aiStep  *stepFixture
+	workDir string
 }
 
 // stepFixture is one synthetic step fixture (checks:test / checks:lint / ai) plus
@@ -62,8 +68,9 @@ type stepFixture struct {
 func (v *celVerifier) Name() string { return v.name }
 
 func (v *celVerifier) Verify(rc *agent.RunContext, iter *captainai.LoopIteration) (agent.Verdict, error) {
-	results := v.run(rc)
-	retry, err := evalRetry(v.retryExpr, results, rc, iter)
+	results := v.runDeterministic(rc)
+	checklist := v.runChecklist(rc)
+	retry, err := evalRetry(v.retryExpr, results, checklist, rc, iter)
 	if err != nil {
 		return agent.Verdict{}, err
 	}
@@ -73,28 +80,39 @@ func (v *celVerifier) Verify(rc *agent.RunContext, iter *captainai.LoopIteration
 	return agent.Verdict{
 		OK:       false,
 		Reason:   "definition of done not met",
-		Feedback: aggregateFeedback(results),
+		Feedback: verifierFeedback(results, checklist),
 	}, nil
 }
 
-// run executes every DoD source and returns their results.
-func (v *celVerifier) run(rc *agent.RunContext) []fixtures.FixtureResult {
+// runDeterministic executes the configured checks and the todo's `## Verification`
+// section — the cheap, deterministic part of the definition of done.
+func (v *celVerifier) runDeterministic(rc *agent.RunContext) []fixtures.FixtureResult {
 	var results []fixtures.FixtureResult
 	for _, s := range v.steps {
 		results = append(results, s.runner(s.fixture, fixtures.RunOptions{WorkDir: v.workDir}))
 	}
 	if len(v.nodes) > 0 {
-		ctx := rc.Ctx
-		results = append(results, runFixtureSection(ctx, v.nodes, v.workDir)...)
+		results = append(results, runFixtureSection(rc.Ctx, v.nodes, v.workDir)...)
 	}
 	return results
 }
 
-// evalRetry builds the CEL activation from the run's results plus the run
-// context and evaluates the retry predicate to a bool. An empty expression uses
-// the default; a compile/eval error or non-bool result is surfaced (never a
-// silent pass).
-func evalRetry(expr string, results []fixtures.FixtureResult, rc *agent.RunContext, iter *captainai.LoopIteration) (bool, error) {
+// runChecklist executes the acceptance-criteria checklist (the LLM step) and
+// returns one {item, passed, message} entry per criterion — nil when the todo
+// has no criteria.
+func (v *celVerifier) runChecklist(rc *agent.RunContext) []map[string]any {
+	if v.aiStep == nil {
+		return nil
+	}
+	res := v.aiStep.runner(v.aiStep.fixture, fixtures.RunOptions{WorkDir: v.workDir})
+	return checklistFromResult(res)
+}
+
+// evalRetry builds the CEL activation from the run's results, the checklist, and
+// the run context, and evaluates the retry predicate to a bool. An empty
+// expression uses the default; a compile/eval error or non-bool result is
+// surfaced (never a silent pass).
+func evalRetry(expr string, results []fixtures.FixtureResult, checklist []map[string]any, rc *agent.RunContext, iter *captainai.LoopIteration) (bool, error) {
 	if strings.TrimSpace(expr) == "" {
 		expr = types.DefaultRetryExpr
 	}
@@ -107,7 +125,7 @@ func evalRetry(expr string, results []fixtures.FixtureResult, rc *agent.RunConte
 		return false, fmt.Errorf("retry predicate %q: %w", expr, err)
 	}
 	out, _, err := prg.Eval(map[string]any{
-		"results":       resultsSummary(results),
+		"results":       resultsSummary(results, checklist),
 		"test_results":  resultLeaves(results),
 		"changed_files": changedFiles(rc),
 		"session_log":   sessionLog(iter),
@@ -123,9 +141,11 @@ func evalRetry(expr string, results []fixtures.FixtureResult, rc *agent.RunConte
 	return b, nil
 }
 
-// resultsSummary tallies every leaf across the DoD results into the `results`
-// CEL variable: {total, passed, failed, warned, skipped}.
-func resultsSummary(results []fixtures.FixtureResult) map[string]any {
+// resultsSummary tallies every deterministic leaf into the `results` CEL
+// variable: {total, passed, failed, warned, skipped} plus `checklist` — the
+// acceptance-criteria per-item results ([]{item, passed, message}), always a
+// list so `results.checklist.all(i, i.passed)` holds vacuously without criteria.
+func resultsSummary(results []fixtures.FixtureResult, checklist []map[string]any) map[string]any {
 	var total, passed, failed, warned, skipped int
 	for i := range results {
 		walkLeaves(&results[i], func(status task.Status) {
@@ -142,12 +162,16 @@ func resultsSummary(results []fixtures.FixtureResult) map[string]any {
 			}
 		})
 	}
+	if checklist == nil {
+		checklist = []map[string]any{}
+	}
 	return map[string]any{
-		"total":   total,
-		"passed":  passed,
-		"failed":  failed,
-		"warned":  warned,
-		"skipped": skipped,
+		"total":     total,
+		"passed":    passed,
+		"failed":    failed,
+		"warned":    warned,
+		"skipped":   skipped,
+		"checklist": checklist,
 	}
 }
 
@@ -229,14 +253,54 @@ func iteration(iter *captainai.LoopIteration) int {
 	return iter.Iteration
 }
 
-// aggregateFeedback renders the failing/warned nodes across every DoD result as
-// the feedback fed back to the agent on a retry.
-func aggregateFeedback(results []fixtures.FixtureResult) string {
+// verifierFeedback renders the failing/warned deterministic nodes plus any
+// unmet checklist items as the feedback fed back to the agent on a retry.
+func verifierFeedback(results []fixtures.FixtureResult, checklist []map[string]any) string {
 	var parts []string
 	for i := range results {
 		if fb := fixtureFeedback(results[i]); fb != "" {
 			parts = append(parts, fb)
 		}
 	}
+	for _, item := range checklist {
+		if passed, _ := item["passed"].(bool); passed {
+			continue
+		}
+		line := "- criterion not met: " + fmt.Sprint(item["item"])
+		if msg, _ := item["message"].(string); msg != "" {
+			line += ": " + msg
+		}
+		parts = append(parts, line)
+	}
 	return strings.Join(parts, "\n")
+}
+
+// checklistFromResult maps the ai checklist step's per-criterion verify result
+// into the CEL `results.checklist` shape ([]{item, passed, message}). A step that
+// errored before producing results surfaces as a single failed item so the
+// predicate never verifies on a missing checklist.
+func checklistFromResult(res fixtures.FixtureResult) []map[string]any {
+	vr := verifyResultFrom(res)
+	if vr == nil {
+		return []map[string]any{{"item": res.Name, "passed": false, "message": res.Error}}
+	}
+	checklist := make([]map[string]any, 0, len(vr.AcceptanceCriteria))
+	for _, c := range vr.AcceptanceCriteria {
+		checklist = append(checklist, map[string]any{
+			"item":    c.Criteria,
+			"passed":  c.Pass,
+			"message": c.Comments,
+		})
+	}
+	return checklist
+}
+
+func verifyResultFrom(res fixtures.FixtureResult) *verify.VerifyResult {
+	if res.Metadata == nil {
+		return nil
+	}
+	if vr, ok := res.Metadata["verify"].(*verify.VerifyResult); ok {
+		return vr
+	}
+	return nil
 }

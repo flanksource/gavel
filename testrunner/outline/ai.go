@@ -2,31 +2,25 @@ package outline
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 )
 
 const (
-	maxAISourceChars  = 12000
-	aiSummaryWorkers  = 4
-	testSummaryPrompt = `You are reviewing a test file to describe what each test verifies.
-
-For every test id listed below, return one line (<=15 words) stating WHAT
-behavior the test verifies — the observable outcome, not the mechanics.
-
-Test ids (return each id exactly as given):
-%s
-
-Test file source (%s):
-%s
-`
+	maxAISourceChars = 12000
+	aiSummaryWorkers = 4
 )
+
+//go:embed test-summary.prompt
+var testSummaryPromptTemplate string
 
 type testSummaryItem struct {
 	ID      string `json:"id" description:"the test id exactly as given"`
@@ -65,6 +59,11 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 		return fmt.Errorf("create AI agent for --ai-summary: %w", err)
 	}
 
+	template, err := resolveSummaryPrompt(workDir)
+	if err != nil {
+		return err
+	}
+
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, aiSummaryWorkers)
 	for file, leaves := range leavesByFile {
@@ -73,7 +72,7 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := summarizeFileTests(ctx, agent, workDir, file, leaves); err != nil {
+			if err := summarizeFileTests(ctx, agent, workDir, file, leaves, template); err != nil {
 				logger.Warnf("ai-summary for %s failed (keeping static descriptions): %v", file, err)
 			}
 		}(file, leaves)
@@ -82,10 +81,13 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 	return nil
 }
 
-func summarizeFileTests(ctx context.Context, agent SummaryAgent, workDir, file string, leaves []*Entry) error {
+func summarizeFileTests(ctx context.Context, agent SummaryAgent, workDir, file string, leaves []*Entry, template string) error {
 	source, err := os.ReadFile(filepath.Join(workDir, file))
 	if err != nil {
 		return fmt.Errorf("read test source: %w", err)
+	}
+	if strings.TrimSpace(template) == "" {
+		template = testSummaryPromptTemplate
 	}
 
 	byID := map[string]*Entry{}
@@ -96,17 +98,31 @@ func summarizeFileTests(ctx context.Context, agent SummaryAgent, workDir, file s
 		ids = append(ids, id)
 	}
 
-	schema := &fileSummariesSchema{}
+	req, _, err := prompt.Load(template).Render(map[string]any{
+		"ids":    strings.Join(ids, "\n"),
+		"file":   file,
+		"source": truncateSource(string(source)),
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("render summary prompt: %w", err)
+	}
+
 	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-		Name:             fmt.Sprintf("test outline summary: %s", file),
-		Prompt:           fmt.Sprintf(testSummaryPrompt, strings.Join(ids, "\n"), file, truncateSource(string(source))),
-		StructuredOutput: schema,
+		Name:       fmt.Sprintf("test outline summary: %s", file),
+		Prompt:     req.Prompt.User,
+		SchemaJSON: req.Prompt.SchemaJSON,
+		Source:     "test-summary.prompt",
 	})
 	if err != nil {
 		return fmt.Errorf("execute summary prompt: %w", err)
 	}
 	if resp.Error != "" {
 		return fmt.Errorf("summary prompt returned error: %s", resp.Error)
+	}
+
+	var schema fileSummariesSchema
+	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
+		return fmt.Errorf("decode summary response: %w", err)
 	}
 
 	matched := 0

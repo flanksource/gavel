@@ -34,7 +34,7 @@ func TestEvalRetryDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			results := []fixtures.FixtureResult{{Status: tc.status}}
-			retry, err := evalRetry(types.DefaultRetryExpr, results, rc, nil)
+			retry, err := evalRetry(types.DefaultRetryExpr, results, nil, rc, nil)
 			if err != nil {
 				t.Fatalf("evalRetry: %v", err)
 			}
@@ -80,7 +80,7 @@ func TestCelVerifierVerdict(t *testing.T) {
 func TestCelCustomExprToleratesWarnings(t *testing.T) {
 	rc := &agent.RunContext{Ctx: context.Background()}
 	warned := []fixtures.FixtureResult{{Status: task.StatusWarning}}
-	retry, err := evalRetry("results.failed > 0", warned, rc, nil)
+	retry, err := evalRetry("results.failed > 0", warned, nil, rc, nil)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
@@ -93,12 +93,52 @@ func TestCelCustomExprToleratesWarnings(t *testing.T) {
 func TestCelChangedFilesBinding(t *testing.T) {
 	rc := &agent.RunContext{Ctx: context.Background(), ChangedFiles: []string{"a.go", "b.go"}}
 	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
-	retry, err := evalRetry(`changed_files.exists(f, f == "a.go")`, clean, rc, nil)
+	retry, err := evalRetry(`changed_files.exists(f, f == "a.go")`, clean, nil, rc, nil)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
 	if !retry {
 		t.Error("changed_files should bind and match a.go")
+	}
+}
+
+// The default predicate also fails when any acceptance-criteria checklist item
+// is not passed, via results.checklist.all(i, i.passed).
+func TestCelChecklist(t *testing.T) {
+	rc := &agent.RunContext{Ctx: context.Background()}
+	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
+
+	allPass := []map[string]any{
+		{"item": "handles 5xx", "passed": true, "message": ""},
+		{"item": "has tests", "passed": true, "message": ""},
+	}
+	retry, err := evalRetry(types.DefaultRetryExpr, clean, allPass, rc, nil)
+	if err != nil {
+		t.Fatalf("evalRetry: %v", err)
+	}
+	if retry {
+		t.Error("all criteria passed → should not retry")
+	}
+
+	mixed := []map[string]any{
+		{"item": "handles 5xx", "passed": true, "message": ""},
+		{"item": "has tests", "passed": false, "message": "no test added"},
+	}
+	retry, err = evalRetry(types.DefaultRetryExpr, clean, mixed, rc, nil)
+	if err != nil {
+		t.Fatalf("evalRetry: %v", err)
+	}
+	if !retry {
+		t.Error("an unmet criterion should retry")
+	}
+
+	// No checklist → vacuously all-passed, no retry from the checklist term.
+	retry, err = evalRetry(types.DefaultRetryExpr, clean, nil, rc, nil)
+	if err != nil {
+		t.Fatalf("evalRetry: %v", err)
+	}
+	if retry {
+		t.Error("absent checklist should not force a retry")
 	}
 }
 
@@ -127,7 +167,7 @@ func TestDispatchFixtureRoutesRunnerStep(t *testing.T) {
 func TestCelMalformedErrors(t *testing.T) {
 	rc := &agent.RunContext{Ctx: context.Background()}
 	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
-	if _, err := evalRetry("results.failed >", clean, rc, nil); err == nil {
+	if _, err := evalRetry("results.failed >", clean, nil, rc, nil); err == nil {
 		t.Fatal("malformed CEL must error, not silently pass")
 	}
 }
