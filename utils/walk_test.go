@@ -278,6 +278,32 @@ var _ = Describe("IsWithin", func() {
 	})
 })
 
+var _ = Describe("FindGitRoot", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+	})
+
+	It("finds the root when .git is a directory", func() {
+		Expect(os.MkdirAll(filepath.Join(root, ".git"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+		Expect(FindGitRoot(filepath.Join(root, "pkg"))).To(Equal(root))
+	})
+
+	It("finds the root when .git is a file (worktree / submodule gitdir pointer)", func() {
+		// Linked worktrees and submodules record .git as a file containing a
+		// `gitdir:` line, not a directory. FindGitRoot must still resolve it.
+		Expect(os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /elsewhere/.git/worktrees/wt\n"), 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "pkg"), 0o755)).To(Succeed())
+		Expect(FindGitRoot(filepath.Join(root, "pkg"))).To(Equal(root))
+	})
+
+	It("returns empty when no .git is present", func() {
+		Expect(FindGitRoot(root)).To(BeEmpty())
+	})
+})
+
 var _ = Describe("FindAllProjectRoots", func() {
 	var root string
 

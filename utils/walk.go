@@ -17,7 +17,11 @@ type walkStopFn func(root, path string, d fs.DirEntry) (bool, error)
 func FindGitRoot(dir string) string {
 	dir, _ = filepath.Abs(dir)
 	for {
-		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+		// A worktree root has `.git` as a directory (normal clone) OR as a file
+		// (linked worktree / submodule — the file holds a `gitdir:` pointer).
+		// Requiring a directory silently disabled gitignore filtering in
+		// worktrees, so accept either.
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)

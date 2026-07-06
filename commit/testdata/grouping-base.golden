@@ -1,0 +1,18 @@
+You are organizing a set of uncommitted changes into clean, logical git commits.
+
+The changed files are listed below with their code scope (derived from the repository map), git status, and +added/-deleted line counts.
+
+| Scope | File | Status |
+| ----- | ---- | ------ |
+| api | old & <legacy>.go → new.go | renamed |
+
+
+Produce the final commit grouping. Rules:
+- Each group MUST represent a single high-level change — one feature, one fix, or one refactor. NEVER put unrelated changes in the same group.
+- Treat each scope as the primary boundary: prefer keeping a scope's files together as one commit, splitting a scope only when it clearly contains unrelated features.
+- Produce at most 3 commits (the chore commit for lock/generated files does NOT count toward this limit). If there are more logical groups, merge the smallest related ones until you are within the limit.
+- Keep a test file in the same group as the feature it tests.
+- Every changed file MUST appear in exactly one group's "files" or in "ignore".
+- Put lock files, build artifacts, generated bundles, and vendored output in "ignore" — they are committed separately as a chore commit and never analyzed.
+- Use repo-relative paths exactly as shown above (for renames, use the new path).
+- Give each group a short conventional-commit-style label describing its intent.
