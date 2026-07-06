@@ -234,6 +234,95 @@
       });
   }
 
+  function todoBodiesForElements(elements) {
+    var selected = Array.isArray(elements) ? elements.filter(Boolean) : [];
+    if (selected.length === 0) return Promise.resolve("");
+    return Promise.all(selected.map(function (el) {
+      return todoBodyForElement({ element: el });
+    })).then(function (parts) {
+      return parts.filter(Boolean).join("\n\n---\n\n");
+    });
+  }
+
+  function todoBodyForContext(ctx) {
+    var selected = Array.isArray(ctx.elements) ? ctx.elements.filter(Boolean) : [];
+    if (selected.length > 1) return todoBodiesForElements(selected);
+    return todoBodyForElement({
+      element: ctx.element,
+      componentName: ctx.componentName,
+      filePath: ctx.filePath,
+      lineNumber: ctx.lineNumber,
+      html: grabHtml(ctx.element),
+    });
+  }
+
+  function absoluteGavelURL(pathOrURL) {
+    if (!pathOrURL) return "";
+    try {
+      return new URL(pathOrURL, GAVEL_ORIGIN).toString();
+    } catch {
+      return pathOrURL;
+    }
+  }
+
+  function uploadScreenshot(blob) {
+    if (!blob) return Promise.reject(new Error("screenshot capture canceled"));
+    var form = new FormData();
+    form.append("attachment", blob, "screenshot.png");
+    return fetch(GAVEL_ORIGIN + "/api/todos/attachments", { method: "POST", body: form })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (!res.ok) throw new Error(data.error || "screenshot upload failed");
+          var attachment = data.attachments && data.attachments[0];
+          if (!attachment || !attachment.url) throw new Error("screenshot upload returned no URL");
+          attachment.url = absoluteGavelURL(attachment.url);
+          return attachment;
+        });
+      });
+  }
+
+  function screenshotMarkdown(attachment) {
+    var filename = attachment.filename || "screenshot.png";
+    return "![" + filename + "](" + attachment.url + ")";
+  }
+
+  function todoBodyWithScreenshot(body, attachment) {
+    var image = screenshotMarkdown(attachment);
+    body = (body || "").trim();
+    if (!body) return image;
+    return body + "\n\n## Attachments\n\n" + image;
+  }
+
+  function fallbackCopyText(text) {
+    return new Promise(function (resolve, reject) {
+      var textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "readonly");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        if (!document.execCommand("copy")) throw new Error("copy failed");
+        resolve(true);
+      } catch (err) {
+        reject(err);
+      } finally {
+        textarea.remove();
+      }
+    });
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(
+        function () { return true; },
+        function () { return fallbackCopyText(text); },
+      );
+    }
+    return fallbackCopyText(text);
+  }
+
   // openDialog shows the todo form in a modal iframe. When attachment ({blob,name})
   // is set it ships the blob into the iframe once the form signals "embed-ready" —
   // the form (same-origin to gavel) then uploads it as multipart, so no CORS is
@@ -346,13 +435,35 @@
   }
 
   function onCopyContent(content, elements) {
-    var selected = Array.isArray(elements) ? elements.filter(Boolean) : [];
-    if (selected.length === 0) return content;
-    return Promise.all(selected.map(function (el) {
-      return todoBodyForElement({ element: el });
-    })).then(function (parts) {
-      return parts.filter(Boolean).join("\n\n---\n\n") || content;
+    return todoBodiesForElements(elements).then(function (markdown) {
+      return markdown || content;
     });
+  }
+
+  function copyScreenshot(ctx, bodyMode) {
+    var body = bodyMode ? todoBodyForContext(ctx) : Promise.resolve("");
+    var el = ctx.element;
+    dismissGrab(ctx);
+    return Promise.all([
+      body,
+      captureFrame(el).then(uploadScreenshot),
+    ]).then(function (result) {
+      var markdown = result[0];
+      var attachment = result[1];
+      var text = bodyMode ? todoBodyWithScreenshot(markdown, attachment) : attachment.url;
+      return copyText(text);
+    }).catch(function (err) {
+      console.warn("[gavel] copy screenshot failed:", err);
+      return false;
+    });
+  }
+
+  function onCopyScreenshot(ctx) {
+    return copyScreenshot(ctx, true);
+  }
+
+  function onScreenshotOnly(ctx) {
+    return copyScreenshot(ctx, false);
   }
 
   var plugin = {
@@ -363,6 +474,8 @@
     actions: [
       { id: "gavel-todo", label: "Add to gavel todo", shortcut: "T", onAction: onAction },
       { id: "gavel-screenshot", label: "Screenshot to gavel todo", shortcut: "S", onAction: onScreenshot },
+      { id: "gavel-copy-screenshot", label: "Copy screenshot", shortcut: "C", onAction: onCopyScreenshot },
+      { id: "gavel-screenshot-only", label: "Screenshot only", shortcut: "O", onAction: onScreenshotOnly },
     ],
   };
 

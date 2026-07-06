@@ -86,6 +86,31 @@ func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
 	}
 }
 
+// Screenshot-copy actions upload a captured PNG first, then write either the
+// normal todo Markdown plus image URL or just the screenshot URL to the clipboard.
+func TestReactGrabPluginCopyScreenshotActions(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"gavel-copy-screenshot",
+		"gavel-screenshot-only",
+		"uploadScreenshot",
+		"/api/todos/attachments",
+		"todoBodyWithScreenshot",
+		"navigator.clipboard.writeText",
+		"absoluteGavelURL",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plugin JS missing %q", want)
+		}
+	}
+}
+
 // The plugin must offer screenshot capture: a getDisplayMedia stream cropped to
 // the grabbed element via Region Capture (CropTarget/cropTo), shipped to the todo
 // form. Guards against the capture path being dropped.
