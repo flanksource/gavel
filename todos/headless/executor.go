@@ -163,8 +163,9 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		return e.failed(start, err), err
 	}
 	base := captainai.Request{Prompt: api.Prompt{
-		User:   feedback + "\n\n" + gavelai.SchemaInstruction(schema),
-		Source: "todos.feedback",
+		User:       feedback,
+		SchemaJSON: schema,
+		Source:     "todos.feedback",
 	}}
 	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, base, true)
 	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
@@ -219,7 +220,9 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 				return req
 			}
 			next := req
-			next.Prompt = api.Prompt{User: feedback, Source: "todos.check"}
+			// Thread the initial turn's envelope schema (same bytes, not a
+			// recompute) so the claude-agent per-turn byte-equality guard holds.
+			next.Prompt = api.Prompt{User: feedback, SchemaJSON: req.Prompt.SchemaJSON, Source: "todos.check"}
 			next.SessionID = "" // SessionReuse fills the prior iteration's session
 			return next
 		},
@@ -243,7 +246,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		result.DoD = &todopkg.DoDOutcome{Ran: true, Passed: passed}
 	}
 
-	envErr := e.captureEnvelope(ctx, provider, result, rres, todosInGroup, timedOut)
+	envErr := e.captureEnvelope(ctx, provider, result, rres, todosInGroup, timedOut, req.Prompt.SchemaJSON)
 	return e.classify(result, sawResult, timedOut, envErr)
 }
 

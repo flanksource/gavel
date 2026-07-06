@@ -40,12 +40,12 @@ type AgentQuestion struct {
 }
 
 // PlanResult reports the plan a plan-mode session produced. Path is the agent's
-// NATIVE plan-mode file (the file Claude/Codex plan mode maintains, which
-// persists after the session); gavel records it on the todo and reads the plan
-// from there — it never writes the file itself.
+// native plan-mode file when the backend has one. Content is for backends like
+// Codex that keep the latest plan inline instead of writing a plan file.
 type PlanResult struct {
-	Status PlanStatus `json:"status,omitempty" jsonschema:"required,enum=new,enum=updated,enum=unchanged" jsonschema_description:"new = first plan, updated = revised, unchanged = existing plan still stands"`
-	Path   string     `json:"path,omitempty" jsonschema_description:"Absolute path of the native plan-mode file this session wrote"`
+	Status  PlanStatus `json:"status,omitempty" jsonschema:"required,enum=new,enum=updated,enum=unchanged" jsonschema_description:"new = first plan, updated = revised, unchanged = existing plan still stands"`
+	Path    string     `json:"path,omitempty" jsonschema_description:"Absolute path of the native plan-mode file this session wrote, when available"`
+	Content string     `json:"content,omitempty" jsonschema_description:"Inline markdown plan content for backends that do not write a native plan file"`
 }
 
 // ResultEnvelope is the structured final result every run-mode agent session
@@ -80,9 +80,10 @@ type PlanEnvelope struct {
 }
 
 // Validate extends ResultEnvelope.Validate with the plan contract: a completed
-// plan run must name its plan file (except when the existing plan is
-// unchanged). Ask/failed sessions may legitimately have produced no plan.
-// Callers additionally verify the file at Plan.Path exists and is non-empty.
+// plan run must provide either a plan file path or inline content (except when
+// the existing plan is unchanged). Ask/failed sessions may legitimately have
+// produced no plan. Callers additionally verify any file at Plan.Path exists
+// and is non-empty.
 func (e *PlanEnvelope) Validate() error {
 	if err := e.ResultEnvelope.Validate(); err != nil {
 		return err
@@ -95,8 +96,8 @@ func (e *PlanEnvelope) Validate() error {
 	default:
 		return fmt.Errorf("plan.status %q is not one of new, updated, unchanged", e.Plan.Status)
 	}
-	if e.Plan.Status != PlanUnchanged && strings.TrimSpace(e.Plan.Path) == "" {
-		return fmt.Errorf("plan.status %q requires plan.path (the native plan-mode file)", e.Plan.Status)
+	if e.Plan.Status != PlanUnchanged && strings.TrimSpace(e.Plan.Path) == "" && strings.TrimSpace(e.Plan.Content) == "" {
+		return fmt.Errorf("plan.status %q requires plan.path or plan.content", e.Plan.Status)
 	}
 	return nil
 }

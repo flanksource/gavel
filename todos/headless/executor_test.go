@@ -56,12 +56,15 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 }
 
 // TestHeadlessPromptOverrideReplacesBody pins the override contract: the edited
-// prompt replaces the auto-built body, but the structured-output schema
-// instruction is still appended so an override cannot break the envelope.
+// prompt replaces the auto-built body, but the structured-output envelope rides
+// on the native SchemaJSON field so an override cannot break it, and the schema
+// text is never injected into the prompt body.
 func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 	var gotPrompt string
+	var gotSchema string
 	capture := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		gotPrompt = req.Prompt.User
+		gotSchema = string(req.Prompt.SchemaJSON)
 		ch := make(chan captainai.Event, 1)
 		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 		close(ch)
@@ -77,8 +80,11 @@ func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 	if strings.Contains(gotPrompt, "auto section") {
 		t.Error("override should replace the auto-built todo sections")
 	}
-	if !strings.Contains(gotPrompt, "conforms to this JSON Schema") {
-		t.Error("override must not drop the envelope schema instruction")
+	if !strings.Contains(gotSchema, `"endStatus"`) {
+		t.Errorf("override must not drop the native envelope schema: %q", gotSchema)
+	}
+	if strings.Contains(gotPrompt, "conforms to this JSON Schema") {
+		t.Error("schema instruction text must not be injected into the prompt body")
 	}
 }
 

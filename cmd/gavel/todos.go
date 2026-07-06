@@ -38,8 +38,6 @@ var (
 	dryRun        bool
 	commitAfter   bool
 	checkAfter    bool
-	verifyAfter   bool
-	verifyModel   string
 	todosProvider string
 	todosMode     string
 	todosDriver   string

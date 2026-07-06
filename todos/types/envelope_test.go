@@ -64,6 +64,13 @@ func TestPlanEnvelopeValidate(t *testing.T) {
 			},
 		},
 		{
+			name: "new inline plan content is valid",
+			env: PlanEnvelope{
+				ResultEnvelope: validEnvelope(),
+				Plan:           PlanResult{Status: PlanNew, Content: "- [x] inspect\n- [ ] implement"},
+			},
+		},
+		{
 			name: "unchanged plan needs no path",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
@@ -71,12 +78,12 @@ func TestPlanEnvelopeValidate(t *testing.T) {
 			},
 		},
 		{
-			name: "new plan without path rejected",
+			name: "new plan without path or content rejected",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
 				Plan:           PlanResult{Status: PlanNew},
 			},
-			wantErr: "plan.path",
+			wantErr: "plan.path or plan.content",
 		},
 		{
 			name: "completed without plan status rejected",
@@ -156,6 +163,9 @@ func TestPlanEnvelopeSchema(t *testing.T) {
 	}
 	if _, ok := planProps["path"]; !ok {
 		t.Errorf("plan schema missing path property (have %v)", keys(planProps))
+	}
+	if _, ok := planProps["content"]; !ok {
+		t.Errorf("plan schema missing content property (have %v)", keys(planProps))
 	}
 }
 

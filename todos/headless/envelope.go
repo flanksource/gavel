@@ -2,13 +2,13 @@ package headless
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
-	gavelai "github.com/flanksource/gavel/ai"
 	todopkg "github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -28,7 +28,7 @@ type envelope struct {
 // without an envelope is a hard error (its plan status/path are unknowable);
 // run mode degrades to the transport result with a logged warning, leaving
 // EndStatus empty so the degradation is visible to callers.
-func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, result *todopkg.ExecutionResult, rres *agent.RunResult, todosInGroup []*types.TODO, timedOut bool) error {
+func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, result *todopkg.ExecutionResult, rres *agent.RunResult, todosInGroup []*types.TODO, timedOut bool, schemaJSON json.RawMessage) error {
 	if env := e.envelopeFromRun(rres); env != nil {
 		applyEnvelope(result, env)
 		return nil
@@ -36,7 +36,12 @@ func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captai
 
 	sessionID := runSessionID(rres, todosInGroup)
 	if sessionID != "" {
-		if env := e.requestFinalResult(ctx, provider, sessionID, groupWorkDir(e.config.WorkDir, todosInGroup), timedOut); env != nil {
+		workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
+		template, err := todoprompt.ResolveFinalTemplate(workDir)
+		if err != nil {
+			return err
+		}
+		if env := e.requestFinalResult(ctx, provider, sessionID, workDir, timedOut, schemaJSON, template); env != nil {
 			applyEnvelope(result, env)
 			return nil
 		}
@@ -69,8 +74,8 @@ func (e *Executor) envelopeFromRun(rres *agent.RunResult) *envelope {
 // requestFinalResult resumes the session with the mode's final-result turn and
 // parses the reply. Failures are logged, not fatal — the caller decides what a
 // missing envelope means for the mode.
-func (e *Executor) requestFinalResult(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, sessionID, workDir string, timedOut bool) *envelope {
-	freq, err := todoprompt.FinalResultRequest(e.config.Mode, sessionID, timedOut)
+func (e *Executor) requestFinalResult(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, sessionID, workDir string, timedOut bool, schemaJSON json.RawMessage, template string) *envelope {
+	freq, err := todoprompt.FinalResultRequest(template, sessionID, timedOut, schemaJSON)
 	if err != nil {
 		ctx.Logger.Warnf("%s: final-result request: %v", e.Name(), err)
 		return nil
@@ -115,13 +120,13 @@ func (e *Executor) parseEnvelope(text string) *envelope {
 		return nil
 	}
 	if e.config.Mode == types.ModePlan {
-		pe, err := gavelai.ParseStructured(text, (*types.PlanEnvelope).Validate)
+		pe, err := captainai.ParseStructured(text, (*types.PlanEnvelope).Validate)
 		if err != nil {
 			return nil
 		}
 		return &envelope{ResultEnvelope: pe.ResultEnvelope, Plan: &pe.Plan}
 	}
-	re, err := gavelai.ParseStructured(text, (*types.ResultEnvelope).Validate)
+	re, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
 	if err != nil {
 		return nil
 	}

@@ -536,9 +536,10 @@ const DefaultMaxCheckIterations = 3
 
 // DefaultRetryExpr is the definition-of-done retry predicate when none is
 // configured: re-run the agent while the run's TestResults have any errors or
-// warnings. It is a CEL expression evaluated over {results, test_results,
-// changed_files, session_log, iteration}.
-const DefaultRetryExpr = "results.failed > 0 || results.warned > 0"
+// warnings, or any acceptance-criteria checklist item is not passed. It is a CEL
+// expression over {results, test_results, changed_files, session_log, iteration}
+// where results also carries `checklist` ([]{item, passed, message}).
+const DefaultRetryExpr = "results.failed > 0 || results.warned > 0 || !results.checklist.all(i, i.passed)"
 
 // AgentChecksConfig configures the post-completion check loop: the gavel test
 // and lint options gavel runs once an agent reports done, feeding any failures

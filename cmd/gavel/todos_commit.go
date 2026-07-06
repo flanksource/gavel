@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 
 	"github.com/flanksource/commons/logger"
@@ -26,19 +25,15 @@ func shouldCommitAfter(result *todos.ExecutionResult) bool {
 }
 
 // maybeCommitAfter runs the `gavel commit` pipeline over the agent's changes
-// when `todos run --commit` is set and the executor did not already commit them,
-// then runs issue verification over the resulting commits when `--verify` is set.
+// when `todos run --commit` is set and the executor did not already commit them.
+// Verification is the run loop's definition-of-done (the fixture/CEL verdict),
+// not a separate post-commit scoring pass — `gavel todos verify` re-runs it
+// manually.
 func maybeCommitAfter(workDir string, provider todos.Provider, todo *types.TODO, result *todos.ExecutionResult) {
-	var hashes []string
 	if shouldCommitAfter(result) {
-		committed, err := commitAfterAgent(workDir, todo)
-		if err != nil {
+		if _, err := commitAfterAgent(workDir, todo); err != nil {
 			logger.Errorf("commit after agent failed: %v", err)
 		}
-		hashes = committed
-	}
-	if verifyAfter && result != nil && result.Success {
-		maybeVerifyAfter(workDir, provider, todo, hashes)
 	}
 }
 
@@ -73,22 +68,6 @@ func commitHashes(result *commitpkg.Result) []string {
 		}
 	}
 	return out
-}
-
-// maybeVerifyAfter scores the just-committed work against the issue's spec and
-// stored acceptance criteria, printing the verdict. It is advisory and logs
-// (rather than fails) when there is nothing to verify.
-func maybeVerifyAfter(workDir string, provider todos.Provider, todo *types.TODO, hashes []string) {
-	result, err := todos.RunIssueVerification(context.Background(), provider, todo, todos.VerifyOptions{
-		WorkDir: todoWorkDir(workDir, todo),
-		Model:   verifyModel,
-		Commits: hashes,
-	})
-	if err != nil {
-		logger.Warnf("issue verification skipped: %v", err)
-		return
-	}
-	fmt.Println(result.Pretty().ANSI())
 }
 
 // todoWorkDir resolves the directory a TODO's agent worked in (workDir joined
