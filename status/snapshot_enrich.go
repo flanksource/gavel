@@ -54,6 +54,10 @@ func enrichWithSnapshot(workDir string, result *Result) error {
 	lintByFile := map[string]LintStatus{}
 	collectLintByFile(snap.Lint, workDir, lintByFile)
 
+	problemsByFile := map[string][]Problem{}
+	collectTestProblems(snap.Tests, workDir, problemsByFile)
+	collectLintProblems(snap.Lint, workDir, problemsByFile)
+
 	for i := range result.Files {
 		f := &result.Files[i]
 		tagged := false
@@ -63,6 +67,10 @@ func enrichWithSnapshot(workDir string, result *Result) error {
 		}
 		if l, ok := lintByFile[f.Path]; ok {
 			f.LintStatus = l
+			tagged = true
+		}
+		if p, ok := problemsByFile[f.Path]; ok {
+			f.Problems = sortProblems(p)
 			tagged = true
 		}
 		if tagged && result.ResultsStale {

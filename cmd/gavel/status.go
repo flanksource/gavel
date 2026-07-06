@@ -49,6 +49,16 @@ func (o StatusOptions) Help() api.Textable {
 		Append("Starship git_status", "italic").
 		Append(" symbols, plus line deltas, the working-tree age, inferred scopes, and repomap findings (Kubernetes refs, architecture violations).", "").
 		NewLine().
+		Append("When the last ", "").
+		Append("gavel test", "italic").
+		Append("/", "").
+		Append("gavel lint", "italic").
+		Append(" run left failures, a ", "").
+		Append("Problems", "font-bold").
+		Append(" section lists them (file · message). It caps each file by default — pass ", "").
+		Append("-v", flagStyle).
+		Append(" to show every error in full.", "").
+		NewLine().
 		Append("By default the listing is scoped to the current working directory. Pass a ", "").
 		Append("[folder]", flagStyle).
 		Append(" to scope to a different subdirectory of the repo, or ", "").
@@ -70,13 +80,15 @@ func (o StatusOptions) Help() api.Textable {
 		Append("  --work-dir", flagStyle).Append("   path to a git repo (default: cwd)", muted).NewLine().
 		Append("  --no-repomap", flagStyle).Append(" skip repomap enrichment (faster)", muted).NewLine().
 		Append("  --ai", flagStyle).Append("         add one-line AI summaries per changed file", muted).NewLine().
-		Append("  --ai-model", flagStyle).Append("   override the AI model used with --ai", muted).NewLine().NewLine().
+		Append("  --ai-model", flagStyle).Append("   override the AI model used with --ai", muted).NewLine().
+		Append("  -v", flagStyle).Append("           expand the Problems section to full test/lint logs", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  gavel status", flagStyle).Append("                 changes under cwd", muted).NewLine().
 		Append("  gavel status .", flagStyle).Append("               whole repo (run from git root)", muted).NewLine().
 		Append("  gavel status cmd/gavel", flagStyle).Append("       changes under cmd/gavel", muted).NewLine().
 		Append("  gavel status --no-repomap", flagStyle).Append("    skip repomap lookup", muted).NewLine().
-		Append("  gavel status --ai", flagStyle).Append("             include AI one-line file summaries", muted).NewLine()
+		Append("  gavel status --ai", flagStyle).Append("             include AI one-line file summaries", muted).NewLine().
+		Append("  gavel status -v", flagStyle).Append("               show full test/lint error logs", muted).NewLine()
 
 	return t
 }
@@ -94,10 +106,13 @@ func runStatus(opts StatusOptions) (any, error) {
 		return nil, err
 	}
 
+	verbose := clicky.Flags.LevelCount > 0
+
 	if !opts.AI {
 		return status.Gather(workDir, status.Options{
 			NoRepomap:    opts.NoRepomap,
 			FolderFilter: folderFilter,
+			Verbose:      verbose,
 		})
 	}
 
@@ -111,6 +126,7 @@ func runStatus(opts StatusOptions) (any, error) {
 	gatherOpts := status.Options{
 		NoRepomap:    opts.NoRepomap,
 		FolderFilter: folderFilter,
+		Verbose:      verbose,
 		Agent:        agent,
 		Context:      ctx,
 		AIMaxWorkers: clickyai.DefaultConfig().MaxConcurrent,

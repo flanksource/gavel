@@ -43,20 +43,25 @@ const (
 )
 
 type FileStatus struct {
-	Path           string
-	PreviousPath   string
-	State          FileState
-	StagedKind     ChangeKind
-	WorkKind       ChangeKind
-	Adds           int
-	Dels           int
-	AISummary      string
-	AIError        string
-	AIStatus       AISummaryStatus
-	FileMap        *repomap.FileMap
-	RepomapError   error
-	TestStatus     TestStatus
-	LintStatus     LintStatus
+	Path         string
+	PreviousPath string
+	State        FileState
+	StagedKind   ChangeKind
+	WorkKind     ChangeKind
+	Adds         int
+	Dels         int
+	AISummary    string
+	AIError      string
+	AIStatus     AISummaryStatus
+	FileMap      *repomap.FileMap
+	RepomapError error
+	TestStatus   TestStatus
+	LintStatus   LintStatus
+	// Problems holds the individual failing tests and lint violations for
+	// this file, pulled from the last snapshot. TestStatus/LintStatus carry
+	// the counts for the inline badges; Problems carries the messages the
+	// trailing "Problems" section renders.
+	Problems       []Problem
 	ResultsStale   bool
 	ConflictReason ConflictReason
 	// ModifiedAt is the working-tree mtime of the file. Zero when the file
@@ -97,6 +102,11 @@ type Result struct {
 	ResultsSHA   string
 	CurrentSHA   string
 	ResultsStale bool
+	// Verbose expands the trailing "Problems" section to every failing
+	// test / lint violation with full multi-line messages. When false the
+	// section caps each file and prints a `gavel status -v` hint. Excluded
+	// from JSON output so `--format json` stays a pure data dump.
+	Verbose bool `json:"-"`
 }
 
 type Options struct {
@@ -106,6 +116,9 @@ type Options struct {
 	// applied before line-count, repomap, and snapshot enrichment so we
 	// don't waste work on files that will be dropped.
 	FolderFilter string
+	// Verbose is threaded onto Result.Verbose so the renderer can expand the
+	// Problems section. Set from the global `-v` count by the CLI.
+	Verbose      bool
 	Agent        clickyai.Agent  `json:"-"`
 	Context      context.Context `json:"-"`
 	AIMaxWorkers int             `json:"-"`
@@ -173,6 +186,7 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		WorkDir: workDir,
 		Branch:  branch,
 		Files:   files,
+		Verbose: opts.Verbose,
 	}
 
 	if err := enrichWithSnapshot(workDir, result); err != nil {

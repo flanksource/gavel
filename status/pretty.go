@@ -61,6 +61,8 @@ func (r *Result) Pretty() api.Text {
 			t = t.Add(f.prettyRow(pathWidth)).NewLine()
 		}
 	}
+
+	t = t.Add(r.prettyProblems())
 	return t
 }
 
