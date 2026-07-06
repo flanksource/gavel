@@ -19,10 +19,14 @@ const (
 	CommitFuncRemoved   = "commit.functionalityRemoved"
 	CommitCompatibility = "commit.compatibility"
 	CommitSummary       = "commit.summary"
+	CommitGrouping      = "commit.grouping"
 	PRContent           = "pr.content"
 	TodosRun            = "todos.run"
 	TodosPlan           = "todos.plan"
 	TodosVerify         = "todos.verify"
+	TodosFinal          = "todos.final"
+	StatusSummary       = "status.summary"
+	TestOutlineSummary  = "test.outlineSummary"
 )
 
 // Prompt describes one overridable AI prompt template for the settings UI.

@@ -1,9 +1,9 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
+import { Markdown } from '@flanksource/clicky-ui/data';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiArrowLeft, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiCog, UiComment, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiEye, UiFolder, UiListDashes, UiListFlat, UiMarkdown, UiPass, UiPlay, UiQuestion, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
-import { Markdown } from '../Markdown';
 import { Spinner } from '../../icons/Spinner';
 import { TodoTimeline } from './TodoTimeline';
 import { TodoCommits } from './TodoCommits';

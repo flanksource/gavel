@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -25,6 +26,10 @@ var attachmentsDir = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "attac
 // attachmentURLPrefix is the path the dashboard loads stored attachments from; the
 // markdown body embeds <prefix>/<id> and handler.go serves it from attachmentsDir.
 const attachmentURLPrefix = "/api/todos/attachments/"
+
+type todoAttachmentUploadResponse struct {
+	Attachments []todoAttachmentSummary `json:"attachments"`
+}
 
 // persistMultipartAttachments writes every uploaded file in the form to
 // attachmentsDir under a random id (keeping the original extension) and returns a
@@ -124,6 +129,45 @@ func (s *Server) handleTodoAttachment(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write(data); err != nil {
 		logger.Debugf("write attachment %s: %v", id, err)
 	}
+}
+
+// handleTodoAttachmentUpload stores attachment bytes without creating or
+// commenting on a todo. React Grab's copy-screenshot actions use it to turn a
+// captured image into a stable URL before writing Markdown to the clipboard.
+func (s *Server) handleTodoAttachmentUpload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "multipart/form-data") {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("unsupported content type %q", r.Header.Get("Content-Type")))
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid multipart form: %w", err))
+		return
+	}
+	attachments, err := persistMultipartAttachments(r.MultipartForm)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(attachments) == 0 {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("attachment is required"))
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(todoAttachmentUploadResponse{Attachments: attachments}) //nolint:errcheck
 }
 
 // todoBodyWithAttachments appends an "## Attachments" section to the todo body.

@@ -11,6 +11,8 @@ import (
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/prompts"
+	"github.com/flanksource/gavel/status"
+	"github.com/flanksource/gavel/testrunner/outline"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/verify"
 )
@@ -51,6 +53,8 @@ func registeredPrompts() []prompts.Prompt {
 	all = append(all, gavelgit.Prompts()...)
 	all = append(all, commit.Prompts()...)
 	all = append(all, todoprompt.Prompts()...)
+	all = append(all, status.Prompts()...)
+	all = append(all, outline.Prompts()...)
 	return all
 }
 

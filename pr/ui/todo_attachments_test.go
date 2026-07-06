@@ -102,6 +102,64 @@ func TestAttachmentPersistAndServe(t *testing.T) {
 	}
 }
 
+func TestAttachmentUploadEndpoint(t *testing.T) {
+	origAttachmentsDir := attachmentsDir
+	attachmentsDir = t.TempDir()
+	t.Cleanup(func() { attachmentsDir = origAttachmentsDir })
+	s := &Server{ghOpts: github.Options{WorkDir: t.TempDir()}}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreatePart(map[string][]string{
+		"Content-Disposition": {`form-data; name="attachment"; filename="screen.png"`},
+		"Content-Type":        {"image/png"},
+	})
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := part.Write(pngBytes); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/attachments", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d, want 201; body = %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+	}
+	var resp todoAttachmentUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal upload response: %v", err)
+	}
+	if len(resp.Attachments) != 1 {
+		t.Fatalf("attachments = %+v, want 1", resp.Attachments)
+	}
+	att := resp.Attachments[0]
+	if !att.IsImage || att.URL != attachmentURLPrefix+att.ID {
+		t.Fatalf("unexpected attachment: %+v", att)
+	}
+	stored, err := os.ReadFile(filepath.Join(attachmentsDir, att.ID))
+	if err != nil {
+		t.Fatalf("read stored attachment: %v", err)
+	}
+	if !bytes.Equal(stored, pngBytes) {
+		t.Fatalf("stored bytes != uploaded bytes")
+	}
+
+	options := httptest.NewRecorder()
+	s.Handler().ServeHTTP(options, httptest.NewRequest(http.MethodOptions, "/api/todos/attachments", nil))
+	if options.Code != http.StatusNoContent {
+		t.Fatalf("options status = %d, want 204", options.Code)
+	}
+}
+
 func TestAbsolutizeAttachmentURLs(t *testing.T) {
 	const origin = "http://gavel.example:9092"
 	body := "Look here:\n\n![screen.png](" + attachmentURLPrefix + "abc.png)\n- [log.txt](" + attachmentURLPrefix + "def.txt)"

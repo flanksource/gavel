@@ -1502,7 +1502,6 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	}
 	todo := req.Todos[0]
 
-	var hashes []string
 	// An ask outcome has half-done work by design: committing it is a decision
 	// for the answer turn, not the run tail.
 	askEnded := result != nil && result.EndStatus == types.EndAsk
@@ -1511,43 +1510,13 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 		if todo.LLM != nil {
 			meta.SessionID = todo.LLM.SessionId
 		}
-		commitResult, err := commit.RunAfterAgent(context.Background(), req.Source.Dir, todo.CWD, meta)
-		if err != nil {
+		if _, err := commit.RunAfterAgent(context.Background(), req.Source.Dir, todo.CWD, meta); err != nil {
 			logger.Errorf("commit after todo run failed: %v", err)
 		}
-		hashes = commitHashes(commitResult)
 	}
-
-	if req.Options.Verify && result != nil && result.Success {
-		verifyAfterRun(req, todo, hashes)
-	}
-}
-
-// verifyAfterRun scores the committed work against the issue's acceptance
-// criteria and records the verdict. It is advisory — failures are logged.
-func verifyAfterRun(req todoRunRequest, todo *types.TODO, hashes []string) {
-	if _, err := todos.RunIssueVerification(context.Background(), req.Provider, todo, todos.VerifyOptions{
-		WorkDir: todoVerifyWorkDir(req.Source.Dir, todo),
-		Model:   req.Options.Model,
-		Backend: req.Options.Backend,
-		Commits: hashes,
-	}); err != nil {
-		logger.Warnf("issue verification after todo run skipped: %v", err)
-	}
-}
-
-// commitHashes extracts the commit hashes from a commit result.
-func commitHashes(result *commit.Result) []string {
-	if result == nil {
-		return nil
-	}
-	var out []string
-	for _, c := range result.Commits {
-		if c.Hash != "" {
-			out = append(out, c.Hash)
-		}
-	}
-	return out
+	// Verification is the run loop's definition of done (the fixture/CEL verdict),
+	// not a separate post-commit scoring pass. `POST /api/todos/verify` re-runs it
+	// manually.
 }
 
 // resolveDriverFromPayload selects the driver kind: the explicit Driver field

@@ -185,7 +185,7 @@ const sectionIconPre: PreExtension = (field) => {
 // promptPost replaces any prompt-override field's value node with the rich
 // PromptOverrideField (segmented Inline/File source + default display), keyed by
 // the schema's x-prompt-id → registry default.
-function promptPost(registry: Record<string, PromptDescriptor>): PostExtension {
+function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: string): PostExtension {
   return (field, nodes) => {
     const id = promptIdOf(field.schema);
     if (!id) return nodes;
@@ -196,8 +196,10 @@ function promptPost(registry: Record<string, PromptDescriptor>): PostExtension {
         <PromptOverrideField
           value={field.value as PromptOverrideValue | undefined}
           onChange={next => field.onChange(next)}
-          defaultText={desc?.default ?? ''}
           description={desc?.description}
+          id={id}
+          title={desc?.title ?? id}
+          scopeQuery={scopeQuery}
         />
       ),
     };
@@ -226,7 +228,10 @@ export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: P
   const isProjectTab = scope.kind === 'project' && tab === PROJECT_TAB;
 
   const query = useMemo(() => scopeQuery(scope), [scope]);
-  const post = useMemo<PostExtension[]>(() => (registry ? [promptPost(registry)] : []), [registry]);
+  const post = useMemo<PostExtension[]>(
+    () => (registry ? [promptPost(registry, query)] : []),
+    [registry, query],
+  );
   const pre = useMemo<PreExtension[]>(() => [sectionIconPre], []);
   const sectionTab = TABS.find(t => t.id === tab) ?? TABS[0];
   const tabSchema = useMemo(

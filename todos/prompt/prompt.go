@@ -4,20 +4,21 @@
 // permissions.mode, budget, effort) is folded into the returned ai.Request, so
 // the .prompt file — not Go code — declares how a mode executes. The per-todo
 // sections are assembled in Go and injected as {{{body}}}; the mode's
-// structured-output envelope schema is appended OUTSIDE the template so
-// .gavel.yaml overrides and the dashboard's editable prompt cannot break the
-// output contract.
+// structured-output envelope schema rides on the request as a native
+// SchemaJSON field (never in the prompt text) so .gavel.yaml overrides and the
+// dashboard's editable prompt cannot break the output contract, and each driver
+// delivers it the way its LLM supports.
 package prompt
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
-	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
@@ -44,8 +45,8 @@ type Options struct {
 	// mode only); empty means the todo has no prior plan.
 	ExistingPlan string
 	// BodyOverride, when set, replaces the rendered prompt body verbatim — the
-	// dashboard's editable prompt. The envelope schema instruction is still
-	// appended so an override cannot break the structured-output contract.
+	// dashboard's editable prompt. The envelope schema rides on a separate
+	// SchemaJSON field, so an override cannot break the structured-output contract.
 	BodyOverride string
 }
 
@@ -120,7 +121,13 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
 	}
-	req.Prompt.User = user + "\n\n" + ai.SchemaInstruction(schema)
+	// The envelope schema rides as a native field, never appended to the prompt
+	// text: the driver delivers it the way its LLM supports, and a hostile
+	// template/body override cannot touch a separate field. It is set identically
+	// on every turn of the run session (see the executor), which is what the
+	// claude-agent per-turn byte-equality guard requires.
+	req.Prompt.User = user
+	req.Prompt.SchemaJSON = schema
 	req.Prompt.Source = "todos." + string(opts.Mode)
 	return req, cfg, nil
 }
@@ -139,9 +146,11 @@ func templateSource(opts Options) (string, error) {
 	}
 }
 
-// EnvelopeSchemaJSON is the JSON schema of the mode's structured final result,
-// embedded in every prompt and in the final-result resume turn.
-func EnvelopeSchemaJSON(mode types.RunMode) (string, error) {
+// EnvelopeSchemaJSON is the JSON schema of the mode's structured final result.
+// The executor computes it once per run session and threads the same bytes to
+// every turn (initial, retry, feedback, final-result resume) so the claude-agent
+// provider's per-turn byte-equality guard holds by identity.
+func EnvelopeSchemaJSON(mode types.RunMode) (json.RawMessage, error) {
 	var v any
 	switch mode {
 	case types.ModePlan:
@@ -149,30 +158,47 @@ func EnvelopeSchemaJSON(mode types.RunMode) (string, error) {
 	case types.ModeRun:
 		v = &types.ResultEnvelope{}
 	default:
-		return "", fmt.Errorf("mode %q has no result envelope", mode)
+		return nil, fmt.Errorf("mode %q has no result envelope", mode)
 	}
 	raw, err := api.SchemaJSON(v)
 	if err != nil {
-		return "", fmt.Errorf("build %s envelope schema: %w", mode, err)
+		return nil, fmt.Errorf("build %s envelope schema: %w", mode, err)
 	}
-	return string(raw), nil
+	return raw, nil
+}
+
+// ResolveFinalTemplate reads the todos.finalPrompt override for dir, returning
+// the inline/file source or "" when unset (FinalResultRequest then renders the
+// embedded default). A configured-but-missing file is a hard error.
+func ResolveFinalTemplate(dir string) (string, error) {
+	cfg, err := verify.LoadGavelConfig(dir)
+	if err != nil {
+		return "", fmt.Errorf("load .gavel.yaml for todos final prompt: %w", err)
+	}
+	tmpl, err := cfg.Todos.FinalPrompt.Resolve(dir, "")
+	if err != nil {
+		return "", fmt.Errorf("resolve todos.finalPrompt override: %w", err)
+	}
+	return tmpl, nil
 }
 
 // FinalResultRequest renders the resume turn that asks a finished (or timed
-// out) session to emit ONLY the mode's final result JSON.
-func FinalResultRequest(mode types.RunMode, sessionID string, timedOut bool) (captainai.Request, error) {
+// out) session to emit ONLY the mode's final result JSON. template is the
+// resolved todos.finalPrompt override; empty renders the embedded default. The
+// schema rides on the request as a native field; the caller passes the same
+// bytes the run session was pinned with so the resume turn matches.
+func FinalResultRequest(template, sessionID string, timedOut bool, schemaJSON json.RawMessage) (captainai.Request, error) {
 	if sessionID == "" {
 		return captainai.Request{}, fmt.Errorf("final-result request needs a session to resume")
 	}
-	req, _, err := dotprompt.Load(finalTemplate).Render(map[string]any{"timedOut": timedOut}, nil)
+	if strings.TrimSpace(template) == "" {
+		template = finalTemplate
+	}
+	req, _, err := dotprompt.Load(template).Render(map[string]any{"timedOut": timedOut}, nil)
 	if err != nil {
 		return captainai.Request{}, fmt.Errorf("render todos final prompt: %w", err)
 	}
-	schema, err := EnvelopeSchemaJSON(mode)
-	if err != nil {
-		return captainai.Request{}, err
-	}
-	req.Prompt.User += "\n\n" + ai.SchemaInstruction(schema)
+	req.Prompt.SchemaJSON = schemaJSON
 	req.Prompt.Source = "todos.final"
 	req.SessionID = sessionID
 	return req, nil
@@ -220,6 +246,13 @@ func Prompts() []prompts.Prompt {
 			Description: "Overrides the verify template for TODO verification only; `gavel verify` keeps verify.promptTemplate.",
 			ConfigPath:  "todos.verifyPrompt",
 			Default:     verify.DefaultPromptTemplate(),
+		},
+		{
+			ID:          prompts.TodosFinal,
+			Title:       "Todo final-result prompt",
+			Description: "The resume-turn framing that asks a finished or timed-out session to emit ONLY the final result JSON. The output schema is fixed in Go and is NOT overridable; only the framing text changes.",
+			ConfigPath:  "todos.finalPrompt",
+			Default:     finalTemplate,
 		},
 	}
 }

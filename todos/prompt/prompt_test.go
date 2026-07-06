@@ -43,7 +43,10 @@ func TestRenderRunGroup(t *testing.T) {
 		newTestTODO("fix-db", "Fix the database query"),
 		newTestTODO("fix-cache", "Fix the cache invalidation"),
 	}
-	prompt := renderUser(t, todoList, Options{})
+	req, _, err := Render(todoList, Options{Mode: types.ModeRun})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
 
 	for _, want := range []string{
 		"implementing the 3 todo items listed below",
@@ -55,12 +58,19 @@ func TestRenderRunGroup(t *testing.T) {
 		"Fix the cache invalidation",
 		"Implement ALL todo items",
 		"Do NOT run git add or git commit",
-		"conforms to this JSON Schema", // envelope schema instruction
-		`"endStatus"`,
 	} {
-		if !strings.Contains(prompt, want) {
+		if !strings.Contains(req.Prompt.User, want) {
 			t.Errorf("run prompt missing %q", want)
 		}
+	}
+
+	// The envelope schema rides on SchemaJSON as a native field, not appended to
+	// the prompt text — so the driver, not gavel, decides how to deliver it.
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"endStatus"`) {
+		t.Errorf("run envelope schema missing endStatus: %s", req.Prompt.SchemaJSON)
+	}
+	if strings.Contains(req.Prompt.User, "conforms to this JSON Schema") {
+		t.Error("schema instruction text must not be appended to the prompt body")
 	}
 }
 
@@ -91,8 +101,8 @@ func TestRenderFoldsFrontmatter(t *testing.T) {
 	if req.Model.Name != "claude" {
 		t.Errorf("plan template Model.Name = %q, want claude", req.Model.Name)
 	}
-	if !strings.Contains(req.Prompt.User, `"plan"`) || !strings.Contains(req.Prompt.User, `"path"`) {
-		t.Errorf("plan prompt missing plan envelope schema: %s", req.Prompt.User[max(0, len(req.Prompt.User)-400):])
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"plan"`) || !strings.Contains(string(req.Prompt.SchemaJSON), `"path"`) {
+		t.Errorf("plan envelope schema missing plan/path: %s", req.Prompt.SchemaJSON)
 	}
 	if req.Prompt.Source != "todos.plan" {
 		t.Errorf("Source = %q, want todos.plan", req.Prompt.Source)
@@ -135,12 +145,16 @@ func TestRenderRunApprovedPlan(t *testing.T) {
 }
 
 // TestRenderOverridesKeepSchema pins the output contract: neither a hostile
-// template override nor a verbatim body override can drop the envelope schema
-// instruction.
+// template override nor a verbatim body override can touch the envelope schema,
+// which now rides on a separate SchemaJSON field rather than the prompt text.
 func TestRenderOverridesKeepSchema(t *testing.T) {
 	todoList := []*types.TODO{newTestTODO("solo", "Single task")}
 
-	tmpl := renderUser(t, todoList, Options{Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END"})
+	tmplReq, _, err := Render(todoList, Options{Mode: types.ModeRun, Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END"})
+	if err != nil {
+		t.Fatalf("Render(template override): %v", err)
+	}
+	tmpl := tmplReq.Prompt.User
 	if !strings.Contains(tmpl, "CUSTOM FRAMING for 1 item(s)") {
 		t.Errorf("override framing not rendered")
 	}
@@ -150,19 +164,23 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 	if strings.Contains(tmpl, "## Instructions") {
 		t.Error("override should replace the default instructions block")
 	}
-	if !strings.Contains(tmpl, "conforms to this JSON Schema") {
-		t.Error("template override must not drop the schema instruction")
+	if !strings.Contains(string(tmplReq.Prompt.SchemaJSON), `"endStatus"`) {
+		t.Error("template override must not affect the native envelope schema")
 	}
 
-	body := renderUser(t, todoList, Options{BodyOverride: "Just do the thing."})
+	bodyReq, _, err := Render(todoList, Options{Mode: types.ModeRun, BodyOverride: "Just do the thing."})
+	if err != nil {
+		t.Fatalf("Render(body override): %v", err)
+	}
+	body := bodyReq.Prompt.User
 	if !strings.Contains(body, "Just do the thing.") {
 		t.Error("body override not applied")
 	}
 	if strings.Contains(body, "## solo") {
 		t.Error("body override should replace the rendered body")
 	}
-	if !strings.Contains(body, "conforms to this JSON Schema") {
-		t.Error("body override must not drop the schema instruction")
+	if !strings.Contains(string(bodyReq.Prompt.SchemaJSON), `"endStatus"`) {
+		t.Error("body override must not affect the native envelope schema")
 	}
 }
 
@@ -180,19 +198,31 @@ func TestRenderRejectsVerifyMode(t *testing.T) {
 }
 
 func TestFinalResultRequest(t *testing.T) {
-	req, err := FinalResultRequest(types.ModePlan, "sess-123", true)
+	planSchema, err := EnvelopeSchemaJSON(types.ModePlan)
+	if err != nil {
+		t.Fatalf("EnvelopeSchemaJSON: %v", err)
+	}
+	req, err := FinalResultRequest("", "sess-123", true, planSchema)
 	if err != nil {
 		t.Fatalf("FinalResultRequest: %v", err)
 	}
 	if req.SessionID != "sess-123" {
 		t.Errorf("SessionID = %q", req.SessionID)
 	}
-	for _, want := range []string{"time limit", "ONLY the final result JSON", "conforms to this JSON Schema", `"plan"`} {
+	for _, want := range []string{"time limit", "ONLY the final result JSON"} {
 		if !strings.Contains(req.Prompt.User, want) {
 			t.Errorf("final prompt missing %q", want)
 		}
 	}
-	if _, err := FinalResultRequest(types.ModeRun, "", false); err == nil {
+	// The schema is threaded verbatim onto the native field (byte-identical to the
+	// run session's pin), never appended to the prompt text.
+	if string(req.Prompt.SchemaJSON) != string(planSchema) {
+		t.Errorf("final request schema not threaded through: %s", req.Prompt.SchemaJSON)
+	}
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"plan"`) {
+		t.Errorf("plan final schema missing plan field: %s", req.Prompt.SchemaJSON)
+	}
+	if _, err := FinalResultRequest("", "", false, planSchema); err == nil {
 		t.Fatal("empty session must error")
 	}
 }
@@ -241,10 +271,46 @@ func TestRenderExcludesPRButIncludesSource(t *testing.T) {
 	}
 }
 
+// TestEnvelopeSchemaBytesIdenticalAcrossTurnSites pins the invariant the
+// claude-agent provider enforces per turn (bytes.Equal against the session's
+// first-turn schema): the run session's initial prompt, the final-result resume,
+// and a recomputed EnvelopeSchemaJSON must all carry byte-identical schema. The
+// executor threads the initial bytes to the retry/feedback turns, and this test
+// guards the two independently-sourced sites (Render vs FinalResultRequest) plus
+// the reflector's own call-to-call stability.
+func TestEnvelopeSchemaBytesIdenticalAcrossTurnSites(t *testing.T) {
+	for _, mode := range []types.RunMode{types.ModeRun, types.ModePlan} {
+		req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: mode})
+		if err != nil {
+			t.Fatalf("Render(%s): %v", mode, err)
+		}
+		initial := string(req.Prompt.SchemaJSON)
+		if initial == "" {
+			t.Fatalf("Render(%s) produced no envelope schema", mode)
+		}
+
+		recomputed, err := EnvelopeSchemaJSON(mode)
+		if err != nil {
+			t.Fatalf("EnvelopeSchemaJSON(%s): %v", mode, err)
+		}
+		if string(recomputed) != initial {
+			t.Errorf("%s: recomputed schema differs from Render's:\n initial=%s\n recomputed=%s", mode, initial, recomputed)
+		}
+
+		final, err := FinalResultRequest("", "sess-1", false, recomputed)
+		if err != nil {
+			t.Fatalf("FinalResultRequest(%s): %v", mode, err)
+		}
+		if string(final.Prompt.SchemaJSON) != initial {
+			t.Errorf("%s: final-result schema differs from the run session's pin:\n initial=%s\n final=%s", mode, initial, final.Prompt.SchemaJSON)
+		}
+	}
+}
+
 func TestPromptsRegistered(t *testing.T) {
 	got := Prompts()
-	if len(got) != 3 {
-		t.Fatalf("Prompts() returned %d entries, want run/plan/verify", len(got))
+	if len(got) != 4 {
+		t.Fatalf("Prompts() returned %d entries, want run/plan/verify/final", len(got))
 	}
 	for _, p := range got {
 		if p.ID == "" || strings.TrimSpace(p.Default) == "" || p.ConfigPath == "" {

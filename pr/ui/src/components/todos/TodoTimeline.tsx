@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
+import { Markdown, Timeline, type TimelineItem } from '@flanksource/clicky-ui/data';
 import { UiAdd, UiChevronDown, UiChevronUp, UiCircleFilled, UiComment, UiDiff, UiHistory } from '@flanksource/clicky-ui/icons';
 import type { TodoEvent } from '../../types';
 import { timeAgo } from '../../utils';
-import { Markdown } from '../Markdown';
 import { RelativeTime } from '../RelativeTime';
 
 type EventVisual = Pick<TimelineItem, 'icon' | 'tone'> & { action: string };

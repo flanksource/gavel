@@ -62,12 +62,14 @@ catalog:
   shiki: ^1.24.0
   sonner: ^1.7.1
   storybook: ^8.6.18
+  streamdown: ^2.5.0
   tailwind-merge: ^2.6.0
   tailwindcss: ^3.4.17
   typescript: ^5.7.2
   vite: ^6.0.3
   vite-plugin-dts: ^4.3.0
   vitest: ^3.0.5
+  yaml: ^2.8.3
 catalogMode: prefer
 
 linkWorkspacePackages: true
@@ -75,3 +77,13 @@ linkWorkspacePackages: true
 # version, so local edits always win. When the sibling is absent (CI) there is
 # no workspace package and clicky-ui resolves from the registry.
 preferWorkspacePackages: true
+
+# Force a single @types/react major across the workspace. The linked clicky-ui
+# sibling pins React 18 while pr/ui (this app) is React 19; without a single
+# @types/react, shared peer-typed libs (@mdxeditor/editor, recharts, radix) resolve
+# React 19's ReactNode (with bigint) against clicky-ui's React 18 ReactNode → TS2786
+# when clicky-ui's .d.ts are generated during a local `make build`. Dedupe the *type*
+# packages to 19 (runtime react stays per-package); clicky-ui peerDeps allow React 19.
+overrides:
+  "@types/react": ^19.2.17
+  "@types/react-dom": ^19.2.3

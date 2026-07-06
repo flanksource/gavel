@@ -1,5 +1,7 @@
-import { useRef, useState } from 'react';
-import { SegmentedControl } from '@flanksource/clicky-ui/components';
+import { useCallback, useEffect, useState } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
+import { PromptEditorDialog } from './settings/PromptEditorDialog';
+import type { PromptDetail } from './settings/promptSpec';
 
 // A prompt override is either inline template text or a path to a .prompt file
 // (the union the Go PromptOverride marshals). An unset/empty override means the
@@ -9,76 +11,88 @@ export type PromptOverrideValue = string | { inline?: string; file?: string };
 interface Props {
   value: PromptOverrideValue | undefined;
   onChange: (next: PromptOverrideValue | undefined) => void;
-  /** Embedded built-in template — the prompt in use when there is no override. */
-  defaultText: string;
   description?: string;
+  /** Stable prompt id (schema x-prompt-id) — the /api/settings/prompts/{id} key. */
+  id: string;
+  /** Human label for the prompt, shown in the editor dialog title. */
+  title: string;
+  /** scope=global | project=<name>, scoping the detail request to one layer. */
+  scopeQuery: string;
 }
 
-function normalize(v: PromptOverrideValue | undefined): { inline: string; file: string } {
-  if (typeof v === 'string') return { inline: v, file: '' };
-  if (v && typeof v === 'object') return { inline: v.inline ?? '', file: v.file ?? '' };
-  return { inline: '', file: '' };
-}
+type Source = 'default' | 'inline' | 'file';
 
-const SOURCES = [
-  { id: 'inline', label: 'Inline' },
-  { id: 'file', label: 'File' },
-] as const;
-
-// PromptOverrideField edits one prompt override with a segmented Inline / File
-// source toggle. In Inline mode the textarea is pre-filled with the prompt
-// actually in use — the override when set, otherwise the built-in default — so
-// the form shows the effective value and you edit it directly. Editing it back to
-// the default (or clearing it) emits `undefined`, so the default is never
-// redundantly written into the .gavel.yaml file. The inactive source's text is
-// stashed locally so toggling between Inline and File does not lose edits.
-export function PromptOverrideField({ value, onChange, defaultText, description }: Props) {
-  const { inline, file } = normalize(value);
-  const [mode, setMode] = useState<'inline' | 'file'>(file ? 'file' : 'inline');
-  const stash = useRef({ inline, file });
-  if (mode === 'inline') stash.current.inline = inline;
-  else stash.current.file = file;
-
-  // The textarea shows the effective inline prompt: the override when set,
-  // otherwise the built-in default that is in use.
-  const inlineText = inline !== '' ? inline : defaultText;
-  const isDefaulted = file === '' && (inline === '' || inline === defaultText);
-
-  // commitInline persists an override only when the text differs from the
-  // default; equal-to-default or empty clears it back to the built-in.
-  function commitInline(next: string) {
-    stash.current.inline = next;
-    if (next.trim() === '' || next === defaultText) onChange(undefined);
-    else onChange({ inline: next });
+function sourceOf(value: PromptOverrideValue | undefined): { source: Source; path?: string } {
+  if (typeof value === 'string') return value.trim() ? { source: 'inline' } : { source: 'default' };
+  if (value && typeof value === 'object') {
+    if (value.inline && value.inline.trim()) return { source: 'inline' };
+    if (value.file && value.file.trim()) return { source: 'file', path: value.file };
   }
+  return { source: 'default' };
+}
 
-  function pickSource(next: 'inline' | 'file') {
-    setMode(next);
-    if (next === 'inline') {
-      const v = stash.current.inline;
-      onChange(v && v !== defaultText ? { inline: v } : undefined);
-    } else {
-      onChange(stash.current.file ? { file: stash.current.file } : undefined);
-    }
+const BADGE: Record<Source, string> = {
+  default: 'bg-muted text-muted-foreground',
+  inline: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200',
+  file: 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200',
+};
+
+// PromptOverrideField is the settings summary row for one overridable prompt: a
+// source badge (default/inline/file), the resolved model, and an Edit button that
+// opens the nested spec/body editor. Content is edited only in the dialog (which
+// persists server-side); the row keeps the lightweight source switches — Reset to
+// default (cleared here, saved with the rest of the form) and, after a dialog
+// save, syncing the in-form value so the enclosing Save stays consistent.
+export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery }: Props) {
+  const [detail, setDetail] = useState<PromptDetail | null>(null);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState(false);
+
+  const load = useCallback(() => {
+    setError('');
+    fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.text()) || `load failed (${r.status})`);
+        return r.json() as Promise<PromptDetail>;
+      })
+      .then(setDetail)
+      .catch((e) => setError(e instanceof Error ? e.message : 'failed to load prompt'));
+  }, [id, scopeQuery]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const { source, path } = sourceOf(value);
+  const model = (detail?.spec?.model as string | undefined) || 'default';
+
+  function onSaved(next: PromptDetail) {
+    setDetail(next);
+    onChange(next.source === 'file' ? { file: next.path ?? '' } : { inline: next.raw });
+    setEditing(false);
   }
 
   return (
     <div className="space-y-2">
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
 
-      <div className="flex items-center gap-2">
-        <SegmentedControl
-          size="sm"
-          value={mode}
-          options={SOURCES.map(s => ({ id: s.id, label: s.label }))}
-          onChange={id => pickSource(id as 'inline' | 'file')}
-          aria-label="Prompt source"
-        />
-        {isDefaulted ? (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            Default
-          </span>
-        ) : (
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${BADGE[source]}`}
+        >
+          {source}
+          {source === 'file' && path ? ` · ${path}` : ''}
+        </span>
+        <span
+          className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+          title="Model"
+        >
+          {model}
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => setEditing(true)} disabled={!detail}>
+          Edit
+        </Button>
+        {source !== 'default' && (
           <button
             type="button"
             onClick={() => onChange(undefined)}
@@ -89,31 +103,18 @@ export function PromptOverrideField({ value, onChange, defaultText, description 
         )}
       </div>
 
-      {mode === 'inline' ? (
-        <textarea
-          className="min-h-[10rem] w-full rounded-md border border-border bg-background p-2 font-mono text-xs"
-          value={inlineText}
-          spellCheck={false}
-          onChange={e => commitInline(e.target.value)}
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+
+      {editing && detail && (
+        <PromptEditorDialog
+          open={editing}
+          id={id}
+          title={title}
+          scopeQuery={scopeQuery}
+          detail={detail}
+          onClose={() => setEditing(false)}
+          onSaved={onSaved}
         />
-      ) : (
-        <div className="space-y-1">
-          <input
-            type="text"
-            className="w-full rounded-md border border-border bg-background p-2 font-mono text-xs"
-            value={file}
-            placeholder="./prompts/my-prompt.prompt"
-            spellCheck={false}
-            onChange={e => {
-              const next = e.target.value;
-              stash.current.file = next;
-              onChange(next ? { file: next } : undefined);
-            }}
-          />
-          <p className="text-[11px] text-muted-foreground">
-            Relative paths resolve against the .gavel.yaml directory. Leave empty to use the built-in default.
-          </p>
-        </div>
       )}
     </div>
   );
