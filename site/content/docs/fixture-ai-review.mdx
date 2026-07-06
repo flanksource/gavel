@@ -7,7 +7,7 @@ order: 5
 AI review fixtures turn a markdown document into one verification step. The fixture describes the review scope, model options, prompt, acceptance criteria, and score threshold.
 
 ```bash
-gavel fixtures examples/ai-review.fixture.md
+gavel fixtures examples/ai-review.fixture.md # [!code focus] [!code note:AI fixture]
 ```
 
 AI review needs a configured backend. Run `captain configure`, set a supported provider key such as `ANTHROPIC_API_KEY`, or use a model alias that is already configured for the local environment.
@@ -17,24 +17,24 @@ AI review needs a configured backend. Run `captain configure`, set a supported p
 ````markdown
 ---
 ai:
-  model: claude-code-sonnet
+  model: claude-code-sonnet # [!code focus] [!code note:model alias]
 verify:
-  threshold: 80
+  threshold: 80 # [!code warning] [!code note:pass score]
 ---
 
 # Verify parser changes
 
 ```prompt
-Focus on parser behavior, actionable errors, and regression coverage.
+Focus on parser behavior, actionable errors, and regression coverage. # [!code focus]
 ```
 
 ## Acceptance Criteria
 
-- [ ] Parser errors are actionable
+- [ ] Parser errors are actionable # [!code highlight]
 - [ ] Existing fixture formats still pass
 - [ ] User-facing behavior is documented
 
-- cel: json.score >= 80
+- cel: json.score >= 80 # [!code info] [!code word:json.score]
 ````
 
 Lines 2-3 choose the AI model. Lines 4-5 set the passing threshold for the verifier. Lines 10-12 are the review prompt; this is where you tell the model what to focus on. Lines 16-18 become scored acceptance criteria. Line 20 asserts on the structured JSON result so the fixture fails when the score is too low.
@@ -47,7 +47,7 @@ The first `prompt` or `ai` code block becomes the reviewer instructions. GitHub 
 
 ```yaml
 ai:
-  model: claude-code-sonnet
+  model: claude-code-sonnet # [!code focus]
   temperature: 0
   maxTokens: 10000
   maxConcurrent: 4
@@ -61,8 +61,8 @@ ai:
 
 ```yaml
 verify:
-  scope: diff
-  threshold: 80
+  scope: diff # [!code highlight]
+  threshold: 80 # [!code warning]
   disabled: [style]
 ```
 
@@ -80,7 +80,7 @@ Checklist items can be static check IDs or plain English criteria.
 - [ ] tests-added
 - [ ] error-paths-tested
 - [ ] no-hardcoded-secrets
-- [ ] The change is covered by a test that fails without it
+- [ ] The change is covered by a test that fails without it # [!code focus]
 - [ ] User-facing behavior changes are reflected in README or docs
 ```
 

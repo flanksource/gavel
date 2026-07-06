@@ -9,9 +9,9 @@ Fixtures are markdown files that Gavel can execute. They let you keep test inten
 Use fixtures when you want to test command output, HTTP smoke checks, generated files, policy checks, or a repeatable workflow around `gavel test`, `gavel lint`, and AI review.
 
 ```bash
-gavel fixtures examples/precommit.fixture.md
-gavel fixtures "fixtures/**/*.fixture.md"
-gavel test --fixtures
+gavel fixtures examples/precommit.fixture.md # [!code focus] [!code note:one file]
+gavel fixtures "fixtures/**/*.fixture.md" # [!code highlight] [!code note:quoted glob]
+gavel test --fixtures # [!code highlight] [!code note:test report]
 ```
 
 The first command runs one known fixture file. The second quotes the glob so Gavel expands it consistently instead of relying on shell-specific glob behavior. The third command folds fixture discovery into the normal `gavel test` report, which is what you want when fixtures are part of the project test suite.
@@ -20,9 +20,9 @@ The first command runs one known fixture file. The second quotes the glob so Gav
 
 ```yaml
 fixtures:
-  enabled: true
-  files:
-    - "tests/**/*.fixture.md"
+  enabled: true # [!code focus] [!code note:opt in]
+  files: # [!code highlight]
+    - "tests/**/*.fixture.md" # [!code word:**/*.fixture.md] [!code note:explicit discovery]
     - "fixtures/**/*.md"
 ```
 
@@ -51,11 +51,12 @@ Every runnable node becomes part of the same fixture result tree. When fixtures 
 ````markdown
 # Smoke checks
 
+<!-- [!code focus:3] -->
 ```bash
 echo "ok"
 ```
 
-- contains: ok
+- contains: ok # [!code highlight] [!code note:stdout check]
 - cel: exitCode == 0
 ````
 

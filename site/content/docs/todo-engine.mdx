@@ -8,10 +8,10 @@ The todo engine is Gavel's task execution layer. It turns work items into struct
 
 ```bash
 gavel todos list
-gavel todos create "Fix flaky parser"
-gavel todos get 90ec80f0
-gavel todos run 90ec80f0
-gavel todos verify 90ec80f0
+gavel todos create "Fix flaky parser" # [!code highlight] [!code note:create issue]
+gavel todos get 90ec80f0 # [!code word:90ec80f0]
+gavel todos run 90ec80f0 # [!code focus] [!code note:agent loop]
+gavel todos verify 90ec80f0 # [!code info] [!code note:score result]
 ```
 
 Line 1 lists active work. Line 2 creates a provider-backed issue. Line 3 prints the full todo body, status, provider history, and parsed sections. Line 4 starts the agent loop. Line 5 scores committed work against the todo's acceptance criteria.
@@ -30,8 +30,8 @@ Gavel has two todo providers:
 The Grite provider is the default. Use the file provider when you want portable markdown files inside a repository.
 
 ```bash
-gavel todos list --provider=grite
-gavel todos list --provider=todos --dir .todos
+gavel todos list --provider=grite # [!code focus]
+gavel todos list --provider=todos --dir .todos # [!code highlight] [!code word:.todos]
 ```
 
 The first command uses Grite issues. The second reads markdown files from `.todos`. `--dir` is only meaningful for the file provider; Grite stores content in its issue database.
@@ -42,7 +42,7 @@ Provider behavior is shared through one interface: list, get, create, delete, ed
 
 ```bash
 gavel todos create "Fix parser error messages"
-gavel todos new --title "Add fixture docs" --body-file todo.md
+gavel todos new --title "Add fixture docs" --body-file todo.md # [!code focus] [!code note:full body]
 gavel todos create --priority high --status pending "Stop leaking stderr"
 ```
 
@@ -85,12 +85,12 @@ File-backed todos use YAML front matter. Grite-backed todos map the same fields 
 title: Fix parser error messages
 priority: high
 status: pending
-cwd: ./services/api
+cwd: ./services/api # [!code focus] [!code note:agent cwd]
 llm:
   model: claude-code-sonnet
   max_turns: 12
 checks:
-  enabled: true
+  enabled: true # [!code highlight]
   maxIterations: 3
   test:
     changed: true

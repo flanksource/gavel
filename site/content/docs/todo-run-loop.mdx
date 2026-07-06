@@ -8,9 +8,9 @@ order: 7
 
 ```bash
 gavel todos run 90ec80f0
-gavel todos run --mode plan 90ec80f0
-gavel todos run --mode verify 90ec80f0
-gavel todos run --check --commit --verify 90ec80f0
+gavel todos run --mode plan 90ec80f0 # [!code highlight] [!code note:reviewable plan]
+gavel todos run --mode verify 90ec80f0 # [!code info]
+gavel todos run --check --commit --verify 90ec80f0 # [!code focus] [!code note:full loop]
 ```
 
 Line 1 runs the default implementation mode. Line 2 asks the agent to produce a reviewable plan. Line 3 delegates to issue verification. Line 4 runs implementation, fixture-backed checks, auto-commit, and issue verification as one workflow.
@@ -34,8 +34,8 @@ Plan mode is read-oriented. A completed plan run reports a native plan file path
 Drivers choose how the agent runs. The default is a cmux-backed driver for the resolved agent. Explicit drivers include values such as `claude-cmux`, `claude-headless`, `codex-cmux`, and `codex-headless`.
 
 ```bash
-gavel todos run --driver claude-cmux --model claude-code-sonnet 90ec80f0
-gavel todos run --resume 90ec80f0
+gavel todos run --driver claude-cmux --model claude-code-sonnet 90ec80f0 # [!code focus]
+gavel todos run --resume 90ec80f0 # [!code highlight] [!code note:same session]
 ```
 
 Line 1 pins both the driver mechanism and the model. Line 2 resumes the prior recorded session instead of starting a new one, which is the right path for answering questions or continuing interrupted work.
@@ -49,7 +49,7 @@ Every agent run is expected to finish with a structured envelope:
 ```json
 {
   "summary": "What changed or what blocked progress.",
-  "endStatus": "completed",
+  "endStatus": "completed", // [!code focus] [!code note:status mapping]
   "questions": []
 }
 ```
@@ -63,8 +63,8 @@ Plan mode adds a `plan` object:
   "summary": "Investigated the parser and wrote a plan.",
   "endStatus": "completed",
   "plan": {
-    "status": "new",
-    "path": "/absolute/path/to/plan.md"
+    "status": "new", // [!code focus] [!code note:new updated unchanged]
+    "path": "/absolute/path/to/plan.md" // [!code warning]
   }
 }
 ```
@@ -86,8 +86,8 @@ The `--check` flag enables the post-completion test/lint loop. Project defaults 
 
 ```yaml
 checks:
-  enabled: true
-  maxIterations: 3
+  enabled: true # [!code focus]
+  maxIterations: 3 # [!code warning] [!code note:retry budget]
   test:
     changed: true
     timeout: 5m
@@ -112,15 +112,15 @@ A todo's `## Verification` section is its definition of done. It runs even when 
 ### command: parser reports actionable errors
 
 ```bash
-gavel fixtures fixtures/parser-errors.fixture.md
+gavel fixtures fixtures/parser-errors.fixture.md # [!code focus] [!code note:existing suite]
 ```
 
-- cel: exitCode == 0
+- cel: exitCode == 0 # [!code info]
 
 ### command: changed packages pass
 
 ```yaml test
-changed: true
+changed: true # [!code highlight]
 framework: [go]
 test-timeout: 2m
 ```
@@ -137,8 +137,8 @@ The verification fixture is evaluated inside the agent loop. Passing nodes promo
 `--verify` runs issue verification after commit. It scores the committed work against the issue body and acceptance criteria, then records the result through the provider.
 
 ```bash
-gavel todos run --commit=true --verify 90ec80f0
-gavel todos verify --threshold 80 --strict 90ec80f0
+gavel todos run --commit=true --verify 90ec80f0 # [!code focus]
+gavel todos verify --threshold 80 --strict 90ec80f0 # [!code warning]
 ```
 
 The first command commits successful agent work and immediately scores those commits. The second command can be run later; `--strict` makes the command fail when any selected todo is judged not implemented.

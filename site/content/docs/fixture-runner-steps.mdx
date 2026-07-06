@@ -15,9 +15,9 @@ Use a `yaml test` fence when the fixture should run `gavel test` options.
 
 ```yaml test
 paths: [./examples/sample-app]
-framework: [go]
-test-timeout: 2m
-show-passed: true
+framework: [go] # [!code focus] [!code note:runner filter]
+test-timeout: 2m # [!code highlight]
+show-passed: true # [!code info] [!code note:visible pass nodes]
 ```
 ````
 
@@ -45,8 +45,8 @@ Use a `yaml lint` or bare `lint` fence for the lint engine.
 
 ```yaml lint
 linters: [golangci-lint]
-changed: true
-timeout: 5m
+changed: true # [!code focus] [!code note:changed only]
+timeout: 5m # [!code warning]
 ```
 ````
 
@@ -73,9 +73,9 @@ UI and detach options such as `ui`, `addr`, and `detach` are ignored inside fixt
 
 ```bash
 gavel fixtures tests.md
-gavel fixtures -v tests.md
-gavel fixtures -vv tests.md
-gavel fixtures -vvv tests.md
+gavel fixtures -v tests.md # [!code highlight] [!code note:show passed]
+gavel fixtures -vv tests.md # [!code highlight] [!code note:show commands]
+gavel fixtures -vvv tests.md # [!code focus] [!code note:show debug context]
 gavel fixtures --show-passed tests.md
 gavel fixtures --show-stdout Always tests.md
 gavel fixtures --show-stderr OnFailure tests.md
@@ -105,12 +105,12 @@ import (
 
 func TestFixtures(t *testing.T) {
 	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
-		Paths: []string{"fixtures/**/*.md"},
+		Paths: []string{"fixtures/**/*.md"}, // [!code focus] [!code note:markdown discovery]
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner.RunTesting(t)
+	runner.RunTesting(t) // [!code highlight]
 }
 ```
 
@@ -133,7 +133,7 @@ The bundled `examples/precommit.fixture.md` combines a lint step, a test step, a
 
 ```yaml lint
 linters: [golangci-lint]
-files: [./examples/sample-app]
+files: [./examples/sample-app] # [!code focus]
 ```
 
 ## Test
@@ -141,13 +141,13 @@ files: [./examples/sample-app]
 ```yaml test
 paths: [./examples/sample-app]
 framework: [go]
-test-timeout: 2m
+test-timeout: 2m # [!code highlight]
 ```
 
 ## Formatting is clean
 
 ```bash
-test -z "$(gofmt -l "$GIT_ROOT_DIR/examples/sample-app")"
+test -z "$(gofmt -l "$GIT_ROOT_DIR/examples/sample-app")" # [!code info] [!code word:$GIT_ROOT_DIR]
 ```
 ````
 

@@ -8,10 +8,10 @@ Fixture files are ordinary markdown with optional YAML front matter. File-level 
 
 ```yaml
 ---
-build: go build -o myapp
-daemon: go run ./server --port {{.port}}
-exec: ./myapp
-args: [--verbose]
+build: go build -o myapp # [!code focus] [!code note:build once]
+daemon: go run ./server --port {{.port}} # [!code focus] [!code word:{{.port}}]
+exec: ./myapp # [!code highlight]
+args: [--verbose] # [!code highlight]
 env:
   LOG_LEVEL: debug
 cwd: ./testdir
@@ -19,7 +19,7 @@ terminal: pty
 timeout: 30s
 os: linux
 arch: amd64
-skip: "! command -v docker"
+skip: "! command -v docker" # [!code warning] [!code note:conditional skip]
 ---
 ```
 
@@ -32,7 +32,7 @@ Tables are the most compact format when tests share the same command and vary by
 ````markdown
 ---
 exec: bash
-args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"]
+args: ["-c", "curl {{.flags}} {{.baseUrl}}{{.path}}"] # [!code word:{{.path}}] [!code note:row variable]
 baseUrl: https://api.example.com
 flags: "-s"
 ---
@@ -63,6 +63,7 @@ Command blocks are better for multi-line scripts, setup, teardown, or per-test Y
 ````markdown
 ### command: multi-line setup
 
+<!-- [!code highlight:4] -->
 ```yaml
 exitCode: 0
 env:
@@ -71,7 +72,7 @@ env:
 
 ```bash
 tmp="$(mktemp)"
-echo "hello" > "$tmp"
+echo "hello" > "$tmp" # [!code focus] [!code note:produce stdout]
 cat "$tmp"
 rm -f "$tmp"
 ```
@@ -98,10 +99,10 @@ Executable code blocks outside `command:` headings are auto-detected. The neares
 ## Version output
 
 ```bash
-gavel --version
+gavel --version # [!code focus] [!code note:test command]
 ```
 
-- regex: gavel version
+- regex: gavel version # [!code highlight]
 ````
 
 Line 1 names the test. Lines 3-5 run the command. Line 7 checks stdout with a regex. Use this compact form for one-off checks that do not need per-test YAML.
@@ -122,10 +123,10 @@ Here `exitCode=1` says the non-zero exit is expected, and `timeout=30` bounds th
 
 ```yaml
 exec: $executablePath
-daemon: go run ./server --port {{.port}}
-args: ["--file", "$file"]
-build: go build -o $workDir/myapp
-cwd: $GIT_ROOT_DIR/testdata
+daemon: go run ./server --port {{.port}} # [!code word:{{.port}}]
+args: ["--file", "$file"] # [!code word:$file]
+build: go build -o $workDir/myapp # [!code word:$workDir]
+cwd: $GIT_ROOT_DIR/testdata # [!code word:$GIT_ROOT_DIR] [!code note:resolved before run]
 ```
 
 `$executablePath` and `$workDir` come from the runner. `{{.port}}` is a free TCP port created for daemon fixtures. `$file` is available when `files:` expands a test across matched files. `cwd` is templated before Gavel resolves the final working directory.

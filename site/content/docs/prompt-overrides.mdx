@@ -1,0 +1,55 @@
+---
+title: Prompt overrides
+description: Override Gavel's built-in AI prompts from .gavel.yaml, and the input/output contract each one must honor.
+order: 9
+---
+
+Every AI prompt Gavel ships is overridable from `.gavel.yaml`. Each override is either inline text or a file reference, and layers merge home → git-root → target directory (last write wins):
+
+```yaml
+commit:
+  groupingPrompt: "You are grouping changes. {{table}} ..."   # inline
+verify:
+  promptTemplate:
+    file: .gavel/prompts/review.prompt                        # file reference
+```
+
+An override is a [dotprompt](https://google.github.io/dotprompt/) template. A configured-but-missing file is a hard error — Gavel never silently falls back to the built-in default.
+
+## The contract
+
+An override must honor two halves of the contract:
+
+- **Input variables** — the Handlebars variables Gavel binds when it renders your template. Referencing an unknown variable renders empty; the variables below are all that is bound for each prompt.
+- **Output schema** — the JSON shape Gavel parses back. For most prompts the schema is declared in the prompt's frontmatter (`output.schema`) and you may change it if you also change what you ask for. For a few prompts the **schema is fixed in Go and is NOT overridable** — the override changes only the instruction text, and the output shape is enforced regardless. Those are called out below.
+
+Gavel validates the parsed output and fails loudly on a shape mismatch (no zero-value fallback).
+
+## Overridable prompts
+
+| Config path | Prompt | Input variables | Output schema |
+| --- | --- | --- | --- |
+| `verify.promptTemplate` | Reviewer prompt (`gavel verify`) | `{{scopeInstruction}}`, `{{extraPrompt}}`, `{{issue}}`, `{{sessionId}}`, `{{changedFiles}}`, `{{worktree}}` | Built from checks/criteria (schema.cel) |
+| `commit.messagePrompt` | Commit message | `{{patch}}`, `{{maxBodyLines}}` | frontmatter |
+| `commit.functionalityRemovedPrompt` | Removed functionality | commit fields | frontmatter |
+| `commit.compatibilityPrompt` | Compatibility issues | commit fields | frontmatter |
+| `commit.summaryPrompt` | Commit-group summary (`git analyze --summary`) | scope/commit fields | frontmatter |
+| `commit.groupingPrompt` | AI commit grouping (`commit -G`) | `{{table}}`, `{{groupByScope}}`, `{{maxCommits}}`, `{{consolidation}}`, `{{prevCount}}`, `{{prevGroups}}` | frontmatter (`groups[]`+`ignore[]`) |
+| `commit.prContentPrompt` | PR title/body/branch | PR input fields | frontmatter |
+| `todos.runPrompt` | Todo run | `{{body}}`, `{{count}}`, `{{multiple}}`, `{{existingPlan}}` | **fixed** (run envelope) |
+| `todos.planPrompt` | Todo plan | `{{body}}`, `{{count}}`, `{{existingPlan}}` | **fixed** (plan envelope) |
+| `todos.verifyPrompt` | Todo verification | same as `verify.promptTemplate` | Built from checks/criteria |
+| `todos.finalPrompt` | Final-result resume turn | `{{timedOut}}` | **fixed** (mode envelope) |
+| `status.summaryPrompt` | Per-file summary (`status --ai`) | `{{details}}` | frontmatter (`{summary}`) |
+| `test.outlineSummaryPrompt` | Per-test summary (`test outline --ai-summary`) | `{{ids}}`, `{{file}}`, `{{source}}` | frontmatter (`tests[]`) |
+
+### White-box vs black-box verify
+
+The verify prompt is white-box or black-box by **which variables it references**, not by a mode flag:
+
+- **White-box** — reference `{{sessionId}}` to have the reviewer inspect the implementation session's transcript.
+- **Black-box** — reference `{{changedFiles}}` / `{{worktree}}` (the final worktree state) to review purely from the result, which lets a cheap non-agentic model verify without agent tools. These are computed lazily, only when the template references them.
+
+### Fixed-schema prompts
+
+`todos.runPrompt`, `todos.planPrompt`, and `todos.finalPrompt` carry a structured result **envelope** whose schema is generated in Go and applied to the request natively. Overriding these prompts changes the framing and instructions, but the output shape is enforced by the driver and cannot be altered from `.gavel.yaml` — this is what keeps a hand-edited prompt from breaking the run loop.
