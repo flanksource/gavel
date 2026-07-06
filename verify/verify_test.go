@@ -3,6 +3,7 @@ package verify
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,34 +149,6 @@ func TestMergeVerifyConfig(t *testing.T) {
 			t.Errorf("Model = %q, want %q", got.Model, "claude")
 		}
 	})
-}
-
-func TestResolveAdapter(t *testing.T) {
-	tests := []struct {
-		model         string
-		expectedName  string
-		expectedModel string
-	}{
-		{"claude", "claude", "claude"},
-		{"gemini", "gemini", "gemini"},
-		{"codex", "codex", "codex"},
-		{"claude-sonnet-4", "claude", "claude-sonnet-4"},
-		{"gemini-2.5-flash", "gemini", "gemini-2.5-flash"},
-		{"codex-mini", "codex", "codex-mini"},
-		{"unknown", "claude", "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			adapter, model := ResolveAdapter(tt.model)
-			if adapter.Name() != tt.expectedName {
-				t.Errorf("Name() = %q, want %q", adapter.Name(), tt.expectedName)
-			}
-			if model != tt.expectedModel {
-				t.Errorf("model = %q, want %q", model, tt.expectedModel)
-			}
-		})
-	}
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -391,7 +364,7 @@ func TestRenderPromptIncludesIssueAndCommits(t *testing.T) {
 		CommitSHAs:  []string{"abc1234", "def5678"},
 	}
 	scope := ReviewScope{Type: "commits", Commits: issue.CommitSHAs}
-	prompt, err := renderPrompt(verifyPromptTemplate, scope, VerifyConfig{}, issue)
+	prompt, err := renderPrompt(verifyPromptTemplate, scope, VerifyConfig{}, issue, "")
 	if err != nil {
 		t.Fatalf("renderPrompt() error: %v", err)
 	}
@@ -406,24 +379,52 @@ func TestRenderPromptIncludesIssueAndCommits(t *testing.T) {
 	}
 }
 
-func TestSchemaFile(t *testing.T) {
-	path, err := SchemaFile(ChecksConfig{}, false, nil)
+// TestRenderPromptWhiteBoxSessionID pins that a template referencing {{sessionId}}
+// gets the implementation session id — the white-box verify signal.
+func TestRenderPromptWhiteBoxSessionID(t *testing.T) {
+	tmpl := "Inspect session {{sessionId}} to confirm the work."
+	issue := &IssueContext{SessionID: "sess-abcdef"}
+	got, err := renderPrompt(tmpl, ReviewScope{Type: "diff"}, VerifyConfig{}, issue, "")
 	if err != nil {
-		t.Fatalf("SchemaFile() error: %v", err)
+		t.Fatalf("renderPrompt() error: %v", err)
 	}
-	defer os.Remove(path)
+	if !strings.Contains(got, "sess-abcdef") {
+		t.Errorf("white-box prompt missing session id:\n%s", got)
+	}
+}
 
-	if !strings.HasSuffix(path, ".json") {
-		t.Errorf("schema file path should end in .json, got %q", path)
+// TestRenderPromptBlackBoxWorktree pins that a template referencing the
+// final-state variables gets the worktree change-list computed from workDir, and
+// that a template NOT referencing them never triggers the git call (lazy).
+func TestRenderPromptBlackBoxWorktree(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "changed.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	data, err := os.ReadFile(path)
+	tmpl := "Review the final state.\nChanged files:\n{{changedFiles}}\n\nStatus:\n{{worktree}}"
+	got, err := renderPrompt(tmpl, ReviewScope{Type: "diff"}, VerifyConfig{}, nil, repo)
 	if err != nil {
-		t.Fatalf("failed to read schema file: %v", err)
+		t.Fatalf("renderPrompt() error: %v", err)
+	}
+	if !strings.Contains(got, "changed.go") {
+		t.Errorf("black-box prompt missing the changed file:\n%s", got)
 	}
 
-	var schema map[string]any
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatalf("schema file is not valid JSON: %v", err)
+	// A template that never references the vars must render even in a non-git dir
+	// (the git call is skipped), proving the compute is lazy.
+	lazy, err := renderPrompt("Just {{scopeInstruction}}", ReviewScope{Type: "diff"}, VerifyConfig{}, nil, t.TempDir())
+	if err != nil {
+		t.Fatalf("renderPrompt(lazy) error: %v", err)
+	}
+	if !strings.Contains(lazy, "git diff HEAD") {
+		t.Errorf("lazy prompt should still render the scope instruction:\n%s", lazy)
 	}
 }

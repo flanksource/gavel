@@ -2,10 +2,12 @@ package verify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/ai"
 )
@@ -29,6 +31,10 @@ type RunOptions struct {
 	// AI steps and todo verification always set it; `gavel verify` and the autofix
 	// loop leave it nil and use the legacy per-provider CLI adapters.
 	AgentConfig *ai.AgentConfig
+	// SchemaCEL, when non-empty, overrides the built-in schema.cel expression that
+	// generates the JSON output schema from the review's checks/criteria (the
+	// fixture AI-step `schema.cel` frontmatter). Empty uses DefaultSchemaCEL.
+	SchemaCEL string
 }
 
 func RunVerify(opts RunOptions) (*VerifyResult, error) {
@@ -49,12 +55,18 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 		return nil, fmt.Errorf("failed to render prompt: %w", err)
 	}
 
-	var result VerifyResult
-	if opts.AgentConfig != nil {
-		result, err = runAgentic(opts, scope, cfg, prompt, criteria)
-	} else {
-		result, err = runAdapter(opts, scope, cfg, prompt, criteria)
+	// Every review runs through a captain backend (native structured output).
+	// When the caller supplies no agent config, synthesize the default from the
+	// verify model.
+	if opts.AgentConfig == nil {
+		ac := ai.DefaultConfig()
+		if cfg.Model != "" {
+			ac.Model = cfg.Model
+		}
+		opts.AgentConfig = &ac
 	}
+
+	result, err := runAgentic(opts, scope, cfg, prompt, criteria)
 	if err != nil {
 		return nil, err
 	}
@@ -67,46 +79,38 @@ func RunVerify(opts RunOptions) (*VerifyResult, error) {
 // JSON reply. The schema is built from the run's checks + criteria and embedded
 // in the prompt (the agentic backends have no native structured-output mode).
 func runAgentic(opts RunOptions, scope ReviewScope, cfg VerifyConfig, prompt string, criteria []string) (VerifyResult, error) {
-	schema, err := BuildSchema(EnabledChecks(cfg.Checks), opts.Issue != nil, criteria)
+	schema, err := EvalSchema(opts.SchemaCEL, EnabledChecks(cfg.Checks), opts.Issue != nil, criteria)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("failed to build schema: %w", err)
 	}
 	logger.Infof("Verifying %s using %s", scope, opts.AgentConfig.Model)
-	result, err := ai.ExecuteStructured(context.Background(), ai.StructuredRequest{
-		Config:     *opts.AgentConfig,
-		Prompt:     prompt,
-		SchemaJSON: schema,
-		RepoPath:   opts.RepoPath,
+
+	provider, err := ai.NewProvider(*opts.AgentConfig)
+	if err != nil {
+		return VerifyResult{}, fmt.Errorf("build verify agent: %w", err)
+	}
+	req := captainai.Request{Prompt: api.Prompt{
+		User:       prompt,
+		SchemaJSON: json.RawMessage(schema),
 		Source:     "verify",
-	}, validateVerifyResult)
+	}}
+	req.SetCwd(opts.RepoPath)
+	resp, err := provider.Execute(context.Background(), req)
+	if err != nil {
+		return VerifyResult{}, fmt.Errorf("verify agent execution failed: %w", err)
+	}
+
+	// Providers that honor the schema natively return the JSON on StructuredData;
+	// cmux/text backends leave it on Text. Prefer the clean structured payload.
+	raw := resp.Text
+	if sd, ok := resp.StructuredData.(json.RawMessage); ok && len(sd) > 0 {
+		raw = string(sd)
+	}
+	result, err := captainai.ParseStructured(raw, validateVerifyResult)
 	if err != nil {
 		return VerifyResult{}, err
 	}
 	return *result, nil
-}
-
-// runAdapter executes the review with the legacy per-provider CLI adapters.
-func runAdapter(opts RunOptions, scope ReviewScope, cfg VerifyConfig, prompt string, criteria []string) (VerifyResult, error) {
-	adapter, model := ResolveAdapter(cfg.Model)
-	logger.Infof("Verifying %s using %s", scope, model)
-
-	schemaFile, err := SchemaFile(cfg.Checks, opts.Issue != nil, criteria)
-	if err != nil {
-		return VerifyResult{}, fmt.Errorf("failed to create schema file: %w", err)
-	}
-	defer os.Remove(schemaFile)
-
-	raw, err := Execute(adapter, prompt, model, schemaFile, opts.RepoPath, logger.V(2).Enabled())
-	if err != nil {
-		return VerifyResult{}, fmt.Errorf("CLI execution failed: %w", err)
-	}
-	adapter.PostExecute(raw)
-
-	result, err := adapter.ParseResponse(raw)
-	if err != nil {
-		return VerifyResult{}, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return result, nil
 }
 
 // resolveVerifyPrompt returns the verbatim PromptOverride when set, otherwise the
@@ -119,7 +123,7 @@ func resolveVerifyPrompt(opts RunOptions, scope ReviewScope, cfg VerifyConfig) (
 	if err != nil {
 		return "", err
 	}
-	return renderPrompt(template, scope, cfg, opts.Issue)
+	return renderPrompt(template, scope, cfg, opts.Issue, opts.RepoPath)
 }
 
 // PreviewPrompt renders the verify prompt for a run without executing it, so the
@@ -137,7 +141,7 @@ func PreviewPrompt(opts RunOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return renderPrompt(template, scope, cfg, opts.Issue)
+	return renderPrompt(template, scope, cfg, opts.Issue, opts.RepoPath)
 }
 
 // resolveRunScope targets the issue's commits when the run is issue-aware,

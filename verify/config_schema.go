@@ -42,6 +42,8 @@ func gavelConfigSchema() map[string]any {
 			"procfile": procfileSchema(),
 			"checks":   checksSchema(),
 			"todos":    todosSchema(),
+			"status":   statusSchema(),
+			"test":     testSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -184,6 +186,10 @@ func commitSchema() map[string]any {
 			"summaryPrompt": promptOverrideSchema(prompts.CommitSummary,
 				"Override the built-in prompt that names and summarises a group of commits "+
 					"(`gavel git analyze --summary`). Last-write-wins across layers."),
+			"groupingPrompt": promptOverrideSchema(prompts.CommitGrouping,
+				"Override the built-in AI commit-grouping prompt (`gavel commit -G`) that sorts "+
+					"uncommitted changes into logical commits. The output schema (groups[]+ignore[]) is "+
+					"fixed; the override changes only the instructions. Last-write-wins across layers."),
 			"prContentPrompt": promptOverrideSchema(prompts.PRContent,
 				"Override the built-in prompt that generates PR title, body, and branch name. "+
 					"Last-write-wins across layers."),
@@ -205,6 +211,34 @@ func todosSchema() map[string]any {
 			"verifyPrompt": promptOverrideSchema(prompts.TodosVerify,
 				"Override the verify reviewer template for TODO verification only; `gavel verify` "+
 					"keeps verify.promptTemplate. Last-write-wins across layers."),
+			"finalPrompt": promptOverrideSchema(prompts.TodosFinal,
+				"Override the resume-turn prompt that asks a finished/timed-out session to emit ONLY "+
+					"the final result JSON. The output schema is fixed in Go and is NOT overridable — the "+
+					"override changes only the framing. Last-write-wins across layers."),
+		},
+	)
+}
+
+func statusSchema() map[string]any {
+	return object(
+		"Settings for `gavel status`.",
+		map[string]any{
+			"summaryPrompt": promptOverrideSchema(prompts.StatusSummary,
+				"Override the built-in per-file AI summary prompt (`gavel status --ai`). Variable: "+
+					"{{details}} (staged/unstaged diff or file contents). The output schema ({summary}) is "+
+					"fixed. Last-write-wins across layers."),
+		},
+	)
+}
+
+func testSchema() map[string]any {
+	return object(
+		"Settings for `gavel test`.",
+		map[string]any{
+			"outlineSummaryPrompt": promptOverrideSchema(prompts.TestOutlineSummary,
+				"Override the built-in per-test AI summary prompt (`gavel test outline --ai-summary`). "+
+					"Variables: {{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is "+
+					"fixed. Last-write-wins across layers."),
 		},
 	)
 }
@@ -240,6 +274,11 @@ func checksSchema() map[string]any {
 				"Turn the loop on. Omitted leaves it off unless --check or a TODO's frontmatter enables it."),
 			"maxIterations": intWithDefault(
 				"Maximum agent re-runs before giving up.", types.DefaultMaxCheckIterations),
+			"retry": stringProp(
+				"CEL definition-of-done predicate: while it is true the agent re-runs with the failing " +
+					"nodes as feedback; when false the run is verified. Reads {results, test_results, " +
+					"changed_files, session_log, iteration} where results carries checklist " +
+					"([]{item, passed, message}). Default: " + types.DefaultRetryExpr),
 			"test": object(
 				"gavel test options for the check run. Omit to skip tests.",
 				map[string]any{

@@ -1,12 +1,13 @@
 package verify
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
+// evidenceSchema is the shared {file, line, message} evidence array used by
+// checks, ratings, and completeness. It is a Go primitive the schema.cel
+// `evidence_schema()` helper returns.
 func evidenceSchema() map[string]any {
 	return map[string]any{
 		"type": "array",
@@ -23,16 +24,19 @@ func evidenceSchema() map[string]any {
 	}
 }
 
-// BuildSchema builds the JSON output schema for a verification run. When
-// issueAware is set the schema requires an overall `implemented` verdict; when
-// criteria is additionally non-empty it requires an `acceptance_criteria` array
-// with one scored entry per stored criterion.
-func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, error) {
-	checkProps := make(map[string]any, len(checks))
+// checksObjectSchema builds the `checks` object schema: one boolean pass/fail
+// entry (with failure evidence) per enabled check, keyed by check ID. CEL cannot
+// build a map with runtime keys, so this is the Go primitive the schema.cel
+// `check_schema(checks)` helper returns. Each check map carries "id"+"description".
+func checksObjectSchema(checks []map[string]any) map[string]any {
+	props := make(map[string]any, len(checks))
+	ids := make([]string, 0, len(checks))
 	for _, c := range checks {
-		checkProps[c.ID] = map[string]any{
+		id, _ := c["id"].(string)
+		desc, _ := c["description"].(string)
+		props[id] = map[string]any{
 			"type":                 "object",
-			"description":          c.Description,
+			"description":          desc,
 			"required":             []string{"pass", "evidence"},
 			"additionalProperties": false,
 			"properties": map[string]any{
@@ -40,11 +44,24 @@ func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, er
 				"evidence": evidenceSchema(),
 			},
 		}
+		ids = append(ids, id)
 	}
+	return map[string]any{
+		"type":                 "object",
+		"description":          "Boolean pass/fail checks. Evaluate every check. Only include evidence for failures.",
+		"required":             ids,
+		"additionalProperties": false,
+		"properties":           props,
+	}
+}
 
-	ratingProps := make(map[string]any, len(RatingDimensions))
-	for _, dim := range RatingDimensions {
-		ratingProps[dim] = map[string]any{
+// ratingsObjectSchema builds the `ratings` object schema: a 0-100 score (with
+// findings) per rated dimension, keyed by dimension name. It backs the
+// schema.cel `rating_schema(rating_dimensions)` helper.
+func ratingsObjectSchema(dimensions []string) map[string]any {
+	props := make(map[string]any, len(dimensions))
+	for _, dim := range dimensions {
+		props[dim] = map[string]any{
 			"type":                 "object",
 			"required":             []string{"score", "findings"},
 			"additionalProperties": false,
@@ -54,111 +71,48 @@ func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, er
 			},
 		}
 	}
+	return map[string]any{
+		"type":                 "object",
+		"description":          "Rated dimensions (0-100). Include findings for scores below 80.",
+		"required":             dimensions,
+		"additionalProperties": false,
+		"properties":           props,
+	}
+}
 
-	properties := map[string]any{
-		"checks": map[string]any{
+// criteriaArraySchema builds the `acceptance_criteria` array schema: exactly one
+// scored verdict per criterion, in order, with the criteria enumerated in the
+// description so the prompt need not repeat them. It backs the schema.cel
+// `criteria_schema(criteria)` helper.
+func criteriaArraySchema(criteria []string) map[string]any {
+	var desc strings.Builder
+	desc.WriteString("One verdict per acceptance criterion below, in this exact order. ")
+	desc.WriteString("Echo the criterion text in `criteria`, set `pass` true only when the commits clearly satisfy it, and justify in `comments`:\n")
+	for i, c := range criteria {
+		fmt.Fprintf(&desc, "%d. %s\n", i+1, c)
+	}
+	return map[string]any{
+		"type":        "array",
+		"description": desc.String(),
+		"minItems":    len(criteria),
+		"maxItems":    len(criteria),
+		"items": map[string]any{
 			"type":                 "object",
-			"description":          "Boolean pass/fail checks. Evaluate every check. Only include evidence for failures.",
-			"required":             checkIDs(checks),
-			"additionalProperties": false,
-			"properties":           checkProps,
-		},
-		"ratings": map[string]any{
-			"type":                 "object",
-			"description":          "Rated dimensions (0-100). Include findings for scores below 80.",
-			"required":             RatingDimensions,
-			"additionalProperties": false,
-			"properties":           ratingProps,
-		},
-		"completeness": map[string]any{
-			"type":                 "object",
-			"description":          "Overall completeness assessment against the diff, issue, and extra instructions.",
-			"required":             []string{"pass", "summary", "evidence"},
+			"required":             []string{"criteria", "pass", "comments"},
 			"additionalProperties": false,
 			"properties": map[string]any{
+				"criteria": map[string]any{"type": "string"},
 				"pass":     map[string]any{"type": "boolean"},
-				"summary":  map[string]any{"type": "string"},
-				"evidence": evidenceSchema(),
+				"comments": map[string]any{"type": "string"},
 			},
 		},
 	}
-	required := []string{"checks", "ratings", "completeness"}
-
-	if issueAware {
-		properties["implemented"] = map[string]any{
-			"type":        "boolean",
-			"description": "True only if the commits fully and correctly implement the issue and every required acceptance criterion is met.",
-		}
-		required = append(required, "implemented")
-	}
-	if len(criteria) > 0 {
-		// Generate the acceptance-criteria schema FROM the criteria so the prompt
-		// doesn't have to enumerate them: one array entry per criterion, in this
-		// exact order, each {criteria, pass, comments}.
-		var desc strings.Builder
-		desc.WriteString("One verdict per acceptance criterion below, in this exact order. ")
-		desc.WriteString("Echo the criterion text in `criteria`, set `pass` true only when the commits clearly satisfy it, and justify in `comments`:\n")
-		for i, c := range criteria {
-			fmt.Fprintf(&desc, "%d. %s\n", i+1, c)
-		}
-		properties["acceptance_criteria"] = map[string]any{
-			"type":        "array",
-			"description": desc.String(),
-			"minItems":    len(criteria),
-			"maxItems":    len(criteria),
-			"items": map[string]any{
-				"type":                 "object",
-				"required":             []string{"criteria", "pass", "comments"},
-				"additionalProperties": false,
-				"properties": map[string]any{
-					"criteria": map[string]any{"type": "string"},
-					"pass":     map[string]any{"type": "boolean"},
-					"comments": map[string]any{"type": "string"},
-				},
-			},
-		}
-		required = append(required, "acceptance_criteria")
-	}
-
-	schema := map[string]any{
-		"$schema":              "https://json-schema.org/draft/2020-12/schema",
-		"type":                 "object",
-		"description":          "Code review result with boolean checks, rated dimensions, and completeness assessment. Rating rubric: 0-39 critical, 40-59 significant, 60-79 minor, 80-100 good.",
-		"required":             required,
-		"additionalProperties": false,
-		"properties":           properties,
-	}
-
-	b, err := json.MarshalIndent(schema, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
-func checkIDs(checks []Check) []string {
-	ids := make([]string, len(checks))
-	for i, c := range checks {
-		ids[i] = c.ID
-	}
-	return ids
-}
-
-func SchemaFile(cfg ChecksConfig, issueAware bool, criteria []string) (string, error) {
-	schema, err := BuildSchema(EnabledChecks(cfg), issueAware, criteria)
-	if err != nil {
-		return "", err
-	}
-
-	f, err := os.CreateTemp("", "gavel-schema-*.json")
-	if err != nil {
-		return "", err
-	}
-	if _, err := f.WriteString(schema); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
-	}
-	f.Close()
-	return f.Name(), nil
+// BuildSchema returns the JSON output schema for a verification run by evaluating
+// the default schema.cel expression. The schema is defined declaratively in CEL
+// (see schema.cel / DefaultSchemaCEL); this is a convenience wrapper for callers
+// that use the built-in schema with no per-fixture override.
+func BuildSchema(checks []Check, issueAware bool, criteria []string) (string, error) {
+	return EvalSchema("", checks, issueAware, criteria)
 }

@@ -1,0 +1,39 @@
+// Default verify output schema, expressed declaratively. The dynamic-keyed
+// checks/ratings objects and the evidence/criteria fragments come from Go helper
+// functions (CEL cannot build maps with runtime keys); the overall shape lives
+// here and can be overridden per fixture via the AI-step `schema.cel` frontmatter.
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Code review result with boolean checks, rated dimensions, and completeness assessment. Rating rubric: 0-39 critical, 40-59 significant, 60-79 minor, 80-100 good.",
+  "required": issue_aware
+    ? ["checks", "ratings", "completeness", "implemented", "acceptance_criteria"]
+    : ["checks", "ratings", "completeness"],
+  "properties": merge(
+    {
+      "checks": check_schema(checks),
+      "ratings": rating_schema(rating_dimensions),
+      "completeness": {
+        "type": "object",
+        "description": "Overall completeness assessment against the diff, issue, and extra instructions.",
+        "required": ["pass", "summary", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "pass": {"type": "boolean"},
+          "summary": {"type": "string"},
+          "evidence": evidence_schema()
+        }
+      }
+    },
+    issue_aware
+      ? {
+          "implemented": {
+            "type": "boolean",
+            "description": "True only if the commits fully and correctly implement the issue and every required acceptance criterion is met."
+          },
+          "acceptance_criteria": criteria_schema(criteria)
+        }
+      : {}
+  )
+}

@@ -212,14 +212,16 @@ type CommitConfig struct {
 	Lint          CommitLintConfig    `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Tidy          CommitTidyConfig    `yaml:"tidy,omitempty" json:"tidy,omitempty"`
 	// MessagePrompt, FunctionalityRemovedPrompt, CompatibilityPrompt, SummaryPrompt,
-	// and PRContentPrompt override the built-in AI prompt templates for
-	// commit-message generation, the compatibility analysis, commit-grouping
-	// summaries (`gavel git analyze --summary`), and PR title/body generation
-	// (inline or a file reference). Empty uses the default.
+	// GroupingPrompt, and PRContentPrompt override the built-in AI prompt templates
+	// for commit-message generation, the compatibility analysis, commit-grouping
+	// summaries (`gavel git analyze --summary`), AI commit grouping (`gavel commit
+	// -G`), and PR title/body generation (inline or a file reference). Empty uses
+	// the default.
 	MessagePrompt              PromptOverride `yaml:"messagePrompt,omitempty" json:"messagePrompt,omitempty"`
 	FunctionalityRemovedPrompt PromptOverride `yaml:"functionalityRemovedPrompt,omitempty" json:"functionalityRemovedPrompt,omitempty"`
 	CompatibilityPrompt        PromptOverride `yaml:"compatibilityPrompt,omitempty" json:"compatibilityPrompt,omitempty"`
 	SummaryPrompt              PromptOverride `yaml:"summaryPrompt,omitempty" json:"summaryPrompt,omitempty"`
+	GroupingPrompt             PromptOverride `yaml:"groupingPrompt,omitempty" json:"groupingPrompt,omitempty"`
 	PRContentPrompt            PromptOverride `yaml:"prContentPrompt,omitempty" json:"prContentPrompt,omitempty"`
 }
 
@@ -309,6 +311,23 @@ type GavelConfig struct {
 	// (`gavel todos run --check`). A TODO's frontmatter `checks:` overrides it.
 	Checks types.AgentChecksConfig `yaml:"checks,omitempty" json:"checks,omitempty"`
 	Todos  TodosConfig             `yaml:"todos,omitempty" json:"todos,omitempty"`
+	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
+	Test   TestConfig              `yaml:"test,omitempty" json:"test,omitempty"`
+}
+
+// StatusConfig configures `gavel status`.
+type StatusConfig struct {
+	// SummaryPrompt overrides the built-in per-file AI summary prompt used by
+	// `gavel status --ai`. Empty uses the embedded default. See prompts.StatusSummary.
+	SummaryPrompt PromptOverride `yaml:"summaryPrompt,omitempty" json:"summaryPrompt,omitempty"`
+}
+
+// TestConfig configures `gavel test`.
+type TestConfig struct {
+	// OutlineSummaryPrompt overrides the built-in per-test AI summary prompt used
+	// by `gavel test outline --ai-summary`. Empty uses the embedded default. See
+	// prompts.TestOutlineSummary.
+	OutlineSummaryPrompt PromptOverride `yaml:"outlineSummaryPrompt,omitempty" json:"outlineSummaryPrompt,omitempty"`
 }
 
 // TodosConfig configures `gavel todos run`.
@@ -322,6 +341,11 @@ type TodosConfig struct {
 	// VerifyPrompt overrides the verify template for TODO verification only
 	// (`gavel verify` keeps verify.promptTemplate). See prompts.TodosVerify.
 	VerifyPrompt PromptOverride `yaml:"verifyPrompt,omitempty" json:"verifyPrompt,omitempty"`
+	// FinalPrompt overrides the resume-turn template that asks a finished/timed-out
+	// session to emit ONLY the final result JSON. The output schema is force-applied
+	// in Go and is NOT overridable here — an override changes only the framing text.
+	// See prompts.TodosFinal.
+	FinalPrompt PromptOverride `yaml:"finalPrompt,omitempty" json:"finalPrompt,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -528,6 +552,24 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
 	base.Checks = base.Checks.Overlay(&override.Checks)
 	base.Todos = MergeTodosConfig(base.Todos, override.Todos)
+	base.Status = MergeStatusConfig(base.Status, override.Status)
+	base.Test = MergeTestConfig(base.Test, override.Test)
+	return base
+}
+
+// MergeStatusConfig merges override onto base: a set prompt override wins.
+func MergeStatusConfig(base, override StatusConfig) StatusConfig {
+	if !override.SummaryPrompt.IsZero() {
+		base.SummaryPrompt = override.SummaryPrompt
+	}
+	return base
+}
+
+// MergeTestConfig merges override onto base: a set prompt override wins.
+func MergeTestConfig(base, override TestConfig) TestConfig {
+	if !override.OutlineSummaryPrompt.IsZero() {
+		base.OutlineSummaryPrompt = override.OutlineSummaryPrompt
+	}
 	return base
 }
 
@@ -541,6 +583,9 @@ func MergeTodosConfig(base, override TodosConfig) TodosConfig {
 	}
 	if !override.VerifyPrompt.IsZero() {
 		base.VerifyPrompt = override.VerifyPrompt
+	}
+	if !override.FinalPrompt.IsZero() {
+		base.FinalPrompt = override.FinalPrompt
 	}
 	return base
 }
@@ -719,6 +764,9 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	}
 	if !override.SummaryPrompt.IsZero() {
 		base.SummaryPrompt = override.SummaryPrompt
+	}
+	if !override.GroupingPrompt.IsZero() {
+		base.GroupingPrompt = override.GroupingPrompt
 	}
 	if !override.PRContentPrompt.IsZero() {
 		base.PRContentPrompt = override.PRContentPrompt

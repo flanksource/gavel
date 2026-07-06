@@ -14,14 +14,22 @@ var verifyPromptTemplate string
 // renderPrompt builds the reviewer prompt from template. The checks, rating
 // dimensions, and acceptance criteria are carried by the JSON output schema (see
 // BuildSchema), so the template only needs the scope instruction and issue
-// context — keeping it simple enough for dotprompt (no eq/index/range logic).
-// template is the embedded default or a cfg.PromptTemplate override.
-func renderPrompt(template string, scope ReviewScope, cfg VerifyConfig, issue *IssueContext) (string, error) {
+// context. A verify prompt is white-box or black-box by which variables it
+// references, not by a mode flag:
+//   - {{sessionId}} (white-box) — the implementation session to inspect;
+//   - {{changedFiles}} / {{worktree}} (black-box) — the final worktree state,
+//     computed lazily from workDir only when referenced so a cheap non-agentic
+//     model can verify without agent tools.
+//
+// template is the embedded default or a cfg.PromptTemplate override; workDir is
+// the repo the review targets.
+func renderPrompt(template string, scope ReviewScope, cfg VerifyConfig, issue *IssueContext, workDir string) (string, error) {
 	data := map[string]any{
 		"scopeInstruction": scopeInstruction(scope),
 		"extraPrompt":      cfg.Prompt,
 	}
 	if issue != nil {
+		data["sessionId"] = issue.SessionID
 		im := map[string]any{
 			"title":       issue.Title,
 			"description": issue.Description,
@@ -35,6 +43,15 @@ func renderPrompt(template string, scope ReviewScope, cfg VerifyConfig, issue *I
 			im["comments"] = comments
 		}
 		data["issue"] = im
+	}
+
+	if templateWants(template, "changedFiles") || templateWants(template, "worktree") {
+		files, worktree, err := worktreeChanges(workDir)
+		if err != nil {
+			return "", fmt.Errorf("render verify prompt: %w", err)
+		}
+		data["changedFiles"] = strings.Join(files, "\n")
+		data["worktree"] = worktree
 	}
 
 	req, _, err := prompt.Load(template).Render(data, nil)
