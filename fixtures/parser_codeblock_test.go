@@ -138,6 +138,12 @@ func TestShouldExecuteCodeBlock(t *testing.T) {
 			expected:   true,
 		},
 		{
+			name:       "exec in list",
+			language:   "exec",
+			codeBlocks: []string{"exec"},
+			expected:   true,
+		},
+		{
 			name:       "empty language",
 			language:   "",
 			codeBlocks: []string{"bash"},
@@ -157,4 +163,45 @@ func TestShouldExecuteCodeBlock(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestParseExecutableFenceConfigObject(t *testing.T) {
+	tree, err := ParseMarkdownContentWithTree("suite.md", `# Exec
+
+`+"```exec"+`
+content: |
+  echo ok
+exitCode: 0
+cel: stdout.contains("ok")
+properties:
+  target: api
+`+"```"+`
+`, ".", &FrontMatter{})
+	assert.NoError(t, err)
+
+	test := firstFixtureTest(tree)
+	if assert.NotNil(t, test) {
+		assert.Equal(t, "bash", test.Exec)
+		assert.Equal(t, []string{"-c", "echo ok\n"}, test.Args)
+		if assert.NotNil(t, test.Expected.ExitCode) {
+			assert.Equal(t, 0, *test.Expected.ExitCode)
+		}
+		assert.Equal(t, `stdout.contains("ok")`, test.Expected.CEL)
+		assert.Equal(t, "api", test.Expected.Properties["target"])
+	}
+}
+
+func firstFixtureTest(node *FixtureNode) *FixtureTest {
+	if node == nil {
+		return nil
+	}
+	if node.Test != nil {
+		return node.Test
+	}
+	for _, child := range node.Children {
+		if found := firstFixtureTest(child); found != nil {
+			return found
+		}
+	}
+	return nil
 }

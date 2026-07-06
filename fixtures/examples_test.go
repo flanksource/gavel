@@ -27,7 +27,7 @@ func TestExampleFixturesParse(t *testing.T) {
 		"precommit.fixture.md":   {test: true, lint: true},
 		"pre-release.fixture.md": {test: true, lint: true},
 		"smoke-test.fixture.md":  {test: true},
-		"ai-review.fixture.md":   {ai: true},
+		"ai-review.fixture.md":   {test: true, lint: true, ai: true},
 	}
 
 	seen := map[string]bool{}

@@ -3,6 +3,7 @@ package fixtures
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/goccy/go-yaml"
@@ -23,6 +24,27 @@ type commandBlockBuilder struct {
 	validations []string
 	isComplete  bool
 	origin      *FixtureOrigin
+	config      *executableFenceConfig
+}
+
+type executableFenceConfig struct {
+	Content    string                 `yaml:"content"`
+	CWD        string                 `yaml:"cwd"`
+	Env        map[string]any         `yaml:"env"`
+	Terminal   string                 `yaml:"terminal"`
+	OS         string                 `yaml:"os"`
+	Arch       string                 `yaml:"arch"`
+	Skip       string                 `yaml:"skip"`
+	ExitCode   *int                   `yaml:"exitCode"`
+	Stdout     string                 `yaml:"stdout"`
+	Stderr     string                 `yaml:"stderr"`
+	Error      string                 `yaml:"error"`
+	Format     string                 `yaml:"format"`
+	Count      *int                   `yaml:"count"`
+	Output     string                 `yaml:"output"`
+	Timeout    string                 `yaml:"timeout"`
+	CEL        string                 `yaml:"cel"`
+	Properties map[string]interface{} `yaml:"properties"`
 }
 
 // parseMarkdownWithGoldmarkTree parses markdown content using goldmark AST parser and returns a tree structure
@@ -197,6 +219,10 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 				if shouldExecuteCodeBlock(lang, allowedBlocks) {
 					currentCommand.language = lang
 					currentCommand.content = codeContent
+					if cfg, ok := parseExecutableFenceConfig(codeContent); ok {
+						currentCommand.content = cfg.Content
+						currentCommand.config = &cfg
+					}
 				} else if strings.ToLower(lang) == "frontmatter" || strings.ToLower(lang) == "yaml" {
 					// Always parse frontmatter/yaml blocks regardless of codeBlocks filter
 					currentCommand.frontmatter = codeContent
@@ -236,6 +262,10 @@ func parseMarkdownWithGoldmarkTree(content string, frontMatter *FrontMatter, sou
 						SectionPath: currentSection.GetSectionPath(),
 						Line:        nodeStartLine(node, source),
 					},
+				}
+				if cfg, ok := parseExecutableFenceConfig(codeContent); ok {
+					standaloneCodeBlock.content = cfg.Content
+					standaloneCodeBlock.config = &cfg
 				}
 
 			} else if !inCommandBlock && standaloneCodeBlock != nil {
@@ -435,6 +465,9 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 	}
 
 	switch cmd.language {
+	case "exec":
+		exec.Exec = "bash"
+		exec.Args = []string{"-c", cmd.content}
 	case "bash", "sh":
 		exec.Args = []string{"-c", cmd.content}
 	case "shell":
@@ -506,6 +539,10 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		}
 	}
 
+	if cmd.config != nil {
+		applyExecutableFenceConfig(&fixture, *cmd.config)
+	}
+
 	// Apply file-level frontmatter if present
 	if frontMatter != nil {
 		// Assign the entire frontmatter to preserve metadata
@@ -524,10 +561,17 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 
 	// Combine validations into CEL expression
 	if len(cmd.validations) > 0 {
+		existingCEL := fixture.Expected.CEL
+		nextCEL := ""
 		if len(cmd.validations) == 1 {
-			fixture.Expected.CEL = cmd.validations[0]
+			nextCEL = cmd.validations[0]
 		} else {
-			fixture.Expected.CEL = strings.Join(cmd.validations, " && ")
+			nextCEL = strings.Join(cmd.validations, " && ")
+		}
+		if existingCEL != "" {
+			fixture.Expected.CEL = existingCEL + " && " + nextCEL
+		} else {
+			fixture.Expected.CEL = nextCEL
 		}
 	}
 
@@ -537,6 +581,70 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 		Type:   TestNode,
 		Test:   &fixture,
 		Origin: cmd.origin,
+	}
+}
+
+func parseExecutableFenceConfig(content string) (executableFenceConfig, bool) {
+	var cfg executableFenceConfig
+	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
+		return executableFenceConfig{}, false
+	}
+	if strings.TrimSpace(cfg.Content) == "" {
+		return executableFenceConfig{}, false
+	}
+	return cfg, true
+}
+
+func applyExecutableFenceConfig(fixture *FixtureTest, cfg executableFenceConfig) {
+	if cfg.CWD != "" {
+		fixture.CWD = cfg.CWD
+	}
+	if cfg.Env != nil {
+		fixture.Env = cfg.Env
+	}
+	if cfg.Terminal != "" {
+		fixture.Terminal = cfg.Terminal
+	}
+	if cfg.OS != "" {
+		fixture.TestOS = cfg.OS
+	}
+	if cfg.Arch != "" {
+		fixture.TestArch = cfg.Arch
+	}
+	if cfg.Skip != "" {
+		fixture.TestSkip = cfg.Skip
+	}
+	if cfg.ExitCode != nil {
+		fixture.Expected.ExitCode = cfg.ExitCode
+	}
+	if cfg.Stdout != "" {
+		fixture.Expected.Stdout = cfg.Stdout
+	}
+	if cfg.Stderr != "" {
+		fixture.Expected.Stderr = cfg.Stderr
+	}
+	if cfg.Error != "" {
+		fixture.Expected.Error = cfg.Error
+	}
+	if cfg.Format != "" {
+		fixture.Expected.Format = cfg.Format
+	}
+	if cfg.Count != nil {
+		fixture.Expected.Count = cfg.Count
+	}
+	if cfg.Output != "" {
+		fixture.Expected.Output = cfg.Output
+	}
+	if cfg.CEL != "" {
+		fixture.Expected.CEL = cfg.CEL
+	}
+	if cfg.Timeout != "" {
+		if timeout, err := time.ParseDuration(cfg.Timeout); err == nil {
+			fixture.Expected.Timeout = &timeout
+		}
+	}
+	if cfg.Properties != nil {
+		fixture.Expected.Properties = cfg.Properties
 	}
 }
 

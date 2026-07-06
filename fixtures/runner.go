@@ -96,6 +96,11 @@ func (r *Runner) Run() (*FixtureNode, error) {
 	return r.tree, nil
 }
 
+// Parse builds the fixture tree without executing any fixture work.
+func (r *Runner) Parse() (*FixtureNode, error) {
+	return r.prepareFixtureTree()
+}
+
 func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
 		return nil, fmt.Errorf("failed to parse fixture files: %w", err)

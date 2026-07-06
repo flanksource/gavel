@@ -76,7 +76,7 @@ func getCodeBlocksOrDefault(frontMatter *FrontMatter) []string {
 
 // isExecutableLanguage returns true if the language is an executable language
 // that can be used for standalone code blocks (without "command:" prefix).
-// Supported languages: bash, shell, sh, python, py, typescript, ts, go
+// Supported languages: exec, bash, shell, sh, python, py, typescript, ts, go
 func isExecutableLanguage(language string) bool {
 	if language == "" {
 		return false
@@ -84,7 +84,7 @@ func isExecutableLanguage(language string) bool {
 
 	langLower := strings.ToLower(language)
 	switch langLower {
-	case "bash", "shell", "sh":
+	case "exec", "bash", "shell", "sh":
 		return true
 	case "python", "py":
 		return true

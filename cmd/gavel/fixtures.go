@@ -18,14 +18,22 @@ var (
 	fixturesShowPassed   bool
 	fixturesShowStdout   string
 	fixturesShowStderr   string
+	fixturesSchema       bool
 )
 
 var fixturesCmd = &cobra.Command{
 	Use:          "fixtures [fixture-files...]",
 	Short:        "Run fixture-based tests from markdown tables and command blocks",
-	Args:         cobra.MinimumNArgs(1),
+	Args:         fixturesArgs,
 	RunE:         runFixtures,
 	SilenceUsage: true,
+}
+
+func fixturesArgs(cmd *cobra.Command, args []string) error {
+	if fixturesSchema {
+		return nil
+	}
+	return cobra.MinimumNArgs(1)(cmd, args)
 }
 
 func fixturesHelp(cmd *cobra.Command) api.Text {
@@ -298,6 +306,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  gavel fixtures -vv tests.md")).Add(dim("              # Also show commands")).NewLine().
 		Add(code("  gavel fixtures -vvv tests.md")).Add(dim("             # Also show stdout/stderr")).NewLine().
 		Add(code("  gavel fixtures --no-progress tests.md")).Add(dim("    # Disable progress display")).NewLine().
+		Add(code("  gavel fixtures outline tests.md")).Add(dim("          # Parse and outline without running fixtures")).NewLine().
 		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
 		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 
@@ -305,6 +314,10 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 }
 
 func runFixtures(cmd *cobra.Command, args []string) error {
+	if fixturesSchema {
+		return writeFixturesSchema(os.Stdout)
+	}
+
 	wd, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -356,5 +369,6 @@ func init() {
 		"When to show stdout: Never, OnFailure, Always")
 	fixturesCmd.Flags().StringVar(&fixturesShowStderr, "show-stderr", string(fixtures.OutputOnFailure),
 		"When to show stderr: Never, OnFailure, Always")
+	fixturesCmd.Flags().BoolVar(&fixturesSchema, "schema", false, "Print fixture editor JSON schemas and exit")
 	rootCmd.AddCommand(fixturesCmd)
 }

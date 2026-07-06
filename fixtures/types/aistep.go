@@ -62,6 +62,9 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 		PromptOverride: fixture.AIStep.Prompt,
 		Issue:          buildAIStepIssue(fixture),
 	}
+	if fm.AI != nil {
+		runOpts.SchemaCEL = fm.AI.SchemaCEL
+	}
 	if fm.Verify != nil && fm.Verify.Scope != "" {
 		runOpts.Args = []string{fm.Verify.Scope}
 	}

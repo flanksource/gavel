@@ -40,6 +40,10 @@ type FixtureAIConfig struct {
 	MaxConcurrent int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
 	CacheTTL      time.Duration `yaml:"cacheTTL,omitempty" json:"cacheTTL,omitempty"`
 	NoCache       bool          `yaml:"noCache,omitempty" json:"noCache,omitempty"`
+	// SchemaCEL is a CEL expression (the `schema.cel` key) that generates the JSON
+	// output schema from the parsed fixture outline (criteria, checks,
+	// rating_dimensions, issue_aware). Empty uses verify.DefaultSchemaCEL.
+	SchemaCEL string `yaml:"schema.cel,omitempty" json:"schema.cel,omitempty"`
 }
 
 // ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig, falling back
