@@ -1,3 +1,16 @@
+---
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [functionalityRemoved]
+    properties:
+      functionalityRemoved:
+        type: array
+        description: "User-visible functionality removed by this diff; empty when nothing is removed"
+        items:
+          type: string
+---
 You are reviewing a git diff for user-visible removals. Return structured output describing functionality removed by this change.
 
 DIFF INPUT:

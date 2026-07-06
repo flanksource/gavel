@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -319,7 +320,7 @@ func TestGatherWithAIFileSummaries(t *testing.T) {
 	gitRun(t, repo, "add", "staged.go")
 
 	prev := summarizeFileChangeWithAIFunc
-	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus, _ string) (string, error) {
 		return "add helper function", nil
 	}
 	t.Cleanup(func() {
@@ -354,7 +355,7 @@ func TestSummarizeFileChangeWithAISendsDiffOnlyPrompt(t *testing.T) {
 		State: StateStaged,
 		Adds:  3,
 		Dels:  1,
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, "tighten handler flow", summary)
 	assert.Contains(t, agent.prompt, "Staged diff:")
@@ -367,7 +368,7 @@ func TestSummarizeFileChangeWithAISendsDiffOnlyPrompt(t *testing.T) {
 
 func TestStreamAISummariesPreservesFileOrdering(t *testing.T) {
 	prev := summarizeFileChangeWithAIFunc
-	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus) (string, error) {
+	summarizeFileChangeWithAIFunc = func(_ context.Context, _ string, _ clickyai.Agent, file FileStatus, _ string) (string, error) {
 		switch file.Path {
 		case "slow.go":
 			time.Sleep(40 * time.Millisecond)
@@ -391,7 +392,7 @@ func TestStreamAISummariesPreservesFileOrdering(t *testing.T) {
 	result.PrepareAISummaries()
 
 	var running int
-	for update := range StreamAISummaries(context.Background(), "", stubStatusAgent{}, result.Files, 2) {
+	for update := range StreamAISummaries(context.Background(), "", stubStatusAgent{}, result.Files, 2, "") {
 		if update.Status == AISummaryStatusRunning {
 			running++
 		}
@@ -749,10 +750,7 @@ func (a *capturePromptAgent) GetConfig() clickyai.AgentConfig {
 func (a *capturePromptAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
 func (a *capturePromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	a.prompt = req.Prompt
-	if schema, ok := req.StructuredOutput.(*fileSummarySchema); ok {
-		schema.Summary = "tighten handler flow"
-	}
-	return &clickyai.PromptResponse{}, nil
+	return &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"summary":"tighten handler flow"}`)}, nil
 }
 func (a *capturePromptAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
 	return nil, nil

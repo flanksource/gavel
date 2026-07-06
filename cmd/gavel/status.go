@@ -149,7 +149,11 @@ func runStatus(opts StatusOptions) (any, error) {
 	clickytask.SetLiveRenderer(renderer)
 	defer clickytask.SetLiveRenderer(nil)
 
-	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers)
+	summaryPrompt, err := status.ResolveSummaryPrompt(workDir)
+	if err != nil {
+		return nil, err
+	}
+	updates := status.StreamAISummaries(ctx, workDir, agent, result.Files, gatherOpts.AIMaxWorkers, summaryPrompt)
 	for update := range updates {
 		renderer.Apply(update)
 	}

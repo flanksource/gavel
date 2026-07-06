@@ -36,3 +36,26 @@ lines, and prefer actionable feedback over style nits.
 - [ ] User-facing behavior changes are reflected in the README / docs
 
 - cel: json.score >= 80
+
+
+
+## Lint
+
+```yaml lint
+linters: [golangci-lint]
+files: [./examples/sample-app]
+```
+
+## Test
+
+```yaml test
+paths: [./examples/sample-app]
+framework: [go]
+test-timeout: 2m
+```
+
+## Formatting is clean
+
+```bash
+test -z "$(gofmt -l "$GIT_ROOT_DIR/examples/sample-app")"
+```

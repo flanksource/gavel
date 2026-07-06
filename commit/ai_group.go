@@ -2,15 +2,26 @@ package commit
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 )
+
+//go:embed commit-grouping.prompt
+var groupingPromptTemplate string
+
+// groupingPromptFile is reported as PromptRequest.Source so the AI logging
+// middleware identifies the template under -v.
+const groupingPromptFile = "commit-grouping.prompt"
 
 // groupChangesByAIFunc is the seam tests stub to exercise the --ai-group flow
 // without an LLM. It mirrors analyzeCommitMessageWithAIFunc in commit.go.
@@ -27,10 +38,6 @@ const (
 	// scopeGeneralFallback labels changes absent from the gathered status (e.g.
 	// filtered out) so every path still appears in the grouping table.
 	scopeGeneralFallback = "general"
-
-	// maxGroupingAttempts bounds the grouping prompt calls: one base attempt plus
-	// up to two consolidation feedback rounds when the LLM exceeds MaxCommits.
-	maxGroupingAttempts = 3
 )
 
 // aiGroup is one logical commit the LLM proposes.
@@ -55,31 +62,22 @@ type groupingRow struct {
 	Dels   int    `json:"dels" pretty:"label=-Dels"`
 }
 
-// buildGroupingPrompt assembles the grouping instructions around the rendered
-// status table. The scope guidance and commit cap are parameterized: GroupByScope
-// promotes scope to the primary commit boundary, otherwise scope is just a hint
-// column; maxCommits is stated as a soft limit the LLM should consolidate toward.
-func buildGroupingPrompt(table string, maxCommits int, groupByScope bool) string {
-	var b strings.Builder
-	b.WriteString("You are organizing a set of uncommitted changes into clean, logical git commits.\n\n")
-	b.WriteString("The changed files are listed below with their code scope (derived from the repository map), git status, and +added/-deleted line counts.\n\n")
-	b.WriteString(table)
-	b.WriteString("\nProduce the final commit grouping. Rules:\n")
-	b.WriteString("- Each group MUST represent a single high-level change — one feature, one fix, or one refactor. NEVER put unrelated changes in the same group.\n")
-	if groupByScope {
-		b.WriteString("- Treat each scope as the primary boundary: prefer keeping a scope's files together as one commit, splitting a scope only when it clearly contains unrelated features.\n")
-	} else {
-		b.WriteString("- Group by logical change, one feature/fix/refactor per commit. The Scope column is a hint, not a hard boundary — split or merge across scopes as the change intent dictates.\n")
+// renderGroupingPrompt renders the grouping template around the status table and
+// returns the user prompt, the JSON output schema (with the runtime MaxCommits cap
+// baked in as maxItems on the groups array), and the SchemaStrictness policy — all
+// declared in the .prompt frontmatter. GroupByScope and maxCommits drive the
+// Handlebars conditionals in both the body and the frontmatter schema.
+func renderGroupingPrompt(template, table string, maxCommits int, groupByScope bool) (string, json.RawMessage, api.SchemaStrictness, error) {
+	data := map[string]any{
+		"table":        table,
+		"maxCommits":   maxCommits,
+		"groupByScope": groupByScope,
 	}
-	if maxCommits > 0 {
-		fmt.Fprintf(&b, "- Produce at most %d commits (the chore commit for lock/generated files does NOT count toward this limit). If there are more logical groups, merge the smallest related ones until you are within the limit.\n", maxCommits)
+	req, _, err := dotprompt.Load(template).Render(data, nil)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("render grouping prompt: %w", err)
 	}
-	b.WriteString("- Keep a test file in the same group as the feature it tests.\n")
-	b.WriteString("- Every changed file MUST appear in exactly one group's \"files\" or in \"ignore\".\n")
-	b.WriteString("- Put lock files, build artifacts, generated bundles, and vendored output in \"ignore\" — they are committed separately as a chore commit and never analyzed.\n")
-	b.WriteString("- Use repo-relative paths exactly as shown above (for renames, use the new path).\n")
-	b.WriteString("- Give each group a short conventional-commit-style label describing its intent.")
-	return b.String()
+	return req.Prompt.User, req.Prompt.SchemaJSON, req.Prompt.SchemaStrictness, nil
 }
 
 // buildStatusTable renders the staged changes as a markdown table (gavel status'
@@ -141,10 +139,12 @@ func sortGroupingRows(rows []groupingRow, groupByScope bool) {
 }
 
 // groupChangesByAI splits the staged changes into logical commit groups plus an
-// ignore list: it renders a gavel-status table, asks the LLM to group it, enforces
-// the MaxCommits cap via a consolidation feedback loop, then maps the response back
-// onto the staged changes via assembleGroups. It builds its own agent (like
-// generateCommitAnalysis) so the grouping seam can be stubbed in tests without an LLM.
+// ignore list: it renders a gavel-status table, asks the LLM to group it, then maps
+// the response back onto the staged changes via assembleGroups. The MaxCommits cap
+// is declared as maxItems on the groups array in the .prompt output schema and
+// enforced by captain's schemaStrictness=retry policy (one fix-up re-ask, then a
+// hard error). It builds its own agent (like generateCommitAnalysis) so the
+// grouping seam can be stubbed in tests without an LLM.
 func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([]commitGroup, error) {
 	table, err := buildStatusTable(opts.WorkDir, source.Changes, opts.GroupByScope)
 	if err != nil {
@@ -156,75 +156,36 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 		return nil, err
 	}
 
-	basePrompt := buildGroupingPrompt(table, opts.MaxCommits, opts.GroupByScope)
-	prompting.Prepare()
-
-	exec := func(feedback string) (aiGroupingSchema, error) {
-		prompt := basePrompt
-		if feedback != "" {
-			prompt = basePrompt + "\n\n" + feedback
-		}
-		schema := &aiGroupingSchema{}
-		resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
-			Name:             "commit grouping",
-			Source:           "<commit-grouping>",
-			Prompt:           prompt,
-			StructuredOutput: schema,
-		})
-		if err != nil {
-			return aiGroupingSchema{}, fmt.Errorf("execute AI grouping prompt: %w", err)
-		}
-		if resp.Error != "" {
-			return aiGroupingSchema{}, fmt.Errorf("AI grouping prompt returned error: %s", resp.Error)
-		}
-		return *schema, nil
+	template, err := opts.Config.GroupingPrompt.Resolve(opts.WorkDir, groupingPromptTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("resolve commit.groupingPrompt override: %w", err)
 	}
 
-	schema, err := groupWithMaxCommits(opts.MaxCommits, exec)
+	prompting.Prepare()
+
+	promptText, schemaJSON, strictness, err := renderGroupingPrompt(template, table, opts.MaxCommits, opts.GroupByScope)
 	if err != nil {
 		return nil, err
 	}
+	resp, err := agent.ExecutePrompt(ctx, clickyai.PromptRequest{
+		Name:             "commit grouping",
+		Source:           groupingPromptFile,
+		Prompt:           promptText,
+		SchemaJSON:       schemaJSON,
+		SchemaStrictness: strictness,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("execute AI grouping prompt: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("AI grouping prompt returned error: %s", resp.Error)
+	}
+	var schema aiGroupingSchema
+	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
+		return nil, fmt.Errorf("decode AI grouping response: %w", err)
+	}
 
 	return assembleGroups(source.Changes, schema), nil
-}
-
-// groupWithMaxCommits runs the grouping prompt then re-runs it with a consolidation
-// feedback prompt while the (non-chore) group count exceeds maxCommits, up to
-// maxGroupingAttempts. The chore/ignore commit does not count toward the limit. If
-// the LLM still overshoots after the bounded retries the last grouping is returned
-// and a warning is logged — never silently merged or dropped (CW-2).
-func groupWithMaxCommits(maxCommits int, exec func(feedback string) (aiGroupingSchema, error)) (aiGroupingSchema, error) {
-	schema, err := exec("")
-	if err != nil {
-		return aiGroupingSchema{}, err
-	}
-
-	for attempt := 1; attempt < maxGroupingAttempts && maxCommits > 0 && len(schema.Groups) > maxCommits; attempt++ {
-		next, err := exec(buildConsolidationFeedback(schema, maxCommits))
-		if err != nil {
-			return aiGroupingSchema{}, err
-		}
-		schema = next
-	}
-
-	if maxCommits > 0 && len(schema.Groups) > maxCommits {
-		logger.Warnf("ai-group: LLM returned %d commits after %d attempts; limit is %d. Committing as-is.",
-			len(schema.Groups), maxGroupingAttempts, maxCommits)
-	}
-	return schema, nil
-}
-
-// buildConsolidationFeedback asks the LLM to merge its previous grouping down to
-// the commit limit, echoing the prior groups so it can decide what to combine.
-func buildConsolidationFeedback(schema aiGroupingSchema, maxCommits int) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Your previous grouping produced %d commits, but the limit is %d. ", len(schema.Groups), maxCommits)
-	fmt.Fprintf(&b, "Consolidate by merging the smallest, most related groups so there are at most %d commits. Keep every file assigned to exactly one group and keep the ignore list unchanged.\n\n", maxCommits)
-	b.WriteString("Your previous groups were:\n")
-	for _, g := range schema.Groups {
-		fmt.Fprintf(&b, "- %s: %s\n", g.Label, strings.Join(g.Files, ", "))
-	}
-	return b.String()
 }
 
 // assembleGroups maps an LLM grouping response back onto the staged changes. It

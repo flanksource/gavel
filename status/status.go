@@ -137,9 +137,14 @@ func Gather(workDir string, opts Options) (*Result, error) {
 		return result, nil
 	}
 
+	template, err := ResolveSummaryPrompt(workDir)
+	if err != nil {
+		return nil, err
+	}
+
 	prompting.Prepare()
 	result.PrepareAISummaries()
-	for update := range StreamAISummaries(opts.Context, workDir, opts.Agent, result.Files, opts.AIMaxWorkers) {
+	for update := range StreamAISummaries(opts.Context, workDir, opts.Agent, result.Files, opts.AIMaxWorkers, template) {
 		result.ApplyAISummaryUpdate(update)
 	}
 

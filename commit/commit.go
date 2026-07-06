@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -15,7 +14,6 @@ import (
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -183,6 +181,16 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.WorkDir == "" {
 		return nil, errors.New("commit.Run: WorkDir is required")
 	}
+	// Normalize WorkDir to the repository top-level. Everything downstream —
+	// `git diff --cached` (repo-root-relative paths), the `git reset`/`git add`
+	// pathspecs, and where .gitignore / .gavel.yaml get written — assumes
+	// WorkDir IS the git root. Running from a subdirectory otherwise silently
+	// misfires (unstage no-ops, stray .gitignore written in the subdir).
+	gitRoot, err := resolveGitRoot(opts.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	opts.WorkDir = gitRoot
 	if err := validateInteractiveOptions(opts); err != nil {
 		return nil, err
 	}
@@ -661,8 +669,9 @@ func stageFiles(workDir, mode string, cfg verify.CommitConfig) error {
 // unstageGitIgnored removes from the index any staged file that matches the
 // repo's .gitignore, except files in preStaged (staged by the user before
 // gavel ran). It uses `git reset --` so the working tree and tracking are
-// untouched — the modification simply won't be in the commit. A !-negation in
-// .gitignore keeps a path staged.
+// untouched — the modification simply won't be in the commit. Matching is done
+// by `git check-ignore` (see gitCheckIgnore), so !-negations, .git/info/exclude,
+// the global excludesFile, and worktrees are all honored.
 func unstageGitIgnored(workDir string, preStaged []string) error {
 	staged, err := stagedFiles(workDir)
 	if err != nil {
@@ -672,28 +681,25 @@ func unstageGitIgnored(workDir string, preStaged []string) error {
 		return nil
 	}
 
-	absToRel := make(map[string]string, len(staged))
-	abs := make([]string, 0, len(staged))
-	for _, f := range staged {
-		p := filepath.Join(workDir, f)
-		absToRel[p] = f
-		abs = append(abs, p)
-	}
-
 	preStagedSet := make(map[string]struct{}, len(preStaged))
 	for _, f := range preStaged {
 		preStagedSet[f] = struct{}{}
 	}
 
-	_, ignored := utils.PartitionGitIgnored(abs, workDir)
+	ignored, err := gitCheckIgnore(workDir, staged)
+	if err != nil {
+		return err
+	}
 	toReset := make([]string, 0, len(ignored))
-	for _, p := range ignored {
-		rel := absToRel[p]
-		if _, kept := preStagedSet[rel]; kept {
+	for _, f := range staged {
+		if _, isIgnored := ignored[f]; !isIgnored {
 			continue
 		}
-		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
-		toReset = append(toReset, rel)
+		if _, kept := preStagedSet[f]; kept {
+			continue
+		}
+		logger.Infof("commit: skipping %s (matches .gitignore)", f)
+		toReset = append(toReset, f)
 	}
 	return resetFiles(workDir, toReset)
 }

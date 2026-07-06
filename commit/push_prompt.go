@@ -57,8 +57,7 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 		return PRContent{}, fmt.Errorf("no commits to summarise")
 	}
 
-	schema := &prContentSchema{}
-	req, err := renderPRContentPrompt(in, schema)
+	req, err := renderPRContentPrompt(in)
 	if err != nil {
 		return PRContent{}, err
 	}
@@ -70,6 +69,11 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 	}
 	if resp.Error != "" {
 		return PRContent{}, fmt.Errorf("PR-content prompt returned error: %s", resp.Error)
+	}
+
+	var schema prContentSchema
+	if err := clickyai.DecodeStructured(resp, &schema); err != nil {
+		return PRContent{}, fmt.Errorf("decode PR-content response: %w", err)
 	}
 
 	title := strings.TrimSpace(schema.Title)
@@ -89,20 +93,21 @@ func GeneratePRContent(ctx context.Context, agent clickyai.Agent, in PRContentIn
 	}, nil
 }
 
-func renderPRContentPrompt(in PRContentInput, schema *prContentSchema) (clickyai.PromptRequest, error) {
+func renderPRContentPrompt(in PRContentInput) (clickyai.PromptRequest, error) {
 	template := prContentPromptTemplate
 	if strings.TrimSpace(in.PromptOverride) != "" {
 		template = in.PromptOverride
 	}
-	req, _, err := prompt.Load(template).Render(prContentPromptData(in), schema)
+	req, _, err := prompt.Load(template).Render(prContentPromptData(in), nil)
 	if err != nil {
 		return clickyai.PromptRequest{}, fmt.Errorf("render PR-content prompt: %w", err)
 	}
 	return clickyai.PromptRequest{
-		Name:             "PR title and body",
-		Prompt:           req.Prompt.User,
-		SystemPrompt:     req.Prompt.System,
-		StructuredOutput: req.Prompt.Schema,
+		Name:         "PR title and body",
+		Prompt:       req.Prompt.User,
+		SystemPrompt: req.Prompt.System,
+		SchemaJSON:   req.Prompt.SchemaJSON,
+		Source:       "pr-content.prompt",
 	}, nil
 }
 

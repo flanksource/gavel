@@ -9,7 +9,6 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/history"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -180,18 +179,13 @@ func filterIgnoredPaths(workDir string, candidates []string, cfg verify.CommitCo
 	}
 	ignored := make(map[string]struct{})
 
-	absToRel := make(map[string]string, len(candidates))
-	abs := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		p := filepath.Join(workDir, c)
-		absToRel[p] = c
-		abs = append(abs, p)
+	gitIgnored, err := gitCheckIgnore(workDir, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("check .gitignore: %w", err)
 	}
-	_, gitIgnored := utils.PartitionGitIgnored(abs, workDir)
-	for _, p := range gitIgnored {
-		rel := absToRel[p]
-		logger.Infof("commit: skipping %s (matches .gitignore)", rel)
-		ignored[rel] = struct{}{}
+	for c := range gitIgnored {
+		logger.Infof("commit: skipping %s (matches .gitignore)", c)
+		ignored[c] = struct{}{}
 	}
 
 	violations, err := EvaluateGitIgnoreMatches(candidates, cfg.GitIgnore, cfg.Allow)

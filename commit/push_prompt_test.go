@@ -2,6 +2,7 @@ package commit
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,17 +16,15 @@ import (
 type prContentPromptAgent struct {
 	t    *testing.T
 	req  clickyai.PromptRequest
-	fill func(*prContentSchema)
+	fill prContentSchema
 }
 
 func (a *prContentPromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	a.req = req
-	schema, ok := req.StructuredOutput.(*prContentSchema)
-	require.True(a.t, ok, "structured output should be *prContentSchema")
-	if a.fill != nil {
-		a.fill(schema)
-	}
-	return &clickyai.PromptResponse{Result: "{}"}, nil
+	require.NotEmpty(a.t, req.SchemaJSON, "PR-content schema should come from the .prompt frontmatter")
+	raw, err := json.Marshal(a.fill)
+	require.NoError(a.t, err)
+	return &clickyai.PromptResponse{StructuredData: json.RawMessage(raw)}, nil
 }
 
 func (a *prContentPromptAgent) ExecuteBatch(context.Context, []clickyai.PromptRequest) (map[string]*clickyai.PromptResponse, error) {
@@ -38,10 +37,10 @@ func (a *prContentPromptAgent) Close() error             { return nil }
 func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 	agent := &prContentPromptAgent{
 		t: t,
-		fill: func(schema *prContentSchema) {
-			schema.Title = "fix: use prompts"
-			schema.Body = "## What\n- uses Captain prompts"
-			schema.Branch = "fix/use-prompts"
+		fill: prContentSchema{
+			Title:  "fix: use prompts",
+			Body:   "## What\n- uses Captain prompts",
+			Branch: "fix/use-prompts",
 		},
 	}
 
@@ -66,16 +65,16 @@ func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 	assert.Contains(t, agent.req.Prompt, "fix: use Captain prompt for PRs")
 	assert.Contains(t, agent.req.Prompt, "files: commit/push_prompt.go, commit/pr-content.prompt")
 	assert.NotContains(t, agent.req.Prompt, "%s")
-	assert.IsType(t, &prContentSchema{}, agent.req.StructuredOutput)
+	assert.NotEmpty(t, agent.req.SchemaJSON, "schema should be carried as SchemaJSON from the frontmatter")
 }
 
 func TestGeneratePRContentRejectsLongTitle(t *testing.T) {
 	agent := &prContentPromptAgent{
 		t: t,
-		fill: func(schema *prContentSchema) {
-			schema.Title = "fix: this title is definitely longer than forty characters"
-			schema.Body = "## What\n- too long"
-			schema.Branch = "fix/long-title"
+		fill: prContentSchema{
+			Title:  "fix: this title is definitely longer than forty characters",
+			Body:   "## What\n- too long",
+			Branch: "fix/long-title",
 		},
 	}
 

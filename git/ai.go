@@ -41,14 +41,6 @@ type commitMessageSchema struct {
 	Body    string `json:"body,omitempty" description:"Optional body explaining why and impact"`
 }
 
-type functionalityRemovedSchema struct {
-	FunctionalityRemoved []string `json:"functionalityRemoved" description:"User-visible functionality removed by this diff; empty when nothing is removed"`
-}
-
-type compatibilityIssuesSchema struct {
-	CompatibilityIssues []string `json:"compatibilityIssues" description:"Backward compatibility issues or breaking changes introduced by this diff; empty when there are none"`
-}
-
 type CommitPromptAnalysis struct {
 	Commit               models.CommitAnalysis
 	FunctionalityRemoved []string
@@ -127,24 +119,28 @@ func analyzeCommitMessageWithAI(ctx context.Context, commit models.CommitAnalysi
 		return commit, fmt.Errorf("AI commit message prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, template, map[string]any{"maxBodyLines": maxBodyLines})
+	promptText, schemaJSON, err := renderCommitPrompt(commit, template, map[string]any{"maxBodyLines": maxBodyLines})
 	if err != nil {
 		return commit, err
 	}
 
-	schema := &commitMessageSchema{}
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
-		Name:             promptName(commit, "commit message"),
-		Source:           commitMessagePromptFile,
-		Prompt:           promptText,
-		StructuredOutput: schema,
+		Name:       promptName(commit, "commit message"),
+		Source:     commitMessagePromptFile,
+		Prompt:     promptText,
+		SchemaJSON: schemaJSON,
 	})
 	if err != nil {
 		return commit, fmt.Errorf("execute AI commit message prompt: %w", err)
 	}
 	if resp.Error != "" {
 		return commit, fmt.Errorf("AI commit message prompt returned error: %s", resp.Error)
+	}
+
+	var schema commitMessageSchema
+	if err := ai.DecodeStructured(resp, &schema); err != nil {
+		return commit, fmt.Errorf("decode AI commit message response: %w", err)
 	}
 
 	if strings.TrimSpace(schema.Subject) == "" {
@@ -177,18 +173,17 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 		return nil, fmt.Errorf("AI functionality-removed prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, template, nil)
+	promptText, schemaJSON, err := renderCommitPrompt(commit, template, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	schema := &functionalityRemovedSchema{}
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
-		Name:             promptName(commit, "removed functionality"),
-		Source:           functionalityRemovedPromptFile,
-		Prompt:           promptText,
-		StructuredOutput: schema,
+		Name:       promptName(commit, "removed functionality"),
+		Source:     functionalityRemovedPromptFile,
+		Prompt:     promptText,
+		SchemaJSON: schemaJSON,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("execute AI functionality-removed prompt: %w", err)
@@ -197,7 +192,9 @@ func analyzeFunctionalityRemovedWithAI(ctx context.Context, commit models.Commit
 		return nil, fmt.Errorf("AI functionality-removed prompt returned error: %s", resp.Error)
 	}
 
-	return parseStringArrayResult(schema.FunctionalityRemoved, resp.Result, "functionalityRemoved"), nil
+	// parseStringArrayResult recovers the array from the raw JSON reply (a bare
+	// array or a {"functionalityRemoved": [...]} object), so no separate decode.
+	return parseStringArrayResult(nil, resp.Result, "functionalityRemoved"), nil
 }
 
 func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitAnalysis, agent ai.Agent, override string) ([]string, error) {
@@ -206,18 +203,17 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 		return nil, fmt.Errorf("AI compatibility-issues prompt template is empty")
 	}
 
-	promptText, err := renderCommitPrompt(commit, template, nil)
+	promptText, schemaJSON, err := renderCommitPrompt(commit, template, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	schema := &compatibilityIssuesSchema{}
 	prompting.Prepare()
 	resp, err := agent.ExecutePrompt(ctx, ai.PromptRequest{
-		Name:             promptName(commit, "compatibility issues"),
-		Source:           compatibilityIssuesPromptFile,
-		Prompt:           promptText,
-		StructuredOutput: schema,
+		Name:       promptName(commit, "compatibility issues"),
+		Source:     compatibilityIssuesPromptFile,
+		Prompt:     promptText,
+		SchemaJSON: schemaJSON,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("execute AI compatibility-issues prompt: %w", err)
@@ -226,7 +222,8 @@ func analyzeCompatibilityIssuesWithAI(ctx context.Context, commit models.CommitA
 		return nil, fmt.Errorf("AI compatibility-issues prompt returned error: %s", resp.Error)
 	}
 
-	return parseStringArrayResult(schema.CompatibilityIssues, resp.Result, "compatibilityIssues"), nil
+	// parseStringArrayResult recovers the array from the raw JSON reply.
+	return parseStringArrayResult(nil, resp.Result, "compatibilityIssues"), nil
 }
 
 // promptOrDefault returns the .gavel.yaml override when set, otherwise the
@@ -238,16 +235,18 @@ func promptOrDefault(override, embedded string) string {
 	return embedded
 }
 
-func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map[string]any) (string, error) {
+// renderCommitPrompt renders the template body and returns the user prompt plus
+// the JSON output schema declared in the .prompt frontmatter (empty when none).
+func renderCommitPrompt(commit models.CommitAnalysis, template string, extra map[string]any) (string, json.RawMessage, error) {
 	data := commit.AsMap()
 	for k, v := range extra {
 		data[k] = v
 	}
 	req, _, err := prompt.Load(template).Render(data, nil)
 	if err != nil {
-		return "", fmt.Errorf("render AI prompt template: %w", err)
+		return "", nil, fmt.Errorf("render AI prompt template: %w", err)
 	}
-	return req.Prompt.User, nil
+	return req.Prompt.User, req.Prompt.SchemaJSON, nil
 }
 
 func promptName(commit models.CommitAnalysis, suffix string) string {

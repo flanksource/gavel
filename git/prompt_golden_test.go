@@ -44,7 +44,7 @@ func sampleCommit() models.CommitAnalysis {
 }
 
 func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
-	got, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 3})
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 3})
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: at most 3 line(s)", "maxBodyLines must select the if-branch")
 	require.NotContains(t, got, "&lt;", "diff must not be HTML-escaped")
@@ -53,7 +53,7 @@ func TestPromptCommitMessage_WithMaxBodyLines(t *testing.T) {
 }
 
 func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
-	got, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 0})
+	got, _, err := renderCommitPrompt(sampleCommit(), commitMessagePrompt, map[string]any{"maxBodyLines": 0})
 	require.NoError(t, err)
 	require.Contains(t, got, "- body: omit unless the change is non-trivial", "zero maxBodyLines must select the else-branch")
 	require.NotContains(t, got, "at most", "else-branch must not mention a line cap")
@@ -61,14 +61,14 @@ func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
 }
 
 func TestPromptFunctionalityRemoved(t *testing.T) {
-	got, err := renderCommitPrompt(sampleCommit(), functionalityRemovedPrompt, nil)
+	got, _, err := renderCommitPrompt(sampleCommit(), functionalityRemovedPrompt, nil)
 	require.NoError(t, err)
 	require.Contains(t, got, "a < b && c > d", "raw diff content must be preserved")
 	assertGolden(t, "functionality-removed.golden", got)
 }
 
 func TestPromptCompatibilityIssues(t *testing.T) {
-	got, err := renderCommitPrompt(sampleCommit(), compatibilityIssuesPrompt, nil)
+	got, _, err := renderCommitPrompt(sampleCommit(), compatibilityIssuesPrompt, nil)
 	require.NoError(t, err)
 	require.Contains(t, got, "a < b && c > d", "raw diff content must be preserved")
 	assertGolden(t, "compatibility-issues.golden", got)

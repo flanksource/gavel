@@ -63,65 +63,6 @@ func TestSortGroupingRowsByScope(t *testing.T) {
 		"flat ordering is by file alone")
 }
 
-func TestGroupWithMaxCommitsConsolidates(t *testing.T) {
-	// First call overshoots (3 groups), feedback round returns 2 — within the cap.
-	responses := []aiGroupingSchema{
-		{Groups: []aiGroup{{Label: "a"}, {Label: "b"}, {Label: "c"}}, Ignore: []string{"lock"}},
-		{Groups: []aiGroup{{Label: "ab"}, {Label: "c"}}, Ignore: []string{"lock"}},
-	}
-	var calls []string
-	exec := func(feedback string) (aiGroupingSchema, error) {
-		calls = append(calls, feedback)
-		r := responses[len(calls)-1]
-		return r, nil
-	}
-
-	got, err := groupWithMaxCommits(2, exec)
-	require.NoError(t, err)
-	assert.Len(t, got.Groups, 2, "stops once within the limit")
-	require.Len(t, calls, 2)
-	assert.Empty(t, calls[0], "first call uses the base prompt (no feedback)")
-	assert.Contains(t, calls[1], "limit is 2", "feedback re-prompt cites the cap")
-}
-
-func TestGroupWithMaxCommitsIgnoreDoesNotCount(t *testing.T) {
-	// 2 groups + a large ignore list; the cap of 2 is satisfied without feedback.
-	exec := func(feedback string) (aiGroupingSchema, error) {
-		return aiGroupingSchema{
-			Groups: []aiGroup{{Label: "a"}, {Label: "b"}},
-			Ignore: []string{"x", "y", "z"},
-		}, nil
-	}
-	got, err := groupWithMaxCommits(2, callCounter(t, exec, 1))
-	require.NoError(t, err)
-	assert.Len(t, got.Groups, 2)
-}
-
-func TestGroupWithMaxCommitsStopsAtAttemptBound(t *testing.T) {
-	// LLM never gets under the cap; the loop must stop after maxGroupingAttempts
-	// calls and return the last grouping rather than erroring or looping forever.
-	var calls int
-	exec := func(feedback string) (aiGroupingSchema, error) {
-		calls++
-		return aiGroupingSchema{Groups: []aiGroup{{Label: "a"}, {Label: "b"}, {Label: "c"}}}, nil
-	}
-	got, err := groupWithMaxCommits(2, exec)
-	require.NoError(t, err)
-	assert.Equal(t, maxGroupingAttempts, calls)
-	assert.Len(t, got.Groups, 3)
-}
-
-// callCounter wraps exec asserting it is invoked exactly want times.
-func callCounter(t *testing.T, exec func(string) (aiGroupingSchema, error), want int) func(string) (aiGroupingSchema, error) {
-	t.Helper()
-	var calls int
-	t.Cleanup(func() { assert.Equal(t, want, calls) })
-	return func(feedback string) (aiGroupingSchema, error) {
-		calls++
-		return exec(feedback)
-	}
-}
-
 func TestAssembleGroupsMapsGroupsIgnoreAndLeftovers(t *testing.T) {
 	changes := []stagedChange{
 		{Path: "feature/a.go"},

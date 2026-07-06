@@ -6,6 +6,8 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 
@@ -39,25 +41,24 @@ var envAliases = map[string][]string{
 
 var normalizeOnce sync.Once
 
-// NewProvider builds the captain provider for cfg (env-normalized, wrapped with
-// the logging middleware) and returns it directly. Callers that need the full
-// request surface — a working directory, agentic tool/permission knobs — drive
+// NewProvider builds the captain provider for cfg (env-normalized) with captain's
+// default middleware applied: request/response logging always, plus response
+// caching when cfg configures it (CacheTTL/CacheDBPath with NoCache unset). This
+// is the batteries-included middleware.NewProvider, which also makes the
+// --ai-cache-* flags actually take effect. Callers that need the full request
+// surface — a working directory, agentic tool/permission knobs — drive
 // provider.Execute with a captainai.Request, which the named-prompt PromptRequest
 // wrapper cannot express. NewAgent is the higher-level surface built on top.
 func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	provider, err := captainai.NewProvider(cfg.toCaptain())
-	if err != nil {
-		return nil, err
-	}
-	return middleware.Wrap(provider, middleware.WithLogging())
+	return middleware.NewProvider(cfg.toCaptain())
 }
 
 // NewAgent builds a captain-backed agent from cfg after normalizing env keys.
-// The backend is inferred from the model by captain. The provider is wrapped with
-// captain's logging middleware so the prompt source, rendered input, schema-in and
-// schema-out print under -v (Debug/Trace); captain's NewAgent omits middleware, so
-// gavel applies it here (the ai package cannot import middleware without a cycle).
+// The backend is inferred from the model by captain. The provider carries
+// captain's default middleware (via NewProvider) so the prompt source, rendered
+// input, schema-in and schema-out print under -v (Debug/Trace); captain's own
+// ai.NewAgent omits middleware, so gavel routes through middleware.NewProvider.
 func NewAgent(cfg AgentConfig) (Agent, error) {
 	provider, err := NewProvider(cfg)
 	if err != nil {
@@ -69,6 +70,21 @@ func NewAgent(cfg AgentConfig) (Agent, error) {
 // GetDefaultAgent returns an agent built from DefaultConfig.
 func GetDefaultAgent() (Agent, error) {
 	return NewAgent(DefaultConfig())
+}
+
+// DecodeStructured unmarshals a prompt response's structured output into target.
+// It prefers the provider's validated StructuredData (raw JSON) and falls back
+// to the Result text, failing loudly when neither yields the target shape. Use
+// it with prompts whose output schema is declared in the .prompt frontmatter
+// (PromptRequest.SchemaJSON) rather than bound to a Go struct.
+func DecodeStructured(resp *PromptResponse, target any) error {
+	if raw, ok := resp.StructuredData.(json.RawMessage); ok && len(raw) > 0 {
+		return json.Unmarshal(raw, target)
+	}
+	if resp.Result != "" {
+		return json.Unmarshal([]byte(resp.Result), target)
+	}
+	return fmt.Errorf("response carried no structured output to decode into %T", target)
 }
 
 func NormalizeEnv() {

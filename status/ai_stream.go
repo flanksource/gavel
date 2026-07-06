@@ -70,7 +70,7 @@ func (r *Result) ApplyAISummaryUpdate(update AISummaryUpdate) {
 	}
 }
 
-func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent, files []FileStatus, maxWorkers int) <-chan AISummaryUpdate {
+func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent, files []FileStatus, maxWorkers int, template string) <-chan AISummaryUpdate {
 	updates := make(chan AISummaryUpdate, len(files)*2+1)
 	if agent == nil || len(files) == 0 {
 		close(updates)
@@ -94,7 +94,7 @@ func StreamAISummaries(ctx context.Context, workDir string, agent clickyai.Agent
 				return aiSummaryResult{Index: index, HasIndex: true}, ctx.Err()
 			}
 
-			summary, err := summarizeFileChangeWithAIFunc(ctx, workDir, agent, file)
+			summary, err := summarizeFileChangeWithAIFunc(ctx, workDir, agent, file, template)
 			if err != nil {
 				return aiSummaryResult{Index: index, HasIndex: true}, err
 			}

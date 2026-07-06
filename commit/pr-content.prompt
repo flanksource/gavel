@@ -1,3 +1,20 @@
+---
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [title, branch]
+    properties:
+      title:
+        type: string
+        description: "PR title: imperative, <=40 characters, conventional-commit style when applicable"
+      body:
+        type: string
+        description: "Markdown body summarising what changed and why; may be empty for trivial PRs"
+      branch:
+        type: string
+        description: "Suggested branch name: kebab-case, <=40 chars, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]"
+---
 You are opening a GitHub pull request for the following local commits.
 Generate a concise PR title, a short markdown body, and a branch name. Return structured output matching the provided output schema.
 

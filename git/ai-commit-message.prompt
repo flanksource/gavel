@@ -1,3 +1,23 @@
+---
+output:
+  schema:
+    type: object
+    additionalProperties: false
+    required: [type, subject]
+    properties:
+      type:
+        type: string
+        description: "Conventional commit type: feat|fix|perf|refactor|test|docs|build|ci|chore|revert"
+      scope:
+        type: string
+        description: "Optional scope, e.g. db, api, fe, kubernetes"
+      subject:
+        type: string
+        description: "Imperative subject line, max 100 chars, no trailing period"
+      body:
+        type: string
+        description: "Optional body explaining why and impact"
+---
 You are a commit message generator. Analyze the diff below and produce a Conventional Commit message.
 
 DIFF INPUT:
