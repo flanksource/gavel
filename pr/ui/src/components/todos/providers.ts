@@ -1,6 +1,7 @@
 import type { ChatModel, ToolMeta } from '@flanksource/clicky-ui/chat';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
-import { UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
+import type { SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
+import { UiColumns, UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
 import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
 
 // A run's driver is `<provider>-<mechanism>`. The advanced dialog selects the
@@ -204,4 +205,79 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
 // driverFor composes the TodoRunDriver from the two axes the dialog selects.
 export function driverFor(provider: RunProvider, mechanism: RunMechanism): TodoRunDriver {
   return `${provider}-${mechanism}` as TodoRunDriver;
+}
+
+// buildRunFamilies maps a RunContext onto clicky's two-axis Family -> Mode
+// picker (PromptRunEditor/RuntimeModePicker): one family per provider, with
+// cmux as the TUI mode and every configured captain backend as a further
+// mode. A family's `provider` tag is taken from its own model catalog (not
+// hardcoded) so it always matches the real `ChatModel.provider` value
+// ('anthropic'/'openai') the models list carries — required for the shared
+// component's modelsForFamily/modelBelongsToFamily narrowing to work at all.
+export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
+  return PROVIDERS.map((provider) => {
+    const cmuxMode = {
+      id: 'cmux',
+      label: 'cmux (TUI)',
+      backend: driverFor(provider.id, 'cmux'),
+      icon: UiColumns,
+      title: `${provider.label} multiplexer`,
+    };
+    const backendModes = backendsForAgent(context, provider.id).map((item) => ({
+      id: item.id,
+      label: item.configured === false ? `${item.label} (not ready)` : item.label,
+      backend: item.id,
+      icon: provider.icon,
+      title: item.label,
+    }));
+    return {
+      id: provider.id,
+      label: provider.label,
+      provider: provider.models[0]?.provider ?? provider.id,
+      modes: [cmuxMode, ...backendModes],
+    };
+  });
+}
+
+// isCmuxBackend reports whether `backend` is the provider's cmux mode, as
+// opposed to one of its captain (headless) backends.
+export function isCmuxBackend(agent: RunProvider, backend: string | undefined): boolean {
+  return (backend ?? '') === driverFor(agent, 'cmux');
+}
+
+// agentForBackend recovers which provider a `spec.backend` value belongs to,
+// so the dialog can derive provider-scoped state (models, driver) from the
+// single backend string the two-axis picker writes.
+export function agentForBackend(context: RunContext, backend: string | undefined): RunProvider {
+  const value = backend ?? '';
+  for (const provider of PROVIDERS) {
+    if (value === driverFor(provider.id, 'cmux')) return provider.id;
+  }
+  return context.backends.find((item) => item.id === value)?.agent ?? 'claude';
+}
+
+// modelsForSelection/defaultModelForSelection return the model list and
+// sentinel default model for whichever mode (cmux or a captain backend)
+// `backend` currently selects.
+export function modelsForSelection(context: RunContext, agent: RunProvider, backend: string | undefined): ChatModel[] {
+  if (isCmuxBackend(agent, backend)) return providerCatalog(agent).models;
+  return backendCatalog(context, backend ?? '', agent).models;
+}
+
+export function defaultModelForSelection(context: RunContext, agent: RunProvider, backend: string | undefined): string {
+  if (isCmuxBackend(agent, backend)) return providerCatalog(agent).defaultModel;
+  return backendCatalog(context, backend ?? '', agent).defaultModel;
+}
+
+// driverForSelection composes the TodoRunDriver + optional captain backend id
+// the run/preview/submit payloads need from the two-axis picker's single
+// `backend` selection.
+export function driverForSelection(
+  context: RunContext,
+  agent: RunProvider,
+  backend: string | undefined,
+): { driver: TodoRunDriver; runBackend?: string } {
+  if (isCmuxBackend(agent, backend)) return { driver: driverFor(agent, 'cmux') };
+  const cat = backendCatalog(context, backend ?? '', agent);
+  return { driver: cat.driver, runBackend: cat.id };
 }

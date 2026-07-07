@@ -1,16 +1,36 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Button, Combobox, DropdownMenu, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
-import { BudgetSelector, EffortSelector, ModelSelector, ProviderSelector, type ChatBudgetConfig, type ClaudePermissionMode, type ToolMode } from "@flanksource/clicky-ui/chat";
-import { ToolPreferences } from "@flanksource/clicky-ui/ai";
+import { ModelSelector, ProviderSelector } from "@flanksource/clicky-ui/chat";
+import { PromptRunEditor, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
 import { UiChevronDown, UiCog, UiPlay, UiSparkles, UiTerminal, type IconProps } from "@flanksource/clicky-ui/icons";
-import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
+import type { TodoRunAgent, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass, todoQuery } from "./format";
-import { PROVIDERS, backendCatalog as findBackendCatalog, backendsForAgent, defaultBackendForAgent, driverFor, providerCatalog, runContextWithFallback, type RunContext, type RunMechanism } from "./providers";
+import { runtimeValueToPayload } from "../settings/promptSpec";
+import {
+  PROVIDERS,
+  agentForBackend,
+  backendCatalog as findBackendCatalog,
+  backendsForAgent,
+  buildRunFamilies,
+  defaultBackendForAgent,
+  defaultModelForSelection,
+  driverForSelection,
+  isCmuxBackend,
+  modelsForSelection,
+  runContextWithFallback,
+  type RunContext,
+} from "./providers";
 
 // RunMode is the prompt the dialog runs: Run (implement), Plan (propose only),
 // or Verify (score the committed work against acceptance criteria).
 type RunMode = "run" | "plan" | "verify";
+
+// The "Edit spec" modal only shows what gavel's dispatch actually reads:
+// model/effort/budget, the prompt override, and tool/permission posture.
+// Workspace/environment/verify/cli configure things gavel's own run options
+// (worktree, dirty, checks) already drive elsewhere, so they stay hidden here.
+const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions"] as const;
 
 // MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
 // markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
@@ -169,6 +189,10 @@ export function TodoRunSplitButton({
   );
 }
 
+const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-cmux", model: "claude", effort: "medium" };
+const INITIAL_VERIFY_BACKEND = "claude-agent";
+const INITIAL_VERIFY_MODEL = "claude-agent-sonnet";
+
 export function TodoRunAdvancedDialog({
   open,
   onClose,
@@ -190,27 +214,22 @@ export function TodoRunAdvancedDialog({
   provider: string;
   refs: string[];
 }) {
-  // The driver splits into two picker axes: the provider (claude/codex, the
-  // segmented control) and the mechanism (cmux/headless/…). agent is the provider
-  // and isCmux gates the cmux-only (plan/resume) vs structured-only (max
-  // cost/turns, dirty worktree) fields.
-  const [agent, setAgent] = useState<TodoRunAgent>("claude");
-  const [mechanism, setMechanism] = useState<RunMechanism>("cmux");
-  const [backend, setBackend] = useState("claude-agent");
-  const [model, setModel] = useState("claude");
-  const [effort, setEffort] = useState<TodoRunEffort>("medium");
+  // Run/Plan share one AISpecRuntimeValue (model/backend/effort/budget/
+  // permissions/prompt), edited via clicky's PromptRunEditor. Verify only ever
+  // needs a captain backend + model (its wire body has no effort/budget/
+  // permissions), so it keeps its own small, independent selection instead of
+  // sharing — and instead of showing Effort/Budget/Permissions controls that
+  // verify's request would silently ignore.
+  const [runtimeValue, setRuntimeValue] = useState<AISpecRuntimeValue>(INITIAL_RUNTIME_VALUE);
   const [mode, setMode] = useState<RunMode>("run");
   const [resume, setResume] = useState(false);
-  const [timeout, setTimeoutValue] = useState("30m");
-  const [budget, setBudget] = useState<ChatBudgetConfig>({});
   const [dirty, setDirty] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [commit, setCommit] = useState(true);
   const [check, setCheck] = useState(false);
-  // toolModes scopes each agent tool for the run (enabled/ask/disabled);
-  // permissionMode is the base posture. Both feed the run's api.Permissions.
-  const [toolModes, setToolModes] = useState<Record<string, ToolMode>>({});
-  const [permissionMode, setPermissionMode] = useState<ClaudePermissionMode>("default");
+  const [verifyAgent, setVerifyAgent] = useState<TodoRunAgent>("claude");
+  const [verifyBackend, setVerifyBackend] = useState(INITIAL_VERIFY_BACKEND);
+  const [verifyModel, setVerifyModel] = useState(INITIAL_VERIFY_MODEL);
   // promptDraft is the editable prompt body sent as the verbatim override;
   // promptDirty stops the live preview from clobbering the user's edits.
   const [promptDraft, setPromptDraft] = useState("");
@@ -226,29 +245,43 @@ export function TodoRunAdvancedDialog({
   const promptDirtyRef = useRef(false);
 
   const context = runContextWithFallback(runContext);
-  const catalog = providerCatalog(agent);
-  const isCmux = mechanism === "cmux";
+  const families = buildRunFamilies(context);
+  const agent = agentForBackend(context, runtimeValue.backend);
+  const isCmux = isCmuxBackend(agent, runtimeValue.backend);
+  const activeModels = modelsForSelection(context, agent, runtimeValue.backend);
+  const modelFallback = defaultModelForSelection(context, agent, runtimeValue.backend);
+  const { driver, runBackend } = driverForSelection(context, agent, runtimeValue.backend);
   const plan = mode === "plan";
   const isVerify = mode === "verify";
-  const usesCaptainBackend = isVerify || mechanism === "headless";
-  const selectedBackend = findBackendCatalog(context, backend, agent);
-  const driver = usesCaptainBackend && !isVerify ? selectedBackend.driver : driverFor(agent, mechanism);
-  const models = usesCaptainBackend ? selectedBackend.models : catalog.models;
-  const efforts = context.efforts.length > 0 ? context.efforts : catalog.efforts;
-  const modelFallback = usesCaptainBackend ? selectedBackend.defaultModel : agent;
-  const runBackend = usesCaptainBackend ? selectedBackend.id : undefined;
   const canVerify = refs.length === 1; // verify scores one issue's commits
+  const verifyBackendCatalog = findBackendCatalog(context, verifyBackend, verifyAgent);
+  const verifyModelFallback = verifyBackendCatalog.defaultModel;
 
-  // Switching mode re-seeds the editor from the matching preview (Run/Plan share
-  // the run body; Verify uses the verify prompt).
+  // A backend switch (cmux <-> a captain backend, or a family switch) can leave
+  // a model id that no longer belongs to the new mode (cmux uses bare ids like
+  // "opus"; captain backends use prefixed ids like "claude-agent-opus") — reset
+  // to the new mode's default in that case, mirroring the old changeMechanism/
+  // changeProvider/changeBackend resets.
+  function changeRuntime(next: AISpecRuntimeValue) {
+    const prevBackend = runtimeValue.backend ?? "";
+    const nextBackend = next.backend ?? "";
+    if (nextBackend === prevBackend) {
+      setRuntimeValue(next);
+      return;
+    }
+    const nextAgent = agentForBackend(context, nextBackend);
+    const candidates = modelsForSelection(context, nextAgent, nextBackend);
+    const modelStillValid = !!next.model && candidates.some((m) => m.id === next.model);
+    setRuntimeValue({
+      ...next,
+      model: modelStillValid ? next.model : defaultModelForSelection(context, nextAgent, nextBackend),
+    });
+    // Plan only runs in cmux; leaving cmux drops back to Run, same as before.
+    if (!isCmuxBackend(nextAgent, nextBackend) && mode === "plan") setMode("run");
+  }
+
   function changeMode(next: RunMode) {
     setMode(next);
-    if (next === "verify") {
-      const nextBackend = findBackendCatalog(context, backend, agent);
-      setModel(nextBackend.defaultModel);
-    } else if (mode === "verify") {
-      setModel(mechanism === "headless" ? selectedBackend.defaultModel : catalog.defaultModel);
-    }
     setPromptDirty(false);
     promptDirtyRef.current = false;
     setVerifyError("");
@@ -266,59 +299,31 @@ export function TodoRunAdvancedDialog({
     setRegenNonce((n) => n + 1);
   }
 
-  // Switching provider re-scopes the mechanism/model/effort to what the new
-  // provider offers, keeping the current mechanism when it is still valid.
-  function changeProvider(next: TodoRunAgent) {
-    const nextCatalog = providerCatalog(next);
-    const nextMechanism = nextCatalog.mechanisms.some((m) => m.value === mechanism) ? mechanism : "cmux";
+  function changeVerifyAgent(next: TodoRunAgent) {
     const nextBackend = defaultBackendForAgent(context, next);
-    const nextUsesCaptainBackend = mode === "verify" || nextMechanism === "headless";
-    setAgent(next);
-    setMechanism(nextMechanism);
-    setBackend(nextBackend.id);
-    setModel(nextUsesCaptainBackend ? nextBackend.defaultModel : nextCatalog.defaultModel);
-    if (!efforts.includes(effort)) setEffort((efforts[0] || "medium") as TodoRunEffort);
-    if (nextMechanism !== "cmux" && mode === "plan") setMode("run");
+    setVerifyAgent(next);
+    setVerifyBackend(nextBackend.id);
+    setVerifyModel(nextBackend.defaultModel);
   }
 
-  function changeMechanism(next: RunMechanism) {
-    setMechanism(next);
-    if (next === "headless") {
-      const nextBackend = findBackendCatalog(context, backend, agent);
-      setModel(nextBackend.defaultModel);
-    } else {
-      setModel(catalog.defaultModel);
-    }
-    if (next !== "cmux" && mode === "plan") setMode("run");
-  }
-
-  function changeBackend(next: string) {
-    const nextBackend = findBackendCatalog(context, next, agent);
-    setBackend(nextBackend.id);
-    setModel(nextBackend.defaultModel);
-  }
-
-  function changeEffort(next: string) {
-    setEffort((next || "medium") as TodoRunEffort);
+  function changeVerifyBackend(next: string) {
+    const nextBackend = findBackendCatalog(context, next, verifyAgent);
+    setVerifyBackend(nextBackend.id);
+    setVerifyModel(nextBackend.defaultModel);
   }
 
   useEffect(() => {
     if (!open) return;
-    setAgent("claude");
-    setMechanism("cmux");
-    setBackend("claude-agent");
-    setModel("claude");
-    setEffort("medium");
+    setRuntimeValue(INITIAL_RUNTIME_VALUE);
     setMode("run");
     setResume(false);
-    setTimeoutValue("30m");
-    setBudget({});
     setDirty(false);
     setDryRun(false);
     setCommit(true);
     setCheck(false);
-    setToolModes({});
-    setPermissionMode("default");
+    setVerifyAgent("claude");
+    setVerifyBackend(INITIAL_VERIFY_BACKEND);
+    setVerifyModel(INITIAL_VERIFY_MODEL);
     setPromptDraft("");
     setPromptDirty(false);
     promptDirtyRef.current = false;
@@ -345,6 +350,8 @@ export function TodoRunAdvancedDialog({
   // refs is a fresh array each render at the call sites, so key the preview fetch
   // on its contents rather than its identity to avoid an endless refetch loop.
   const refsKey = refs.join("\n");
+  const previewModel = isVerify ? verifyModel.trim() || verifyModelFallback : runtimeValue.model?.trim() || modelFallback;
+  const previewBackend = isVerify ? verifyBackend : runBackend;
 
   // Fetch the prompt that will be sent whenever the dialog is open and a
   // prompt-affecting option changes (driver/model/effort/plan/resume). The
@@ -364,13 +371,13 @@ export function TodoRunAdvancedDialog({
     }
     const url = isVerify ? `/api/todos/verify/preview?${todoQuery(dir, provider)}` : `/api/todos/run/preview?${todoQuery(dir, provider)}`;
     const body = isVerify
-      ? { provider, dir, ref: list[0], backend: runBackend, model: model.trim() || modelFallback }
+      ? { provider, dir, ref: list[0], backend: previewBackend, model: previewModel }
       : {
           refs: list,
           driver,
-          backend: runBackend,
-          model: model.trim() || modelFallback,
-          effort,
+          backend: previewBackend,
+          model: previewModel,
+          effort: runtimeValue.effort,
           plan: isCmux ? plan : undefined,
           resume: isCmux ? resume : undefined,
         };
@@ -400,7 +407,7 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, provider, refsKey, driver, runBackend, model, modelFallback, effort, plan, resume, isCmux, isVerify, regenNonce]);
+  }, [open, dir, provider, refsKey, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, isVerify, regenNonce]);
 
   if (!open) return null;
 
@@ -415,7 +422,7 @@ export function TodoRunAdvancedDialog({
       const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, dir, ref: list[0], backend: runBackend, model: model.trim() || modelFallback, prompt: promptDraft }),
+        body: JSON.stringify({ provider, dir, ref: list[0], backend: verifyBackend, model: previewModel, prompt: promptDraft }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verify failed");
@@ -432,17 +439,11 @@ export function TodoRunAdvancedDialog({
       void runVerify();
       return;
     }
-    // Send the effective per-tool posture (catalog default unless the user
-    // overrode it) so the backend sees a complete picture — otherwise a single
-    // override would leave the untouched tools unspecified (and brokered). Sent
-    // only when the user actually changed something; an untouched run keeps the
-    // backend's default posture.
-    const toolPreferences = Object.keys(toolModes).length > 0 ? Object.fromEntries([...context.tools.map((t) => [t.name, toolModes[t.name] ?? t.defaultMode ?? "enabled"] as const), ...Object.entries(toolModes)]) : undefined;
+    const { spec } = runtimeValueToPayload(runtimeValue);
     onRun({
+      ...spec,
       driver,
       backend: runBackend,
-      model: model.trim() || modelFallback,
-      effort,
       plan: isCmux ? plan : undefined,
       resume: isCmux ? resume : undefined,
       dirty: !isCmux ? dirty : undefined,
@@ -452,20 +453,9 @@ export function TodoRunAdvancedDialog({
       // Plan-only runs make no changes, so the post-completion test/lint check
       // loop has nothing to verify.
       check: plan ? false : check,
-      budget: {
-        timeout: timeout.trim() || "30m",
-        cost: !isCmux && budget.cost !== undefined ? budget.cost : undefined,
-        maxTurns: !isCmux && budget.maxTokens !== undefined ? budget.maxTokens : undefined,
-      },
       prompt: {
         // The edited prompt body is sent verbatim as the override.
         user: promptDraft.trim() ? promptDraft : undefined,
-      },
-      permissions: {
-        // Per-tool modes and permission posture, sent only when the user changed
-        // them from the defaults so a plain run keeps the backend's default posture.
-        tools: toolPreferences ? { modes: toolPreferences } : undefined,
-        mode: permissionMode !== "default" ? permissionMode : undefined,
       },
     });
   }
@@ -473,10 +463,37 @@ export function TodoRunAdvancedDialog({
   const modeOptions: { id: RunMode; label: string }[] = [{ id: "run", label: "Run" }];
   if (isCmux) modeOptions.push({ id: "plan", label: "Plan" });
   if (canVerify) modeOptions.push({ id: "verify", label: "Verify" });
-  const backendOptions = backendsForAgent(context, agent).map((item) => ({
+  const verifyBackendOptions = backendsForAgent(context, verifyAgent).map((item) => ({
     value: item.id,
     label: item.configured === false ? `${item.label} (not ready)` : item.label,
   }));
+
+  // Shared regenerate/error/editor/dirty-note block: passed to PromptRunEditor's
+  // `promptEditor` slot for Run/Plan (it supplies the "Prompt" block title), and
+  // rendered under a matching manual title for Verify (which doesn't use
+  // PromptRunEditor, since its wire body has no effort/budget/permissions to edit).
+  const promptEditorNode = (
+    <div className="space-y-1">
+      <div className="flex items-center justify-end gap-2">
+        {previewLoading && <Spinner className="text-xs text-muted-foreground" />}
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={regeneratePrompt}
+          disabled={previewLoading}
+          title="Discard edits and regenerate from the options above"
+          className="h-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          Regenerate
+        </Button>
+      </div>
+      {previewError && <div className="text-xs text-red-600">{previewError}</div>}
+      <Suspense fallback={<textarea className={`${inputClass} h-auto min-h-[16rem] resize-y font-mono`} value={promptDraft} onChange={(e) => editPrompt(e.currentTarget.value)} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} />}>
+        <MdxEditorField value={promptDraft} onChange={editPrompt} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} className="min-h-[16rem]" />
+      </Suspense>
+      {promptDirty && <div className="text-[11px] text-muted-foreground">Edited — sent verbatim as the prompt.</div>}
+    </div>
+  );
 
   return (
     <Modal
@@ -499,44 +516,27 @@ export function TodoRunAdvancedDialog({
         <Field label="Mode">
           <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
         </Field>
-        <Field label="Agent">
-          <ProviderSelector ariaLabel="Agent" value={agent} onChange={changeProvider} providers={PROVIDERS.map((p) => ({ id: p.id, label: p.label, icon: p.icon }))} />
-        </Field>
         {isVerify ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Backend">
-              <Combobox ariaLabel="Captain backend" value={selectedBackend.id} onChange={changeBackend} options={backendOptions} allowCustomValue={false} required />
-            </Field>
-            <Field label="Model">
-              <ModelSelector models={models} value={model} onChange={setModel} className="w-full" />
-            </Field>
-          </div>
-        ) : (
           <>
-            <div className={`grid gap-3 ${usesCaptainBackend ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-2"}`}>
-              <Field label="Type">
-                <Combobox ariaLabel="Driver type" value={mechanism} onChange={(v) => changeMechanism(v as RunMechanism)} options={catalog.mechanisms.map((m) => ({ value: m.value, label: m.label }))} allowCustomValue={false} required />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label="Agent">
+                <ProviderSelector ariaLabel="Agent" value={verifyAgent} onChange={changeVerifyAgent} providers={PROVIDERS.map((p) => ({ id: p.id, label: p.label, icon: p.icon }))} />
               </Field>
-              {usesCaptainBackend && (
-                <Field label="Backend">
-                  <Combobox ariaLabel="Captain backend" value={selectedBackend.id} onChange={changeBackend} options={backendOptions} allowCustomValue={false} required />
-                </Field>
-              )}
+              <Field label="Backend">
+                <Combobox ariaLabel="Captain backend" value={verifyBackendCatalog.id} onChange={changeVerifyBackend} options={verifyBackendOptions} allowCustomValue={false} required />
+              </Field>
               <Field label="Model">
-                <ModelSelector models={models} value={model} onChange={setModel} className="w-full" />
+                <ModelSelector models={verifyBackendCatalog.models} value={verifyModel} onChange={setVerifyModel} className="w-full" />
               </Field>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Effort">
-                <EffortSelector efforts={efforts} value={effort} onChange={changeEffort} className="w-full" />
-              </Field>
-              <Field label="Timeout">
-                <input className={inputClass} value={timeout} onChange={(e) => setTimeoutValue(e.currentTarget.value)} />
-              </Field>
+            <div className="space-y-1">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Verify prompt</div>
+              {promptEditorNode}
+              {verifyError && <div className="text-xs text-red-600">{verifyError}</div>}
             </div>
-            <Field label="Budget">
-              <BudgetSelector budget={budget} onBudgetChange={setBudget} maxTokensLabel="Max turns" disabled={isCmux} />
-            </Field>
+          </>
+        ) : (
+          <PromptRunEditor value={runtimeValue} onChange={changeRuntime} models={activeModels} families={families} tools={context.tools} specSections={RUN_SPEC_SECTIONS} promptEditor={promptEditorNode} promptLabel="Prompt">
             <div className="flex flex-wrap gap-3 text-xs">
               <label className="inline-flex items-center gap-2">
                 <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} disabled={!isCmux} />
@@ -559,34 +559,8 @@ export function TodoRunAdvancedDialog({
                 <span>Dry run</span>
               </label>
             </div>
-            <Field label="Tools">
-              <ToolPreferences tools={context.tools} value={toolModes} onChange={setToolModes} permissionMode={permissionMode} onPermissionModeChange={setPermissionMode} />
-            </Field>
-          </>
+          </PromptRunEditor>
         )}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">{isVerify ? "Verify prompt" : "Prompt"}</span>
-            <div className="flex items-center gap-2">
-              {previewLoading && <Spinner className="text-xs text-muted-foreground" />}
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={regeneratePrompt}
-                disabled={previewLoading}
-                title="Discard edits and regenerate from the options above"
-                className="h-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                Regenerate
-              </Button>
-            </div>
-          </div>
-          {(previewError || verifyError) && <div className="text-xs text-red-600">{previewError || verifyError}</div>}
-          <Suspense fallback={<textarea className={`${inputClass} h-auto min-h-[16rem] resize-y font-mono`} value={promptDraft} onChange={(e) => editPrompt(e.currentTarget.value)} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} />}>
-            <MdxEditorField value={promptDraft} onChange={editPrompt} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} className="min-h-[16rem]" />
-          </Suspense>
-          {promptDirty && <div className="text-[11px] text-muted-foreground">Edited — sent verbatim as the prompt.</div>}
-        </div>
       </div>
     </Modal>
   );
