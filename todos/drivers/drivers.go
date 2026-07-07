@@ -115,9 +115,9 @@ type Config struct {
 	// ExistingPlan is the current content of the todo's recorded plan file
 	// (plan mode); empty means no prior plan.
 	ExistingPlan string
-	// Verifiers gate each run-mode iteration (captain agent.Runner plugins);
+	// Verifiers gate each run-mode iteration (captain agent.Runner Verify hooks);
 	// a failing verdict's feedback drives another attempt in the same session.
-	Verifiers     []agent.Plugin
+	Verifiers     []agent.Verify
 	MaxIterations int
 	Resume        bool
 	SessionID     string

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
@@ -39,12 +39,14 @@ func newRetryEnv() *cel.Env {
 // whether to re-run the agent (retry, with the failing/warned nodes as feedback)
 // or stop (verified). The predicate reads {results, test_results, changed_files,
 // session_log, iteration}, evaluated via the same gomplate CEL path fixture
-// expectations use.
+// expectations use. changed_files only binds when the hook runs scoped
+// (HookContext.Scope == agent.ScopeChanged); session_log is always empty now —
+// see sessionLog's doc comment.
 
 // celVerifier is the aggregate definition-of-done verifier: it runs every DoD
 // source (configured checks test/lint step fixtures, and the todo's
 // `## Verification` section nodes), aggregates them into one TestResults view,
-// and evaluates the retry CEL. Verdict.OK = !retry.
+// and evaluates the retry CEL. VerifyResult.Valid = !retry.
 type celVerifier struct {
 	name      string
 	retryExpr string
@@ -67,32 +69,41 @@ type stepFixture struct {
 
 func (v *celVerifier) Name() string { return v.name }
 
-func (v *celVerifier) Verify(rc *agent.RunContext, iter *captainai.LoopIteration) (agent.Verdict, error) {
-	results := v.runDeterministic(rc)
-	checklist := v.runChecklist(rc)
-	retry, err := evalRetry(v.retryExpr, results, checklist, rc, iter)
+func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) {
+	results := v.runDeterministic(hc)
+	checklist := v.runChecklist(hc)
+	summary := resultsSummary(results, checklist)
+	retry, err := evalRetry(v.retryExpr, results, checklist, hc)
 	if err != nil {
-		return agent.Verdict{}, err
+		return agent.VerifyResult{}, err
 	}
 	if !retry {
-		return agent.Verdict{OK: true}, nil
+		return agent.VerifyResult{Valid: true, Output: summary}, nil
 	}
-	return agent.Verdict{
-		OK:       false,
-		Reason:   "definition of done not met",
-		Feedback: verifierFeedback(results, checklist),
-	}, nil
+	// Build the next iteration's request explicitly: the same rendered request
+	// (permissions/model/setup unchanged) with a fresh feedback prompt, threading
+	// the initial turn's envelope schema (same bytes, not a recompute) so the
+	// claude-agent per-turn byte-equality guard holds. The new Runner has no
+	// SessionReuse of its own, so resuming the same session is this hook's job.
+	retryReq := *hc.Request
+	retryReq.Prompt = api.Prompt{
+		User:       verifierFeedback(results, checklist),
+		SchemaJSON: hc.Request.Prompt.SchemaJSON,
+		Source:     "todos.check",
+	}
+	retryReq.SessionID = hc.Workspace().SessionID
+	return agent.VerifyResult{Valid: false, Retry: &retryReq, Output: summary}, nil
 }
 
 // runDeterministic executes the configured checks and the todo's `## Verification`
 // section — the cheap, deterministic part of the definition of done.
-func (v *celVerifier) runDeterministic(rc *agent.RunContext) []fixtures.FixtureResult {
+func (v *celVerifier) runDeterministic(hc *agent.HookContext) []fixtures.FixtureResult {
 	var results []fixtures.FixtureResult
 	for _, s := range v.steps {
 		results = append(results, s.runner(s.fixture, fixtures.RunOptions{WorkDir: v.workDir}))
 	}
 	if len(v.nodes) > 0 {
-		results = append(results, runFixtureSection(rc.Ctx, v.nodes, v.workDir)...)
+		results = append(results, runFixtureSection(hc, v.nodes, v.workDir)...)
 	}
 	return results
 }
@@ -100,7 +111,7 @@ func (v *celVerifier) runDeterministic(rc *agent.RunContext) []fixtures.FixtureR
 // runChecklist executes the acceptance-criteria checklist (the LLM step) and
 // returns one {item, passed, message} entry per criterion — nil when the todo
 // has no criteria.
-func (v *celVerifier) runChecklist(rc *agent.RunContext) []map[string]any {
+func (v *celVerifier) runChecklist(hc *agent.HookContext) []map[string]any {
 	if v.aiStep == nil {
 		return nil
 	}
@@ -109,10 +120,10 @@ func (v *celVerifier) runChecklist(rc *agent.RunContext) []map[string]any {
 }
 
 // evalRetry builds the CEL activation from the run's results, the checklist, and
-// the run context, and evaluates the retry predicate to a bool. An empty
+// the hook context, and evaluates the retry predicate to a bool. An empty
 // expression uses the default; a compile/eval error or non-bool result is
 // surfaced (never a silent pass).
-func evalRetry(expr string, results []fixtures.FixtureResult, checklist []map[string]any, rc *agent.RunContext, iter *captainai.LoopIteration) (bool, error) {
+func evalRetry(expr string, results []fixtures.FixtureResult, checklist []map[string]any, hc *agent.HookContext) (bool, error) {
 	if strings.TrimSpace(expr) == "" {
 		expr = types.DefaultRetryExpr
 	}
@@ -127,9 +138,9 @@ func evalRetry(expr string, results []fixtures.FixtureResult, checklist []map[st
 	out, _, err := prg.Eval(map[string]any{
 		"results":       resultsSummary(results, checklist),
 		"test_results":  resultLeaves(results),
-		"changed_files": changedFiles(rc),
-		"session_log":   sessionLog(iter),
-		"iteration":     iteration(iter),
+		"changed_files": changedFiles(hc),
+		"session_log":   sessionLog(),
+		"iteration":     hc.Iteration,
 	})
 	if err != nil {
 		return false, fmt.Errorf("retry predicate %q: %w", expr, err)
@@ -220,37 +231,31 @@ func walkLeaves(res *fixtures.FixtureResult, visit func(task.Status)) {
 
 // changedFiles is the `changed_files` CEL variable — the repo-relative paths the
 // agent's file-mutating tool uses touched this run (Bash-driven edits are not
-// tracked). Always a slice so CEL `.exists`/`.size()` never hit a null.
-func changedFiles(rc *agent.RunContext) []string {
-	if rc == nil || rc.ChangedFiles == nil {
+// tracked), scoped to hooks the runner asked to act only on changed files
+// (HookContext.Scope == agent.ScopeChanged). A ScopeAll run leaves it empty:
+// "changed" isn't a meaningful restriction when the hook is meant to act on the
+// whole tree. Always a slice so CEL `.exists`/`.size()` never hit a null.
+func changedFiles(hc *agent.HookContext) []string {
+	if hc == nil || hc.Scope != agent.ScopeChanged {
 		return []string{}
 	}
-	return rc.ChangedFiles
+	if changed := hc.Workspace().Changed; changed != nil {
+		return changed
+	}
+	return []string{}
 }
 
-// sessionLog is the `session_log` CEL variable — this turn's events (assistant
-// text, tool uses, the result) from the in-memory iteration, so a predicate can
-// react to what the agent did without reading the log file.
-func sessionLog(iter *captainai.LoopIteration) []map[string]any {
-	if iter == nil {
-		return []map[string]any{}
-	}
-	events := make([]map[string]any, 0, len(iter.Events))
-	for _, ev := range iter.Events {
-		events = append(events, map[string]any{
-			"kind": string(ev.Kind),
-			"text": ev.Text,
-			"tool": ev.Tool,
-		})
-	}
-	return events
-}
-
-func iteration(iter *captainai.LoopIteration) int {
-	if iter == nil {
-		return 0
-	}
-	return iter.Iteration
+// sessionLog is the `session_log` CEL variable. The old captain Runner exposed
+// the completed LoopIteration, so this turn's raw events (assistant text, tool
+// uses, the result) were available directly; the current HookContext only
+// carries the run's folded state (Response.Text/Usage, Workspace), not the
+// per-event stream.
+//
+// DEVIATION: session_log is always empty now. Predicates keying off it (e.g.
+// matching a specific tool call) will see []; `results`, `test_results`, and
+// scoped changed_files remain the reliable retry signals.
+func sessionLog() []map[string]any {
+	return []map[string]any{}
 }
 
 // verifierFeedback renders the failing/warned deterministic nodes plus any

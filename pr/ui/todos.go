@@ -1561,7 +1561,7 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	}
 	// Post-run checks run inside the agent loop as fixture-backed verify
 	// plugins; a failing round's feedback re-runs the same session.
-	var verifiers []agent.Plugin
+	var verifiers []agent.Verify
 	var maxIterations int
 	if mode == types.ModeRun {
 		var err error

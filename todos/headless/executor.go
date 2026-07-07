@@ -61,8 +61,8 @@ type Config struct {
 	PromptOverride string
 	// Verifiers gate each run-mode iteration: a failing verdict's feedback is
 	// sent back to the same session for another attempt (captain agent.Runner
-	// drives the loop). Plan runs register none.
-	Verifiers []agent.Plugin
+	// drives the loop via Verify hooks). Plan runs register none.
+	Verifiers []agent.Verify
 	// MaxIterations bounds the verify-feedback loop (only meaningful with
 	// Verifiers); 0 defaults to 3.
 	MaxIterations int
@@ -171,11 +171,11 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 
-// run drives the request through captain's agent.Runner (verify plugins gate
-// run-mode iterations; SessionReuse carries feedback turns), then captures the
-// structured result envelope — from the final iteration's text, or by resuming
-// the session with a final-result request when the text has none or the run
-// timed out.
+// run drives the request through captain's agent.Runner (Verify hooks gate
+// run-mode iterations; a failing verdict's Retry request carries the session
+// id forward explicitly), then captures the structured result envelope — from
+// the final iteration's text, or by resuming the session with a final-result
+// request when the text has none or the run timed out.
 func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captainai.Request, canUseTool captainai.PermissionFunc, providerSessionID string, todosInGroup []*types.TODO) (*todopkg.ExecutionResult, error) {
 	provider, err := e.provider(req, canUseTool, providerSessionID)
 	if err != nil {
@@ -203,28 +203,28 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		}
 	}
 
-	runner := &agent.Runner{
-		Provider: provider,
-		Repo:     req.Cwd(),
-		Cwd:      req.Cwd(),
-		Plugins:  plugins,
-		Loop: captainai.LoopOptions{
-			MaxIterations: maxIter,
-			SessionReuse:  true,
-			OnEvent: func(_ int, ev captainai.Event) {
-				e.handleEvent(ctx, ev, result, todosInGroup, &sawResult)
-			},
-		},
-		Build: func(_ *agent.RunContext, iter int, _ *captainai.LoopIteration, feedback string) captainai.Request {
-			if iter == 0 {
-				return req
-			}
-			next := req
-			// Thread the initial turn's envelope schema (same bytes, not a
-			// recompute) so the claude-agent per-turn byte-equality guard holds.
-			next.Prompt = api.Prompt{User: feedback, SchemaJSON: req.Prompt.SchemaJSON, Source: "todos.check"}
-			next.SessionID = "" // SessionReuse fills the prior iteration's session
-			return next
+	// Scope tells the verify hooks how much they should act on: a check run
+	// (verifiers present) restricts them to the files the agent changed this
+	// run; a plain run (no verifiers) lets them act on the whole tree.
+	scope := agent.ScopeAll
+	if len(plugins) > 0 {
+		scope = agent.ScopeChanged
+	}
+	hooks := make([]any, len(plugins))
+	for i, p := range plugins {
+		hooks[i] = p
+	}
+
+	runner := &agent.Runner[string]{
+		Provider:      provider,
+		Request:       req,
+		Hooks:         hooks,
+		MaxIterations: maxIter,
+		Repo:          req.Cwd(),
+		Cwd:           req.Cwd(),
+		Scope:         scope,
+		OnEvent: func(_ int, ev captainai.Event) {
+			e.handleEvent(ctx, ev, result, todosInGroup, &sawResult)
 		},
 	}
 
@@ -242,7 +242,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	// (budget/cost exhausted, timeout) means a check is still red. This drives
 	// the verified/unverified terminal status in applyOutcome.
 	if len(plugins) > 0 {
-		passed := rres != nil && rres.Loop != nil && rres.Loop.StopReason == "condition-met"
+		passed := rres.Loop != nil && rres.Loop.StopReason == "condition-met"
 		result.DoD = &todopkg.DoDOutcome{Ran: true, Passed: passed}
 	}
 

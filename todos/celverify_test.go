@@ -5,11 +5,25 @@ import (
 	"strings"
 	"testing"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
 )
+
+// newTestHookContext builds a minimal HookContext good enough for celVerifier /
+// evalRetry: a non-nil Request (Verify's retry path dereferences it) and a
+// non-nil Response/Workspace (HookContext.Workspace() allocates lazily off
+// Response, which must itself be non-nil).
+func newTestHookContext() *agent.HookContext {
+	return &agent.HookContext{
+		Context:  context.Background(),
+		Request:  &captainai.Request{},
+		Response: &api.Response{Workspace: &api.Workspace{}},
+	}
+}
 
 func fakeStep(res fixtures.FixtureResult) stepFixture {
 	return stepFixture{
@@ -20,7 +34,7 @@ func fakeStep(res fixtures.FixtureResult) stepFixture {
 // The default retry predicate re-runs while the results have any errors OR
 // warnings — the corrected contract (warnings were treated as pass before).
 func TestEvalRetryDefault(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background()}
+	hc := newTestHookContext()
 	cases := []struct {
 		name   string
 		status task.Status
@@ -34,7 +48,7 @@ func TestEvalRetryDefault(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			results := []fixtures.FixtureResult{{Status: tc.status}}
-			retry, err := evalRetry(types.DefaultRetryExpr, results, nil, rc, nil)
+			retry, err := evalRetry(types.DefaultRetryExpr, results, nil, hc)
 			if err != nil {
 				t.Fatalf("evalRetry: %v", err)
 			}
@@ -46,7 +60,7 @@ func TestEvalRetryDefault(t *testing.T) {
 }
 
 func TestCelVerifierVerdict(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background()}
+	hc := newTestHookContext()
 	failing := fixtures.FixtureResult{
 		Name: "checks:test", Status: task.StatusFAIL,
 		Children: []*fixtures.FixtureNode{
@@ -55,32 +69,36 @@ func TestCelVerifierVerdict(t *testing.T) {
 		},
 	}
 	v := &celVerifier{name: "definition-of-done", retryExpr: types.DefaultRetryExpr, steps: []stepFixture{fakeStep(failing)}}
-	verdict, err := v.Verify(rc, nil)
+	result, err := v.Verify(hc)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if verdict.OK {
-		t.Fatal("failing DoD must be not-OK (retry)")
+	if result.Valid {
+		t.Fatal("failing DoD must be invalid (retry)")
 	}
-	if !strings.Contains(verdict.Feedback, "TestA") || !strings.Contains(verdict.Feedback, "boom") {
-		t.Errorf("feedback missing the failing child: %q", verdict.Feedback)
+	if result.Retry == nil {
+		t.Fatal("an invalid verdict must propose a retry request")
 	}
-	if strings.Contains(verdict.Feedback, "TestB") {
-		t.Errorf("feedback should omit the passing child: %q", verdict.Feedback)
+	feedback := result.Retry.Prompt.User
+	if !strings.Contains(feedback, "TestA") || !strings.Contains(feedback, "boom") {
+		t.Errorf("feedback missing the failing child: %q", feedback)
+	}
+	if strings.Contains(feedback, "TestB") {
+		t.Errorf("feedback should omit the passing child: %q", feedback)
 	}
 
 	v.steps = []stepFixture{fakeStep(fixtures.FixtureResult{Name: "checks:test", Status: task.StatusPASS})}
-	verdict, err = v.Verify(rc, nil)
-	if err != nil || !verdict.OK {
-		t.Fatalf("passing DoD must be OK, got %+v, %v", verdict, err)
+	result, err = v.Verify(hc)
+	if err != nil || !result.Valid {
+		t.Fatalf("passing DoD must be valid, got %+v, %v", result, err)
 	}
 }
 
 // A custom predicate can tolerate warnings by keying only off failures.
 func TestCelCustomExprToleratesWarnings(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background()}
+	hc := newTestHookContext()
 	warned := []fixtures.FixtureResult{{Status: task.StatusWarning}}
-	retry, err := evalRetry("results.failed > 0", warned, nil, rc, nil)
+	retry, err := evalRetry("results.failed > 0", warned, nil, hc)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
@@ -89,30 +107,51 @@ func TestCelCustomExprToleratesWarnings(t *testing.T) {
 	}
 }
 
-// The retry context exposes changed_files (and session_log) for richer rules.
+// changed_files only binds when the hook is scoped to the agent's changed
+// files (Scope == ScopeChanged); a ScopeAll run leaves it empty even when the
+// workspace recorded changed files, since "changed" isn't a meaningful
+// restriction when the hook is meant to act on the whole tree.
 func TestCelChangedFilesBinding(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background(), ChangedFiles: []string{"a.go", "b.go"}}
 	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
-	retry, err := evalRetry(`changed_files.exists(f, f == "a.go")`, clean, nil, rc, nil)
-	if err != nil {
-		t.Fatalf("evalRetry: %v", err)
-	}
-	if !retry {
-		t.Error("changed_files should bind and match a.go")
-	}
+
+	t.Run("scope changed binds and matches", func(t *testing.T) {
+		hc := newTestHookContext()
+		hc.Scope = agent.ScopeChanged
+		hc.Response.Workspace.Changed = []string{"a.go", "b.go"}
+		retry, err := evalRetry(`changed_files.exists(f, f == "a.go")`, clean, nil, hc)
+		if err != nil {
+			t.Fatalf("evalRetry: %v", err)
+		}
+		if !retry {
+			t.Error("changed_files should bind and match a.go")
+		}
+	})
+
+	t.Run("scope all leaves changed_files empty", func(t *testing.T) {
+		hc := newTestHookContext()
+		hc.Scope = agent.ScopeAll
+		hc.Response.Workspace.Changed = []string{"a.go", "b.go"}
+		retry, err := evalRetry(`changed_files.exists(f, f == "a.go")`, clean, nil, hc)
+		if err != nil {
+			t.Fatalf("evalRetry: %v", err)
+		}
+		if retry {
+			t.Error("changed_files must not bind outside ScopeChanged")
+		}
+	})
 }
 
 // The default predicate also fails when any acceptance-criteria checklist item
 // is not passed, via results.checklist.all(i, i.passed).
 func TestCelChecklist(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background()}
+	hc := newTestHookContext()
 	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
 
 	allPass := []map[string]any{
 		{"item": "handles 5xx", "passed": true, "message": ""},
 		{"item": "has tests", "passed": true, "message": ""},
 	}
-	retry, err := evalRetry(types.DefaultRetryExpr, clean, allPass, rc, nil)
+	retry, err := evalRetry(types.DefaultRetryExpr, clean, allPass, hc)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
@@ -124,7 +163,7 @@ func TestCelChecklist(t *testing.T) {
 		{"item": "handles 5xx", "passed": true, "message": ""},
 		{"item": "has tests", "passed": false, "message": "no test added"},
 	}
-	retry, err = evalRetry(types.DefaultRetryExpr, clean, mixed, rc, nil)
+	retry, err = evalRetry(types.DefaultRetryExpr, clean, mixed, hc)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
@@ -133,7 +172,7 @@ func TestCelChecklist(t *testing.T) {
 	}
 
 	// No checklist → vacuously all-passed, no retry from the checklist term.
-	retry, err = evalRetry(types.DefaultRetryExpr, clean, nil, rc, nil)
+	retry, err = evalRetry(types.DefaultRetryExpr, clean, nil, hc)
 	if err != nil {
 		t.Fatalf("evalRetry: %v", err)
 	}
@@ -165,9 +204,9 @@ func TestDispatchFixtureRoutesRunnerStep(t *testing.T) {
 
 // A malformed predicate must fail loud, never silently pass verification.
 func TestCelMalformedErrors(t *testing.T) {
-	rc := &agent.RunContext{Ctx: context.Background()}
+	hc := newTestHookContext()
 	clean := []fixtures.FixtureResult{{Status: task.StatusPASS}}
-	if _, err := evalRetry("results.failed >", clean, nil, rc, nil); err == nil {
+	if _, err := evalRetry("results.failed >", clean, nil, hc); err == nil {
 		t.Fatal("malformed CEL must error, not silently pass")
 	}
 }

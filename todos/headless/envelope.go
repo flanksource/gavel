@@ -28,7 +28,7 @@ type envelope struct {
 // without an envelope is a hard error (its plan status/path are unknowable);
 // run mode degrades to the transport result with a logged warning, leaving
 // EndStatus empty so the degradation is visible to callers.
-func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, result *todopkg.ExecutionResult, rres *agent.RunResult, todosInGroup []*types.TODO, timedOut bool, schemaJSON json.RawMessage) error {
+func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, result *todopkg.ExecutionResult, rres agent.Result[string], todosInGroup []*types.TODO, timedOut bool, schemaJSON json.RawMessage) error {
 	if env := e.envelopeFromRun(rres); env != nil {
 		applyEnvelope(result, env)
 		return nil
@@ -57,8 +57,8 @@ func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captai
 // envelopeFromRun parses the envelope out of the final iteration's assistant
 // text: the last text event alone first (the final reply is usually the bare
 // JSON), then the iteration's full text.
-func (e *Executor) envelopeFromRun(rres *agent.RunResult) *envelope {
-	if rres == nil || rres.Loop == nil || len(rres.Loop.Iterations) == 0 {
+func (e *Executor) envelopeFromRun(rres agent.Result[string]) *envelope {
+	if rres.Loop == nil || len(rres.Loop.Iterations) == 0 {
 		return nil
 	}
 	last := rres.Loop.Iterations[len(rres.Loop.Iterations)-1]
@@ -140,11 +140,12 @@ func applyEnvelope(result *todopkg.ExecutionResult, env *envelope) {
 	result.Plan = env.Plan
 }
 
-// runSessionID prefers the session the Runner observed on the event stream,
-// falling back to the todos' recorded prior session.
-func runSessionID(rres *agent.RunResult, todosInGroup []*types.TODO) string {
-	if rres != nil && rres.SessionID != "" {
-		return rres.SessionID
+// runSessionID prefers the session the Runner observed on the event stream
+// (folded onto the response Workspace), falling back to the todos' recorded
+// prior session.
+func runSessionID(rres agent.Result[string], todosInGroup []*types.TODO) string {
+	if rres.Response != nil && rres.Response.Workspace != nil && rres.Response.Workspace.SessionID != "" {
+		return rres.Response.Workspace.SessionID
 	}
 	return priorSessionID(todosInGroup)
 }

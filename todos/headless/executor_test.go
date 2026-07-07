@@ -324,8 +324,13 @@ func TestHeadlessModelDefaults(t *testing.T) {
 type fakeVerifier struct{ ok bool }
 
 func (f fakeVerifier) Name() string { return "fake" }
-func (f fakeVerifier) Verify(*agent.RunContext, *captainai.LoopIteration) (agent.Verdict, error) {
-	return agent.Verdict{OK: f.ok, Feedback: "fix it"}, nil
+func (f fakeVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) {
+	if f.ok {
+		return agent.VerifyResult{Valid: true}, nil
+	}
+	retry := *hc.Request
+	retry.Prompt = api.Prompt{User: "fix it"}
+	return agent.VerifyResult{Valid: false, Retry: &retry}, nil
 }
 
 // TestHeadlessDoDVerdict pins the definition-of-done capture: the loop stops
@@ -339,7 +344,7 @@ func TestHeadlessDoDVerdict(t *testing.T) {
 
 	t.Run("verifier passes → DoD passed", func(t *testing.T) {
 		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 3,
-			Verifiers: []agent.Plugin{fakeVerifier{ok: true}}, Stream: fakeStream(events...)})
+			Verifiers: []agent.Verify{fakeVerifier{ok: true}}, Stream: fakeStream(events...)})
 		result, err := e.Execute(newTestCtx(), &types.TODO{})
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
@@ -351,7 +356,7 @@ func TestHeadlessDoDVerdict(t *testing.T) {
 
 	t.Run("verifier keeps failing → DoD not passed", func(t *testing.T) {
 		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 2,
-			Verifiers: []agent.Plugin{fakeVerifier{ok: false}}, Stream: fakeStream(events...)})
+			Verifiers: []agent.Verify{fakeVerifier{ok: false}}, Stream: fakeStream(events...)})
 		result, err := e.Execute(newTestCtx(), &types.TODO{})
 		if err != nil {
 			t.Fatalf("Execute: %v", err)

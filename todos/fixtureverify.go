@@ -62,7 +62,7 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 // `checks.retry` CEL predicate decides verified vs unverified. It returns no
 // plugins (and a zero budget) only when the todo has no definition of done at
 // all — such a run ends `completed`.
-func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool) ([]agent.Plugin, int, error) {
+func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool) ([]agent.Verify, int, error) {
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
 	if err != nil {
@@ -125,7 +125,7 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 		aiStep:    aiStep,
 		workDir:   gitRoot,
 	}
-	return []agent.Plugin{verifier}, maxIter + 1, nil
+	return []agent.Verify{verifier}, maxIter + 1, nil
 }
 
 // newChecklistStep builds the acceptance-criteria checklist step: an ai fixture
