@@ -16,8 +16,12 @@ var todosTransferCmd = &cobra.Command{
 	Use:          "transfer <ref> --to <project>",
 	SilenceUsage: true,
 	Short:        "Move a TODO from the current workspace to another project",
-	Args:         cobra.ExactArgs(1),
-	RunE:         runTodosTransfer,
+	Long: `Move a TODO out of the current workspace into another registered gavel project
+(from ~/.config/gavel/projects.json). The target is named by --to.`,
+	Example: `  gavel todos transfer 3f2a1b --to backend
+  gavel todos transfer "Fix parser" --to acme/api`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTodosTransfer,
 }
 
 func runTodosTransfer(_ *cobra.Command, args []string) error {

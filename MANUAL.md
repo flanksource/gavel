@@ -11,7 +11,7 @@ This manual is organized around the actual CLI tree and answers two questions fo
 
 The CLI has two layers:
 
-- Root-level feature commands such as `test`, `lint`, `verify`, and `commit`.
+- Root-level feature commands such as `test`, `lint`, and `commit`.
 - Command groups such as `pr`, `git`, `todos`, `ssh`, `system`, and `repomap`.
 
 Many commands also inherit shared output and execution behavior:
@@ -88,10 +88,10 @@ gavel
 |   |-- check
 |   |-- get
 |   |-- list
-|   `-- run
+|   |-- run
+|   `-- verify
 |-- ui
 |   `-- serve
-|-- verify
 `-- version
 ```
 
@@ -142,7 +142,6 @@ Several features can turn failures into `.todos` entries:
 
 - `gavel test --sync-todos`
 - `gavel lint --sync-todos`
-- `gavel verify --sync-todos`
 - `gavel pr status --sync-todos`
 - `gavel pr fix`
 
@@ -221,7 +220,7 @@ Field reference:
 
 | Key | Purpose |
 | --- | --- |
-| `verify.model` | Default AI CLI or model name for `gavel verify` |
+| `verify.model` | Default AI CLI or model name for `gavel todos verify` and AI-verification fixtures |
 | `verify.prompt` | Optional custom verify prompt text |
 | `verify.checks.disabled` | Disable specific verify checks by ID |
 | `verify.checks.disabledCategories` | Disable whole verify categories |
@@ -468,30 +467,32 @@ This is the command to reach for when someone hands you `gavel-results.json` and
 
 This part of the CLI is about turning diffs and failure reports into actionable next steps: review findings, generated commit messages, and TODO execution loops.
 
-### `gavel verify`
+### `gavel todos verify`
 
-Use `verify` for AI-assisted review of local changes, commit ranges, branches, PRs, files, or directories. It applies a prescribed review structure across completeness, code quality, testing, consistency, security, and performance.
+Use `todos verify` for AI-assisted review: it scores whether a TODO's committed
+work implements its acceptance criteria, applying a prescribed review structure
+across completeness, code quality, testing, consistency, security, and
+performance. (This replaces the former top-level `gavel verify` command; the
+same scoring engine also backs AI-verification fixtures.)
 
 It fits best when you want:
 
-- A review pass before opening or merging a PR
-- A review of a specific commit range or PR
-- An automated fix loop driven by the review findings
-- Findings materialized as TODO files
+- A review pass over the work a TODO produced before merging
+- A pass/fail gate on committed work (`--strict`)
+- A minimum-quality bar enforced by score (`--threshold`)
 
 Common workflows:
 
 ```bash
-gavel verify
-gavel verify main..HEAD
-gavel verify #123
-gavel verify path/to/file.go
-gavel verify --model gemini
-gavel verify --auto-fix --max-turns 5
-gavel verify --sync-todos
+gavel todos verify                       # score all todos
+gavel todos verify 3f2a1b                 # score one todo
+gavel todos verify --threshold 90         # require a higher score
+gavel todos verify --strict               # non-zero if any is unimplemented
+gavel todos verify --model claude-code-sonnet
 ```
 
-Use `--patch-only` when the AI side should return patches instead of relying on interactive tool use.
+To review arbitrary diffs or commit ranges outside the TODO flow, use an
+AI-verification fixture (`ai:`/`verify:` front-matter — see `gavel fixtures --help`).
 
 ### `gavel commit`
 
@@ -817,7 +818,6 @@ gavel version
 
 ```bash
 gavel test --lint --changed
-gavel verify main..HEAD
 gavel commit
 ```
 
@@ -854,7 +854,7 @@ If you only remember a few entrypoints, use this map:
 | Run tests across the repo | `gavel test` |
 | Run linters across the repo | `gavel lint` |
 | Run declarative Markdown tests | `gavel fixtures` |
-| Review a diff with AI | `gavel verify` |
+| Review committed work with AI | `gavel todos verify` |
 | Generate a commit message | `gavel commit` |
 | Check PR status | `gavel pr status` |
 | Browse many PRs | `gavel pr list` |

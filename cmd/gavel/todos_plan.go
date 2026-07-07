@@ -16,6 +16,11 @@ var planReviseFeedback string
 var todosPlanCmd = &cobra.Command{
 	Use:   "plan",
 	Short: "Act on a reviewed plan (reject or revise) — the CLI side of the dashboard plan-review actions",
+	Long: `Act on a plan produced by 'gavel todos run --mode plan' that is awaiting review.
+Subcommands: reject (todo returns to pending, plan cleared) and revise (agent
+folds your --feedback into the plan and returns it to review).`,
+	Example: `  gavel todos plan reject 3f2a1b
+  gavel todos plan revise 3f2a1b --feedback "split the migration into two steps"`,
 }
 
 var todosPlanRejectCmd = &cobra.Command{

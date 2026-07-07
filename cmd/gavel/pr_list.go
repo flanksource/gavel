@@ -47,6 +47,23 @@ type PRListOptions struct {
 	Repos       []string `args:"true"`
 }
 
+func (o PRListOptions) Help() string {
+	return `List GitHub pull requests — the gavel alternative to gh pr list.
+
+Defaults to your open PRs (--author @me) updated in the last --since window (7d).
+Optional positional args restrict to specific repos. Add check status with
+--status, widen to the whole org with --all, or open a live browser dashboard
+with --ui. --ci switches to default-branch CI health across the org's repos.
+
+Examples:
+  gavel pr list                    # your open PRs from the last 7 days
+  gavel pr list --status           # with Actions check status counts
+  gavel pr list --all --org acme   # every open PR across the org
+  gavel pr list --state all --any  # all states, all authors
+  gavel pr list --ui               # live browser dashboard (port 9092)
+  gavel pr list --ci --failed-only # org repos whose default branch is red`
+}
+
 var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)
 
 // closedPRLookback bounds how far back an on-demand closed-PR sync reaches on a

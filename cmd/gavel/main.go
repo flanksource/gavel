@@ -111,7 +111,6 @@ func gavelMCPExcludedCommands() []string {
 		// OS-level daemon/service installers
 		"^system$", "^system ",
 		// expensive AI, history-rewriting, or large-analysis workflows
-		"^verify$",
 		"^todos$", "^todos ",
 		"^bench$", "^bench ",
 		"^pr fix$",

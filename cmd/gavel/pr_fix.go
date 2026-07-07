@@ -21,8 +21,20 @@ var (
 )
 
 var prFixCmd = &cobra.Command{
-	Use:          "fix [pr-number]",
-	Short:        "Sync TODOs from PR failures and interactively select which to fix",
+	Use:   "fix [pr-number]",
+	Short: "Sync TODOs from PR failures and interactively select which to fix",
+	Long: `Turn a PR's failing checks and review comments into fixes, end to end.
+
+Fetches the PR status (current branch's PR when no number is given), syncs a
+.todos entry per failing job and per actionable review comment, then opens an
+interactive picker so you choose which to fix. Selected TODOs run through the
+same agent loop as 'gavel todos run' — see 'gavel todos --help'.
+
+Examples:
+  gavel pr fix                     # fix the current branch's PR
+  gavel pr fix 123                 # fix PR #123
+  gavel pr fix --dir .todos/pr     # sync into a specific directory
+  gavel pr fix --dry-run           # sync + list, print commands without running`,
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	RunE:         runPRFix,

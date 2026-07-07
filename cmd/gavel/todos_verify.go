@@ -20,7 +20,28 @@ var todosVerifyCmd = &cobra.Command{
 	Use:          "verify [ids-or-files...]",
 	SilenceUsage: true,
 	Short:        "AI-verify whether a TODO's commits implement its acceptance criteria",
-	RunE:         runTodosVerify,
+	Long: `AI code review for TODOs: score whether the committed work actually implements
+each TODO's acceptance criteria. This is gavel's AI-review surface (it replaces
+the former top-level 'gavel verify' command).
+
+For each TODO, an AI model reviews the diff of its commits against its task-list
+criteria and returns a score plus an implemented/not-implemented verdict. A TODO
+is promoted to "verified" when it is implemented and scores at/above --threshold
+(default 80). --strict exits non-zero if any reviewed TODO is not implemented,
+which makes it usable as a CI/quality gate. The model defaults to .gavel.yaml
+verify.model; override with --model.
+
+With no arguments it verifies every TODO matching --status; pass ids/paths to
+select a subset. The same scoring engine is also available as AI-verification
+fixtures (see 'gavel fixtures --help', FORMAT 3).
+
+Examples:
+  gavel todos verify                       # score all todos
+  gavel todos verify 3f2a1b                 # score one todo
+  gavel todos verify --threshold 90         # require a higher score
+  gavel todos verify --strict               # non-zero if any unimplemented
+  gavel todos verify --model claude-code-sonnet`,
+	RunE: runTodosVerify,
 }
 
 func init() {

@@ -367,29 +367,29 @@ gavel bench compare --base base.json --head head.json --threshold 15 --ui
 
 ### Code Review & Commits
 
-#### `gavel verify`
+#### `gavel todos verify`
 
-AI-powered code review with structured checks across completeness, code quality, testing, consistency, security, and performance.
+AI-powered code review: score whether a TODO's committed work implements its
+acceptance criteria, across completeness, code quality, testing, consistency,
+security, and performance. (This replaces the former top-level `gavel verify`
+command; the same engine also backs AI-verification fixtures — see
+`gavel fixtures --help`.)
 
 ```bash
-gavel verify
-gavel verify --range main..HEAD
-gavel verify --model gemini --disable-checks SEC-1,PERF-2
-gavel verify --auto-fix --max-turns 5
-gavel verify --sync-todos
+gavel todos verify                       # score all todos
+gavel todos verify 3f2a1b                 # score one todo
+gavel todos verify --threshold 90         # require a higher score
+gavel todos verify --strict               # exit non-zero if any is unimplemented
+gavel todos verify --model claude-code-sonnet
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--model` | AI CLI: `claude`, `gemini`, `codex` (or a model name) |
-| `--range` | Commit range to review |
-| `--auto-fix` | Enable iterative AI fix loop |
-| `--fix-model` | Separate model for fixes |
-| `--max-turns` | Max verify-fix cycles (default: 3) |
-| `--score-threshold` | Exit 0 if score >= this (default: 80) |
-| `--disable-checks` | Check IDs to disable |
-| `--sync-todos` | Create TODO files from findings |
-| `--patch-only` | AI outputs patches instead of interactive tool-use |
+| `--model` | AI model for verification (default: `.gavel.yaml` `verify.model`) |
+| `--threshold` | Score at/above which an implemented TODO is promoted to verified (default: 80) |
+| `--strict` | Exit non-zero when any verified TODO is not implemented |
+| `--status` | Only verify TODOs in this status |
+| `--dir` | TODOs directory (with `--provider=todos`) |
 
 #### `gavel commit`
 
@@ -736,7 +736,7 @@ A full annotated example lives in `gavel.yaml.example` and is also rendered in `
 
 ```yaml
 verify:
-  model: claude                      # AI model for gavel verify
+  model: claude                      # AI model for gavel todos verify / AI fixtures
   checks:
     disabled: [SEC-1, PERF-2]        # disable specific check IDs
     disabledCategories: [performance] # disable entire categories
@@ -914,12 +914,14 @@ gavel git analyze --verbose            # show skip reasons
 
 ## Agent Skills
 
-Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents three complementary capabilities: writing data-driven tests, driving the everyday test+lint loop, *and* migrating CI pipelines onto the gavel composite action. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
+Gavel ships [Agent Skills](https://agentskills.io/) that teach AI coding agents to reach for gavel across the workflow: writing data-driven tests, driving the everyday test+lint loop, using gavel instead of gh/git for PRs and commits, running the TODO/AI-review loop, and migrating CI pipelines onto the gavel composite action. Skills are auto-discovered from `.agents/skills/` by any compatible agent (Claude Code, VS Code Copilot, Cursor, Gemini CLI, and [others](https://agentskills.io/)).
 
 | Skill | What it teaches the agent |
 |-------|---------------------------|
 | [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
 | [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
+| [`gavel-git`](.agents/skills/gavel-git/SKILL.md) | **Use gavel over gh/git** — `gavel pr status` for PR + CI status (replaces `gh pr view`/`gh run view`), `gavel commit -p` / `gavel pr create` to open PRs with AI-generated content, and `gavel commit` (session-scoped, conventional message, hooks) for commits. |
+| [`gavel-todos`](.agents/skills/gavel-todos/SKILL.md) | **Run the TODO loop** — have a coding agent implement TODOs (`gavel todos run`, run/plan/verify modes) and AI-score committed work against acceptance criteria (`gavel todos verify --strict`, the home of the former `gavel verify`). |
 | [`gavel-ci-migrator`](.agents/skills/gavel-ci-migrator/SKILL.md) | **Migrate CI** — discover existing `golangci-lint` / `go test` / `make lint|test` jobs in `.github/workflows/`, ask per-workflow whether to replace with `flanksource/gavel@…` or add alongside, rewrite YAML with the right `permissions:` and `fetch-depth: 0`, and verify with `actionlint`. Never auto-commits. |
 
 ### Install
@@ -932,7 +934,7 @@ Gavel ships [Agent Skills](https://agentskills.io/) that give AI coding agents t
 /plugin install gavel-skills@flanksource-gavel
 ```
 
-After installation, all three skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results, and `gavel-ci-migrator` when you ask it to *switch CI to gavel* or *replace golangci-lint-action / `go test` jobs* with the gavel action.
+After installation, all five skills become available. The agent picks `gavel-fixture-tester` when you ask it to *write* a fixture, `gavel-runner` when you ask it to *run* tests, *rerun* failures, or *inspect* results, `gavel-git` when you ask it to *check a PR*, *see why CI is failing*, or *commit / open a PR*, `gavel-todos` when you ask it to *run the todos* or *verify* committed work, and `gavel-ci-migrator` when you ask it to *switch CI to gavel* or *replace golangci-lint-action / `go test` jobs* with the gavel action.
 
 **For any agent (via the open Skills CLI):**
 

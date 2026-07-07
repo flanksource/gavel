@@ -21,7 +21,26 @@ const statusDefaultTailLogs = 100
 
 var prCmd = &cobra.Command{
 	Use:   "pr",
-	Short: "Pull request commands",
+	Short: "Pull request commands — the gavel replacement for gh pr / gh run",
+	Long: `Inspect and drive GitHub pull requests and their Actions checks.
+
+Prefer these over raw gh for PR/CI work — gavel renders workflow steps,
+conclusions, timing, and failing-step logs in one view, and can feed failures
+into the AI or into .todos/. Reserve raw gh for actions gavel does not cover.
+
+Subcommands:
+  status   Show a PR's Actions status (replaces gh pr view / gh run view / gh run list)
+  create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
+  fix      Sync TODOs from a PR's failures/comments, then interactively fix them
+  list     List PRs, optionally with CI status or a live browser dashboard (--ui)
+
+Examples:
+  gavel pr status                 # current branch's PR + checks
+  gavel pr status 123 --logs      # PR #123 with failing-job logs
+  gavel pr status --follow        # block until checks complete
+  gavel pr create <SHA>           # open a PR from one commit
+  gavel pr fix                    # sync + fix failing checks/comments
+  gavel pr list --ui              # live PR dashboard`,
 }
 
 type PRStatusOptions struct {
@@ -46,7 +65,18 @@ type PRStatusOptions struct {
 }
 
 func (o PRStatusOptions) Help() string {
-	return `Show GitHub Actions status for a PR.
+	return `Show a PR's GitHub Actions status — checks, conclusions, timing, and failing-step logs.
+
+Use this instead of gh pr view / gh run view / gh run list: one readable view of
+every workflow step for the PR. With no argument it resolves the current branch's
+PR (falling back to your most recent PR). Accepts a PR number, owner/repo + number,
+or a full PR URL.
+
+Key flags:
+  --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
+  --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
+  --sync-todos DIR  Write .todos for failed jobs + review comments (bare flag -> .todos)
+  --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
 
 Examples:
   gavel pr status                              # current branch's PR
@@ -54,6 +84,8 @@ Examples:
   gavel pr status owner/repo 123               # PR #123 in another repo
   gavel pr status https://github.com/o/r/pull/1
   gavel pr status --follow                     # block until checks complete
+  gavel pr status 123 --logs                   # include failing-job logs
+  gavel pr status --sync-todos                 # turn failures + comments into .todos
   gavel pr status --ai-fix                     # feed status into the AI to fix failures`
 }
 

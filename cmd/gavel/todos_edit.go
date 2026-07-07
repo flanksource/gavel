@@ -27,24 +27,30 @@ var todosEditCmd = &cobra.Command{
 	Use:          "edit <id-or-file>",
 	SilenceUsage: true,
 	Short:        "Edit a TODO's title and/or body",
-	Args:         cobra.ExactArgs(1),
-	RunE:         runTodosEdit,
+	Example: `  gavel todos edit 3f2a1b --title "Fix parser panic"
+  gavel todos edit .todos/fix-parser.md --body-file new-body.md`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTodosEdit,
 }
 
 var todosCommentCmd = &cobra.Command{
 	Use:          "comment <id-or-file> [message...]",
 	SilenceUsage: true,
 	Short:        "Add a comment to a TODO",
-	Args:         cobra.MinimumNArgs(1),
-	RunE:         runTodosComment,
+	Example: `  gavel todos comment 3f2a1b "blocked on the upstream fix"
+  gavel todos comment .todos/fix-parser.md --body-file note.md`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: runTodosComment,
 }
 
 var todosReopenCmd = &cobra.Command{
 	Use:          "reopen <id-or-file>",
 	SilenceUsage: true,
 	Short:        "Reopen a completed TODO, optionally with a comment",
-	Args:         cobra.ExactArgs(1),
-	RunE:         runTodosReopen,
+	Example: `  gavel todos reopen 3f2a1b
+  gavel todos reopen 3f2a1b --comment "regressed on main"`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTodosReopen,
 }
 
 func init() {

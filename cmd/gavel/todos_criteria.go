@@ -19,6 +19,12 @@ var todosCriteriaCmd = &cobra.Command{
 	Use:          "criteria",
 	SilenceUsage: true,
 	Short:        "View and edit a TODO's acceptance criteria",
+	Long: `Manage a TODO's acceptance criteria — the task-list items that 'todos verify'
+scores. Subcommands: list, add, remove, edit, generate (AI re-draft).`,
+	Example: `  gavel todos criteria list 3f2a1b
+  gavel todos criteria add 3f2a1b "handles empty input"
+  gavel todos criteria remove 3f2a1b 2
+  gavel todos criteria generate 3f2a1b   # AI (re)draft from title/body`,
 }
 
 var todosCriteriaListCmd = &cobra.Command{

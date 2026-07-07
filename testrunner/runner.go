@@ -230,21 +230,27 @@ func (opts RunOptions) hasChangeSelector() bool {
 }
 
 func (r RunOptions) Help() string {
-	return `Run all test frameworks in the project (go test and Ginkgo).
+	return `Run every test framework detected in the project — the gavel replacement for
+'go test' / 'ginkgo' / 'vitest' / 'jest' / 'playwright' / 'make test'.
 
-Automatically detects which frameworks are present and runs them.
-Captures output in JSON format for reliable parsing.
-Optionally syncs failures to TODO files in .todos/ directory.
+Auto-detects which frameworks are present and runs them, capturing output as
+structured JSON for reliable parsing. Layers CLI-only concerns on top: re-run
+only failures, gate on new-vs-baseline, cache passing packages, run linters in
+parallel (--lint), sync failures to .todos/, and stream to a browser UI (--ui).
 
-Optionally accepts package paths as arguments to run only tests in those packages.
-Additional arguments after "--" are passed to the test runners (e.g., ginkgo flags).
+Positional args restrict the run to those package paths (recursive by default).
+Arguments after "--" pass through to the underlying runner (e.g. ginkgo flags).
 
 Examples:
-  arch-unit test
-  arch-unit test ./pkg/testrunner
-  arch-unit test ./pkg/testrunner ./cmd
-  arch-unit test ./pkg/testrunner -- --focus "TestName"
-  arch-unit test . -- --focus "Integration" --skip "Slow"`
+  gavel test                                       # all frameworks
+  gavel test ./pkg/testrunner ./cmd                # only these packages
+  gavel test --lint                                # tests + linters in parallel
+  gavel test --changed                             # only changed packages
+  gavel test --failed                              # re-run last run's failures (.gavel/last.json)
+  gavel test --framework go,ginkgo                 # restrict frameworks
+  gavel test ./pkg/testrunner -- --focus "TestName"  # pass-through to ginkgo
+  gavel test . -- --focus "Integration" --skip "Slow"
+  gavel test --ui                                  # live browser UI (HTTP + SSE)`
 }
 
 // packageResult contains results from running tests in a single package

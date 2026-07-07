@@ -53,14 +53,59 @@ var todosCmd = &cobra.Command{
 	Use:          "todos",
 	Aliases:      []string{"todo"},
 	SilenceUsage: true,
-	Short:        "Automated TODO execution system with Claude Code integration",
+	Short:        "Automated TODO execution + AI verification with coding agents",
+	Long: `Run, verify, and manage TODOs — units of work an AI coding agent implements
+and gavel then scores against their acceptance criteria.
+
+A TODO is a markdown file with YAML frontmatter (title, status, priority,
+working_commit, branch, verify, checks, ...). Its GitHub task-list items
+("- [ ] ...") are the acceptance criteria that 'todos verify' scores. Todos come
+from source TODO/FIXME comments ('todos sync'), from a PR's failures
+('gavel pr fix' / 'gavel pr status --sync-todos'), or by hand ('todos create').
+
+Subcommands:
+  list      List TODOs (filter by --status, group with --group-by)
+  get       Show one TODO in detail (accepts a short id, full id, or file path)
+  create    Create a TODO
+  run       Have a coding agent implement TODOs (--mode run|plan|verify)
+  verify    AI-score whether a TODO's commits implement its criteria
+  check     Run a TODO's verification tests
+  edit / comment / reopen / criteria / sync / plan / transfer
+
+Examples:
+  gavel todos list
+  gavel todos get <id>
+  gavel todos run                  # implement all pending todos
+  gavel todos run --mode plan      # propose a reviewable plan first
+  gavel todos verify --strict      # score committed work, non-zero if unmet`,
 }
 
 var todosRunCmd = &cobra.Command{
 	Use:          "run [todo-titles...]",
 	SilenceUsage: true,
-	Short:        "Execute TODOs using Claude Code with automated verification",
-	RunE:         runTodosRun,
+	Short:        "Have a coding agent implement TODOs (run/plan/verify modes)",
+	Long: `Drive an AI coding agent (Claude or Codex, via cmux or headless) to work TODOs.
+
+With no arguments it runs every pending TODO; pass titles/ids/paths to select a
+subset, or -i to pick interactively. --mode chooses the operation:
+  run     implement the TODO (default)
+  plan    propose a reviewable plan instead of editing (see 'todos plan')
+  verify  score committed work (delegates to 'todos verify')
+
+After each TODO's agent finishes, gavel commits its changes (--commit, on by
+default; disable with --commit=false). --check additionally runs the configured
+checks suite and feeds failures back to the agent until they pass. Use --dry-run
+to print the prompts and commands without executing.
+
+Examples:
+  gavel todos run                          # implement all pending todos
+  gavel todos run "Fix flaky parser test"  # one todo by title
+  gavel todos run -i                       # interactively select
+  gavel todos run --mode plan              # propose plans for review
+  gavel todos run --check                  # run checks + fix failures in-loop
+  gavel todos run --driver codex-headless --model o3
+  gavel todos run --dry-run                # preview prompts, no changes`,
+	RunE: runTodosRun,
 }
 
 type TodosListOptions struct {
@@ -76,15 +121,33 @@ var todosGetCmd = &cobra.Command{
 	Use:          "get <id-or-file>",
 	SilenceUsage: true,
 	Short:        "Display detailed information about a TODO (accepts a full or short id, or a file path)",
-	Args:         cobra.ExactArgs(1),
-	RunE:         runTodosGet,
+	Long: `Show one TODO in full — frontmatter, body, acceptance criteria, and run history.
+
+The argument matches a short id, a full id, the title, or a file path.
+
+Examples:
+  gavel todos get 3f2a1b
+  gavel todos get "Fix flaky parser test"
+  gavel todos get .todos/fix-parser.md`,
+	Args: cobra.ExactArgs(1),
+	RunE: runTodosGet,
 }
 
 var todosCheckCmd = &cobra.Command{
 	Use:          "check [todo-files...]",
 	SilenceUsage: true,
 	Short:        "Check TODOs by running their verification tests",
-	RunE:         runTodosCheck,
+	Long: `Run each TODO's verification commands (the 'verify' fixtures) and report pass/fail.
+
+This runs the deterministic checks attached to a TODO — unlike 'todos verify',
+which uses AI to score acceptance criteria. Exits non-zero if any TODO fails.
+With no arguments it checks every discovered TODO; pass ids/paths to select some.
+
+Examples:
+  gavel todos check
+  gavel todos check .todos/fix-parser.md
+  gavel todos check --status in_progress`,
+	RunE: runTodosCheck,
 }
 
 func runTodosRun(cmd *cobra.Command, args []string) error {

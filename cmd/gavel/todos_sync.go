@@ -19,7 +19,13 @@ var todosSyncCmd = &cobra.Command{
 	Use:          "sync [paths...]",
 	SilenceUsage: true,
 	Short:        "Sync source TODO/FIXME comments into TODO issues",
-	RunE:         runTodosSync,
+	Long: `Scan the source tree for TODO/FIXME comments and create or update a TODO issue
+for each. Restrict to specific paths with positional args; change which markers
+are picked up with --markers. Use --dry-run to preview the changes.`,
+	Example: `  gavel todos sync
+  gavel todos sync ./pkg/parser
+  gavel todos sync --markers TODO,FIXME,HACK --dry-run`,
+	RunE: runTodosSync,
 }
 
 func runTodosSync(cmd *cobra.Command, args []string) error {

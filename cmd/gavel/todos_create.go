@@ -29,8 +29,13 @@ var todosCreateCmd = &cobra.Command{
 	Aliases:      []string{"new"},
 	SilenceUsage: true,
 	Short:        "Create a TODO",
-	Args:         cobra.ArbitraryArgs,
-	RunE:         runTodosCreate,
+	Long: `Create a TODO from a title (and optional body). When a model is available, gavel
+drafts AI acceptance criteria from the title/body (disable with --criteria=false).`,
+	Example: `  gavel todos create "Fix flaky parser test"
+  gavel todos create --title "Add retry" --body "wrap the client in backoff"
+  gavel todos create "Refactor auth" --priority high --criteria=false`,
+	Args: cobra.ArbitraryArgs,
+	RunE: runTodosCreate,
 }
 
 func init() {
