@@ -13,6 +13,7 @@ import (
 	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
@@ -264,9 +265,14 @@ func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, erro
 	}
 	cfg := newDriverConfig(kind, workDir, todo)
 	if todosRunMode != types.ModePlan {
-		// Post-run checks are fixture-backed verify plugins inside the agent loop
-		// (--check forces them on; .gavel.yaml/frontmatter `checks` enable them too).
-		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, checkAfter)
+		// Post-run checks are fixture-backed verify plugins inside the agent loop.
+		// --check force-enables them (a bare Workflow.Verify); .gavel.yaml/frontmatter
+		// `checks` enable them too.
+		var checkVerify *api.Verify
+		if checkAfter {
+			checkVerify = &api.Verify{}
+		}
+		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, checkVerify)
 		if err != nil {
 			return nil, "", err
 		}

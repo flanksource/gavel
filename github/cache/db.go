@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/shutdown"
 	commonsdb "github.com/flanksource/commons-db/db"
+	commonsdbgorm "github.com/flanksource/commons-db/gorm"
 	"github.com/flanksource/commons/logger"
 	internalcache "github.com/flanksource/gavel/internal/cache"
 	"github.com/flanksource/gavel/service"
@@ -73,12 +74,13 @@ func Open() (*Store, error) {
 		return &Store{disabled: true}, nil
 	}
 
-	db, err := internalcache.NewDBRaw("postgres", dsn)
+	gormDB, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
 	if err != nil {
 		return nil, fmt.Errorf("open github cache: %w", err)
 	}
+	db := internalcache.NewFromGormDB(gormDB)
 
-	if err := db.GormDB().AutoMigrate(
+	if err := commonsdbgorm.SchemaChangeSession(db.GormDB()).AutoMigrate(
 		&HTTPCacheEntry{},
 		&WorkflowRunCache{},
 		&JobLogCache{},

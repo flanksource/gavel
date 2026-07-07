@@ -30,6 +30,11 @@ type DB struct {
 	writeMu sync.Mutex // Protects write operations
 }
 
+// NewFromGormDB wraps an existing GORM connection with the cache DB helpers.
+func NewFromGormDB(gormDB *gorm.DB) *DB {
+	return &DB{conn: gormDB}
+}
+
 // NewDB creates a new synchronized GORM database wrapper and, for sqlite,
 // auto-migrates the lint-violation models. Callers that own a different
 // schema (e.g. github/cache) should use NewDBRaw to skip that migration.

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/flanksource/captain/pkg/api"
 	clickyai "github.com/flanksource/gavel/ai"
 )
 
@@ -66,6 +67,8 @@ func TestGeneratePRContentRendersCaptainPromptAndSchema(t *testing.T) {
 	assert.Contains(t, agent.req.Prompt, "files: commit/push_prompt.go, commit/pr-content.prompt")
 	assert.NotContains(t, agent.req.Prompt, "%s")
 	assert.NotEmpty(t, agent.req.SchemaJSON, "schema should be carried as SchemaJSON from the frontmatter")
+	assert.Equal(t, api.SchemaStrictnessRetry, agent.req.SchemaStrictness,
+		"schemaStrictness: retry from the frontmatter must be forwarded so a schema violation is fixed by re-asking the model")
 }
 
 func TestGeneratePRContentRejectsLongTitle(t *testing.T) {

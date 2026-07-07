@@ -103,11 +103,12 @@ func renderPRContentPrompt(in PRContentInput) (clickyai.PromptRequest, error) {
 		return clickyai.PromptRequest{}, fmt.Errorf("render PR-content prompt: %w", err)
 	}
 	return clickyai.PromptRequest{
-		Name:         "PR title and body",
-		Prompt:       req.Prompt.User,
-		SystemPrompt: req.Prompt.System,
-		SchemaJSON:   req.Prompt.SchemaJSON,
-		Source:       "pr-content.prompt",
+		Name:             "PR title and body",
+		Prompt:           req.Prompt.User,
+		SystemPrompt:     req.Prompt.System,
+		SchemaJSON:       req.Prompt.SchemaJSON,
+		SchemaStrictness: req.Prompt.SchemaStrictness,
+		Source:           "pr-content.prompt",
 	}, nil
 }
 

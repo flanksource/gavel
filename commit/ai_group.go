@@ -142,8 +142,8 @@ func sortGroupingRows(rows []groupingRow, groupByScope bool) {
 // ignore list: it renders a gavel-status table, asks the LLM to group it, then maps
 // the response back onto the staged changes via assembleGroups. The MaxCommits cap
 // is declared as maxItems on the groups array in the .prompt output schema and
-// enforced by captain's schemaStrictness=retry policy (one fix-up re-ask, then a
-// hard error). It builds its own agent (like generateCommitAnalysis) so the
+// enforced by captain's schemaStrictness=retry policy (bounded fix-up re-asks,
+// then a hard error). It builds its own agent (like generateCommitAnalysis) so the
 // grouping seam can be stubbed in tests without an LLM.
 func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([]commitGroup, error) {
 	table, err := buildStatusTable(opts.WorkDir, source.Changes, opts.GroupByScope)

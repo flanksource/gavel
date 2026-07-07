@@ -1,4 +1,6 @@
 ---
+prompt:
+  schemaStrictness: retry
 output:
   schema:
     type: object
@@ -14,7 +16,7 @@ output:
         description: "Markdown body summarising what changed and why; may be empty for trivial PRs"
       branch:
         type: string
-        maxLength: 20
+        maxLength: 40
         description: "Suggested branch name: kebab-case, <=40 chars, conventional-commit type prefix (feat/, fix/, chore/, refactor/, docs/) when the commits share a type. Use only [a-z0-9/-]"
 ---
 You are opening a GitHub pull request for the following local commits.
