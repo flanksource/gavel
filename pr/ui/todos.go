@@ -197,17 +197,15 @@ type todoRunPayload struct {
 	// bool, which is still accepted until the dashboard sends runMode.
 	RunMode string `json:"runMode,omitempty"`
 	Plan    bool   `json:"plan,omitempty"`
-	Resume  bool   `json:"resume,omitempty"`
-	Dirty   bool   `json:"dirty,omitempty"`
-	DryRun  bool   `json:"dryRun,omitempty"`
-	// Commit controls whether `gavel commit` runs over the agent's changes once
-	// the run finishes. A nil pointer defaults to true (the dashboard auto-commits
-	// like the CLI's `todos run --commit`); send false to disable it.
-	Commit *bool `json:"commit,omitempty"`
-	// Check, when true, runs the configured `checks` test/lint suite after the
-	// agent completes and feeds failures back to it. Opt-in (defaults off),
-	// mirroring the CLI's `todos run --check`.
-	Check *bool `json:"check,omitempty"`
+	// Resume continues the todo's prior agent session (claude --resume) instead of
+	// starting fresh. It stays a sibling flag rather than a Spec field because it is
+	// a session-identity decision: a fresh run also carries a (minted) sessionId, so
+	// resume cannot be inferred from Spec.SessionID.
+	Resume bool `json:"resume,omitempty"`
+	// Dirty/DryRun/Commit/Check are no longer sibling flags — the run's dirty-tree
+	// stash, dry-run, auto-commit, and checks all come from the embedded api.Spec
+	// (Setup.Checkout.Dirty and Workflow.Verify/PostRun), surfaced by clicky's
+	// Workspace/Verify/Commit sections.
 }
 
 type todoRunResponse struct {
@@ -256,18 +254,45 @@ type todoRunRequest struct {
 }
 
 type todoRunOptions struct {
-	// Spec carries the model/backend/effort/budget/prompt/permissions/session
-	// knobs, resolved and validated by normalizeTodoRunOptions.
+	// Spec carries the model/backend/effort/budget/prompt/permissions/session knobs
+	// plus the run's Setup (dirty/checkout) and Workflow (verify/postRun), resolved
+	// and validated by normalizeTodoRunOptions. dirty/checks/commit/dryRun are read
+	// from Spec.Setup/Spec.Workflow (see specDirty/specVerify/specCommit/specDryRun),
+	// not sibling flags.
 	api.Spec
 	Agent   string
 	Mode    string
 	Driver  string
 	RunMode types.RunMode
 	Resume  bool
-	Dirty   bool
-	DryRun  bool
-	Commit  bool
-	Check   bool
+}
+
+// specCommit reports whether the run's Workflow.PostRun asks for an auto-commit.
+// Absent Workflow/PostRun means no commit; the run dialog seeds postRun.commit=true
+// on the Commit section so a default dashboard run still auto-commits.
+func specCommit(spec api.Spec) bool {
+	return spec.Workflow != nil && spec.Workflow.PostRun != nil && spec.Workflow.PostRun.Commit
+}
+
+// specDryRun reports whether the run is a dry run (Workflow.PostRun.DryRun): the
+// agent runs normally but the post-run auto-commit is suppressed.
+func specDryRun(spec api.Spec) bool {
+	return spec.Workflow != nil && spec.Workflow.PostRun != nil && spec.Workflow.PostRun.DryRun
+}
+
+// specVerify returns the run's Workflow.Verify (nil when unset). Its presence
+// force-enables the checks suite and its MaxIterations caps the verify loop.
+func specVerify(spec api.Spec) *api.Verify {
+	if spec.Workflow == nil {
+		return nil
+	}
+	return spec.Workflow.Verify
+}
+
+// specDirty reports whether the run's Setup.Checkout carries a dirty-tree stash
+// config (surfaced by the Workspace section).
+func specDirty(spec api.Spec) bool {
+	return spec.Setup != nil && spec.Setup.Checkout != nil && spec.Setup.Checkout.Dirty != nil
 }
 
 // timeout parses the run's budget timeout, defaulting to 30 minutes when
@@ -748,15 +773,12 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Timeout:   opts.timeout().String(),
 		MaxBudget: opts.Budget.Cost,
 		MaxTurns:  opts.Budget.MaxTurns,
-		Commit:    opts.Commit,
+		Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
-	if opts.DryRun {
-		resp.Status = "dry_run"
-		resp.Message = "Todo run validated"
-		json.NewEncoder(w).Encode(resp) //nolint:errcheck
-		return
-	}
+	// A dry run (Workflow.PostRun.DryRun) still executes the agent — it only skips
+	// the post-run commit (see maybeCommitAfterRun). "Show what would run without
+	// running" is covered by the live prompt preview (handleTodoRunPreview).
 	if err := startTodoRun(req); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -1373,18 +1395,9 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 			return todoRunOptions{}, fmt.Errorf("invalid tool mode %q for tool %q", mode, tool)
 		}
 	}
-
-	// Auto-commit defaults on (matching the CLI's `todos run --commit`); a nil
-	// pointer means the client did not opt out.
-	commit := true
-	if payload.Commit != nil {
-		commit = *payload.Commit
-	}
-
-	// The post-completion check loop is opt-in (matching `todos run --check`).
-	check := false
-	if payload.Check != nil {
-		check = *payload.Check
+	// Validate the run's Workflow (verify scope/maxIterations); nil is allowed.
+	if err := spec.Workflow.Validate(); err != nil {
+		return todoRunOptions{}, fmt.Errorf("workflow: %w", err)
 	}
 
 	return todoRunOptions{
@@ -1394,10 +1407,6 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		Driver:  string(kind),
 		RunMode: runMode,
 		Resume:  payload.Resume,
-		Dirty:   payload.Dirty,
-		DryRun:  payload.DryRun,
-		Commit:  commit,
-		Check:   check,
 	}, nil
 }
 
@@ -1448,7 +1457,9 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	// An ask outcome has half-done work by design: committing it is a decision
 	// for the answer turn, not the run tail.
 	askEnded := result != nil && result.EndStatus == types.EndAsk
-	if enabled := req.Options.Commit && req.Options.RunMode != types.ModePlan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
+	// A dry run executes but suppresses the auto-commit (api.PostRun.DryRun).
+	commitEnabled := specCommit(req.Options.Spec) && !specDryRun(req.Options.Spec)
+	if enabled := commitEnabled && req.Options.RunMode != types.ModePlan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
 		meta := commit.AgentRunMetadata{IssueID: todo.ID}
 		if todo.LLM != nil {
 			meta.SessionID = todo.LLM.SessionId
@@ -1508,7 +1519,7 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	var maxIterations int
 	if mode == types.ModeRun {
 		var err error
-		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, req.Options.Check)
+		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, specVerify(req.Options.Spec))
 		if err != nil {
 			return nil, "", err
 		}
@@ -1538,7 +1549,7 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 		Timeout:        req.Options.timeout(),
 		MaxBudgetUsd:   req.Options.Budget.Cost,
 		MaxTurns:       req.Options.Budget.MaxTurns,
-		Dirty:          req.Options.Dirty,
+		Dirty:          specDirty(req.Options.Spec),
 		PromptOverride: req.Options.Prompt.User,
 		ToolModes:      toolModesFromPermissions(req.Options.Permissions.Tools),
 		PermissionMode: string(req.Options.Permissions.Mode),

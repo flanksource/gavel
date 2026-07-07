@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
@@ -309,7 +310,7 @@ func TestResumeRequiresFeedbackExecutor(t *testing.T) {
 
 func TestBuildCheckVerifiers(t *testing.T) {
 	t.Run("disabled yields none", func(t *testing.T) {
-		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{{}}, false)
+		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{{}}, nil)
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -326,7 +327,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 			MaxIterations: 2,
 			Lint:          &types.AgentLintConfig{},
 		}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, false)
+		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -346,7 +347,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// fixture — its definition of done gates the loop regardless.
 		todo := &types.TODO{}
 		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, false)
+		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -363,7 +364,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// checklist ai step feeding results.checklist.
 		todo := &types.TODO{}
 		todo.AcceptanceCriteria = []types.AcceptanceCriterion{{Text: "retries on 5xx"}}
-		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, false)
+		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -372,6 +373,23 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		}
 		if v, ok := plugins[0].(*celVerifier); !ok || v.aiStep == nil {
 			t.Fatal("criteria should synthesize the checklist ai step on the verifier")
+		}
+	})
+
+	t.Run("workflow verify maxIterations overrides the loop cap", func(t *testing.T) {
+		// A run carrying a Workflow.Verify.maxIterations overrides the default
+		// budget (initial run + N feedback rounds).
+		todo := &types.TODO{}
+		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
+		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, &api.Verify{MaxIterations: 5})
+		if err != nil {
+			t.Fatalf("BuildCheckVerifiers: %v", err)
+		}
+		if len(plugins) != 1 {
+			t.Fatalf("plugins = %d, want 1 aggregate DoD verifier", len(plugins))
+		}
+		if maxIter != 6 {
+			t.Errorf("maxIter = %d, want 5 override + 1 initial run", maxIter)
 		}
 	})
 }

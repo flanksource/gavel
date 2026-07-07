@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 
@@ -57,18 +58,21 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 // BuildCheckVerifiers assembles the run's single definition-of-done verifier and
 // the loop's iteration budget (initial run + feedback rounds). The DoD is the
 // todo's `## Verification` fixture (always, when present) plus the configured
-// `checks` test/lint suite (.gavel.yaml `checks`, frontmatter `checks:`, or
-// --check via force), aggregated into one TestResults tree; the resolved
-// `checks.retry` CEL predicate decides verified vs unverified. It returns no
-// plugins (and a zero budget) only when the todo has no definition of done at
-// all — such a run ends `completed`.
-func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool) ([]agent.Verify, int, error) {
+// `checks` test/lint suite (.gavel.yaml `checks`, frontmatter `checks:`, enabled
+// whenever the run carries a Workflow.Verify), aggregated into one TestResults
+// tree; the resolved `checks.retry` CEL predicate decides verified vs unverified.
+// It returns no plugins (and a zero budget) only when the todo has no definition
+// of done at all — such a run ends `completed`.
+//
+// verifySpec is the run's api.Spec Workflow.Verify (nil = no verify): its presence
+// force-enables the checks suite and its MaxIterations overrides the loop cap.
+func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, verifySpec *api.Verify) ([]agent.Verify, int, error) {
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
 	if err != nil {
 		return nil, 0, fmt.Errorf("checks: load .gavel.yaml: %w", err)
 	}
-	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), force)
+	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), verifySpec != nil)
 
 	var steps []stepFixture
 	// The `checks` test/lint suite is opt-in (enabled config / --check).
@@ -114,6 +118,10 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, force bool)
 		return nil, 0, nil
 	}
 	maxIter := cfg.MaxIterations
+	// An explicit Workflow.Verify.maxIterations overrides the .gavel.yaml cap.
+	if verifySpec != nil && verifySpec.MaxIterations > 0 {
+		maxIter = verifySpec.MaxIterations
+	}
 	if maxIter <= 0 {
 		maxIter = types.DefaultMaxCheckIterations
 	}

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -642,8 +643,10 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 		Spec: api.Spec{
 			Model:  api.Model{Name: "codex", Effort: "high"},
 			Budget: api.Budget{Cost: 1.25, MaxTurns: 12, Timeout: "45m"},
+			// Dirty-worktree now rides the spec's Setup.Checkout.Dirty (Workspace
+			// section) instead of a sibling flag.
+			Setup: &shell.Setup{Checkout: &shell.Checkout{Dirty: &shell.Dirty{Stash: shell.StashAll}}},
 		},
-		Dirty: true,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -666,7 +669,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if got.Source.Dir != workDir || got.Backend != todos.ProviderFiles {
 		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
 	}
-	if got.Options.Name != "codex" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !got.Options.Dirty {
+	if got.Options.Name != "codex" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
 		t.Fatalf("unexpected run options: %+v", got.Options)
 	}
 }
@@ -764,29 +767,34 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	}
 }
 
-func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
+func TestNormalizeTodoRunOptionsCommitFromWorkflow(t *testing.T) {
 	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
+	commitWorkflow := func(commit bool) *api.Workflow {
+		return &api.Workflow{PostRun: &api.PostRun{Commit: commit}}
+	}
 
+	// Auto-commit is sourced from Workflow.PostRun.Commit — no server-side default.
+	// The run dialog seeds postRun.commit=true so a default dashboard run commits;
+	// an absent workflow (or an explicit false) means no commit.
 	cases := []struct {
-		name    string
-		payload *bool
-		want    bool
+		name     string
+		workflow *api.Workflow
+		want     bool
 	}{
-		{"omitted defaults to true", nil, true},
-		{"explicit true", boolPtr(true), true},
-		{"explicit false", boolPtr(false), false},
+		{"no workflow means no auto-commit", nil, false},
+		{"postRun.commit true auto-commits", commitWorkflow(true), true},
+		{"postRun.commit false skips commit", commitWorkflow(false), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := base
-			payload.Commit = tc.payload
+			payload.Workflow = tc.workflow
 			opts, err := normalizeTodoRunOptions(payload)
 			if err != nil {
 				t.Fatalf("normalize: %v", err)
 			}
-			if opts.Commit != tc.want {
-				t.Fatalf("Commit = %v, want %v", opts.Commit, tc.want)
+			if got := specCommit(opts.Spec); got != tc.want {
+				t.Fatalf("specCommit = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -844,14 +852,13 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 }
 
 func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
-	boolPtr := func(b bool) *bool { return &b }
 	cases := []struct {
-		name   string
-		commit *bool
-		want   bool
+		name     string
+		workflow *api.Workflow
+		want     bool
 	}{
-		{"defaults to auto-commit", nil, true},
-		{"opt out disables commit", boolPtr(false), false},
+		{"postRun commit auto-commits", &api.Workflow{PostRun: &api.PostRun{Commit: true}}, true},
+		{"absent workflow skips commit", nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -873,13 +880,14 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			}
 			t.Cleanup(func() { startTodoRun = oldStart })
 
-			body, _ := json.Marshal(todoRunPayload{
-				Ref:    todos.TODOReference(created),
-				Agent:  "claude",
-				Mode:   "cmux",
-				Spec:   specPayload("claude", "medium"),
-				Commit: tc.commit,
-			})
+			payload := todoRunPayload{
+				Ref:   todos.TODOReference(created),
+				Agent: "claude",
+				Mode:  "cmux",
+				Spec:  specPayload("claude", "medium"),
+			}
+			payload.Workflow = tc.workflow
+			body, _ := json.Marshal(payload)
 			rec := httptest.NewRecorder()
 			s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
 			if rec.Code != http.StatusOK {
@@ -892,10 +900,57 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			if resp.Commit != tc.want {
 				t.Fatalf("response Commit = %v, want %v", resp.Commit, tc.want)
 			}
-			if got.Options.Commit != tc.want {
-				t.Fatalf("run starter Commit = %v, want %v", got.Options.Commit, tc.want)
+			if got := specCommit(got.Options.Spec); got != tc.want {
+				t.Fatalf("run starter commit = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A dry run (Workflow.PostRun.DryRun) still executes the agent — it only skips the
+// post-run auto-commit — so handleTodoRun starts it and reports Commit:false.
+func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+		Title:  "Run me",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	oldStart := startTodoRun
+	started := false
+	startTodoRun = func(todoRunRequest) error { started = true; return nil }
+	t.Cleanup(func() { startTodoRun = oldStart })
+
+	payload := todoRunPayload{
+		Ref:   todos.TODOReference(created),
+		Agent: "claude",
+		Mode:  "cmux",
+		Spec:  specPayload("claude", "medium"),
+	}
+	// commit=true but dryRun=true: the run executes, the commit is suppressed.
+	payload.Workflow = &api.Workflow{PostRun: &api.PostRun{Commit: true, DryRun: true}}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var resp todoRunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal run response: %v", err)
+	}
+	if resp.Status != "started" {
+		t.Fatalf("status = %q, want started (a dry run still executes)", resp.Status)
+	}
+	if resp.Commit {
+		t.Fatal("response Commit = true, want false (dry run suppresses the commit)")
+	}
+	if !started {
+		t.Fatal("dry run did not start the agent run")
 	}
 }
 

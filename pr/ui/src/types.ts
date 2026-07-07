@@ -294,10 +294,11 @@ export type TodoRunDriver =
   | 'codex-headless';
 
 // TodoRunOptions is the run POST body's options: api.Spec's inlined fields
-// (model/backend/effort flat; prompt/budget/permissions/sessionId nested,
-// mirroring clicky's AISpecRuntimeValue) plus the gavel-only run extras below.
-// A bare prompt override is spec.prompt.user; a budget cap is spec.budget.cost/
-// maxTurns/timeout; tool/permission posture is spec.permissions.{mode,tools}.
+// (model/backend/effort flat; prompt/budget/permissions/setup/workflow/sessionId
+// nested, mirroring clicky's AISpecRuntimeValue) plus the run-orchestration extras
+// below. Dirty worktree, auto-commit, dry-run, and checks all live in the spec now
+// (setup.checkout.dirty, workflow.postRun.commit/dryRun, workflow.verify); only the
+// prompt/driver selection and the resume decision sit alongside it.
 export interface TodoRunOptions extends AISpecRuntimeValue {
   // Driver is the authoritative selection; agent/mode are the legacy pair the
   // server still accepts and derives a driver from when driver is absent.
@@ -310,18 +311,10 @@ export interface TodoRunOptions extends AISpecRuntimeValue {
   // Plan-only run: the agent proposes an implementation plan without changing
   // code. Requires cmux mode. Legacy — prefer runMode.
   plan?: boolean;
-  // Resume the todo's prior agent session (claude --resume) instead of starting
-  // a fresh one, so the agent keeps the earlier conversation's context.
+  // Resume the todo's prior agent session (claude --resume) instead of starting a
+  // fresh one. Stays a sibling flag rather than a spec field: a fresh run also
+  // carries a (minted) sessionId, so resume can't be inferred from spec.sessionId.
   resume?: boolean;
-  dirty?: boolean;
-  dryRun?: boolean;
-  // Auto-commit the agent's changes once the run finishes (defaults to true on
-  // the server). Set false in the advanced dialog to disable it.
-  commit?: boolean;
-  // Run the configured `checks` test/lint suite after the agent completes and
-  // feed any failures back to it for another iteration. Opt-in (defaults off on
-  // the server), mirroring the CLI's `todos run --check`.
-  check?: boolean;
 }
 
 export interface TodoRunResponse {

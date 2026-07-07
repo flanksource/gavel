@@ -26,18 +26,23 @@ import {
 // or Verify (score the committed work against acceptance criteria).
 type RunMode = "run" | "plan" | "verify";
 
-// The "Edit spec" modal only shows what gavel's dispatch actually reads:
-// model/effort/budget, the prompt override, and tool/permission posture.
-// Workspace/environment/verify/cli configure things gavel's own run options
-// (worktree, dirty, checks) already drive elsewhere, so they stay hidden here.
-const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions"] as const;
+// The spec editor exposes exactly what gavel's dispatch reads: model/effort/budget,
+// the prompt override, tool/permission posture, plus the run's Workspace (dirty
+// worktree), Verify (checks), and Commit (auto-commit / dry-run). The last three
+// replace the old loose checkboxes now that those options live on the api.Spec.
+const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
+
+// Runs auto-commit by default — the old commit=true default, now expressed as the
+// spec's Workflow.PostRun.commit. The advanced dialog's Commit section can turn it
+// off; a plan-only run never commits (the server suppresses commit in plan mode).
+const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { postRun: { commit: true } } };
 
 // MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
 // markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
 // code-split and rendered under Suspense with a plain-textarea fallback.
 const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((m) => ({ default: m.MdxEditorField })));
 
-export const defaultRunOptions: TodoRunOptions = { driver: "claude-cmux", model: "claude", effort: "medium" };
+export const defaultRunOptions: TodoRunOptions = { driver: "claude-cmux", model: "claude", effort: "medium", ...AUTO_COMMIT };
 
 type RunPreset = { label: string; icon: ComponentType<IconProps>; options: TodoRunOptions };
 
@@ -49,8 +54,8 @@ export const runActionGroups: Array<{ action: "Run" | "Plan"; detail: string; pr
     action: "Run",
     detail: "implement",
     presets: [
-      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", model: "claude", effort: "medium" } },
-      { label: "Codex", icon: UiTerminal, options: { driver: "codex-cmux", model: "codex", effort: "medium" } },
+      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", model: "claude", effort: "medium", ...AUTO_COMMIT } },
+      { label: "Codex", icon: UiTerminal, options: { driver: "codex-cmux", model: "codex", effort: "medium", ...AUTO_COMMIT } },
     ],
   },
   {
@@ -189,7 +194,7 @@ export function TodoRunSplitButton({
   );
 }
 
-const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-cmux", model: "claude", effort: "medium" };
+const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-cmux", model: "claude", effort: "medium", ...AUTO_COMMIT };
 const INITIAL_VERIFY_BACKEND = "claude-agent";
 const INITIAL_VERIFY_MODEL = "claude-agent-sonnet";
 
@@ -222,11 +227,10 @@ export function TodoRunAdvancedDialog({
   // verify's request would silently ignore.
   const [runtimeValue, setRuntimeValue] = useState<AISpecRuntimeValue>(INITIAL_RUNTIME_VALUE);
   const [mode, setMode] = useState<RunMode>("run");
+  // Resume stays a discrete toggle (session-identity decision, cmux only); dirty,
+  // auto-commit, dry-run, and checks now live on runtimeValue's spec (Workspace/
+  // Commit/Verify sections), not as parallel booleans.
   const [resume, setResume] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [dryRun, setDryRun] = useState(false);
-  const [commit, setCommit] = useState(true);
-  const [check, setCheck] = useState(false);
   const [verifyAgent, setVerifyAgent] = useState<TodoRunAgent>("claude");
   const [verifyBackend, setVerifyBackend] = useState(INITIAL_VERIFY_BACKEND);
   const [verifyModel, setVerifyModel] = useState(INITIAL_VERIFY_MODEL);
@@ -317,10 +321,6 @@ export function TodoRunAdvancedDialog({
     setRuntimeValue(INITIAL_RUNTIME_VALUE);
     setMode("run");
     setResume(false);
-    setDirty(false);
-    setDryRun(false);
-    setCommit(true);
-    setCheck(false);
     setVerifyAgent("claude");
     setVerifyBackend(INITIAL_VERIFY_BACKEND);
     setVerifyModel(INITIAL_VERIFY_MODEL);
@@ -439,6 +439,10 @@ export function TodoRunAdvancedDialog({
       void runVerify();
       return;
     }
+    // spec carries the model/effort/permissions plus the run's setup (dirty),
+    // workflow.verify (checks) and workflow.postRun (auto-commit / dry-run) — all
+    // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
+    // never commit or verify; the server suppresses both for run mode plan.
     const { spec } = runtimeValueToPayload(runtimeValue);
     onRun({
       ...spec,
@@ -446,13 +450,6 @@ export function TodoRunAdvancedDialog({
       backend: runBackend,
       plan: isCmux ? plan : undefined,
       resume: isCmux ? resume : undefined,
-      dirty: !isCmux ? dirty : undefined,
-      dryRun,
-      // Plan-only runs make no changes, so there is nothing to auto-commit.
-      commit: plan ? false : commit,
-      // Plan-only runs make no changes, so the post-completion test/lint check
-      // loop has nothing to verify.
-      check: plan ? false : check,
       prompt: {
         // The edited prompt body is sent verbatim as the override.
         user: promptDraft.trim() ? promptDraft : undefined,
@@ -537,28 +534,15 @@ export function TodoRunAdvancedDialog({
           </>
         ) : (
           <PromptRunEditor value={runtimeValue} onChange={changeRuntime} models={activeModels} families={families} tools={context.tools} specSections={RUN_SPEC_SECTIONS} promptEditor={promptEditorNode} promptLabel="Prompt">
-            <div className="flex flex-wrap gap-3 text-xs">
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} disabled={!isCmux} />
+            {isCmux && (
+              // Resume is the one run-orchestration toggle without a spec home: it
+              // continues the todo's prior claude session (--resume) rather than
+              // minting a fresh one, and only applies to cmux runs.
+              <label className="inline-flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
                 <span>Resume session</span>
               </label>
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={dirty} onChange={(e) => setDirty(e.currentTarget.checked)} disabled={isCmux} />
-                <span>Dirty worktree</span>
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={commit && !plan} onChange={(e) => setCommit(e.currentTarget.checked)} disabled={plan} />
-                <span>Auto-commit</span>
-              </label>
-              <label className="inline-flex items-center gap-2" title="Run the configured test/lint checks after the agent finishes and feed failures back to it">
-                <input type="checkbox" checked={check && !plan} onChange={(e) => setCheck(e.currentTarget.checked)} disabled={plan} />
-                <span>Run checks (test/lint)</span>
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.currentTarget.checked)} />
-                <span>Dry run</span>
-              </label>
-            </div>
+            )}
           </PromptRunEditor>
         )}
       </div>

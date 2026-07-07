@@ -92,7 +92,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			RunMode:   string(opts.RunMode),
 			SessionID: opts.Spec.SessionID,
 			Timeout:   opts.timeout().String(),
-			Commit:    opts.Commit,
+			Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 			Message:   "Approved plan — implementing",
 		}
 	}
