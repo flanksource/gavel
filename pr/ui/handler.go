@@ -401,6 +401,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/criteria/generate", s.handleTodoCriteriaGenerate)
 	mux.HandleFunc("POST /api/todos/verify", s.handleTodoVerify)
 	mux.HandleFunc("POST /api/todos/verify/preview", s.handleTodoVerifyPreview)
+	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)

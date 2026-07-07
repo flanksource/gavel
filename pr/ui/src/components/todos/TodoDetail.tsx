@@ -13,7 +13,7 @@ import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel, todoQuery } from './format';
 import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
-import { AcceptanceCriteria } from './AcceptanceCriteria';
+import { TodoVerification } from './TodoVerification';
 import { TodoReviewBanner } from './planActions';
 
 export function TodoDetail({
@@ -44,7 +44,7 @@ export function TodoDetail({
   const [busy, setBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'overview' | 'criteria' | 'session' | 'plan'>('overview');
+  const [tab, setTab] = useState<'overview' | 'verification' | 'session' | 'plan'>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -58,7 +58,7 @@ export function TodoDetail({
   const closed = todo?.status === 'completed' || todo?.providerState === 'closed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  const criteriaCount = todo?.criteria?.length ?? 0;
+  const verificationCount = todo?.criteria?.length ?? 0;
   const fullTodoId = todo ? todoFullId(todo, provider) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const { stats: headerSessionStats } = useSessionStats(dir, provider, todo?.sessionId, !!todo?.sessionId);
@@ -414,7 +414,7 @@ export function TodoDetail({
       <TodoReviewBanner todo={todo} dir={dir} provider={provider} onChanged={onChanged} />
       <div className="flex shrink-0 gap-1 border-b border-border bg-background px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon={UiListFlat} label="Overview" />
-        <DetailTab active={tab === 'criteria'} onClick={() => setTab('criteria')} icon={UiListDashes} label="Criteria" count={criteriaCount} />
+        <DetailTab active={tab === 'verification'} onClick={() => setTab('verification')} icon={UiListDashes} label="Verification" count={verificationCount} />
         <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon={UiComment} label="Session" />
         <DetailTab active={tab === 'plan'} onClick={() => setTab('plan')} icon={UiListDashes} label="Plan" />
       </div>
@@ -423,9 +423,9 @@ export function TodoDetail({
           <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'plan'} />
-        ) : tab === 'criteria' ? (
+        ) : tab === 'verification' ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <AcceptanceCriteria dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
+            <TodoVerification dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">

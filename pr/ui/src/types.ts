@@ -135,6 +135,10 @@ export interface TodoItem {
   // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
   // section; present on detail responses.
   criteria?: AcceptanceCriterion[];
+  // Raw fixture markdown from the todo's "## Verification" section (excluding
+  // the heading); present on detail responses, edited via the Verification
+  // tab's FixtureEditor and saved through /api/todos/verification/fixture.
+  verificationMarkdown?: string;
   // Plan-run bookkeeping (present on detail responses once a plan run finishes):
   // the native plan file's absolute path, whether the last plan was new/updated/
   // unchanged, and the mode of the last run. The plan CONTENT is fetched lazily

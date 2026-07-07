@@ -202,6 +202,38 @@ func (s *Server) saveCriteria(r *http.Request, provider todos.Provider, todo *ty
 	return provider.Edit(r.Context(), todo, todos.EditRequest{Body: &body})
 }
 
+// todoVerificationFixturePayload is the request body for saving the
+// Verification tab's fixture markdown (edited via the dashboard's FixtureEditor).
+type todoVerificationFixturePayload struct {
+	Provider string `json:"provider,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	Fixture  string `json:"fixture"`
+}
+
+// handleTodoVerificationFixture saves a todo's "## Verification" fixture
+// markdown, rewriting the section in place, and returns the refreshed todo —
+// mirroring handleTodoCriteria for the Verification tab's FixtureEditor.
+func (s *Server) handleTodoVerificationFixture(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var payload todoVerificationFixturePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	if err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+	body := todos.UpsertVerificationFixture(todo.MarkdownBody, payload.Fixture)
+	if err := provider.Edit(r.Context(), todo, todos.EditRequest{Body: &body}); err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.writeRefreshedTodo(w, r, provider, todo)
+}
+
 // writeRefreshedTodo re-reads the todo so the response reflects the provider's
 // authoritative state (rewritten body, re-parsed criteria) and encodes it.
 func (s *Server) writeRefreshedTodo(w http.ResponseWriter, r *http.Request, provider todos.Provider, todo *types.TODO) {
