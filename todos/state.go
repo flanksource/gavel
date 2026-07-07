@@ -122,6 +122,20 @@ func EditTODOContent(todo *types.TODO, edit EditRequest) error {
 	if edit.Body != nil {
 		markdown = normalizeMarkdownBody(*edit.Body)
 	}
+	if edit.Path != nil {
+		frontmatter.Path = *edit.Path
+	}
+	if len(edit.Metadata) > 0 || len(edit.Labels) > 0 {
+		if frontmatter.Metadata == nil {
+			frontmatter.Metadata = map[string]any{}
+		}
+		for k, v := range edit.Metadata {
+			frontmatter.Metadata[k] = v
+		}
+		if len(edit.Labels) > 0 {
+			frontmatter.Metadata["labels"] = append([]string(nil), edit.Labels...)
+		}
+	}
 
 	newContent, err := WriteFrontmatter(&frontmatter, markdown)
 	if err != nil {
@@ -133,6 +147,9 @@ func EditTODOContent(todo *types.TODO, edit EditRequest) error {
 
 	todo.TODOFrontmatter = frontmatter
 	todo.MarkdownBody = markdown
+	if len(edit.Labels) > 0 {
+		todo.Labels = append([]string(nil), edit.Labels...)
+	}
 	return nil
 }
 

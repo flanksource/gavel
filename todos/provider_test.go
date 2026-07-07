@@ -149,3 +149,51 @@ func TestFileProviderCreateGetListDelete(t *testing.T) {
 		t.Fatalf("expected TODO file to be removed, stat err=%v", err)
 	}
 }
+
+func TestFileProviderCreateAndEditGeneratedMetadata(t *testing.T) {
+	workDir := t.TempDir()
+	provider := NewFileProvider(workDir, "")
+	ctx := context.Background()
+
+	todo, err := provider.Create(ctx, CreateRequest{
+		Title:    "TODO: source task",
+		Body:     "Generated body.",
+		Status:   types.StatusPending,
+		Path:     types.StringOrSlice{"main.go:1"},
+		Labels:   []string{"source:todo", "source-id:abc123"},
+		Metadata: map[string]any{"source": "code-comment", "source_id": "abc123"},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	reloaded, err := provider.Get(ctx, todo.FilePath)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if len(reloaded.Path) != 1 || reloaded.Path[0] != "main.go:1" {
+		t.Fatalf("path = %#v, want main.go:1", reloaded.Path)
+	}
+	if reloaded.Metadata["source"] != "code-comment" || reloaded.Metadata["source_id"] != "abc123" {
+		t.Fatalf("metadata not preserved: %#v", reloaded.Metadata)
+	}
+
+	path := types.StringOrSlice{"main.go:2"}
+	if err := provider.Edit(ctx, reloaded, EditRequest{
+		Path:     &path,
+		Labels:   []string{"source:todo", "source-id:abc123"},
+		Metadata: map[string]any{"source_id": "abc123", "source_marker": "todo"},
+	}); err != nil {
+		t.Fatalf("Edit failed: %v", err)
+	}
+	edited, err := provider.Get(ctx, todo.FilePath)
+	if err != nil {
+		t.Fatalf("Get after edit failed: %v", err)
+	}
+	if len(edited.Path) != 1 || edited.Path[0] != "main.go:2" {
+		t.Fatalf("edited path = %#v, want main.go:2", edited.Path)
+	}
+	if edited.Metadata["source_marker"] != "todo" {
+		t.Fatalf("metadata edit missing source_marker: %#v", edited.Metadata)
+	}
+}

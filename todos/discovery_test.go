@@ -143,3 +143,31 @@ func TestDiscoverTODOs_FiltersByStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryFiltersMatchStatusAndLabels(t *testing.T) {
+	todo := &types.TODO{
+		Labels: []string{"source:todo"},
+		TODOFrontmatter: types.TODOFrontmatter{
+			Status: types.StatusPending,
+		},
+	}
+
+	if !((DiscoveryFilters{
+		IncludeStatuses: []types.Status{types.StatusPending},
+		IncludeLabels:   []string{"source:todo"},
+	}).Matches(todo)) {
+		t.Fatal("expected matching status and label to pass")
+	}
+	if (DiscoveryFilters{
+		IncludeStatuses: []types.Status{types.StatusPending},
+		IncludeLabels:   []string{"source:other"},
+	}).Matches(todo) {
+		t.Fatal("expected non-matching label to fail")
+	}
+	if (DiscoveryFilters{
+		IncludeStatuses: []types.Status{types.StatusFailed},
+		IncludeLabels:   []string{"source:todo"},
+	}).Matches(todo) {
+		t.Fatal("expected non-matching status to fail")
+	}
+}

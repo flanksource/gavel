@@ -68,6 +68,27 @@ func TestGriteProviderListMapsStatusesAndLabels(t *testing.T) {
 	}
 }
 
+func TestGriteProviderListPassesIncludeLabels(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		return []byte(`{"ok": true, "data": {"issues": []}}`), nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	if _, err := provider.List(context.Background(), DiscoveryFilters{IncludeLabels: []string{"source:todo"}}); err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	want := []string{
+		"issue list --json --state open --label source:todo",
+		"issue list --json --state closed --label source:todo",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+}
+
 func TestGriteProviderGetParsesIssueBody(t *testing.T) {
 	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
 		if strings.Join(args, " ") != "issue show abc123 --json" {
@@ -186,6 +207,58 @@ func TestGriteProviderCreateUsesLabelsAndFetchesDetail(t *testing.T) {
 	}
 	want := []string{
 		"issue create --title Fix workspace --body Body text --label priority:high --label status:in_progress --json",
+		"issue show new123456789 --json",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls mismatch\nwant: %#v\n got: %#v", want, calls)
+	}
+}
+
+func TestGriteProviderCreateAddsExtraLabels(t *testing.T) {
+	var calls []string
+	runner := func(ctx context.Context, workDir, binary string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		switch joined {
+		case "issue create --title TODO: source task --body Body --label priority:medium --label status:pending --label source:todo --label source-id:abc123 --json":
+			return []byte(`{"ok": true, "data": {"issue_id": "new123456789"}}`), nil
+		case "issue show new123456789 --json":
+			return []byte(`{
+				"ok": true,
+				"data": {
+					"issue": {
+						"issue_id": "new123456789",
+						"title": "TODO: source task",
+						"state": "open",
+						"labels": ["priority:medium", "status:pending", "source:todo", "source-id:abc123"]
+					},
+					"events": [{
+						"event_id": "created123",
+						"actor": "agent",
+						"kind": {"IssueCreated": {"title": "TODO: source task", "body": "Body"}}
+					}]
+				}
+			}`), nil
+		default:
+			t.Fatalf("unexpected args: %v", args)
+		}
+		return nil, nil
+	}
+
+	provider := &GriteProvider{WorkDir: "/repo", Binary: "grite", Runner: runner}
+	todo, err := provider.Create(context.Background(), CreateRequest{
+		Title:  "TODO: source task",
+		Body:   "Body",
+		Labels: []string{"source:todo", "source-id:abc123"},
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if !hasLabel(todo.Labels, "source:todo") || !hasLabel(todo.Labels, "source-id:abc123") {
+		t.Fatalf("created labels missing source labels: %+v", todo.Labels)
+	}
+	want := []string{
+		"issue create --title TODO: source task --body Body --label priority:medium --label status:pending --label source:todo --label source-id:abc123 --json",
 		"issue show new123456789 --json",
 	}
 	if !reflect.DeepEqual(calls, want) {

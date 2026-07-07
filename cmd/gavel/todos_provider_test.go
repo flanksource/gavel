@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -39,6 +41,50 @@ func TestTodosCreateCommandRegistered(t *testing.T) {
 		if flag := todosCreateCmd.Flags().Lookup(name); flag == nil {
 			t.Fatalf("expected todos create --%s flag to be registered", name)
 		}
+	}
+}
+
+func TestTodosSyncCommandRegistered(t *testing.T) {
+	for _, name := range []string{"dir", "markers", "ignore", "dry-run"} {
+		if flag := todosSyncCmd.Flags().Lookup(name); flag == nil {
+			t.Fatalf("expected todos sync --%s flag to be registered", name)
+		}
+	}
+}
+
+func TestRunTodosSyncFileProviderDryRun(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("// TODO: dry run only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldProvider := todosProvider
+	oldWorkingDir := workingDir
+	oldTodosDir := todosDir
+	oldMarkers := todosSyncMarkers
+	oldIgnore := todosSyncIgnore
+	oldDryRun := todosSyncDryRun
+	t.Cleanup(func() {
+		todosProvider = oldProvider
+		workingDir = oldWorkingDir
+		todosDir = oldTodosDir
+		todosSyncMarkers = oldMarkers
+		todosSyncIgnore = oldIgnore
+		todosSyncDryRun = oldDryRun
+	})
+
+	todosProvider = todos.ProviderFiles
+	workingDir = workDir
+	todosDir = ""
+	todosSyncMarkers = []string{"TODO", "FIXME"}
+	todosSyncIgnore = nil
+	todosSyncDryRun = true
+
+	if err := runTodosSync(todosSyncCmd, nil); err != nil {
+		t.Fatalf("runTodosSync: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".todos")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not create .todos, stat err=%v", err)
 	}
 }
 

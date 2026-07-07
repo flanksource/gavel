@@ -21,6 +21,7 @@ output:
           properties:
             label:
               type: string
+              maxLength: 40
               description: "conventional-commit-style label describing this group's intent, e.g. 'feat: agent check loop'"
             files:
               type: array

@@ -14,11 +14,12 @@ import (
 type DiscoveryFilters struct {
 	IncludeStatuses []types.Status
 	ExcludeStatuses []types.Status
+	IncludeLabels   []string
 }
 
 // IsEmpty returns true if no filters are configured.
 func (filter DiscoveryFilters) IsEmpty() bool {
-	return len(filter.IncludeStatuses) == 0 && len(filter.ExcludeStatuses) == 0
+	return len(filter.IncludeStatuses) == 0 && len(filter.ExcludeStatuses) == 0 && len(filter.IncludeLabels) == 0
 }
 
 // Matches returns true if the given TODO matches the filter criteria.
@@ -43,10 +44,53 @@ func (filters DiscoveryFilters) Matches(todo *types.TODO) bool {
 				break
 			}
 		}
-		return included
+		if !included {
+			return false
+		}
+	}
+
+	if len(filters.IncludeLabels) > 0 {
+		labels := todoLabels(todo)
+		for _, want := range filters.IncludeLabels {
+			if !stringInSlice(labels, want) {
+				return false
+			}
+		}
 	}
 
 	return true
+}
+
+func todoLabels(todo *types.TODO) []string {
+	if todo == nil {
+		return nil
+	}
+	labels := append([]string(nil), todo.Labels...)
+	if todo.Metadata == nil {
+		return labels
+	}
+	switch value := todo.Metadata["labels"].(type) {
+	case string:
+		labels = append(labels, value)
+	case []string:
+		labels = append(labels, value...)
+	case []any:
+		for _, item := range value {
+			if label, ok := item.(string); ok {
+				labels = append(labels, label)
+			}
+		}
+	}
+	return labels
+}
+
+func stringInSlice(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // DiscoverTODOs recursively discovers all TODO markdown files in the specified directory,

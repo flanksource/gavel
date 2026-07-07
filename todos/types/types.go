@@ -462,6 +462,21 @@ func (f *TODOFrontmatter) CleanMetadata() {
 	if f.Metadata == nil {
 		return
 	}
+	if nested, ok := f.Metadata["metadata"]; ok {
+		switch values := nested.(type) {
+		case map[string]any:
+			for k, v := range values {
+				f.Metadata[k] = v
+			}
+		case map[interface{}]interface{}:
+			for k, v := range values {
+				if key, ok := k.(string); ok {
+					f.Metadata[key] = v
+				}
+			}
+		}
+		delete(f.Metadata, "metadata")
+	}
 	// Keys from TODOFrontmatter
 	delete(f.Metadata, "title")
 	delete(f.Metadata, "priority")

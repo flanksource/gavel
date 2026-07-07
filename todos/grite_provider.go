@@ -47,6 +47,9 @@ func (p *GriteProvider) List(ctx context.Context, filters DiscoveryFilters) (typ
 		if state != "" {
 			args = append(args, "--state", state)
 		}
+		for _, label := range filters.IncludeLabels {
+			args = append(args, "--label", label)
+		}
 		raw, err := p.run(ctx, args...)
 		if err != nil {
 			return nil, err
@@ -108,6 +111,11 @@ func (p *GriteProvider) Create(ctx context.Context, req CreateRequest) (*types.T
 	for _, label := range griteCreateLabels(priority, status) {
 		args = append(args, "--label", label)
 	}
+	for _, label := range req.Labels {
+		if label = strings.TrimSpace(label); label != "" {
+			args = append(args, "--label", label)
+		}
+	}
 	args = append(args, "--json")
 	raw, err := p.run(ctx, args...)
 	if err != nil {
@@ -159,25 +167,41 @@ func (p *GriteProvider) Edit(ctx context.Context, todo *types.TODO, edit EditReq
 	}
 	args := []string{"issue", "update", id}
 	var title string
+	hasContentEdit := false
 	if edit.Title != nil {
 		title = strings.TrimSpace(*edit.Title)
 		if title == "" {
 			return fmt.Errorf("title cannot be empty")
 		}
 		args = append(args, "--title", title)
+		hasContentEdit = true
 	}
 	if edit.Body != nil {
 		args = append(args, "--body", *edit.Body)
+		hasContentEdit = true
 	}
-	args = append(args, "--json")
-	if _, err := p.run(ctx, args...); err != nil {
-		return err
+	if hasContentEdit {
+		args = append(args, "--json")
+		if _, err := p.run(ctx, args...); err != nil {
+			return err
+		}
 	}
 	if edit.Title != nil {
 		todo.Title = title
 	}
 	if edit.Body != nil {
 		todo.MarkdownBody = *edit.Body
+	}
+	for _, label := range edit.Labels {
+		label = strings.TrimSpace(label)
+		if label == "" || hasLabel(todo.Labels, label) {
+			continue
+		}
+		if _, err := p.run(ctx, "issue", "label", "add", id, "--label", label, "--json"); err != nil {
+			return err
+		}
+		todo.Labels = append(todo.Labels, label)
+		sort.Strings(todo.Labels)
 	}
 	return nil
 }

@@ -40,18 +40,24 @@ type CreateRequest struct {
 	Body     string
 	Priority types.Priority
 	Status   types.Status
+	Path     types.StringOrSlice
+	Labels   []string
+	Metadata map[string]any
 }
 
 // EditRequest is a partial update to a TODO's title and/or body. A nil field is
 // left unchanged, mirroring StateUpdate's pointer semantics.
 type EditRequest struct {
-	Title *string
-	Body  *string
+	Title    *string
+	Body     *string
+	Path     *types.StringOrSlice
+	Labels   []string
+	Metadata map[string]any
 }
 
 // IsEmpty reports whether the edit would change nothing.
 func (e EditRequest) IsEmpty() bool {
-	return e.Title == nil && e.Body == nil
+	return e.Title == nil && e.Body == nil && e.Path == nil && len(e.Labels) == 0 && len(e.Metadata) == 0
 }
 
 type FileProvider struct {
@@ -111,10 +117,21 @@ func (p *FileProvider) Create(_ context.Context, req CreateRequest) (*types.TODO
 		Title:    title,
 		Priority: priority,
 		Status:   status,
+		Path:     req.Path,
 	}
 	frontmatter.CWD = p.WorkDir
+	if len(req.Metadata) > 0 || len(req.Labels) > 0 {
+		frontmatter.Metadata = map[string]any{}
+		for k, v := range req.Metadata {
+			frontmatter.Metadata[k] = v
+		}
+		if len(req.Labels) > 0 {
+			frontmatter.Metadata["labels"] = append([]string(nil), req.Labels...)
+		}
+	}
 	todo := &types.TODO{
 		FilePath:        path,
+		Labels:          append([]string(nil), req.Labels...),
 		TODOFrontmatter: frontmatter,
 		Implementation:  strings.TrimSpace(req.Body),
 		MarkdownBody:    strings.TrimSpace(req.Body),
