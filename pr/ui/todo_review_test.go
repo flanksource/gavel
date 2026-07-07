@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -72,8 +73,7 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 		Run: true,
 		Options: &todoRunPayload{
 			Driver: "claude-headless",
-			Model:  "claude",
-			Effort: "medium",
+			Spec:   api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}},
 			// Even a stale plan runMode is forced back to run for the chained run.
 			RunMode: "plan",
 		},
@@ -157,7 +157,7 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	body, _ := json.Marshal(todoRevisePayload{
 		Ref:      todos.TODOReference(created),
 		Feedback: "use a bounded queue, not unbounded",
-		Options:  &todoRunPayload{Model: "claude", Effort: "medium"},
+		Options:  &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise?provider=todos", strings.NewReader(string(body))))
@@ -214,7 +214,7 @@ func TestTodoAPIAnswer(t *testing.T) {
 	body, _ := json.Marshal(todoAnswerPayload{
 		Ref:     todos.TODOReference(created),
 		Answer:  "use postgres",
-		Options: &todoRunPayload{Driver: "claude-headless", Model: "claude", Effort: "medium"},
+		Options: &todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))

@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
@@ -179,22 +180,22 @@ type todoRunPayload struct {
 	// Driver selects the agent driver (claude-cmux, claude-headless, claude-sdk,
 	// claude-api, codex-cmux, codex-headless). When empty it is derived from the
 	// legacy agent+mode pair for backward compatibility.
-	Driver  string `json:"driver,omitempty"`
-	Backend string `json:"backend,omitempty"`
-	Model   string `json:"model,omitempty"`
-	Effort  string `json:"effort,omitempty"`
+	Driver string `json:"driver,omitempty"`
+
+	// Spec inlines the model/backend/effort/prompt/budget/permissions/session
+	// knobs — the same request shape captain's prompt run editor produces
+	// (model, backend, effort, prompt.user, budget.{cost,maxTurns,timeout},
+	// permissions.{mode,tools}, sessionId, ...).
+	api.Spec
+
 	// RunMode selects the built-in prompt: run (implement) or plan (read-only
 	// investigation producing a reviewable plan). It supersedes the legacy Plan
 	// bool, which is still accepted until the dashboard sends runMode.
-	RunMode   string  `json:"runMode,omitempty"`
-	Plan      bool    `json:"plan,omitempty"`
-	Resume    bool    `json:"resume,omitempty"`
-	Timeout   string  `json:"timeout,omitempty"`
-	MaxBudget float64 `json:"maxBudget,omitempty"`
-	MaxCost   float64 `json:"maxCost,omitempty"`
-	MaxTurns  int     `json:"maxTurns,omitempty"`
-	Dirty     bool    `json:"dirty,omitempty"`
-	DryRun    bool    `json:"dryRun,omitempty"`
+	RunMode string `json:"runMode,omitempty"`
+	Plan    bool   `json:"plan,omitempty"`
+	Resume  bool   `json:"resume,omitempty"`
+	Dirty   bool   `json:"dirty,omitempty"`
+	DryRun  bool   `json:"dryRun,omitempty"`
 	// Commit controls whether `gavel commit` runs over the agent's changes once
 	// the run finishes. A nil pointer defaults to true (the dashboard auto-commits
 	// like the CLI's `todos run --commit`); send false to disable it.
@@ -203,19 +204,6 @@ type todoRunPayload struct {
 	// agent completes and feeds failures back to it. Opt-in (defaults off),
 	// mirroring the CLI's `todos run --check`.
 	Check *bool `json:"check,omitempty"`
-	// Verify, when true, runs an AI issue verification over the committed work
-	// after the run, scoring it against the issue's acceptance criteria. Opt-in,
-	// mirroring the CLI's `todos run --verify`.
-	Verify *bool `json:"verify,omitempty"`
-	// Prompt, when non-empty, overrides the auto-built prompt body verbatim — the
-	// dashboard's editable prompt. The implement/plan scaffolding still follows
-	// the run mode (plan flag).
-	Prompt string `json:"prompt,omitempty"`
-	// ToolPreferences maps a tool name to its per-run mode (enabled/ask/disabled),
-	// from the run dialog's tool-permissions control. PermissionMode is the base
-	// permission posture (a clicky ClaudePermissionMode).
-	ToolPreferences map[string]string `json:"toolPreferences,omitempty"`
-	PermissionMode  string            `json:"permissionMode,omitempty"`
 }
 
 type todoRunResponse struct {
@@ -264,29 +252,33 @@ type todoRunRequest struct {
 }
 
 type todoRunOptions struct {
-	Agent           string
-	Mode            string
-	Driver          string
-	Backend         string
-	Model           string
-	Effort          string
-	RunMode         types.RunMode
-	Resume          bool
-	SessionID       string
-	Timeout         time.Duration
-	MaxBudget       float64
-	MaxTurns        int
-	Dirty           bool
-	DryRun          bool
-	Commit          bool
-	Check           bool
-	Verify          bool
-	Prompt          string
-	TimeoutOriginal string
-	// ToolModes is the per-tool exposure (enabled/ask/disabled) and PermissionMode
-	// the base posture, both threaded into the captain request's permissions.
-	ToolModes      map[string]string
-	PermissionMode string
+	// Spec carries the model/backend/effort/budget/prompt/permissions/session
+	// knobs, resolved and validated by normalizeTodoRunOptions.
+	api.Spec
+	Agent   string
+	Mode    string
+	Driver  string
+	RunMode types.RunMode
+	Resume  bool
+	Dirty   bool
+	DryRun  bool
+	Commit  bool
+	Check   bool
+}
+
+// timeout parses the run's budget timeout, defaulting to 30 minutes when
+// unset. normalizeTodoRunOptions always writes a canonical time.Duration
+// string here, so a parse failure indicates a construction bug rather than
+// bad user input.
+func (o todoRunOptions) timeout() time.Duration {
+	if o.Budget.Timeout == "" {
+		return 30 * time.Minute
+	}
+	d, err := time.ParseDuration(o.Budget.Timeout)
+	if err != nil {
+		panic(fmt.Sprintf("todoRunOptions: invalid budget timeout %q (should have been validated by normalizeTodoRunOptions): %v", o.Budget.Timeout, err))
+	}
+	return d
 }
 
 var startTodoRun = defaultStartTodoRun
@@ -720,7 +712,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the run's session id once, up front, so it is stable across the
 	// validation and start calls below and can be returned to the client to
 	// follow the session log live (see handleTodoSessionStream).
-	opts.SessionID = resolveRunSessionID(opts, todoList)
+	opts.Spec.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
 		Todos:    todoList,
@@ -742,16 +734,16 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Agent:     opts.Agent,
 		Mode:      opts.Mode,
 		Driver:    opts.Driver,
-		Backend:   opts.Backend,
-		Model:     opts.Model,
-		Effort:    opts.Effort,
+		Backend:   string(opts.Spec.Backend),
+		Model:     opts.Spec.Name,
+		Effort:    string(opts.Spec.Effort),
 		RunMode:   string(opts.RunMode),
 		Plan:      opts.RunMode == types.ModePlan,
 		Resume:    opts.Resume,
-		SessionID: opts.SessionID,
-		Timeout:   opts.Timeout.String(),
-		MaxBudget: opts.MaxBudget,
-		MaxTurns:  opts.MaxTurns,
+		SessionID: opts.Spec.SessionID,
+		Timeout:   opts.timeout().String(),
+		MaxBudget: opts.Budget.Cost,
+		MaxTurns:  opts.Budget.MaxTurns,
 		Commit:    opts.Commit,
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
@@ -791,8 +783,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		Prompt:  previewPrompt,
 		Mode:    opts.Mode,
 		Agent:   opts.Agent,
-		Backend: opts.Backend,
-		Effort:  opts.Effort,
+		Backend: string(opts.Spec.Backend),
+		Effort:  string(opts.Spec.Effort),
 		RunMode: string(opts.RunMode),
 		Plan:    opts.RunMode == types.ModePlan,
 		Count:   len(todoList),
@@ -814,7 +806,7 @@ func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunO
 	if err != nil {
 		return "", err
 	}
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: dir, Mode: mode, Effort: opts.Effort, Template: tmpl})
+	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: dir, Mode: mode, Effort: string(opts.Spec.Effort), Template: tmpl})
 	if err != nil {
 		return "", err
 	}
@@ -1304,7 +1296,7 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		return todoRunOptions{}, err
 	}
 	agent := kind.Agent()
-	backend, model, err := resolveTodoRunBackendModel(kind, payload.Backend, payload.Model)
+	backend, model, err := resolveTodoRunBackendModel(kind, string(payload.Backend), payload.Name)
 	if err != nil {
 		return todoRunOptions{}, err
 	}
@@ -1331,19 +1323,19 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		return todoRunOptions{}, fmt.Errorf("verify runs through POST /api/todos/verify, not the run endpoint")
 	}
 
-	effort := strings.ToLower(strings.TrimSpace(payload.Effort))
+	effort := api.Effort(strings.ToLower(strings.TrimSpace(string(payload.Effort))))
 	if effort == "" {
 		effort = "medium"
 	}
-	if !validTodoRunEffort(effort) {
+	if !validTodoRunEffort(string(effort)) {
 		return todoRunOptions{}, fmt.Errorf("invalid effort %q", payload.Effort)
 	}
 
 	timeout := 30 * time.Minute
-	if strings.TrimSpace(payload.Timeout) != "" {
-		parsed, err := time.ParseDuration(strings.TrimSpace(payload.Timeout))
+	if raw := strings.TrimSpace(payload.Budget.Timeout); raw != "" {
+		parsed, err := time.ParseDuration(raw)
 		if err != nil {
-			return todoRunOptions{}, fmt.Errorf("invalid timeout %q", payload.Timeout)
+			return todoRunOptions{}, fmt.Errorf("invalid timeout %q", payload.Budget.Timeout)
 		}
 		if parsed <= 0 {
 			return todoRunOptions{}, fmt.Errorf("timeout must be greater than zero")
@@ -1351,15 +1343,30 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		timeout = parsed
 	}
 
-	maxBudget := payload.MaxBudget
-	if maxBudget == 0 {
-		maxBudget = payload.MaxCost
+	// The rendered .prompt template's request is not built here — normalize only
+	// resolves and validates the run's Spec overlay (model/backend/effort/budget
+	// plus any prompt/permissions overrides the dashboard sent); newTodoRunExecutor
+	// and buildRequest overlay it onto the template frontmatter's defaults.
+	spec := payload.Spec
+	spec.Name = model
+	spec.Backend = api.Backend(backend)
+	spec.Effort = effort
+	spec.Budget.Timeout = timeout.String()
+	if err := spec.Budget.Validate(); err != nil {
+		return todoRunOptions{}, err
 	}
-	if maxBudget < 0 {
-		return todoRunOptions{}, fmt.Errorf("max cost must be greater than or equal to zero")
+	if err := spec.Permissions.Validate(); err != nil {
+		return todoRunOptions{}, err
 	}
-	if payload.MaxTurns < 0 {
-		return todoRunOptions{}, fmt.Errorf("max turns must be greater than or equal to zero")
+	// Permissions.Validate reaches Tools.Modes only via Tools.Policies(), whose
+	// enabled/ask/disabled switch has no default case — an unrecognized mode is
+	// silently dropped from the map rather than surfaced as invalid. Check the
+	// raw modes directly so a mistyped value fails loud at this wire boundary
+	// instead of being dropped.
+	for tool, mode := range spec.Permissions.Tools.Modes {
+		if !mode.Valid() {
+			return todoRunOptions{}, fmt.Errorf("invalid tool mode %q for tool %q", mode, tool)
+		}
 	}
 
 	// Auto-commit defaults on (matching the CLI's `todos run --commit`); a nil
@@ -1375,87 +1382,18 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 		check = *payload.Check
 	}
 
-	// Post-commit issue verification is opt-in (matching `todos run --verify`).
-	verify := false
-	if payload.Verify != nil {
-		verify = *payload.Verify
-	}
-
-	toolModes, err := normalizeToolPreferences(payload.ToolPreferences)
-	if err != nil {
-		return todoRunOptions{}, err
-	}
-	permissionMode := strings.TrimSpace(payload.PermissionMode)
-	if permissionMode != "" && !validClickyPermissionMode(permissionMode) {
-		return todoRunOptions{}, fmt.Errorf("invalid permission mode %q", payload.PermissionMode)
-	}
-
 	return todoRunOptions{
-		Agent:           agent,
-		Mode:            mode,
-		Driver:          string(kind),
-		Backend:         backend,
-		Model:           model,
-		Effort:          effort,
-		RunMode:         runMode,
-		Resume:          payload.Resume,
-		Timeout:         timeout,
-		MaxBudget:       maxBudget,
-		MaxTurns:        payload.MaxTurns,
-		Dirty:           payload.Dirty,
-		DryRun:          payload.DryRun,
-		Commit:          commit,
-		Check:           check,
-		Verify:          verify,
-		Prompt:          payload.Prompt,
-		TimeoutOriginal: payload.Timeout,
-		ToolModes:       toolModes,
-		PermissionMode:  permissionMode,
+		Spec:    spec,
+		Agent:   agent,
+		Mode:    mode,
+		Driver:  string(kind),
+		RunMode: runMode,
+		Resume:  payload.Resume,
+		Dirty:   payload.Dirty,
+		DryRun:  payload.DryRun,
+		Commit:  commit,
+		Check:   check,
 	}, nil
-}
-
-// normalizeToolPreferences validates a tool-name→mode map (enabled/ask/disabled),
-// failing loud on an unknown mode. An empty map normalizes to nil (no per-tool
-// preferences — the run keeps the backend's default tool posture).
-func normalizeToolPreferences(prefs map[string]string) (map[string]string, error) {
-	if len(prefs) == 0 {
-		return nil, nil
-	}
-	out := make(map[string]string, len(prefs))
-	for tool, mode := range prefs {
-		tool = strings.TrimSpace(tool)
-		if tool == "" {
-			continue
-		}
-		if !validToolMode(mode) {
-			return nil, fmt.Errorf("invalid tool mode %q for %q (want enabled, ask or disabled)", mode, tool)
-		}
-		out[tool] = mode
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
-}
-
-func validToolMode(m string) bool {
-	switch m {
-	case "enabled", "ask", "disabled":
-		return true
-	default:
-		return false
-	}
-}
-
-// validClickyPermissionMode reports whether m is one of clicky's
-// ClaudePermissionMode values (the run dialog's permission-mode picker).
-func validClickyPermissionMode(m string) bool {
-	switch m {
-	case "default", "auto", "acceptEdits", "dontAsk", "plan", "bypassPermissions":
-		return true
-	default:
-		return false
-	}
 }
 
 func defaultStartTodoRun(req todoRunRequest) error {
@@ -1464,7 +1402,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 		return err
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), req.Options.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), req.Options.timeout())
 		defer cancel()
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
@@ -1528,7 +1466,7 @@ func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 	}
 	agent := strings.ToLower(strings.TrimSpace(p.Agent))
 	if agent == "" {
-		agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Model))
+		agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Name))
 	}
 	mode := strings.ToLower(strings.TrimSpace(p.Mode))
 	if mode == "" {
@@ -1583,26 +1521,48 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	}
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
-		Model:          req.Options.Model,
-		Backend:        req.Options.Backend,
-		Effort:         req.Options.Effort,
+		Model:          req.Options.Spec.Name,
+		Backend:        string(req.Options.Spec.Backend),
+		Effort:         string(req.Options.Spec.Effort),
 		Mode:           mode,
 		ExistingPlan:   existingPlan,
 		Verifiers:      verifiers,
 		MaxIterations:  maxIterations,
 		Resume:         req.Options.Resume,
-		SessionID:      req.Options.SessionID,
-		Timeout:        req.Options.Timeout,
-		MaxBudgetUsd:   req.Options.MaxBudget,
-		MaxTurns:       req.Options.MaxTurns,
+		SessionID:      req.Options.Spec.SessionID,
+		Timeout:        req.Options.timeout(),
+		MaxBudgetUsd:   req.Options.Budget.Cost,
+		MaxTurns:       req.Options.Budget.MaxTurns,
 		Dirty:          req.Options.Dirty,
-		PromptOverride: req.Options.Prompt,
-		ToolModes:      req.Options.ToolModes,
-		PermissionMode: req.Options.PermissionMode,
+		PromptOverride: req.Options.Prompt.User,
+		ToolModes:      toolModesFromPermissions(req.Options.Permissions.Tools),
+		PermissionMode: string(req.Options.Permissions.Mode),
 		// The dashboard is the approval resolver (handleTodoSessionApprove), so
 		// brokered tool permissions can be surfaced and answered here.
 		Approvals: true,
 	})
+}
+
+// toolModesFromPermissions flattens api.Tools (the Spec's allow/deny/modes
+// policy) into the legacy tool-name→mode map (enabled/ask/disabled) that
+// headless.Config/drivers.Config key their allow/deny/broker logic on.
+// ToolMode's string values ("enabled"/"ask"/"disabled") are identical to that
+// legacy scheme, so the conversion is direct.
+func toolModesFromPermissions(tools api.Tools) map[string]string {
+	if len(tools.Allow) == 0 && len(tools.Deny) == 0 && len(tools.Modes) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(tools.Allow)+len(tools.Deny)+len(tools.Modes))
+	for _, tool := range tools.Allow {
+		out[tool] = string(api.ToolModeEnabled)
+	}
+	for _, tool := range tools.Deny {
+		out[tool] = string(api.ToolModeDisabled)
+	}
+	for tool, mode := range tools.Modes {
+		out[tool] = string(mode)
+	}
+	return out
 }
 
 // resolveRunSessionID determines the claude session id a run will use, so the

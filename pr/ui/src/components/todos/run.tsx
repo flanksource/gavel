@@ -445,9 +445,6 @@ export function TodoRunAdvancedDialog({
       effort,
       plan: isCmux ? plan : undefined,
       resume: isCmux ? resume : undefined,
-      timeout: timeout.trim() || "30m",
-      maxCost: !isCmux && budget.cost !== undefined ? budget.cost : undefined,
-      maxTurns: !isCmux && budget.maxTokens !== undefined ? budget.maxTokens : undefined,
       dirty: !isCmux ? dirty : undefined,
       dryRun,
       // Plan-only runs make no changes, so there is nothing to auto-commit.
@@ -455,12 +452,21 @@ export function TodoRunAdvancedDialog({
       // Plan-only runs make no changes, so the post-completion test/lint check
       // loop has nothing to verify.
       check: plan ? false : check,
-      // The edited prompt body is sent verbatim as the override.
-      prompt: promptDraft.trim() ? promptDraft : undefined,
-      // Per-tool modes and permission posture, sent only when the user changed
-      // them from the defaults so a plain run keeps the backend's default posture.
-      toolPreferences,
-      permissionMode: permissionMode !== "default" ? permissionMode : undefined,
+      budget: {
+        timeout: timeout.trim() || "30m",
+        cost: !isCmux && budget.cost !== undefined ? budget.cost : undefined,
+        maxTurns: !isCmux && budget.maxTokens !== undefined ? budget.maxTokens : undefined,
+      },
+      prompt: {
+        // The edited prompt body is sent verbatim as the override.
+        user: promptDraft.trim() ? promptDraft : undefined,
+      },
+      permissions: {
+        // Per-tool modes and permission posture, sent only when the user changed
+        // them from the defaults so a plain run keeps the backend's default posture.
+        tools: toolPreferences ? { modes: toolPreferences } : undefined,
+        mode: permissionMode !== "default" ? permissionMode : undefined,
+      },
     });
   }
 

@@ -86,12 +86,12 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Agent:     opts.Agent,
 			Mode:      opts.Mode,
 			Driver:    opts.Driver,
-			Backend:   opts.Backend,
-			Model:     opts.Model,
-			Effort:    opts.Effort,
+			Backend:   string(opts.Spec.Backend),
+			Model:     opts.Spec.Name,
+			Effort:    string(opts.Spec.Effort),
 			RunMode:   string(opts.RunMode),
-			SessionID: opts.SessionID,
-			Timeout:   opts.Timeout.String(),
+			SessionID: opts.Spec.SessionID,
+			Timeout:   opts.timeout().String(),
 			Commit:    opts.Commit,
 			Message:   "Approved plan — implementing",
 		}
@@ -288,7 +288,7 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 		return err
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), req.Options.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), req.Options.timeout())
 		defer cancel()
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)

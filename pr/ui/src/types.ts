@@ -1,4 +1,4 @@
-import type { ClaudePermissionMode, ToolMode } from '@flanksource/clicky-ui/chat';
+import type { AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
 
 export interface FailedCheck {
   name: string;
@@ -289,15 +289,17 @@ export type TodoRunDriver =
   | 'codex-cmux'
   | 'codex-headless';
 
-export interface TodoRunOptions {
+// TodoRunOptions is the run POST body's options: api.Spec's inlined fields
+// (model/backend/effort flat; prompt/budget/permissions/sessionId nested,
+// mirroring clicky's AISpecRuntimeValue) plus the gavel-only run extras below.
+// A bare prompt override is spec.prompt.user; a budget cap is spec.budget.cost/
+// maxTurns/timeout; tool/permission posture is spec.permissions.{mode,tools}.
+export interface TodoRunOptions extends AISpecRuntimeValue {
   // Driver is the authoritative selection; agent/mode are the legacy pair the
   // server still accepts and derives a driver from when driver is absent.
   driver?: TodoRunDriver;
   agent?: TodoRunAgent;
   mode?: TodoRunMode;
-  backend?: string;
-  model?: string;
-  effort?: TodoRunEffort;
   // runMode is the operation the run performs (run/plan/verify). Supersedes the
   // `plan` bool; the server accepts both (plan:true is treated as runMode:plan).
   runMode?: TodoRunModeValue;
@@ -307,9 +309,6 @@ export interface TodoRunOptions {
   // Resume the todo's prior agent session (claude --resume) instead of starting
   // a fresh one, so the agent keeps the earlier conversation's context.
   resume?: boolean;
-  timeout?: string;
-  maxCost?: number;
-  maxTurns?: number;
   dirty?: boolean;
   dryRun?: boolean;
   // Auto-commit the agent's changes once the run finishes (defaults to true on
@@ -319,17 +318,6 @@ export interface TodoRunOptions {
   // feed any failures back to it for another iteration. Opt-in (defaults off on
   // the server), mirroring the CLI's `todos run --check`.
   check?: boolean;
-  // Prompt, when set, overrides the auto-built prompt body verbatim — the
-  // dashboard's editable prompt. The implement/plan scaffolding still follows
-  // the run mode.
-  prompt?: string;
-  // toolPreferences scopes each agent tool for the run: enabled (Auto), ask
-  // (prompt the dashboard), or disabled (Off). Only tools the user changed need
-  // be sent; omitted tools keep the backend default posture.
-  toolPreferences?: Record<string, ToolMode>;
-  // permissionMode is the base permission posture for the run (a clicky
-  // ClaudePermissionMode); omitted leaves the backend default.
-  permissionMode?: ClaudePermissionMode;
 }
 
 export interface TodoRunResponse {

@@ -12,10 +12,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
+
+// specPayload builds the inlined api.Spec a test payload sends for the
+// model/effort pair — the common case most run-payload tests need.
+func specPayload(model, effort string) api.Spec {
+	return api.Spec{Model: api.Model{Name: model, Effort: api.Effort(effort)}}
+}
 
 func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	workDir := t.TempDir()
@@ -629,15 +636,14 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:      todos.TODOReference(created),
-		Agent:    "codex",
-		Mode:     "cmux",
-		Model:    "codex",
-		Effort:   "high",
-		Timeout:  "45m",
-		MaxCost:  1.25,
-		MaxTurns: 12,
-		Dirty:    true,
+		Ref:   todos.TODOReference(created),
+		Agent: "codex",
+		Mode:  "cmux",
+		Spec: api.Spec{
+			Model:  api.Model{Name: "codex", Effort: "high"},
+			Budget: api.Budget{Cost: 1.25, MaxTurns: 12, Timeout: "45m"},
+		},
+		Dirty: true,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -660,7 +666,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if got.Source.Dir != workDir || got.Backend != todos.ProviderFiles {
 		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
 	}
-	if got.Options.Model != "codex" || got.Options.Effort != "high" || got.Options.MaxBudget != 1.25 || got.Options.MaxTurns != 12 || !got.Options.Dirty {
+	if got.Options.Name != "codex" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !got.Options.Dirty {
 		t.Fatalf("unexpected run options: %+v", got.Options)
 	}
 }
@@ -694,7 +700,7 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		return resp
 	}
 
-	cmuxResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Model: "claude", Effort: "high"})
+	cmuxResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "high")})
 	if cmuxResp.Count != 1 || cmuxResp.Mode != "cmux" {
 		t.Fatalf("unexpected preview meta: %+v", cmuxResp)
 	}
@@ -711,12 +717,12 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		t.Fatalf("cmux preview should include the instructions section: %q", cmuxResp.Prompt)
 	}
 
-	planResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium", Plan: true})
+	planResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium"), Plan: true})
 	if !strings.Contains(planResp.Prompt, "## Fix the parser") {
 		t.Fatalf("plan preview should contain the title: %q", planResp.Prompt)
 	}
 
-	inlineResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Model: "claude", Effort: "medium"})
+	inlineResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Spec: specPayload("claude", "medium")})
 	if strings.HasPrefix(inlineResp.Prompt, "# Fix the parser") {
 		t.Fatalf("inline preview should be the bare claude prompt, not the cmux instruction: %q", inlineResp.Prompt)
 	}
@@ -738,7 +744,7 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	}
 	ref := todos.TODOReference(created)
 
-	body, _ := json.Marshal(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Model: "claude"})
+	body, _ := json.Marshal(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Spec: api.Spec{Model: api.Model{Name: "claude"}}})
 	rec := httptest.NewRecorder()
 	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview?provider=todos", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
@@ -760,7 +766,7 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 
 func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
 	boolPtr := func(b bool) *bool { return &b }
-	base := todoRunPayload{Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium"}
+	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
 
 	cases := []struct {
 		name    string
@@ -787,21 +793,26 @@ func TestNormalizeTodoRunOptionsCommitDefault(t *testing.T) {
 }
 
 func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
-	base := todoRunPayload{Agent: "claude", Mode: "cmux", Model: "claude", Effort: "medium"}
+	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
 
 	t.Run("valid prefs and permission mode are threaded", func(t *testing.T) {
 		payload := base
-		payload.ToolPreferences = map[string]string{"Bash": "ask", "Write": "disabled", "Read": "enabled"}
-		payload.PermissionMode = "acceptEdits"
+		payload.Spec.Permissions = api.Permissions{
+			Mode: api.PermissionAcceptEdits,
+			Tools: api.Tools{Modes: map[string]api.ToolMode{
+				"Bash": api.ToolModeAsk, "Write": api.ToolModeDisabled, "Read": api.ToolModeEnabled,
+			}},
+		}
 		opts, err := normalizeTodoRunOptions(payload)
 		if err != nil {
 			t.Fatalf("normalize: %v", err)
 		}
-		if opts.PermissionMode != "acceptEdits" {
-			t.Fatalf("PermissionMode = %q, want acceptEdits", opts.PermissionMode)
+		if opts.Permissions.Mode != api.PermissionAcceptEdits {
+			t.Fatalf("PermissionMode = %q, want acceptEdits", opts.Permissions.Mode)
 		}
-		if opts.ToolModes["Bash"] != "ask" || opts.ToolModes["Write"] != "disabled" || opts.ToolModes["Read"] != "enabled" {
-			t.Fatalf("ToolModes = %v, want Bash=ask Write=disabled Read=enabled", opts.ToolModes)
+		toolModes := toolModesFromPermissions(opts.Permissions.Tools)
+		if toolModes["Bash"] != "ask" || toolModes["Write"] != "disabled" || toolModes["Read"] != "enabled" {
+			t.Fatalf("ToolModes = %v, want Bash=ask Write=disabled Read=enabled", toolModes)
 		}
 	})
 
@@ -810,14 +821,14 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		if err != nil {
 			t.Fatalf("normalize: %v", err)
 		}
-		if opts.ToolModes != nil || opts.PermissionMode != "" {
-			t.Fatalf("want nil ToolModes and empty PermissionMode, got %v / %q", opts.ToolModes, opts.PermissionMode)
+		if toolModesFromPermissions(opts.Permissions.Tools) != nil || opts.Permissions.Mode != "" {
+			t.Fatalf("want nil ToolModes and empty PermissionMode, got %v / %q", opts.Permissions.Tools, opts.Permissions.Mode)
 		}
 	})
 
 	t.Run("invalid tool mode fails loud", func(t *testing.T) {
 		payload := base
-		payload.ToolPreferences = map[string]string{"Bash": "maybe"}
+		payload.Spec.Permissions = api.Permissions{Tools: api.Tools{Modes: map[string]api.ToolMode{"Bash": "maybe"}}}
 		if _, err := normalizeTodoRunOptions(payload); err == nil {
 			t.Fatal("expected error for invalid tool mode, got nil")
 		}
@@ -825,7 +836,7 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 
 	t.Run("invalid permission mode fails loud", func(t *testing.T) {
 		payload := base
-		payload.PermissionMode = "yolo"
+		payload.Spec.Permissions = api.Permissions{Mode: "yolo"}
 		if _, err := normalizeTodoRunOptions(payload); err == nil {
 			t.Fatal("expected error for invalid permission mode, got nil")
 		}
@@ -866,8 +877,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 				Ref:    todos.TODOReference(created),
 				Agent:  "claude",
 				Mode:   "cmux",
-				Model:  "claude",
-				Effort: "medium",
+				Spec:   specPayload("claude", "medium"),
 				Commit: tc.commit,
 			})
 			rec := httptest.NewRecorder()
@@ -918,11 +928,10 @@ func TestTodoAPIRunStartsMultipleTodosInOneSession(t *testing.T) {
 
 	// Duplicate the first ref to confirm the handler de-duplicates refs.
 	body, _ := json.Marshal(todoRunPayload{
-		Refs:   []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
-		Agent:  "claude",
-		Mode:   "cmux",
-		Model:  "sonnet",
-		Effort: "medium",
+		Refs:  []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
+		Agent: "claude",
+		Mode:  "cmux",
+		Spec:  specPayload("sonnet", "medium"),
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -956,11 +965,10 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Agent:  "codex",
-		Mode:   "inline",
-		Model:  "codex",
-		Effort: "medium",
+		Ref:   todos.TODOReference(created),
+		Agent: "codex",
+		Mode:  "inline",
+		Spec:  specPayload("codex", "medium"),
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -992,12 +1000,11 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:    todos.TODOReference(created),
-		Agent:  "claude",
-		Mode:   "cmux",
-		Model:  "claude",
-		Effort: "medium",
-		Plan:   true,
+		Ref:   todos.TODOReference(created),
+		Agent: "claude",
+		Mode:  "cmux",
+		Spec:  specPayload("claude", "medium"),
+		Plan:  true,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -1041,8 +1048,7 @@ func TestTodoAPIRunModeField(t *testing.T) {
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:     todos.TODOReference(created),
 		Driver:  "claude-headless",
-		Model:   "claude",
-		Effort:  "medium",
+		Spec:    specPayload("claude", "medium"),
 		RunMode: "plan",
 	})
 	rec := httptest.NewRecorder()
@@ -1069,7 +1075,7 @@ func TestTodoAPIRunModeField(t *testing.T) {
 
 func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	// Explicit driver wins and sets the legacy mode label for downstream paths.
-	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Effort: "medium"})
+	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Effort: "medium"}}})
 	if err != nil {
 		t.Fatalf("claude-headless driver: %v", err)
 	}
@@ -1082,8 +1088,8 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codex-cmux driver: %v", err)
 	}
-	if opts.Agent != "codex" || opts.Model != "codex" || opts.Mode != "cmux" {
-		t.Fatalf("got agent=%q model=%q mode=%q", opts.Agent, opts.Model, opts.Mode)
+	if opts.Agent != "codex" || opts.Name != "codex" || opts.Mode != "cmux" {
+		t.Fatalf("got agent=%q model=%q mode=%q", opts.Agent, opts.Name, opts.Mode)
 	}
 
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-tui"}); err == nil {
@@ -1114,26 +1120,26 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 }
 
 func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
-	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Backend: "claude-cli", Effort: "xhigh"})
+	opts, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-cli", Effort: "xhigh"}}})
 	if err != nil {
 		t.Fatalf("claude-cli backend: %v", err)
 	}
-	if opts.Backend != "claude-cli" || opts.Model != "claude-agent-sonnet" || opts.Effort != "xhigh" {
+	if opts.Backend != "claude-cli" || opts.Name != "claude-agent-sonnet" || opts.Effort != "xhigh" {
 		t.Fatalf("unexpected claude backend options: %+v", opts)
 	}
 
-	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Model: "codex"})
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Name: "codex"}}})
 	if err != nil {
 		t.Fatalf("default codex backend: %v", err)
 	}
-	if opts.Backend != "codex-cli" || opts.Model != "gpt-5-codex" {
+	if opts.Backend != "codex-cli" || opts.Name != "gpt-5-codex" {
 		t.Fatalf("unexpected codex backend defaults: %+v", opts)
 	}
 
-	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Backend: "claude-agent", Model: "claude-agent-sonnet"}); err == nil {
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-agent-sonnet"}}}); err == nil {
 		t.Fatal("mismatched backend and driver should be rejected")
 	}
-	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Backend: "claude-agent", Model: "gpt-5-codex"}); err == nil {
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "gpt-5-codex"}}}); err == nil {
 		t.Fatal("mismatched backend and model should be rejected")
 	}
 }
@@ -1158,11 +1164,9 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:     todos.TODOReference(created),
-		Driver:  "claude-headless",
-		Backend: "claude-agent",
-		Model:   "claude-agent-sonnet",
-		Effort:  "medium",
+		Ref:    todos.TODOReference(created),
+		Driver: "claude-headless",
+		Spec:   api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-agent-sonnet", Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -1176,7 +1180,7 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	if resp.Driver != "claude-headless" || resp.Backend != "claude-agent" || resp.Model != "claude-agent-sonnet" {
 		t.Fatalf("response did not thread backend/model: %+v", resp)
 	}
-	if got.Options.Backend != "claude-agent" || got.Options.Model != "claude-agent-sonnet" {
+	if got.Options.Backend != "claude-agent" || got.Options.Name != "claude-agent-sonnet" {
 		t.Fatalf("run starter did not receive backend/model: %+v", got.Options)
 	}
 }
