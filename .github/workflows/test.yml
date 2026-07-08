@@ -40,7 +40,7 @@ jobs:
           version: 3.x
 
       - name: Build gavel
-        run: make build
+        run: task build:prod
 
       # Node + TypeScript for the jest/vitest/playwright test frameworks and
       # the tsc lint check live in these UI projects' devDependencies.
@@ -87,7 +87,7 @@ jobs:
           version: 3.x
 
       - name: Build gavel
-        run: make build
+        run: task build:prod
 
       # Node + TypeScript for the tsc / eslint linters live in these UI
       # projects' devDependencies; install them so gavel lint can run them.
@@ -155,7 +155,7 @@ jobs:
           version: 3.x
 
       - name: Build binary
-        run: make build
+        run: task build:prod
 
       - name: Test binary
         run: |

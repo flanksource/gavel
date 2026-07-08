@@ -55,7 +55,7 @@ jobs:
 
       - name: Build gavel from source
         run: |
-          task build
+          task build:prod
           install_dir="$HOME/.local/bin"
           mkdir -p "$install_dir"
           cp gavel "$install_dir/gavel"

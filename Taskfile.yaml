@@ -125,15 +125,39 @@ tasks:
         sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
       DATE:
         sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      GO_TAGS: '{{.GO_TAGS | default ""}}'
       LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
     cmds:
-      - go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_PACKAGE}}
+      - |
+        tags="{{.GO_TAGS}}"
+        if [ -n "$tags" ]; then
+          go build -tags "$tags" -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_PACKAGE}}
+        else
+          go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_PACKAGE}}
+        fi
     sources:
       - ./**/*.go
       - go.mod
       - go.sum
     generates:
       - ./{{.BINARY_NAME}}
+
+  build:prod:
+    desc: Build the production binary with optional native integrations
+    deps:
+      - test-ui
+      - pr-ui
+    vars:
+      VERSION:
+        sh: git describe --tags --always 2>/dev/null || echo "dev"
+      COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      DATE:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      GO_TAGS: gavel_menubar
+      LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
+    cmds:
+      - go build -tags "{{.GO_TAGS}}" -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} {{.MAIN_PACKAGE}}
 
   build:cross:
     desc: |
@@ -146,6 +170,7 @@ tasks:
     vars:
       GOOS: '{{.GOOS | default "linux"}}'
       GOARCH: '{{.GOARCH | default "amd64"}}'
+      GO_TAGS: '{{.GO_TAGS | default ""}}'
       VERSION:
         sh: git describe --tags --always 2>/dev/null || echo "dev"
       COMMIT:
@@ -160,7 +185,13 @@ tasks:
       CGO_ENABLED: 0
     cmds:
       - mkdir -p .bin
-      - go build -trimpath -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
+      - |
+        tags="{{.GO_TAGS}}"
+        if [ -n "$tags" ]; then
+          go build -tags "$tags" -trimpath -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
+        else
+          go build -trimpath -ldflags "{{.LDFLAGS}}" -o {{.OUTPUT}} {{.MAIN_PACKAGE}}
+        fi
     sources:
       - ./**/*.go
       - go.mod
@@ -272,4 +303,4 @@ tasks:
       - task: fmt
       - task: lint
       - task: test
-      - task: build
+      - task: build:prod

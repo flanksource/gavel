@@ -111,7 +111,7 @@ jobs:
           version: 3.x
 
       - name: Build binary
-        run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }}
+        run: task build:cross GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GO_TAGS=gavel_menubar
 
       - name: Archive binary
         id: archive
