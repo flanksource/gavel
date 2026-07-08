@@ -76,3 +76,49 @@ func TestVerificationFixtureRoundTrips(t *testing.T) {
 		t.Errorf("round-trip = %q, want %q", got, fixture)
 	}
 }
+
+func TestUpsertMarkedVerificationBlockPreservesUserFixture(t *testing.T) {
+	body := strings.Join([]string{
+		"Issue description.",
+		"",
+		"## Verification",
+		"",
+		"### command: User check",
+		"",
+		"```bash",
+		"make test",
+		"```",
+	}, "\n")
+
+	updated := UpsertMarkedVerificationBlock(body, "gavel:test", "### command: Generated\n\n```exec\ngavel pr status 1 --actions '*'\n```")
+
+	if strings.Count(updated, "## Verification\n") != 1 {
+		t.Fatalf("expected one verification section:\n%s", updated)
+	}
+	if !strings.Contains(updated, "make test") {
+		t.Fatalf("user fixture was dropped:\n%s", updated)
+	}
+	if !strings.Contains(updated, "<!-- gavel:test -->") || !strings.Contains(updated, "gavel pr status 1") {
+		t.Fatalf("generated block missing:\n%s", updated)
+	}
+}
+
+func TestUpsertMarkedVerificationBlockReplacesOnlyMarkedBlock(t *testing.T) {
+	body := UpsertMarkedVerificationBlock("Issue description.", "gavel:test", "```exec\ngavel pr status 1 --actions old\n```")
+	body = UpsertVerificationFixture(body, ExtractVerificationFixture(body)+"\n\n```bash\nmake test\n```")
+
+	updated := UpsertMarkedVerificationBlock(body, "gavel:test", "```exec\ngavel pr status 1 --actions new\n```")
+
+	if strings.Count(updated, "<!-- gavel:test -->") != 1 {
+		t.Fatalf("expected one generated block:\n%s", updated)
+	}
+	if strings.Contains(updated, "--actions old") {
+		t.Fatalf("old generated block remained:\n%s", updated)
+	}
+	if !strings.Contains(updated, "--actions new") {
+		t.Fatalf("new generated block missing:\n%s", updated)
+	}
+	if !strings.Contains(updated, "make test") {
+		t.Fatalf("custom fixture was dropped:\n%s", updated)
+	}
+}

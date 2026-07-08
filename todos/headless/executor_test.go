@@ -30,14 +30,19 @@ func newTestCtx() *todopkg.ExecutorContext {
 }
 
 func TestHeadlessCompletesOnResult(t *testing.T) {
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
+	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Model: "claude-agent-sonnet", Effort: "high", Stream: fakeStream(
 		captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-1"},
 		captainai.Event{Kind: captainai.EventText, Text: "working on it"},
 		captainai.Event{Kind: captainai.EventToolUse, Tool: "Edit", Input: map[string]any{"file_path": "/repo/x.go"}},
 		captainai.Event{Kind: captainai.EventResult, Success: true, CostUSD: 0.12, Usage: &captainai.Usage{InputTokens: 100, OutputTokens: 50}},
 	)})
 	todo := &types.TODO{}
-	result, err := e.Execute(newTestCtx(), todo)
+	ctx := newTestCtx()
+	var starts []todopkg.RunStartMetadata
+	ctx.SetRunStartHook(func(meta todopkg.RunStartMetadata) {
+		starts = append(starts, meta)
+	})
+	result, err := e.Execute(ctx, todo)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -52,6 +57,12 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	}
 	if todo.LLM == nil || todo.LLM.SessionId != "sess-1" {
 		t.Errorf("session id not recorded on todo: %+v", todo.LLM)
+	}
+	if len(starts) != 1 {
+		t.Fatalf("run starts = %d, want 1: %#v", len(starts), starts)
+	}
+	if starts[0].SessionID != "sess-1" || starts[0].Mode != "run" || starts[0].ResolvedModel != "claude-agent-sonnet" || starts[0].Effort != "high" {
+		t.Fatalf("run metadata = %+v", starts[0])
 	}
 }
 
@@ -315,8 +326,18 @@ func TestHeadlessModelDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codex streamer: %v", err)
 	}
-	if codexP.GetBackend() != captainai.BackendCodexCLI {
-		t.Errorf("codex backend = %v, want codex-cli", codexP.GetBackend())
+	if codexP.GetBackend() != captainai.BackendCodexAgent {
+		t.Errorf("codex backend = %v, want codex-agent", codexP.GetBackend())
+	}
+	codexAgentP, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "gpt-5.5", string(captainai.BackendCodexAgent))
+	if err != nil {
+		t.Fatalf("codex-agent streamer: %v", err)
+	}
+	if codexAgentP.GetBackend() != captainai.BackendCodexAgent {
+		t.Errorf("codex explicit backend = %v, want codex-agent", codexAgentP.GetBackend())
+	}
+	if _, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "gpt-5.5", string(captainai.BackendCodexCLI)); err == nil {
+		t.Fatal("codex-cli backend should be rejected")
 	}
 }
 

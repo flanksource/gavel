@@ -181,6 +181,13 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if err != nil {
 		return e.failed(start, err), err
 	}
+	runMeta := todopkg.RunStartMetadata{
+		SessionID:     firstNonEmpty(firstNonEmpty(req.SessionID, providerSessionID), priorSessionID(todosInGroup)),
+		Mode:          string(e.config.Mode),
+		ResolvedModel: provider.GetModel(),
+		Effort:        e.config.Effort,
+	}
+	ctx.RecordRunStart(runMeta)
 
 	ctx.Logger.Infof("%s: dispatching %d TODO(s) in %s", e.Name(), len(todosInGroup), req.Cwd())
 	gavelai.NormalizeEnv()
@@ -224,7 +231,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		Cwd:           req.Cwd(),
 		Scope:         scope,
 		OnEvent: func(_ int, ev captainai.Event) {
-			e.handleEvent(ctx, ev, result, todosInGroup, &sawResult)
+			e.handleEvent(ctx, ev, result, todosInGroup, &sawResult, runMeta)
 		},
 	}
 
@@ -289,7 +296,7 @@ func (e *Executor) classify(result *todopkg.ExecutionResult, sawResult, timedOut
 	}
 }
 
-func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event, result *todopkg.ExecutionResult, todosInGroup []*types.TODO, sawResult *bool) {
+func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event, result *todopkg.ExecutionResult, todosInGroup []*types.TODO, sawResult *bool, runMeta todopkg.RunStartMetadata) {
 	transcript := ctx.GetTranscript()
 	switch ev.Kind {
 	case captainai.EventText:
@@ -313,6 +320,8 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 		if ev.SessionID != "" {
 			recordSessionID(todosInGroup, ev.SessionID)
 			ctx.RecordSessionID(ev.SessionID)
+			runMeta.SessionID = ev.SessionID
+			ctx.RecordRunStart(runMeta)
 		}
 	case captainai.EventResult:
 		*sawResult = true

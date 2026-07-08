@@ -33,3 +33,41 @@ func UpsertVerificationFixture(body, fixture string) string {
 	b.WriteString("\n")
 	return ReplaceOrAppendSection(body, verificationFixtureSection, b.String(), verificationFixtureInsertBefore...)
 }
+
+// UpsertMarkedVerificationBlock inserts or replaces a generated block inside
+// the "## Verification" fixture section without clobbering any user-authored
+// fixture markdown in the same section.
+func UpsertMarkedVerificationBlock(body, marker, block string) string {
+	marker = strings.TrimSpace(marker)
+	block = strings.TrimSpace(block)
+	if marker == "" || block == "" {
+		return body
+	}
+
+	startTag := "<!-- " + marker + " -->"
+	endTag := "<!-- /" + marker + " -->"
+	wrapped := startTag + "\n" + block + "\n" + endTag
+
+	fixture := ExtractVerificationFixture(body)
+	if fixture == "" {
+		return UpsertVerificationFixture(body, wrapped)
+	}
+
+	if start := strings.Index(fixture, startTag); start >= 0 {
+		searchFrom := start + len(startTag)
+		if endRel := strings.Index(fixture[searchFrom:], endTag); endRel >= 0 {
+			end := searchFrom + endRel + len(endTag)
+			var parts []string
+			if before := strings.TrimSpace(fixture[:start]); before != "" {
+				parts = append(parts, before)
+			}
+			parts = append(parts, wrapped)
+			if after := strings.TrimSpace(fixture[end:]); after != "" {
+				parts = append(parts, after)
+			}
+			return UpsertVerificationFixture(body, strings.Join(parts, "\n\n"))
+		}
+	}
+
+	return UpsertVerificationFixture(body, strings.TrimSpace(fixture)+"\n\n"+wrapped)
+}

@@ -36,7 +36,7 @@ func defaultTodoVerifyModelForBackend(backend string) string {
 	switch captainai.Backend(backend) {
 	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI:
 		return "claude-agent-sonnet"
-	case captainai.BackendCodexCLI:
+	case captainai.BackendCodexAgent:
 		return "gpt-5-codex"
 	default:
 		return defaultTodoVerifyModel

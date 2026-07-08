@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/clicky/task"
@@ -116,6 +117,83 @@ func TestTODOExecutorPersistsSessionBeforeExecutorReturns(t *testing.T) {
 	}
 }
 
+func TestTODOExecutorCommentsRunMetadataWhenSessionKnown(t *testing.T) {
+	execCtx := NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	provider := &recordingProvider{}
+	runner := NewTODOExecutor(".", metadataExecutor{
+		meta: RunStartMetadata{
+			SessionID:     "sess-42",
+			Mode:          "plan",
+			ResolvedModel: "claude-agent-sonnet",
+			Effort:        "high",
+		},
+		result: &ExecutionResult{
+			Success:      true,
+			ExecutorName: "metadata-executor",
+			Summary:      "planned",
+			EndStatus:    types.EndCompleted,
+			Plan:         &types.PlanResult{Status: types.PlanUnchanged},
+		},
+	}, "", provider)
+	runner.SetMode(types.ModePlan)
+	todo := &types.TODO{
+		ID:              "todo-1",
+		FilePath:        "todo-1",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Record run metadata"},
+	}
+
+	if _, err := runner.Execute(execCtx, todo); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(provider.comments) != 1 {
+		t.Fatalf("comments = %d, want 1: %#v", len(provider.comments), provider.comments)
+	}
+	comment := provider.comments[0]
+	for _, want := range []string{
+		"**Todo run started**",
+		"**Session ID:** `sess-42`",
+		"**Mode:** `plan`",
+		"**Resolved Model:** `claude-agent-sonnet`",
+		"**Effort:** `high`",
+	} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("run metadata comment missing %q:\n%s", want, comment)
+		}
+	}
+}
+
+func TestTODOExecutorRunMetadataCommentIsOncePerRun(t *testing.T) {
+	execCtx := NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	provider := &recordingProvider{}
+	runner := NewTODOExecutor(".", metadataExecutor{
+		repeat: 2,
+		meta: RunStartMetadata{
+			SessionID:     "sess-dup",
+			Mode:          "run",
+			ResolvedModel: "gpt-5-codex",
+			Effort:        "medium",
+		},
+		result: &ExecutionResult{
+			Success:      true,
+			ExecutorName: "metadata-executor",
+			Summary:      "done",
+			EndStatus:    types.EndCompleted,
+		},
+	}, "", provider)
+	todo := &types.TODO{
+		ID:              "todo-1",
+		FilePath:        "todo-1",
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Do not spam comments"},
+	}
+
+	if _, err := runner.Execute(execCtx, todo); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(provider.comments) != 1 {
+		t.Fatalf("comments = %d, want 1: %#v", len(provider.comments), provider.comments)
+	}
+}
+
 type sessionHookExecutor struct {
 	sessionID           string
 	sawSessionPersisted bool
@@ -128,6 +206,26 @@ func (e *sessionHookExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*
 	// RecordSessionID runs the hook synchronously, so by now the id is on the todo.
 	e.sawSessionPersisted = todo.LLM != nil && todo.LLM.SessionId == e.sessionID
 	return &ExecutionResult{ExecutorName: e.Name()}, nil
+}
+
+type metadataExecutor struct {
+	meta   RunStartMetadata
+	repeat int
+	result *ExecutionResult
+}
+
+func (e metadataExecutor) Name() string { return "metadata-executor" }
+
+func (e metadataExecutor) Execute(ctx *ExecutorContext, _ *types.TODO) (*ExecutionResult, error) {
+	n := e.repeat
+	if n <= 0 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		ctx.RecordSessionID(e.meta.SessionID)
+		ctx.RecordRunStart(e.meta)
+	}
+	return e.result, nil
 }
 
 type cancelingExecutor struct {
@@ -149,6 +247,7 @@ type recordingProvider struct {
 	saveCtxErr    error
 	updateCtxErrs []error
 	sessionIDs    []string
+	comments      []string
 }
 
 func (p *recordingProvider) List(context.Context, DiscoveryFilters) (types.TODOS, error) {
@@ -171,7 +270,8 @@ func (p *recordingProvider) Edit(context.Context, *types.TODO, EditRequest) erro
 	return nil
 }
 
-func (p *recordingProvider) Comment(context.Context, *types.TODO, string) error {
+func (p *recordingProvider) Comment(_ context.Context, _ *types.TODO, body string) error {
+	p.comments = append(p.comments, body)
 	return nil
 }
 

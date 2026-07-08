@@ -232,7 +232,7 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 	}
 	switch e.config.Agent {
 	case "codex":
-		if backend != "" && captainai.Backend(backend) != captainai.BackendCodexCLI {
+		if backend != "" && captainai.Backend(backend) != captainai.BackendCodexAgent {
 			return nil, fmt.Errorf("headless codex does not support backend %q", backend)
 		}
 		if model == "codex" {

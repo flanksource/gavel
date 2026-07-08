@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -187,6 +188,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	// Execute with configured executor (Claude, OpenAI, etc.)
 	ctx.Logger.Infof("Executing with %s", e.executor.Name())
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
+	ctx.SetRunStartHook(e.runStartPersister(ctx, []*types.TODO{todo}))
 	result, err := e.executor.Execute(ctx, todo)
 	// The executor may generate its own session id (e.g. cmux's claude
 	// --session-id); persist it now that it is known, regardless of outcome.
@@ -273,6 +275,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 	if len(needsExecution) > 0 {
 		var err error
 		ctx.SetSessionIDHook(e.sessionIDPersister(ctx, needsExecution))
+		ctx.SetRunStartHook(e.runStartPersister(ctx, needsExecution))
 		groupResult, err = groupExec.ExecuteGroup(ctx, needsExecution)
 		// The group executor may generate a session id per todo (e.g. cmux's
 		// claude --session-id); persist it now that it is known.
@@ -389,6 +392,47 @@ func (e *TODOExecutor) sessionIDPersister(ctx context.Context, todoList []*types
 			e.updateProviderState(ctx, todo, StateUpdate{SessionID: &sessionID})
 		}
 	}
+}
+
+func (e *TODOExecutor) runStartPersister(ctx context.Context, todoList []*types.TODO) func(RunStartMetadata) {
+	commented := false
+	return func(meta RunStartMetadata) {
+		if commented || strings.TrimSpace(meta.SessionID) == "" {
+			return
+		}
+		if strings.TrimSpace(meta.Mode) == "" {
+			meta.Mode = string(e.Mode())
+		}
+		body := renderRunStartComment(meta)
+		persistCtx, cancel := providerPersistenceContext(ctx)
+		defer cancel()
+		for _, todo := range todoList {
+			if todo == nil {
+				continue
+			}
+			if err := e.activeProvider().Comment(persistCtx, todo, body); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to comment TODO run metadata: %v\n", err)
+			}
+		}
+		commented = true
+	}
+}
+
+func renderRunStartComment(meta RunStartMetadata) string {
+	var b strings.Builder
+	b.WriteString("**Todo run started**\n\n")
+	b.WriteString("- **Session ID:** `" + commentValue(meta.SessionID, "unknown") + "`\n")
+	b.WriteString("- **Mode:** `" + commentValue(meta.Mode, "run") + "`\n")
+	b.WriteString("- **Resolved Model:** `" + commentValue(meta.ResolvedModel, "default") + "`\n")
+	b.WriteString("- **Effort:** `" + commentValue(meta.Effort, "default") + "`")
+	return b.String()
+}
+
+func commentValue(value, fallback string) string {
+	if v := strings.TrimSpace(value); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {

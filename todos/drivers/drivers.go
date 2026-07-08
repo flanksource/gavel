@@ -40,7 +40,7 @@ const (
 	ClaudeAPI Kind = "claude-api"
 	// CodexCmux drives codex's interactive TUI inside a cmux surface.
 	CodexCmux Kind = "codex-cmux"
-	// CodexHeadless drives codex via `codex exec --json`.
+	// CodexHeadless drives codex via the app-server provider.
 	CodexHeadless Kind = "codex-headless"
 )
 

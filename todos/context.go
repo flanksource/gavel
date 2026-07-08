@@ -22,6 +22,16 @@ type ExecutorContext struct {
 	interaction *UserInteraction
 	transcript  *ExecutionTranscript
 	onSessionID func(sessionID string)
+	onRunStart  func(RunStartMetadata)
+}
+
+// RunStartMetadata is the human-facing run identity recorded on a TODO issue
+// when an agent run starts.
+type RunStartMetadata struct {
+	SessionID     string
+	Mode          string
+	ResolvedModel string
+	Effort        string
 }
 
 // UserInteraction handles user-facing communication during TODO execution.
@@ -224,6 +234,22 @@ func (ctx *ExecutorContext) RecordSessionID(sessionID string) {
 		return
 	}
 	ctx.onSessionID(sessionID)
+}
+
+// SetRunStartHook registers a callback an executor invokes once it knows the
+// session id and resolved model used for the run.
+func (ctx *ExecutorContext) SetRunStartHook(fn func(RunStartMetadata)) {
+	ctx.onRunStart = fn
+}
+
+// RecordRunStart reports the run metadata to the registered hook (if any). A
+// blank session id is ignored because the issue comment must identify the
+// resumable session.
+func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
+	if meta.SessionID == "" || ctx.onRunStart == nil {
+		return
+	}
+	ctx.onRunStart(meta)
 }
 
 // ExecutionTranscript records the complete interaction history during TODO execution.
