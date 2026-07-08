@@ -8,7 +8,6 @@ This repository uses **Grite** as the canonical task and memory system. **Always
 - **"What did I work on?"** → `grite issue list --state closed`
 - **"What do I know about X?"** → `grite issue list --label memory`
 - **"What should I work on next?"** → `grite issue dep topo --state open`
-- **"What does function X do?"** → `grite context query X`
 - **Starting a new task** → `grite issue create`
 - **Making progress** → `grite issue comment`
 - **Task A depends on B** → `grite issue dep add`
@@ -18,7 +17,6 @@ This repository uses **Grite** as the canonical task and memory system. **Always
 Run at the beginning of each session:
 
 ```bash
-grite sync --pull --json
 grite issue list --json
 grite issue dep topo --state open --json
 ```
@@ -44,7 +42,6 @@ grite issue comment <ID> --body "Checkpoint: what changed, why, tests run" --jso
 
 # Close when done
 grite issue close <ID> --json
-grite sync --push --json
 ```
 
 ### Querying tasks
@@ -87,34 +84,6 @@ grite issue dep list <ID> --reverse --json
 grite issue dep topo --state open --json
 ```
 
-**Always run `dep topo`** at session start to determine which task to work on next.
-
-### Context store
-
-Index and query codebase structure for fast navigation:
-
-```bash
-# Index all tracked files (skips unchanged files)
-grite context index --json
-
-# Index specific files or patterns
-grite context index --path src/main.py --json
-grite context index --pattern "*.rs" --json
-
-# Query for a symbol (function, class, struct, etc.)
-grite context query <symbol_name> --json
-
-# Show all symbols in a file
-grite context show <file_path> --json
-
-# Set project-level context (conventions, architecture notes)
-grite context set <key> <value> --json
-
-# View all project context
-grite context project --json
-```
-
-**Index after significant code changes** to keep the symbol database current.
 
 ### Key flags
 

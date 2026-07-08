@@ -398,9 +398,8 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -t                       # choose files in an interactive tree picker
-gavel commit -A                       # split staged changes into multiple commits by directory
-gavel commit -G                       # let the LLM split staged changes into logical commits + a chore commit for lock/generated files
-gavel commit -G -A                    # stage everything first, then group logically
+gavel commit -A                       # stage everything, let the LLM split it into logical commits + a chore commit for lock/generated files
+gavel commit --max-commits=3          # same as -A, capped at 3 logical commits (implies -A)
 gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
 gavel commit --stage all --dry-run    # stage everything, print message
 gavel commit --force                  # skip hooks
@@ -410,13 +409,11 @@ gavel commit --force                  # skip hooks
 |------|-------------|
 | `--stage` | Which changes to commit: `session` (default — commits only the running agent's edits, resolving `GAVEL_SESSION_ID`/`CLAUDE_SESSION_ID`/`CODEX_SESSION_ID`, falling back to `staged` when none is set), `staged`, `unstaged`, `all`, or an explicit Claude/Codex session id |
 | `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
-| `-A` / `--commit-all` | Split the selected change set into multiple commits grouped by directory; if nothing is staged, stage all first |
-| `-G` / `--ai-group` | Ask the LLM to split the change set into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles) instead of grouping by directory. Combine with `-A` to stage all changes first |
-| `--max-commits` | Cap the number of commits `-G` produces, excluding the chore commit (default 7). Fed to the grouping prompt and re-enforced via a consolidation follow-up if exceeded |
-| `--group-by-scope` | With `-G`, treat repomap scope as the primary commit boundary (default `false`: group by logical change, scope is only a hint) |
+| `-A` / `--commit-all` | Stage all changes and ask the LLM to split them into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles). Each group is committed as soon as its message is ready |
+| `--max-commits` | Cap the number of logical commits, excluding the chore commit (default 7). Setting it implies `-A`. Rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
 | `--model` | Override LLM model for commit-message/PR generation from `.gavel.yaml` `commit.model` (fast/haiku-class) |
-| `--group-model` | Override LLM model for AI grouping (`-G`) from `.gavel.yaml` `commit.groupModel` (capable/sonnet-class); falls back to `--model` |
+| `--group-model` | Override LLM model for AI grouping (`-A`) from `.gavel.yaml` `commit.groupModel` (capable/sonnet-class); falls back to `--model` |
 | `--dry-run` | Print the generated message without committing |
 | `--force` | Skip pre-commit hooks |
 | `--no-cache` | Bypass the LLM response cache |
@@ -753,7 +750,7 @@ lint:
 
 commit:
   model: claude-haiku-4-5            # fast model for commit-message/PR generation
-  groupModel: claude-sonnet-4-5      # capable model for AI commit grouping (-G)
+  groupModel: claude-sonnet-4-5      # capable model for AI commit grouping (-A)
   hooks:                             # pre-commit hooks
     - name: lint-staged
       run: "golangci-lint run --new-from-rev=HEAD~1"

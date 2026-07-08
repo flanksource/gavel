@@ -31,7 +31,7 @@ Plan mode is read-oriented. A completed plan run reports a native plan file path
 
 ## Drivers and sessions
 
-Drivers choose how the agent runs. The default is a cmux-backed driver for the resolved agent. Explicit drivers include values such as `claude-cmux`, `claude-headless`, `codex-cmux`, and `codex-headless`.
+Drivers choose how the agent runs. The default is a cmux-backed driver for the resolved agent. Explicit drivers include values such as `claude-cmux`, `claude-headless`, `codex-cmux`, and `codex-headless`. For Codex, `codex-headless` resolves to the `codex-agent` app-server backend.
 
 ```bash
 gavel todos run --driver claude-cmux --model claude-code-sonnet 90ec80f0 # [!code focus]

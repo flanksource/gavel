@@ -227,7 +227,7 @@ Field reference:
 | `lint.ignore` | Repo-wide or user-wide ignore rules matched by `source`, `rule`, and/or `file` |
 | `lint.linters.<name>.enabled` | Force a linter on or off when Gavel would otherwise rely on detection/default behavior |
 | `commit.model` | Model for commit-message and PR-content generation (fast/haiku-class); overridable with `--model` |
-| `commit.groupModel` | Model for AI commit grouping (`gavel commit -G`, capable/sonnet-class); overridable with `--group-model`, falls back to `commit.model` |
+| `commit.groupModel` | Model for AI commit grouping (`gavel commit -A`, capable/sonnet-class); overridable with `--group-model`, falls back to `commit.model` |
 | `commit.hooks` | Pre-commit shell hooks run by `gavel commit` |
 | `commit.hooks[].files` | Optional staged-file glob filter; hook runs only if any staged file matches |
 | `commit.precommit.mode` | How `gavel commit` handles gitignore + linked-dependency precommit checks |
@@ -504,7 +504,7 @@ This is the right command when you want:
 - AI warnings for removed functionality or compatibility issues before the commit is written
 - Hook execution before finalizing the commit
 - Interactive file selection with an in-picker `/` filter for path, status, language, or scope
-- AI-assisted splitting of a large change into multiple commits — by directory (`-A`) or into logical groups with a separate chore commit for lock/generated files (`-G`). `-G` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change by default (pass `--group-by-scope` to make repomap scope the primary boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit), re-prompting to consolidate if the model overshoots
+- AI-assisted splitting of a large change into multiple logical commits (`-A`), with a separate chore commit for lock/generated files. `-A` feeds the LLM a `gavel status` table (scope, file, status, line counts), groups by logical change (scope is a hint, not a hard boundary), and caps the result at `--max-commits` (default 7, excluding the chore commit) — rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy. Each group is committed as soon as its message is ready
 - Optional follow-up push behavior
 
 By default (`--stage session`) commit scopes itself to the running agent's edits: it resolves a session id from `GAVEL_SESSION_ID`, `CLAUDE_SESSION_ID`, or `CODEX_SESSION_ID` and stages only the files that Claude or Codex session touched. With no session id in the environment it falls back to the previous default of committing the already-staged set. Pass `--stage staged|unstaged|all` or an explicit session id to override.
@@ -515,11 +515,8 @@ Common workflows:
 gavel commit
 gavel commit -t
 gavel commit -A
-gavel commit -A --max=5
-gavel commit -G
-gavel commit -G -A
-gavel commit -G --max-commits=3
-gavel commit -G --group-by-scope
+gavel commit -A --max-commits=3
+gavel commit --max-commits=3
 gavel commit -m "chore: bump dep"
 gavel commit --stage all --dry-run
 gavel commit --force
