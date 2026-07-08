@@ -5,6 +5,7 @@ import {
   type PromptSpecDetail,
   type PromptSpecSavePayload,
 } from '@flanksource/clicky-ui/ai';
+import type { ChatModel } from '@flanksource/clicky-ui/chat';
 
 // A prompt override is either inline template text or a path to a .prompt file
 // (the union the Go PromptOverride marshals). An unset/empty override means the
@@ -21,11 +22,13 @@ interface Props {
   title: string;
   /** scope=global | project=<name>, scoping the detail request to one layer. */
   scopeQuery: string;
+  /** Model catalog shown by the shared SpecRuntimeEditor dialog. */
+  models?: ChatModel[];
 }
 
 // PromptOverrideField adapts Gavel's settings prompt endpoints to clicky-ui's
 // reusable one-line PromptPickerField.
-export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery }: Props) {
+export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery, models }: Props) {
   const loadDetail = useCallback(() => {
     return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
       .then(async (response) => {
@@ -53,6 +56,7 @@ export function PromptOverrideField({ value, onChange, description, id, title, s
       description={description}
       loadDetail={loadDetail}
       saveDetail={saveDetail}
+      models={models}
     />
   );
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
@@ -107,6 +108,13 @@ type todoSource struct {
 // dashboard list a workspace's todos without the caller knowing which it uses.
 const providerAuto = "auto"
 
+type todoPRVerificationPayload struct {
+	PRNumber   int      `json:"prNumber,omitempty"`
+	Repo       string   `json:"repo,omitempty"`
+	CommentIDs []int64  `json:"commentIds,omitempty"`
+	Actions    []string `json:"actions,omitempty"`
+}
+
 type todoCreatePayload struct {
 	Provider string         `json:"provider,omitempty"`
 	Dir      string         `json:"dir,omitempty"`
@@ -116,9 +124,12 @@ type todoCreatePayload struct {
 	Status   types.Status   `json:"status,omitempty"`
 	// Criteria, when set, are folded into the body as a "## Acceptance Criteria"
 	// checklist on create — used by the dashboard's "create todo from PR" flow to
-	// seed a todo with the PR's failing tests, lint violations, and review
-	// comments as its acceptance criteria.
+	// seed a todo with the PR's failing tests and lint violations as criteria.
 	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
+	// PRVerification, when set, is converted server-side into a generated exec
+	// fixture in "## Verification" so GitHub comments/actions are checked by the
+	// fixture runner rather than duplicated as AI-scored acceptance criteria.
+	PRVerification *todoPRVerificationPayload `json:"prVerification,omitempty"`
 }
 
 type todoNewPayload struct {
@@ -426,7 +437,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
-		Body:     bodyWithCriteria(payload.Body, payload.Criteria),
+		Body:     bodyWithCreateSections(payload.Body, payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority,
 		Status:   payload.Status,
 	})
@@ -440,13 +451,26 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 
 // bodyWithCriteria folds an "## Acceptance Criteria" checklist into the todo body
 // when criteria are supplied (e.g. a todo created from a PR's failing tests and
-// review comments), so they round-trip through the provider's parse as the todo's
+// lint violations), so they round-trip through the provider's parse as the todo's
 // acceptance criteria. An empty list leaves the body untouched.
 func bodyWithCriteria(body string, criteria []types.AcceptanceCriterion) string {
 	if len(criteria) == 0 {
 		return body
 	}
 	return todos.UpsertCriteriaSection(body, criteria)
+}
+
+func bodyWithCreateSections(body string, criteria []types.AcceptanceCriterion, verification *todoPRVerificationPayload) string {
+	body = bodyWithCriteria(body, criteria)
+	if verification == nil {
+		return body
+	}
+	return prwatch.UpsertPRStatusVerification(body, prwatch.PRStatusVerification{
+		PRNumber:   verification.PRNumber,
+		Repo:       verification.Repo,
+		CommentIDs: verification.CommentIDs,
+		Actions:    verification.Actions,
+	})
 }
 
 func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
@@ -494,7 +518,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 	}
 	todo, err := provider.Create(r.Context(), todos.CreateRequest{
 		Title:    payload.Title,
-		Body:     bodyWithCriteria(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria),
+		Body:     bodyWithCreateSections(todoBodyWithAttachments(payload.Body, attachments), payload.Criteria, payload.PRVerification),
 		Priority: payload.Priority,
 		Status:   payload.Status,
 	})

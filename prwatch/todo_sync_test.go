@@ -57,6 +57,8 @@ func TestSyncTodosCreateOnFailure(t *testing.T) {
 	assert.Equal(t, "git fetch origin && git checkout feat/x", parsed.Frontmatter.Build)
 	assert.Contains(t, parsed.MarkdownContent, "CI / unit-tests")
 	assert.Contains(t, parsed.MarkdownContent, "FAIL: TestFoo")
+	assert.Contains(t, parsed.MarkdownContent, "## Verification")
+	assert.Contains(t, parsed.MarkdownContent, "gavel pr status 99 --actions CI")
 
 	require.NotNil(t, parsed.Frontmatter.PR)
 	assert.Equal(t, 99, parsed.Frontmatter.PR.Number)
@@ -112,6 +114,7 @@ func TestSyncTodosUpdateOnRepeatedFailure(t *testing.T) {
 	assert.Equal(t, 2, parsed.Frontmatter.Attempts)
 	assert.Contains(t, parsed.MarkdownContent, "Attempt 2")
 	assert.Contains(t, parsed.MarkdownContent, "FAIL: TestFoo attempt2")
+	assert.Equal(t, 1, strings.Count(parsed.MarkdownContent, "<!-- "+PRStatusVerificationMarker+" -->"))
 }
 
 func TestSyncTodosCompleteOnSuccess(t *testing.T) {
@@ -523,11 +526,35 @@ func TestSyncCommentTodosCreatesFromMatchingComment(t *testing.T) {
 	assert.Equal(t, types.PriorityMedium, parsed.Frontmatter.Priority)
 	assert.Equal(t, types.StatusPending, parsed.Frontmatter.Status)
 	assert.Contains(t, parsed.MarkdownContent, "null pointer in handler.go")
+	assert.Contains(t, parsed.MarkdownContent, "gavel pr status 42 --comments 100")
 
 	require.NotNil(t, parsed.Frontmatter.PR)
 	assert.Equal(t, 42, parsed.Frontmatter.PR.Number)
 	assert.Equal(t, "reviewer", parsed.Frontmatter.PR.CommentAuthor)
 	assert.Equal(t, "https://github.com/org/repo/pull/42#issuecomment-100", parsed.Frontmatter.PR.CommentURL)
+}
+
+func TestSyncCommentTodosBackfillsExistingCommentVerification(t *testing.T) {
+	dir := t.TempDir()
+	pr := &github.PRInfo{Number: 42, HeadRefName: "feat/review"}
+	comment := github.PRComment{
+		ID:       101,
+		Body:     `<details><summary>🤖 Fix all issues with AI agents</summary>Please fix it</details>`,
+		Author:   "reviewer",
+		Severity: "major",
+	}
+	path := commentTodoPath(dir, pr.Number, comment)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content, err := todos.WriteFrontmatter(&types.TODOFrontmatter{Priority: types.PriorityMedium, Status: types.StatusPending}, "Existing body")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	require.NoError(t, SyncCommentTodos([]github.PRComment{comment}, pr, dir))
+
+	parsed, err := todos.ParseFrontmatterFromFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, parsed.MarkdownContent, "Existing body")
+	assert.Contains(t, parsed.MarkdownContent, "gavel pr status 42 --comments 101")
 }
 
 func TestSyncCommentTodosCreatesFromSeverity(t *testing.T) {

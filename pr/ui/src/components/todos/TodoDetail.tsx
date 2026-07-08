@@ -11,7 +11,7 @@ import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel, todoQuery } from './format';
-import { TodoRunAdvancedDialog, TodoRunSplitButton, defaultRunOptions, useTodoRun } from './run';
+import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
 import { TodoReviewBanner } from './planActions';
@@ -42,7 +42,7 @@ export function TodoDetail({
   onTransferred?: (toDir: string, todo: TodoItem) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<'overview' | 'verification' | 'session' | 'plan'>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
@@ -67,7 +67,7 @@ export function TodoDetail({
   useEffect(() => {
     setError('');
     resetRun();
-    setAdvancedOpen(false);
+    setAdvancedMode(null);
     setTab('overview');
     setEditingTitle(false);
     setEditingBody(false);
@@ -282,7 +282,7 @@ export function TodoDetail({
               </div>
             </div>
 
-            <MobileHeaderMenu
+            <HeaderActionsMenu
               todo={todo}
               busy={busy}
               runBusy={runBusy}
@@ -293,6 +293,7 @@ export function TodoDetail({
               labels={visibleLabels}
               transferTargets={transferTargets}
               canTransfer={!!onTransferred}
+              className="md:hidden"
               onCopy={copyFullId}
               onEditTitle={startEditTitle}
               onStatus={status => patch({ status })}
@@ -300,20 +301,14 @@ export function TodoDetail({
               onTransfer={transferTo}
               onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
               onRun={() => runTodo(defaultRunOptions)}
-              onAdvanced={() => setAdvancedOpen(true)}
+              onPlan={() => runTodo(loadLastTodoRunOptions('plan'))}
+              onAdvanced={setAdvancedMode}
               onVerify={() => patch({ status: 'verified' })}
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
               onArchive={archiveTodo}
             />
 
             <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
-              {onTransferred && transferTargets.length > 0 && (
-                <MoveMenu
-                  disabled={busy}
-                  targets={transferTargets}
-                  onSelect={transferTo}
-                />
-              )}
               {todo.sessionId && (
                 <Button
                   variant="ghost"
@@ -328,35 +323,50 @@ export function TodoDetail({
                   {runBusy ? <Spinner className="text-sm" /> : <UiDebugStepOver className="text-sm" />}
                 </Button>
               )}
-              <TodoRunSplitButton
+              <TodoRunActionButton
+                action="plan"
                 disabled={busy || runBusy || sessionInProgress}
                 loading={runBusy}
-                label={sessionInProgress ? 'Stop' : 'Run'}
+                onRun={runTodo}
+                onAdvanced={setAdvancedMode}
+              />
+              <TodoRunActionButton
+                action="run"
+                disabled={busy || runBusy || sessionInProgress}
+                loading={runBusy}
+                label={sessionInProgress ? 'Stop' : undefined}
                 icon={sessionInProgress ? UiStop : UiPlay}
                 tone={sessionInProgress ? 'danger' : 'default'}
                 title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : 'Run todo'}
                 onRun={runTodo}
-                onAdvanced={() => setAdvancedOpen(true)}
+                onAdvanced={setAdvancedMode}
               />
-              <HeaderIconButton
-                icon={busy ? Spinner : UiCheckFilled}
-                label={todo.status === 'verified' ? 'Already verified' : 'Mark verified'}
-                onClick={() => patch({ status: 'verified' })}
-                disabled={busy || todo.status === 'verified'}
-                className="text-emerald-600 hover:text-emerald-700"
-              />
-              <HeaderIconButton
-                icon={busy ? Spinner : closed ? UiRestart : UiPass}
-                label={closed ? 'Reopen todo' : 'Close todo'}
-                onClick={() => patch({ status: closed ? 'pending' : 'completed' })}
-                disabled={busy}
-              />
-              <HeaderIconButton
-                icon={busy ? Spinner : UiTrash}
-                label={isGrite ? 'Archive issue' : 'Delete file'}
-                onClick={archiveTodo}
-                disabled={busy}
-                className="hover:text-red-600"
+              <HeaderActionsMenu
+                todo={todo}
+                busy={busy}
+                runBusy={runBusy}
+                closed={closed}
+                isGrite={isGrite}
+                sessionInProgress={sessionInProgress}
+                fullTodoId={fullTodoId}
+                labels={visibleLabels}
+                transferTargets={transferTargets}
+                canTransfer={!!onTransferred}
+                showRunActions={false}
+                showStatusPriority={false}
+                showLabels={false}
+                onCopy={copyFullId}
+                onEditTitle={startEditTitle}
+                onStatus={status => patch({ status })}
+                onPriority={priority => patch({ priority })}
+                onTransfer={transferTo}
+                onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
+                onRun={() => runTodo(defaultRunOptions)}
+                onPlan={() => runTodo(loadLastTodoRunOptions('plan'))}
+                onAdvanced={setAdvancedMode}
+                onVerify={() => patch({ status: 'verified' })}
+                onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
+                onArchive={archiveTodo}
               />
             </div>
 
@@ -400,13 +410,15 @@ export function TodoDetail({
         </div>
       </div>
       <TodoRunAdvancedDialog
-        open={advancedOpen}
-        onClose={() => setAdvancedOpen(false)}
+        open={advancedMode !== null}
+        onClose={() => setAdvancedMode(null)}
         onRun={options => {
-          setAdvancedOpen(false);
-          runTodo(options);
+          setAdvancedMode(null);
+          runTodo(rememberTodoRunOptionsForMode(options, true));
         }}
         loading={runBusy}
+        initialMode={advancedMode ?? 'run'}
+        title={advancedMode === 'plan' ? 'Plan todo' : 'Run todo'}
         dir={dir}
         provider={provider}
         refs={[todo.ref]}
@@ -657,7 +669,7 @@ function HeaderTags({ labels }: { labels: string[] }) {
   );
 }
 
-function MobileHeaderMenu({
+function HeaderActionsMenu({
   todo,
   busy,
   runBusy,
@@ -668,6 +680,10 @@ function MobileHeaderMenu({
   labels,
   transferTargets,
   canTransfer,
+  className,
+  showRunActions = true,
+  showStatusPriority = true,
+  showLabels = true,
   onCopy,
   onEditTitle,
   onStatus,
@@ -675,6 +691,7 @@ function MobileHeaderMenu({
   onTransfer,
   onResume,
   onRun,
+  onPlan,
   onAdvanced,
   onVerify,
   onToggleClosed,
@@ -690,6 +707,10 @@ function MobileHeaderMenu({
   labels: string[];
   transferTargets: Project[];
   canTransfer: boolean;
+  className?: string;
+  showRunActions?: boolean;
+  showStatusPriority?: boolean;
+  showLabels?: boolean;
   onCopy: () => void;
   onEditTitle: () => void;
   onStatus: (status: TodoStatus) => void;
@@ -697,7 +718,8 @@ function MobileHeaderMenu({
   onTransfer: (dir: string) => void;
   onResume: () => void;
   onRun: () => void;
-  onAdvanced: () => void;
+  onPlan: () => void;
+  onAdvanced: (action: TodoRunAction) => void;
   onVerify: () => void;
   onToggleClosed: () => void;
   onArchive: () => void;
@@ -707,7 +729,7 @@ function MobileHeaderMenu({
       align="right"
       menuLabel="Issue actions"
       menuClassName="w-72 max-h-[80vh] max-w-[calc(100vw-16px)] overflow-y-auto"
-      className="md:hidden"
+      className={className}
       trigger={
         <Button
           variant="ghost"
@@ -744,83 +766,80 @@ function MobileHeaderMenu({
             />
           </MobileMenuSection>
 
-          <MobileMenuSection title="Run">
-            {todo.sessionId && (
+          {showRunActions && (
+            <MobileMenuSection title="Run">
+              {todo.sessionId && (
+                <MobileMenuItem
+                  icon={UiDebugStepOver}
+                  label="Resume session"
+                  disabled={busy || runBusy || sessionInProgress}
+                  onClick={() => {
+                    close();
+                    onResume();
+                  }}
+                />
+              )}
               <MobileMenuItem
-                icon={UiDebugStepOver}
-                label="Resume session"
+                icon={sessionInProgress ? UiStop : runBusy ? Spinner : UiPlay}
+                label={sessionInProgress ? 'Stop unavailable' : 'Run todo'}
+                detail={sessionInProgress ? 'Session interrupt is not supported yet' : undefined}
                 disabled={busy || runBusy || sessionInProgress}
                 onClick={() => {
                   close();
-                  onResume();
+                  onRun();
                 }}
               />
-            )}
-            <MobileMenuItem
-              icon={sessionInProgress ? UiStop : runBusy ? Spinner : UiPlay}
-              label={sessionInProgress ? 'Stop unavailable' : 'Run todo'}
-              detail={sessionInProgress ? 'Session interrupt is not supported yet' : undefined}
-              disabled={busy || runBusy || sessionInProgress}
-              onClick={() => {
-                close();
-                onRun();
-              }}
-            />
-            <MobileMenuItem
-              icon={UiCog}
-              label="Advanced run"
-              disabled={busy || runBusy}
-              onClick={() => {
-                close();
-                onAdvanced();
-              }}
-            />
-          </MobileMenuSection>
-
-          <MobileMenuSection title="Status">
-            {statuses.map(status => (
               <MobileMenuItem
-                key={status}
-                icon={statusIcon(status)}
-                label={statusLabel(status)}
-                selected={status === todo.status}
-                disabled={busy || status === todo.status}
+                icon={UiListDashes}
+                label="Plan todo"
+                disabled={busy || runBusy || sessionInProgress}
                 onClick={() => {
                   close();
-                  onStatus(status);
+                  onPlan();
                 }}
               />
-            ))}
-          </MobileMenuSection>
-
-          <MobileMenuSection title="Severity">
-            {priorities.map(priority => (
               <MobileMenuItem
-                key={priority}
-                icon={priorityIcon(priority)}
-                label={priority}
-                selected={priority === todo.priority}
-                disabled={busy || priority === todo.priority}
+                icon={UiCog}
+                label="Advanced run"
+                disabled={busy || runBusy}
                 onClick={() => {
                   close();
-                  onPriority(priority);
+                  onAdvanced('run');
                 }}
               />
-            ))}
-          </MobileMenuSection>
+            </MobileMenuSection>
+          )}
 
-          {canTransfer && transferTargets.length > 0 && (
-            <MobileMenuSection title="Move to">
-              {transferTargets.map(target => (
+          {showStatusPriority && (
+            <MobileMenuSection title="Status">
+              {statuses.map(status => (
                 <MobileMenuItem
-                  key={target.dir}
-                  icon={UiFolder}
-                  label={target.name || target.dir}
-                  detail={target.dir}
-                  disabled={busy}
+                  key={status}
+                  icon={statusIcon(status)}
+                  label={statusLabel(status)}
+                  selected={status === todo.status}
+                  disabled={busy || status === todo.status}
                   onClick={() => {
                     close();
-                    onTransfer(target.dir);
+                    onStatus(status);
+                  }}
+                />
+              ))}
+            </MobileMenuSection>
+          )}
+
+          {showStatusPriority && (
+            <MobileMenuSection title="Severity">
+              {priorities.map(priority => (
+                <MobileMenuItem
+                  key={priority}
+                  icon={priorityIcon(priority)}
+                  label={priority}
+                  selected={priority === todo.priority}
+                  disabled={busy || priority === todo.priority}
+                  onClick={() => {
+                    close();
+                    onPriority(priority);
                   }}
                 />
               ))}
@@ -828,6 +847,14 @@ function MobileHeaderMenu({
           )}
 
           <MobileMenuSection title="Actions">
+            {canTransfer && transferTargets.length > 0 && (
+              <MoveSubmenu
+                disabled={busy}
+                targets={transferTargets}
+                onSelect={onTransfer}
+                onCloseParent={close}
+              />
+            )}
             <MobileMenuItem
               icon={UiCheckFilled}
               label={todo.status === 'verified' ? 'Already verified' : 'Mark verified'}
@@ -839,7 +866,7 @@ function MobileHeaderMenu({
             />
             <MobileMenuItem
               icon={closed ? UiRestart : UiPass}
-              label={closed ? 'Reopen todo' : 'Close todo'}
+              label={closed ? 'Reopen todo' : 'Mark complete'}
               disabled={busy}
               onClick={() => {
                 close();
@@ -858,7 +885,7 @@ function MobileHeaderMenu({
             />
           </MobileMenuSection>
 
-          {labels.length > 0 && (
+          {showLabels && labels.length > 0 && (
             <MobileMenuSection title="Tags">
               <div className="flex flex-wrap gap-1 px-2 py-1">
                 {labels.map(label => (
@@ -917,7 +944,7 @@ function MobileMenuItem({
     >
       <Icon className={`mt-0.5 shrink-0 text-sm ${danger ? 'text-red-600' : 'text-muted-foreground'}`} />
       <span className="min-w-0 flex-1">
-        <span className={`block truncate font-medium capitalize ${danger ? 'text-red-600' : 'text-foreground'}`}>{label}</span>
+        <span className={`block truncate font-medium ${danger ? 'text-red-600' : 'text-foreground'}`}>{label}</span>
         {detail && <span className="block truncate font-mono text-[10px] text-muted-foreground">{detail}</span>}
       </span>
       {selected && <UiCheck className="mt-0.5 text-xs text-primary" />}
@@ -925,14 +952,16 @@ function MobileMenuItem({
   );
 }
 
-function MoveMenu({
+function MoveSubmenu({
   disabled,
   targets,
   onSelect,
+  onCloseParent,
 }: {
   disabled?: boolean;
   targets: Project[];
   onSelect: (dir: string) => void;
+  onCloseParent: () => void;
 }) {
   return (
     <DropdownMenu
@@ -941,16 +970,19 @@ function MoveMenu({
       menuClassName="w-72 max-w-[calc(100vw-24px)]"
       trigger={
         <Button
-          variant="outline"
+          variant="ghost"
           type="button"
           disabled={disabled}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs disabled:opacity-50"
+          className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
           title="Move todo to another project"
           aria-label="Move todo to another project"
         >
-          <UiFolder className="text-xs" />
-          Move to…
-          <UiChevronDown className="text-[11px] opacity-70" />
+          <UiFolder className="shrink-0 text-sm text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium text-foreground">Move to</span>
+            <span className="block truncate text-[11px] text-muted-foreground">Choose project</span>
+          </span>
+          <UiChevronRight className="text-[11px] text-muted-foreground" />
         </Button>
       }
     >
@@ -964,6 +996,7 @@ function MoveMenu({
               disabled={disabled}
               onClick={() => {
                 close();
+                onCloseParent();
                 onSelect(target.dir);
               }}
               className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
@@ -978,35 +1011,6 @@ function MoveMenu({
         </div>
       )}
     </DropdownMenu>
-  );
-}
-
-function HeaderIconButton({
-  icon: Icon,
-  label,
-  onClick,
-  disabled,
-  className = '',
-}: {
-  icon: ComponentType<IconProps>;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 ${className}`}
-    >
-      <Icon className="text-sm" />
-    </Button>
   );
 }
 

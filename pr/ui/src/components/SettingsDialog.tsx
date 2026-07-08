@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, Suspense } from 'react';
 import { Modal, Button, JsonSchemaForm, Tabs } from '@flanksource/clicky-ui/components';
+import type { ChatModel } from '@flanksource/clicky-ui/chat';
 import type {
   JsonSchemaObject,
   JsonSchemaProperty,
@@ -13,6 +14,7 @@ import { Spinner } from '../icons/Spinner';
 import { sectionIcon } from '../icons/settings';
 import { useProjectRegistration, ProjectFields } from './ProjectForm';
 import { PromptOverrideField, type PromptOverrideValue } from './PromptOverrideField';
+import { runContextWithFallback, type RunContext } from './todos/providers';
 
 // SettingsScope selects what the dialog edits: the user's global ~/.gavel.yaml
 // (navbar) or one registered workspace. Project scope also edits the workspace
@@ -184,7 +186,7 @@ const sectionIconPre: PreExtension = (field) => {
 
 // promptPost replaces any prompt-override field's value node with the shared
 // PromptOverrideField, keyed by the schema's x-prompt-id → registry default.
-function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: string): PostExtension {
+function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: string, models: ChatModel[]): PostExtension {
   return (field, nodes) => {
     const id = promptIdOf(field.schema);
     if (!id) return nodes;
@@ -199,10 +201,19 @@ function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: stri
           id={id}
           title={desc?.title ?? id}
           scopeQuery={scopeQuery}
+          models={models}
         />
       ),
     };
   };
+}
+
+function promptModelCatalog(context: RunContext): ChatModel[] {
+  const models = new Map<string, ChatModel>();
+  for (const backend of context.backends) {
+    for (const model of backend.models) models.set(model.id, model);
+  }
+  return [...models.values()];
 }
 
 // SettingsDialog edits one .gavel.yaml file as a schema-driven form, split into
@@ -221,15 +232,20 @@ export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: P
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [runContext, setRunContext] = useState<RunContext | null>(null);
 
   const reg = useProjectRegistration(open, scope.kind === 'project' ? scope.project : null);
   const projectName = scope.kind === 'project' ? scope.project.name : null;
   const isProjectTab = scope.kind === 'project' && tab === PROJECT_TAB;
 
   const query = useMemo(() => scopeQuery(scope), [scope]);
+  const promptModels = useMemo(
+    () => promptModelCatalog(runContextWithFallback(runContext)),
+    [runContext],
+  );
   const post = useMemo<PostExtension[]>(
-    () => (registry ? [promptPost(registry, query)] : []),
-    [registry, query],
+    () => (registry ? [promptPost(registry, query, promptModels)] : []),
+    [registry, query, promptModels],
   );
   const pre = useMemo<PreExtension[]>(() => [sectionIconPre], []);
   const sectionTab = TABS.find(t => t.id === tab) ?? TABS[0];
@@ -261,6 +277,23 @@ export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: P
         setRegistry(promptsCache);
       })
       .catch(e => setError(e?.message || 'failed to load prompt registry'));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch('/api/todos/run/context')
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: RunContext) => {
+        if (!cancelled) setRunContext(data);
+      })
+      .catch(() => {
+        if (!cancelled) setRunContext(null);
+      });
+    return () => { cancelled = true; };
   }, [open]);
 
   useEffect(() => {

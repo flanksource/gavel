@@ -48,7 +48,7 @@ func SyncTodos(result *PRWatchResult, todosDir string) error {
 					}
 				} else {
 					logger.Infof("updating todo for failed job %s/%s: %s", run.Name, job.Name, path)
-					if err := updateJobTodo(path, run, job); err != nil {
+					if err := updateJobTodo(path, run, job, result.PR); err != nil {
 						return fmt.Errorf("update todo %s: %w", path, err)
 					}
 				}
@@ -88,7 +88,11 @@ func createJobTodo(path string, run *github.WorkflowRun, job github.Job, pr *git
 		fm.Path = paths
 	}
 
-	body := formatJobBody(run, job, pr)
+	body := UpsertPRStatusVerification(formatJobBody(run, job, pr), PRStatusVerification{
+		PRNumber: pr.Number,
+		Repo:     prRepo(pr),
+		Actions:  []string{workflowActionSelector(run)},
+	})
 	content, err := todos.WriteFrontmatter(&fm, body)
 	if err != nil {
 		return err
@@ -96,7 +100,7 @@ func createJobTodo(path string, run *github.WorkflowRun, job github.Job, pr *git
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-func updateJobTodo(path string, _ *github.WorkflowRun, job github.Job) error {
+func updateJobTodo(path string, run *github.WorkflowRun, job github.Job, pr *github.PRInfo) error {
 	parsed, err := todos.ParseFrontmatterFromFile(path)
 	if err != nil {
 		return err
@@ -113,6 +117,11 @@ func updateJobTodo(path string, _ *github.WorkflowRun, job github.Job) error {
 	logs := formatJobLogs(job)
 	history := fmt.Sprintf("\n\n## Attempt %d\n\n%s", parsed.Frontmatter.Attempts, logs)
 	markdown := parsed.MarkdownContent + history
+	markdown = UpsertPRStatusVerification(markdown, PRStatusVerification{
+		PRNumber: pr.Number,
+		Repo:     prRepo(pr),
+		Actions:  []string{workflowActionSelector(run)},
+	})
 
 	content, err := todos.WriteFrontmatter(&parsed.Frontmatter, markdown)
 	if err != nil {
@@ -147,6 +156,26 @@ func autoCompleteTodo(path string) error {
 		return nil
 	}
 	return completeJobTodo(path)
+}
+
+func ensureCommentTodoVerification(path string, pr *github.PRInfo, comment github.PRComment) error {
+	parsed, err := todos.ParseFrontmatterFromFile(path)
+	if err != nil {
+		return err
+	}
+	body := UpsertPRStatusVerification(parsed.MarkdownContent, PRStatusVerification{
+		PRNumber:   pr.Number,
+		Repo:       prRepo(pr),
+		CommentIDs: []int64{comment.ID},
+	})
+	if body == parsed.MarkdownContent {
+		return nil
+	}
+	content, err := todos.WriteFrontmatter(&parsed.Frontmatter, body)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func formatJobBody(run *github.WorkflowRun, job github.Job, pr *github.PRInfo) string {
@@ -340,6 +369,9 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			continue
 		}
 		if _, err := os.Stat(path); err == nil {
+			if err := ensureCommentTodoVerification(path, pr, comment); err != nil {
+				return fmt.Errorf("update todo %s: %w", path, err)
+			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -402,7 +434,12 @@ func SyncCommentTodos(comments []github.PRComment, pr *github.PRInfo, todosDir s
 			}
 		}
 
-		content, err := todos.WriteFrontmatter(&fm, sb.String())
+		body := UpsertPRStatusVerification(sb.String(), PRStatusVerification{
+			PRNumber:   pr.Number,
+			Repo:       prRepo(pr),
+			CommentIDs: []int64{comment.ID},
+		})
+		content, err := todos.WriteFrontmatter(&fm, body)
 		if err != nil {
 			return fmt.Errorf("write frontmatter for comment %d: %w", comment.ID, err)
 		}

@@ -101,8 +101,18 @@ type runBackendSpec struct {
 	Driver       drivers.Kind
 }
 
+var runCaptainWhoami = captaincli.RunWhoami
+
 func supportedTodoRunBackends() []runBackendSpec {
 	return []runBackendSpec{
+		{
+			Backend:      captainai.BackendClaudeCmux,
+			Label:        "Claude cmux",
+			Provider:     "anthropic",
+			Agent:        "claude",
+			DefaultModel: "claude-agent-sonnet",
+			Driver:       drivers.ClaudeCmux,
+		},
 		{
 			Backend:      captainai.BackendClaudeAgent,
 			Label:        "Claude Agent",
@@ -120,11 +130,19 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Driver:       drivers.ClaudeHeadless,
 		},
 		{
-			Backend:      captainai.BackendCodexCLI,
-			Label:        "Codex CLI",
+			Backend:      captainai.BackendCodexCmux,
+			Label:        "Codex cmux",
 			Provider:     "openai",
 			Agent:        "codex",
-			DefaultModel: "gpt-5-codex",
+			DefaultModel: "gpt-5.5",
+			Driver:       drivers.CodexCmux,
+		},
+		{
+			Backend:      captainai.BackendCodexAgent,
+			Label:        "Codex Agent",
+			Provider:     "openai",
+			Agent:        "codex",
+			DefaultModel: "gpt-5.5",
 			Driver:       drivers.CodexHeadless,
 		},
 	}
@@ -148,7 +166,7 @@ func todoRunContext() todoRunContextResponse {
 	return todoRunContextResponse{
 		Backends:       backends,
 		Efforts:        todoRunEfforts(),
-		DefaultBackend: string(captainai.BackendClaudeAgent),
+		DefaultBackend: string(captainai.BackendClaudeCmux),
 		Tools:          todoRunToolCatalog(),
 		InputSchemas:   todoRunInputSchemas(),
 	}
@@ -177,7 +195,7 @@ func todoRunInputSchemas() map[string]json.RawMessage {
 func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
 	status := whoamiStatus(spec.Backend)
 	configured := status.Ready()
-	models := todoRunModelsForBackend(spec)
+	models := todoRunModelsFromWhoami(spec, status)
 	return todoRunBackendOption{
 		ID:            string(spec.Backend),
 		Label:         spec.Label,
@@ -198,7 +216,7 @@ func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
 }
 
 func whoamiStatus(backend captainai.Backend) captaincli.AdapterStatus {
-	result, err := captaincli.RunWhoami(captaincli.WhoamiOptions{
+	result, err := runCaptainWhoami(captaincli.WhoamiOptions{
 		Backend: string(backend),
 		Models:  true,
 		Limit:   50,
@@ -213,45 +231,56 @@ func whoamiStatus(backend captainai.Backend) captaincli.AdapterStatus {
 	return who.Adapters[0]
 }
 
-func todoRunModelsForBackend(spec runBackendSpec) []todoRunModelOption {
-	result, err := captaincli.RunAIModels(captaincli.AIModelsOptions{Backend: string(spec.Backend), Limit: 50})
-	if err == nil {
-		if rows, ok := result.(captaincli.AIModelsResult); ok && len(rows.Rows) > 0 {
-			models := make([]todoRunModelOption, 0, len(rows.Rows))
-			for _, row := range rows.Rows {
-				models = append(models, todoRunModelOption{
-					ID:         row.Model,
-					Provider:   spec.Provider,
-					Label:      modelLabel(row.Model),
-					Reasoning:  true,
-					Configured: true,
-				})
+func todoRunModelsFromWhoami(spec runBackendSpec, status captaincli.AdapterStatus) []todoRunModelOption {
+	candidates := make([]todoRunModelOption, 0, len(status.Models)+len(status.ModelDetails))
+	if len(status.ModelDetails) > 0 {
+		for _, model := range status.ModelDetails {
+			candidates = append(candidates, todoRunModelOption{
+				ID:         model.ID,
+				Provider:   spec.Provider,
+				Label:      firstNonEmpty(model.Name, modelLabel(model.ID)),
+				Reasoning:  true,
+				Configured: true,
+			})
+		}
+	} else {
+		for _, id := range status.Models {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
 			}
-			return models
+			candidates = append(candidates, todoRunModelOption{
+				ID:         id,
+				Provider:   spec.Provider,
+				Label:      modelLabel(id),
+				Reasoning:  true,
+				Configured: true,
+			})
 		}
 	}
-	return fallbackModelsForBackend(spec)
-}
 
-func fallbackModelsForBackend(spec runBackendSpec) []todoRunModelOption {
-	models := []string{spec.DefaultModel}
-	switch spec.Backend {
-	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI:
-		models = []string{"claude-agent-opus", "claude-agent-sonnet", "claude-agent-haiku"}
-	case captainai.BackendCodexCLI:
-		models = []string{"gpt-5-codex"}
-	}
-	out := make([]todoRunModelOption, 0, len(models))
-	for _, id := range models {
-		out = append(out, todoRunModelOption{
-			ID:         id,
-			Provider:   spec.Provider,
-			Label:      modelLabel(id),
-			Reasoning:  true,
-			Configured: true,
-		})
+	out := make([]todoRunModelOption, 0, len(candidates))
+	seen := map[string]bool{}
+	for _, model := range candidates {
+		originalID := model.ID
+		model.ID = normalizeTodoRunModelForBackend(string(spec.Backend), model.ID)
+		if model.ID == "" || seen[model.ID] {
+			continue
+		}
+		seen[model.ID] = true
+		model.Label = firstNonEmpty(model.Label, modelLabel(originalID))
+		out = append(out, model)
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func defaultModelFromCatalog(models []todoRunModelOption, fallback string) string {
@@ -269,7 +298,11 @@ func defaultModelFromCatalog(models []todoRunModelOption, fallback string) strin
 func modelLabel(id string) string {
 	label := strings.TrimPrefix(id, "claude-agent-")
 	label = strings.TrimPrefix(label, "claude-code-")
+	label = strings.TrimPrefix(label, "claude-")
 	label = strings.TrimPrefix(label, "codex-")
+	if formatted := claudeTierModelLabel(label); formatted != "" {
+		return formatted
+	}
 	label = strings.ReplaceAll(label, "-", " ")
 	if label == "" {
 		return id
@@ -290,6 +323,56 @@ func modelLabel(id string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func claudeTierModelLabel(id string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(id)), "-")
+	if len(parts) == 0 {
+		return ""
+	}
+	tier := parts[0]
+	switch tier {
+	case "fable", "opus", "sonnet", "haiku":
+	default:
+		return ""
+	}
+	label := titleWord(tier)
+	version := []string{}
+	i := 1
+	for i < len(parts) && isModelVersionPart(parts[i]) {
+		version = append(version, parts[i])
+		i++
+	}
+	if len(version) > 0 {
+		label += " " + strings.Join(version, ".")
+	}
+	if i < len(parts) {
+		rest := make([]string, 0, len(parts)-i)
+		for _, part := range parts[i:] {
+			rest = append(rest, titleWord(part))
+		}
+		label += " " + strings.Join(rest, " ")
+	}
+	return label
+}
+
+func isModelVersionPart(part string) bool {
+	if part == "" {
+		return false
+	}
+	for _, r := range part {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func titleWord(part string) string {
+	if part == "" {
+		return part
+	}
+	return strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
 }
 
 func todoRunEfforts() []string {
@@ -318,6 +401,7 @@ func resolveTodoRunBackendModel(kind drivers.Kind, backend, model string) (strin
 		if model == "" || model == kind.Agent() {
 			model = defaultModelForBackend(backend)
 		}
+		model = normalizeTodoRunModelForBackend(backend, model)
 		if err := validateModelForBackend(backend, model); err != nil {
 			return "", "", err
 		}
@@ -332,12 +416,20 @@ func resolveTodoRunBackendModel(kind drivers.Kind, backend, model string) (strin
 	return backend, model, nil
 }
 
+func normalizeTodoRunModelForBackend(backend, model string) string {
+	return captainai.NormalizeModelForBackend(captainai.Backend(backend), model)
+}
+
 func defaultBackendForDriver(kind drivers.Kind) string {
 	switch kind {
+	case drivers.ClaudeCmux:
+		return string(captainai.BackendClaudeCmux)
 	case drivers.ClaudeHeadless:
 		return string(captainai.BackendClaudeAgent)
+	case drivers.CodexCmux:
+		return string(captainai.BackendCodexCmux)
 	case drivers.CodexHeadless:
-		return string(captainai.BackendCodexCLI)
+		return string(captainai.BackendCodexAgent)
 	default:
 		return ""
 	}
@@ -367,15 +459,17 @@ func validateBackendForDriver(kind drivers.Kind, backend string) error {
 
 func validateModelForBackend(backend, model string) error {
 	switch captainai.Backend(backend) {
-	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI:
-		switch strings.ToLower(model) {
-		case "claude", "sonnet", "opus", "haiku":
+	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI, captainai.BackendClaudeCmux:
+		lower := strings.ToLower(strings.TrimSpace(model))
+		if lower == "claude" {
 			return nil
 		}
-		if strings.HasPrefix(strings.ToLower(model), "claude-agent-") || strings.HasPrefix(strings.ToLower(model), "claude-code-") {
-			return nil
+		for _, prefix := range []string{"fable", "opus", "sonnet", "haiku", "claude-", "claude-agent-", "claude-code-"} {
+			if lower == strings.TrimSuffix(prefix, "-") || strings.HasPrefix(lower, prefix) {
+				return nil
+			}
 		}
-	case captainai.BackendCodexCLI:
+	case captainai.BackendCodexAgent, captainai.BackendCodexCmux:
 		if model == "" || strings.EqualFold(model, "codex") {
 			return nil
 		}

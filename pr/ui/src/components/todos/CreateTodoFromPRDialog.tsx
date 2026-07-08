@@ -37,21 +37,28 @@ interface CandidateDetail {
   url?: string;
 }
 
-// Candidate is one selectable acceptance criterion derived from a PR signal. The
-// key is stable per signal so selection survives re-renders; text is the
-// criterion stored on the todo; primary/secondary label the row; detail backs
-// the right-hand pane.
+// Candidate is one selectable PR signal. Tests/lint become acceptance criteria;
+// PR checks/comments become executable verification gates.
 interface Candidate {
   key: string;
   group: SourceGroup;
   text: string;
   primary: string;
   secondary?: string;
+  actionPattern?: string;
+  commentId?: number;
   // author/avatarUrl are set for review comments so they can be sub-grouped by
   // author in the list.
   author?: string;
   avatarUrl?: string;
   detail: CandidateDetail;
+}
+
+interface PRVerificationPayload {
+  prNumber: number;
+  repo?: string;
+  commentIds?: number[];
+  actions?: string[];
 }
 
 // GROUPS drives both the grouped checkbox lists and the one-click presets: each
@@ -70,7 +77,7 @@ function location(file?: string, line?: number): string {
 }
 
 // buildCandidates turns a PR's failing tests, lint violations, failed CI checks,
-// and unresolved review comments into selectable acceptance criteria.
+// and unresolved review comments into selectable signals.
 function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
   const out: Candidate[] = [];
   const shards = detail?.gavelResults ?? [];
@@ -113,6 +120,7 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
       text: `CI check "${c.name}" passes`,
       primary: c.name,
       secondary: steps || undefined,
+      actionPattern: c.name,
       detail: { heading: c.name, meta: steps ? `Failed steps: ${steps}` : undefined, log: c.logTail, url: c.detailsUrl },
     });
   });
@@ -128,6 +136,7 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
         text: `Address @${c.author}'s comment${loc ? ` on ${loc}` : ''}: ${title}`,
         primary: title || `Comment by @${c.author}`,
         secondary: loc || undefined,
+        commentId: c.id,
         author: c.author,
         avatarUrl: c.avatarUrl,
         detail: { heading: title || `Comment by @${c.author}`, headingMarkdown: true, meta: `@${c.author}`, location: loc, markdown: c.body, url: c.url },
@@ -135,6 +144,34 @@ function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
     });
 
   return out;
+}
+
+function isAcceptanceCriterionCandidate(c: Candidate): boolean {
+  return c.group === 'tests' || c.group === 'lint';
+}
+
+function uniqueValues<T>(values: T[]): T[] {
+  return Array.from(new Set(values));
+}
+
+function buildPRVerification(pr: PRItem, candidates: Candidate[], selected: Candidate[]): PRVerificationPayload | undefined {
+  const commentIds = uniqueValues(selected.map(c => c.commentId).filter((id): id is number => typeof id === 'number' && id > 0));
+  const allActionCandidates = candidates.filter(c => c.actionPattern);
+  const selectedActionCandidates = selected.filter(c => c.actionPattern);
+  let actions = uniqueValues(selectedActionCandidates.map(c => c.actionPattern).filter((action): action is string => Boolean(action)));
+
+  if (selectedActionCandidates.length > 0 && selectedActionCandidates.length === allActionCandidates.length) {
+    const selectedActionKeys = new Set(selectedActionCandidates.map(c => c.key));
+    if (allActionCandidates.every(c => selectedActionKeys.has(c.key))) actions = ['*'];
+  }
+
+  if (commentIds.length === 0 && actions.length === 0) return undefined;
+  return {
+    prNumber: pr.number,
+    repo: pr.repo,
+    ...(commentIds.length > 0 ? { commentIds } : {}),
+    ...(actions.length > 0 ? { actions } : {}),
+  };
 }
 
 // Section is one rendered group in the left list: tests/lint/checks each map to a
@@ -236,9 +273,8 @@ function DetailPane({ detail }: { detail?: CandidateDetail }) {
 }
 
 // CreateTodoFromPRDialog turns a PR's failing tests, lint violations, failed CI
-// checks, and review comments into a new todo whose acceptance criteria are the
-// selected signals. Selecting a row shows its full details on the right. It stays
-// on the PR after creating and links to the new todo.
+// checks, and review comments into a new todo. Tests/lint are acceptance
+// criteria; PR checks/comments are executable verification gates.
 export function CreateTodoFromPRDialog({
   open,
   onClose,
@@ -262,7 +298,7 @@ export function CreateTodoFromPRDialog({
     return match?.dir ?? workspaces[0]?.dir ?? '';
   }, [workspaces, pr.repo]);
 
-  // The ListMenu multi-select owns which signals become acceptance criteria;
+  // The ListMenu multi-select owns which signals become criteria or verification gates;
   // activeKey is the separate detail-focus row shown in the right pane. Selection
   // is controlled (we own selectedKeys) so checkbox writes and the submit read
   // share one source of truth, and so programmatic defaults (which call
@@ -355,16 +391,27 @@ export function CreateTodoFromPRDialog({
     try {
       const provider = workspaces.find(w => w.dir === dir)?.todoProvider || 'auto';
       const sel = new Set(selectedKeys);
-      const criteria: AcceptanceCriterion[] = candidates
-        .filter(c => sel.has(c.key))
+      const selected = candidates.filter(c => sel.has(c.key));
+      const criteria: AcceptanceCriterion[] = selected
+        .filter(isAcceptanceCriterionCandidate)
         .map(c => ({ text: c.text }));
+      const prVerification = buildPRVerification(pr, candidates, selected);
       const bodyParts: string[] = [];
       if (notes.trim()) bodyParts.push(notes.trim());
       bodyParts.push(`_From [${pr.repo}#${pr.number}](${pr.url})._`);
+      const payload: {
+        title: string;
+        body: string;
+        priority: TodoPriority;
+        status: TodoStatus;
+        criteria: AcceptanceCriterion[];
+        prVerification?: PRVerificationPayload;
+      } = { title: title.trim(), body: bodyParts.join('\n\n'), priority, status, criteria };
+      if (prVerification) payload.prVerification = prVerification;
       const res = await fetch(`/api/todos/new?${todoQuery(dir, provider)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), body: bodyParts.join('\n\n'), priority, status, criteria }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Create failed');
@@ -377,7 +424,9 @@ export function CreateTodoFromPRDialog({
     }
   }
 
-  const selectedCount = selectedKeys.length;
+  const selectedCandidates = candidates.filter(c => selectedKeys.includes(c.key));
+  const selectedCriteriaCount = selectedCandidates.filter(isAcceptanceCriterionCandidate).length;
+  const selectedGateCount = selectedCandidates.filter(c => c.actionPattern || c.commentId).length;
   const presets = GROUPS.filter(g => candidates.some(c => c.group === g.id));
   const activeDetail = candidates.find(c => c.key === activeKey)?.detail;
 
@@ -397,7 +446,8 @@ export function CreateTodoFromPRDialog({
         ) : (
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">
-              {selectedCount} acceptance criteri{selectedCount === 1 ? 'on' : 'a'}
+              {selectedCriteriaCount} acceptance criteri{selectedCriteriaCount === 1 ? 'on' : 'a'}
+              {selectedGateCount > 0 && ` · ${selectedGateCount} verification gate${selectedGateCount === 1 ? '' : 's'}`}
             </span>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -415,6 +465,7 @@ export function CreateTodoFromPRDialog({
               <div className="font-medium">{created.title}</div>
               <div className="mt-0.5 text-xs text-green-700">
                 {(created.criteria?.length ?? 0)} acceptance criteri{(created.criteria?.length ?? 0) === 1 ? 'on' : 'a'} added
+                {created.verificationMarkdown ? ' · verification fixture added' : ''}
               </div>
             </div>
           </div>
@@ -487,7 +538,7 @@ export function CreateTodoFromPRDialog({
           </div>
 
           <div>
-            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Acceptance criteria</div>
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">PR signals</div>
             {candidates.length === 0 ? (
               <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
                 No failing tests, lint violations, checks, or open comments on this PR — the todo will be created from the title and notes alone.

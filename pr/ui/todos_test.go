@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/captain/pkg/api"
+	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
@@ -186,6 +187,50 @@ func TestTodoNewEndpointFoldsCriteriaIntoBody(t *testing.T) {
 	}
 	if !strings.Contains(resp.Todo.Body, "From flanksource/gavel#7") {
 		t.Fatalf("body dropped the PR reference: %q", resp.Todo.Body)
+	}
+}
+
+func TestTodoNewEndpointAddsPRVerificationFixture(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+
+	payload := todoNewPayload{todoCreatePayload: todoCreatePayload{
+		Title: "Fix PR feedback",
+		Body:  "From flanksource/gavel#7",
+		Criteria: []types.AcceptanceCriterion{
+			{Text: "Test `TestParser` passes"},
+		},
+		PRVerification: &todoPRVerificationPayload{
+			PRNumber:   7,
+			Repo:       "flanksource/gavel",
+			CommentIDs: []int64{102, 101},
+			Actions:    []string{"*"},
+		},
+	}}
+	autoSave := true
+	payload.AutoSave = &autoSave
+	raw, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("new status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp todoNewResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal new response: %v", err)
+	}
+	if len(resp.Todo.Criteria) != 1 || resp.Todo.Criteria[0].Text != "Test `TestParser` passes" {
+		t.Fatalf("criteria not preserved: %+v", resp.Todo.Criteria)
+	}
+	want := "gavel pr status 7 --repo flanksource/gavel --comments 101,102 --actions '*'"
+	if !strings.Contains(resp.Todo.VerificationMarkdown, want) {
+		t.Fatalf("verification fixture missing command %q: %q", want, resp.Todo.VerificationMarkdown)
+	}
+	if strings.Contains(resp.Todo.Body, "CI check") || strings.Contains(resp.Todo.Body, "Address @") {
+		t.Fatalf("PR gates should not be duplicated as criteria: %q", resp.Todo.Body)
 	}
 }
 
@@ -669,7 +714,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if got.Source.Dir != workDir || got.Backend != todos.ProviderFiles {
 		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
 	}
-	if got.Options.Name != "codex" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
+	if got.Options.Name != "gpt-5.5" || got.Options.Backend != "codex-cmux" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
 		t.Fatalf("unexpected run options: %+v", got.Options)
 	}
 }
@@ -1138,13 +1183,14 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.Agent, opts.Mode)
 	}
 
-	// codex-cmux with no model resolves the codex agent and defaults the model.
+	// codex-cmux with no model resolves the codex agent and defaults to the
+	// captain whoami-backed cmux model.
 	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-cmux"})
 	if err != nil {
 		t.Fatalf("codex-cmux driver: %v", err)
 	}
-	if opts.Agent != "codex" || opts.Name != "codex" || opts.Mode != "cmux" {
-		t.Fatalf("got agent=%q model=%q mode=%q", opts.Agent, opts.Name, opts.Mode)
+	if opts.Agent != "codex" || opts.Backend != "codex-cmux" || opts.Name != "gpt-5.5" || opts.Mode != "cmux" {
+		t.Fatalf("got agent=%q backend=%q model=%q mode=%q", opts.Agent, opts.Backend, opts.Name, opts.Mode)
 	}
 
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-tui"}); err == nil {
@@ -1153,15 +1199,35 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 }
 
 func TestTodoRunContextListsCaptainBackends(t *testing.T) {
+	prev := runCaptainWhoami
+	runCaptainWhoami = func(opts captaincli.WhoamiOptions) (any, error) {
+		models := []string{"sonnet-5", "sonnet-4-6", "opus-4-8", "claude-agent-sonnet"}
+		if strings.HasPrefix(opts.Backend, "codex") {
+			models = []string{"gpt-5.5", "gpt-5.4"}
+		}
+		return captaincli.WhoamiResult{Adapters: []captaincli.AdapterStatus{{
+			Backend:       opts.Backend,
+			Type:          "cli",
+			Authenticated: true,
+			Binary:        "/usr/local/bin/agent",
+			ModelCount:    len(models),
+			Models:        models,
+		}}}, nil
+	}
+	t.Cleanup(func() { runCaptainWhoami = prev })
+
 	resp := todoRunContext()
 	if !stringSliceContains(resp.Efforts, "xhigh") {
 		t.Fatalf("efforts = %v, want captain xhigh effort", resp.Efforts)
+	}
+	if resp.DefaultBackend != "claude-cmux" {
+		t.Fatalf("default backend = %q, want claude-cmux", resp.DefaultBackend)
 	}
 	backends := map[string]todoRunBackendOption{}
 	for _, backend := range resp.Backends {
 		backends[backend.ID] = backend
 	}
-	for _, id := range []string{"claude-agent", "claude-cli", "codex-cli"} {
+	for _, id := range []string{"claude-cmux", "claude-agent", "claude-cli", "codex-cmux", "codex-agent"} {
 		if backends[id].ID == "" {
 			t.Fatalf("missing backend %q in %+v", id, resp.Backends)
 		}
@@ -1169,8 +1235,26 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 			t.Fatalf("backend %q has no model list: %+v", id, backends[id])
 		}
 	}
-	if backends["claude-agent"].Driver != "claude-headless" || backends["codex-cli"].Driver != "codex-headless" {
-		t.Fatalf("unexpected backend drivers: claude-agent=%q codex-cli=%q", backends["claude-agent"].Driver, backends["codex-cli"].Driver)
+	if backends["codex-cli"].ID != "" {
+		t.Fatalf("unexpected codex-cli backend in %+v", resp.Backends)
+	}
+	if backends["claude-cmux"].Driver != "claude-cmux" || backends["claude-agent"].Driver != "claude-headless" || backends["codex-agent"].Driver != "codex-headless" {
+		t.Fatalf("unexpected backend drivers: claude-cmux=%q claude-agent=%q codex-agent=%q", backends["claude-cmux"].Driver, backends["claude-agent"].Driver, backends["codex-agent"].Driver)
+	}
+	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-sonnet") {
+		t.Fatalf("claude-cmux models = %+v, want claude-agent-sonnet from captain whoami", backends["claude-cmux"].Models)
+	}
+	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-opus") {
+		t.Fatalf("claude-cmux models = %+v, want claude-agent-opus from normalized captain whoami", backends["claude-cmux"].Models)
+	}
+	if todoRunModelsContain(backends["claude-cmux"].Models, "opus-4-8") {
+		t.Fatalf("claude-cmux models = %+v, should not expose provider-only opus-4-8 id", backends["claude-cmux"].Models)
+	}
+	if !todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5.5") {
+		t.Fatalf("codex-cmux models = %+v, want gpt-5.5 from captain whoami", backends["codex-cmux"].Models)
+	}
+	if todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5-codex") {
+		t.Fatalf("codex-cmux models = %+v, should not include code variant gpt-5-codex", backends["codex-cmux"].Models)
 	}
 }
 
@@ -1187,8 +1271,28 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default codex backend: %v", err)
 	}
-	if opts.Backend != "codex-cli" || opts.Name != "gpt-5-codex" {
+	if opts.Backend != "codex-agent" || opts.Name != "gpt-5.5" {
 		t.Fatalf("unexpected codex backend defaults: %+v", opts)
+	}
+
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "codex-cli", Name: "gpt-5.5"}}}); err == nil {
+		t.Fatal("codex-cli backend should be rejected for codex-headless")
+	}
+
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "claude-cmux", Spec: api.Spec{Model: api.Model{Name: "sonnet-4-6"}}})
+	if err != nil {
+		t.Fatalf("versioned claude cmux model: %v", err)
+	}
+	if opts.Backend != "claude-cmux" || opts.Name != "claude-agent-sonnet" {
+		t.Fatalf("unexpected versioned claude model options: %+v", opts)
+	}
+
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "opus-4-8"}}})
+	if err != nil {
+		t.Fatalf("stale claude agent opus model: %v", err)
+	}
+	if opts.Backend != "claude-agent" || opts.Name != "claude-agent-opus" {
+		t.Fatalf("unexpected normalized opus model options: %+v", opts)
 	}
 
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-agent-sonnet"}}}); err == nil {
@@ -1240,9 +1344,38 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	}
 }
 
+func TestTodoRunModelLabelFormatsVersionedClaudeModels(t *testing.T) {
+	cases := map[string]string{
+		"sonnet-5":              "Sonnet 5",
+		"sonnet-4-6":            "Sonnet 4.6",
+		"opus-4-8":              "Opus 4.8",
+		"claude-agent-opus-4-6": "Opus 4.6",
+		"claude-sonnet-5":       "Sonnet 5",
+		"claude-agent-sonnet":   "Sonnet",
+		"gpt-5-codex":           "GPT 5 Codex",
+		"codex-gpt-5-codex":     "GPT 5 Codex",
+		"claude-code-haiku-4-5": "Haiku 4.5",
+		"claude-agent-fable-5":  "Fable 5",
+	}
+	for in, want := range cases {
+		if got := modelLabel(in); got != want {
+			t.Errorf("modelLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func stringSliceContains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func todoRunModelsContain(items []todoRunModelOption, want string) bool {
+	for _, item := range items {
+		if item.ID == want {
 			return true
 		}
 	}
