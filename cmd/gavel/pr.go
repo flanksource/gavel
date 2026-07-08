@@ -50,6 +50,8 @@ type PRStatusOptions struct {
 	Logs      bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
 	TailLogs  int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
 	SyncTodos string          `flag:"sync-todos" help:"Sync TODO files for failed jobs to directory"`
+	Comments  []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
+	Actions   []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, and workflow name"`
 	Args      []string        `args:"true"`
 	Context   context.Context `json:"-"`
 
@@ -76,6 +78,8 @@ Key flags:
   --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
   --sync-todos DIR  Write .todos for failed jobs + review comments (bare flag -> .todos)
+  --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
+  --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, or name
   --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
 
 Examples:
@@ -85,6 +89,8 @@ Examples:
   gavel pr status https://github.com/o/r/pull/1
   gavel pr status --follow                     # block until checks complete
   gavel pr status 123 --logs                   # include failing-job logs
+  gavel pr status --comments '1,2,!3,*,!@coderabbit'
+  gavel pr status --actions '.github/workflows/ci.yml,!deploy'
   gavel pr status --sync-todos                 # turn failures + comments into .todos
   gavel pr status --ai-fix                     # feed status into the AI to fix failures`
 }
@@ -124,6 +130,8 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		Follow:   opts.Follow,
 		Logs:     opts.Logs,
 		TailLogs: opts.TailLogs,
+		Comments: opts.Comments,
+		Actions:  opts.Actions,
 	}
 
 	result, code := prwatch.Run(watchOpts)

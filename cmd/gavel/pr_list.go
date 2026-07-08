@@ -271,6 +271,9 @@ func runPRUI(opts PRListOptions) error {
 		Org:         searchOpts.Org,
 		IgnoredOrgs: saved.IgnoredOrgs,
 	})
+	srv.SetFixtureSchemaProvider(func() (any, error) {
+		return fixturesSchemaDocument()
+	})
 
 	// Surface the backend build metadata to the dashboard (window.__GAVEL__).
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}
