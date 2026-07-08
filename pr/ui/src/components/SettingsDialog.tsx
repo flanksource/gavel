@@ -182,9 +182,8 @@ const sectionIconPre: PreExtension = (field) => {
   return { ...field, labelIcon: <Glyph className="shrink-0 text-[15px] text-muted-foreground" /> };
 };
 
-// promptPost replaces any prompt-override field's value node with the rich
-// PromptOverrideField (segmented Inline/File source + default display), keyed by
-// the schema's x-prompt-id → registry default.
+// promptPost replaces any prompt-override field's value node with the shared
+// PromptOverrideField, keyed by the schema's x-prompt-id → registry default.
 function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: string): PostExtension {
   return (field, nodes) => {
     const id = promptIdOf(field.schema);
@@ -209,8 +208,8 @@ function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: stri
 // SettingsDialog edits one .gavel.yaml file as a schema-driven form, split into
 // tabs by top-level section. It loads and saves a single layer (never the merged
 // view) so editing the project file does not bake in global values. Overridable
-// AI prompts render with a segmented Inline/File editor that shows the built-in
-// default. Note: saving rewrites the file from the form, so hand-written comments
+// AI prompts render as a compact picker that opens the full runtime editor.
+// Note: saving rewrites the file from the form, so hand-written comments
 // are not preserved.
 export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: Props) {
   const [schema, setSchema] = useState<JsonSchemaObject | null>(schemaCache);

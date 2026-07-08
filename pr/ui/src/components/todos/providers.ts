@@ -71,12 +71,12 @@ const EFFORTS: TodoRunEffort[] = ['low', 'medium', 'high', 'xhigh'];
 // FALLBACK_TOOLS mirrors gavel's drivers.DefaultTools so the picker still renders
 // when the run-context fetch fails. Keep in sync with todoRunToolCatalog (Go).
 const FALLBACK_TOOLS: ToolMeta[] = [
-  { name: 'Read', label: 'Read', group: 'Files', defaultMode: 'enabled' },
-  { name: 'Edit', label: 'Edit', group: 'Files', defaultMode: 'enabled' },
-  { name: 'Write', label: 'Write', group: 'Files', defaultMode: 'enabled' },
-  { name: 'Bash', label: 'Bash', group: 'Shell', defaultMode: 'ask' },
-  { name: 'Glob', label: 'Glob', group: 'Search', defaultMode: 'enabled' },
-  { name: 'Grep', label: 'Grep', group: 'Search', defaultMode: 'enabled' },
+  { name: 'Read', label: 'Read', group: 'Files', defaultPermission: 'on' },
+  { name: 'Edit', label: 'Edit', group: 'Files', defaultPermission: 'on' },
+  { name: 'Write', label: 'Write', group: 'Files', defaultPermission: 'on' },
+  { name: 'Bash', label: 'Bash', group: 'Shell', defaultPermission: 'ask' },
+  { name: 'Glob', label: 'Glob', group: 'Search', defaultPermission: 'on' },
+  { name: 'Grep', label: 'Grep', group: 'Search', defaultPermission: 'on' },
 ];
 
 const CLAUDE: ProviderCatalog = {

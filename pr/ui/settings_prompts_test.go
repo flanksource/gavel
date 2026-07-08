@@ -152,6 +152,47 @@ func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
+	dir := withProject(t, "gavel", "flanksource/gavel", "")
+
+	body := putBody(t, promptDetailRequest{
+		Source: "inline",
+		Spec:   map[string]any{"model": "claude-test"},
+		Body:   "Custom review body.",
+	})
+	rec := httptest.NewRecorder()
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.Verify, "project=gavel", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inline PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	(&Server{}).handleSettingsPromptDetail(
+		rec,
+		promptReq("PUT", prompts.Verify, "project=gavel", putBody(t, promptDetailRequest{Source: "default"})),
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var got promptDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Source != "default" {
+		t.Errorf("source = %q, want default", got.Source)
+	}
+	if strings.Contains(got.Raw, "Custom review body.") {
+		t.Errorf("default response still contains old override:\n%s", got.Raw)
+	}
+	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(dir, ".gavel.yaml"))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.Verify.PromptTemplate.IsZero() {
+		t.Errorf("prompt override was not cleared: %+v", cfg.Verify.PromptTemplate)
+	}
+}
+
 // Editing one modeled key (model) must not drop an unmodeled frontmatter block
 // (output.schema) the base document carried.
 func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T) {

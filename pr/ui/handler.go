@@ -98,6 +98,11 @@ type Server struct {
 	// a running Vite dev server so `pr list --ui --dev` serves HMR'd modules
 	// instead of the embedded bundle. nil in production. See devproxy.go.
 	devProxy http.Handler
+
+	// fixtureSchemaProvider returns the same schema document printed by
+	// `gavel fixtures --schema`, injected by cmd/gavel so pr/ui does not
+	// duplicate the CLI-owned fixture schema builder.
+	fixtureSchemaProvider func() (any, error)
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -186,6 +191,10 @@ func (s *Server) refreshAuthProbe() {
 
 func (s *Server) DetailCache() *DetailCache {
 	return s.detailCache
+}
+
+func (s *Server) SetFixtureSchemaProvider(provider func() (any, error)) {
+	s.fixtureSchemaProvider = provider
 }
 
 func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
@@ -402,6 +411,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/verify", s.handleTodoVerify)
 	mux.HandleFunc("POST /api/todos/verify/preview", s.handleTodoVerifyPreview)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
+	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
 	mux.HandleFunc("GET /api/todos/commits/diff", s.handleTodoCommitDiff)
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)

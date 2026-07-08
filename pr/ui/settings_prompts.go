@@ -34,7 +34,7 @@ type promptDetailResponse struct {
 // unmodeled keys (config/input/output) survive. BaseRaw is the raw the editor
 // last read, used as a stable merge base.
 type promptDetailRequest struct {
-	Source  string         `json:"source"` // inline | file
+	Source  string         `json:"source"` // default | inline | file
 	Path    string         `json:"path,omitempty"`
 	Spec    map[string]any `json:"spec"`
 	Body    string         `json:"body"`
@@ -99,8 +99,8 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 		respondError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
-	if req.Source != "inline" && req.Source != "file" {
-		respondError(w, http.StatusBadRequest, `source must be "inline" or "file"`)
+	if req.Source != "default" && req.Source != "inline" && req.Source != "file" {
+		respondError(w, http.StatusBadRequest, `source must be "default", "inline" or "file"`)
 		return
 	}
 	if req.Source == "file" && strings.TrimSpace(req.Path) == "" {
@@ -116,6 +116,15 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 	ov, err := promptOverridePtr(&cfg, desc.ConfigPath)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if req.Source == "default" {
+		*ov = verify.PromptOverride{}
+		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.getPromptDetail(w, desc, scope, dir)
 		return
 	}
 

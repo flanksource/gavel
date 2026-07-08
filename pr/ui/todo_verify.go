@@ -196,6 +196,22 @@ func (s *Server) handleTodoVerifyPreview(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(todoRunPreviewResponse{Prompt: prompt, Mode: "verify", Count: 1}) //nolint:errcheck
 }
 
+// handleTodoVerificationSchema exposes the CLI-owned `gavel fixtures --schema`
+// document to the dashboard's FixtureEditor.
+func (s *Server) handleTodoVerificationSchema(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.fixtureSchemaProvider == nil {
+		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("fixture schema provider is not configured"))
+		return
+	}
+	doc, err := s.fixtureSchemaProvider()
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	json.NewEncoder(w).Encode(doc) //nolint:errcheck
+}
+
 // saveCriteria rewrites the todo body's acceptance-criteria section in place.
 func (s *Server) saveCriteria(r *http.Request, provider todos.Provider, todo *types.TODO, criteria []types.AcceptanceCriterion) error {
 	body := todos.UpsertCriteriaSection(todo.MarkdownBody, criteria)

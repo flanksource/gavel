@@ -1,12 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Button, Combobox, DropdownMenu, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
 import { ModelSelector, ProviderSelector } from "@flanksource/clicky-ui/chat";
-import { PromptRunEditor, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
+import { PromptRunEditor, promptRuntimeValueToPayload, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
 import { UiChevronDown, UiCog, UiPlay, UiSparkles, UiTerminal, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunAgent, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass, todoQuery } from "./format";
-import { runtimeValueToPayload } from "../settings/promptSpec";
 import {
   PROVIDERS,
   agentForBackend,
@@ -443,7 +442,7 @@ export function TodoRunAdvancedDialog({
     // workflow.verify (checks) and workflow.postRun (auto-commit / dry-run) — all
     // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
     // never commit or verify; the server suppresses both for run mode plan.
-    const { spec } = runtimeValueToPayload(runtimeValue);
+    const { spec } = promptRuntimeValueToPayload(runtimeValue);
     onRun({
       ...spec,
       driver,

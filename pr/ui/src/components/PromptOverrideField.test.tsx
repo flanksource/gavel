@@ -1,16 +1,51 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PromptOverrideField } from './PromptOverrideField';
-import type { PromptDetail } from './settings/promptSpec';
+import type { PromptSpecDetail, PromptSpecSavePayload } from '@flanksource/clicky-ui/ai';
 
-// The real SpecRuntimeEditor pulls in observers jsdom lacks; stub only it while
-// keeping the adapter helpers (compactAISpecRuntime) that promptSpec imports.
-vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  SpecRuntimeEditor: () => <div data-testid="spec-editor" />,
-}));
+vi.mock('@flanksource/clicky-ui/ai', async () => {
+  const React = await import('react');
+  return {
+    PromptPickerField: (props: {
+      title: string;
+      loadDetail: () => Promise<PromptSpecDetail>;
+      saveDetail: (payload: PromptSpecSavePayload) => Promise<PromptSpecDetail>;
+      onChange: (value: unknown) => void;
+    }) => {
+      const [label, setLabel] = React.useState('Loading prompt...');
+      React.useEffect(() => {
+        void props.loadDetail()
+          .then((detail) => setLabel(`${String(detail.spec.model ?? 'Default model')} · ${detail.body}`))
+          .catch((error: Error) => setLabel(error.message));
+      }, [props.loadDetail]);
+      return (
+        <div>
+          {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky prompt picker itself. */}
+          <button type="button" aria-label={`Edit prompt ${props.title}`}>
+            {label}
+          </button>
+          {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky prompt picker itself. */}
+          <button
+            type="button"
+            onClick={async () => {
+              const next = await props.saveDetail({
+                source: 'inline',
+                spec: { model: 'new' },
+                body: 'body',
+                baseRaw: 'base',
+              });
+              props.onChange(next.source === 'file' ? { file: next.path ?? '' } : { inline: next.raw });
+            }}
+          >
+            Save prompt
+          </button>
+        </div>
+      );
+    },
+  };
+});
 
-const detail: PromptDetail = {
+const detail: PromptSpecDetail = {
   id: 'verify',
   scope: 'global',
   source: 'default',
@@ -36,31 +71,22 @@ function renderRow(onChange = vi.fn()) {
   return onChange;
 }
 
-describe('PromptOverrideField summary row', () => {
+describe('PromptOverrideField adapter', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('renders source and model badges from the resolved detail', async () => {
+  it('passes the resolved prompt detail into the shared one-line picker', async () => {
     mockFetch(async () => ({ ok: true, json: async () => detail }));
     renderRow();
 
-    expect(await screen.findByText('claude-sonnet')).toBeTruthy();
-    expect(screen.getByText('default')).toBeTruthy();
-  });
-
-  it('opens the nested editor dialog on Edit', async () => {
-    mockFetch(async () => ({ ok: true, json: async () => detail }));
-    renderRow();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    expect(await screen.findByText(/Edit prompt/)).toBeTruthy();
-    expect(screen.getByTestId('spec-editor')).toBeTruthy();
+    expect(await screen.findByText('claude-sonnet · Review {{diff}}.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit prompt Verify' })).toBeTruthy();
   });
 
   it('PUTs on save and syncs the in-form value to the persisted override', async () => {
-    const saved: PromptDetail = {
+    const saved: PromptSpecDetail = {
       ...detail,
       source: 'inline',
       raw: '---\nmodel: new\n---\nbody',
@@ -76,8 +102,7 @@ describe('PromptOverrideField summary row', () => {
     });
     const onChange = renderRow();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save prompt' }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ inline: saved.raw }));
     expect(putUrl).toContain('/api/settings/prompts/verify?scope=global');

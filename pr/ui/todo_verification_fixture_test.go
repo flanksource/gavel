@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -102,5 +103,56 @@ func TestHandleTodoVerificationFixtureRequiresRef(t *testing.T) {
 	s.handleTodoVerificationFixture(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestHandleTodoVerificationSchemaReturnsProviderDocument(t *testing.T) {
+	s := &Server{}
+	s.SetFixtureSchemaProvider(func() (any, error) {
+		return map[string]any{
+			"schemaVersion": 1,
+			"fences": map[string]any{
+				"test": map[string]any{
+					"aliases": []string{"yaml test"},
+					"schema":  map[string]any{"type": "object"},
+				},
+			},
+		}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/todos/verification/schema", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if got["schemaVersion"].(float64) != 1 {
+		t.Fatalf("unexpected schema version: %#v", got["schemaVersion"])
+	}
+	fences := got["fences"].(map[string]any)
+	if _, ok := fences["test"]; !ok {
+		t.Fatalf("schema response missing test fence: %#v", got)
+	}
+}
+
+func TestHandleTodoVerificationSchemaReportsProviderErrors(t *testing.T) {
+	s := &Server{}
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/todos/verification/schema", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing provider status = %d, want %d; body = %q", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	s.SetFixtureSchemaProvider(func() (any, error) {
+		return nil, errors.New("schema failed")
+	})
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/todos/verification/schema", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("provider error status = %d, want %d; body = %q", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }

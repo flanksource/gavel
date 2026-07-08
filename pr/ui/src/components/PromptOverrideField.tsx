@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Button } from '@flanksource/clicky-ui/components';
-import { PromptEditorDialog } from './settings/PromptEditorDialog';
-import type { PromptDetail } from './settings/promptSpec';
+import { useCallback } from 'react';
+import {
+  PromptPickerField,
+  type PromptPickerValue,
+  type PromptSpecDetail,
+  type PromptSpecSavePayload,
+} from '@flanksource/clicky-ui/ai';
 
 // A prompt override is either inline template text or a path to a .prompt file
 // (the union the Go PromptOverride marshals). An unset/empty override means the
 // built-in default is used.
-export type PromptOverrideValue = string | { inline?: string; file?: string };
+export type PromptOverrideValue = PromptPickerValue;
 
 interface Props {
   value: PromptOverrideValue | undefined;
@@ -20,102 +23,36 @@ interface Props {
   scopeQuery: string;
 }
 
-type Source = 'default' | 'inline' | 'file';
-
-function sourceOf(value: PromptOverrideValue | undefined): { source: Source; path?: string } {
-  if (typeof value === 'string') return value.trim() ? { source: 'inline' } : { source: 'default' };
-  if (value && typeof value === 'object') {
-    if (value.inline && value.inline.trim()) return { source: 'inline' };
-    if (value.file && value.file.trim()) return { source: 'file', path: value.file };
-  }
-  return { source: 'default' };
-}
-
-const BADGE: Record<Source, string> = {
-  default: 'bg-muted text-muted-foreground',
-  inline: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200',
-  file: 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200',
-};
-
-// PromptOverrideField is the settings summary row for one overridable prompt: a
-// source badge (default/inline/file), the resolved model, and an Edit button that
-// opens the nested spec/body editor. Content is edited only in the dialog (which
-// persists server-side); the row keeps the lightweight source switches — Reset to
-// default (cleared here, saved with the rest of the form) and, after a dialog
-// save, syncing the in-form value so the enclosing Save stays consistent.
+// PromptOverrideField adapts Gavel's settings prompt endpoints to clicky-ui's
+// reusable one-line PromptPickerField.
 export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery }: Props) {
-  const [detail, setDetail] = useState<PromptDetail | null>(null);
-  const [error, setError] = useState('');
-  const [editing, setEditing] = useState(false);
-
-  const load = useCallback(() => {
-    setError('');
-    fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.text()) || `load failed (${r.status})`);
-        return r.json() as Promise<PromptDetail>;
-      })
-      .then(setDetail)
-      .catch((e) => setError(e instanceof Error ? e.message : 'failed to load prompt'));
+  const loadDetail = useCallback(() => {
+    return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.text()) || `load failed (${response.status})`);
+        return response.json() as Promise<PromptSpecDetail>;
+      });
   }, [id, scopeQuery]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const { source, path } = sourceOf(value);
-  const model = (detail?.spec?.model as string | undefined) || 'default';
-
-  function onSaved(next: PromptDetail) {
-    setDetail(next);
-    onChange(next.source === 'file' ? { file: next.path ?? '' } : { inline: next.raw });
-    setEditing(false);
-  }
+  const saveDetail = useCallback((payload: PromptSpecSavePayload) => {
+    return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.text()) || `save failed (${response.status})`);
+      return response.json() as Promise<PromptSpecDetail>;
+    });
+  }, [id, scopeQuery]);
 
   return (
-    <div className="space-y-2">
-      {description && <p className="text-xs text-muted-foreground">{description}</p>}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${BADGE[source]}`}
-        >
-          {source}
-          {source === 'file' && path ? ` · ${path}` : ''}
-        </span>
-        <span
-          className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-          title="Model"
-        >
-          {model}
-        </span>
-        <Button size="sm" variant="secondary" onClick={() => setEditing(true)} disabled={!detail}>
-          Edit
-        </Button>
-        {source !== 'default' && (
-          <button
-            type="button"
-            onClick={() => onChange(undefined)}
-            className="text-xs text-muted-foreground underline hover:text-foreground"
-          >
-            Reset to default
-          </button>
-        )}
-      </div>
-
-      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
-
-      {editing && detail && (
-        <PromptEditorDialog
-          open={editing}
-          id={id}
-          title={title}
-          scopeQuery={scopeQuery}
-          detail={detail}
-          onClose={() => setEditing(false)}
-          onSaved={onSaved}
-        />
-      )}
-    </div>
+    <PromptPickerField
+      value={value}
+      onChange={onChange}
+      title={title}
+      description={description}
+      loadDetail={loadDetail}
+      saveDetail={saveDetail}
+    />
   );
 }

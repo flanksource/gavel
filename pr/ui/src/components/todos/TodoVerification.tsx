@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { FixtureEditor } from '@flanksource/clicky-ui/data';
+import type { FixtureFenceOption, FixtureFenceSchemas } from '@flanksource/clicky-ui/data';
 import { UiBeaker, UiCopy } from '@flanksource/clicky-ui/icons';
 import type { TodoItem } from '../../types';
 import { todoQuery } from './format';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
+import { fixtureFenceSchemasFromDocument } from './fixtureSchema';
+
+const GAVEL_FIXTURE_FENCES = [
+  { info: 'yaml test', label: 'test', description: 'Gavel test options' },
+  { info: 'yaml lint', label: 'lint', description: 'Gavel lint options' },
+  { info: 'ai', label: 'ai', description: 'Reviewer instructions' },
+  { info: 'exec', label: 'exec', description: 'Shell command or script' },
+  { info: 'bash', label: 'bash', description: 'Bash command block' },
+] satisfies readonly FixtureFenceOption[];
 
 // TodoVerification renders the Verification tab: a FixtureEditor over the
 // todo's "## Verification" fixture markdown (explicit Save, since the editor
@@ -24,8 +34,23 @@ export function TodoVerification({
 }) {
   const saved = todo.verificationMarkdown ?? '';
   const [fixture, setFixture] = useState(saved);
+  const [schemas, setSchemas] = useState<FixtureFenceSchemas>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/todos/verification/schema', { signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((doc) => setSchemas(fixtureFenceSchemasFromDocument(doc)))
+      .catch((err) => {
+        if (err?.name !== 'AbortError') setSchemas({});
+      });
+    return () => controller.abort();
+  }, []);
 
   // Adopt the server's saved fixture whenever a different todo is shown, or
   // after this todo's own save round-trips back through props.
@@ -100,6 +125,8 @@ export function TodoVerification({
             value={fixture}
             onChange={setFixture}
             size="sm"
+            schemas={schemas}
+            allowedFences={GAVEL_FIXTURE_FENCES}
             placeholder="Write the verification fixture markdown…"
           />
         </div>
