@@ -19,7 +19,7 @@ func Prompts() []prompts.Prompt {
 		{
 			ID:          prompts.CommitGrouping,
 			Title:       "Commit grouping",
-			Description: "Groups uncommitted changes into logical commits for `gavel commit -G`. Available variables: {{table}} (the status table), {{groupByScope}}, {{maxCommits}}. Output schema is groups[]+ignore[]; {{maxCommits}} also caps the groups array via maxItems in the frontmatter output.schema, enforced by captain's schemaStrictness=retry policy.",
+			Description: "Groups uncommitted changes into logical commits for `gavel commit -A`. Available variables: {{table}} (the status table), {{maxCommits}}. Output schema is groups[]+ignore[]; {{maxCommits}} also caps the groups array via maxItems in the frontmatter output.schema, enforced by captain's schemaStrictness=retry policy.",
 			ConfigPath:  "commit.groupingPrompt",
 			Default:     groupingPromptTemplate,
 		},

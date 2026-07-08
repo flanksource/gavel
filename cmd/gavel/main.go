@@ -165,8 +165,6 @@ func gavelMCPCommitIgnoredParams() []string {
 		"interactive",
 		"lint",
 		"lint-secrets",
-		"max-files",
-		"max-lines",
 		"model",
 		"precommit",
 		"push",

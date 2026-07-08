@@ -23,7 +23,7 @@ var groupingPromptTemplate string
 // middleware identifies the template under -v.
 const groupingPromptFile = "commit-grouping.prompt"
 
-// groupChangesByAIFunc is the seam tests stub to exercise the --ai-group flow
+// groupChangesByAIFunc is the seam tests stub to exercise the -A grouping flow
 // without an LLM. It mirrors analyzeCommitMessageWithAIFunc in commit.go.
 var groupChangesByAIFunc func(ctx context.Context, opts Options, source stagedSource) ([]commitGroup, error) = groupChangesByAI
 
@@ -65,13 +65,12 @@ type groupingRow struct {
 // renderGroupingPrompt renders the grouping template around the status table and
 // returns the user prompt, the JSON output schema (with the runtime MaxCommits cap
 // baked in as maxItems on the groups array), and the SchemaStrictness policy — all
-// declared in the .prompt frontmatter. GroupByScope and maxCommits drive the
-// Handlebars conditionals in both the body and the frontmatter schema.
-func renderGroupingPrompt(template, table string, maxCommits int, groupByScope bool) (string, json.RawMessage, api.SchemaStrictness, error) {
+// declared in the .prompt frontmatter. maxCommits drives the Handlebars
+// conditionals in both the body and the frontmatter schema.
+func renderGroupingPrompt(template, table string, maxCommits int) (string, json.RawMessage, api.SchemaStrictness, error) {
 	data := map[string]any{
-		"table":        table,
-		"maxCommits":   maxCommits,
-		"groupByScope": groupByScope,
+		"table":      table,
+		"maxCommits": maxCommits,
 	}
 	req, _, err := dotprompt.Load(template).Render(data, nil)
 	if err != nil {
@@ -87,7 +86,7 @@ func renderGroupingPrompt(template, table string, maxCommits int, groupByScope b
 // are sent later during message generation. Every change gets a row (changes absent
 // from the gathered status fall back to the "general" scope) so the LLM can assign
 // each path.
-func buildStatusTable(workDir string, changes []stagedChange, groupByScope bool) (string, error) {
+func buildStatusTable(workDir string, changes []stagedChange) (string, error) {
 	res, err := gatherStatusFunc(workDir)
 	if err != nil {
 		return "", fmt.Errorf("gather status for grouping: %w", err)
@@ -118,7 +117,7 @@ func buildStatusTable(workDir string, changes []stagedChange, groupByScope bool)
 			Dels:   c.Dels,
 		})
 	}
-	sortGroupingRows(rows, groupByScope)
+	sortGroupingRows(rows)
 
 	table, err := clicky.Format(rows, clicky.FormatOptions{Markdown: true, NoColor: true})
 	if err != nil {
@@ -127,13 +126,9 @@ func buildStatusTable(workDir string, changes []stagedChange, groupByScope bool)
 	return table, nil
 }
 
-// sortGroupingRows orders the table rows: by scope then file when grouping by
-// scope (so a scope's files read as a block), else by file alone.
-func sortGroupingRows(rows []groupingRow, groupByScope bool) {
+// sortGroupingRows orders the table rows by file for deterministic output.
+func sortGroupingRows(rows []groupingRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		if groupByScope && rows[i].Scope != rows[j].Scope {
-			return rows[i].Scope < rows[j].Scope
-		}
 		return rows[i].File < rows[j].File
 	})
 }
@@ -146,7 +141,7 @@ func sortGroupingRows(rows []groupingRow, groupByScope bool) {
 // then a hard error). It builds its own agent (like generateCommitAnalysis) so the
 // grouping seam can be stubbed in tests without an LLM.
 func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([]commitGroup, error) {
-	table, err := buildStatusTable(opts.WorkDir, source.Changes, opts.GroupByScope)
+	table, err := buildStatusTable(opts.WorkDir, source.Changes)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +158,7 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 
 	prompting.Prepare()
 
-	promptText, schemaJSON, strictness, err := renderGroupingPrompt(template, table, opts.MaxCommits, opts.GroupByScope)
+	promptText, schemaJSON, strictness, err := renderGroupingPrompt(template, table, opts.MaxCommits)
 	if err != nil {
 		return nil, err
 	}

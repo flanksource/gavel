@@ -33,19 +33,20 @@ func TestIsTokenLimitError(t *testing.T) {
 	}
 }
 
-func TestRunSingleCommitChunksByDirectoryOnTokenLimit(t *testing.T) {
+func TestRunSingleCommitChunksOnTokenLimit(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFileInDir(t, repo, "alpha/a.txt", "one\n")
 	writeFileInDir(t, repo, "beta/b.txt", "two\n")
 	gitRun(t, repo, "add", "alpha/a.txt", "beta/b.txt")
+	stubGroupPerFile(t)
 
 	prevAgent := newAgentFunc
 	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return nil, nil }
 	defer func() { newAgentFunc = prevAgent }()
 
-	// The whole-tree diff spans both directories and "overflows" the context;
-	// each single-directory chunk succeeds. This forces the runSingleCommit
-	// fallback to split the commit by directory.
+	// The whole-tree diff spans both files and "overflows" the context; each
+	// single-file chunk succeeds. This forces the runSingleCommit fallback to
+	// split the commit into per-group commits via the AI grouping seam.
 	prevMsg := analyzeCommitMessageWithAIFunc
 	analyzeCommitMessageWithAIFunc = func(ctx context.Context, commit models.CommitAnalysis, agent clickyai.Agent, opts git.AnalyzeOptions) (models.CommitAnalysis, error) {
 		if strings.Contains(commit.Patch, "alpha/") && strings.Contains(commit.Patch, "beta/") {

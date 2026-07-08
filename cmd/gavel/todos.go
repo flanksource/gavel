@@ -104,7 +104,7 @@ Examples:
   gavel todos run -i                       # interactively select
   gavel todos run --mode plan              # propose plans for review
   gavel todos run --check                  # run checks + fix failures in-loop
-  gavel todos run --driver codex-headless --model o3
+  gavel todos run --driver codex-headless --model o3 # codex-agent app-server
   gavel todos run --dry-run                # preview prompts, no changes`,
 	RunE: runTodosRun,
 }

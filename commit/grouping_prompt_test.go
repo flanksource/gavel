@@ -36,7 +36,7 @@ const groupingTable = "| Scope | File | Status |\n" +
 	"| api | old & <legacy>.go → new.go | renamed |\n"
 
 func TestRenderGroupingPromptBase(t *testing.T) {
-	got, schema, strictness, err := renderGroupingPrompt(groupingPromptTemplate, groupingTable, 3, true)
+	got, schema, strictness, err := renderGroupingPrompt(groupingPromptTemplate, groupingTable, 3)
 	require.NoError(t, err)
 	require.NotEmpty(t, schema, "frontmatter output.schema must be carried through")
 	require.Equal(t, api.SchemaStrictnessRetry, strictness, "frontmatter declares schemaStrictness: retry")
@@ -44,7 +44,7 @@ func TestRenderGroupingPromptBase(t *testing.T) {
 	require.NotContains(t, got, "&amp;", "table must not be HTML-escaped")
 	require.NotContains(t, got, "&lt;", "table must not be HTML-escaped")
 	require.Contains(t, got, "old & <legacy>.go → new.go", "raw table content must be preserved")
-	require.Contains(t, got, "Treat each scope as the primary boundary", "groupByScope selects the scope branch")
+	require.Contains(t, got, "The Scope column is a hint", "scope is always a hint, not a hard boundary")
 	require.Contains(t, got, "Produce at most 3 commits", "maxCommits renders the cap rule")
 
 	groups := groupsSchemaNode(t, schema)
@@ -54,7 +54,7 @@ func TestRenderGroupingPromptBase(t *testing.T) {
 }
 
 func TestRenderGroupingPromptFlatNoCap(t *testing.T) {
-	got, schema, _, err := renderGroupingPrompt(groupingPromptTemplate, groupingTable, 0, false)
+	got, schema, _, err := renderGroupingPrompt(groupingPromptTemplate, groupingTable, 0)
 	require.NoError(t, err)
 	require.Contains(t, got, "The Scope column is a hint", "flat grouping selects the logical-change branch")
 	require.NotContains(t, got, "Produce at most", "zero maxCommits omits the cap rule")

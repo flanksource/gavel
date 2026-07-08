@@ -141,6 +141,7 @@ func TestRunCommitAllCompatibilityCancelLeavesHistoryUntouched(t *testing.T) {
 	writeFileInDir(t, repo, "alpha/a.txt", "one\n")
 	writeFileInDir(t, repo, "beta/b.txt", "two\n")
 	gitRun(t, repo, "add", "alpha/a.txt", "beta/b.txt")
+	stubGroupPerFile(t)
 
 	restore := stubCommitAI(t,
 		func(ctx context.Context, analysis models.CommitAnalysis, agent clickyai.Agent, opts git.AnalyzeOptions) (models.CommitAnalysis, error) {

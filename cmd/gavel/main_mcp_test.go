@@ -57,8 +57,6 @@ func TestGavelMCPProfileIgnoresCommitWorkflowParams(t *testing.T) {
 		"interactive",
 		"lint",
 		"lint-secrets",
-		"max-files",
-		"max-lines",
 		"model",
 		"precommit",
 		"push",

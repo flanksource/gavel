@@ -29,7 +29,7 @@ func TestBuildStatusTable(t *testing.T) {
 		{Path: "ghost.go", Status: "updated", Adds: 1, Dels: 1},
 	}
 
-	got, err := buildStatusTable("/repo", changes, false)
+	got, err := buildStatusTable("/repo", changes)
 	require.NoError(t, err)
 
 	// A markdown table with the expected columns and one row per change.
@@ -43,24 +43,16 @@ func TestBuildStatusTable(t *testing.T) {
 	assert.Contains(t, got, scopeGeneralFallback)
 }
 
-func TestSortGroupingRowsByScope(t *testing.T) {
-	rows := func() []groupingRow {
-		return []groupingRow{
-			{Scope: "go · b", File: "z.go"},
-			{Scope: "go · a", File: "y.go"},
-			{Scope: "go · b", File: "a.go"},
-		}
+func TestSortGroupingRows(t *testing.T) {
+	rows := []groupingRow{
+		{Scope: "go · b", File: "z.go"},
+		{Scope: "go · a", File: "y.go"},
+		{Scope: "go · b", File: "a.go"},
 	}
 
-	byScope := rows()
-	sortGroupingRows(byScope, true)
-	assert.Equal(t, []string{"y.go", "a.go", "z.go"}, []string{byScope[0].File, byScope[1].File, byScope[2].File},
-		"group-by-scope orders by scope then file")
-
-	byFile := rows()
-	sortGroupingRows(byFile, false)
-	assert.Equal(t, []string{"a.go", "y.go", "z.go"}, []string{byFile[0].File, byFile[1].File, byFile[2].File},
-		"flat ordering is by file alone")
+	sortGroupingRows(rows)
+	assert.Equal(t, []string{"a.go", "y.go", "z.go"}, []string{rows[0].File, rows[1].File, rows[2].File},
+		"rows are ordered by file alone")
 }
 
 func TestAssembleGroupsMapsGroupsIgnoreAndLeftovers(t *testing.T) {
@@ -110,7 +102,7 @@ func TestAssembleGroupsNoIgnoreNoLeftovers(t *testing.T) {
 	assert.Equal(t, "g2", groups[1].Label)
 }
 
-func TestRunAIGroupSplitsAndCreatesChoreCommit(t *testing.T) {
+func TestRunCommitAllSplitsAndCreatesChoreCommit(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFileInDir(t, repo, "feature/a.go", "package feature\n")
 	writeFileInDir(t, repo, "bugfix/b.go", "package bugfix\n")
@@ -131,7 +123,7 @@ func TestRunAIGroupSplitsAndCreatesChoreCommit(t *testing.T) {
 		}), nil
 	}
 
-	result, err := Run(context.Background(), Options{WorkDir: repo, AIGroup: true})
+	result, err := Run(context.Background(), Options{WorkDir: repo, CommitAll: true})
 	require.NoError(t, err)
 
 	require.Len(t, result.Commits, 3)
@@ -146,10 +138,4 @@ func TestRunAIGroupSplitsAndCreatesChoreCommit(t *testing.T) {
 	// 1 initial commit + 3 created here.
 	assert.Equal(t, "4", strings.TrimSpace(gitOutput(t, repo, "rev-list", "--count", "HEAD")))
 	assert.Empty(t, strings.TrimSpace(gitOutput(t, repo, "status", "--short")))
-}
-
-func TestRunAIGroupRejectsMessage(t *testing.T) {
-	repo := initCommitRepo(t)
-	_, err := Run(context.Background(), Options{WorkDir: repo, AIGroup: true, Message: "x"})
-	assert.ErrorIs(t, err, ErrAIGroupWithMessage)
 }

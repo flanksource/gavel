@@ -18,18 +18,14 @@ import (
 
 type CommitOptions struct {
 	Stage        string `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id" default:"session"`
-	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the selected change set into commits grouped by directory"`
-	AIGroup      bool   `flag:"ai-group" short:"G" help:"Ask the LLM to split the change set into logical commit groups (and a separate chore commit for lock/generated files) instead of grouping by directory. Combine with -A to first stage all changes."`
+	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
 	Tree         bool   `flag:"tree" short:"t" help:"Alias for --interactive"`
 	Summary      bool   `flag:"summary" short:"s" help:"With -i, print a gavel-status-style summary of the candidate files before the picker opens"`
-	MaxFiles     int    `flag:"max-files" help:"Max files per commit group before splitting further by subdirectory" default:"7"`
-	MaxLines     int    `flag:"max-lines" help:"Max changed lines (adds+dels, excluding new files) per commit group before splitting further by subdirectory" default:"500"`
-	MaxCommits   int    `flag:"max-commits" help:"Max number of commits AI grouping (-G) should produce, excluding the chore commit for lock/generated files" default:"7"`
-	GroupByScope bool   `flag:"group-by-scope" help:"With -G, group changes by repomap scope as the primary boundary; default groups by logical change with scope as a hint" default:"false"`
+	MaxCommits   int    `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
 	Message      string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
 	Model        string `flag:"model" help:"Override LLM model for commit-message/PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
-	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-G) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
+	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
 	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
 	NoCache      bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
@@ -97,9 +93,11 @@ exclusive with -A and -m. Pair with -s to print a status-style summary
 of the candidate files before the picker opens. Combine with --dry-run
 to preview a single commit without looping.
 
-The -A flag groups staged files by their top-level directory and recursively
-splits any group that exceeds --max-files or --max-lines. An LLM still writes
-the conventional commit message for each group.
+The -A flag stages all changes and asks the LLM to split them into logical
+commits — one feature/fix/refactor each — capped at --max-commits (default 7,
+excluding the chore commit that collects lock/generated files). Passing
+--max-commits implies -A. An LLM writes the conventional commit message for
+each group.
 
 With --push (-p), if nothing is staged the commit step is skipped and the
 existing local commits ahead of upstream are pushed instead. A new PR is
@@ -120,9 +118,9 @@ Examples:
   gavel commit -t                       # alias for the tree picker
   gavel commit -i -s                    # show a status summary before opening the picker
   gavel commit -i --dry-run             # preview message for the picked subset
-  gavel commit -A                       # one commit per directory, split when large
-  gavel commit -A --max-files=3         # tighter file cap; triggers deeper splits
-  gavel commit -A --max-lines=50        # tighter line cap; triggers deeper splits
+  gavel commit -A                       # LLM-grouped logical commits (up to 7)
+  gavel commit -A --max-commits=3       # cap at 3 logical commits (chore commit excluded)
+  gavel commit --max-commits=3          # same as above; --max-commits implies -A
   gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
   gavel commit --stage staged           # commit only what is already git-added (the pre-session default)
   gavel commit --stage all --dry-run    # stage everything, print message
@@ -158,13 +156,9 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
 		CommitAll:       opts.CommitAll,
-		AIGroup:         opts.AIGroup,
 		Interactive:     opts.Interactive || opts.Tree,
 		Summary:         opts.Summary,
-		MaxFiles:        opts.MaxFiles,
-		MaxLines:        opts.MaxLines,
 		MaxCommits:      opts.MaxCommits,
-		GroupByScope:    opts.GroupByScope,
 		DryRun:          opts.DryRun,
 		Force:           opts.Force,
 		NoCache:         opts.NoCache,

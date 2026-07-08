@@ -42,11 +42,7 @@ The changed files are listed below with their code scope (derived from the repos
 
 Produce the final commit grouping. Rules:
 - Each group MUST represent a single high-level change — one feature, one fix, or one refactor. NEVER put unrelated changes in the same group.
-{{#if groupByScope}}
-- Treat each scope as the primary boundary: prefer keeping a scope's files together as one commit, splitting a scope only when it clearly contains unrelated features.
-{{else}}
 - Group by logical change, one feature/fix/refactor per commit. The Scope column is a hint, not a hard boundary — split or merge across scopes as the change intent dictates.
-{{/if}}
 {{#if maxCommits}}
 - Produce at most {{maxCommits}} commits (the chore commit for lock/generated files does NOT count toward this limit). If there are more logical groups, merge the smallest related ones until you are within the limit.
 {{/if}}

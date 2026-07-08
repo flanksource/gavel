@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -23,8 +24,6 @@ var (
 	ErrNothingToPush            = errors.New("nothing to commit and no local commits ahead of upstream")
 	ErrLLMUnavailable           = errors.New("LLM agent unavailable")
 	ErrCommitAllWithMessage     = errors.New("--commit-all does not support --message")
-	ErrAIGroupWithMessage       = errors.New("--ai-group does not support --message")
-	ErrAIGroupWithInteractive   = errors.New("--ai-group cannot be combined with --interactive")
 	ErrInteractiveWithCommitAll = errors.New("--interactive cannot be combined with --commit-all")
 	ErrInteractiveWithMessage   = errors.New("--interactive cannot be combined with --message")
 	ErrInteractiveNonTTY        = errors.New("--interactive requires an interactive terminal")
@@ -37,11 +36,7 @@ var (
 	dryRunOutput                          io.Writer = os.Stdout
 )
 
-const (
-	defaultMaxFiles   = 7
-	defaultMaxLines   = 500
-	defaultMaxCommits = 7
-)
+const defaultMaxCommits = 7
 
 const (
 	StageStaged   = "staged"
@@ -58,30 +53,24 @@ const (
 )
 
 type Options struct {
-	WorkDir   string
-	Stage     string
-	CommitAll bool
-	// AIGroup asks the LLM to split the change set into logical commit groups
-	// (plus a separate chore commit for lock/generated files) instead of
-	// grouping by directory. Combine with CommitAll to stage all changes first;
-	// otherwise it groups only the staged set.
-	AIGroup     bool
+	WorkDir string
+	Stage   string
+	// CommitAll stages all changes and asks the LLM to split them into logical
+	// commit groups (plus a separate chore commit for lock/generated files).
+	// Set implicitly when MaxCommits is provided.
+	CommitAll   bool
 	Interactive bool
 	Summary     bool
-	MaxFiles    int
-	MaxLines    int
-	// MaxCommits caps how many commits AI grouping (--ai-group) produces,
-	// excluding the trailing chore commit for lock/generated files. It is fed to
-	// the grouping prompt and re-enforced via a consolidation feedback prompt when
-	// the LLM exceeds it. Defaults to defaultMaxCommits.
+	// MaxCommits caps how many logical commits grouping produces, excluding the
+	// trailing chore commit for lock/generated files. It is rendered into the
+	// grouping prompt's output schema as maxItems on the groups array and
+	// enforced by captain's schemaStrictness=retry policy (bounded fix-up
+	// re-asks, then a hard error). Defaults to defaultMaxCommits.
 	MaxCommits int
-	// GroupByScope makes AI grouping treat repomap scope as the primary commit
-	// boundary. Default (false) groups by logical change with scope as a hint.
-	GroupByScope bool
-	DryRun       bool
-	Force        bool
-	NoCache      bool
-	Push         bool
+	DryRun     bool
+	Force      bool
+	NoCache    bool
+	Push       bool
 	// AutoMerge, with Push, enables GitHub auto-merge on a newly opened PR so
 	// it merges once required checks pass. Only applies to PRs this run opens.
 	AutoMerge bool
@@ -191,6 +180,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.WorkDir = gitRoot
+	// --max-commits only has meaning for the grouping flow, so setting it implies
+	// -A. Applied before the mutual-exclusion guards so a conflicting combination
+	// (e.g. --max-commits with --fixup/--interactive) is rejected, not ignored.
+	if opts.MaxCommits != 0 {
+		opts.CommitAll = true
+	}
 	if err := validateInteractiveOptions(opts); err != nil {
 		return nil, err
 	}
@@ -226,32 +221,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		result, err = runIssueIdSquash(ctx, opts)
 	case opts.Fixup != "":
 		result, err = runFixup(ctx, opts)
-	case opts.AIGroup:
-		if opts.Message != "" {
-			return nil, ErrAIGroupWithMessage
-		}
-		if opts.Interactive {
-			return nil, ErrAIGroupWithInteractive
-		}
-		if opts.MaxFiles == 0 {
-			opts.MaxFiles = defaultMaxFiles
-		}
-		if opts.MaxLines == 0 {
-			opts.MaxLines = defaultMaxLines
-		}
-		if opts.MaxCommits == 0 {
-			opts.MaxCommits = defaultMaxCommits
-		}
-		result, err = runCommitAIGroup(ctx, opts)
 	case opts.CommitAll:
 		if opts.Message != "" {
 			return nil, ErrCommitAllWithMessage
 		}
-		if opts.MaxFiles == 0 {
-			opts.MaxFiles = defaultMaxFiles
-		}
-		if opts.MaxLines == 0 {
-			opts.MaxLines = defaultMaxLines
+		if opts.MaxCommits == 0 {
+			opts.MaxCommits = defaultMaxCommits
 		}
 		result, err = runCommitAll(ctx, opts)
 	case opts.Interactive && !opts.DryRun:
@@ -331,8 +306,8 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	analysis, err := generateCommitAnalysis(ctx, opts, source.Diff)
 	if err != nil {
 		if isTokenLimitError(err) {
-			logger.Infof("staged diff exceeds model context window, splitting commit by directory")
-			return commitByDirectory(ctx, opts, source, result)
+			logger.Infof("staged diff exceeds model context window, splitting into logical commits")
+			return commitByGrouping(ctx, opts, source, result)
 		}
 		return result, fmt.Errorf("generate commit analysis: %w", err)
 	}
@@ -423,6 +398,10 @@ func mergeResults(agg, single *Result) *Result {
 	return agg
 }
 
+// runCommitAll stages all changes, asks the LLM to split them into logical
+// commit groups plus a chore group for lock/generated files, and creates one
+// commit per group. It backs `-A` / `--commit-all` (also implied by
+// --max-commits).
 func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 	if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
 		return nil, err
@@ -433,44 +412,15 @@ func runCommitAll(ctx context.Context, opts Options) (*Result, error) {
 		return result, err
 	}
 
-	return commitByDirectory(ctx, opts, source, result)
-}
-
-// runCommitAIGroup stages the change set (all changes when --commit-all is also
-// set, otherwise just the staged set), asks the LLM to split it into logical
-// commit groups plus a chore group for lock/generated files, and creates one
-// commit per group.
-func runCommitAIGroup(ctx context.Context, opts Options) (*Result, error) {
-	if opts.CommitAll {
-		if err := stageCommitAllSource(opts.WorkDir, opts.Config); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := stageFiles(opts.WorkDir, opts.Stage, opts.Config); err != nil {
-			return nil, fmt.Errorf("stage files (%s): %w", opts.Stage, err)
-		}
-	}
-
-	source, result, err := prepareMultiCommit(ctx, opts)
-	if err != nil {
-		return result, err
-	}
-
-	groups, err := groupChangesByAIFunc(ctx, opts, source)
-	if err != nil {
-		return result, fmt.Errorf("ai grouping: %w", err)
-	}
-
-	return commitGroups(ctx, opts, source, result, groups)
+	return commitByGrouping(ctx, opts, source, result)
 }
 
 // prepareMultiCommit runs the shared staging-completion pipeline for the
-// multi-commit flows (runCommitAll, runCommitAIGroup): it reads the staged
-// source, applies the precommit gates, runs hooks, re-reads the staged source,
-// and applies the lint gate. Callers are responsible for staging beforehand
-// (stageCommitAllSource for --commit-all, stageFiles for --ai-group). It
-// returns the final staged source and a Result pre-populated with Staged/Hooks/
-// Lint so error returns carry partial state.
+// grouped-commit flow (runCommitAll): it reads the staged source, applies the
+// precommit gates, runs hooks, re-reads the staged source, and applies the lint
+// gate. The caller is responsible for staging beforehand (stageCommitAllSource).
+// It returns the final staged source and a Result pre-populated with
+// Staged/Hooks/Lint so error returns carry partial state.
 func prepareMultiCommit(ctx context.Context, opts Options) (stagedSource, *Result, error) {
 	source, err := readStagedSource(opts.WorkDir)
 	if err != nil {
@@ -539,83 +489,111 @@ func applyPrecommitChecks(ctx context.Context, opts Options, source stagedSource
 	return source, nil
 }
 
-// commitByDirectory groups the staged changes by directory and creates one
-// commit per group. It backs `--commit-all` and is also the fallback when a
+// commitByGrouping asks the LLM to split the staged changes into logical commit
+// groups (plus a chore group for lock/generated files) and creates one commit
+// per group. It backs `-A` / `--commit-all` and is also the fallback when a
 // single-commit AI analysis overflows the model context window.
-func commitByDirectory(ctx context.Context, opts Options, source stagedSource, result *Result) (*Result, error) {
-	if opts.MaxFiles == 0 {
-		opts.MaxFiles = defaultMaxFiles
+func commitByGrouping(ctx context.Context, opts Options, source stagedSource, result *Result) (*Result, error) {
+	groups, err := groupChangesByAIFunc(ctx, opts, source)
+	if err != nil {
+		return result, fmt.Errorf("ai grouping: %w", err)
 	}
-	if opts.MaxLines == 0 {
-		opts.MaxLines = defaultMaxLines
-	}
-
-	groups := groupChangesByDir(source.Changes, opts.MaxFiles, opts.MaxLines)
 	return commitGroups(ctx, opts, source, result, groups)
 }
 
-// commitGroups generates a message for each commit group and creates one commit
-// per group. A group carrying a preset Message (e.g. the --ai-group chore group
-// for lock/generated files) skips the LLM and uses it verbatim. It backs both
-// the directory grouper and the AI grouper.
+// commitSerializeMu serializes the git-index mutation (stage + commit) for a
+// single group so only one commit is ever in flight, even when group message
+// generation runs concurrently.
+var commitSerializeMu sync.Mutex
+
+// commitGroups creates one commit per group, committing each group as soon as
+// its message is ready rather than batching every commit to the end — an
+// interrupted run still lands the groups it finished. A group carrying a preset
+// Message (e.g. the chore group for lock/generated files) skips the LLM and uses
+// it verbatim.
 func commitGroups(ctx context.Context, opts Options, source stagedSource, result *Result, groups []commitGroup) (*Result, error) {
 	if len(groups) == 0 {
 		return result, ErrNothingStaged
 	}
-
 	result.Commits = make([]CommitResult, 0, len(groups))
-	for _, group := range groups {
-		if group.Message != "" {
-			result.Commits = append(result.Commits, CommitResult{
-				Label:   group.Label,
-				Message: applyCommitMetadata(opts, group.Message),
-				Files:   group.Files(),
-			})
-			continue
-		}
-		analysis, msgErr := generateCommitAnalysis(ctx, opts, group.diff())
-		if msgErr != nil {
-			return result, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), msgErr)
-		}
-		result.Commits = append(result.Commits, CommitResult{
-			Label:                group.Label,
-			Message:              applyCommitMetadata(opts, analysis.Message),
-			Files:                group.Files(),
-			FunctionalityRemoved: analysis.FunctionalityRemoved,
-			CompatibilityIssues:  analysis.CompatibilityIssues,
-		})
-	}
 
+	// Dry run: generate and preview every message without touching the index.
 	if opts.DryRun {
+		for _, group := range groups {
+			cr, err := analyzeGroup(ctx, opts, group)
+			if err != nil {
+				return result, err
+			}
+			result.Commits = append(result.Commits, cr)
+		}
 		printDryRunPreview(result)
 		return result, nil
 	}
 
-	for _, commit := range result.Commits {
-		if err := applyCompatibilityCheck(ctx, opts, commit); err != nil {
-			return result, err
-		}
-	}
-
+	// Live: unstage everything once, then stage+commit each group the moment its
+	// message is ready. commitSerializeMu keeps a single commit in flight.
 	if err := resetFiles(opts.WorkDir, source.GitPaths()); err != nil {
 		return result, fmt.Errorf("reset staged files: %w", err)
 	}
-
-	for i, group := range groups {
-		if err := addFiles(opts.WorkDir, group.GitPaths()); err != nil {
-			return result, fmt.Errorf("stage commit group %s: %w", group.labelOrDefault(), err)
+	for _, group := range groups {
+		cr, err := analyzeGroup(ctx, opts, group)
+		if err != nil {
+			return result, err
 		}
-		hash, commitErr := commitWithMessage(opts.WorkDir, result.Commits[i].Message)
-		if commitErr != nil {
-			return result, fmt.Errorf("create commit for %s: %w", group.labelOrDefault(), commitErr)
+		if err := applyCompatibilityCheck(ctx, opts, cr); err != nil {
+			return result, err
 		}
-		result.Commits[i].Hash = hash
-		logger.Infof("Committed %s: %s", shortHash(hash), firstLine(result.Commits[i].Message))
+		hash, err := stageAndCommitGroup(opts.WorkDir, group, cr.Message)
+		if err != nil {
+			return result, err
+		}
+		cr.Hash = hash
+		result.Commits = append(result.Commits, cr)
+		logger.Infof("Committed %s: %s", shortHash(hash), firstLine(cr.Message))
 	}
 
 	restoreLocalReplaces(opts.WorkDir, source.PendingRestores)
 
 	return result, nil
+}
+
+// analyzeGroup builds the CommitResult for a group: a preset-Message group is
+// used verbatim (no LLM); otherwise the message and compatibility findings come
+// from an LLM analysis of the group's diff.
+func analyzeGroup(ctx context.Context, opts Options, group commitGroup) (CommitResult, error) {
+	if group.Message != "" {
+		return CommitResult{
+			Label:   group.Label,
+			Message: applyCommitMetadata(opts, group.Message),
+			Files:   group.Files(),
+		}, nil
+	}
+	analysis, err := generateCommitAnalysis(ctx, opts, group.diff())
+	if err != nil {
+		return CommitResult{}, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), err)
+	}
+	return CommitResult{
+		Label:                group.Label,
+		Message:              applyCommitMetadata(opts, analysis.Message),
+		Files:                group.Files(),
+		FunctionalityRemoved: analysis.FunctionalityRemoved,
+		CompatibilityIssues:  analysis.CompatibilityIssues,
+	}, nil
+}
+
+// stageAndCommitGroup stages exactly the group's paths and creates one commit,
+// holding commitSerializeMu so only one commit is ever in flight.
+func stageAndCommitGroup(workDir string, group commitGroup, message string) (string, error) {
+	commitSerializeMu.Lock()
+	defer commitSerializeMu.Unlock()
+	if err := addFiles(workDir, group.GitPaths()); err != nil {
+		return "", fmt.Errorf("stage commit group %s: %w", group.labelOrDefault(), err)
+	}
+	hash, err := commitWithMessage(workDir, message)
+	if err != nil {
+		return "", fmt.Errorf("create commit for %s: %w", group.labelOrDefault(), err)
+	}
+	return hash, nil
 }
 
 // stageFiles stages changes for the given mode using git's own ignore-aware

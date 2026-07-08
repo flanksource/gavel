@@ -1,4 +1,4 @@
-//go:build darwin && cgo
+//go:build darwin && cgo && gavel_menubar
 
 package main
 
