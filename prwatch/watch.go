@@ -18,6 +18,8 @@ type WatchOptions struct {
 	Follow   bool
 	Logs     bool // fetch failing job log tails (extra API quota)
 	TailLogs int
+	Comments []string
+	Actions  []string
 }
 
 func Run(opts WatchOptions) (*PRWatchResult, int) {
@@ -48,15 +50,14 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
 
 		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
+		filters := newResultFilters(opts.Comments, opts.Actions)
+		filters.apply(result)
 
 		if !opts.Follow {
-			if pr.StatusCheckRollup.HasFailure() {
-				return result, 1
-			}
-			return result, 0
+			return result, statusExitCode(result)
 		}
 
-		done := pr.StatusCheckRollup.AllComplete()
+		done := filters.actionFilteredNoChecks(result) || result.PR.StatusCheckRollup.AllComplete()
 		frame := result.Pretty().ANSI()
 		if !strings.HasSuffix(frame, "\n") {
 			frame += "\n"
@@ -74,14 +75,18 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 
 		if done {
-			if pr.StatusCheckRollup.HasFailure() {
-				return result, 1
-			}
-			return result, 0
+			return result, statusExitCode(result)
 		}
 
 		time.Sleep(opts.Interval)
 	}
+}
+
+func statusExitCode(result *PRWatchResult) int {
+	if result != nil && result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
+		return 1
+	}
+	return 0
 }
 
 func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowRun {
@@ -108,7 +113,7 @@ func fetchRuns(opts WatchOptions, pr *github.PRInfo) map[int64]*github.WorkflowR
 			continue
 		}
 
-		if github.RunHasFailedJob(run) {
+		if github.RunHasFailedJob(run) || newResultFilters(nil, opts.Actions).hasActionFilters() {
 			if _, err := github.FetchWorkflowDefinition(opts.Options, run); err != nil {
 				logger.Warnf("failed to fetch workflow definition for run %d: %v", runID, err)
 			}

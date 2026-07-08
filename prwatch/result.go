@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -55,6 +56,8 @@ func (r PRWatchResult) prettyWorkflows() api.Text {
 }
 
 var severityOrder = map[string]int{"critical": 0, "major": 1, "minor": 2, "nitpick": 3, "": 4}
+
+const commentPreviewLineLimit = 5
 
 func (r PRWatchResult) prettyComments() api.Text {
 	if len(r.Comments) == 0 {
@@ -136,9 +139,10 @@ func prettyCommentLine(c github.PRComment, indent string) api.Text {
 	if c.Line > 0 {
 		text = text.Append(fmt.Sprintf(" :%d", c.Line), "text-gray-500")
 	}
-	title := c.Title()
-	if len(title) > 100 {
-		title = title[:97] + "..."
+	body := renderCommentBody(c.Body)
+	lines := body.preview
+	if len(lines) == 0 {
+		lines = []string{c.Title()}
 	}
 	style := ""
 	if c.IsResolved || c.IsOutdated {
@@ -147,7 +151,71 @@ func prettyCommentLine(c github.PRComment, indent string) api.Text {
 		if c.IsOutdated {
 			tag = "outdated"
 		}
-		title = title + " (" + tag + ")"
+		lines[0] = lines[0] + " (" + tag + ")"
 	}
-	return text.Append(" "+title, style)
+	text = text.Append(" "+lines[0], style)
+	for _, line := range lines[1:] {
+		text = text.NewLine().Append(indent+"  "+line, style)
+	}
+	if body.hasMore && body.content != nil {
+		text = text.NewLine().Append(indent+"  ", "").Add(api.Collapsed{
+			Label:        "show more",
+			Content:      body.content,
+			CollapseANSI: true,
+		})
+	}
+	return text
+}
+
+type renderedCommentBody struct {
+	preview []string
+	content api.Textable
+	hasMore bool
+}
+
+func renderCommentBody(body string) renderedCommentBody {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return renderedCommentBody{}
+	}
+
+	var content api.Textable
+	plain := body
+	if doc, err := clicky.ParseMarkdown(body); err == nil && doc != nil {
+		content = doc
+		plain = doc.String()
+	} else {
+		content = clicky.Text(body, "whitespace-pre-wrap")
+	}
+
+	lines := commentPreviewLines(plain)
+	if len(lines) == 0 {
+		return renderedCommentBody{content: content}
+	}
+	preview := lines
+	if len(preview) > commentPreviewLineLimit {
+		preview = preview[:commentPreviewLineLimit]
+	}
+	return renderedCommentBody{
+		preview: preview,
+		content: content,
+		hasMore: len(lines) > commentPreviewLineLimit,
+	}
+}
+
+func commentPreviewLines(body string) []string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil
+	}
+
+	rawLines := strings.Split(body, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
