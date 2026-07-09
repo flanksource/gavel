@@ -84,12 +84,13 @@ func (o Options) Help() string {
 	return `Run linters on the project.
 
 Automatically detects which linters are available and runs them.
-Supports: golangci-lint, ruff, eslint, oxlint, pyright, markdownlint, vale, jscpd, betterleaks.
+Supports: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks.
 
 Examples:
   gavel lint
   gavel lint jscpd
   gavel lint jscpd eslint
+  gavel lint react-doctor
   gavel lint secrets                 # alias for betterleaks
   gavel lint --linters=golangci-lint
   gavel lint --linters=golangci-lint,ruff

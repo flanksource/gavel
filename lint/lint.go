@@ -154,8 +154,8 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 				}
 				continue
 			}
-			hasDirectConfig := hasDirectMatchingFiles(inv.projectRoot, linterConfigPatterns(linter.Name()))
-			executable, reason, err := resolveLinterExecutable(ctx, linter, groupGitRoot, hasDirectConfig, false)
+			hasDirectConfig := linterHasDirectConfig(inv.projectRoot, linter)
+			executable, reason, err := resolveLinterExecutable(ctx, linter, groupGitRoot, inv.projectRoot, hasDirectConfig, false)
 			if err != nil {
 				return nil, err
 			}
@@ -360,8 +360,8 @@ func dryRunGroup(opts Options) error {
 				testrunner.PrintDryRunSkipped("lint", linter.Name()+" @ "+inv.projectRoot, reason)
 				continue
 			}
-			hasDirectConfig := hasDirectMatchingFiles(inv.projectRoot, linterConfigPatterns(linter.Name()))
-			executable, reason, err := resolveLinterExecutable(opts.Context, linter, lintGitRoot(opts.WorkDir), hasDirectConfig, true)
+			hasDirectConfig := linterHasDirectConfig(inv.projectRoot, linter)
+			executable, reason, err := resolveLinterExecutable(opts.Context, linter, lintGitRoot(opts.WorkDir), inv.projectRoot, hasDirectConfig, true)
 			if err != nil {
 				return err
 			}

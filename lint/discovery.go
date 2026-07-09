@@ -47,6 +47,14 @@ var linterDirectConfigPatterns = map[string][]string{
 		"pyrightconfig.json",
 		"pyproject.toml",
 	},
+	"react-doctor": {
+		"doctor.config.ts",
+		"doctor.config.js",
+		"doctor.config.mjs",
+		"doctor.config.cjs",
+		"doctor.config.json",
+		"react-doctor.config.json",
+	},
 	"ruff": {
 		"ruff.toml",
 		"pyproject.toml",
@@ -83,17 +91,32 @@ func shouldSelectLinter(workDir string, cfg verify.GavelConfig, linter linters.L
 		return shouldRunLinter(workDir, cfg, linter.Name(), true, false, false)
 	}
 
-	hasConfig := hasDirectMatchingFiles(workDir, linterConfigPatterns(linter.Name()))
+	hasConfig := linterHasDirectConfig(workDir, linter)
 	if linter.Name() == "betterleaks" {
 		hasConfig = len(betterleaks.DiscoverConfigs(workDir)) > 0
 	}
-	hasDirectTrigger := hasDirectMatchingFiles(workDir, linter.DefaultIncludes()) || hasConfig
+	hasDefaultActivation := hasConfig || linterHasDefaultActivation(workDir, linter)
+	hasDirectTrigger := hasDirectMatchingFiles(workDir, linter.DefaultIncludes()) || hasDefaultActivation
 	if !hasDirectTrigger {
 		return false, "no matching files or config in work dir"
 	}
 
 	explicitEnabled := isLinterExplicitlyEnabled(cfg, linter.Name())
-	return shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasConfig)
+	return shouldRunLinter(workDir, cfg, linter.Name(), false, explicitEnabled, hasDefaultActivation)
+}
+
+func linterHasDirectConfig(workDir string, linter linters.Linter) bool {
+	if detector, ok := linter.(linters.DirectConfigDetector); ok {
+		return detector.HasDirectConfig(workDir)
+	}
+	return hasDirectMatchingFiles(workDir, linterConfigPatterns(linter.Name()))
+}
+
+func linterHasDefaultActivation(workDir string, linter linters.Linter) bool {
+	if detector, ok := linter.(linters.DefaultActivationDetector); ok {
+		return detector.HasDefaultActivation(workDir)
+	}
+	return false
 }
 
 func hasDirectMatchingFiles(workDir string, patterns []string) bool {

@@ -175,8 +175,10 @@ func TestFixturesSchemaDocumentIncludesRunnerSchemas(t *testing.T) {
 	}
 	assertSchemaHelp(t, linters, "Common lint keys", "fixtures --help")
 	linterItems := linters["items"].(fixtureSchemaProperty)
-	if !slices.Contains(stringSliceFromAny(linterItems["enum"]), "oxlint") {
-		t.Fatalf("linter enum missing oxlint: %#v", linterItems["enum"])
+	for _, want := range []string{"oxlint", "react-doctor"} {
+		if !slices.Contains(stringSliceFromAny(linterItems["enum"]), want) {
+			t.Fatalf("linter enum missing %s: %#v", want, linterItems["enum"])
+		}
 	}
 
 	execSchema := fences["exec"].(map[string]any)["schema"].(fixtureJSONSchema)

@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/gavel/linters/eslint"
 	"github.com/flanksource/gavel/linters/golangci"
 	"github.com/flanksource/gavel/linters/markdownlint"
+	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 )
@@ -169,6 +170,87 @@ func TestShouldSelectLinterUsesDirectCWDConfig(t *testing.T) {
 	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, eslint.NewESLint(workDir), false)
 	if !ok {
 		t.Fatalf("expected eslint to be selected, got skip reason %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesDirectConfig(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "doctor.config.ts"), []byte("export default {};\n"), 0o644); err != nil {
+		t.Fatalf("write react-doctor config: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected, got skip reason %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesPackageJSONConfig(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"reactDoctor":{}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected from package.json#reactDoctor, got %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorUsesReactDependency(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"dependencies":{"react":"^19.0.0"}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if !ok {
+		t.Fatalf("expected react-doctor to be selected from React dependency, got %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorRequiresReactOrConfigForImplicitRun(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"scripts":{}}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), false)
+	if ok {
+		t.Fatal("expected react-doctor to be skipped without React dependency or config on implicit run")
+	}
+	if reason != "no React dependency or react-doctor config found in work dir" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+}
+
+func TestShouldSelectReactDoctorExplicitRunAllowsSourceWithoutConfig(t *testing.T) {
+	workDir := t.TempDir()
+	src := filepath.Join(workDir, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatalf("create src: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "App.tsx"), []byte("export function App() { return null }\n"), 0o644); err != nil {
+		t.Fatalf("write App.tsx: %v", err)
+	}
+
+	ok, reason := shouldSelectLinter(workDir, verify.GavelConfig{}, reactdoctor.NewReactDoctor(workDir), true)
+	if !ok {
+		t.Fatalf("expected explicit react-doctor run to be selected, got %q", reason)
 	}
 }
 

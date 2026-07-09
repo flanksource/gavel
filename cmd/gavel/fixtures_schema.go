@@ -307,6 +307,7 @@ func linterSchemaValues() []string {
 		"ruff",
 		"eslint",
 		"oxlint",
+		"react-doctor",
 		"pyright",
 		"tsc",
 		"markdownlint",

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -98,9 +99,18 @@ func golangciInstalledPath(gitRoot string) string {
 
 var installGolangciLint = deps.InstallWithContext
 
-func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
-	if path, err := exec.LookPath(linter.Name()); err == nil {
-		return path, "", nil
+func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot, projectRoot string, hasDirectConfig bool, dryRun bool) (string, string, error) {
+	candidates := []string{linter.Name()}
+	if provider, ok := linter.(linters.ExecutableCandidateProvider); ok {
+		if provided := provider.ExecutableCandidates(projectRoot); len(provided) > 0 {
+			candidates = provided
+		}
+	}
+
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, "", nil
+		}
 	}
 
 	if linter.Name() == "golangci-lint" {
@@ -142,7 +152,10 @@ func resolveLinterExecutable(ctx context.Context, linter linters.Linter, gitRoot
 		}
 	}
 
-	return "", "not found on PATH", nil
+	if len(candidates) == 1 {
+		return "", "not found on PATH", nil
+	}
+	return "", fmt.Sprintf("none of %s found on PATH", strings.Join(candidates, ", ")), nil
 }
 
 func validateExecutable(ctx context.Context, path string) error {

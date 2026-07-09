@@ -9,6 +9,7 @@ import (
 	deps "github.com/flanksource/deps"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/linters/golangci"
+	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/models"
 )
@@ -167,7 +168,7 @@ func TestResolveLinterExecutableDryRunUsesGitRootInstallPath(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
 
-	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, true, true)
+	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, repo, true, true)
 	if err != nil {
 		t.Fatalf("resolveLinterExecutable: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestResolveLinterExecutableUsesInstalledGolangciBinary(t *testing.T) {
 		t.Fatalf("write installed golangci: %v", err)
 	}
 
-	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, false, false)
+	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, repo, false, false)
 	if err != nil {
 		t.Fatalf("resolveLinterExecutable: %v", err)
 	}
@@ -225,7 +226,7 @@ func TestResolveLinterExecutableReinstallsInvalidGolangciBinary(t *testing.T) {
 	}
 	t.Cleanup(func() { installGolangciLint = oldInstall })
 
-	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, true, false)
+	got, reason, err := resolveLinterExecutable(context.Background(), golangci.NewGolangciLint(repo), repo, repo, true, false)
 	if err != nil {
 		t.Fatalf("resolveLinterExecutable: %v", err)
 	}
@@ -235,6 +236,101 @@ func TestResolveLinterExecutableReinstallsInvalidGolangciBinary(t *testing.T) {
 	if got != installed {
 		t.Fatalf("command = %q, want %q", got, installed)
 	}
+}
+
+func TestResolveLinterExecutableReactDoctorPrefersPNPXForPNPMLock(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "pnpm-lock.yaml"), nil, 0o644); err != nil {
+		t.Fatalf("write pnpm lock: %v", err)
+	}
+	binDir := t.TempDir()
+	pnpx := writeExecutable(t, binDir, "pnpx")
+	writeExecutable(t, binDir, "npx")
+	writeExecutable(t, binDir, "react-doctor")
+	t.Setenv("PATH", binDir)
+
+	got, reason, err := resolveLinterExecutable(context.Background(), reactdoctor.NewReactDoctor(repo), repo, repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != pnpx {
+		t.Fatalf("command = %q, want %q", got, pnpx)
+	}
+}
+
+func TestResolveLinterExecutableReactDoctorPrefersNPXForNPMLock(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "package-lock.json"), nil, 0o644); err != nil {
+		t.Fatalf("write package lock: %v", err)
+	}
+	binDir := t.TempDir()
+	npx := writeExecutable(t, binDir, "npx")
+	writeExecutable(t, binDir, "react-doctor")
+	t.Setenv("PATH", binDir)
+
+	got, reason, err := resolveLinterExecutable(context.Background(), reactdoctor.NewReactDoctor(repo), repo, repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != npx {
+		t.Fatalf("command = %q, want %q", got, npx)
+	}
+}
+
+func TestResolveLinterExecutableReactDoctorFallsBackToBinary(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "pnpm-lock.yaml"), nil, 0o644); err != nil {
+		t.Fatalf("write pnpm lock: %v", err)
+	}
+	binDir := t.TempDir()
+	binary := writeExecutable(t, binDir, "react-doctor")
+	t.Setenv("PATH", binDir)
+
+	got, reason, err := resolveLinterExecutable(context.Background(), reactdoctor.NewReactDoctor(repo), repo, repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != binary {
+		t.Fatalf("command = %q, want %q", got, binary)
+	}
+}
+
+func TestResolveLinterExecutableReactDoctorWithoutLockUsesBinary(t *testing.T) {
+	repo := t.TempDir()
+	binDir := t.TempDir()
+	writeExecutable(t, binDir, "npx")
+	binary := writeExecutable(t, binDir, "react-doctor")
+	t.Setenv("PATH", binDir)
+
+	got, reason, err := resolveLinterExecutable(context.Background(), reactdoctor.NewReactDoctor(repo), repo, repo, false, false)
+	if err != nil {
+		t.Fatalf("resolveLinterExecutable: %v", err)
+	}
+	if reason != "" {
+		t.Fatalf("unexpected skip reason: %q", reason)
+	}
+	if got != binary {
+		t.Fatalf("command = %q, want %q", got, binary)
+	}
+}
+
+func writeExecutable(t *testing.T, dir, name string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, executableFileName(name))
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", name, err)
+	}
+	return path
 }
 
 func TestApplyPostLintFiltersUsesGroupConfig(t *testing.T) {

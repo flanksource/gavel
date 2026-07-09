@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/gavel/linters/markdownlint"
 	"github.com/flanksource/gavel/linters/oxlint"
 	"github.com/flanksource/gavel/linters/pyright"
+	"github.com/flanksource/gavel/linters/reactdoctor"
 	"github.com/flanksource/gavel/linters/ruff"
 	"github.com/flanksource/gavel/linters/tsc"
 	"github.com/flanksource/gavel/linters/vale"
@@ -31,6 +32,7 @@ func buildLinterRegistry(workDir string) *linters.Registry {
 	registry.Register(ruff.NewRuff(workDir))
 	registry.Register(eslint.NewESLint(workDir))
 	registry.Register(oxlint.NewOxlint(workDir))
+	registry.Register(reactdoctor.NewReactDoctor(workDir))
 	registry.Register(pyright.NewPyright(workDir))
 	registry.Register(tsc.NewTSC(workDir))
 	registry.Register(markdownlint.NewMarkdownlint(workDir))
@@ -55,6 +57,9 @@ func shouldRunLinter(workDir string, cfg verify.GavelConfig, linterName string, 
 	if !cliExplicit && !explicitEnabled && linterRequiresDirectConfig(linterName) && !hasConfig {
 		if linterName == "betterleaks" {
 			return false, "no betterleaks/gitleaks config found"
+		}
+		if linterName == "react-doctor" {
+			return false, "no React dependency or react-doctor config found in work dir"
 		}
 		return false, fmt.Sprintf("no %s config found in work dir", linterName)
 	}
