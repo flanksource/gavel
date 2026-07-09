@@ -14,9 +14,9 @@ import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
 // driver's agent half (claude or codex).
 export type RunProvider = TodoRunAgent;
 
-// RunMechanism is how the agent is driven. cmux is the interactive TUI; the rest
-// are the structured paths (headless stream-json, the SDK bridge, the raw API).
-export type RunMechanism = 'cmux' | 'headless' | 'sdk' | 'api';
+// RunMechanism is the user-facing runtime mode. The driver string still carries
+// implementation detail such as claude-headless; the picker presents agent/cli/API.
+export type RunMechanism = 'cmux' | 'agent' | 'cli' | 'api';
 
 export interface ProviderCatalog {
   id: RunProvider;
@@ -83,8 +83,8 @@ const CLAUDE: ProviderCatalog = {
   icon: UiSparkles,
   mechanisms: [
     { value: 'cmux', label: 'cmux (TUI)' },
-    { value: 'headless', label: 'headless' },
-    { value: 'sdk', label: 'SDK' },
+    { value: 'agent', label: 'agent' },
+    { value: 'cli', label: 'cli' },
     { value: 'api', label: 'API' },
   ],
   efforts: EFFORTS,
@@ -97,7 +97,7 @@ const CODEX: ProviderCatalog = {
   icon: UiRobotAi,
   mechanisms: [
     { value: 'cmux', label: 'cmux (TUI)' },
-    { value: 'headless', label: 'headless' },
+    { value: 'agent', label: 'agent' },
   ],
   efforts: EFFORTS,
 };
@@ -114,7 +114,7 @@ export const FALLBACK_RUN_CONTEXT: RunContext = {
       label: 'Claude cmux',
       provider: 'anthropic',
       agent: 'claude',
-      defaultModel: 'claude-agent-sonnet',
+      defaultModel: 'claude-sonnet-5',
       driver: 'claude-cmux',
       mechanisms: [{ value: 'cmux', label: 'cmux (TUI)', driver: 'claude-cmux' }],
       models: [],
@@ -125,9 +125,9 @@ export const FALLBACK_RUN_CONTEXT: RunContext = {
       label: 'Claude Agent',
       provider: 'anthropic',
       agent: 'claude',
-      defaultModel: 'claude-agent-sonnet',
+      defaultModel: 'claude-sonnet-5',
       driver: 'claude-headless',
-      mechanisms: [{ value: 'headless', label: 'headless', driver: 'claude-headless' }],
+      mechanisms: [{ value: 'agent', label: 'agent', driver: 'claude-headless' }],
       models: [],
       configured: false,
     },
@@ -136,9 +136,9 @@ export const FALLBACK_RUN_CONTEXT: RunContext = {
       label: 'Claude CLI',
       provider: 'anthropic',
       agent: 'claude',
-      defaultModel: 'claude-agent-sonnet',
+      defaultModel: 'claude-sonnet-5',
       driver: 'claude-headless',
-      mechanisms: [{ value: 'headless', label: 'headless', driver: 'claude-headless' }],
+      mechanisms: [{ value: 'cli', label: 'cli', driver: 'claude-headless' }],
       models: [],
       configured: false,
     },
@@ -160,7 +160,7 @@ export const FALLBACK_RUN_CONTEXT: RunContext = {
       agent: 'codex',
       defaultModel: 'gpt-5.5',
       driver: 'codex-headless',
-      mechanisms: [{ value: 'headless', label: 'headless', driver: 'codex-headless' }],
+      mechanisms: [{ value: 'agent', label: 'agent', driver: 'codex-headless' }],
       models: [],
       configured: false,
     },

@@ -45,7 +45,7 @@ const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { postRun: { c
 // code-split and rendered under Suspense with a plain-textarea fallback.
 const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((m) => ({ default: m.MdxEditorField })));
 
-export const defaultRunOptions: TodoRunOptions = { driver: "claude-cmux", model: "claude-agent-sonnet", effort: "medium", ...AUTO_COMMIT };
+export const defaultRunOptions: TodoRunOptions = { driver: "claude-cmux", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT };
 
 type RunPreset = { label: string; icon: ComponentType<IconProps>; options: TodoRunOptions };
 type RunChoiceState = {
@@ -61,7 +61,7 @@ export const runActionGroups: Array<{ action: "Run" | "Plan"; detail: string; pr
     action: "Run",
     detail: "implement",
     presets: [
-      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", model: "claude-agent-sonnet", effort: "medium", ...AUTO_COMMIT } },
+      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT } },
       { label: "Codex", icon: UiTerminal, options: { driver: "codex-cmux", backend: "codex-cmux", model: "gpt-5.5", effort: "medium", ...AUTO_COMMIT } },
     ],
   },
@@ -69,7 +69,7 @@ export const runActionGroups: Array<{ action: "Run" | "Plan"; detail: string; pr
     action: "Plan",
     detail: "plan only · no changes",
     presets: [
-      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", backend: "claude-cmux", model: "claude-agent-sonnet", effort: "medium", runMode: "plan", plan: true } },
+      { label: "Claude", icon: UiSparkles, options: { driver: "claude-cmux", backend: "claude-cmux", model: "claude-sonnet-5", effort: "medium", runMode: "plan", plan: true } },
       { label: "Codex", icon: UiTerminal, options: { driver: "codex-cmux", backend: "codex-cmux", model: "gpt-5.5", effort: "medium", runMode: "plan", plan: true } },
     ],
   },
@@ -774,9 +774,9 @@ function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: Ru
   return `${mode} · ${model}${effort}`;
 }
 
-const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-cmux", model: "claude-agent-sonnet", effort: "medium", ...AUTO_COMMIT };
+const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-cmux", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT };
 const INITIAL_VERIFY_BACKEND = "claude-agent";
-const INITIAL_VERIFY_MODEL = "claude-agent-sonnet";
+const INITIAL_VERIFY_MODEL = "claude-sonnet-5";
 
 export function TodoRunAdvancedDialog({
   open,
@@ -848,8 +848,8 @@ export function TodoRunAdvancedDialog({
   const verifyModelFallback = verifyBackendCatalog.defaultModel;
 
   // A backend switch (cmux <-> a captain backend, or a family switch) can leave
-  // a model id that no longer belongs to the new mode (cmux uses bare ids like
-  // "opus"; captain backends use prefixed ids like "claude-agent-opus") — reset
+  // a model id that no longer belongs to the new mode (for example after
+  // switching providers) — reset
   // to the new mode's default in that case, mirroring the old changeMechanism/
   // changeProvider/changeBackend resets.
   function changeRuntime(next: AISpecRuntimeValue) {

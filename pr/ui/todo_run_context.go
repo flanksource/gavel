@@ -110,7 +110,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Label:        "Claude cmux",
 			Provider:     "anthropic",
 			Agent:        "claude",
-			DefaultModel: "claude-agent-sonnet",
+			DefaultModel: "claude-sonnet-5",
 			Driver:       drivers.ClaudeCmux,
 		},
 		{
@@ -118,7 +118,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Label:        "Claude Agent",
 			Provider:     "anthropic",
 			Agent:        "claude",
-			DefaultModel: "claude-agent-sonnet",
+			DefaultModel: "claude-sonnet-5",
 			Driver:       drivers.ClaudeHeadless,
 		},
 		{
@@ -126,7 +126,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Label:        "Claude CLI",
 			Provider:     "anthropic",
 			Agent:        "claude",
-			DefaultModel: "claude-agent-sonnet",
+			DefaultModel: "claude-sonnet-5",
 			Driver:       drivers.ClaudeHeadless,
 		},
 		{
@@ -196,6 +196,7 @@ func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
 	status := whoamiStatus(spec.Backend)
 	configured := status.Ready()
 	models := todoRunModelsFromWhoami(spec, status)
+	mode := runtimeModeForTodoBackend(spec.Backend, spec.Driver)
 	return todoRunBackendOption{
 		ID:            string(spec.Backend),
 		Label:         spec.Label,
@@ -203,7 +204,7 @@ func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
 		Agent:         spec.Agent,
 		DefaultModel:  defaultModelFromCatalog(models, spec.DefaultModel),
 		Driver:        string(spec.Driver),
-		Mechanisms:    []todoRunMechanismItem{{Value: spec.Driver.Mechanism(), Label: mechanismLabel(spec.Driver.Mechanism()), Driver: string(spec.Driver)}},
+		Mechanisms:    []todoRunMechanismItem{{Value: mode, Label: mechanismLabel(mode), Driver: string(spec.Driver)}},
 		Models:        models,
 		Configured:    configured,
 		Type:          status.Type,
@@ -458,35 +459,51 @@ func validateBackendForDriver(kind drivers.Kind, backend string) error {
 }
 
 func validateModelForBackend(backend, model string) error {
+	normalized := normalizeTodoRunModelForBackend(backend, model)
 	switch captainai.Backend(backend) {
 	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI, captainai.BackendClaudeCmux:
-		lower := strings.ToLower(strings.TrimSpace(model))
+		lower := strings.ToLower(strings.TrimSpace(normalized))
 		if lower == "claude" {
 			return nil
 		}
-		for _, prefix := range []string{"fable", "opus", "sonnet", "haiku", "claude-", "claude-agent-", "claude-code-"} {
-			if lower == strings.TrimSuffix(prefix, "-") || strings.HasPrefix(lower, prefix) {
-				return nil
-			}
+		if strings.HasPrefix(lower, "claude-") {
+			return nil
 		}
 	case captainai.BackendCodexAgent, captainai.BackendCodexCmux:
 		if model == "" || strings.EqualFold(model, "codex") {
 			return nil
 		}
-		lower := strings.ToLower(model)
-		if strings.HasPrefix(lower, "codex") || strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+		lower := strings.ToLower(strings.TrimSpace(normalized))
+		if strings.HasPrefix(lower, "gpt-") {
 			return nil
 		}
 	}
 	return fmt.Errorf("model %q is not valid for backend %q", model, backend)
 }
 
+func runtimeModeForTodoBackend(backend captainai.Backend, driver drivers.Kind) string {
+	switch backend {
+	case captainai.BackendClaudeCmux, captainai.BackendCodexCmux:
+		return "cmux"
+	case captainai.BackendClaudeAgent, captainai.BackendCodexAgent:
+		return "agent"
+	case captainai.BackendClaudeCLI:
+		return "cli"
+	}
+	if mechanism := driver.Mechanism(); mechanism != "" {
+		return mechanism
+	}
+	return string(backend)
+}
+
 func mechanismLabel(mechanism string) string {
 	switch mechanism {
 	case "cmux":
 		return "cmux (TUI)"
-	case "headless":
-		return "headless"
+	case "agent":
+		return "agent"
+	case "cli":
+		return "cli"
 	case "sdk":
 		return "SDK"
 	case "api":

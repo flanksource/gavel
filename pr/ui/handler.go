@@ -418,6 +418,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
 	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
+	mux.HandleFunc("GET /api/todos/session/cmux", s.handleTodoSessionCmux)
 	mux.HandleFunc("POST /api/todos/session/approve", s.handleTodoSessionApprove)
 	mux.HandleFunc("GET /api/todos/session/plan", s.handleTodoSessionPlan)
 	mux.HandleFunc("POST /api/todos/session/plan", s.handleTodoSessionPlanSave)

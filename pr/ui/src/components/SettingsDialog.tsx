@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, Suspense } from 'react';
 import { Modal, Button, JsonSchemaForm, Tabs } from '@flanksource/clicky-ui/components';
 import type { ChatModel } from '@flanksource/clicky-ui/chat';
+import type { SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import type {
   JsonSchemaObject,
   JsonSchemaProperty,
@@ -14,7 +15,7 @@ import { Spinner } from '../icons/Spinner';
 import { sectionIcon } from '../icons/settings';
 import { useProjectRegistration, ProjectFields } from './ProjectForm';
 import { PromptOverrideField, type PromptOverrideValue } from './PromptOverrideField';
-import { runContextWithFallback, type RunContext } from './todos/providers';
+import { buildRunFamilies, runContextWithFallback, type RunContext } from './todos/providers';
 
 // SettingsScope selects what the dialog edits: the user's global ~/.gavel.yaml
 // (navbar) or one registered workspace. Project scope also edits the workspace
@@ -186,7 +187,12 @@ const sectionIconPre: PreExtension = (field) => {
 
 // promptPost replaces any prompt-override field's value node with the shared
 // PromptOverrideField, keyed by the schema's x-prompt-id → registry default.
-function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: string, models: ChatModel[]): PostExtension {
+function promptPost(
+  registry: Record<string, PromptDescriptor>,
+  scopeQuery: string,
+  models: ChatModel[],
+  families: SpecRuntimeFamily[],
+): PostExtension {
   return (field, nodes) => {
     const id = promptIdOf(field.schema);
     if (!id) return nodes;
@@ -202,16 +208,25 @@ function promptPost(registry: Record<string, PromptDescriptor>, scopeQuery: stri
           title={desc?.title ?? id}
           scopeQuery={scopeQuery}
           models={models}
+          families={families}
         />
       ),
     };
   };
 }
 
-function promptModelCatalog(context: RunContext): ChatModel[] {
+export function promptModelCatalog(context: RunContext): ChatModel[] {
   const models = new Map<string, ChatModel>();
   for (const backend of context.backends) {
-    for (const model of backend.models) models.set(model.id, model);
+    for (const model of backend.models) {
+      const existing = models.get(model.id);
+      const backends = new Set<string>([
+        ...(existing?.backends ?? []),
+        ...(model.backends ?? []),
+        backend.id,
+      ].filter(Boolean));
+      models.set(model.id, { ...existing, ...model, backends: [...backends] });
+    }
   }
   return [...models.values()];
 }
@@ -239,13 +254,18 @@ export function SettingsDialog({ open, onClose, scope, repoOptions, onSaved }: P
   const isProjectTab = scope.kind === 'project' && tab === PROJECT_TAB;
 
   const query = useMemo(() => scopeQuery(scope), [scope]);
+  const resolvedRunContext = useMemo(() => runContextWithFallback(runContext), [runContext]);
   const promptModels = useMemo(
-    () => promptModelCatalog(runContextWithFallback(runContext)),
-    [runContext],
+    () => promptModelCatalog(resolvedRunContext),
+    [resolvedRunContext],
+  );
+  const promptFamilies = useMemo(
+    () => buildRunFamilies(resolvedRunContext),
+    [resolvedRunContext],
   );
   const post = useMemo<PostExtension[]>(
-    () => (registry ? [promptPost(registry, query, promptModels)] : []),
-    [registry, query, promptModels],
+    () => (registry ? [promptPost(registry, query, promptModels, promptFamilies)] : []),
+    [registry, query, promptModels, promptFamilies],
   );
   const pre = useMemo<PreExtension[]>(() => [sectionIconPre], []);
   const sectionTab = TABS.find(t => t.id === tab) ?? TABS[0];

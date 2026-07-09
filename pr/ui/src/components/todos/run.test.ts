@@ -31,11 +31,11 @@ const context: RunContext = {
       label: 'Claude Agent',
       provider: 'anthropic',
       agent: 'claude',
-      defaultModel: 'claude-agent-opus',
+      defaultModel: 'claude-opus-4-8',
       driver: 'claude-headless',
-      mechanisms: [{ value: 'headless', label: 'headless', driver: 'claude-headless' }],
+      mechanisms: [{ value: 'agent', label: 'agent', driver: 'claude-headless' }],
       models: [
-        { id: 'claude-agent-opus', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true },
+        { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true },
       ],
       configured: true,
     },
@@ -49,12 +49,12 @@ describe('todo run model choices', () => {
     expect(choices.map(choice => `${choice.backend.id}:${choice.modelID}`)).toEqual([
       'codex-cmux:gpt-5.5',
       'codex-cmux:gpt-5.4',
-      'claude-agent:claude-agent-opus',
+      'claude-agent:claude-opus-4-8',
     ]);
     expect(choices.find(choice => choice.backend.id === 'claude-agent')?.options).toMatchObject({
       driver: 'claude-headless',
       backend: 'claude-agent',
-      model: 'claude-agent-opus',
+      model: 'claude-opus-4-8',
       runMode: 'plan',
       plan: true,
     });
@@ -75,13 +75,13 @@ describe('todo run model choices', () => {
 
   it('labels primary buttons with mechanism and short model', () => {
     expect(runButtonLabelForOptions('plan', { driver: 'codex-cmux', backend: 'codex-cmux', model: 'gpt-5.5', runMode: 'plan' }, context)).toBe('Plan (cmux:gpt-5.5)');
-    expect(runButtonLabelForOptions('run', { driver: 'claude-headless', backend: 'claude-agent', model: 'claude-agent-opus', runMode: 'run' }, context)).toBe('Run (agent:opus-4.8)');
+    expect(runButtonLabelForOptions('run', { driver: 'claude-headless', backend: 'claude-agent', model: 'claude-opus-4-8', runMode: 'run' }, context)).toBe('Run (agent:opus-4.8)');
   });
 
   it('shortens provider and Claude version prefixes', () => {
     expect(shortTodoRunModelName('anthropic/claude-opus-4-8')).toBe('opus-4.8');
     expect(shortTodoRunModelName('Claude Opus 4.8')).toBe('opus-4.8');
-    expect(shortTodoRunModelName('claude-agent-sonnet')).toBe('sonnet');
+    expect(shortTodoRunModelName('claude-sonnet-5')).toBe('sonnet-5');
     expect(shortTodoRunModelName('gpt-5.5')).toBe('gpt-5.5');
   });
 });

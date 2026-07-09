@@ -1241,14 +1241,17 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 	if backends["claude-cmux"].Driver != "claude-cmux" || backends["claude-agent"].Driver != "claude-headless" || backends["codex-agent"].Driver != "codex-headless" {
 		t.Fatalf("unexpected backend drivers: claude-cmux=%q claude-agent=%q codex-agent=%q", backends["claude-cmux"].Driver, backends["claude-agent"].Driver, backends["codex-agent"].Driver)
 	}
-	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-sonnet") {
-		t.Fatalf("claude-cmux models = %+v, want claude-agent-sonnet from captain whoami", backends["claude-cmux"].Models)
+	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-sonnet-5") {
+		t.Fatalf("claude-cmux models = %+v, want claude-sonnet-5 from captain whoami", backends["claude-cmux"].Models)
 	}
-	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-opus") {
-		t.Fatalf("claude-cmux models = %+v, want claude-agent-opus from normalized captain whoami", backends["claude-cmux"].Models)
+	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-opus-4-8") {
+		t.Fatalf("claude-cmux models = %+v, want claude-opus-4-8 from normalized captain whoami", backends["claude-cmux"].Models)
 	}
 	if todoRunModelsContain(backends["claude-cmux"].Models, "opus-4-8") {
 		t.Fatalf("claude-cmux models = %+v, should not expose provider-only opus-4-8 id", backends["claude-cmux"].Models)
+	}
+	if todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-sonnet") {
+		t.Fatalf("claude-cmux models = %+v, should not expose synthetic claude-agent aliases", backends["claude-cmux"].Models)
 	}
 	if !todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5.5") {
 		t.Fatalf("codex-cmux models = %+v, want gpt-5.5 from captain whoami", backends["codex-cmux"].Models)
@@ -1263,7 +1266,7 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude-cli backend: %v", err)
 	}
-	if opts.Backend != "claude-cli" || opts.Name != "claude-agent-sonnet" || opts.Effort != "xhigh" {
+	if opts.Backend != "claude-cli" || opts.Name != "claude-sonnet-5" || opts.Effort != "xhigh" {
 		t.Fatalf("unexpected claude backend options: %+v", opts)
 	}
 
@@ -1283,7 +1286,7 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("versioned claude cmux model: %v", err)
 	}
-	if opts.Backend != "claude-cmux" || opts.Name != "claude-agent-sonnet" {
+	if opts.Backend != "claude-cmux" || opts.Name != "claude-sonnet-4-6" {
 		t.Fatalf("unexpected versioned claude model options: %+v", opts)
 	}
 
@@ -1291,11 +1294,11 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stale claude agent opus model: %v", err)
 	}
-	if opts.Backend != "claude-agent" || opts.Name != "claude-agent-opus" {
+	if opts.Backend != "claude-agent" || opts.Name != "claude-opus-4-8" {
 		t.Fatalf("unexpected normalized opus model options: %+v", opts)
 	}
 
-	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-agent-sonnet"}}}); err == nil {
+	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5"}}}); err == nil {
 		t.Fatal("mismatched backend and driver should be rejected")
 	}
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "gpt-5-codex"}}}); err == nil {
@@ -1325,7 +1328,7 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:    todos.TODOReference(created),
 		Driver: "claude-headless",
-		Spec:   api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-agent-sonnet", Effort: "medium"}},
+		Spec:   api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5", Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
@@ -1336,10 +1339,10 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Driver != "claude-headless" || resp.Backend != "claude-agent" || resp.Model != "claude-agent-sonnet" {
+	if resp.Driver != "claude-headless" || resp.Backend != "claude-agent" || resp.Model != "claude-sonnet-5" {
 		t.Fatalf("response did not thread backend/model: %+v", resp)
 	}
-	if got.Options.Backend != "claude-agent" || got.Options.Name != "claude-agent-sonnet" {
+	if got.Options.Backend != "claude-agent" || got.Options.Name != "claude-sonnet-5" {
 		t.Fatalf("run starter did not receive backend/model: %+v", got.Options)
 	}
 }

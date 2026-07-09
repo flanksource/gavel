@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PromptOverrideField } from './PromptOverrideField';
-import type { PromptSpecDetail, PromptSpecSavePayload } from '@flanksource/clicky-ui/ai';
+import type { PromptSpecDetail, PromptSpecSavePayload, SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import type { ChatModel } from '@flanksource/clicky-ui/chat';
 
 vi.mock('@flanksource/clicky-ui/ai', async () => {
@@ -13,6 +13,7 @@ vi.mock('@flanksource/clicky-ui/ai', async () => {
       saveDetail: (payload: PromptSpecSavePayload) => Promise<PromptSpecDetail>;
       onChange: (value: unknown) => void;
       models?: ChatModel[];
+      families?: SpecRuntimeFamily[];
     }) => {
       const [label, setLabel] = React.useState('Loading prompt...');
       React.useEffect(() => {
@@ -27,6 +28,7 @@ vi.mock('@flanksource/clicky-ui/ai', async () => {
             {label}
           </button>
           <span data-testid="model-count">{props.models?.length ?? 0}</span>
+          <span data-testid="family-count">{props.families?.length ?? 0}</span>
           {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky prompt picker itself. */}
           <button
             type="button"
@@ -61,7 +63,7 @@ function mockFetch(impl: (url: string, init?: RequestInit) => Promise<{ ok: bool
   vi.stubGlobal('fetch', vi.fn(impl));
 }
 
-function renderRow(onChange = vi.fn(), models?: ChatModel[]) {
+function renderRow(onChange = vi.fn(), models?: ChatModel[], families?: SpecRuntimeFamily[]) {
   render(
     <PromptOverrideField
       value={undefined}
@@ -70,6 +72,7 @@ function renderRow(onChange = vi.fn(), models?: ChatModel[]) {
       title="Verify"
       scopeQuery="scope=global"
       models={models}
+      families={families}
     />,
   );
   return onChange;
@@ -98,6 +101,21 @@ describe('PromptOverrideField adapter', () => {
     ]);
 
     expect((await screen.findByTestId('model-count')).textContent).toBe('2');
+  });
+
+  it('passes runtime families to the shared picker', async () => {
+    mockFetch(async () => ({ ok: true, json: async () => detail }));
+
+    renderRow(vi.fn(), undefined, [
+      {
+        id: 'claude',
+        label: 'Claude',
+        provider: 'anthropic',
+        modes: [{ id: 'agent', label: 'Agent', backend: 'claude-agent' }],
+      },
+    ]);
+
+    expect((await screen.findByTestId('family-count')).textContent).toBe('1');
   });
 
   it('PUTs on save and syncs the in-form value to the persisted override', async () => {

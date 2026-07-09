@@ -4,6 +4,7 @@ import {
   type PromptPickerValue,
   type PromptSpecDetail,
   type PromptSpecSavePayload,
+  type SpecRuntimeFamily,
 } from '@flanksource/clicky-ui/ai';
 import type { ChatModel } from '@flanksource/clicky-ui/chat';
 
@@ -24,11 +25,13 @@ interface Props {
   scopeQuery: string;
   /** Model catalog shown by the shared SpecRuntimeEditor dialog. */
   models?: ChatModel[];
+  /** Backend/family catalog used to scope models to the selected runtime. */
+  families?: SpecRuntimeFamily[];
 }
 
 // PromptOverrideField adapts Gavel's settings prompt endpoints to clicky-ui's
 // reusable one-line PromptPickerField.
-export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery, models }: Props) {
+export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery, models, families }: Props) {
   const loadDetail = useCallback(() => {
     return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
       .then(async (response) => {
@@ -57,6 +60,7 @@ export function PromptOverrideField({ value, onChange, description, id, title, s
       loadDetail={loadDetail}
       saveDetail={saveDetail}
       models={models}
+      families={families}
     />
   );
 }

@@ -126,6 +126,61 @@ func (s *Server) handleTodoSessionFocus(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]any{"focused": true}) //nolint:errcheck
 }
 
+// todoSessionCmuxResponse locates the cmux terminal a session maps to. It is
+// best-effort: a stopped cmux or a closed terminal reports found=false with the
+// reason rather than an error, so the dashboard's cmux control still renders (and
+// can offer Resume) instead of the whole request failing.
+type todoSessionCmuxResponse struct {
+	Found     bool   `json:"found"`
+	Workspace string `json:"workspace,omitempty"`
+	Surface   string `json:"surface,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// handleTodoSessionCmux resolves the cmux workspace and surface a TODO's agent
+// session lives on, so the dashboard can label the "Focus / Resume in cmux"
+// control with the concrete terminal it targets (e.g. "workspace:2 surface:1").
+// Resolution reuses the same workspace naming the cmux executor uses, so no cmux
+// reference has to be tracked on the issue.
+func (s *Server) handleTodoSessionCmux(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	agent := strings.TrimSpace(r.URL.Query().Get("agent"))
+	if agent == "" {
+		agent = "claude"
+	}
+	workspace, surface, err := resolveCmuxSurface(r.Context(), dir, agent)
+	resp := todoSessionCmuxResponse{Found: err == nil}
+	if err != nil {
+		resp.Reason = err.Error()
+	} else {
+		resp.Workspace = workspace
+		resp.Surface = surface
+	}
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// resolveCmuxSurface finds the cmux workspace running the agent session for
+// workDir — named the same way the cmux executor names it — and the surface its
+// terminal currently shows. The surface read is best-effort: a workspace whose
+// tree can't be read still yields the workspace reference.
+func resolveCmuxSurface(ctx context.Context, workDir, agent string) (workspace, surface string, err error) {
+	client := cmuxprov.NewClient("")
+	if err := client.Available(ctx); err != nil {
+		return "", "", err
+	}
+	name := cmuxprov.AgentWorkspaceName(workDir, agent)
+	ref, found, err := client.FindWorkspace(ctx, name, workDir)
+	if err != nil {
+		return "", "", err
+	}
+	if !found {
+		return "", "", fmt.Errorf("no cmux workspace %q for %s; the session terminal may have been closed", name, workDir)
+	}
+	surface, _ = client.ResolveSurface(ctx, ref.String())
+	return ref.String(), surface, nil
+}
+
 // handleTodoSessionStream follows a TODO's agent session log over SSE. The
 // session id is recorded on the issue (session:<id> label) when the run starts,
 // so the transcript itself is never stored — the dashboard streams the raw
