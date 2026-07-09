@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -124,7 +128,32 @@ func runMenuBar(srv *ui.Server, dashboardURL string) error {
 	menu.Add("Quit").OnClick(func(ctx *application.Context) { app.Quit() })
 	systray.SetMenu(menu)
 
+	installSignalQuit(app)
+
 	return app.Run()
+}
+
+// installSignalQuit makes Ctrl+C work in menu-bar mode. wails v3 alpha.102
+// builds a default SIGINT/SIGTERM handler but never starts it, and runPRUI wires
+// its own handler only in the non-menu-bar branch — so without this the process
+// sits in the Cocoa run loop ignoring signals until SIGKILL. The first signal
+// asks wails to stop gracefully; a second signal (or a bounded timeout, in case
+// teardown blocks) forces the exit so shutdown can never wedge indefinitely.
+func installSignalQuit(app *application.App) {
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		s := <-sig
+		logger.Infof("received %s, shutting down menu bar…", s)
+		app.Quit()
+		select {
+		case <-sig:
+			logger.Warnf("second signal received, forcing exit")
+		case <-time.After(10 * time.Second):
+			logger.Warnf("graceful shutdown timed out after 10s, forcing exit")
+		}
+		os.Exit(1)
+	}()
 }
 
 // blankIdle is how long the menubar popover may sit hidden before its webview
