@@ -152,7 +152,7 @@ Each leaf row shows min/avg/max duration, execution count, pass rate, last passe
 
 Run linters on the project. Auto-detects which linters are installed and applicable.
 
-Supported linters: golangci-lint, ruff, eslint, pyright, markdownlint, vale, jscpd, betterleaks.
+Supported linters: golangci-lint, ruff, eslint, oxlint, react-doctor, pyright, tsc, markdownlint, vale, jscpd, betterleaks.
 
 ```bash
 gavel lint
@@ -162,6 +162,7 @@ gavel lint --changed                        # only new issues vs origin/main
 gavel lint --ui                             # view violations in browser
 gavel lint --dry-run                        # show linter commands without executing
 gavel lint secrets                          # run betterleaks only (alias)
+gavel lint react-doctor                     # run React Doctor only
 gavel lint jscpd eslint                     # run specific linters by name
 gavel lint --sync-todos .todos              # sync violations to TODO files
 ```
@@ -183,7 +184,7 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--timeout` | Timeout per linter (default: `5m`) |
 | `--dry-run` | Print linter commands without executing |
 
-Config-file-gated linters only run when a usable config is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
+Config-file-gated linters only run when a usable config or native project signal is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. React Doctor runs when `package.json` declares React or a common React framework/plugin, and can also be enabled with `doctor.config.*`, legacy `react-doctor.config.json`, or `package.json#reactDoctor`. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
 
 #### `gavel fixtures`
 
@@ -747,6 +748,8 @@ lint:
   linters:
     jscpd:
       enabled: true                   # opt in to jscpd duplicate detection
+    react-doctor:
+      enabled: true                   # opt in without React detection or doctor.config.*
 
 commit:
   model: claude-haiku-4-5            # fast model for commit-message/PR generation

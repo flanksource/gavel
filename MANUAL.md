@@ -374,6 +374,7 @@ The linter subcommands are shortcuts for pinning `--linters`:
 - `golangci-lint`, `golangci`
 - `ruff`
 - `eslint`
+- `react-doctor`
 - `pyright`
 - `tsc`, `typescript`
 - `markdownlint`

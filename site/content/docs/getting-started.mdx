@@ -4,7 +4,7 @@ description: Install gavel and run your first test, lint, and AI verify pass.
 order: 1
 ---
 
-Gavel is a single CLI that runs your tests, nine linters in parallel, and an AI-powered verify pass — locally and in CI.
+Gavel is a single CLI that runs your tests, linters in parallel, and an AI-powered verify pass — locally and in CI.
 
 ## Install
 
@@ -36,11 +36,11 @@ Gavel discovers your `go test` packages, runs them, and writes a structured `dis
 gavel lint
 ```
 
-Supported linters (activated when their native config is discovered):
+Supported linters (activated when their native config or project signal is discovered):
 
 - **Go**: golangci-lint
 - **Python**: ruff, pyright
-- **TypeScript/JavaScript**: eslint, tsc
+- **TypeScript/JavaScript**: eslint, oxlint, react-doctor (React dependency), tsc
 - **Markdown & prose**: markdownlint, vale
 - **Cross-cutting**: jscpd (duplicate code), betterleaks (secrets)
 

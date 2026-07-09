@@ -1,7 +1,7 @@
 version: "3"
 
 vars:
-  BINARY_NAME: gavel
+  BINARY_NAME: .bin/gavel
   MAIN_PACKAGE: ./cmd/gavel
 
 tasks:
@@ -145,7 +145,6 @@ tasks:
   build:prod:
     desc: Build the production binary with optional native integrations
     deps:
-      - test-ui
       - pr-ui
     vars:
       VERSION:
@@ -163,7 +162,7 @@ tasks:
     desc: |
       Cross-compile the binary for a given GOOS/GOARCH.
       Pass the target via CLI vars: `task build:cross GOOS=darwin GOARCH=arm64`.
-      Defaults to linux/amd64. Output: .bin/{{.BINARY_NAME}}_<goos>_<goarch>.
+      Defaults to linux/amd64. Output: {{.BINARY_NAME}}_<goos>_<goarch>.
     deps:
       - test-ui
       - pr-ui
@@ -178,7 +177,7 @@ tasks:
       DATE:
         sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
       LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
-      OUTPUT: .bin/{{.BINARY_NAME}}_{{.GOOS}}_{{.GOARCH}}
+      OUTPUT: "{{.BINARY_NAME}}_{{.GOOS}}_{{.GOARCH}}"
     env:
       GOOS: "{{.GOOS}}"
       GOARCH: "{{.GOARCH}}"
@@ -201,20 +200,8 @@ tasks:
 
   install:
     desc: Install the binary to $GOPATH/bin
-    deps:
-      - build
     cmds:
-      - mv "./{{.BINARY_NAME}}" "$GOPATH/bin/"
-
-  restart:
-    desc: Build, install, and restart the local gavel pr-ui daemon
-    deps:
-      - install
-    cmds:
-      # `system stop` is a no-op when nothing is running, so always safe.
-      # `system start` truncates the logfile and kills any stale daemon.
-      - $GOPATH/bin/{{.BINARY_NAME}} system stop
-      - $GOPATH/bin/{{.BINARY_NAME}} system start
+      - mv "{{.BINARY_NAME}}" "$GOPATH/bin/"
 
   deploy:
     desc: |
@@ -226,7 +213,7 @@ tasks:
       - task: build:cross
         vars: { GOOS: linux, GOARCH: amd64 }
     vars:
-      BINARY_LOCAL: .bin/{{.BINARY_NAME}}_linux_amd64
+      BINARY_LOCAL: "{{.BINARY_NAME}}_linux_amd64"
       TARGET: "{{.CLI_ARGS}}"
     preconditions:
       - sh: test -n "{{.TARGET}}"
@@ -289,13 +276,13 @@ tasks:
   docker:build:
     desc: Build Docker image
     cmds:
-      - docker build -t {{.BINARY_NAME}}:latest .
+      - docker build -t gavel:latest .
 
   docker:run:
     desc: Run Docker container
     deps: [docker:build]
     cmds:
-      - docker run --rm {{.BINARY_NAME}}:latest --help
+      - docker run --rm gavel:latest --help
 
   ci:
     desc: Run CI pipeline locally
