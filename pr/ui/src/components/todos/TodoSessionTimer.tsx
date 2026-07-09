@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Button } from '@flanksource/clicky-ui/components';
-import { UiClock, UiCollapseAll, UiError, UiEye, UiHubot, UiUnknown } from '@flanksource/clicky-ui/icons';
+import { useEffect, useRef, useState, type ComponentType } from 'react';
+import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
+import { UiChevronDown, UiClock, UiCollapseAll, UiDebugStepOver, UiError, UiEye, UiHubot, UiUnknown, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { SessionStats } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
@@ -97,38 +97,20 @@ function ctxBarColor(pct: number): string {
 
 // TodoSessionTimer is the inline session readout for the Session header:
 // identity (model + effort), live elapsed time, a context-window usage bar,
-// estimated cost, and a control to focus the session's cmux terminal. It renders
-// nothing until the session has produced a log (found), and returns a bare run of
-// flex items so the caller's header owns the surrounding row.
-export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
+// estimated cost, and a control to open the session's cmux terminal (focus or
+// resume). It renders nothing until the session has produced a log (found), and
+// returns a bare run of flex items so the caller's header owns the surrounding row.
+export function TodoSessionTimer({ dir, provider, sessionId, active = true, onResume, resumeDisabled }: {
   dir: string;
   provider: string;
   sessionId?: string;
   active?: boolean;
+  // onResume continues this session in a fresh cmux run (claude --resume). Wired
+  // from the todo detail's run flow; the "Resume in cmux" menu item hides without it.
+  onResume?: () => void;
+  resumeDisabled?: boolean;
 }) {
   const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, active);
-  const [focusBusy, setFocusBusy] = useState(false);
-  const [focusError, setFocusError] = useState('');
-
-  // focusSession brings the agent's cmux terminal to the front. The workspace is
-  // keyed by the run's working directory and agent, so the server can find it
-  // without the UI tracking cmux refs. A closed terminal / stopped cmux surfaces
-  // its reason inline rather than failing silently.
-  const focusSession = async () => {
-    if (focusBusy) return;
-    setFocusBusy(true);
-    setFocusError('');
-    try {
-      const params = new URLSearchParams(todoQuery(dir, provider));
-      if (stats?.agent) params.set('agent', stats.agent);
-      const res = await fetch(`/api/todos/session/focus?${params.toString()}`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not focus cmux session');
-    } catch (err: any) {
-      setFocusError(err?.message || 'Could not focus cmux session');
-    } finally {
-      setFocusBusy(false);
-    }
-  };
 
   if (!sessionId || !stats?.found) return null;
 
@@ -189,17 +171,183 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true }: {
           <span className="truncate">{stats.error || 'API error'}</span>
         </span>
       )}
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={focusSession}
-        disabled={focusBusy}
-        title={focusError || 'Focus this session’s terminal in cmux'}
-        className={`ml-auto inline-flex h-auto items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted disabled:opacity-50 ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
-      >
-        {focusBusy ? <Spinner className="text-[12px]" /> : focusError ? <UiError className="text-[12px]" /> : <UiEye className="text-[12px]" />}
-        cmux
-      </Button>
+      <CmuxSessionButton
+        dir={dir}
+        provider={provider}
+        sessionId={sessionId}
+        agent={stats.agent}
+        onResume={onResume}
+        resumeDisabled={resumeDisabled}
+      />
     </>
+  );
+}
+
+// cmuxSurfaceLabel renders the cmux terminal reference for a session, e.g.
+// "Cmux workspace:2 surface:1". Missing parts are dropped so a workspace with no
+// resolved surface still labels its terminal ("Cmux workspace:2").
+export function cmuxSurfaceLabel(workspace?: string, surface?: string): string {
+  return ['Cmux', workspace?.trim(), surface?.trim()].filter(Boolean).join(' ');
+}
+
+interface CmuxSurface {
+  found: boolean;
+  workspace?: string;
+  surface?: string;
+  reason?: string;
+}
+
+// useCmuxSurface resolves which cmux workspace/surface a session's terminal sits
+// on. It only fetches while `enabled` (the menu is open) because each call shells
+// out to cmux; a stopped cmux or a closed terminal resolves to found=false with a
+// reason rather than throwing, so the control still offers Resume.
+function useCmuxSurface(dir: string, provider: string, agent: string | undefined, enabled: boolean) {
+  const [surface, setSurface] = useState<CmuxSurface | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const params = new URLSearchParams(todoQuery(dir, provider));
+    if (agent) params.set('agent', agent);
+    setLoading(true);
+    fetch(`/api/todos/session/cmux?${params.toString()}`)
+      .then(res => res.json() as Promise<CmuxSurface>)
+      .then(data => { if (!cancelled) setSurface(data); })
+      // An unreachable endpoint is inconclusive, not proof the terminal is gone —
+      // leave the surface unknown (null) so Focus stays enabled and fails loudly on
+      // its own if the terminal really is closed, rather than pre-disabling it.
+      .catch(() => { if (!cancelled) setSurface(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [dir, provider, agent, enabled]);
+
+  return { surface, loading };
+}
+
+// CmuxSessionButton is the session header's cmux control: a dropdown that either
+// focuses the live cmux terminal for this session or resumes it in a fresh cmux
+// run, captioned with the resolved workspace/surface the session maps to.
+export function CmuxSessionButton({ dir, provider, sessionId, agent, onResume, resumeDisabled }: {
+  dir: string;
+  provider: string;
+  sessionId: string;
+  agent?: string;
+  onResume?: () => void;
+  resumeDisabled?: boolean;
+}) {
+  const [focusBusy, setFocusBusy] = useState(false);
+  const [focusError, setFocusError] = useState('');
+  const [open, setOpen] = useState(false);
+  const { surface, loading } = useCmuxSurface(dir, provider, agent, open);
+
+  // focusSession brings the agent's cmux terminal to the front. The workspace is
+  // keyed by the run's working directory and agent, so the server finds it without
+  // the UI tracking cmux refs. A closed terminal / stopped cmux surfaces its reason
+  // inline rather than failing silently.
+  const focusSession = async () => {
+    if (focusBusy) return;
+    setFocusBusy(true);
+    setFocusError('');
+    try {
+      const params = new URLSearchParams(todoQuery(dir, provider));
+      if (agent) params.set('agent', agent);
+      const res = await fetch(`/api/todos/session/focus?${params.toString()}`, { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not focus cmux session');
+    } catch (err: any) {
+      setFocusError(err?.message || 'Could not focus cmux session');
+    } finally {
+      setFocusBusy(false);
+    }
+  };
+
+  // A resolved-but-absent workspace means the terminal was closed, so Focus can't
+  // land there — only Resume can reopen it.
+  const focusUnavailable = surface?.found === false;
+
+  return (
+    <DropdownMenu
+      align="right"
+      className="ml-auto"
+      menuLabel="cmux session actions"
+      menuClassName="w-64 max-w-[calc(100vw-24px)]"
+      onOpenChange={setOpen}
+      trigger={
+        <Button
+          variant="ghost"
+          type="button"
+          title={focusError || 'Open this session in cmux'}
+          className={`inline-flex h-auto items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
+        >
+          {focusBusy ? <Spinner className="text-[12px]" /> : focusError ? <UiError className="text-[12px]" /> : <UiEye className="text-[12px]" />}
+          cmux
+          <UiChevronDown className="text-[10px] opacity-70" />
+        </Button>
+      }
+    >
+      {close => (
+        <div className="p-1 text-xs">
+          {/* The cmux surface reference for this session — the "comment" mapping
+              the session id to its cmux workspace/surface (e.g. workspace:2
+              surface:1) so the user knows which terminal Focus/Resume targets. */}
+          <div className="px-2 pb-1.5 pt-1 leading-tight text-muted-foreground">
+            {loading ? (
+              <span className="inline-flex items-center gap-1 text-[10px]"><Spinner className="text-[10px]" /> Locating cmux terminal…</span>
+            ) : (
+              <>
+                <span className="block font-mono text-[10px] text-foreground/80">{cmuxSurfaceLabel(surface?.workspace, surface?.surface)}</span>
+                <span className="block break-all font-mono text-[10px]">for session: {sessionId}</span>
+                {focusUnavailable && (
+                  <span className="mt-0.5 block text-[10px] text-amber-600">{surface?.reason || 'Terminal not found — resume to reopen'}</span>
+                )}
+              </>
+            )}
+          </div>
+          <div className="border-t border-border pt-1">
+            <CmuxMenuItem
+              icon={UiEye}
+              label="Focus in cmux"
+              detail={focusUnavailable ? 'Terminal closed' : 'Bring the terminal to the front'}
+              disabled={focusBusy || focusUnavailable}
+              onClick={() => { close(); focusSession(); }}
+            />
+            {onResume && (
+              <CmuxMenuItem
+                icon={UiDebugStepOver}
+                label="Resume in cmux"
+                detail="Continue this session in a new cmux run"
+                disabled={resumeDisabled}
+                onClick={() => { close(); onResume(); }}
+              />
+            )}
+          </div>
+          {focusError && <div className="px-2 pt-1 text-[10px] text-red-500">{focusError}</div>}
+        </div>
+      )}
+    </DropdownMenu>
+  );
+}
+
+function CmuxMenuItem({ icon: Icon, label, detail, disabled, onClick }: {
+  icon: ComponentType<IconProps>;
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex h-auto w-full items-start justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
+    >
+      <Icon className="mt-0.5 shrink-0 text-sm text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium text-foreground">{label}</span>
+        {detail && <span className="block truncate text-[10px] text-muted-foreground">{detail}</span>}
+      </span>
+    </Button>
   );
 }

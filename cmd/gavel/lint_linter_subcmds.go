@@ -21,6 +21,7 @@ var lintSubcommands = []struct {
 	{"ruff", "ruff", "Run only ruff (Python)"},
 	{"eslint", "eslint", "Run only eslint"},
 	{"oxlint", "oxlint", "Run only oxlint (JS/TS)"},
+	{"react-doctor", "react-doctor", "Run only react-doctor (React diagnostics)"},
 	{"pyright", "pyright", "Run only pyright (Python types)"},
 	{"tsc", "tsc", "Run only tsc (TypeScript compile check)"},
 	{"typescript", "tsc", "Alias for tsc"},

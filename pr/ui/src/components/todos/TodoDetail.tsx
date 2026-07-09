@@ -432,7 +432,14 @@ export function TodoDetail({
       </div>
       <div className="flex min-h-0 flex-1 flex-col bg-[#f4f6f9] dark:bg-[#0a1020]">
         {tab === 'session' ? (
-          <TodoSession dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'session'} />
+          <TodoSession
+            dir={dir}
+            provider={provider}
+            sessionId={todo.sessionId}
+            active={tab === 'session'}
+            onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
+            resumeDisabled={busy || runBusy || sessionInProgress}
+          />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'plan'} />
         ) : tab === 'verification' ? (

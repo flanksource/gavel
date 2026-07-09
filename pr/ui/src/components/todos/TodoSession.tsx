@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState, type ComponentType } from 're
 import { SessionViewer, type SessionEntry } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoSessionApproval } from '../../types';
+import type { SessionStats, TodoQuestion, TodoSessionApproval } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 import { TodoSessionTimer } from './TodoSessionTimer';
+import { AnswerBox, QuestionsPanel } from './planActions';
 
 interface SessionStateView {
   label: string;
@@ -141,11 +142,17 @@ export function TodoSession({
   provider,
   sessionId,
   active,
+  onResume,
+  resumeDisabled,
 }: {
   dir: string;
   provider: string;
   sessionId?: string;
   active: boolean;
+  // onResume/resumeDisabled back the session timer's "Resume in cmux" action,
+  // wired from the todo detail's run flow.
+  onResume?: () => void;
+  resumeDisabled?: boolean;
 }) {
   const { entries, connected, error } = useTodoSession(dir, provider, sessionId, active);
   const { state, error: statusError, approval, approve, busy: approveBusy } = useSessionStatus(dir, provider, sessionId, active);
@@ -189,7 +196,7 @@ export function TodoSession({
           {connected ? 'Following session' : 'Session idle'}
         </span>
         <span className="font-mono">{sessionId.slice(0, 8)}</span>
-        <TodoSessionTimer dir={dir} provider={provider} sessionId={sessionId} active={active} />
+        <TodoSessionTimer dir={dir} provider={provider} sessionId={sessionId} active={active} onResume={onResume} resumeDisabled={resumeDisabled} />
         <span ref={setMenuHost} className="ml-auto inline-flex items-center" />
       </div>
       {approval && <ApprovalBanner approval={approval} busy={approveBusy} onDecide={approve} />}
@@ -208,15 +215,19 @@ export function TodoSession({
 
 // ApprovalBanner shows a pending tool-permission request with Allow/Deny. The
 // driver is blocked awaiting the decision, so the buttons drive the run forward.
-function ApprovalBanner({
+export function ApprovalBanner({
   approval,
   busy,
   onDecide,
 }: {
   approval: TodoSessionApproval;
   busy: boolean;
-  onDecide: (allow: boolean) => void;
+  onDecide: (allow: boolean, message?: string) => void;
 }) {
+  if (approval.tool === 'AskUserQuestion') {
+    return <QuestionApprovalBanner approval={approval} busy={busy} onDecide={onDecide} />;
+  }
+
   const summary = approvalInputSummary(approval.input);
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-700">
@@ -247,6 +258,64 @@ function ApprovalBanner({
   );
 }
 
+function QuestionApprovalBanner({
+  approval,
+  busy,
+  onDecide,
+}: {
+  approval: TodoSessionApproval;
+  busy: boolean;
+  onDecide: (allow: boolean, message?: string) => void;
+}) {
+  const [answer, setAnswer] = useState('');
+  const questions = approvalQuestions(approval.input);
+
+  useEffect(() => {
+    setAnswer('');
+  }, [approval.sessionId, approval.toolUseId, approval.tool]);
+
+  const submit = () => {
+    const trimmed = answer.trim();
+    if (!trimmed) return;
+    onDecide(true, trimmed);
+  };
+
+  return (
+    <div className="flex shrink-0 flex-col gap-2 border-b border-purple-500/30 bg-purple-500/5 px-3 py-2 text-[11px] text-purple-700">
+      <div className="flex items-center gap-2">
+        <UiComment className="shrink-0 text-purple-600" />
+        <span className="font-medium">The agent needs your input to continue</span>
+      </div>
+      {questions.length > 0 ? (
+        <QuestionsPanel questions={questions} />
+      ) : (
+        <div className="rounded border border-purple-500/30 bg-background/60 p-2 text-sm text-foreground">
+          The agent is waiting for an answer.
+        </div>
+      )}
+      <AnswerBox
+        value={answer}
+        onChange={setAnswer}
+        onSubmit={submit}
+        busy={busy}
+        label="Send answer"
+        placeholder="Answer the agent's question... (Cmd/Ctrl+Enter to send)"
+      />
+      <div className="flex items-center justify-end">
+        <Button
+          variant="ghost"
+          type="button"
+          disabled={busy}
+          onClick={() => onDecide(false, answer.trim() || 'No answer provided')}
+          className="h-auto rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-700 hover:bg-red-500/20 disabled:opacity-50"
+        >
+          Deny
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // approvalInputSummary picks the most descriptive field of a tool's input for a
 // one-line preview (the command, the file, etc.), truncated.
 function approvalInputSummary(input?: Record<string, unknown>): string {
@@ -258,6 +327,67 @@ function approvalInputSummary(input?: Record<string, unknown>): string {
     }
   }
   return '';
+}
+
+export function approvalQuestions(input?: Record<string, unknown>): TodoQuestion[] {
+  if (!input) return [];
+  const rawQuestions = input.questions;
+  if (Array.isArray(rawQuestions)) {
+    return rawQuestions.map(questionFromValue).filter((q): q is TodoQuestion => q !== null);
+  }
+
+  const text = stringField(input, 'question') || stringField(input, 'prompt') || stringField(input, 'text');
+  if (!text) return [];
+  const context = stringField(input, 'header') || stringField(input, 'context') || stringField(input, 'description');
+  const options = optionLabels(input.options);
+  return [{
+    text,
+    ...(context ? { context } : {}),
+    ...(options.length ? { options } : {}),
+  }];
+}
+
+function questionFromValue(value: unknown): TodoQuestion | null {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    return text ? { text } : null;
+  }
+  if (!isRecord(value)) return null;
+  const text = stringField(value, 'question') || stringField(value, 'text') || stringField(value, 'prompt') || stringField(value, 'label');
+  if (!text) return null;
+  const context = stringField(value, 'header') || stringField(value, 'context') || stringField(value, 'description');
+  const options = optionLabels(value.options);
+  return {
+    text,
+    ...(context ? { context } : {}),
+    ...(options.length ? { options } : {}),
+  };
+}
+
+function optionLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(option => {
+    if (typeof option === 'string') {
+      const label = option.trim();
+      return label ? [label] : [];
+    }
+    if (!isRecord(option)) return [];
+    const label = stringField(option, 'label') || stringField(option, 'value') || stringField(option, 'id');
+    const description = stringField(option, 'description');
+    if (label && description) return [`${label} - ${description}`];
+    if (label) return [label];
+    if (description) return [description];
+    return [];
+  });
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function SessionStateBadge({ view }: { view: SessionStateView }) {
