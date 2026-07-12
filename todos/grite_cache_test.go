@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/gavel/todos/griteexport"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -111,9 +112,12 @@ func (r *recordingRunner) sawArgs(sub string) bool {
 	return false
 }
 
-func evt(id, issueID, kind string, ts int64, body string) griteEvent {
+func evt(id, issueID, kind string, ts int64, body string) griteexport.Event {
 	payload, _ := json.Marshal(griteEventPayload{Body: body})
-	return griteEvent{EventID: id, IssueID: issueID, TimestampMS: ts, Kind: map[string]json.RawMessage{kind: payload}}
+	return griteexport.Event{
+		EventID: griteexport.ID(id), IssueID: griteexport.ID(issueID), TimestampMS: ts,
+		Kind: griteexport.Kind{kind: payload},
+	}
 }
 
 func newCachedProvider(store GriteCacheStore, runner *recordingRunner, ttl time.Duration) *CachedGriteProvider {
@@ -124,8 +128,8 @@ func newCachedProvider(store GriteCacheStore, runner *recordingRunner, ttl time.
 func TestCachedGriteProviderSyncsThenServesFromStore(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "abc12345", Title: "Do thing", State: "open", Labels: []string{"priority:high", "status:pending"}, UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", "abc12345", "IssueCreated", 100, "the body")},
+		Issues: []griteexport.Issue{{IssueID: "abc12345", Title: "Do thing", State: "open", Labels: []string{"priority:high", "status:pending"}, UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", "abc12345", "IssueCreated", 100, "the body")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour)
 
@@ -158,8 +162,8 @@ func TestCachedGriteProviderSyncsThenServesFromStore(t *testing.T) {
 func TestCachedGriteProviderResyncsAfterTTL(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", "abc12345", "IssueCreated", 100, "b")},
+		Issues: []griteexport.Issue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", "abc12345", "IssueCreated", 100, "b")},
 	}}}
 	p := newCachedProvider(store, runner, time.Nanosecond)
 
@@ -176,8 +180,8 @@ func TestCachedGriteProviderResyncsAfterTTL(t *testing.T) {
 func TestCachedGriteProviderWritePassThroughForcesSync(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", "abc12345", "IssueCreated", 100, "b")},
+		Issues: []griteexport.Issue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", "abc12345", "IssueCreated", 100, "b")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour) // long TTL: writes must sync anyway
 
@@ -201,8 +205,8 @@ func TestCachedGriteProviderWritePassThroughForcesSync(t *testing.T) {
 func TestCachedGriteProviderFiltersClosed(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "done0001", Title: "Closed", State: "closed", UpdatedTS: 50}},
-		Events: []griteEvent{evt("e1", "done0001", "IssueCreated", 50, "b")},
+		Issues: []griteexport.Issue{{IssueID: "done0001", Title: "Closed", State: "closed", UpdatedTS: 50}},
+		Events: []griteexport.Event{evt("e1", "done0001", "IssueCreated", 50, "b")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour)
 
@@ -225,8 +229,8 @@ func TestCachedGriteProviderFiltersClosed(t *testing.T) {
 func TestCachedGriteProviderGetRebuildsEvents(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", "abc12345", "IssueCreated", 100, "the body")},
+		Issues: []griteexport.Issue{{IssueID: "abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", "abc12345", "IssueCreated", 100, "the body")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour)
 
@@ -246,8 +250,8 @@ func TestCachedGriteProviderGetResolvesShortID(t *testing.T) {
 	const fullID = "81b6f0520b0f9f1780bc964a172283ee"
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: fullID, Title: "Do thing", State: "open", UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", fullID, "IssueCreated", 100, "the body")},
+		Issues: []griteexport.Issue{{IssueID: fullID, Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", fullID, "IssueCreated", 100, "the body")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour)
 
@@ -267,11 +271,11 @@ func TestCachedGriteProviderGetResolvesShortID(t *testing.T) {
 func TestCachedGriteProviderGetAmbiguousShortIDErrors(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{
+		Issues: []griteexport.Issue{
 			{IssueID: "abcd111100000000", Title: "First", State: "open", UpdatedTS: 100},
 			{IssueID: "abcd222200000000", Title: "Second", State: "open", UpdatedTS: 100},
 		},
-		Events: []griteEvent{
+		Events: []griteexport.Event{
 			evt("e1", "abcd111100000000", "IssueCreated", 100, "a"),
 			evt("e2", "abcd222200000000", "IssueCreated", 100, "b"),
 		},
@@ -287,8 +291,8 @@ func TestCachedGriteProviderGetAmbiguousShortIDErrors(t *testing.T) {
 func TestCachedGriteProviderGetUnknownRefErrors(t *testing.T) {
 	store := newFakeGriteStore()
 	runner := &recordingRunner{t: t, tempDir: t.TempDir(), exports: []griteExportFile{{
-		Issues: []griteIssue{{IssueID: "abc12345abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
-		Events: []griteEvent{evt("e1", "abc12345abc12345", "IssueCreated", 100, "b")},
+		Issues: []griteexport.Issue{{IssueID: "abc12345abc12345", Title: "Do thing", State: "open", UpdatedTS: 100}},
+		Events: []griteexport.Event{evt("e1", "abc12345abc12345", "IssueCreated", 100, "b")},
 	}}}
 	p := newCachedProvider(store, runner, time.Hour)
 
@@ -299,17 +303,20 @@ func TestCachedGriteProviderGetUnknownRefErrors(t *testing.T) {
 }
 
 func TestMergeExportAccumulatesEvents(t *testing.T) {
-	priorEvents, _ := json.Marshal([]griteEvent{evt("e1", "x", "CommentAdded", 100, "a")})
+	priorEvents, _ := json.Marshal([]griteexport.Event{evt("e1", "x", "CommentAdded", 100, "a")})
 	existing := []CachedIssue{{IssueID: "x", EventsJSON: priorEvents}}
 	export := griteExportFile{
-		Issues: []griteIssue{{IssueID: "x", UpdatedTS: 200}},
-		Events: []griteEvent{
+		Issues: []griteexport.Issue{{IssueID: "x", UpdatedTS: 200}},
+		Events: []griteexport.Event{
 			evt("e1", "x", "CommentAdded", 100, "a"), // duplicate of prior, must dedup
 			evt("e2", "x", "CommentAdded", 200, "b"),
 		},
 	}
 
-	issues, cursor := mergeExport("/repo", 100, existing, export)
+	issues, cursor, err := mergeExport("/repo", 100, existing, export)
+	if err != nil {
+		t.Fatalf("mergeExport failed: %v", err)
+	}
 	if cursor != 200 {
 		t.Fatalf("expected cursor 200, got %d", cursor)
 	}

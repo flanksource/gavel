@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/gavel/todos/griteexport"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
@@ -325,23 +325,20 @@ func (p *CachedGriteProvider) doSync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	issues, newCursor := mergeExport(p.repo, cursor, existing, export)
+	issues, newCursor, err := mergeExport(p.repo, cursor, existing, export)
+	if err != nil {
+		return err
+	}
 	return p.store.UpsertSync(ctx, p.repo, issues, newCursor)
 }
 
 // griteExportResult is the envelope payload of `grite export --json`; the issue
 // and event data is written to OutputPath rather than stdout.
-type griteExportResult struct {
-	OutputPath string `json:"output_path"`
-	EventCount int    `json:"event_count"`
-}
+type griteExportResult = griteexport.Result
 
 // griteExportFile is the on-disk export written by grite: a full snapshot of all
 // issues plus the events since the requested cursor.
-type griteExportFile struct {
-	Issues []griteIssue `json:"issues"`
-	Events []griteEvent `json:"events"`
-}
+type griteExportFile = griteexport.Snapshot
 
 func (p *CachedGriteProvider) exportSince(ctx context.Context, cursor int64) (griteExportFile, error) {
 	raw, err := p.inner.run(ctx, "export", "--format", "json", "--json", "--since", strconv.FormatInt(cursor, 10))
@@ -355,43 +352,44 @@ func (p *CachedGriteProvider) exportSince(ctx context.Context, cursor int64) (gr
 	if res.OutputPath == "" {
 		return griteExportFile{}, fmt.Errorf("grite export returned no output path")
 	}
-	data, err := os.ReadFile(res.OutputPath)
-	if err != nil {
-		return griteExportFile{}, fmt.Errorf("read grite export %s: %w", res.OutputPath, err)
-	}
-	var file griteExportFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return griteExportFile{}, fmt.Errorf("decode grite export %s: %w", res.OutputPath, err)
-	}
-	return file, nil
+	return griteexport.LoadFile(res.OutputPath)
 }
 
 // mergeExport applies a (full issue snapshot + incremental event delta) export onto
 // the existing cache: every issue is re-projected from the snapshot and its event
 // history is the union of prior events and the new delta (deduped, time-ordered).
 // The returned cursor is the max timestamp observed so the next export resumes there.
-func mergeExport(repo string, cursor int64, existing []CachedIssue, export griteExportFile) ([]CachedIssue, int64) {
-	prior := make(map[string][]griteEvent, len(existing))
+func mergeExport(repo string, cursor int64, existing []CachedIssue, export griteExportFile) ([]CachedIssue, int64, error) {
+	prior := make(map[string][]griteexport.Event, len(existing))
 	for _, ci := range existing {
-		if ev, err := ci.events(); err == nil {
+		var ev []griteexport.Event
+		if err := json.Unmarshal(ci.EventsJSON, &ev); err == nil {
 			prior[ci.IssueID] = ev
 		}
 	}
-	newByIssue := make(map[string][]griteEvent, len(export.Events))
+	newByIssue := make(map[string][]griteexport.Event, len(export.Events))
 	newCursor := cursor
 	for _, ev := range export.Events {
-		newByIssue[ev.IssueID] = append(newByIssue[ev.IssueID], ev)
+		issueID := ev.IssueID.String()
+		newByIssue[issueID] = append(newByIssue[issueID], ev)
 		if ev.TimestampMS > newCursor {
 			newCursor = ev.TimestampMS
 		}
 	}
 	out := make([]CachedIssue, 0, len(export.Issues))
 	for _, issue := range export.Issues {
-		merged := mergeEvents(prior[issue.IssueID], newByIssue[issue.IssueID])
-		eventsJSON, _ := json.Marshal(merged)
+		issueID := issue.IssueID.String()
+		merged, err := griteexport.Merge(prior[issueID], newByIssue[issueID])
+		if err != nil {
+			return nil, cursor, fmt.Errorf("merge Grite events for issue %s: %w", issueID, err)
+		}
+		eventsJSON, err := json.Marshal(merged)
+		if err != nil {
+			return nil, cursor, fmt.Errorf("encode Grite events for issue %s: %w", issueID, err)
+		}
 		out = append(out, CachedIssue{
 			Repo:         repo,
-			IssueID:      issue.IssueID,
+			IssueID:      issueID,
 			Title:        issue.Title,
 			State:        issue.State,
 			Labels:       append([]string(nil), issue.Labels...),
@@ -404,23 +402,5 @@ func mergeExport(repo string, cursor int64, existing []CachedIssue, export grite
 			newCursor = issue.UpdatedTS
 		}
 	}
-	return out, newCursor
-}
-
-func mergeEvents(prior, incoming []griteEvent) []griteEvent {
-	seen := make(map[string]bool, len(prior)+len(incoming))
-	merged := make([]griteEvent, 0, len(prior)+len(incoming))
-	for _, batch := range [][]griteEvent{prior, incoming} {
-		for _, ev := range batch {
-			if seen[ev.EventID] {
-				continue
-			}
-			seen[ev.EventID] = true
-			merged = append(merged, ev)
-		}
-	}
-	sort.SliceStable(merged, func(i, j int) bool {
-		return merged[i].TimestampMS < merged[j].TimestampMS
-	})
-	return merged
+	return out, newCursor, nil
 }
