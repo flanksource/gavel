@@ -14,7 +14,6 @@ import (
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/todosync"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
 )
@@ -29,6 +28,9 @@ func init() {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
 	}
+	if f := lintCmd.Flags().Lookup("sync-todos"); f != nil {
+		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
+	}
 }
 
 // resolveAIFix reports whether the AI fix loop should run: either --ai-fix was
@@ -36,6 +38,9 @@ func init() {
 func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
 func runLint(opts LintOptions) (any, error) {
+	if opts.SyncTodos != "" {
+		return nil, retiredTODOFileRuntimeError("gavel lint", "--sync-todos")
+	}
 	var err error
 	opts, err = lint.NormalizeRootArg(opts)
 	if err != nil {
@@ -90,7 +95,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	// Narrow --failed and establish the effective git root the same way
-	// lint.Run does internally, so the post-run triage / sync-todos / snapshot
+	// lint.Run does internally, so the post-run triage and snapshot
 	// blocks below operate on the git root of the (narrowed) first file.
 	// runOpts keeps the full (un-collapsed) file set so lint.Run fans out
 	// across every git root; opts collapses to the first group for the log line
@@ -163,20 +168,6 @@ func runLint(opts LintOptions) (any, error) {
 			logger.Infof("Saved %d new ignore rules to .gavel.yaml", len(newRules))
 			linters.FilterIgnoredViolations(allResults, newRules)
 		}
-	}
-
-	if opts.SyncTodos != "" {
-		todosDir := filepath.Join(opts.SyncTodos, "lint")
-		syncResult, err := todosync.SyncLintTodos(allResults, todosync.SyncOptions{
-			TodosDir: todosDir,
-			GroupBy:  opts.GroupBy,
-			WorkDir:  opts.WorkDir,
-		})
-		if err != nil {
-			return allResults, fmt.Errorf("failed to sync todos: %w", err)
-		}
-		logger.Infof("Synced TODOs: %d created, %d updated, %d completed",
-			len(syncResult.Created), len(syncResult.Updated), len(syncResult.Completed))
 	}
 
 	snap := &testui.Snapshot{

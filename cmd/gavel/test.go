@@ -27,7 +27,6 @@ import (
 	"github.com/flanksource/gavel/testrunner"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
-	"github.com/flanksource/gavel/todosync"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
@@ -45,6 +44,9 @@ var (
 )
 
 func runTests(opts testrunner.RunOptions) (any, error) {
+	if opts.SyncTodos {
+		return nil, retiredTODOFileRuntimeError("gavel test", "--sync-todos")
+	}
 	opts.AutoStop = testDurationFlags.AutoStop
 	opts.IdleTimeout = testDurationFlags.IdleTimeout
 	opts.Timeout = testDurationFlags.Timeout
@@ -79,11 +81,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			return nil, err
 		}
 		opts.WorkDir = wd
-	}
-	// testrunner no longer imports the todos package; supply the TODO recorder
-	// it calls when --sync-todos is set (see todosync.NewTestFailureRecorder).
-	if opts.SyncTodos && opts.TodoSync == nil {
-		opts.TodoSync = todosync.NewTestFailureRecorder(opts.TodosDir, opts.TodoTemplate).SyncFailure
 	}
 	if opts.Failed == failedAutoSentinel {
 		resolved, err := snapshots.ResolveLast(opts.WorkDir)
@@ -871,6 +868,14 @@ func init() {
 	if f := testCmd.Flags().Lookup("failed"); f != nil {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+	}
+	if f := testCmd.Flags().Lookup("sync-todos"); f != nil {
+		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
+	}
+	for _, name := range []string{"todos-dir", "todo-template"} {
+		if f := testCmd.Flags().Lookup(name); f != nil {
+			f.Usage = "Retired file-backed TODO sync option; runtime TODOs use PostgreSQL"
+		}
 	}
 }
 

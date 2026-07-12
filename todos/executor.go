@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -125,10 +126,18 @@ type TODOExecutor struct {
 	executor  Executor // Pluggable executor implementation
 	sessionID string   // Session ID for resumption across runs
 	provider  Provider
+	resume    bool
 	// mode drives the envelope→status mapping (see applyOutcome). Post-run
 	// checks live in the run loop itself now: fixture-backed verify plugins
 	// built by BuildCheckVerifiers and threaded through drivers.Config.
 	mode types.RunMode
+}
+
+// SetResume marks a normal Execute call as a continuation of the prior agent
+// session. Native storage can then reuse the Captain session while allocating
+// a new prompt run only when the prior operation is already terminal.
+func (e *TODOExecutor) SetResume(resume bool) {
+	e.resume = resume
 }
 
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
@@ -187,6 +196,15 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 
 	// Execute with configured executor (Claude, OpenAI, etc.)
 	ctx.Logger.Infof("Executing with %s", e.executor.Name())
+	if err := e.prepareRun(ctx, todo); err != nil {
+		if errors.Is(err, ErrRunDispatchAlreadyClaimed) || errors.Is(err, ErrRunResumeModeMismatch) {
+			return nil, fmt.Errorf("prepare native TODO run: %w", err)
+		}
+		todo.Status = types.StatusFailed
+		todo.Attempts++
+		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+		return nil, fmt.Errorf("prepare native TODO run: %w", err)
+	}
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	ctx.SetRunStartHook(e.runStartPersister(ctx, []*types.TODO{todo}))
 	result, err := e.executor.Execute(ctx, todo)
@@ -233,6 +251,9 @@ type GroupExecutor interface {
 // ExecuteGroup orchestrates group execution: one AI session for multiple TODOs,
 // then independent verification per TODO.
 func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.TODO) ([]*ExecutionResult, error) {
+	if policy, ok := e.activeProvider().(GroupExecutionPolicy); ok && !policy.SupportsGroupedExecution() {
+		return nil, fmt.Errorf("grouped TODO execution is not supported by the native PostgreSQL runtime; run one issue at a time")
+	}
 	groupExec, ok := e.executor.(GroupExecutor)
 	if !ok {
 		return nil, fmt.Errorf("executor %s does not support group execution", e.executor.Name())
@@ -363,6 +384,28 @@ func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result
 	return e.activeProvider().SaveAttempt(persistCtx, todo, result)
 }
 
+func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error {
+	lifecycle, ok := e.activeProvider().(RunLifecycleProvider)
+	if !ok {
+		return nil
+	}
+	persistCtx, cancel := providerPersistenceContext(ctx)
+	defer cancel()
+	preparation := RunPreparation{
+		Mode:         e.Mode(),
+		ExecutorName: e.executor.Name(),
+		Resume:       e.resume,
+	}
+	if renderer, ok := e.executor.(RunPromptProvider); ok {
+		prompt, err := renderer.RenderRunPrompt(ctx, todo)
+		if err != nil {
+			return fmt.Errorf("render native TODO prompt: %w", err)
+		}
+		preparation.PromptMarkdown = prompt
+	}
+	return lifecycle.PrepareRun(persistCtx, todo, preparation)
+}
+
 // persistSessionID records the executor's session id (e.g. the cmux/claude
 // --session-id) on the provider so the issue carries a session:<id> label.
 func (e *TODOExecutor) persistSessionID(ctx context.Context, todo *types.TODO) {
@@ -397,15 +440,25 @@ func (e *TODOExecutor) sessionIDPersister(ctx context.Context, todoList []*types
 func (e *TODOExecutor) runStartPersister(ctx context.Context, todoList []*types.TODO) func(RunStartMetadata) {
 	commented := false
 	return func(meta RunStartMetadata) {
-		if commented || strings.TrimSpace(meta.SessionID) == "" {
-			return
-		}
 		if strings.TrimSpace(meta.Mode) == "" {
 			meta.Mode = string(e.Mode())
 		}
-		body := renderRunStartComment(meta)
 		persistCtx, cancel := providerPersistenceContext(ctx)
 		defer cancel()
+		if lifecycle, ok := e.activeProvider().(RunLifecycleProvider); ok {
+			for _, todo := range todoList {
+				if todo == nil {
+					continue
+				}
+				if err := lifecycle.RecordRunStart(persistCtx, todo, meta); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to record native TODO run start: %v\n", err)
+				}
+			}
+		}
+		if commented || strings.TrimSpace(meta.SessionID) == "" {
+			return
+		}
+		body := renderRunStartComment(meta)
 		for _, todo := range todoList {
 			if todo == nil {
 				continue

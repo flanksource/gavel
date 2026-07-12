@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,19 @@ import (
 
 	"github.com/flanksource/gavel/todos/types"
 )
+
+func TestValidateRuntimeProviderOnlyAcceptsDatabase(t *testing.T) {
+	for _, value := range []string{"", ProviderDB, " DB "} {
+		if err := ValidateRuntimeProvider(value); err != nil {
+			t.Fatalf("ValidateRuntimeProvider(%q) = %v", value, err)
+		}
+	}
+	for _, value := range []string{ProviderGrite, ProviderFiles, "auto", "unknown"} {
+		if err := ValidateRuntimeProvider(value); !errors.Is(err, ErrProviderRetired) {
+			t.Fatalf("ValidateRuntimeProvider(%q) = %v, want ErrProviderRetired", value, err)
+		}
+	}
+}
 
 func TestFileProviderEditUpdatesTitleAndBody(t *testing.T) {
 	workDir := t.TempDir()

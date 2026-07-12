@@ -1,17 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-
-	"github.com/flanksource/clicky"
-	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/prwatch"
-	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
@@ -22,118 +11,24 @@ var (
 
 var prFixCmd = &cobra.Command{
 	Use:   "fix [pr-number]",
-	Short: "Sync TODOs from PR failures and interactively select which to fix",
-	Long: `Turn a PR's failing checks and review comments into fixes, end to end.
-
-Fetches the PR status (current branch's PR when no number is given), syncs a
-.todos entry per failing job and per actionable review comment, then opens an
-interactive picker so you choose which to fix. Selected TODOs run through the
-same agent loop as 'gavel todos run' — see 'gavel todos --help'.
-
-Examples:
-  gavel pr fix                     # fix the current branch's PR
-  gavel pr fix 123                 # fix PR #123
-  gavel pr fix --dir .todos/pr     # sync into a specific directory
-  gavel pr fix --dry-run           # sync + list, print commands without running`,
+	Short: "Retired file-backed PR TODO workflow",
+	Long: `The former PR fix workflow wrote PR failures to .todos files, discovered
+them with the file provider, and executed them as runtime TODOs. Runtime TODOs
+now live only in PostgreSQL, so this compatibility command returns migration
+guidance without fetching a PR or reading/writing .todos.`,
 	SilenceUsage: true,
 	Args:         cobra.MaximumNArgs(1),
 	RunE:         runPRFix,
 }
 
-func runPRFix(cmd *cobra.Command, args []string) error {
-	workDir, err := getWorkingDir()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	var ghOpts github.Options
-	if fixRepo != "" {
-		ghOpts.Repo = fixRepo
-	} else {
-		ghOpts.WorkDir = workDir
-	}
-
-	var prNumber int
-	if len(args) > 0 {
-		prNumber, err = strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid PR number: %w", err)
-		}
-	}
-
-	syncDir := fixSyncDir
-	if syncDir == "" {
-		syncDir = filepath.Join(workDir, ".todos")
-	}
-
-	// Step 1: Watch PR and sync TODOs
-	logger.Infof("Fetching PR status and syncing TODOs...")
-	result, _ := prwatch.Run(prwatch.WatchOptions{
-		Options:  ghOpts,
-		PRNumber: prNumber,
-		TailLogs: statusDefaultTailLogs,
-	})
-
-	if result == nil {
-		return fmt.Errorf("failed to fetch PR information")
-	}
-
-	clicky.MustPrint(result, clicky.FormatOptions{})
-
-	if err := prwatch.SyncTodos(result, syncDir); err != nil {
-		logger.Warnf("failed to sync todos: %v", err)
-	}
-	if err := prwatch.SyncCommentTodos(result.Comments, result.PR, syncDir); err != nil {
-		logger.Warnf("failed to sync comment todos: %v", err)
-	}
-
-	// Step 2: Discover and present TODOs
-	if _, err := os.Stat(syncDir); os.IsNotExist(err) {
-		logger.Infof("No TODOs synced")
-		return nil
-	}
-
-	todoList, err := todos.DiscoverTODOs(syncDir, todos.DiscoveryFilters{
-		ExcludeStatuses: []types.Status{types.StatusCompleted},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to discover TODOs: %w", err)
-	}
-
-	if len(todoList) == 0 {
-		logger.Infof("No TODOs to fix")
-		return nil
-	}
-
-	// Step 3: Interactive selection
-	selected, err := selectTODOs(todoList, "Select TODOs to fix:")
-	if err != nil {
-		return err
-	}
-	if selected == nil {
-		logger.Infof("No TODOs selected")
-		return nil
-	}
-
-	// Step 4: Execute selected TODOs
-	logger.Infof("Executing %d TODOs...", len(selected))
-	interaction := newInteraction()
-
-	groups := todos.GroupTODOs(selected, groupBy)
-	fmt.Println(clicky.MustFormat(todos.FlattenGrouped(groups)))
-	fmt.Println()
-
-	provider := todos.NewFileProvider(workDir, syncDir)
-	if groupBy != "" && groupBy != todos.GroupByNone {
-		return executeGroups(workDir, groups, interaction, provider)
-	}
-	return executeSingleTODOs(workDir, types.TODOS(selected), interaction, provider)
+func runPRFix(_ *cobra.Command, _ []string) error {
+	return retiredTODOFileRuntimeError("gavel pr fix", "file-backed PR syncing")
 }
 
 func init() {
 	prCmd.AddCommand(prFixCmd)
 	prFixCmd.Flags().StringVarP(&fixRepo, "repo", "R", "", "GitHub repository (owner/repo)")
-	prFixCmd.Flags().StringVar(&fixSyncDir, "dir", "", "TODOs directory (default: .todos)")
+	prFixCmd.Flags().StringVar(&fixSyncDir, "dir", "", "Retired .todos compatibility option (runtime TODOs use PostgreSQL)")
 	prFixCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts")
 	prFixCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
 	prFixCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")

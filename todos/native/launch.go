@@ -27,9 +27,10 @@ type PromptRunLaunchAttachment struct {
 // PromptRunLaunch combines Captain's authoritative records with the native
 // issue after all three were committed by one database transaction.
 type PromptRunLaunch struct {
-	Session   *captaindb.Session
-	PromptRun *captaindb.PromptRun
-	Issue     *Issue
+	Session       *captaindb.Session
+	PromptRun     *captaindb.PromptRun
+	Issue         *Issue
+	DispatchOwned bool
 }
 
 // PlanSelectionAttachment is Gavel-owned selection metadata. The selected
@@ -52,6 +53,14 @@ type PersistedPlan struct {
 // ApprovedPlanSelection is the cross-owner approval result. Captain remains
 // authoritative for approval while Gavel stores only the selected plan link.
 type ApprovedPlanSelection struct {
+	Plan  *captaindb.Plan
+	Issue *Issue
+}
+
+// ReviewedPlanSelection is the atomic result of a non-approval plan decision
+// (pending, rejected, or revision requested) and the corresponding Gavel plan
+// selection/event update.
+type ReviewedPlanSelection struct {
 	Plan  *captaindb.Plan
 	Issue *Issue
 }
@@ -121,7 +130,7 @@ func (c *LaunchCoordinator) LaunchPromptRun(
 		if err != nil {
 			return err
 		}
-		issue, err := integration.ActivatePromptRun(ctx, PromptRunAttachment{
+		issue, dispatchOwned, err := integration.activatePromptRun(ctx, PromptRunAttachment{
 			IssueID:              attachment.IssueID,
 			PromptRunID:          promptRun.ID,
 			StepKind:             attachment.StepKind,
@@ -135,6 +144,7 @@ func (c *LaunchCoordinator) LaunchPromptRun(
 		result.Session = session
 		result.PromptRun = promptRun
 		result.Issue = issue
+		result.DispatchOwned = dispatchOwned
 		return nil
 	})
 	if err != nil {
@@ -224,6 +234,18 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(
 			return err
 		}
 		_, revisionExisted := priorRevisionIDs[revision.ID]
+		if !revisionExisted && priorPlan != nil && priorPlan.ApprovalState != captaindb.PlanApprovalPending {
+			// A new immutable revision is never implicitly approved by an older
+			// decision. Reset review state in the same shared transaction that
+			// appends and selects the new content.
+			plan, err = captainTx.SetPlanReviewState(ctx, captaindb.SetPlanReviewStateInput{
+				PlanID: plan.ID, State: captaindb.PlanApprovalPending,
+				Actor: attachment.Actor,
+			})
+			if err != nil {
+				return err
+			}
+		}
 		captainChanged := priorPlan == nil || !revisionExisted
 		var mutation *EventInput
 		if captainChanged {
@@ -359,6 +381,99 @@ func (c *LaunchCoordinator) ApproveAndSelectPlan(
 	return result, nil
 }
 
+// ReviewAndSelectPlan records a non-approval Captain review decision and keeps
+// the exact plan selected on the Gavel issue in the same shared transaction.
+// Exact retries are mutation-free in both owners.
+func (c *LaunchCoordinator) ReviewAndSelectPlan(
+	ctx context.Context,
+	review captaindb.SetPlanReviewStateInput,
+	attachment PlanSelectionAttachment,
+) (*ReviewedPlanSelection, error) {
+	if attachment.IssueID == uuid.Nil {
+		return nil, fmt.Errorf("%w: issue ID is required", ErrInvalidInput)
+	}
+	result := &ReviewedPlanSelection{}
+	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
+		tx := captainTx.Gorm()
+		issue, err := lockExecutionIssue(tx, attachment.IssueID)
+		if err != nil {
+			return err
+		}
+		if err := lockCaptainPlan(tx, review.PlanID); err != nil {
+			return err
+		}
+		priorPlan, err := captainTx.GetPlan(ctx, review.PlanID)
+		if err != nil {
+			return err
+		}
+		reviewWasExact := planReviewExact(priorPlan, review)
+		selectionWasExact, err := planSelectionExact(tx, issue, priorPlan.ID, attachment.Ordinal)
+		if err != nil {
+			return err
+		}
+		if issue.Version != attachment.ExpectedIssueVersion {
+			if reviewWasExact && selectionWasExact {
+				currentIssue, err := getIssue(tx, "id = ?", attachment.IssueID)
+				if err != nil {
+					return err
+				}
+				result.Plan = priorPlan
+				result.Issue = currentIssue
+				return nil
+			}
+			return versionConflict(attachment.IssueID, attachment.ExpectedIssueVersion, issue.Version)
+		}
+
+		plan, err := captainTx.SetPlanReviewState(ctx, review)
+		if err != nil {
+			return err
+		}
+		var mutation *EventInput
+		if !reviewWasExact {
+			kind := "plan_review_changed"
+			switch review.State {
+			case captaindb.PlanApprovalRejected:
+				kind = "plan_rejected"
+			case captaindb.PlanApprovalRevisionRequested:
+				kind = "plan_revision_requested"
+			case captaindb.PlanApprovalPending:
+				kind = "plan_review_pending"
+			}
+			mutation = &EventInput{
+				Kind:  kind,
+				Actor: attachment.Actor,
+				Payload: map[string]any{
+					"planId":  plan.ID,
+					"state":   review.State,
+					"actor":   strings.TrimSpace(review.Actor),
+					"comment": strings.TrimSpace(review.Comment),
+					"ordinal": attachment.Ordinal,
+				},
+			}
+		}
+		if err := selectPlanLocked(tx, issue, PlanAttachment{
+			IssueID:              attachment.IssueID,
+			PlanID:               plan.ID,
+			Ordinal:              attachment.Ordinal,
+			ExpectedIssueVersion: attachment.ExpectedIssueVersion,
+			Actor:                attachment.Actor,
+		}, mutation); err != nil {
+			return err
+		}
+		currentIssue, err := getIssue(tx, "id = ?", attachment.IssueID)
+		if err != nil {
+			return err
+		}
+		result.Plan = plan
+		result.Issue = currentIssue
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func existingPlanForCreate(ctx context.Context, db *captaindb.DB, input captaindb.CreatePlanInput) (*captaindb.Plan, error) {
 	if input.SourcePromptRunID != nil && strings.TrimSpace(input.Variant) != "" {
 		variant := strings.TrimSpace(input.Variant)
@@ -453,5 +568,13 @@ func planApprovalExact(plan *captaindb.Plan, input captaindb.ApprovePlanRevision
 		plan.ApprovalState == captaindb.PlanApprovalApproved &&
 		plan.ApprovedRevisionID != nil && *plan.ApprovedRevisionID == input.RevisionID &&
 		strings.TrimSpace(plan.ApprovedBy) == strings.TrimSpace(input.ApprovedBy) &&
+		strings.TrimSpace(plan.ApprovalComment) == strings.TrimSpace(input.Comment)
+}
+
+func planReviewExact(plan *captaindb.Plan, input captaindb.SetPlanReviewStateInput) bool {
+	return plan != nil &&
+		plan.ApprovalState == input.State &&
+		plan.ApprovedRevisionID == nil &&
+		strings.TrimSpace(plan.ApprovedBy) == strings.TrimSpace(input.Actor) &&
 		strings.TrimSpace(plan.ApprovalComment) == strings.TrimSpace(input.Comment)
 }

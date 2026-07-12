@@ -94,6 +94,9 @@ type TODO struct {
 	FileNode       *fixtures.FixtureNode `json:"file_node,omitempty"` // Root file node from fixtures parser
 	ID             string                `json:"id,omitempty"`
 	ShortID        string                `json:"short_id,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspace_id,omitempty"`
+	ExecutionState string                `json:"execution_state,omitempty"`
 	Provider       string                `json:"provider,omitempty"`
 	Workspace      string                `json:"workspace,omitempty"`
 	ProviderState  string                `json:"provider_state,omitempty"`

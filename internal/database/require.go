@@ -19,7 +19,11 @@ var ErrUnavailable = errors.New("gavel database unavailable")
 func Require(ctx context.Context, feature string) (*gorm.DB, error) {
 	db, err := Shared(ctx)
 	if err != nil {
-		return nil, err
+		feature = strings.TrimSpace(feature)
+		if feature == "" {
+			feature = "this operation"
+		}
+		return nil, fmt.Errorf("%s requires PostgreSQL: %w (open failed: %v); set %s or configure embedded PostgreSQL with gavel system install --embedded", feature, ErrUnavailable, err, EnvDSN)
 	}
 	if !db.Disabled() {
 		return db.Gorm(), nil

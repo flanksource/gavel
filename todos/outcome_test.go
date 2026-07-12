@@ -68,7 +68,7 @@ func writePlanFile(t *testing.T, dir string) string {
 }
 
 func TestApplyOutcomeRunTransitions(t *testing.T) {
-	t.Run("completed", func(t *testing.T) {
+	t.Run("successful run without verification remains pending", func(t *testing.T) {
 		dir := t.TempDir()
 		todo := writeOutcomeTodo(t, dir)
 		e := NewTODOExecutor(dir, plainExec{}, "")
@@ -76,8 +76,8 @@ func TestApplyOutcomeRunTransitions(t *testing.T) {
 		if err := e.applyOutcome(context.Background(), todo, result); err != nil {
 			t.Fatalf("applyOutcome: %v", err)
 		}
-		if todo.Status != types.StatusCompleted {
-			t.Errorf("status = %s, want completed", todo.Status)
+		if todo.Status != types.StatusPending {
+			t.Errorf("status = %s, want pending", todo.Status)
 		}
 		if todo.LastRunSummary != "did it" {
 			t.Errorf("summary = %q", todo.LastRunSummary)
@@ -115,7 +115,7 @@ func TestApplyOutcomeRunTransitions(t *testing.T) {
 		}
 	})
 
-	t.Run("no envelope falls back to completed", func(t *testing.T) {
+	t.Run("no envelope falls back to pending", func(t *testing.T) {
 		dir := t.TempDir()
 		todo := writeOutcomeTodo(t, dir)
 		e := NewTODOExecutor(dir, plainExec{}, "")
@@ -123,13 +123,13 @@ func TestApplyOutcomeRunTransitions(t *testing.T) {
 		if err := e.applyOutcome(context.Background(), todo, result); err != nil {
 			t.Fatalf("applyOutcome: %v", err)
 		}
-		if todo.Status != types.StatusCompleted {
-			t.Errorf("status = %s, want completed", todo.Status)
+		if todo.Status != types.StatusPending {
+			t.Errorf("status = %s, want pending", todo.Status)
 		}
 	})
 
 	// The definition-of-done verdict lands the run verified or unverified; a run
-	// with no DoD stays completed.
+	// with no DoD stays open/pending for human review.
 	t.Run("DoD verdict maps to verified/unverified", func(t *testing.T) {
 		cases := []struct {
 			name string
@@ -138,7 +138,7 @@ func TestApplyOutcomeRunTransitions(t *testing.T) {
 		}{
 			{"passed → verified", &DoDOutcome{Ran: true, Passed: true}, types.StatusVerified},
 			{"failed → unverified", &DoDOutcome{Ran: true, Passed: false}, types.StatusUnverified},
-			{"no DoD → completed", nil, types.StatusCompleted},
+			{"no DoD → pending", nil, types.StatusPending},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -294,8 +294,8 @@ func TestResumeAppliesOutcome(t *testing.T) {
 	if len(results) != 1 || results[0].Summary != "answered and done" {
 		t.Errorf("results = %+v", results)
 	}
-	if todo.Status != types.StatusCompleted {
-		t.Errorf("status = %s, want completed", todo.Status)
+	if todo.Status != types.StatusPending {
+		t.Errorf("status = %s, want pending", todo.Status)
 	}
 }
 

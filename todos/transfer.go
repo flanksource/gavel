@@ -29,6 +29,9 @@ func Transfer(ctx context.Context, source, target Provider, ref string) (*types.
 	if err != nil {
 		return nil, fmt.Errorf("load source todo %q: %w", ref, err)
 	}
+	if mover, ok := source.(TransferProvider); ok {
+		return mover.MoveTo(ctx, todo, target)
+	}
 	created, err := target.Create(ctx, CreateRequest{
 		Title:    todo.Title,
 		Body:     transferBody(todo),

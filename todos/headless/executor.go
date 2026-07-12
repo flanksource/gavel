@@ -90,6 +90,8 @@ type Executor struct {
 	config Config
 }
 
+var _ todopkg.RunPromptProvider = (*Executor)(nil)
+
 func NewExecutor(config Config) *Executor {
 	if config.Agent == "" {
 		config.Agent = "claude"
@@ -117,15 +119,38 @@ func (e *Executor) Execute(ctx *todopkg.ExecutorContext, todo *types.TODO) (*tod
 	return e.ExecuteGroup(ctx, []*types.TODO{todo})
 }
 
+// RenderRunPrompt implements todos.RunPromptProvider. It shares the exact
+// renderer used by ExecuteGroup so native admission can persist Captain's real
+// user prompt before the external provider is dispatched.
+func (e *Executor) RenderRunPrompt(_ *todopkg.ExecutorContext, todo *types.TODO) (string, error) {
+	rendered, err := e.renderInitialRequest([]*types.TODO{todo})
+	if err != nil {
+		return "", err
+	}
+	return rendered.Prompt.User, nil
+}
+
 func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO) (*todopkg.ExecutionResult, error) {
 	start := time.Now()
 	if len(todosInGroup) == 0 {
 		return nil, fmt.Errorf("no todos supplied")
 	}
+	rendered, err := e.renderInitialRequest(todosInGroup)
+	if err != nil {
+		return nil, err
+	}
+	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, rendered, e.config.Resume)
+	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+}
+
+func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.Request, error) {
+	if len(todosInGroup) == 0 {
+		return captainai.Request{}, fmt.Errorf("no todos supplied")
+	}
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	tmpl, err := todoprompt.ResolveTemplate(workDir, e.config.Mode)
 	if err != nil {
-		return nil, err
+		return captainai.Request{}, err
 	}
 	rendered, _, err := todoprompt.Render(todosInGroup, todoprompt.Options{
 		WorkDir:      workDir,
@@ -136,10 +161,9 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		BodyOverride: e.config.PromptOverride,
 	})
 	if err != nil {
-		return nil, err
+		return captainai.Request{}, err
 	}
-	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, rendered, e.config.Resume)
-	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+	return rendered, nil
 }
 
 // SendFeedback resumes the group's prior agent session with a user message (an

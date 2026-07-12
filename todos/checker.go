@@ -98,9 +98,9 @@ func updateTODOAfterCheck(ctx context.Context, provider Provider, todo *types.TO
 
 	var status types.Status
 	if result.AllPassed {
-		status = types.StatusCompleted
+		status = types.StatusVerified
 	} else {
-		status = types.StatusFailed
+		status = types.StatusUnverified
 	}
 	todo.Status = status
 

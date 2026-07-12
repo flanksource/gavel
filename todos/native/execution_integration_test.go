@@ -185,6 +185,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	require.NotNil(t, launch.Session)
 	require.NotNil(t, launch.PromptRun)
 	require.NotNil(t, launch.Issue)
+	assert.True(t, launch.DispatchOwned)
 	assert.Equal(t, launch.Session.ID, launch.PromptRun.SessionID)
 	require.NotNil(t, launch.Issue.ActivePromptRunID)
 	assert.Equal(t, launch.PromptRun.ID, *launch.Issue.ActivePromptRunID)
@@ -198,6 +199,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	assert.Equal(t, launch.Session.ID, replay.Session.ID)
 	assert.Equal(t, launch.PromptRun.ID, replay.PromptRun.ID)
 	assert.Equal(t, launch.Issue.Version, replay.Issue.Version)
+	assert.False(t, replay.DispatchOwned)
 
 	sourceRunID := launch.PromptRun.ID
 	planInput := captaindb.CreatePlanInput{

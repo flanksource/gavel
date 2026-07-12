@@ -55,18 +55,18 @@ var todosReopenCmd = &cobra.Command{
 
 func init() {
 	todosCmd.AddCommand(todosEditCmd)
-	todosEditCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosEditCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
 	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body")
 	todosEditCmd.Flags().StringVar(&todoEditBodyFile, "body-file", "", "Read new body from file")
 
 	todosCmd.AddCommand(todosCommentCmd)
-	todosCommentCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosCommentCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosCommentCmd.Flags().StringVar(&todoCommentBody, "body", "", "Comment body")
 	todosCommentCmd.Flags().StringVar(&todoCommentBodyFile, "body-file", "", "Read comment body from file")
 
 	todosCmd.AddCommand(todosReopenCmd)
-	todosReopenCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosReopenCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosReopenCmd.Flags().StringVar(&todoReopenComment, "comment", "", "Comment to add while reopening")
 	todosReopenCmd.Flags().StringVar(&todoReopenCommentFile, "comment-file", "", "Read reopen comment from file")
 }

@@ -123,6 +123,40 @@ func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 	}
 }
 
+func TestHeadlessPreparedPromptMatchesDispatchWithApprovedPlan(t *testing.T) {
+	var dispatched string
+	capture := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+		dispatched = req.Prompt.User
+		ch := make(chan captainai.Event, 1)
+		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+		close(ch)
+		return ch, nil
+	}
+	e := NewExecutor(Config{
+		WorkDir: t.TempDir(), Agent: "claude", Effort: "high",
+		ExistingPlan: "# Approved plan\n\n1. Keep the database authoritative.",
+		Stream:       capture,
+	})
+	todo := &types.TODO{
+		TODOFrontmatter: types.TODOFrontmatter{Title: "Cut over runtime storage"},
+		Implementation:  "Remove provider fallback.",
+	}
+	ctx := newTestCtx()
+	prepared, err := e.RenderRunPrompt(ctx, todo)
+	if err != nil {
+		t.Fatalf("RenderRunPrompt: %v", err)
+	}
+	if _, err := e.Execute(ctx, todo); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if prepared != dispatched {
+		t.Fatalf("prepared Captain prompt differs from dispatch:\nprepared: %q\ndispatched: %q", prepared, dispatched)
+	}
+	if !strings.Contains(prepared, "Approved plan") {
+		t.Fatalf("prepared prompt omitted approved plan: %q", prepared)
+	}
+}
+
 func TestHeadlessFailsWhenResultUnsuccessful(t *testing.T) {
 	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
 		captainai.Event{Kind: captainai.EventError, Error: "boom"},

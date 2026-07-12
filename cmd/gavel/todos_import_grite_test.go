@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImportGriteCommandIsDisposableAndDoesNotChangeProviderFlags(t *testing.T) {
+func TestImportGriteCommandIsDisposableAndRuntimeDefaultsToDB(t *testing.T) {
 	assert.True(t, todosImportGriteCmd.Hidden)
 	assert.Same(t, todosCmd, todosImportGriteCmd.Parent())
 	for _, name := range []string{"input", "probe-input", "workspace", "artifact-dir", "finalize", "plan-root", "frozen", "strict"} {
@@ -22,7 +22,7 @@ func TestImportGriteCommandIsDisposableAndDoesNotChangeProviderFlags(t *testing.
 	}
 	provider := todosCmd.PersistentFlags().Lookup("provider")
 	require.NotNil(t, provider)
-	assert.Equal(t, "grite", provider.DefValue, "milestone 5 must not cut over runtime provider routing")
+	assert.Equal(t, "db", provider.DefValue, "runtime TODO routing must remain PostgreSQL-only")
 }
 
 func TestValidateImportGriteOptions(t *testing.T) {

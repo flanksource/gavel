@@ -483,6 +483,200 @@ func (r *Repository) GetIssueByRef(ctx context.Context, workspaceID uuid.UUID, r
 	}
 }
 
+// GetIssueByGlobalRef resolves issue references without consulting a runtime
+// provider or requiring a workspace. Exact aliases remain authoritative over
+// UUIDs, including when an alias happens to be a valid native UUID. References
+// that identify issues in multiple workspaces are rejected as ambiguous.
+func (r *Repository) GetIssueByGlobalRef(ctx context.Context, ref string) (*Issue, error) {
+	ref = normalizeToken(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("%w: issue reference is required", ErrInvalidInput)
+	}
+
+	var exactAliases []struct{ IssueID uuid.UUID }
+	aliasResult := r.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT issue_id
+		FROM todo_issue_aliases
+		WHERE alias = ?
+		LIMIT 2`, ref,
+	).Scan(&exactAliases)
+	if aliasResult.Error != nil {
+		return nil, aliasResult.Error
+	}
+	switch len(exactAliases) {
+	case 1:
+		return getIssue(r.db.WithContext(ctx), `id = ?`, exactAliases[0].IssueID)
+	case 2:
+		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
+	}
+
+	if id, err := uuid.Parse(ref); err == nil {
+		issue, err := getIssue(r.db.WithContext(ctx), `id = ?`, id)
+		if err == nil || !errors.Is(err, ErrNotFound) {
+			return issue, err
+		}
+	}
+
+	compact := strings.ReplaceAll(ref, "-", "")
+	if len(compact) < MinShortReferenceLength {
+		return nil, fmt.Errorf("%w: short issue reference must contain at least %d characters", ErrInvalidInput, MinShortReferenceLength)
+	}
+	prefix := escapeLike(ref) + "%"
+	compactPrefix := escapeLike(compact) + "%"
+	var matches []struct{ IssueID uuid.UUID }
+	result := r.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT issue_id
+		FROM (
+			SELECT id AS issue_id
+			FROM todo_issues
+			WHERE replace(id::text, '-', '') LIKE ? ESCAPE '\'
+			UNION
+			SELECT issue_id
+			FROM todo_issue_aliases
+			WHERE alias LIKE ? ESCAPE '\'
+		) AS matched_refs
+		LIMIT 2`, compactPrefix, prefix,
+	).Scan(&matches)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("%w: issue reference %q", ErrNotFound, ref)
+	case 1:
+		return getIssue(r.db.WithContext(ctx), `id = ?`, matches[0].IssueID)
+	default:
+		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
+	}
+}
+
+// MoveIssueWorkspace transfers one issue between native workspaces without
+// changing its identity or deleting its history and Captain links. Issues with
+// relationships must be detached first because relationships are
+// workspace-scoped.
+func (r *Repository) MoveIssueWorkspace(
+	ctx context.Context,
+	issueID, targetWorkspaceID uuid.UUID,
+	expectedVersion int64,
+	actor string,
+) (*Issue, error) {
+	if issueID == uuid.Nil || targetWorkspaceID == uuid.Nil {
+		return nil, fmt.Errorf("%w: issue and target workspace IDs are required", ErrInvalidInput)
+	}
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sourceWorkspaceID, err := issueWorkspace(tx, issueID)
+		if err != nil {
+			return err
+		}
+		// Relationship mutations take this same workspace-scoped advisory lock.
+		// Taking it before the issue row lock preserves their lock ordering.
+		if err := lockWorkspaceRelationships(tx, sourceWorkspaceID); err != nil {
+			return err
+		}
+		locked, err := lockIssue(tx, issueID, expectedVersion)
+		if err != nil {
+			return err
+		}
+		if locked.WorkspaceID != sourceWorkspaceID {
+			return fmt.Errorf("%w: issue %s workspace changed during move", ErrVersionConflict, issueID)
+		}
+		if locked.WorkspaceID == targetWorkspaceID {
+			return ErrNoChanges
+		}
+
+		var targetWorkspace struct{ ID uuid.UUID }
+		targetResult := tx.Raw(`SELECT id FROM todo_workspaces WHERE id = ? FOR SHARE`, targetWorkspaceID).Scan(&targetWorkspace)
+		if targetResult.Error != nil {
+			return targetResult.Error
+		}
+		if targetResult.RowsAffected == 0 {
+			return fmt.Errorf("%w: workspace %s", ErrNotFound, targetWorkspaceID)
+		}
+
+		var hasRelationships bool
+		if err := tx.Raw(`
+			SELECT EXISTS(
+				SELECT 1 FROM todo_issue_relationships
+				WHERE issue_id = ? OR target_issue_id = ?
+			)`, issueID, issueID,
+		).Scan(&hasRelationships).Error; err != nil {
+			return err
+		}
+		if hasRelationships {
+			return fmt.Errorf("%w: issue %s", ErrIssueHasRelationships, issueID)
+		}
+
+		var aliases []Alias
+		if err := tx.Raw(`
+			SELECT workspace_id, alias, issue_id, COALESCE(kind, '') AS kind, created_at
+			FROM todo_issue_aliases
+			WHERE issue_id = ?
+			ORDER BY alias`, issueID,
+		).Scan(&aliases).Error; err != nil {
+			return err
+		}
+		var conflictingAlias string
+		conflictResult := tx.Raw(`
+			SELECT source.alias
+			FROM todo_issue_aliases AS source
+			JOIN todo_issue_aliases AS target
+			  ON target.workspace_id = ? AND target.alias = source.alias
+			WHERE source.issue_id = ?
+			LIMIT 1`, targetWorkspaceID, issueID,
+		).Scan(&conflictingAlias)
+		if conflictResult.Error != nil {
+			return conflictResult.Error
+		}
+		if conflictResult.RowsAffected > 0 {
+			return fmt.Errorf("%w: workspace %s alias %q", ErrAliasConflict, targetWorkspaceID, conflictingAlias)
+		}
+
+		// The alias foreign key includes workspace_id and is immediate. Remove
+		// and reinsert aliases inside this transaction so the issue and aliases
+		// never expose different workspaces while retaining alias metadata.
+		if err := tx.Exec(`DELETE FROM todo_issue_aliases WHERE issue_id = ?`, issueID).Error; err != nil {
+			return err
+		}
+		moveResult := tx.Exec(`
+			UPDATE todo_issues
+			SET workspace_id = ?
+			WHERE id = ? AND version = ?`, targetWorkspaceID, issueID, expectedVersion,
+		)
+		if moveResult.Error != nil {
+			return moveResult.Error
+		}
+		if moveResult.RowsAffected != 1 {
+			return fmt.Errorf("%w: issue %s expected version %d", ErrVersionConflict, issueID, expectedVersion)
+		}
+		for _, alias := range aliases {
+			result := tx.Exec(`
+				INSERT INTO todo_issue_aliases
+					(workspace_id, alias, issue_id, kind, created_at)
+				VALUES (?, ?, ?, NULLIF(?, ''), ?)`,
+				targetWorkspaceID, alias.Alias, issueID, alias.Kind, alias.CreatedAt,
+			)
+			if result.Error != nil {
+				return mapUniqueError(result.Error, ErrAliasConflict, "workspace %s alias %q", targetWorkspaceID, alias.Alias)
+			}
+		}
+
+		_, err = recordMutation(tx, locked, EventInput{
+			Kind:  "workspace_moved",
+			Actor: actor,
+			Payload: map[string]any{
+				"fromWorkspaceId": sourceWorkspaceID,
+				"toWorkspaceId":   targetWorkspaceID,
+			},
+		})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.GetIssue(ctx, issueID)
+}
+
 func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVersion int64, patch IssuePatch) (*Issue, error) {
 	updates := map[string]any{}
 	payload := map[string]any{}

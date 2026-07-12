@@ -44,13 +44,20 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 	if targetDir == filepath.Clean(workDir) {
 		return fmt.Errorf("project %q points at the current workspace; nothing to transfer", transferToProject)
 	}
+	if err := todos.ValidateRuntimeProvider(target.TodoProvider); err != nil {
+		return fmt.Errorf("target project %q: %w", target.Name, err)
+	}
 
 	source, err := newTodosProvider(workDir, todosDir)
 	if err != nil {
 		return err
 	}
+	targetProvider, err := openRuntimeTodosProvider(context.Background(), targetDir)
+	if err != nil {
+		return fmt.Errorf("open target native TODO workspace %q: %w", target.Name, err)
+	}
 
-	created, err := todos.Transfer(context.Background(), source, ui.ProviderForProject(target), args[0])
+	created, err := todos.Transfer(context.Background(), source, targetProvider, args[0])
 	if err != nil {
 		return err
 	}
@@ -63,5 +70,5 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 func init() {
 	todosCmd.AddCommand(todosTransferCmd)
 	todosTransferCmd.Flags().StringVar(&transferToProject, "to", "", "Target project name (from `gavel projects`)")
-	todosTransferCmd.Flags().StringVar(&todosDir, "dir", "", "Source TODOs directory (default: .todos)")
+	todosTransferCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 }

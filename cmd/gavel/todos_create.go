@@ -40,7 +40,7 @@ drafts AI acceptance criteria from the title/body (disable with --criteria=false
 
 func init() {
 	todosCmd.AddCommand(todosCreateCmd)
-	todosCreateCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosCreateCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosCreateCmd.Flags().StringVar(&todoCreateTitle, "title", "", "TODO title")
 	todosCreateCmd.Flags().StringVar(&todoCreateBody, "body", "", "TODO body")
 	todosCreateCmd.Flags().StringVar(&todoCreateBodyFile, "body-file", "", "Read TODO body from file")

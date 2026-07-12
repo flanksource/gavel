@@ -77,6 +77,9 @@ func HasPlan(todo *types.TODO) bool {
 	if todo.Status == types.StatusReview {
 		return true
 	}
+	if todo.Provider == ProviderDB && todo.PlanStatus != "" {
+		return true
+	}
 	return ValidatePlanFile(todo.PlanPath) == nil
 }
 

@@ -33,8 +33,8 @@ func (e *TODOExecutor) Mode() types.RunMode {
 //
 //	plan:  plan new/updated → review (plan file validated), unchanged → pending,
 //	       ask → ask
-//	run:   ask → ask, otherwise completed (an envelope-reported failure already
-//	       surfaced as an executor error before this point)
+//	run:   ask → ask, verified/unverified from an executed definition of done,
+//	       otherwise pending. Closing is a separate human workflow transition.
 func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
 	if todo.LLM == nil {
 		todo.LLM = &types.LLM{}
@@ -74,12 +74,12 @@ func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, resul
 			todo.Status = types.StatusUnverified
 		}
 	default:
-		todo.Status = types.StatusCompleted
+		todo.Status = types.StatusPending
 	}
 	update.Status = &todo.Status
 
 	if err := e.saveAttempt(ctx, todo, result); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save attempt: %v\n", err)
+		return fmt.Errorf("persist TODO attempt: %w", err)
 	}
 	e.updateProviderState(ctx, todo, update)
 	return nil
@@ -133,6 +133,25 @@ func (e *TODOExecutor) Resume(ctx *ExecutorContext, todosInGroup []*types.TODO, 
 	fb, ok := e.executor.(FeedbackExecutor)
 	if !ok {
 		return nil, fmt.Errorf("executor %s cannot resume a session", e.executor.Name())
+	}
+	if lifecycle, ok := e.activeProvider().(RunLifecycleProvider); ok {
+		for _, todo := range todosInGroup {
+			if err := lifecycle.PrepareRun(ctx, todo, RunPreparation{
+				Mode: e.Mode(), ExecutorName: e.executor.Name(), Resume: true,
+				PromptMarkdown: message,
+			}); err != nil {
+				return nil, fmt.Errorf("prepare resumed native TODO run: %w", err)
+			}
+			sessionID := ""
+			if todo.LLM != nil {
+				sessionID = todo.LLM.SessionId
+			}
+			if err := lifecycle.RecordRunStart(ctx, todo, RunStartMetadata{
+				SessionID: sessionID, Mode: string(e.Mode()), ResolvedModel: e.executor.Name(),
+			}); err != nil {
+				return nil, fmt.Errorf("resume native TODO run: %w", err)
+			}
+		}
 	}
 	now := time.Now()
 	for _, todo := range todosInGroup {

@@ -41,8 +41,8 @@ func init() {
 	todosCmd.AddCommand(todosPlanCmd)
 	todosPlanCmd.AddCommand(todosPlanRejectCmd)
 	todosPlanCmd.AddCommand(todosPlanReviseCmd)
-	todosPlanRejectCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
-	todosPlanReviseCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosPlanRejectCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
+	todosPlanReviseCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosPlanReviseCmd.Flags().StringVar(&planReviseFeedback, "feedback", "", "The change request for the agent to fold into the plan (required)")
 }
 
@@ -57,15 +57,14 @@ func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provid
 	if err != nil {
 		return "", nil, nil, err
 	}
-	todoList, err := provider.List(ctx, todos.DiscoveryFilters{})
+	todoList, err := resolveRequestedTODOs(ctx, provider, args, todos.DiscoveryFilters{})
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("failed to discover TODOs: %w", err)
 	}
-	matched := filterTODOsByArgs(todoList, args, workDir)
-	if len(matched) != 1 {
-		return "", nil, nil, fmt.Errorf("expected exactly one TODO matching %q, found %d", args[0], len(matched))
+	if len(todoList) != 1 {
+		return "", nil, nil, fmt.Errorf("expected exactly one TODO matching %q, found %d", args[0], len(todoList))
 	}
-	todo := matched[0]
+	todo := todoList[0]
 	if todo.Status != types.StatusReview {
 		return "", nil, nil, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status)
 	}
@@ -78,11 +77,12 @@ func runTodosPlanReject(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	pending := types.StatusPending
-	clearedPath := ""
-	clearedStatus := types.PlanStatus("")
-	todo.Status = pending
-	if err := provider.UpdateState(ctx, todo, todos.StateUpdate{Status: &pending, PlanPath: &clearedPath, PlanStatus: &clearedStatus}); err != nil {
+	reviewer, ok := provider.(todos.PlanReviewProvider)
+	if !ok {
+		return fmt.Errorf("native PostgreSQL TODO provider does not support durable plan review")
+	}
+	todo, err = reviewer.RejectPlan(ctx, todo, "gavel-cli", "")
+	if err != nil {
 		return err
 	}
 	logger.Infof("Rejected plan for %s — back to pending", todo.Filename())
@@ -102,7 +102,12 @@ func runTodosPlanRevise(_ *cobra.Command, args []string) error {
 	if todo.LLM == nil || todo.LLM.SessionId == "" {
 		return fmt.Errorf("todo has no recorded plan session to revise")
 	}
-	if err := provider.Comment(ctx, todo, "**Requested changes:** "+feedback); err != nil {
+	reviewer, ok := provider.(todos.PlanReviewProvider)
+	if !ok {
+		return fmt.Errorf("native PostgreSQL TODO provider does not support durable plan review")
+	}
+	todo, err = reviewer.RequestPlanRevision(ctx, todo, "gavel-cli", feedback)
+	if err != nil {
 		return err
 	}
 
@@ -111,7 +116,7 @@ func runTodosPlanRevise(_ *cobra.Command, args []string) error {
 	todosRunMode = types.ModePlan
 	resumeSession = true
 	cwd := todoWorkDir(workDir, todo)
-	executor, sessionID, err := newExecutor(cwd, todo)
+	executor, sessionID, err := newExecutor(cwd, todo, provider)
 	if err != nil {
 		return err
 	}

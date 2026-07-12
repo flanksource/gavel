@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -243,10 +244,11 @@ func (ctx *ExecutorContext) SetRunStartHook(fn func(RunStartMetadata)) {
 }
 
 // RecordRunStart reports the run metadata to the registered hook (if any). A
-// blank session id is ignored because the issue comment must identify the
-// resumable session.
+// blank provider session ID is ignored; native execution was already created
+// and attached by PrepareRun before dispatch, and the later callback binds the
+// external identity plus resolved model.
 func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
-	if meta.SessionID == "" || ctx.onRunStart == nil {
+	if strings.TrimSpace(meta.SessionID) == "" || ctx.onRunStart == nil {
 		return
 	}
 	ctx.onRunStart(meta)

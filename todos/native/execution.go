@@ -56,16 +56,25 @@ func NewExecutionIntegration(repository *Repository) (*ExecutionIntegration, err
 // Replaying an already-completed attachment is a no-op even when the caller is
 // retrying with the original issue version after losing the first response.
 func (s *ExecutionIntegration) ActivatePromptRun(ctx context.Context, input PromptRunAttachment) (*Issue, error) {
+	issue, _, err := s.activatePromptRun(ctx, input)
+	return issue, err
+}
+
+// activatePromptRun also reports whether this transaction inserted the durable
+// issue-to-run link. Only that caller owns external dispatch; an exact replay
+// may resolve the same records but must not start a second agent process.
+func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input PromptRunAttachment) (*Issue, bool, error) {
 	if input.IssueID == uuid.Nil || input.PromptRunID == uuid.Nil {
-		return nil, fmt.Errorf("%w: issue and prompt run IDs are required", ErrInvalidInput)
+		return nil, false, fmt.Errorf("%w: issue and prompt run IDs are required", ErrInvalidInput)
 	}
 	if !input.StepKind.valid() {
-		return nil, fmt.Errorf("%w: unsupported prompt step %q", ErrInvalidInput, input.StepKind)
+		return nil, false, fmt.Errorf("%w: unsupported prompt step %q", ErrInvalidInput, input.StepKind)
 	}
 	if input.Ordinal < 0 {
-		return nil, fmt.Errorf("%w: prompt run ordinal cannot be negative", ErrInvalidInput)
+		return nil, false, fmt.Errorf("%w: prompt run ordinal cannot be negative", ErrInvalidInput)
 	}
 
+	dispatchOwned := false
 	err := s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		issue, err := lockExecutionIssue(tx, input.IssueID)
 		if err != nil {
@@ -104,6 +113,7 @@ func (s *ExecutionIntegration) ActivatePromptRun(ctx context.Context, input Prom
 			if insert.Error != nil {
 				return mapUniqueError(insert.Error, ErrLinkConflict, "prompt run %s", input.PromptRunID)
 			}
+			dispatchOwned = true
 		}
 		if err := tx.Exec(`
 			UPDATE todo_issues SET active_prompt_run_id = ? WHERE id = ?`,
@@ -131,9 +141,10 @@ func (s *ExecutionIntegration) ActivatePromptRun(ctx context.Context, input Prom
 		return projectPromptRun(tx, input.PromptRunID)
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return s.repository.GetIssue(ctx, input.IssueID)
+	issue, err := s.repository.GetIssue(ctx, input.IssueID)
+	return issue, dispatchOwned, err
 }
 
 // SelectPlan atomically inserts the issue-to-plan link and selects it. Plan

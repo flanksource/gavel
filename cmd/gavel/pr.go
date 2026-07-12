@@ -26,12 +26,14 @@ var prCmd = &cobra.Command{
 
 Prefer these over raw gh for PR/CI work — gavel renders workflow steps,
 conclusions, timing, and failing-step logs in one view, and can feed failures
-into the AI or into .todos/. Reserve raw gh for actions gavel does not cover.
+into the AI. The former .todos sync workflow is retained only as a compatibility
+error with PostgreSQL migration guidance. Reserve raw gh for actions gavel does
+not cover.
 
 Subcommands:
   status   Show a PR's Actions status (replaces gh pr view / gh run view / gh run list)
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
-  fix      Sync TODOs from a PR's failures/comments, then interactively fix them
+  fix      Explain the retired file-backed PR TODO workflow
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
 
 Examples:
@@ -39,7 +41,7 @@ Examples:
   gavel pr status 123 --logs      # PR #123 with failing-job logs
   gavel pr status --follow        # block until checks complete
   gavel pr create <SHA>           # open a PR from one commit
-  gavel pr fix                    # sync + fix failing checks/comments
+  gavel pr fix                    # show PostgreSQL migration guidance
   gavel pr list --ui              # live PR dashboard`,
 }
 
@@ -49,7 +51,7 @@ type PRStatusOptions struct {
 	Interval  string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
 	Logs      bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
 	TailLogs  int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
-	SyncTodos string          `flag:"sync-todos" help:"Sync TODO files for failed jobs to directory"`
+	SyncTodos string          `flag:"sync-todos" help:"Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"`
 	Comments  []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
 	Actions   []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, and workflow name"`
 	Args      []string        `args:"true"`
@@ -77,7 +79,7 @@ or a full PR URL.
 Key flags:
   --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
-  --sync-todos DIR  Write .todos for failed jobs + review comments (bare flag -> .todos)
+  --sync-todos DIR  Retired compatibility flag; returns PostgreSQL migration guidance
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, or name
   --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
@@ -91,11 +93,14 @@ Examples:
   gavel pr status 123 --logs                   # include failing-job logs
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
-  gavel pr status --sync-todos                 # turn failures + comments into .todos
+  gavel pr status --sync-todos                 # explain the retired file-backed workflow
   gavel pr status --ai-fix                     # feed status into the AI to fix failures`
 }
 
 func runPRStatus(opts PRStatusOptions) (any, error) {
+	if opts.SyncTodos != "" {
+		return nil, retiredTODOFileRuntimeError("gavel pr status", "--sync-todos")
+	}
 	repo, prNumber, err := parseStatusArgs(opts.Args)
 	if err != nil {
 		return nil, err
@@ -142,15 +147,6 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if opts.Logs && !resultHasFailedRun(result) {
 		logger.Infof("--logs had no effect: no failed jobs found (logs are only shown for failed jobs)")
 	}
-	if opts.SyncTodos != "" {
-		if err := prwatch.SyncTodos(result, opts.SyncTodos); err != nil {
-			logger.Warnf("failed to sync todos: %v", err)
-		}
-		if err := prwatch.SyncCommentTodos(result.Comments, result.PR, opts.SyncTodos); err != nil {
-			logger.Warnf("failed to sync comment todos: %v", err)
-		}
-	}
-
 	if opts.AIFix {
 		// Print the status block first so the user sees the input the AI is
 		// about to act on before live ai-fix events start streaming to
@@ -233,5 +229,6 @@ func init() {
 	statusCmd := clicky.AddNamedCommand("status", prCmd, PRStatusOptions{}, runPRStatus)
 	if f := statusCmd.Flags().Lookup("sync-todos"); f != nil {
 		f.NoOptDefVal = ".todos"
+		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
 	}
 }

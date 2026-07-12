@@ -73,7 +73,7 @@ func init() {
 		todosCriteriaListCmd, todosCriteriaAddCmd, todosCriteriaRemoveCmd,
 		todosCriteriaEditCmd, todosCriteriaGenerateCmd,
 	} {
-		c.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+		c.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 		todosCriteriaCmd.AddCommand(c)
 	}
 	todosCriteriaGenerateCmd.Flags().StringVar(&todoCriteriaModel, "model", "", "LLM model for acceptance-criteria generation")

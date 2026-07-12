@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,19 +10,29 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
 var loadTodoProjects = ui.LoadProjects
 
+// openRuntimeTodosProvider is the only production provider constructor used by
+// TODO commands. It is a variable solely so command tests can exercise routing
+// without requiring a process-owned PostgreSQL instance.
+var openRuntimeTodosProvider = func(ctx context.Context, workDir string) (todos.Provider, error) {
+	return todoruntime.Open(ctx, workDir)
+}
+
 func runTodosList(opts TodosListOptions) (any, error) {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
+	}
+	if err := validateRuntimeTODOSelection(opts.Dir); err != nil {
+		return nil, err
 	}
 	var since time.Time
 	if opts.Since != "" {
@@ -41,10 +52,10 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	ctx := context.Background()
 	var todoList types.TODOS
 	if opts.All {
-		if opts.Dir != "" {
-			return nil, fmt.Errorf("--dir cannot be used with --all")
+		todoList, err = listAllProjectTodos(ctx, loadTodoProjects(), filters)
+		if err != nil {
+			return nil, err
 		}
-		todoList = listAllProjectTodos(ctx, loadTodoProjects(), filters)
 	} else {
 		provider, err := newTodosProvider(workDir, opts.Dir)
 		if err != nil {
@@ -85,29 +96,35 @@ func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
 }
 
 // listAllProjectTodos aggregates TODOs from every registered workspace using
-// the same per-project provider resolution as the dashboard. Duplicate project
-// entries that resolve to the same directory and backend are queried once.
-// One stale or unavailable workspace should not hide results from the others,
-// so project-local failures are reported as warnings and skipped.
-func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) types.TODOS {
+// the native PostgreSQL runtime. Duplicate project entries that resolve to the
+// same directory are queried once; stored legacy provider preferences are
+// intentionally ignored because they can no longer select runtime storage.
+// Every database open/list failure is returned: treating an unavailable
+// database as an empty workspace would be a false successful result.
+func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) (types.TODOS, error) {
 	seen := map[string]struct{}{}
 	var todoList types.TODOS
+	var failures []error
 	for _, project := range projects {
 		dir := project.ResolvedDir()
 		if strings.TrimSpace(dir) == "" {
 			logger.Warnf("list todos for project %q: workspace directory is empty", project.Name)
 			continue
 		}
-		backend := strings.TrimSuffix(ui.TodoBackendLabel(dir, project.TodoProvider), " (auto)")
-		key := filepath.Clean(dir) + "\x00" + backend
+		key := filepath.Clean(dir)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 
-		items, err := ui.ProviderForProject(project).List(ctx, filters)
+		provider, err := openRuntimeTodosProvider(ctx, dir)
 		if err != nil {
-			logger.Warnf("list todos for project %q (%s): %v", project.Name, dir, err)
+			failures = append(failures, fmt.Errorf("open native TODO workspace for project %q (%s): %w", project.Name, dir, err))
+			continue
+		}
+		items, err := provider.List(ctx, filters)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("list native TODOs for project %q (%s): %w", project.Name, dir, err))
 			continue
 		}
 		for _, todo := range items {
@@ -121,7 +138,7 @@ func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters tod
 		todoList = append(todoList, items...)
 	}
 	todoList.Sort()
-	return todoList
+	return todoList, errors.Join(failures...)
 }
 
 func runTodosGet(cmd *cobra.Command, args []string) error {
@@ -154,35 +171,14 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var todoList []*types.TODO
-
-	hasFilePaths := selectedTodosProvider() == todos.ProviderFiles && len(args) > 0 && (filepath.IsAbs(args[0]) || strings.Contains(args[0], string(filepath.Separator)))
-
-	if hasFilePaths {
-		logger.Infof("Checking specific TODO files...")
-		for _, arg := range args {
-			todo, err := provider.Get(context.Background(), arg)
-			if err != nil {
-				return err
-			}
-			todoList = append(todoList, todo)
-		}
-	} else {
-		logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
-
-		filters := todos.DiscoveryFilters{}
-		if filterStatus != "" {
-			filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
-		}
-
-		todoList, err = provider.List(context.Background(), filters)
-		if err != nil {
-			return fmt.Errorf("failed to discover TODOs: %w", err)
-		}
-
-		if len(args) > 0 {
-			todoList = filterTODOsByArgs(todoList, args, workDir)
-		}
+	logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
+	filters := todos.DiscoveryFilters{}
+	if filterStatus != "" {
+		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
+	}
+	todoList, err := resolveRequestedTODOs(context.Background(), provider, args, filters)
+	if err != nil {
+		return fmt.Errorf("failed to discover TODOs: %w", err)
 	}
 
 	if len(todoList) == 0 {
@@ -237,13 +233,13 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
-	todosCmd.PersistentFlags().StringVar(&todosProvider, "provider", todos.ProviderGrite, "TODO provider: grite or todos")
+	todosCmd.PersistentFlags().StringVar(&todosProvider, "provider", todos.ProviderDB, "Deprecated compatibility selector; only db is accepted")
 	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
 	todosCmd.AddCommand(todosGetCmd)
 	todosCmd.AddCommand(todosCheckCmd)
 
-	todosRunCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosRunCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosRunCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed TODOs")
 	todosRunCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status (pending, in_progress, failed)")
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
@@ -260,66 +256,84 @@ func init() {
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
 
-	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 
-	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "TODOs directory (default: .todos)")
+	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
 }
 
 func selectedTodosProvider() string {
-	if todosProvider == "" {
-		return todos.ProviderGrite
+	if strings.TrimSpace(todosProvider) == "" {
+		return todos.ProviderDB
 	}
-	return todosProvider
+	return strings.TrimSpace(todosProvider)
 }
 
 func newTodosProvider(workDir, dir string) (todos.Provider, error) {
-	switch selectedTodosProvider() {
-	case todos.ProviderGrite:
-		if dir != "" {
-			return nil, fmt.Errorf("--dir is only supported with --provider=todos")
-		}
-		return todos.ResolveGriteProvider(workDir, cache.Shared(), 0), nil
-	case todos.ProviderFiles:
-		return todos.NewFileProvider(workDir, dir), nil
-	default:
-		return nil, fmt.Errorf("unknown todos provider %q (expected grite or todos)", selectedTodosProvider())
+	if err := validateRuntimeTODOSelection(dir); err != nil {
+		return nil, err
 	}
+	return openRuntimeTodosProvider(context.Background(), workDir)
 }
 
-func filterTODOsByArgs(todoList types.TODOS, args []string, workDir string) types.TODOS {
-	var filtered types.TODOS
-	for _, todo := range todoList {
-		for _, arg := range args {
-			if todoMatchesArg(todo, arg, workDir) {
-				filtered = append(filtered, todo)
-				break
+func validateRuntimeTODOSelection(dir string) error {
+	if err := todos.ValidateRuntimeProvider(selectedTodosProvider()); err != nil {
+		return err
+	}
+	if strings.TrimSpace(dir) != "" {
+		return fmt.Errorf("--dir is retired for runtime TODO commands; PostgreSQL is the only runtime store (omit --dir and use explicit import/export commands for .todos files)")
+	}
+	return nil
+}
+
+func retiredTODOFileRuntimeError(command, option string) error {
+	return fmt.Errorf("%s %s is retired: PostgreSQL is the only runtime TODO store; use `gavel todos create`, `gavel todos sync`, and `gavel todos run` for native TODOs, and reserve .todos/Grite data for explicit import/export migration commands (`gavel todos import-grite` for Grite)", command, option)
+}
+
+// resolveRequestedTODOs preserves direct native reference semantics for UUIDs,
+// safe short IDs, and imported aliases. Listing first would discard legacy
+// aliases because list rows expose the canonical native UUID.
+func resolveRequestedTODOs(ctx context.Context, provider todos.Provider, args []string, filters todos.DiscoveryFilters) (types.TODOS, error) {
+	if len(args) == 0 {
+		return provider.List(ctx, filters)
+	}
+
+	resolved := make(types.TODOS, 0, len(args))
+	seen := map[string]struct{}{}
+	var listed types.TODOS
+	for _, ref := range args {
+		todo, err := provider.Get(ctx, ref)
+		if err != nil {
+			// Preserve exact-title CLI compatibility without replacing the native
+			// repository's prefix length and ambiguity checks.
+			if listed == nil {
+				listed, _ = provider.List(ctx, todos.DiscoveryFilters{})
 			}
+			var titleMatches types.TODOS
+			for _, candidate := range listed {
+				if candidate != nil && strings.EqualFold(candidate.Title, ref) {
+					titleMatches = append(titleMatches, candidate)
+				}
+			}
+			if len(titleMatches) != 1 {
+				return nil, err
+			}
+			todo = titleMatches[0]
 		}
+		if !filters.Matches(todo) {
+			continue
+		}
+		key := todo.ID
+		if key == "" {
+			key = todos.TODOReference(todo)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		resolved = append(resolved, todo)
 	}
-	return filtered
-}
-
-func todoMatchesArg(todo *types.TODO, arg, workDir string) bool {
-	if todo == nil {
-		return false
-	}
-	if todo.ID != "" && (strings.EqualFold(todo.ID, arg) || strings.HasPrefix(todo.ID, arg)) {
-		return true
-	}
-	if todo.Title != "" && strings.EqualFold(todo.Title, arg) {
-		return true
-	}
-	if strings.EqualFold(todo.Filename(), arg) {
-		return true
-	}
-	if todo.FilePath == "" || (!strings.Contains(arg, string(filepath.Separator)) && !strings.HasSuffix(arg, ".md")) {
-		return false
-	}
-	absArg := arg
-	if !filepath.IsAbs(arg) {
-		absArg = filepath.Join(workDir, arg)
-	}
-	return filepath.Clean(absArg) == filepath.Clean(todo.FilePath)
+	resolved.Sort()
+	return resolved, nil
 }

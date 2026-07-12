@@ -112,9 +112,9 @@ Examples:
 }
 
 type TodosListOptions struct {
-	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
+	Dir     string `json:"dir" flag:"dir" help:"Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
-	All     bool   `json:"all" flag:"all" help:"List TODOs from all registered projects using each project's provider"`
+	All     bool   `json:"all" flag:"all" help:"List PostgreSQL-backed TODOs from all registered projects"`
 	Done    bool   `json:"done" flag:"done" help:"Include verified and completed TODOs"`
 	Since   string `json:"since" flag:"since" help:"Show TODOs created or updated since (e.g. 7d, now-30d, 2024-01-01)"`
 	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
@@ -188,13 +188,9 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
 	}
 
-	todoList, err := provider.List(context.Background(), filters)
+	todoList, err := resolveRequestedTODOs(context.Background(), provider, args, filters)
 	if err != nil {
 		return fmt.Errorf("failed to discover TODOs: %w", err)
-	}
-
-	if len(args) > 0 {
-		todoList = filterTODOsByArgs(todoList, args, workDir)
 	}
 
 	if interactive && len(args) == 0 && len(todoList) > 0 {
@@ -215,7 +211,12 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	}
 
 	effectiveGroupBy := groupBy
-	if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" && effectiveGroupBy == "" {
+	if policy, ok := provider.(todos.GroupExecutionPolicy); ok && !policy.SupportsGroupedExecution() {
+		if effectiveGroupBy != "" && effectiveGroupBy != todos.GroupByNone {
+			return fmt.Errorf("--group-by is not supported by the native PostgreSQL runtime; run one issue at a time")
+		}
+		effectiveGroupBy = todos.GroupByNone
+	} else if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" && effectiveGroupBy == "" {
 		effectiveGroupBy = todos.GroupByRepo
 	}
 
@@ -226,7 +227,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	if dryRun {
-		return dryRunTODOs(groups, workDir)
+		return dryRunTODOs(groups, workDir, provider)
 	}
 
 	interaction := newInteraction()
@@ -262,12 +263,15 @@ func newInteraction() *todos.UserInteraction {
 	}
 }
 
-func newExecutor(workDir string, todo *types.TODO) (todos.Executor, string, error) {
+func newExecutor(workDir string, todo *types.TODO, provider todos.Provider) (todos.Executor, string, error) {
 	kind, err := resolveDriverKind(todo)
 	if err != nil {
 		return nil, "", err
 	}
-	cfg := newDriverConfig(kind, workDir, todo)
+	cfg, err := newDriverConfig(context.Background(), kind, workDir, todo, provider)
+	if err != nil {
+		return nil, "", err
+	}
 	if todosRunMode != types.ModePlan {
 		// Post-run checks are fixture-backed verify plugins inside the agent loop.
 		// --check force-enables them (a bare Workflow.Verify); .gavel.yaml/frontmatter
@@ -306,7 +310,7 @@ func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 // cmux mints and manages its own --session-id (reading any prior session from
 // the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
 // resume by carrying the prior session id explicitly.
-func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) drivers.Config {
+func newDriverConfig(ctx context.Context, kind drivers.Kind, workDir string, todo *types.TODO, provider todos.Provider) (drivers.Config, error) {
 	model := ""
 	prior := ""
 	var maxCost float64
@@ -351,16 +355,29 @@ func newDriverConfig(kind drivers.Kind, workDir string, todo *types.TODO) driver
 	if todo != nil && (todosRunMode == types.ModePlan || todosRunMode == types.ModeRun) {
 		// Plan mode: the recorded plan feeds a re-plan (updated/unchanged). Run
 		// mode: the approved/edited plan steers the implementation.
-		content, _, _, err := todos.ReadPlanFile(todo.PlanPath)
+		content, err := nativeExistingPlan(ctx, provider, todo, todosRunMode)
 		if err != nil {
-			logger.Warnf("read recorded plan %s: %v", todo.PlanPath, err)
+			return drivers.Config{}, err
 		}
 		cfg.ExistingPlan = content
 	}
 	if kind.Mechanism() != "cmux" {
 		cfg.SessionID = prior
 	}
-	return cfg
+	return cfg, nil
+}
+
+// nativeExistingPlan loads plan content through the active DB provider.
+// Plan paths are source metadata only and are never read on the DB runtime.
+func nativeExistingPlan(ctx context.Context, provider todos.Provider, todo *types.TODO, mode types.RunMode) (string, error) {
+	if provider == nil || todo == nil {
+		return "", nil
+	}
+	contentProvider, ok := provider.(todos.PlanContentProvider)
+	if !ok {
+		return "", fmt.Errorf("native PostgreSQL TODO provider does not support durable plan content")
+	}
+	return contentProvider.PlanMarkdown(ctx, todo, mode)
 }
 
 func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.UserInteraction, provider todos.Provider) error {
@@ -374,13 +391,14 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID, err := newExecutor(workDir, group.TODOs[0])
+		executor, sessionID, err := newExecutor(workDir, group.TODOs[0], provider)
 		if err != nil {
 			cancel()
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.SetMode(todosRunMode)
+		todoExec.SetResume(resumeSession)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -446,13 +464,14 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID, err := newExecutor(workDir, todo)
+		executor, sessionID, err := newExecutor(workDir, todo, provider)
 		if err != nil {
 			cancel()
 			return err
 		}
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.SetMode(todosRunMode)
+		todoExec.SetResume(resumeSession)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -536,7 +555,7 @@ func safeResult(results []*todos.ExecutionResult, i int) *todos.ExecutionResult 
 	return nil
 }
 
-func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
+func dryRunTODOs(groups []todos.TODOGroup, workDir string, provider todos.Provider) error {
 	isGrouped := len(groups) > 1 || (len(groups) == 1 && groups[0].Name != "")
 
 	for _, group := range groups {
@@ -545,7 +564,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 		}
 
 		if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" {
-			if err := printCmuxDryRun(group, workDir); err != nil {
+			if err := printCmuxDryRun(group, workDir, provider); err != nil {
 				return err
 			}
 			continue
@@ -555,7 +574,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 			fmt.Printf("=== Group: %s ===\n\n", group.Name)
 			printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 			fmt.Println("### Prompt")
-			groupPrompt, err := buildTodoRunPrompt(group.TODOs, workDir)
+			groupPrompt, err := buildTodoRunPrompt(group.TODOs, workDir, provider)
 			if err != nil {
 				return err
 			}
@@ -566,7 +585,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string) error {
 				fmt.Printf("=== TODO: %s ===\n\n", todo.Filename())
 				printTodoCommands("Pre-check commands (steps_to_reproduce)", todo.StepsToReproduce)
 				fmt.Println("### Prompt")
-				todoPrompt, err := buildTodoRunPrompt([]*types.TODO{todo}, workDir)
+				todoPrompt, err := buildTodoRunPrompt([]*types.TODO{todo}, workDir, provider)
 				if err != nil {
 					return err
 				}
@@ -597,7 +616,7 @@ func validateTodosRunOptions() error {
 	return nil
 }
 
-func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
+func printCmuxDryRun(group todos.TODOGroup, workDir string, provider todos.Provider) error {
 	groupWorkDir := workDir
 	if group.Name != "" && group.Name != todos.UngroupedLabel && filepath.IsAbs(group.Name) {
 		groupWorkDir = group.Name
@@ -629,7 +648,7 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 	fmt.Println()
 	printSectionCommands("Pre-check commands (steps_to_reproduce)", group.TODOs, func(t *types.TODO) []*fixtures.FixtureNode { return t.StepsToReproduce })
 	fmt.Println("### Prompt")
-	cmuxPrompt, err := buildTodoRunPrompt(group.TODOs, workDir)
+	cmuxPrompt, err := buildTodoRunPrompt(group.TODOs, workDir, provider)
 	if err != nil {
 		return err
 	}
@@ -640,7 +659,7 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string) error {
 
 // buildTodoRunPrompt renders the mode's prompt exactly as a dispatch would:
 // framing, sections, effort directive, and the envelope schema instruction.
-func buildTodoRunPrompt(todoList []*types.TODO, workDir string) (string, error) {
+func buildTodoRunPrompt(todoList []*types.TODO, workDir string, provider todos.Provider) (string, error) {
 	mode := todosRunMode
 	if mode == "" {
 		mode = types.ModeRun
@@ -654,7 +673,10 @@ func buildTodoRunPrompt(todoList []*types.TODO, workDir string) (string, error) 
 	// dry-run preview matches the run (an approved plan for run mode, the prior
 	// plan for a re-plan).
 	if len(todoList) == 1 && (mode == types.ModePlan || mode == types.ModeRun) {
-		content, _, _, _ := todos.ReadPlanFile(todoList[0].PlanPath)
+		content, err := nativeExistingPlan(context.Background(), provider, todoList[0], mode)
+		if err != nil {
+			return "", err
+		}
 		opts.ExistingPlan = content
 	}
 	req, _, err := todoprompt.Render(todoList, opts)

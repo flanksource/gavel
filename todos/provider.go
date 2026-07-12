@@ -2,6 +2,7 @@ package todos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,40 @@ import (
 const (
 	ProviderFiles = "todos"
 	ProviderGrite = "grite"
+	ProviderDB    = "db"
 )
+
+var (
+	// ErrProviderRetired marks legacy runtime provider selection. Grite and
+	// .todos remain migration/import-export inputs only; they are never fallbacks.
+	ErrProviderRetired = errors.New("runtime TODO provider is retired")
+
+	// ErrRunDispatchAlreadyClaimed means another caller already won the durable
+	// admission for this exact Captain prompt run. The caller must not dispatch a
+	// second external agent for the idempotently resolved database record.
+	ErrRunDispatchAlreadyClaimed = errors.New("native TODO run dispatch already claimed")
+
+	// ErrRunResumeModeMismatch means a caller tried to resume one nonterminal
+	// Captain operation using a different Gavel step kind.
+	ErrRunResumeModeMismatch = errors.New("native TODO run resume mode mismatch")
+)
+
+// ValidateRuntimeProvider accepts only the native database identity during the
+// one-release compatibility window. Legacy flags/parameters remain parseable
+// so callers receive a migration error instead of silently selecting old data.
+func ValidateRuntimeProvider(value string) error {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", ProviderDB:
+		return nil
+	case ProviderGrite:
+		return fmt.Errorf("%w: provider %q cannot be selected; run gavel todos import-grite, then omit --provider or use --provider=%s", ErrProviderRetired, value, ProviderDB)
+	case ProviderFiles, "auto":
+		return fmt.Errorf("%w: provider %q cannot be selected; .todos is import/export-only and PostgreSQL is the runtime store", ErrProviderRetired, value)
+	default:
+		return fmt.Errorf("%w: unknown provider %q; PostgreSQL provider %q is the only runtime store", ErrProviderRetired, value, ProviderDB)
+	}
+}
 
 // Provider is the persistence boundary for TODO storage.
 type Provider interface {
@@ -33,6 +67,75 @@ type Provider interface {
 	// SaveVerification records an issue-verification verdict as a persistent
 	// "## Verification Result" section/comment, replacing any prior result.
 	SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error
+}
+
+// RunPreparation is the durable identity needed before an external agent is
+// dispatched. PostgreSQL-backed providers use it to create and attach the
+// authoritative Captain prompt run before any provider session starts.
+type RunPreparation struct {
+	Mode         types.RunMode
+	ExecutorName string
+	Resume       bool
+	// PromptMarkdown is the exact user prompt the executor will dispatch. Native
+	// storage persists it on Captain's prompt run before external execution.
+	PromptMarkdown string
+}
+
+// RunPromptProvider exposes the exact initial user prompt an executor will
+// dispatch. TODOExecutor asks for it before native admission so Captain stores
+// the same prompt rather than a lossy reconstruction from the issue body.
+type RunPromptProvider interface {
+	RenderRunPrompt(ctx *ExecutorContext, todo *types.TODO) (string, error)
+}
+
+// RunLifecycleProvider is implemented by the native PostgreSQL runtime. The
+// legacy provider interface remains temporarily for executor/test plumbing,
+// but native execution state is owned by Captain and projected into issues.
+type RunLifecycleProvider interface {
+	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) error
+	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
+}
+
+// GroupExecutionPolicy lets a persistence boundary reject execution shapes
+// that its data model cannot represent. Native prompt runs are single-issue.
+type GroupExecutionPolicy interface {
+	SupportsGroupedExecution() bool
+}
+
+// GlobalReferenceProvider resolves a native UUID or imported alias without a
+// caller first listing every workspace. Ambiguous cross-workspace aliases must
+// be reported rather than guessed.
+type GlobalReferenceProvider interface {
+	GetGlobal(ctx context.Context, ref string) (*types.TODO, error)
+}
+
+// TransferProvider preserves native identity/history when moving an issue
+// between database workspaces. The legacy copy/delete fallback remains only
+// for explicit import/export cleanup until M7 removes runtime file providers.
+type TransferProvider interface {
+	MoveTo(ctx context.Context, todo *types.TODO, target Provider) (*types.TODO, error)
+}
+
+// PlanReviewProvider persists review decisions against Captain's durable plan
+// revisions while keeping Gavel's issue link/version in the same operation.
+type PlanReviewProvider interface {
+	ApprovePlan(ctx context.Context, todo *types.TODO, actor, comment string) (*types.TODO, error)
+	RejectPlan(ctx context.Context, todo *types.TODO, actor, comment string) (*types.TODO, error)
+	RequestPlanRevision(ctx context.Context, todo *types.TODO, actor, feedback string) (*types.TODO, error)
+}
+
+// PlanContentProvider resolves the durable Captain plan content that should be
+// fed to an agent. Plan mode receives the latest selected revision so it can
+// revise it; run mode receives only the explicitly approved revision.
+type PlanContentProvider interface {
+	PlanMarkdown(ctx context.Context, todo *types.TODO, mode types.RunMode) (string, error)
+}
+
+// PlanRevisionProvider appends a human-edited immutable Captain revision and
+// keeps it selected on the native issue. Implementations must not rewrite an
+// agent-owned plan file.
+type PlanRevisionProvider interface {
+	SavePlanRevision(ctx context.Context, todo *types.TODO, markdown, actor string) (*types.TODO, error)
 }
 
 type CreateRequest struct {
