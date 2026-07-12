@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
@@ -270,7 +272,7 @@ func TestTodoMatchesArgMatchesGriteIDPrefix(t *testing.T) {
 	}
 }
 
-func TestRunTodosListHidesCompletedByDefault(t *testing.T) {
+func TestRunTodosListHidesDoneByDefault(t *testing.T) {
 	workDir := seedListTodos(t)
 
 	got := runListWithGlobals(t, workDir, TodosListOptions{})
@@ -279,22 +281,25 @@ func TestRunTodosListHidesCompletedByDefault(t *testing.T) {
 		t.Fatalf("default list length = %d, want 2: %+v", len(got), got)
 	}
 	for _, todo := range got {
-		if todo.Status == types.StatusCompleted {
-			t.Fatalf("default list included completed todo: %+v", todo)
+		if todo.Status == types.StatusCompleted || todo.Status == types.StatusVerified {
+			t.Fatalf("default list included done todo: %+v", todo)
 		}
 	}
 }
 
-func TestRunTodosListAllIncludesCompleted(t *testing.T) {
+func TestRunTodosListDoneIncludesVerifiedAndCompleted(t *testing.T) {
 	workDir := seedListTodos(t)
 
-	got := runListWithGlobals(t, workDir, TodosListOptions{All: true})
+	got := runListWithGlobals(t, workDir, TodosListOptions{Done: true})
 
-	if len(got) != 3 {
-		t.Fatalf("--all list length = %d, want 3: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("--done list length = %d, want 4: %+v", len(got), got)
 	}
 	if !hasStatus(got, types.StatusCompleted) {
-		t.Fatalf("--all list did not include completed todo: %+v", got)
+		t.Fatalf("--done list did not include completed todo: %+v", got)
+	}
+	if !hasStatus(got, types.StatusVerified) {
+		t.Fatalf("--done list did not include verified todo: %+v", got)
 	}
 }
 
@@ -311,6 +316,120 @@ func TestRunTodosListStatusCompletedOverridesDefaultHide(t *testing.T) {
 	}
 }
 
+func TestRunTodosListStatusVerifiedOverridesDefaultHide(t *testing.T) {
+	workDir := seedListTodos(t)
+
+	got := runListWithGlobals(t, workDir, TodosListOptions{Status: string(types.StatusVerified)})
+
+	if len(got) != 1 || got[0].Status != types.StatusVerified {
+		t.Fatalf("verified list = %+v, want one verified todo", got)
+	}
+}
+
+func TestRunTodosListAllAggregatesRegisteredProjects(t *testing.T) {
+	firstDir := seedProjectTodos(t, "First pending", "First done")
+	secondDir := seedProjectTodos(t, "Second pending", "Second done")
+	staleDir := filepath.Join(t.TempDir(), "missing")
+	oldLoad := loadTodoProjects
+	loadTodoProjects = func() []ui.Project {
+		return []ui.Project{
+			{Name: "first", Dir: firstDir, TodoProvider: todos.ProviderFiles},
+			{Name: "stale", Dir: staleDir, TodoProvider: todos.ProviderFiles},
+			{Name: "second", Dir: secondDir, TodoProvider: todos.ProviderFiles},
+			{Name: "duplicate", Dir: firstDir, TodoProvider: todos.ProviderFiles},
+		}
+	}
+	t.Cleanup(func() { loadTodoProjects = oldLoad })
+
+	got := runListWithGlobals(t, firstDir, TodosListOptions{All: true})
+	if len(got) != 2 {
+		t.Fatalf("--all list length = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Title != "First pending" || got[1].Title != "Second pending" {
+		t.Fatalf("--all titles = %q, %q; want both projects", got[0].Title, got[1].Title)
+	}
+	for _, todo := range got {
+		if todo.CWD == "" {
+			t.Fatalf("aggregated todo missing cwd: %+v", todo)
+		}
+		if todo.Workspace == "" {
+			t.Fatalf("aggregated todo missing workspace: %+v", todo)
+		}
+	}
+
+	got = runListWithGlobals(t, firstDir, TodosListOptions{All: true, Done: true})
+	if len(got) != 4 {
+		t.Fatalf("--all --done list length = %d, want 4: %+v", len(got), got)
+	}
+
+	got = runListWithGlobals(t, firstDir, TodosListOptions{All: true, Status: string(types.StatusCompleted)})
+	if len(got) != 2 || got[0].Status != types.StatusCompleted || got[1].Status != types.StatusCompleted {
+		t.Fatalf("--all --status completed = %+v, want two completed todos", got)
+	}
+}
+
+func TestRunTodosListAllRejectsDir(t *testing.T) {
+	oldProvider := todosProvider
+	oldWorkingDir := workingDir
+	todosProvider = todos.ProviderFiles
+	workingDir = t.TempDir()
+	t.Cleanup(func() {
+		todosProvider = oldProvider
+		workingDir = oldWorkingDir
+	})
+
+	if _, err := runTodosList(TodosListOptions{All: true, Dir: ".todos"}); err == nil || !strings.Contains(err.Error(), "--dir cannot be used with --all") {
+		t.Fatalf("runTodosList error = %v, want --dir/--all conflict", err)
+	}
+}
+
+func TestFilterTODOsSinceUsesNewestCreatedOrUpdatedTimestamp(t *testing.T) {
+	cutoff := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	old := cutoff.Add(-24 * time.Hour)
+	newer := cutoff.Add(time.Hour)
+	createdAtCutoff := cutoff
+
+	got := filterTODOsSince(types.TODOS{
+		{ID: "created", TODOFrontmatter: types.TODOFrontmatter{Created: &newer}},
+		{ID: "updated", TODOFrontmatter: types.TODOFrontmatter{Created: &old, LastRun: &newer}},
+		{ID: "boundary", TODOFrontmatter: types.TODOFrontmatter{Created: &createdAtCutoff}},
+		{ID: "old", TODOFrontmatter: types.TODOFrontmatter{Created: &old, LastRun: &old}},
+		{ID: "unknown"},
+	}, cutoff)
+
+	if len(got) != 3 || got[0].ID != "created" || got[1].ID != "updated" || got[2].ID != "boundary" {
+		t.Fatalf("filterTODOsSince = %+v, want created, updated, boundary", got)
+	}
+}
+
+func TestRunTodosListRejectsInvalidSince(t *testing.T) {
+	workDir := seedListTodos(t)
+	oldProvider := todosProvider
+	oldWorkingDir := workingDir
+	todosProvider = todos.ProviderFiles
+	workingDir = workDir
+	t.Cleanup(func() {
+		todosProvider = oldProvider
+		workingDir = oldWorkingDir
+	})
+
+	if _, err := runTodosList(TodosListOptions{Since: "not-a-date"}); err == nil || !strings.Contains(err.Error(), "unable to parse since") {
+		t.Fatalf("runTodosList error = %v, want invalid --since error", err)
+	}
+}
+
+func TestTodoListSinceAcceptsDateMath(t *testing.T) {
+	before := time.Now().Add(-7*24*time.Hour - time.Second)
+	got, err := parseSince("7d")
+	if err != nil {
+		t.Fatalf("parseSince(7d): %v", err)
+	}
+	after := time.Now().Add(-7*24*time.Hour + time.Second)
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("parseSince(7d) = %s, want approximately seven days ago", got)
+	}
+}
+
 func seedListTodos(t *testing.T) string {
 	t.Helper()
 	workDir := t.TempDir()
@@ -321,12 +440,31 @@ func seedListTodos(t *testing.T) string {
 	}{
 		{"Pending item", types.StatusPending},
 		{"Running item", types.StatusInProgress},
+		{"Verified item", types.StatusVerified},
 		{"Completed item", types.StatusCompleted},
 	} {
 		if _, err := provider.Create(t.Context(), todos.CreateRequest{
 			Title:  item.title,
 			Status: item.status,
 		}); err != nil {
+			t.Fatalf("seed %q: %v", item.title, err)
+		}
+	}
+	return workDir
+}
+
+func seedProjectTodos(t *testing.T, pendingTitle, completedTitle string) string {
+	t.Helper()
+	workDir := t.TempDir()
+	provider := todos.NewFileProvider(workDir, "")
+	for _, item := range []struct {
+		title  string
+		status types.Status
+	}{
+		{pendingTitle, types.StatusPending},
+		{completedTitle, types.StatusCompleted},
+	} {
+		if _, err := provider.Create(t.Context(), todos.CreateRequest{Title: item.title, Status: item.status}); err != nil {
 			t.Fatalf("seed %q: %v", item.title, err)
 		}
 	}

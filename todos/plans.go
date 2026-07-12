@@ -58,6 +58,20 @@ func ValidatePlanFile(path string) error {
 	return nil
 }
 
+// HasPlan reports whether a todo has a plan worth surfacing in the listing:
+// a validated on-disk plan file, or the todo is awaiting review — reached
+// even when the plan is inline-only with no on-disk path (see
+// applyPlanOutcome's PlanNew/PlanUpdated branch, outcome.go).
+func HasPlan(todo *types.TODO) bool {
+	if todo == nil {
+		return false
+	}
+	if todo.Status == types.StatusReview {
+		return true
+	}
+	return ValidatePlanFile(todo.PlanPath) == nil
+}
+
 // ReadPlanFile reads the todo's recorded plan file. exists is false (with no
 // error) when the todo has no recorded plan or the file is gone — callers
 // render "no plan" rather than failing a page load over a deleted file.

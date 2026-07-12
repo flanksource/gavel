@@ -252,6 +252,12 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		passed := rres.Loop != nil && rres.Loop.StopReason == "condition-met"
 		result.DoD = &todopkg.DoDOutcome{Ran: true, Passed: passed}
 	}
+	if result.EndStatus == types.EndAsk {
+		// AskUserQuestion is itself the terminal outcome for this turn. Requesting
+		// the normal result envelope would resume the just-paused session and steal
+		// the question from the human-facing workflow.
+		return e.classify(result, sawResult, timedOut, nil)
+	}
 
 	envErr := e.captureEnvelope(ctx, provider, result, rres, todosInGroup, timedOut, req.Prompt.SchemaJSON)
 	return e.classify(result, sawResult, timedOut, envErr)
@@ -312,6 +318,13 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 		action := toolSummary(ev)
 		transcript.AddExecutorMessage(action, todopkg.EntryAction, map[string]any{"tool": ev.Tool})
 		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyAction, Message: action})
+		if ev.Tool == "AskUserQuestion" {
+			if questions := agentQuestionsFromToolInput(ev.Input); len(questions) > 0 {
+				result.EndStatus = types.EndAsk
+				result.Questions = questions
+				result.Summary = "The agent is waiting for answers."
+			}
+		}
 	case captainai.EventPermission:
 		action := toolSummary(ev)
 		transcript.AddExecutorMessage("awaiting approval: "+action, todopkg.EntryAction, map[string]any{"tool": ev.Tool})
@@ -337,6 +350,51 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 		result.ErrorMessage = ev.Error
 		ctx.Notify(todopkg.Notification{Type: todopkg.NotifyError, Message: ev.Error})
 	}
+}
+
+func agentQuestionsFromToolInput(input map[string]any) []types.AgentQuestion {
+	raw, ok := input["questions"].([]any)
+	if !ok {
+		if text := firstString(input, "question", "prompt", "text"); text != "" {
+			return []types.AgentQuestion{{Text: text, Context: firstString(input, "context", "header")}}
+		}
+		return nil
+	}
+	questions := make([]types.AgentQuestion, 0, len(raw))
+	for _, item := range raw {
+		question, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := firstString(question, "question", "prompt", "text")
+		if text == "" {
+			continue
+		}
+		parsed := types.AgentQuestion{Text: text, Context: firstString(question, "context", "header")}
+		if options, ok := question["options"].([]any); ok {
+			for _, option := range options {
+				switch value := option.(type) {
+				case string:
+					parsed.Options = append(parsed.Options, value)
+				case map[string]any:
+					if label := firstString(value, "label", "value"); label != "" {
+						parsed.Options = append(parsed.Options, label)
+					}
+				}
+			}
+		}
+		questions = append(questions, parsed)
+	}
+	return questions
+}
+
+func firstString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (e *Executor) failed(start time.Time, err error) *todopkg.ExecutionResult {

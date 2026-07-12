@@ -66,6 +66,30 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	}
 }
 
+func TestHeadlessParksOnAskUserQuestionWithoutRequestingEnvelope(t *testing.T) {
+	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
+		captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-ask"},
+		captainai.Event{Kind: captainai.EventToolUse, Tool: "AskUserQuestion", Input: map[string]any{
+			"questions": []any{map[string]any{
+				"question": "Which database?", "header": "Storage",
+				"options": []any{map[string]any{"label": "Postgres"}, map[string]any{"label": "SQLite"}},
+			}},
+		}},
+		captainai.Event{Kind: captainai.EventResult, Success: true},
+	)})
+
+	result, err := e.Execute(newTestCtx(), &types.TODO{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.EndStatus != types.EndAsk || len(result.Questions) != 1 {
+		t.Fatalf("result = %+v, want one ask question", result)
+	}
+	if got := result.Questions[0]; got.Text != "Which database?" || got.Context != "Storage" || len(got.Options) != 2 {
+		t.Fatalf("question = %+v", got)
+	}
+}
+
 // TestHeadlessPromptOverrideReplacesBody pins the override contract: the edited
 // prompt replaces the auto-built body, but the structured-output envelope rides
 // on the native SchemaJSON field so an override cannot break it, and the schema

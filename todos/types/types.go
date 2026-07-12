@@ -95,6 +95,7 @@ type TODO struct {
 	ID             string                `json:"id,omitempty"`
 	ShortID        string                `json:"short_id,omitempty"`
 	Provider       string                `json:"provider,omitempty"`
+	Workspace      string                `json:"workspace,omitempty"`
 	ProviderState  string                `json:"provider_state,omitempty"`
 	Labels         []string              `json:"labels,omitempty"`
 	ProviderEvents []ProviderEvent       `json:"provider_events,omitempty"`
@@ -150,17 +151,38 @@ func (t TODO) PrettyRow(opts interface{}) map[string]api.Text {
 		title = t.Filename()
 	}
 	row := map[string]api.Text{
-		"Title":    clicky.Text(title, "order-1"),
-		"Status":   t.Status.Pretty().Styles("order-2"),
-		"Priority": t.Priority.Pretty().Styles("order-3"),
+		"Title":    clicky.Text(title, "order-2"),
+		"Status":   t.Status.Pretty().Styles("order-3"),
+		"Priority": t.Priority.Pretty().Styles("order-4"),
 	}
 	if id := t.DisplayID(); id != "" {
 		row["ID"] = clicky.Text(id, "order-0 text-muted")
 	}
+	if t.Workspace != "" {
+		row["Workspace"] = clicky.Text(t.Workspace, "order-1 text-muted")
+	}
 	if t.LastRun != nil {
-		row["Updated"] = clicky.Text("", "order-4").Append(time.Since(*t.LastRun), "text-muted")
+		row["Updated"] = clicky.Text(summaryAge(time.Since(*t.LastRun)), "order-5 text-muted")
 	}
 	return row
+}
+
+// summaryAge renders only the largest useful unit so list timestamps stay
+// scannable instead of showing exact multi-unit durations.
+func summaryAge(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 func (t TODO) DisplayID() string {

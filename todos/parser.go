@@ -32,7 +32,7 @@ import (
 // Returns an error if the file cannot be read or parsing fails.
 func ParseTODO(filePath string) (*types.TODO, error) {
 	// Parse YAML frontmatter directly into TODOFrontmatter
-	todoFrontmatter, err := parseTODOFrontmatter(filePath)
+	todoFrontmatter, body, err := parseTODOFrontmatter(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse frontmatter: %w", err)
 	}
@@ -52,13 +52,15 @@ func ParseTODO(filePath string) (*types.TODO, error) {
 	}
 
 	return &types.TODO{
-		FilePath:          filePath,
-		FileNode:          fileNode,
-		TODOFrontmatter:   todoFrontmatter,
-		StepsToReproduce:  extractSection(fileNode, "Steps to Reproduce"),
-		Implementation:    extractImplementationText(fileNode, "Implementation"),
-		Verification:      extractSection(fileNode, "Verification"),
-		CustomValidations: extractSection(fileNode, "Custom Validations"),
+		FilePath:           filePath,
+		FileNode:           fileNode,
+		TODOFrontmatter:    todoFrontmatter,
+		StepsToReproduce:   extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:     extractImplementationText(fileNode, "Implementation"),
+		Verification:       extractSection(fileNode, "Verification"),
+		CustomValidations:  extractSection(fileNode, "Custom Validations"),
+		MarkdownBody:       body,
+		AcceptanceCriteria: ParseAcceptanceCriteria(body),
 	}, nil
 }
 
@@ -113,51 +115,63 @@ func hasFrontmatter(content string) bool {
 }
 
 // parseTODOFrontmatter reads YAML frontmatter directly from a markdown file
-// and unmarshals it into TODOFrontmatter. This works regardless of whether
-// the file contains executable code blocks.
-func parseTODOFrontmatter(filePath string) (types.TODOFrontmatter, error) {
+// and unmarshals it into TODOFrontmatter, alongside the remaining markdown
+// body. This works regardless of whether the file contains executable code
+// blocks.
+func parseTODOFrontmatter(filePath string) (types.TODOFrontmatter, string, error) {
 	var fm types.TODOFrontmatter
 
-	rawYAML, err := extractRawFrontmatter(filePath)
+	rawYAML, body, err := extractRawFrontmatter(filePath)
 	if err != nil {
-		return fm, err
+		return fm, "", err
 	}
 	if rawYAML == "" {
-		return fm, nil
+		return fm, body, nil
 	}
 
 	if err := yaml.Unmarshal([]byte(rawYAML), &fm); err != nil {
-		return fm, fmt.Errorf("failed to unmarshal frontmatter: %w", err)
+		return fm, "", fmt.Errorf("failed to unmarshal frontmatter: %w", err)
 	}
 	fm.CleanMetadata()
-	return fm, nil
+	return fm, body, nil
 }
 
-// extractRawFrontmatter reads the YAML frontmatter string from a markdown file
-// delimited by --- markers.
-func extractRawFrontmatter(filePath string) (string, error) {
+// extractRawFrontmatter reads the YAML frontmatter string (delimited by ---
+// markers) and the remaining markdown body from a TODO file. A file with no
+// frontmatter block returns an empty frontmatter string and the whole file
+// as body.
+func extractRawFrontmatter(filePath string) (frontmatter string, body string, err error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
-		return "", nil
+		return "", "", nil
 	}
-	if strings.TrimSpace(scanner.Text()) != "---" {
-		return "", nil
+	firstLine := scanner.Text()
+	if strings.TrimSpace(firstLine) != "---" {
+		lines := []string{firstLine}
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		return "", strings.Join(lines, "\n"), scanner.Err()
 	}
 
-	var lines []string
+	var fmLines []string
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "---" {
-			return strings.Join(lines, "\n"), nil
+			var bodyLines []string
+			for scanner.Scan() {
+				bodyLines = append(bodyLines, scanner.Text())
+			}
+			return strings.Join(fmLines, "\n"), strings.Join(bodyLines, "\n"), scanner.Err()
 		}
-		lines = append(lines, scanner.Text())
+		fmLines = append(fmLines, scanner.Text())
 	}
-	return "", scanner.Err()
+	return strings.Join(fmLines, "\n"), "", scanner.Err()
 }
 
 // validateFrontmatter validates that required fields in the TODO frontmatter are present

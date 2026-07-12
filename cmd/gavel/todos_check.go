@@ -10,32 +10,53 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
+
+var loadTodoProjects = ui.LoadProjects
 
 func runTodosList(opts TodosListOptions) (any, error) {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-
-	provider, err := newTodosProvider(workDir, opts.Dir)
-	if err != nil {
-		return nil, err
+	var since time.Time
+	if opts.Since != "" {
+		since, err = parseSince(opts.Since)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	filters := todos.DiscoveryFilters{}
 	if opts.Status != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(opts.Status)}
-	} else if !opts.All {
-		filters.ExcludeStatuses = []types.Status{types.StatusCompleted}
+	} else if !opts.Done {
+		filters.ExcludeStatuses = []types.Status{types.StatusVerified, types.StatusCompleted}
 	}
 
-	todoList, err := provider.List(context.Background(), filters)
-	if err != nil {
-		return nil, err
+	ctx := context.Background()
+	var todoList types.TODOS
+	if opts.All {
+		if opts.Dir != "" {
+			return nil, fmt.Errorf("--dir cannot be used with --all")
+		}
+		todoList = listAllProjectTodos(ctx, loadTodoProjects(), filters)
+	} else {
+		provider, err := newTodosProvider(workDir, opts.Dir)
+		if err != nil {
+			return nil, err
+		}
+		todoList, err = provider.List(ctx, filters)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !since.IsZero() {
+		todoList = filterTODOsSince(todoList, since)
 	}
 
 	if opts.GroupBy != "" && opts.GroupBy != todos.GroupByNone {
@@ -44,6 +65,63 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	}
 
 	return todoList, nil
+}
+
+func filterTODOsSince(todoList types.TODOS, since time.Time) types.TODOS {
+	filtered := make(types.TODOS, 0, len(todoList))
+	for _, todo := range todoList {
+		if todo == nil {
+			continue
+		}
+		latest := todo.Created
+		if todo.LastRun != nil && (latest == nil || todo.LastRun.After(*latest)) {
+			latest = todo.LastRun
+		}
+		if latest != nil && !latest.Before(since) {
+			filtered = append(filtered, todo)
+		}
+	}
+	return filtered
+}
+
+// listAllProjectTodos aggregates TODOs from every registered workspace using
+// the same per-project provider resolution as the dashboard. Duplicate project
+// entries that resolve to the same directory and backend are queried once.
+// One stale or unavailable workspace should not hide results from the others,
+// so project-local failures are reported as warnings and skipped.
+func listAllProjectTodos(ctx context.Context, projects []ui.Project, filters todos.DiscoveryFilters) types.TODOS {
+	seen := map[string]struct{}{}
+	var todoList types.TODOS
+	for _, project := range projects {
+		dir := project.ResolvedDir()
+		if strings.TrimSpace(dir) == "" {
+			logger.Warnf("list todos for project %q: workspace directory is empty", project.Name)
+			continue
+		}
+		backend := strings.TrimSuffix(ui.TodoBackendLabel(dir, project.TodoProvider), " (auto)")
+		key := filepath.Clean(dir) + "\x00" + backend
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		items, err := ui.ProviderForProject(project).List(ctx, filters)
+		if err != nil {
+			logger.Warnf("list todos for project %q (%s): %v", project.Name, dir, err)
+			continue
+		}
+		for _, todo := range items {
+			if todo != nil {
+				todo.Workspace = project.Name
+				if todo.CWD == "" {
+					todo.CWD = dir
+				}
+			}
+		}
+		todoList = append(todoList, items...)
+	}
+	todoList.Sort()
+	return todoList
 }
 
 func runTodosGet(cmd *cobra.Command, args []string) error {

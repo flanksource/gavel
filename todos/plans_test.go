@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/flanksource/gavel/todos/types"
 )
 
 func TestValidatePlanFile(t *testing.T) {
@@ -31,6 +33,56 @@ func TestValidatePlanFile(t *testing.T) {
 	}
 	if err := ValidatePlanFile(dir); err == nil {
 		t.Error("directory must be rejected")
+	}
+}
+
+func TestHasPlan(t *testing.T) {
+	dir := t.TempDir()
+	validPlan := filepath.Join(dir, "plan.md")
+	if err := os.WriteFile(validPlan, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	missingPlan := filepath.Join(dir, "missing.md")
+
+	cases := []struct {
+		name string
+		todo *types.TODO
+		want bool
+	}{
+		{name: "nil todo", todo: nil, want: false},
+		{
+			name: "pending, empty plan path",
+			todo: &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: types.StatusPending}},
+			want: false,
+		},
+		{
+			name: "pending, missing plan file",
+			todo: &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: types.StatusPending, PlanPath: missingPlan}},
+			want: false,
+		},
+		{
+			name: "pending, valid plan file",
+			todo: &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: types.StatusPending, PlanPath: validPlan}},
+			want: true,
+		},
+		{
+			name: "review, inline-only plan (no on-disk path)",
+			todo: &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: types.StatusReview}},
+			want: true,
+		},
+		{
+			name: "review, invalid plan path still counts (status short-circuits)",
+			todo: &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Status: types.StatusReview, PlanPath: missingPlan}},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasPlan(tc.todo); got != tc.want {
+				t.Errorf("HasPlan() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

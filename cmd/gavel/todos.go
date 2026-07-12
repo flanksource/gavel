@@ -75,6 +75,8 @@ Subcommands:
 
 Examples:
   gavel todos list
+  gavel todos list --all            # list every registered project
+  gavel todos list --all --done     # include verified/completed items
   gavel todos get <id>
   gavel todos run                  # implement all pending todos
   gavel todos run --mode plan      # propose a reviewable plan first
@@ -112,7 +114,9 @@ Examples:
 type TodosListOptions struct {
 	Dir     string `json:"dir" flag:"dir" help:"TODOs directory (default: .todos)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
-	All     bool   `json:"all" flag:"all" help:"Show completed TODOs too"`
+	All     bool   `json:"all" flag:"all" help:"List TODOs from all registered projects using each project's provider"`
+	Done    bool   `json:"done" flag:"done" help:"Include verified and completed TODOs"`
+	Since   string `json:"since" flag:"since" help:"Show TODOs created or updated since (e.g. 7d, now-30d, 2024-01-01)"`
 	GroupBy string `json:"group-by" flag:"group-by" help:"Group TODOs by: file, directory, repo, all, or none"`
 }
 

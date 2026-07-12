@@ -91,10 +91,6 @@ func (p *FileProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse TODO: %w", err)
 	}
-	if result, err := ParseFrontmatterFromFile(todoPath); err == nil {
-		todo.MarkdownBody = result.MarkdownContent
-		todo.AcceptanceCriteria = ParseAcceptanceCriteria(todo.MarkdownBody)
-	}
 	todo.Provider = ProviderFiles
 	return todo, nil
 }

@@ -1,9 +1,11 @@
 package prompt
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
@@ -224,6 +226,41 @@ func TestFinalResultRequest(t *testing.T) {
 	}
 	if _, err := FinalResultRequest("", "", false, planSchema); err == nil {
 		t.Fatal("empty session must error")
+	}
+}
+
+func TestPlanEnvelopeSchemaIsCodexCompatible(t *testing.T) {
+	raw, err := EnvelopeSchemaJSON(types.ModePlan)
+	if err != nil {
+		t.Fatalf("EnvelopeSchemaJSON: %v", err)
+	}
+	got, err := captainai.SchemaJSONForBackend(captainai.BackendCodexAgent, api.Prompt{SchemaJSON: raw})
+	if err != nil {
+		t.Fatalf("SchemaJSONForBackend: %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(got, &root); err != nil {
+		t.Fatalf("decode transformed schema: %v", err)
+	}
+	defs, ok := root["$defs"].(map[string]any)
+	if !ok {
+		t.Fatalf("transformed schema has no $defs: %s", got)
+	}
+	planEnvelope, ok := defs["PlanEnvelope"].(map[string]any)
+	if !ok {
+		t.Fatalf("transformed schema has no PlanEnvelope definition: %s", got)
+	}
+	properties, ok := planEnvelope["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("PlanEnvelope has no properties: %#v", planEnvelope)
+	}
+	plan, ok := properties["plan"].(map[string]any)
+	if !ok {
+		t.Fatalf("PlanEnvelope.plan is %T, want schema object", properties["plan"])
+	}
+	if len(plan) != 1 || plan["$ref"] == nil {
+		t.Fatalf("PlanEnvelope.plan = %#v, want a standalone $ref", plan)
 	}
 }
 
