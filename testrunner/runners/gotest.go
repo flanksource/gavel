@@ -43,6 +43,11 @@ func (r *GoTest) Parser() parsers.ResultParser {
 	return r.parser
 }
 
+// FocusArgs maps a common focus pattern to go test's native name filter.
+func (r *GoTest) FocusArgs(pattern string) []string {
+	return []string{"-run", pattern}
+}
+
 // Detect checks if go test is used (looks for *_test.go files). We
 // deliberately do NOT gate on go.mod presence — a nested repo without its
 // own module, or a workDir inside a module whose go.mod sits above

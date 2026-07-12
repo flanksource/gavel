@@ -3,6 +3,7 @@ package runners
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -472,5 +473,12 @@ func TestGinkgoBuildCommandArgs(t *testing.T) {
 	}
 	if strings.Index(args, "--timeout=4m30s") > strings.Index(args, "./pkg") {
 		t.Errorf("timeout flag should precede package path, got: %s", args)
+	}
+}
+
+func TestGinkgoFocusArgs(t *testing.T) {
+	runner := NewGinkgo(t.TempDir())
+	if got, want := runner.FocusArgs("does work"), []string{"--focus", "does work"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("FocusArgs = %v, want %v", got, want)
 	}
 }

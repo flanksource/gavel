@@ -27,6 +27,13 @@ type Runner interface {
 	BuildCommand(packagePath string, extraArgs ...string) (*TestRun, error)
 }
 
+// FocusMapper is an optional runner capability for translating a common test
+// focus pattern into framework-native command-line arguments. Runners that do
+// not implement it are excluded from top-level focused runs.
+type FocusMapper interface {
+	FocusArgs(pattern string) []string
+}
+
 type Package string
 type TestRun struct {
 	Framework  parsers.Framework

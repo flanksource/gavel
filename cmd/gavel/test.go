@@ -799,6 +799,7 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	rerunOpts.Lint = false
 	rerunOpts.Updates = updates
 	rerunOpts.RunKind = "rerun"
+	rerunOpts.PassThroughArgs = nil
 	if req.WorkDir != "" {
 		rerunOpts.WorkDir = req.WorkDir
 	}
@@ -827,12 +828,33 @@ var testDurationFlags struct {
 // an explicit --skip-hooks=... from the unset default.
 var testCmd *cobra.Command
 
+// splitTestPassThroughArgs separates positional package paths from the raw
+// runner arguments supplied after --. Clicky binds every positional token to
+// StartingPaths, while pflag preserves the separator index for us here.
+func splitTestPassThroughArgs(cmd *cobra.Command, opts *testrunner.RunOptions) error {
+	dash := cmd.Flags().ArgsLenAtDash()
+	if dash < 0 {
+		return nil
+	}
+	if dash > len(opts.StartingPaths) {
+		return fmt.Errorf("invalid -- separator index %d for %d test arguments", dash, len(opts.StartingPaths))
+	}
+	opts.PassThroughArgs = append(opts.PassThroughArgs, opts.StartingPaths[dash:]...)
+	opts.StartingPaths = append([]string(nil), opts.StartingPaths[:dash]...)
+	return nil
+}
+
 func init() {
-	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, runTests)
+	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, func(opts testrunner.RunOptions) (any, error) {
+		if err := splitTestPassThroughArgs(testCmd, &opts); err != nil {
+			return nil, err
+		}
+		return runTests(opts)
+	})
 	// Allow flags and positional package paths to interleave so callers (e.g. the
 	// flanksource/gavel composite action) can append flags after user-supplied
-	// paths. Use `--` to terminate flag parsing when forwarding flags to the
-	// underlying runner via the `gavel test ./pkg -- --focus X` idiom.
+	// paths. Use `--` to terminate flag parsing for framework-aware focus or
+	// single-framework raw runner arguments.
 	testCmd.Flags().SetInterspersed(true)
 	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
 		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")

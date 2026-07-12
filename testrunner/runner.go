@@ -113,7 +113,7 @@ type TestOrchestrator struct {
 type RunOptions struct {
 	SyncTodos     bool                  `json:"sync_todos,omitempty" yaml:"sync-todos,omitempty" flag:"sync-todos"`                        // Whether to sync test failures to TODOs
 	StartingPaths []string              `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                               // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
-	ExtraArgs     []string              `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments to pass to test runners (e.g., ["--focus", "TestName"])
+	ExtraArgs     []string              `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments broadcast to every selected test runner.
 	ShowPassed    bool                  `json:"show_passed,omitempty" yaml:"show-passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
 	Ignore        []string              `json:"ignore,omitempty" yaml:"ignore,omitempty" flag:"ignore"`                                    // Glob patterns for test packages/paths to exclude from discovery.
 	ShowStdout    OutputMode            `json:"show_stdout,omitempty" yaml:"show-stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
@@ -150,6 +150,9 @@ type RunOptions struct {
 	OutputTee     io.Writer             `json:"-" yaml:"-"`                                                                                // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind       string                `json:"run_kind,omitempty" yaml:"run-kind,omitempty"`                                              // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
 	SummaryOut    *parsers.TestSummary  `json:"-" yaml:"-"`                                                                                // If non-nil, the runner writes the aggregate pass/fail/skip/total/duration counts here before returning, so CLI callers can print an end-of-run summary even when the run errors mid-way and returns a partial tree.
+
+	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
+
 	// TodoSync, when set, records a failing test as a TODO and returns its path.
 	// It is supplied by the caller (see todosync.NewTestFailureRecorder) so the
 	// testrunner needn't import the todos package. Only invoked when SyncTodos is
@@ -167,6 +170,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if len(opts.ExtraArgs) > 0 {
 		text = text.Space().Append("ExtraArgs: ", "text-muted").Append(clicky.CompactList(opts.ExtraArgs), "text-blue-500")
+	}
+	if len(opts.PassThroughArgs) > 0 {
+		text = text.Space().Append("PassThroughArgs: ", "text-muted").Append(clicky.CompactList(opts.PassThroughArgs), "text-blue-500")
 	}
 	if len(opts.Ignore) > 0 {
 		text = text.Space().Append("Ignore: ", "text-muted").Append(clicky.CompactList(opts.Ignore), "text-blue-500")
@@ -239,7 +245,9 @@ only failures, gate on new-vs-baseline, cache passing packages, run linters in
 parallel (--lint), sync failures to .todos/, and stream to a browser UI (--ui).
 
 Positional args restrict the run to those package paths (recursive by default).
-Arguments after "--" pass through to the underlying runner (e.g. ginkgo flags).
+Immediately after "--", -run PATTERN and --focus PATTERN are equivalent focus
+aliases mapped to each focus-capable framework. Other arguments after "--"
+require exactly one selected framework and pass through unchanged.
 
 Examples:
   gavel test                                       # all frameworks
@@ -248,8 +256,9 @@ Examples:
   gavel test --changed                             # only changed packages
   gavel test --failed                              # re-run last run's failures (.gavel/last.json)
   gavel test --framework go,ginkgo                 # restrict frameworks
-  gavel test ./pkg/testrunner -- --focus "TestName"  # pass-through to ginkgo
-  gavel test . -- --focus "Integration" --skip "Slow"
+  gavel test ./pkg/testrunner -- -run "TestName"     # focus Go test + Ginkgo
+  gavel test ./pkg/testrunner -- --focus "TestName"  # equivalent focus spelling
+  gavel test ginkgo . -- --label-filter "integration" # raw Ginkgo pass-through
   gavel test --ui                                  # live browser UI (HTTP + SSE)`
 }
 
@@ -763,10 +772,95 @@ func filterFrameworks(detected []Framework, requested []string) ([]Framework, er
 	return kept, nil
 }
 
+// extractNativeFocus recognizes the two native Go focus spellings only when
+// they are the first runner arguments after --. This keeps arbitrary
+// framework pass-through opaque while allowing a top-level focused run to map
+// the same pattern to every capable runner.
+func extractNativeFocus(args []string) (focus string, remaining []string, err error) {
+	if len(args) == 0 {
+		return "", nil, nil
+	}
+
+	first := args[0]
+	switch first {
+	case "-run", "--focus":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return "", nil, fmt.Errorf("%s requires a non-empty focus pattern", first)
+		}
+		return args[1], append([]string(nil), args[2:]...), nil
+	}
+
+	for _, prefix := range []string{"-run=", "--focus="} {
+		if strings.HasPrefix(first, prefix) {
+			pattern := strings.TrimPrefix(first, prefix)
+			if strings.TrimSpace(pattern) == "" {
+				return "", nil, fmt.Errorf("%s requires a non-empty focus pattern", strings.TrimSuffix(prefix, "="))
+			}
+			return pattern, append([]string(nil), args[1:]...), nil
+		}
+	}
+
+	return "", append([]string(nil), args...), nil
+}
+
+// resolveFrameworkArgs maps a common focus pattern through each runner's
+// optional FocusMapper implementation. Non-focus runner arguments are only
+// safe when exactly one framework remains selected.
+func (o *TestOrchestrator) resolveFrameworkArgs(frameworks []Framework, extraArgs []string) ([]Framework, map[Framework][]string, error) {
+	focus, passThrough, err := extractNativeFocus(o.PassThroughArgs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	argsByFramework := make(map[Framework][]string, len(frameworks))
+	selected := append([]Framework(nil), frameworks...)
+	if focus != "" {
+		selected = selected[:0]
+		var skipped []string
+		for _, fw := range frameworks {
+			runner, ok := o.registry.Get(fw)
+			if !ok {
+				return nil, nil, fmt.Errorf("no runner registered for framework %s", fw)
+			}
+			mapper, ok := runner.(runners.FocusMapper)
+			if !ok {
+				skipped = append(skipped, string(fw))
+				continue
+			}
+			selected = append(selected, fw)
+			argsByFramework[fw] = append(append([]string(nil), extraArgs...), mapper.FocusArgs(focus)...)
+		}
+		if len(skipped) > 0 {
+			logger.Infof("Focus %q: skipping frameworks without focus support: %s", focus, strings.Join(skipped, ", "))
+		}
+		if len(selected) == 0 {
+			return nil, nil, fmt.Errorf("focus %q is not supported by any detected framework", focus)
+		}
+	} else {
+		for _, fw := range selected {
+			argsByFramework[fw] = append([]string(nil), extraArgs...)
+		}
+	}
+
+	if len(passThrough) > 0 {
+		if len(selected) != 1 {
+			names := make([]string, len(selected))
+			for i, fw := range selected {
+				names[i] = string(fw)
+			}
+			return nil, nil, fmt.Errorf("arguments after -- require exactly one selected framework; got %d (%s): use `gavel test <framework> -- ...` or a single --framework", len(selected), strings.Join(names, ", "))
+		}
+		fw := selected[0]
+		argsByFramework[fw] = append(argsByFramework[fw], passThrough...)
+	}
+
+	return selected, argsByFramework, nil
+}
+
 // applyFailedFilter loads a previous Snapshot and narrows packagesByFramework
-// to only packages that had failures. It also injects framework-specific
-// --run/--focus args to target specific failed tests.
-func applyFailedFilter(packagesByFramework map[Framework][]string, extraArgs []string, failedPath string) (map[Framework][]string, []string, error) {
+// to only packages that had failures. The returned patterns are mapped to
+// native runner arguments through FocusMapper by the orchestrator.
+func applyFailedFilter(packagesByFramework map[Framework][]string, failedPath string) (map[Framework][]string, map[Framework]string, error) {
 	snapshot, err := baseline.LoadSnapshot(failedPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("--failed: %w", err)
@@ -777,7 +871,7 @@ func applyFailedFilter(packagesByFramework map[Framework][]string, extraArgs []s
 	}
 
 	filtered := make(map[Framework][]string)
-	var goTestNames, ginkgoTestNames []string
+	namesByFramework := make(map[Framework][]string)
 
 	for fw, pkgs := range packagesByFramework {
 		failedForFW, ok := failedPkgs[parsers.Framework(fw)]
@@ -794,26 +888,20 @@ func applyFailedFilter(packagesByFramework map[Framework][]string, extraArgs []s
 			}
 		}
 		for _, names := range failedForFW {
-			switch parsers.Framework(fw) {
-			case parsers.GoTest:
-				goTestNames = append(goTestNames, names...)
-			case parsers.Ginkgo:
-				ginkgoTestNames = append(ginkgoTestNames, names...)
-			}
+			namesByFramework[fw] = append(namesByFramework[fw], names...)
 		}
 	}
 
-	if len(goTestNames) > 0 {
-		pattern := "^(" + strings.Join(escapeRegexNames(goTestNames), "|") + ")$"
-		extraArgs = append(extraArgs, "-run", pattern)
+	focusByFramework := make(map[Framework]string)
+	if names := namesByFramework[parsers.GoTest]; len(names) > 0 {
+		focusByFramework[parsers.GoTest] = "^(" + strings.Join(escapeRegexNames(names), "|") + ")$"
 	}
-	if len(ginkgoTestNames) > 0 {
-		pattern := strings.Join(ginkgoTestNames, "|")
-		extraArgs = append(extraArgs, "--focus", pattern)
+	if names := namesByFramework[parsers.Ginkgo]; len(names) > 0 {
+		focusByFramework[parsers.Ginkgo] = strings.Join(names, "|")
 	}
 
 	logger.Infof("--failed: narrowed to %d frameworks from %s", len(filtered), failedPath)
-	return filtered, extraArgs, nil
+	return filtered, focusByFramework, nil
 }
 
 func escapeRegexNames(names []string) []string {
@@ -828,6 +916,11 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	if len(frameworks) == 0 {
 		logger.Infof("No test frameworks detected")
 		return nil, nil
+	}
+
+	frameworks, argsByFramework, err := o.resolveFrameworkArgs(frameworks, extraArgs)
+	if err != nil {
+		return nil, err
 	}
 	// Validate that starting paths exist
 	if len(startingPaths) > 0 {
@@ -932,16 +1025,27 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 
 	// Narrow to previously-failed packages/tests when --failed is set.
 	if o.Failed != "" {
-		var err error
-		packagesByFramework, extraArgs, err = applyFailedFilter(packagesByFramework, extraArgs, o.Failed)
+		var failedFocus map[Framework]string
+		packagesByFramework, failedFocus, err = applyFailedFilter(packagesByFramework, o.Failed)
 		if err != nil {
 			return nil, err
+		}
+		for fw, pattern := range failedFocus {
+			runner, ok := o.registry.Get(fw)
+			if !ok {
+				return nil, fmt.Errorf("no runner registered for framework %s", fw)
+			}
+			mapper, ok := runner.(runners.FocusMapper)
+			if !ok {
+				return nil, fmt.Errorf("framework %s cannot focus previously failed tests", fw)
+			}
+			argsByFramework[fw] = append(argsByFramework[fw], mapper.FocusArgs(pattern)...)
 		}
 	}
 
 	// If dry-run mode, display what would be executed and return early
 	if o.DryRun {
-		return o.displayDryRun(packagesByFramework, extraArgs), nil
+		return o.displayDryRun(packagesByFramework, argsByFramework), nil
 	}
 
 	// Compile all Go test binaries up front so the per-package timeout below
@@ -982,9 +1086,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 			continue
 		}
 
-		fwExtraArgs := extraArgs
+		fwExtraArgs := append([]string(nil), argsByFramework[fw]...)
 		if fw == parsers.Ginkgo && o.Nodes != 0 {
-			fwExtraArgs = append([]string{fmt.Sprintf("--nodes=%d", o.Nodes)}, extraArgs...)
+			fwExtraArgs = append([]string{fmt.Sprintf("--nodes=%d", o.Nodes)}, fwExtraArgs...)
 		}
 
 		for _, pkgPath := range packages {
@@ -1778,7 +1882,7 @@ func (o *TestOrchestrator) parseReportFile(testRun *runners.TestRun) (parsers.Te
 }
 
 // displayDryRun shows what tests would be executed without running them.
-func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, extraArgs []string) parsers.TestSuiteResults {
+func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]string, argsByFramework map[Framework][]string) parsers.TestSuiteResults {
 	logger.Infof("🔍 Dry-run mode: showing what would be executed\n")
 
 	var totalPackages int
@@ -1796,7 +1900,10 @@ func (o *TestOrchestrator) displayDryRun(packagesByFramework map[Framework][]str
 		}
 
 		for _, pkg := range packages {
-			pkgExtraArgs := extraArgs
+			pkgExtraArgs := append([]string(nil), argsByFramework[framework]...)
+			if framework == parsers.Ginkgo && o.Nodes != 0 {
+				pkgExtraArgs = append([]string{fmt.Sprintf("--nodes=%d", o.Nodes)}, pkgExtraArgs...)
+			}
 			if framework == parsers.GoTest {
 				pkgExtraArgs = o.augmentBenchArgs(runner, pkg, pkgExtraArgs)
 			}
