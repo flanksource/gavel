@@ -85,11 +85,15 @@ type todoRunMechanismItem struct {
 }
 
 type todoRunModelOption struct {
-	ID         string `json:"id"`
-	Provider   string `json:"provider"`
-	Label      string `json:"label"`
-	Reasoning  bool   `json:"reasoning"`
-	Configured bool   `json:"configured"`
+	ID                string   `json:"id"`
+	Provider          string   `json:"provider"`
+	Label             string   `json:"label"`
+	CapabilitiesKnown bool     `json:"capabilitiesKnown,omitempty"`
+	Reasoning         bool     `json:"reasoning"`
+	Temperature       *bool    `json:"temperature,omitempty"`
+	SupportedEfforts  []string `json:"supportedEfforts,omitempty"`
+	DefaultEffort     string   `json:"defaultEffort,omitempty"`
+	Configured        bool     `json:"configured"`
 }
 
 type runBackendSpec struct {
@@ -159,14 +163,21 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 
 func todoRunContext() todoRunContextResponse {
 	specs := supportedTodoRunBackends()
+	statuses, statusErr := whoamiStatuses()
 	backends := make([]todoRunBackendOption, 0, len(specs))
 	for _, spec := range specs {
-		backends = append(backends, todoRunBackendOptionFor(spec))
+		status, ok := statuses[spec.Backend]
+		if statusErr != nil {
+			status = captaincli.AdapterStatus{Backend: string(spec.Backend), Type: spec.Backend.Kind(), ModelError: statusErr.Error()}
+		} else if !ok {
+			status = captaincli.AdapterStatus{Backend: string(spec.Backend), Type: spec.Backend.Kind(), ModelError: "captain whoami returned no adapter status"}
+		}
+		backends = append(backends, todoRunBackendOptionFor(spec, status))
 	}
 	return todoRunContextResponse{
 		Backends:       backends,
 		Efforts:        todoRunEfforts(),
-		DefaultBackend: string(captainai.BackendClaudeCmux),
+		DefaultBackend: string(captainai.BackendClaudeAgent),
 		Tools:          todoRunToolCatalog(),
 		InputSchemas:   todoRunInputSchemas(),
 	}
@@ -192,8 +203,7 @@ func todoRunInputSchemas() map[string]json.RawMessage {
 	return out
 }
 
-func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
-	status := whoamiStatus(spec.Backend)
+func todoRunBackendOptionFor(spec runBackendSpec, status captaincli.AdapterStatus) todoRunBackendOption {
 	configured := status.Ready()
 	models := todoRunModelsFromWhoami(spec, status)
 	mode := runtimeModeForTodoBackend(spec.Backend, spec.Driver)
@@ -216,32 +226,53 @@ func todoRunBackendOptionFor(spec runBackendSpec) todoRunBackendOption {
 	}
 }
 
-func whoamiStatus(backend captainai.Backend) captaincli.AdapterStatus {
+func whoamiStatuses() (map[captainai.Backend]captaincli.AdapterStatus, error) {
 	result, err := runCaptainWhoami(captaincli.WhoamiOptions{
-		Backend: string(backend),
-		Models:  true,
-		Limit:   50,
+		Models: true,
 	})
 	if err != nil {
-		return captaincli.AdapterStatus{Backend: string(backend), Type: backend.Kind(), ModelError: err.Error()}
+		return nil, err
 	}
 	who, ok := result.(captaincli.WhoamiResult)
-	if !ok || len(who.Adapters) == 0 {
-		return captaincli.AdapterStatus{Backend: string(backend), Type: backend.Kind(), ModelError: "captain whoami returned no adapter status"}
+	if !ok {
+		return nil, fmt.Errorf("captain whoami returned %T, want WhoamiResult", result)
 	}
-	return who.Adapters[0]
+	statuses := make(map[captainai.Backend]captaincli.AdapterStatus, len(who.Adapters))
+	for _, status := range who.Adapters {
+		backend := captainai.Backend(strings.TrimSpace(status.Backend))
+		if backend == "" {
+			continue
+		}
+		statuses[backend] = status
+	}
+	return statuses, nil
 }
 
 func todoRunModelsFromWhoami(spec runBackendSpec, status captaincli.AdapterStatus) []todoRunModelOption {
 	candidates := make([]todoRunModelOption, 0, len(status.Models)+len(status.ModelDetails))
 	if len(status.ModelDetails) > 0 {
 		for _, model := range status.ModelDetails {
+			reasoning := true
+			var temperature *bool
+			if model.CapabilitiesKnown {
+				reasoning = model.Reasoning
+				value := model.Temperature
+				temperature = &value
+			}
+			efforts := make([]string, 0, len(model.SupportedEfforts))
+			for _, effort := range model.SupportedEfforts {
+				efforts = append(efforts, string(effort))
+			}
 			candidates = append(candidates, todoRunModelOption{
-				ID:         model.ID,
-				Provider:   spec.Provider,
-				Label:      firstNonEmpty(model.Name, modelLabel(model.ID)),
-				Reasoning:  true,
-				Configured: true,
+				ID:                model.ID,
+				Provider:          spec.Provider,
+				Label:             firstNonEmpty(model.Name, modelLabel(model.ID)),
+				CapabilitiesKnown: model.CapabilitiesKnown,
+				Reasoning:         reasoning,
+				Temperature:       temperature,
+				SupportedEfforts:  efforts,
+				DefaultEffort:     string(model.DefaultEffort),
+				Configured:        true,
 			})
 		}
 	} else {
@@ -263,13 +294,12 @@ func todoRunModelsFromWhoami(spec runBackendSpec, status captaincli.AdapterStatu
 	out := make([]todoRunModelOption, 0, len(candidates))
 	seen := map[string]bool{}
 	for _, model := range candidates {
-		originalID := model.ID
-		model.ID = normalizeTodoRunModelForBackend(string(spec.Backend), model.ID)
+		model.ID = strings.TrimSpace(model.ID)
 		if model.ID == "" || seen[model.ID] {
 			continue
 		}
 		seen[model.ID] = true
-		model.Label = firstNonEmpty(model.Label, modelLabel(originalID))
+		model.Label = firstNonEmpty(model.Label, modelLabel(model.ID))
 		out = append(out, model)
 	}
 	return out

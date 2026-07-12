@@ -63,6 +63,10 @@ export function TodoDetail({
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const { stats: headerSessionStats } = useSessionStats(dir, provider, todo?.sessionId, !!todo?.sessionId);
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
+  // A todo awaiting a human decision (plan review or a blocking question) must
+  // route through TodoReviewBanner's approve/reject/answer flow, not have its
+  // review/ask state silently bypassed by re-triggering a run from here.
+  const awaitingHumanAction = todo?.status === 'review' || todo?.status === 'ask';
 
   useEffect(() => {
     setError('');
@@ -289,6 +293,7 @@ export function TodoDetail({
               closed={closed}
               isGrite={isGrite}
               sessionInProgress={sessionInProgress}
+              awaitingHumanAction={awaitingHumanAction}
               fullTodoId={fullTodoId}
               labels={visibleLabels}
               transferTargets={transferTargets}
@@ -315,8 +320,8 @@ export function TodoDetail({
                   size="icon"
                   type="button"
                   onClick={() => runTodo({ ...defaultRunOptions, resume: true })}
-                  disabled={busy || runBusy || sessionInProgress}
-                  title={sessionInProgress ? 'Session is already running' : 'Resume prior agent session'}
+                  disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
+                  title={sessionInProgress ? 'Session is already running' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : 'Resume prior agent session'}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
                   aria-label="Resume prior agent session"
                 >
@@ -325,19 +330,20 @@ export function TodoDetail({
               )}
               <TodoRunActionButton
                 action="plan"
-                disabled={busy || runBusy || sessionInProgress}
+                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                 loading={runBusy}
+                title={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
                 onRun={runTodo}
                 onAdvanced={setAdvancedMode}
               />
               <TodoRunActionButton
                 action="run"
-                disabled={busy || runBusy || sessionInProgress}
+                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                 loading={runBusy}
                 label={sessionInProgress ? 'Stop' : undefined}
                 icon={sessionInProgress ? UiStop : UiPlay}
                 tone={sessionInProgress ? 'danger' : 'default'}
-                title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : 'Run todo'}
+                title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : 'Run todo'}
                 onRun={runTodo}
                 onAdvanced={setAdvancedMode}
               />
@@ -348,6 +354,7 @@ export function TodoDetail({
                 closed={closed}
                 isGrite={isGrite}
                 sessionInProgress={sessionInProgress}
+                awaitingHumanAction={awaitingHumanAction}
                 fullTodoId={fullTodoId}
                 labels={visibleLabels}
                 transferTargets={transferTargets}
@@ -437,6 +444,8 @@ export function TodoDetail({
             provider={provider}
             sessionId={todo.sessionId}
             active={tab === 'session'}
+            todo={todo}
+            onChanged={onChanged}
             onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
             resumeDisabled={busy || runBusy || sessionInProgress}
           />
@@ -683,6 +692,7 @@ function HeaderActionsMenu({
   closed,
   isGrite,
   sessionInProgress,
+  awaitingHumanAction,
   fullTodoId,
   labels,
   transferTargets,
@@ -710,6 +720,7 @@ function HeaderActionsMenu({
   closed: boolean;
   isGrite: boolean;
   sessionInProgress: boolean;
+  awaitingHumanAction: boolean;
   fullTodoId: string;
   labels: string[];
   transferTargets: Project[];
@@ -779,7 +790,8 @@ function HeaderActionsMenu({
                 <MobileMenuItem
                   icon={UiDebugStepOver}
                   label="Resume session"
-                  disabled={busy || runBusy || sessionInProgress}
+                  detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                  disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                   onClick={() => {
                     close();
                     onResume();
@@ -789,8 +801,8 @@ function HeaderActionsMenu({
               <MobileMenuItem
                 icon={sessionInProgress ? UiStop : runBusy ? Spinner : UiPlay}
                 label={sessionInProgress ? 'Stop unavailable' : 'Run todo'}
-                detail={sessionInProgress ? 'Session interrupt is not supported yet' : undefined}
-                disabled={busy || runBusy || sessionInProgress}
+                detail={sessionInProgress ? 'Session interrupt is not supported yet' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                 onClick={() => {
                   close();
                   onRun();
@@ -799,7 +811,8 @@ function HeaderActionsMenu({
               <MobileMenuItem
                 icon={UiListDashes}
                 label="Plan todo"
-                disabled={busy || runBusy || sessionInProgress}
+                detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                 onClick={() => {
                   close();
                   onPlan();
@@ -808,7 +821,8 @@ function HeaderActionsMenu({
               <MobileMenuItem
                 icon={UiCog}
                 label="Advanced run"
-                disabled={busy || runBusy}
+                detail={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                disabled={busy || runBusy || awaitingHumanAction}
                 onClick={() => {
                   close();
                   onAdvanced('run');

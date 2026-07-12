@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -205,10 +206,12 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's
 // prior session is resumed with the answer as the next user turn.
 type todoAnswerPayload struct {
-	Provider string `json:"provider,omitempty"`
-	Dir      string `json:"dir,omitempty"`
-	Ref      string `json:"ref"`
-	Answer   string `json:"answer"`
+	Provider string         `json:"provider,omitempty"`
+	Dir      string         `json:"dir,omitempty"`
+	Ref      string         `json:"ref"`
+	Answer   string         `json:"answer"`
+	Answers  map[string]any `json:"answers,omitempty"`
+	Rejected bool           `json:"rejected,omitempty"`
 	// Optional run knobs for the resumed turn (model/backend/effort/timeout);
 	// omitted fields keep the defaults derived from the todo.
 	Options *todoRunPayload `json:"options,omitempty"`
@@ -231,6 +234,17 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	answer := strings.TrimSpace(payload.Answer)
+	if answer == "" && len(payload.Answers) > 0 {
+		encoded, err := json.Marshal(map[string]any{"answers": payload.Answers})
+		if err != nil {
+			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid answers: %w", err))
+			return
+		}
+		answer = string(encoded)
+	}
+	if answer == "" && payload.Rejected {
+		answer = "The pending question was rejected. Continue without that answer or explain what is required."
+	}
 	if answer == "" {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("answer is required"))
 		return
@@ -240,7 +254,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
-	if todo.Status != types.StatusAsk {
+	if todo.Status != types.StatusAsk && !zombieAskSession(source.Dir, todo) {
 		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo is not awaiting an answer (status: %s)", todo.Status))
 		return
 	}
@@ -250,7 +264,11 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record the answer on the todo so the resumed prompt and the timeline see it.
-	if err := provider.Comment(r.Context(), todo, "**Answer:** "+answer); err != nil {
+	commentLabel := "**Answer:** "
+	if payload.Rejected {
+		commentLabel = "**Rejected question:** "
+	}
+	if err := provider.Comment(r.Context(), todo, commentLabel+answer); err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -277,6 +295,22 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		SessionID: todo.LLM.SessionId,
 		Status:    "resumed",
 	})
+}
+
+// zombieAskSession permits resuming a todo whose worker died after Claude wrote
+// a structured AskUserQuestion but before Gavel persisted StatusAsk. The check is
+// deliberately server-side: the recorded session must exist, be stopped, and
+// have ask as its latest meaningful state.
+func zombieAskSession(dir string, todo *types.TODO) bool {
+	if todo == nil || todo.Status != types.StatusInProgress || todo.LLM == nil || todo.LLM.SessionId == "" {
+		return false
+	}
+	path, err := cmuxprov.SessionLogPath(dir, todo.LLM.SessionId)
+	if err != nil {
+		return false
+	}
+	stats, err := cmuxprov.GlobalSessionStats().Get(todo.LLM.SessionId, path)
+	return err == nil && stats.Found && stats.State == "ask" && !stats.InProgress
 }
 
 // defaultStartTodoAnswer resumes the todo's session with the answer in a

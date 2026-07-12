@@ -132,6 +132,11 @@ export interface TodoItem {
   // Aggregated git diff footprint of the todo's commits (those carrying its
   // Gavel-Issue-Id trailer); absent when no commit references the todo.
   diff?: TodoDiffStat;
+  // hasPlan/hasVerification are lightweight availability flags for the list
+  // row's indicators — present on both list and detail responses (unlike
+  // planPath/verificationMarkdown, which carry full content and are detail-only).
+  hasPlan?: boolean;
+  hasVerification?: boolean;
   // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
   // section; present on detail responses.
   criteria?: AcceptanceCriterion[];
@@ -281,7 +286,7 @@ export interface TodoSessionApproval {
 
 export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunMode = 'cmux' | 'inline';
-export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 // TodoRunDriver selects the agent driver: <agent>-<mechanism>. cmux drives the
 // interactive TUI; headless drives `-p --output-format stream-json`; sdk drives
 // the @anthropic-ai/claude-agent-sdk bridge; api drives the direct Anthropic API.

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons-db/shell"
@@ -94,6 +95,73 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	}
 	if _, err := os.Stat(created.Ref); !os.IsNotExist(err) {
 		t.Fatalf("expected TODO file to be removed, stat err=%v", err)
+	}
+}
+
+// The list response must expose hasPlan/hasVerification on every item (not
+// just detail responses) so the todo row can render its plan/verification
+// indicators without a round-trip per row — see HasPlan (todos/plans.go) and
+// ExtractVerificationFixture (todos/verification_fixture.go).
+func TestTodoAPIListExposesHasPlanAndHasVerification(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := todos.NewFileProvider(workDir, "")
+
+	plain, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "Plain todo",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed plain todo: %v", err)
+	}
+
+	withFixture, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "Todo with a verification fixture",
+		Body:   "## Verification\n\n```yaml test\ncommand: go test ./...\n```\n",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed todo with fixture: %v", err)
+	}
+
+	awaitingReview, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "Todo awaiting plan review",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("seed todo awaiting review: %v", err)
+	}
+	planPath := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reviewStatus := types.StatusReview
+	if err := todos.UpdateTODOState(awaitingReview, todos.StateUpdate{Status: &reviewStatus, PlanPath: &planPath}); err != nil {
+		t.Fatalf("mark awaiting review: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos?provider=todos", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var list todoListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	byTitle := map[string]todoSummary{}
+	for _, item := range list.Items {
+		byTitle[item.Title] = item
+	}
+
+	if got := byTitle[plain.Title]; got.HasPlan || got.HasVerification {
+		t.Errorf("plain todo = %+v, want both flags false", got)
+	}
+	if got := byTitle[withFixture.Title]; !got.HasVerification || got.HasPlan {
+		t.Errorf("fixture todo = %+v, want hasVerification=true hasPlan=false", got)
+	}
+	if got := byTitle[awaitingReview.Title]; !got.HasPlan || got.HasVerification {
+		t.Errorf("review todo = %+v, want hasPlan=true hasVerification=false", got)
 	}
 }
 
@@ -1200,28 +1268,57 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 
 func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 	prev := runCaptainWhoami
+	calls := 0
 	runCaptainWhoami = func(opts captaincli.WhoamiOptions) (any, error) {
-		models := []string{"sonnet-5", "sonnet-4-6", "opus-4-8", "claude-agent-sonnet"}
-		if strings.HasPrefix(opts.Backend, "codex") {
-			models = []string{"gpt-5.5", "gpt-5.4"}
+		calls++
+		if opts.Backend != "" || !opts.Models {
+			t.Fatalf("whoami opts = %+v, want one unfiltered model snapshot", opts)
 		}
-		return captaincli.WhoamiResult{Adapters: []captaincli.AdapterStatus{{
-			Backend:       opts.Backend,
-			Type:          "cli",
-			Authenticated: true,
-			Binary:        "/usr/local/bin/agent",
-			ModelCount:    len(models),
-			Models:        models,
-		}}}, nil
+		adapters := make([]captaincli.AdapterStatus, 0, 5)
+		for _, backend := range []string{"claude-cmux", "claude-agent", "claude-cli"} {
+			adapters = append(adapters, captaincli.AdapterStatus{
+				Backend:       backend,
+				Type:          "cli",
+				Authenticated: true,
+				Binary:        "/usr/local/bin/claude",
+				ModelCount:    3,
+				Models:        []string{"claude-sonnet-5", "claude-fable-5", "claude-opus-4-8"},
+				ModelDetails: []captainai.ModelDef{
+					{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax}, DefaultEffort: api.EffortMedium},
+					{ID: "claude-fable-5", Name: "Claude Fable 5", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax}, DefaultEffort: api.EffortMedium},
+					{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax}, DefaultEffort: api.EffortMedium},
+				},
+			})
+		}
+		for _, backend := range []string{"codex-cmux", "codex-agent"} {
+			adapters = append(adapters, captaincli.AdapterStatus{
+				Backend:       backend,
+				Type:          "cli",
+				Authenticated: true,
+				Binary:        "/usr/local/bin/codex",
+				ModelCount:    4,
+				Models:        []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"},
+				ModelDetails: []captainai.ModelDef{
+					{ID: "gpt-5.5", Name: "GPT-5.5", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh}, DefaultEffort: api.EffortMedium},
+					{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax, api.EffortUltra}, DefaultEffort: api.EffortMedium},
+					{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax}, DefaultEffort: api.EffortMedium},
+					{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", CapabilitiesKnown: true, Reasoning: true, SupportedEfforts: []api.Effort{api.EffortLow, api.EffortMedium, api.EffortHigh, api.EffortXHigh, api.EffortMax}, DefaultEffort: api.EffortMedium},
+				},
+			})
+		}
+		return captaincli.WhoamiResult{Adapters: adapters}, nil
 	}
 	t.Cleanup(func() { runCaptainWhoami = prev })
 
 	resp := todoRunContext()
+	if calls != 1 {
+		t.Fatalf("captain whoami calls = %d, want 1", calls)
+	}
 	if !stringSliceContains(resp.Efforts, "xhigh") {
 		t.Fatalf("efforts = %v, want captain xhigh effort", resp.Efforts)
 	}
-	if resp.DefaultBackend != "claude-cmux" {
-		t.Fatalf("default backend = %q, want claude-cmux", resp.DefaultBackend)
+	if resp.DefaultBackend != "claude-agent" {
+		t.Fatalf("default backend = %q, want claude-agent", resp.DefaultBackend)
 	}
 	backends := map[string]todoRunBackendOption{}
 	for _, backend := range resp.Backends {
@@ -1245,16 +1342,28 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 		t.Fatalf("claude-cmux models = %+v, want claude-sonnet-5 from captain whoami", backends["claude-cmux"].Models)
 	}
 	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-opus-4-8") {
-		t.Fatalf("claude-cmux models = %+v, want claude-opus-4-8 from normalized captain whoami", backends["claude-cmux"].Models)
+		t.Fatalf("claude-cmux models = %+v, want claude-opus-4-8 from captain whoami", backends["claude-cmux"].Models)
 	}
-	if todoRunModelsContain(backends["claude-cmux"].Models, "opus-4-8") {
-		t.Fatalf("claude-cmux models = %+v, should not expose provider-only opus-4-8 id", backends["claude-cmux"].Models)
+	if !todoRunModelsContain(backends["claude-agent"].Models, "claude-fable-5") {
+		t.Fatalf("claude-agent models = %+v, want Fable from captain whoami", backends["claude-agent"].Models)
+	}
+	if len(backends["claude-cmux"].Models) != 3 || backends["claude-cmux"].Models[0].ID != "claude-sonnet-5" || backends["claude-cmux"].Models[1].ID != "claude-fable-5" || backends["claude-cmux"].Models[2].ID != "claude-opus-4-8" {
+		t.Fatalf("claude-cmux models = %+v, want Captain model-detail order", backends["claude-cmux"].Models)
 	}
 	if todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-sonnet") {
 		t.Fatalf("claude-cmux models = %+v, should not expose synthetic claude-agent aliases", backends["claude-cmux"].Models)
 	}
 	if !todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5.5") {
 		t.Fatalf("codex-cmux models = %+v, want gpt-5.5 from captain whoami", backends["codex-cmux"].Models)
+	}
+	for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"} {
+		if !todoRunModelsContain(backends["codex-agent"].Models, id) {
+			t.Fatalf("codex-agent models = %+v, want %s from captain whoami", backends["codex-agent"].Models, id)
+		}
+	}
+	sol := todoRunModelByID(backends["codex-agent"].Models, "gpt-5.6-sol")
+	if !sol.CapabilitiesKnown || !sol.Reasoning || sol.DefaultEffort != "medium" || !stringSliceContains(sol.SupportedEfforts, "ultra") || sol.Temperature == nil || *sol.Temperature {
+		t.Fatalf("gpt-5.6-sol capabilities = %+v, want exact effort and temperature metadata", sol)
 	}
 	if todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5-codex") {
 		t.Fatalf("codex-cmux models = %+v, should not include code variant gpt-5-codex", backends["codex-cmux"].Models)
@@ -1383,6 +1492,15 @@ func todoRunModelsContain(items []todoRunModelOption, want string) bool {
 		}
 	}
 	return false
+}
+
+func todoRunModelByID(items []todoRunModelOption, want string) todoRunModelOption {
+	for _, item := range items {
+		if item.ID == want {
+			return item
+		}
+	}
+	return todoRunModelOption{}
 }
 
 func strconvQuote(s string) string {

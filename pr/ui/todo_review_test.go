@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
@@ -260,5 +263,47 @@ func TestTodoAPIAnswerRejectsWrongState(t *testing.T) {
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("no-session answer status = %d, want 409; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedReviewTodo(t, workDir, types.StatusInProgress)
+	sid := "sess-zombie-ask"
+	mode := types.ModeRun
+	if err := todos.UpdateTODOState(created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+		t.Fatal(err)
+	}
+	logPath, err := cmuxprov.SessionLogPath(workDir, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","sessionId":"sess-zombie-ask","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"ask-1","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?"}]}}]}}` + "\n"
+	if err := os.WriteFile(logPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldStart := startTodoAnswer
+	var gotAnswer string
+	startTodoAnswer = func(_ todoRunRequest, answer string) error { gotAnswer = answer; return nil }
+	t.Cleanup(func() { startTodoAnswer = oldStart })
+
+	body, _ := json.Marshal(todoAnswerPayload{
+		Ref:     todos.TODOReference(created),
+		Answers: map[string]any{"Which database?": "Postgres"},
+	})
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if gotAnswer != `{"answers":{"Which database?":"Postgres"}}` {
+		t.Fatalf("resume feedback = %q", gotAnswer)
 	}
 }

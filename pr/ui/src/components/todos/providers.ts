@@ -1,4 +1,4 @@
-import type { ChatModel, ToolMeta } from '@flanksource/clicky-ui/chat';
+import { providerIcon, type ChatModel, type ToolMeta } from '@flanksource/clicky-ui/chat';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
 import type { SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import { UiColumns, UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
@@ -24,8 +24,9 @@ export interface ProviderCatalog {
   label: string;
   // Model provider key used by clicky-ui's family filter.
   provider: string;
-  // clicky-ui Ui* icon component shown on the provider's segment.
+  // Brand/provider glyph shown on provider segments and run dropdown headers.
   icon: StaticIconComponent;
+  iconColor?: string;
   mechanisms: Array<{ value: RunMechanism; label: string }>;
   efforts: TodoRunEffort[];
 }
@@ -63,7 +64,7 @@ export interface RunContext {
   tools: ToolMeta[];
 }
 
-const EFFORTS: TodoRunEffort[] = ['low', 'medium', 'high', 'xhigh'];
+const EFFORTS: TodoRunEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 // FALLBACK_TOOLS mirrors gavel's drivers.DefaultTools so the picker still renders
 // when the run-context fetch fails. Keep in sync with todoRunToolCatalog (Go).
@@ -80,7 +81,8 @@ const CLAUDE: ProviderCatalog = {
   id: 'claude',
   label: 'Claude',
   provider: 'anthropic',
-  icon: UiSparkles,
+  icon: providerIcon('anthropic') ?? UiSparkles,
+  iconColor: '#D97757',
   mechanisms: [
     { value: 'cmux', label: 'cmux (TUI)' },
     { value: 'agent', label: 'agent' },
@@ -94,7 +96,7 @@ const CODEX: ProviderCatalog = {
   id: 'codex',
   label: 'OpenAI',
   provider: 'openai',
-  icon: UiRobotAi,
+  icon: providerIcon('openai') ?? UiRobotAi,
   mechanisms: [
     { value: 'cmux', label: 'cmux (TUI)' },
     { value: 'agent', label: 'agent' },
@@ -105,7 +107,7 @@ const CODEX: ProviderCatalog = {
 export const PROVIDERS: ProviderCatalog[] = [CLAUDE, CODEX];
 
 export const FALLBACK_RUN_CONTEXT: RunContext = {
-  defaultBackend: 'claude-cmux',
+  defaultBackend: 'claude-agent',
   efforts: EFFORTS,
   tools: FALLBACK_TOOLS,
   backends: [
@@ -192,6 +194,16 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
     ? context.backends.find(backend => backend.id === context.defaultBackend && backend.agent === agent)
     : undefined;
   return preferred ?? backendCatalog(context, '', agent);
+}
+
+// The compact picker is intentionally Agent-first. Advanced remembers whichever
+// backend the user chose, but switching provider in the compact flow always
+// lands on that provider's headless Agent backend.
+export function agentBackendForAgent(context: RunContext, agent: RunProvider): RunBackendCatalog {
+  const agentBackend = backendsForAgent(context, agent).find(
+    backend => backend.mechanisms.some(mechanism => mechanism.value === 'agent') || backend.id.endsWith('-agent'),
+  );
+  return agentBackend ?? defaultBackendForAgent(context, agent);
 }
 
 // driverFor composes the TodoRunDriver from the two axes the dialog selects.

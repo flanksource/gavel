@@ -78,6 +78,11 @@ type todoSummary struct {
 	// Diff is the aggregated git diff footprint of the todo's commits (those
 	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
 	Diff *todoDiffStat `json:"diff,omitempty"`
+	// HasPlan/HasVerification are lightweight availability flags for the list
+	// row's indicators — unlike PlanPath/VerificationMarkdown they're populated
+	// on both list and detail responses since they cost no extra parsing.
+	HasPlan         bool `json:"hasPlan,omitempty"`
+	HasVerification bool `json:"hasVerification,omitempty"`
 	// Envelope-driven fields from the last agent run: the native plan file the
 	// agent reported (rendered by the Plan tab / review mode), its status, the
 	// run mode an answer-resume continues in, the final summary, and the
@@ -1038,6 +1043,8 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 	if out.Ref == "" {
 		out.Ref = todo.FilePath
 	}
+	out.HasPlan = todos.HasPlan(todo)
+	out.HasVerification = todos.ExtractVerificationFixture(todo.MarkdownBody) != ""
 	if detail {
 		out.Body = strings.TrimSpace(todo.MarkdownBody)
 		out.Implementation = strings.TrimSpace(todo.Implementation)

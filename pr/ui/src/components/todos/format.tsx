@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiAdd, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiBeaker, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import { Spinner } from '../../icons/Spinner';
@@ -178,6 +178,9 @@ interface SessionBadgeView {
 // mirrors the real session state instead of a perpetual blue spinner. Before the
 // log appears (found=false) the session is still starting, so it stays live.
 function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
+  if (stats?.state === 'ask') {
+    return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
+  }
   if (stats && stats.found && !stats.inProgress) {
     if (stats.state === 'completed') {
       return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
@@ -189,8 +192,6 @@ function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
       return { className: statusClass('in_progress'), icon: UiLightbulb, label: 'Thinking' };
     case 'working':
       return { className: statusClass('in_progress'), icon: Spinner, label: 'Working' };
-    case 'ask':
-      return { className: statusClass('skipped'), icon: UiComment, label: 'Awaiting input' };
     case 'completed':
       return { className: statusClass('completed'), icon: UiPass, label: 'Done' };
     default:
@@ -303,6 +304,26 @@ function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
   );
 }
 
+// TodoPlanIndicator/TodoVerificationIndicator flag, from the row, that a todo
+// has a plan worth opening or a verification fixture defined, without opening
+// the detail pane's Plan/Verification tabs. Icons match those tabs' own icons
+// (UiListDashes for Plan, UiBeaker for the Verification tab's fixture editor).
+function TodoPlanIndicator() {
+  return (
+    <span className="inline-flex shrink-0 items-center" title="Plan available">
+      <UiListDashes className="text-[11px]" />
+    </span>
+  );
+}
+
+function TodoVerificationIndicator() {
+  return (
+    <span className="inline-flex shrink-0 items-center" title="Verification fixture defined">
+      <UiBeaker className="text-[11px]" />
+    </span>
+  );
+}
+
 // TodoAges shows the todo's created age and, when it differs, its last-activity
 // age. Absolute times sit in the tooltips. A todo with neither timestamp (some
 // file-backed todos) renders nothing. `short` collapses both ages into a single
@@ -409,6 +430,8 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
               <TodoAges todo={todo} short />
               {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
+              {todo.hasPlan && <TodoPlanIndicator />}
+              {todo.hasVerification && <TodoVerificationIndicator />}
               {todo.diff && <TodoDiffBadge diff={todo.diff} />}
             </span>
           )}
@@ -422,6 +445,8 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
               </span>
             )}
             <TodoAges todo={todo} />
+            {todo.hasPlan && <TodoPlanIndicator />}
+            {todo.hasVerification && <TodoVerificationIndicator />}
             {todo.diff && <TodoDiffBadge diff={todo.diff} />}
           </div>
         )}

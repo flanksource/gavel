@@ -59,8 +59,12 @@ func TestTodoSessionApproveFlow(t *testing.T) {
 		t.Fatalf("approval = %+v, want Bash", stats.Approval)
 	}
 
-	// Allow via the approve endpoint unblocks the driver.
-	body, _ := json.Marshal(map[string]any{"sessionId": sessionID, "allow": true})
+	// Allow via the approve endpoint unblocks the driver and forwards an optional
+	// human message to the provider decision.
+	body, _ := json.Marshal(map[string]any{
+		"sessionId": sessionID, "allow": true, "message": "approved after review",
+		"updatedInput": map[string]any{"answers": map[string]any{"Which database?": "Postgres"}},
+	})
 	rec2 := httptest.NewRecorder()
 	s.handleTodoSessionApprove(rec2, httptest.NewRequest(http.MethodPost,
 		"/api/todos/session/approve", bytes.NewReader(body)))
@@ -72,6 +76,13 @@ func TestTodoSessionApproveFlow(t *testing.T) {
 	case d := <-decided:
 		if !d.Allow {
 			t.Fatalf("decision = %+v, want allow", d)
+		}
+		if d.Message != "approved after review" {
+			t.Fatalf("message = %q, want forwarded comment", d.Message)
+		}
+		answers, ok := d.UpdatedInput["answers"].(map[string]any)
+		if !ok || answers["Which database?"] != "Postgres" {
+			t.Fatalf("updated input = %#v", d.UpdatedInput)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("driver Await did not return after approve")

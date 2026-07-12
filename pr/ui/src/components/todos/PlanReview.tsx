@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiChevronUp, UiClose, UiEye } from '@flanksource/clicky-ui/icons';
-import type { TodoItem } from '../../types';
+import type { TodoItem, TodoRunOptions } from '../../types';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 import type { TodoEntry } from './todoGroup';
 import { flattenTodos } from './todoGroup';
 import { buildReviewQueue, nextIndexAfterRemoval, reviewableCount } from './reviewQueue';
 import { AnswerBox, PlanApproveButtons, QuestionsPanel, usePlanActions } from './planActions';
-import { defaultRunOptions } from './run';
+import { loadLastTodoRunOptions } from './run';
 import { statusClass, statusLabel } from './format';
 
 // Plan Review mode: a queue over the todos waiting for a human — approve their
@@ -116,9 +116,9 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const status = current?.status;
 
   const onApprove = useCallback(
-    async (run: boolean) => {
+    async (run: boolean, options?: TodoRunOptions) => {
       if (!ref) return;
-      const result = await approve(ref, { run, options: defaultRunOptions });
+      const result = await approve(ref, { run, options: run ? options ?? loadLastTodoRunOptions('run') : undefined });
       if (!result) return;
       todos.updateItem(result.todo);
       review.advanceAfterAction();
@@ -261,7 +261,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
         {status === 'review' && (
           <PlanApproveButtons
             busy={busy}
-            onApprove={run => void onApprove(run)}
+            onApprove={(run, options) => void onApprove(run, options)}
             onReject={() => void onReject()}
             onRequestChanges={() => setShowChanges(v => !v)}
           />
