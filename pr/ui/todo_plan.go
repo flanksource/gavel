@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/claude"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/gavel/internal/database"
 )
 
 // todoPlanResponse is the exit-plan-mode plan for a TODO's agent session: the plan
@@ -33,6 +34,10 @@ func (s *Server) handleTodoSessionPlan(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.URL.Query().Get("sessionId"))
 	if sessionID == "" {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
+		return
+	}
+	if _, err := database.Shared(r.Context()); err != nil {
+		writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("prepare Captain database: %w", err))
 		return
 	}
 	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: sessionID})
@@ -71,6 +76,10 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 		sessionID := strings.TrimSpace(payload.SessionID)
 		if sessionID == "" {
 			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("path or sessionId is required"))
+			return
+		}
+		if _, err := database.Shared(r.Context()); err != nil {
+			writeTodoError(w, http.StatusServiceUnavailable, fmt.Errorf("prepare Captain database: %w", err))
 			return
 		}
 		res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: sessionID})

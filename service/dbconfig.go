@@ -14,15 +14,15 @@ import (
 	"time"
 )
 
-// DBMode labels the two supported github-cache backends.
+// DBMode labels the two supported Gavel database backends.
 const (
 	DBModeDSN      = "dsn"
 	DBModeEmbedded = "embedded"
 )
 
 // DBConfig is persisted at ~/.config/gavel/db.json by `gavel system install`
-// and read at startup wherever the github cache is opened. It's the single
-// source of truth for "which postgres should the cache use".
+// and read whenever Gavel opens database-backed persistence. It's the single
+// source of truth for the PostgreSQL backend.
 type DBConfig struct {
 	Mode string `json:"mode"`          // "dsn" | "embedded"
 	DSN  string `json:"dsn,omitempty"` // only when Mode == DBModeDSN

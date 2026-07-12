@@ -57,6 +57,7 @@ jobs:
         run: ./gavel test
         env:
           CGO_ENABLED: 0
+          GAVEL_DB_EMBEDDED_TEST: "1"
 
   lint:
     name: Lint

@@ -25,7 +25,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/flanksource/deps v1.0.35
 	github.com/ghodss/yaml v1.0.0
-	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
@@ -54,7 +53,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.0
-	modernc.org/sqlite v1.51.0
 )
 
 require (
@@ -383,5 +381,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311

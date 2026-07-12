@@ -1,19 +1,40 @@
 package cache
 
 import (
-	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// LinterStats tracks execution metrics for intelligent debouncing
-type LinterStats struct {
-	db *DB
+type LinterExecution struct {
+	ID             int64 `gorm:"primaryKey;autoIncrement"`
+	LinterName     string
+	WorkDir        string
+	ExecutedAt     time.Time
+	DurationMS     int64
+	ViolationCount int
+	Success        bool
 }
 
-// ExecutionStats contains metrics for a specific linter
+func (LinterExecution) TableName() string { return "linter_executions" }
+
+type DebounceMetadata struct {
+	LinterName              string `gorm:"primaryKey"`
+	WorkDir                 string `gorm:"primaryKey"`
+	LastDebounceUsedMS      *int64
+	ConsecutiveNoViolations int
+	ConsecutiveViolations   int
+	AdaptationFactor        float64
+	UpdatedAt               time.Time
+}
+
+func (DebounceMetadata) TableName() string { return "debounce_metadata" }
+
+// LinterStats tracks execution metrics for intelligent debouncing.
+type LinterStats struct{ db *gorm.DB }
+
 type ExecutionStats struct {
 	LinterName     string
 	WorkDir        string
@@ -25,345 +46,189 @@ type ExecutionStats struct {
 	SuccessRate    float64
 }
 
-// NewLinterStats creates a new linter statistics tracker
-func NewLinterStats() (*LinterStats, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
+func NewLinterStats(db *gorm.DB) (*LinterStats, error) {
+	if db == nil {
+		return nil, fmt.Errorf("linter stats database is nil")
 	}
-
-	cacheDir := filepath.Join(homeDir, ".cache")
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	dbPath := filepath.Join(cacheDir, "arch-unit-stats.db")
-	db, err := NewDB("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open stats database: %w", err)
-	}
-
-	ls := &LinterStats{db: db}
-	if err := ls.initSchema(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return ls, nil
+	return &LinterStats{db: db}, nil
 }
 
-// initSchema creates the necessary tables
-func (ls *LinterStats) initSchema() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS linter_executions (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		linter_name TEXT NOT NULL,
-		work_dir TEXT NOT NULL,
-		executed_at DATETIME NOT NULL,
-		duration_ms INTEGER NOT NULL,
-		violation_count INTEGER NOT NULL,
-		success BOOLEAN NOT NULL,
-		UNIQUE(linter_name, work_dir, executed_at)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_linter_workdir ON linter_executions(linter_name, work_dir);
-	CREATE INDEX IF NOT EXISTS idx_executed_at ON linter_executions(executed_at);
-
-	-- Table for intelligent debounce metadata
-	CREATE TABLE IF NOT EXISTS debounce_metadata (
-		linter_name TEXT NOT NULL,
-		work_dir TEXT NOT NULL,
-		last_debounce_used_ms INTEGER,
-		consecutive_no_violations INTEGER DEFAULT 0,
-		consecutive_violations INTEGER DEFAULT 0,
-		adaptation_factor REAL DEFAULT 1.0,
-		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY(linter_name, work_dir)
-	);
-	`
-
-	if _, err := ls.db.Exec(schema); err != nil {
-		return fmt.Errorf("failed to create schema: %w", err)
-	}
-
-	return nil
-}
-
-// RecordExecution records a linter execution
 func (ls *LinterStats) RecordExecution(linterName, workDir string, duration time.Duration, violations int, success bool) error {
-	tx, err := ls.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Record the execution
-	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO linter_executions 
-		(linter_name, work_dir, executed_at, duration_ms, violation_count, success)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		linterName, workDir, time.Now(), duration.Milliseconds(), violations, success)
-	if err != nil {
-		return err
-	}
-
-	// Update debounce metadata
-	err = ls.updateDebounceMetadata(tx, linterName, workDir, violations)
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
+	now := time.Now()
+	return ls.db.Transaction(func(tx *gorm.DB) error {
+		execution := LinterExecution{
+			LinterName:     linterName,
+			WorkDir:        workDir,
+			ExecutedAt:     now,
+			DurationMS:     duration.Milliseconds(),
+			ViolationCount: violations,
+			Success:        success,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "linter_name"}, {Name: "work_dir"}, {Name: "executed_at"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"duration_ms", "violation_count", "success",
+			}),
+		}).Create(&execution).Error; err != nil {
+			return err
+		}
+		return updateDebounceMetadata(tx, linterName, workDir, violations, now)
+	})
 }
 
-// updateDebounceMetadata updates the adaptation factors based on violation patterns
-func (ls *LinterStats) updateDebounceMetadata(tx *Tx, linterName, workDir string, violations int) error {
-	// Get current metadata
-	var consecutiveNoViolations, consecutiveViolations int
-	var adaptationFactor float64
-
-	err := tx.QueryRow(`
-		SELECT consecutive_no_violations, consecutive_violations, adaptation_factor
-		FROM debounce_metadata 
-		WHERE linter_name = ? AND work_dir = ?`,
-		linterName, workDir).Scan(&consecutiveNoViolations, &consecutiveViolations, &adaptationFactor)
-
-	if err != nil && err != sql.ErrNoRows {
+func updateDebounceMetadata(tx *gorm.DB, linterName, workDir string, violations int, now time.Time) error {
+	metadata := DebounceMetadata{LinterName: linterName, WorkDir: workDir, AdaptationFactor: 1}
+	err := tx.Where("linter_name = ? AND work_dir = ?", linterName, workDir).First(&metadata).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
 		return err
 	}
+	if metadata.AdaptationFactor == 0 {
+		metadata.AdaptationFactor = 1
+	}
 
-	// Update consecutive counters
 	if violations == 0 {
-		consecutiveNoViolations++
-		consecutiveViolations = 0
+		metadata.ConsecutiveNoViolations++
+		metadata.ConsecutiveViolations = 0
 	} else {
-		consecutiveNoViolations = 0
-		consecutiveViolations++
+		metadata.ConsecutiveNoViolations = 0
+		metadata.ConsecutiveViolations++
 	}
-
-	// Adjust adaptation factor based on patterns
-	// More violations = reduce debounce (increase responsiveness)
-	// Fewer violations = increase debounce (reduce overhead)
-	if consecutiveNoViolations >= 5 {
-		adaptationFactor = minFloat(2.0, adaptationFactor*1.1) // Increase debounce
-	} else if consecutiveViolations >= 3 {
-		adaptationFactor = maxFloat(0.5, adaptationFactor*0.9) // Decrease debounce
+	if metadata.ConsecutiveNoViolations >= 5 {
+		metadata.AdaptationFactor = minFloat(2, metadata.AdaptationFactor*1.1)
+	} else if metadata.ConsecutiveViolations >= 3 {
+		metadata.AdaptationFactor = maxFloat(0.5, metadata.AdaptationFactor*0.9)
 	}
+	metadata.UpdatedAt = now
 
-	// Insert or update metadata
-	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO debounce_metadata 
-		(linter_name, work_dir, consecutive_no_violations, consecutive_violations, adaptation_factor, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		linterName, workDir, consecutiveNoViolations, consecutiveViolations, adaptationFactor, time.Now())
-
-	return err
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "linter_name"}, {Name: "work_dir"}},
+		DoUpdates: clause.AssignmentColumns([]string{"consecutive_no_violations", "consecutive_violations", "adaptation_factor", "updated_at"}),
+	}).Create(&metadata).Error
 }
 
-// GetIntelligentDebounce calculates the optimal debounce duration for a linter
 func (ls *LinterStats) GetIntelligentDebounce(linterName, workDir string) (time.Duration, error) {
-	// Get recent execution statistics
-	var lastDuration, avgDuration time.Duration
-	var runCount int64
-
-	err := ls.db.QueryRow(`
-		SELECT 
-			COALESCE(MAX(duration_ms), 0) as last_duration,
-			COALESCE(AVG(duration_ms), 1000) as avg_duration,
-			COUNT(*) as run_count
-		FROM linter_executions 
-		WHERE linter_name = ? AND work_dir = ? 
-		AND executed_at > datetime('now', '-7 days')`,
-		linterName, workDir).Scan(&lastDuration, &avgDuration, &runCount)
-
+	var aggregate struct {
+		AvgDuration float64
+		RunCount    int64
+	}
+	err := ls.db.Model(&LinterExecution{}).
+		Select("COALESCE(AVG(duration_ms), 1000) AS avg_duration, COUNT(*) AS run_count").
+		Where("linter_name = ? AND work_dir = ? AND executed_at > ?", linterName, workDir, time.Now().Add(-7*24*time.Hour)).
+		Scan(&aggregate).Error
 	if err != nil {
-		// Default for new linters
 		return 5 * time.Minute, nil
 	}
 
-	// lastDurationTime := time.Duration(lastDuration) * time.Millisecond // Currently unused but kept for future use
-	avgDurationTime := time.Duration(avgDuration) * time.Millisecond
-
-	// Get adaptation factor
 	adaptationFactor := 1.0
-	_ = ls.db.QueryRow(`
-		SELECT adaptation_factor
-		FROM debounce_metadata
-		WHERE linter_name = ? AND work_dir = ?`,
-		linterName, workDir).Scan(&adaptationFactor)
-
-	// Calculate base debounce using new thresholds
-	// Use the average duration as the primary metric
-	var baseDebounce time.Duration
-
-	if runCount == 0 {
-		// New linter - default to 5 minutes
-		baseDebounce = 5 * time.Minute
-	} else if avgDurationTime < 100*time.Millisecond {
-		// < 100ms: no debounce
-		baseDebounce = 0
-	} else if avgDurationTime < 1*time.Second {
-		// < 1s: 5 second debounce
-		baseDebounce = 5 * time.Second
-	} else if avgDurationTime < 30*time.Second {
-		// < 30s: 5 minute debounce
-		baseDebounce = 5 * time.Minute
-	} else if avgDurationTime < 5*time.Minute {
-		// 1-5 minutes: 1 hour debounce
-		baseDebounce = 1 * time.Hour
-	} else if avgDurationTime < 15*time.Minute {
-		// 5-15 minutes: 3 hour debounce
-		baseDebounce = 3 * time.Hour
-	} else {
-		// 15+ minutes: 8 hour debounce
-		baseDebounce = 8 * time.Hour
+	var metadata DebounceMetadata
+	if err := ls.db.Where("linter_name = ? AND work_dir = ?", linterName, workDir).First(&metadata).Error; err == nil && metadata.AdaptationFactor != 0 {
+		adaptationFactor = metadata.AdaptationFactor
+	} else if err != nil && err != gorm.ErrRecordNotFound {
+		return 0, err
 	}
 
-	// Apply adaptation factor to fine-tune based on violation patterns
-	if baseDebounce > 0 {
-		baseDebounce = time.Duration(float64(baseDebounce) * adaptationFactor)
+	avg := time.Duration(aggregate.AvgDuration) * time.Millisecond
+	var debounce time.Duration
+	switch {
+	case aggregate.RunCount == 0:
+		debounce = 5 * time.Minute
+	case avg < 100*time.Millisecond:
+		debounce = 0
+	case avg < time.Second:
+		debounce = 5 * time.Second
+	case avg < 30*time.Second:
+		debounce = 5 * time.Minute
+	case avg < 5*time.Minute:
+		debounce = time.Hour
+	case avg < 15*time.Minute:
+		debounce = 3 * time.Hour
+	default:
+		debounce = 8 * time.Hour
 	}
-
-	// Ensure reasonable bounds even with adaptation
-	// Don't let adaptation factor push debounce too extreme
-	if baseDebounce > 24*time.Hour {
-		baseDebounce = 24 * time.Hour
+	if debounce > 0 {
+		debounce = time.Duration(float64(debounce) * adaptationFactor)
 	}
-
-	return baseDebounce, nil
+	if debounce > 24*time.Hour {
+		debounce = 24 * time.Hour
+	}
+	return debounce, nil
 }
 
-// ShouldSkipLinter determines if a linter should be skipped due to debounce
-func (ls *LinterStats) ShouldSkipLinter(linterName, workDir string, configDebounce string) (bool, time.Duration, error) {
-	var effectiveDebounce time.Duration
+func (ls *LinterStats) ShouldSkipLinter(linterName, workDir, configured string) (bool, time.Duration, error) {
+	var debounce time.Duration
 	var err error
-
-	// Priority: explicit config > intelligent debounce
-	if configDebounce != "" && configDebounce != "auto" {
-		effectiveDebounce, err = time.ParseDuration(configDebounce)
+	if configured != "" && configured != "auto" {
+		debounce, err = time.ParseDuration(configured)
 		if err != nil {
 			return false, 0, fmt.Errorf("invalid debounce duration: %w", err)
 		}
 	} else {
-		// Use intelligent debounce
-		effectiveDebounce, err = ls.GetIntelligentDebounce(linterName, workDir)
+		debounce, err = ls.GetIntelligentDebounce(linterName, workDir)
 		if err != nil {
 			return false, 0, err
 		}
 	}
 
-	// Get last execution time
-	var lastRun time.Time
-	err = ls.db.QueryRow(`
-		SELECT MAX(executed_at) 
-		FROM linter_executions 
-		WHERE linter_name = ? AND work_dir = ?`,
-		linterName, workDir).Scan(&lastRun)
-
-	if err != nil || lastRun.IsZero() {
-		// No previous runs - don't skip
-		return false, effectiveDebounce, nil
+	var result struct{ LastRun *time.Time }
+	if err := ls.db.Model(&LinterExecution{}).
+		Select("MAX(executed_at) AS last_run").
+		Where("linter_name = ? AND work_dir = ?", linterName, workDir).
+		Scan(&result).Error; err != nil {
+		return false, debounce, err
 	}
-
-	elapsed := time.Since(lastRun)
-	shouldSkip := elapsed < effectiveDebounce
-
-	return shouldSkip, effectiveDebounce, nil
+	if result.LastRun == nil {
+		return false, debounce, nil
+	}
+	return time.Since(*result.LastRun) < debounce, debounce, nil
 }
 
-// GetStats returns comprehensive statistics for a linter
 func (ls *LinterStats) GetStats(linterName, workDir string) (*ExecutionStats, error) {
-	var stats ExecutionStats
-	var lastRunStr string
-	var lastDurationMs int64
-	var avgDurationMs float64
-
-	// First get the basic stats
-	err := ls.db.QueryRow(`
-		SELECT 
-			COUNT(*) as run_count,
-			COALESCE(AVG(duration_ms), 0) as avg_duration,
-			COALESCE(SUM(violation_count), 0) as total_violations,
-			COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) as success_rate
-		FROM linter_executions 
-		WHERE linter_name = ? AND work_dir = ?`,
-		linterName, workDir).Scan(
-		&stats.RunCount, &avgDurationMs, &stats.ViolationCount, &stats.SuccessRate)
-
-	if err != nil {
+	stats := &ExecutionStats{LinterName: linterName, WorkDir: workDir}
+	var aggregate struct {
+		RunCount      int64
+		AvgDurationMS float64
+		Violations    int64
+		SuccessRate   float64
+	}
+	if err := ls.db.Model(&LinterExecution{}).
+		Select(`COUNT(*) AS run_count,
+			COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+			COALESCE(SUM(violation_count), 0) AS violations,
+			COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) AS success_rate`).
+		Where("linter_name = ? AND work_dir = ?", linterName, workDir).
+		Scan(&aggregate).Error; err != nil {
 		return nil, err
 	}
+	stats.RunCount = aggregate.RunCount
+	stats.AvgDuration = time.Duration(aggregate.AvgDurationMS) * time.Millisecond
+	stats.ViolationCount = aggregate.Violations
+	stats.SuccessRate = aggregate.SuccessRate
 
-	// Get the last run info separately if there are any runs
 	if stats.RunCount > 0 {
-		err = ls.db.QueryRow(`
-			SELECT executed_at, duration_ms
-			FROM linter_executions 
-			WHERE linter_name = ? AND work_dir = ? 
-			ORDER BY executed_at DESC
-			LIMIT 1`,
-			linterName, workDir).Scan(&lastRunStr, &lastDurationMs)
-
-		if err != nil {
+		var latest LinterExecution
+		if err := ls.db.Where("linter_name = ? AND work_dir = ?", linterName, workDir).
+			Order("executed_at DESC").First(&latest).Error; err != nil {
 			return nil, err
 		}
-
-		// Parse the time string
-		stats.LastRun, err = time.Parse("2006-01-02 15:04:05", lastRunStr)
-		if err != nil {
-			// Try parsing as RFC3339
-			stats.LastRun, err = time.Parse(time.RFC3339, lastRunStr)
-			if err != nil {
-				// Fallback to zero time
-				stats.LastRun = time.Time{}
-			}
-		}
-
-		stats.LastDuration = time.Duration(lastDurationMs) * time.Millisecond
-	} else {
-		stats.LastRun = time.Time{}
-		stats.LastDuration = 0
+		stats.LastRun = latest.ExecutedAt
+		stats.LastDuration = time.Duration(latest.DurationMS) * time.Millisecond
 	}
-
-	stats.LinterName = linterName
-	stats.WorkDir = workDir
-	stats.AvgDuration = time.Duration(int64(avgDurationMs)) * time.Millisecond
-
-	return &stats, nil
+	return stats, nil
 }
 
-// GetLinterHistory returns all linters that have execution history
 func (ls *LinterStats) GetLinterHistory(workDir string) ([]string, error) {
-	rows, err := ls.db.Query(`
-		SELECT DISTINCT linter_name 
-		FROM linter_executions 
-		WHERE work_dir = ? 
-		ORDER BY linter_name`,
-		workDir)
-	if err != nil {
+	var linters []string
+	if err := ls.db.Model(&LinterExecution{}).
+		Distinct("linter_name").
+		Where("work_dir = ?", workDir).
+		Order("linter_name").
+		Pluck("linter_name", &linters).Error; err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var linters []string
-	for rows.Next() {
-		var linter string
-		if err := rows.Scan(&linter); err != nil {
-			return nil, err
-		}
-		linters = append(linters, linter)
-	}
-
-	return linters, rows.Err()
+	return linters, nil
 }
 
-// Close closes the database connection
-func (ls *LinterStats) Close() error {
-	if ls.db != nil {
-		return ls.db.Close()
-	}
-	return nil
-}
+func (ls *LinterStats) Close() error { return nil }
 
 func minFloat(a, b float64) float64 {
 	if a < b {

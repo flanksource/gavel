@@ -1,12 +1,14 @@
 package todos
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -17,6 +19,12 @@ import (
 // with an empty path.
 func ResolveSessionPlan(todo *types.TODO) (path string, content string) {
 	if todo == nil || todo.LLM == nil || todo.LLM.SessionId == "" {
+		return "", ""
+	}
+	// Configure Captain with Gavel's process-owned pool only when a path that
+	// can consult Captain persistence is actually used. Unconfigured databases
+	// remain disabled and preserve Captain's file-backed plan resolution.
+	if _, err := database.Shared(context.Background()); err != nil {
 		return "", ""
 	}
 	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: todo.LLM.SessionId})

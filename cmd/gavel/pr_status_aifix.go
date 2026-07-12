@@ -10,6 +10,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
 )
 
@@ -95,6 +96,9 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 // We restrict to sessions newer than the ai-fix start (with a small skew
 // allowance) so the user only sees the run they just triggered.
 func renderCaptainHistory(runStart time.Time) error {
+	if _, err := database.Shared(context.Background()); err != nil {
+		return fmt.Errorf("prepare Captain database: %w", err)
+	}
 	since := runStart.Add(-2 * time.Second)
 	result, err := captaincli.RunHistory(captaincli.HistoryOptions{
 		Last:  true,

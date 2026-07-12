@@ -12,6 +12,7 @@ import (
 	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/internal/cache"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -20,6 +21,7 @@ type Runner struct {
 	registry       *Registry
 	violationCache *cache.ViolationCache
 	linterStats    *cache.LinterStats
+	db             *database.DB
 	config         *models.Config
 	workDir        string
 	noCache        bool
@@ -39,17 +41,25 @@ func NewRunner(config *models.Config, workDir string) (*Runner, error) {
 func NewRunnerWithOptions(config *models.Config, workDir string, opts RunnerOptions) (*Runner, error) {
 	var violationCache *cache.ViolationCache
 	var linterStats *cache.LinterStats
+	var db *database.DB
 	var err error
 
 	if !opts.NoCache {
-		violationCache, err = cache.NewViolationCache()
+		db, err = database.Shared(context.Background())
 		if err != nil {
-			return nil, fmt.Errorf("failed to create violation cache: %w", err)
+			return nil, err
 		}
-
-		linterStats, err = cache.NewLinterStats()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create linter stats: %w", err)
+		if !db.Disabled() {
+			violationCache, err = cache.NewViolationCache(db.Gorm())
+			if err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("failed to create violation cache: %w", err)
+			}
+			linterStats, err = cache.NewLinterStats(db.Gorm())
+			if err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("failed to create linter stats: %w", err)
+			}
 		}
 	}
 
@@ -57,6 +67,7 @@ func NewRunnerWithOptions(config *models.Config, workDir string, opts RunnerOpti
 		registry:       DefaultRegistry,
 		violationCache: violationCache,
 		linterStats:    linterStats,
+		db:             db,
 		config:         config,
 		workDir:        workDir,
 		noCache:        opts.NoCache,
@@ -65,24 +76,9 @@ func NewRunnerWithOptions(config *models.Config, workDir string, opts RunnerOpti
 
 // Close closes any resources held by the runner
 func (r *Runner) Close() error {
-	var errs []error
-
-	if r.violationCache != nil {
-		if err := r.violationCache.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("violation cache close error: %w", err))
-		}
+	if r.db != nil {
+		return r.db.Close()
 	}
-
-	if r.linterStats != nil {
-		if err := r.linterStats.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("linter stats close error: %w", err))
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("close errors: %v", errs)
-	}
-
 	return nil
 }
 

@@ -15,7 +15,7 @@ import (
 )
 
 type SystemInstallOptions struct {
-	DSN             string `flag:"dsn" help:"Postgres DSN for the github cache (mutually exclusive with --embedded; overrides the embedded default)"`
+	DSN             string `flag:"dsn" help:"Postgres DSN for Gavel data (mutually exclusive with --embedded; overrides the embedded default)"`
 	Embedded        bool   `flag:"embedded" help:"Launch an embedded postgres managed by the pr-ui daemon (default when --dsn is not supplied)"`
 	Token           string `flag:"token" help:"GitHub token to persist for the daemon (defaults to GITHUB_TOKEN, GH_TOKEN, or gh auth token)"`
 	SkipVerifyToken bool   `flag:"skip-verify-token" help:"Skip the live GitHub API probe of the token (for GHE or unusual token scopes)"`
@@ -28,7 +28,7 @@ func (SystemInstallOptions) Help() string {
 	return `Install a user-level background service that keeps gavel pr list --all --ui
 running across logins.
 
-Database backend (defaults to --embedded when no flag is given):
+Gavel database backend (defaults to --embedded when no flag is given):
   --embedded            Launch embedded postgres from the pr-ui daemon.
                         Binaries are downloaded on first run; install
                         verifies start/stop immediately so you find out
