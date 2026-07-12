@@ -12,3 +12,10 @@ func TestBuildCommitOptionsTreeAliasEnablesInteractive(t *testing.T) {
 		t.Fatalf("Tree alias did not enable interactive mode")
 	}
 }
+
+func TestBuildCommitOptionsPassesInteractiveSummary(t *testing.T) {
+	got := buildCommitOptions(CommitOptions{Interactive: true, Summary: true}, "/repo", verify.GavelConfig{})
+	if !got.Interactive || !got.Summary {
+		t.Fatalf("interactive summary flags were not propagated: %+v", got)
+	}
+}

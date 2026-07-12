@@ -21,10 +21,10 @@ type CommitOptions struct {
 	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
 	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
 	Tree         bool   `flag:"tree" short:"t" help:"Alias for --interactive"`
-	Summary      bool   `flag:"summary" short:"s" help:"With -i, print a gavel-status-style summary of the candidate files before the picker opens"`
+	Summary      bool   `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
 	MaxCommits   int    `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
 	Message      string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	Model        string `flag:"model" help:"Override LLM model for commit-message/PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
+	Model        string `flag:"model" help:"Override LLM model for chooser summaries, commit-message, and PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
 	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
 	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
 	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
@@ -89,9 +89,9 @@ index and stages exactly the chosen paths before running the normal
 commit pipeline. After each commit, the picker reopens over the
 remaining changed files so you can build several focused commits in
 one session — exit any time with esc or ctrl+c. -i is mutually
-exclusive with -A and -m. Pair with -s to print a status-style summary
-of the candidate files before the picker opens. Combine with --dry-run
-to preview a single commit without looping.
+exclusive with -A and -m. Pair with -s to stream a one-line AI summary
+into each candidate file row while the picker remains interactive.
+Combine with --dry-run to preview a single commit without looping.
 
 The -A flag stages all changes and asks the LLM to split them into logical
 commits — one feature/fix/refactor each — capped at --max-commits (default 7,
@@ -116,7 +116,7 @@ Examples:
   gavel commit                          # session-scoped: commits only the running agent's edits, else staged changes
   gavel commit -i                       # tree picker over all changed files; no git add needed
   gavel commit -t                       # alias for the tree picker
-  gavel commit -i -s                    # show a status summary before opening the picker
+  gavel commit -i -s                    # stream one-line AI summaries into the picker rows
   gavel commit -i --dry-run             # preview message for the picked subset
   gavel commit -A                       # LLM-grouped logical commits (up to 7)
   gavel commit -A --max-commits=3       # cap at 3 logical commits (chore commit excluded)

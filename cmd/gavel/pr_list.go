@@ -71,7 +71,15 @@ var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)
 // closed" opt-in caps the window at 30 days rather than pulling the whole history.
 const closedPRLookback = 30 * 24 * time.Hour
 
-func parseSince(s string) (time.Time, error) {
+func parseSince(s string) (parsed time.Time, err error) {
+	// go-datemath may panic on malformed lexer input. Treat that the same as a
+	// parse failure so CLI flags never crash the process.
+	defer func() {
+		if recover() != nil {
+			parsed = time.Time{}
+			err = fmt.Errorf("unable to parse since: %s", s)
+		}
+	}()
 	if bareDurationRe.MatchString(s) {
 		s = "now-" + s
 	}

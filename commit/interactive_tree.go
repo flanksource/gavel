@@ -28,6 +28,7 @@ const (
 	styleScope        = "text-cyan-600"
 	styleLanguage     = "text-muted italic"
 	styleMuted        = "text-muted"
+	styleRunning      = "text-blue-500"
 	styleCursor       = "text-cyan-600 font-bold"
 	styleHeader       = "font-bold"
 	styleHelp         = "text-muted"
@@ -50,10 +51,11 @@ type treePickerResult struct {
 // runTreePicker is the production tree picker entry point. Tests stub
 // runTreePickerFunc instead so they can drive the model directly without
 // a real terminal.
-func runTreePicker(candidates []status.FileStatus, gitRoot string) (treePickerResult, error) {
+func runTreePicker(candidates []status.FileStatus, gitRoot string, summaryUpdates <-chan status.AISummaryUpdate) (treePickerResult, error) {
 	model := newTreeModel(candidates)
 	model.gitRoot = gitRoot
 	model.appendGitIgnore = appendGitIgnore
+	model.summaryUpdates = summaryUpdates
 	if len(model.visible) == 0 {
 		return treePickerResult{}, ErrInteractiveEmpty
 	}
@@ -111,6 +113,7 @@ type ignorePromptState struct {
 // drive directly via Update().
 type treeModel struct {
 	root            *treeNode
+	files           []status.FileStatus
 	visible         []*treeNode
 	cursor          int
 	width           int
@@ -124,15 +127,17 @@ type treeModel struct {
 	ignorePrompt    *ignorePromptState
 	statusLine      string
 	pendingRmCached []string
+	summaryUpdates  <-chan status.AISummaryUpdate
 }
 
 func newTreeModel(files []status.FileStatus) treeModel {
 	root := &treeNode{Name: "", Path: "", IsDir: true, Expanded: true}
-	for i := range files {
-		insertFile(root, &files[i])
+	ownedFiles := append([]status.FileStatus(nil), files...)
+	for i := range ownedFiles {
+		insertFile(root, &ownedFiles[i])
 	}
 	sortTree(root)
-	m := treeModel{root: root, height: 20, width: 80}
+	m := treeModel{root: root, files: ownedFiles, height: 20, width: 80}
 	m.rebuildVisible()
 	return m
 }
@@ -292,11 +297,34 @@ func nodeMatchesFilter(n *treeNode, query string) bool {
 	return strings.Contains(haystack, query)
 }
 
+type aiSummaryUpdateMsg struct {
+	update status.AISummaryUpdate
+	open   bool
+}
+
+func waitForAISummaryUpdate(updates <-chan status.AISummaryUpdate) tea.Cmd {
+	if updates == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		update, ok := <-updates
+		return aiSummaryUpdateMsg{update: update, open: ok}
+	}
+}
+
 // Init satisfies tea.Model.
-func (m treeModel) Init() tea.Cmd { return nil }
+func (m treeModel) Init() tea.Cmd { return waitForAISummaryUpdate(m.summaryUpdates) }
 
 func (m treeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case aiSummaryUpdateMsg:
+		if !msg.open {
+			m.summaryUpdates = nil
+			return m, nil
+		}
+		result := status.Result{Files: m.files}
+		result.ApplyAISummaryUpdate(msg.update)
+		return m, waitForAISummaryUpdate(m.summaryUpdates)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -867,7 +895,7 @@ func checkboxFor(n *treeNode) string {
 }
 
 func chipsFor(f status.FileStatus) string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 
 	if label := stateGlyph(f); label != "" {
 		parts = append(parts, styled(label, stateStyle(f.State)))
@@ -890,9 +918,29 @@ func chipsFor(f status.FileStatus) string {
 			parts = append(parts, styled(age+" ago", styleMuted))
 		}
 	}
+	if summary := aiSummaryChip(f); summary != "" {
+		parts = append(parts, summary)
+	}
 
 	separator := styled(" · ", styleMuted)
 	return strings.Join(parts, separator)
+}
+
+func aiSummaryChip(f status.FileStatus) string {
+	if summary := strings.TrimSpace(f.AISummary); summary != "" {
+		return styled(summary, styleMuted)
+	}
+
+	switch f.AIStatus {
+	case status.AISummaryStatusPending:
+		return styled("⏳ ai", styleMuted)
+	case status.AISummaryStatusRunning:
+		return styled("⟳ ai", styleRunning)
+	case status.AISummaryStatusFailed:
+		return styled("⚠ ai summary failed", styleDeleted)
+	default:
+		return ""
+	}
 }
 
 func stateGlyph(f status.FileStatus) string {

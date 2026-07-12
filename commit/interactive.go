@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	clickyai "github.com/flanksource/gavel/ai"
+	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/status"
 )
 
@@ -16,12 +20,23 @@ var (
 	gatherStatusFunc = func(workDir string) (*status.Result, error) {
 		return status.GatherBase(workDir, status.Options{NoRepomap: false})
 	}
-	addFilesFunc      = addFiles
-	resetAllStagedFn  = resetAllStaged
-	gitRmCachedFunc   = gitRmCached
-	runTreePickerFunc = runTreePicker
-	interactiveStdout = os.Stdout
+	addFilesFunc                = addFiles
+	resetAllStagedFn            = resetAllStaged
+	gitRmCachedFunc             = gitRmCached
+	runTreePickerFunc           = runTreePicker
+	startCandidateSummariesFunc = startCandidateSummaries
+	interactiveStdout           = os.Stdout
 )
+
+// candidateSummarySession owns the per-file AI summary stream used by one
+// picker invocation. Files contains the candidate slice after its AI states
+// have been initialized. Stop cancels in-flight requests, closes the agent,
+// waits for the stream to settle, and restores Clicky's task renderer.
+type candidateSummarySession struct {
+	Files   []status.FileStatus
+	Updates <-chan status.AISummaryUpdate
+	Stop    func()
+}
 
 func validateInteractiveOptions(opts Options) error {
 	if !opts.Interactive {
@@ -47,7 +62,7 @@ func validateInteractiveOptions(opts Options) error {
 // resets the index and stages exactly the chosen paths. Returns the list of
 // selected (now staged) file paths so the caller can verify and proceed with
 // the standard commit pipeline.
-func runInteractiveStaging(_ context.Context, opts Options) ([]string, error) {
+func runInteractiveStaging(ctx context.Context, opts Options) ([]string, error) {
 	statusResult, err := gatherStatusFunc(opts.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("gather candidate files: %w", err)
@@ -61,11 +76,18 @@ func runInteractiveStaging(_ context.Context, opts Options) ([]string, error) {
 		return nil, ErrNothingStaged
 	}
 
+	var summaryUpdates <-chan status.AISummaryUpdate
 	if opts.Summary {
-		printCandidateSummary(statusResult, candidates)
+		summaries, err := startCandidateSummariesFunc(ctx, opts, candidates)
+		if err != nil {
+			return nil, fmt.Errorf("start candidate summaries: %w", err)
+		}
+		defer summaries.Stop()
+		candidates = summaries.Files
+		summaryUpdates = summaries.Updates
 	}
 
-	picked, err := runTreePickerFunc(candidates, opts.WorkDir)
+	picked, err := runTreePickerFunc(candidates, opts.WorkDir, summaryUpdates)
 	if err != nil {
 		return nil, err
 	}
@@ -103,13 +125,68 @@ func filterCandidates(files []status.FileStatus) (kept, skipped []status.FileSta
 	return
 }
 
-func printCandidateSummary(result *status.Result, candidates []status.FileStatus) {
-	if result == nil {
-		return
+// startCandidateSummaries starts the same per-file AI summary pipeline used by
+// `gavel status --ai`, but feeds its updates to the Bubble Tea picker instead
+// of installing Clicky's status renderer. The task renderer is disabled while
+// Bubble Tea owns the alternate screen so the two renderers cannot corrupt one
+// another's frames.
+func startCandidateSummaries(ctx context.Context, opts Options, candidates []status.FileStatus) (*candidateSummarySession, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	view := *result
-	view.Files = candidates
-	fmt.Fprintln(interactiveStdout, view.Pretty().ANSI())
+
+	agent, err := BuildAgent(opts, opts.messageModel())
+	if err != nil {
+		return nil, err
+	}
+
+	summaryPrompt, err := status.ResolveSummaryPrompt(opts.WorkDir)
+	if err != nil {
+		_ = agent.Close()
+		return nil, err
+	}
+
+	prompting.Prepare()
+	result := &status.Result{Files: append([]status.FileStatus(nil), candidates...)}
+	result.PrepareAISummaries()
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	previousNoRender := clickytask.IsNoRender()
+	clickytask.SetNoRender(true)
+	rawUpdates := status.StreamAISummaries(
+		streamCtx,
+		opts.WorkDir,
+		agent,
+		result.Files,
+		clickyai.DefaultConfig().MaxConcurrent,
+		summaryPrompt,
+	)
+
+	updates := make(chan status.AISummaryUpdate, len(result.Files)*2+1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(updates)
+		for update := range rawUpdates {
+			updates <- update
+		}
+	}()
+
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			_ = agent.Close()
+			<-done
+			clickytask.SetNoRender(previousNoRender)
+		})
+	}
+
+	return &candidateSummarySession{
+		Files:   result.Files,
+		Updates: updates,
+		Stop:    stop,
+	}, nil
 }
 
 // resetAllStaged unstages everything currently in the index. Used to clear

@@ -109,7 +109,15 @@ gavel test --fixtures                                 # discover and run *.fixtu
 gavel test --format "json=out.json,html=report.html"  # write multiple output formats
 gavel test --dry-run                                  # show what would run without executing
 gavel test history                                    # show local test duration/pass history
+gavel test ./pkg -- -run 'TestFoo'                    # focus Go test and Ginkgo by name
+gavel test ./pkg -- --focus 'TestFoo'                 # equivalent native focus spelling
+gavel test ginkgo ./pkg -- --label-filter smoke       # raw args for one framework
 ```
+
+The first `-run` or `--focus` immediately after `--` is normalized through
+each runner's focus mapping. Any other arguments after `--` require exactly
+one selected framework, using a framework subcommand or a single
+`--framework` value.
 
 | Flag | Description |
 |------|-------------|
@@ -133,7 +141,7 @@ gavel test history                                    # show local test duration
 | `--dry-run` | Print test commands without executing |
 | `--auto-stop` | With `--ui`, fork a detached UI server that exits after this duration |
 | `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
-| `--extra-args` | Additional arguments passed through to test runners |
+| `--extra-args` | Additional arguments broadcast to every selected test runner |
 | `--work-dir` | Working directory to run tests in |
 
 #### `gavel test history`
@@ -399,6 +407,7 @@ Generate a conventional commit message via LLM and run pre-commit hooks from `.g
 ```bash
 gavel commit                          # LLM-generated message, staged changes
 gavel commit -t                       # choose files in an interactive tree picker
+gavel commit -i -s                    # stream one-line AI summaries into picker rows
 gavel commit -A                       # stage everything, let the LLM split it into logical commits + a chore commit for lock/generated files
 gavel commit --max-commits=3          # same as -A, capped at 3 logical commits (implies -A)
 gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
@@ -410,6 +419,7 @@ gavel commit --force                  # skip hooks
 |------|-------------|
 | `--stage` | Which changes to commit: `session` (default — commits only the running agent's edits, resolving `GAVEL_SESSION_ID`/`CLAUDE_SESSION_ID`/`CODEX_SESSION_ID`, falling back to `staged` when none is set), `staged`, `unstaged`, `all`, or an explicit Claude/Codex session id |
 | `-t` / `--tree`, `-i` / `--interactive` | Open an interactive tree picker over changed files; press `/` in the picker to filter by path, status, language, or scope |
+| `-s` / `--summary` | With `-i`/`-t`, stream a one-line AI summary into each candidate file row while the picker remains interactive |
 | `-A` / `--commit-all` | Stage all changes and ask the LLM to split them into logical commit groups (plus a separate chore commit for lock files / build artifacts / generated bundles). Each group is committed as soon as its message is ready |
 | `--max-commits` | Cap the number of logical commits, excluding the chore commit (default 7). Setting it implies `-A`. Rendered into the grouping prompt's output schema as `maxItems` and enforced by captain's `schemaStrictness=retry` policy |
 | `-m` / `--message` | Explicit commit message; skips only the message-generation LLM call |
