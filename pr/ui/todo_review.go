@@ -13,6 +13,8 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+const todoReviewActor = "gavel-ui"
+
 // Plan-review actions: approving a reviewed plan (optionally chaining straight
 // into the implementing run) and answering an agent's blocking questions by
 // resuming its session. Both are domain transitions, not bare status writes —
@@ -52,9 +54,13 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pending := types.StatusPending
-	todo.Status = pending
-	if err := provider.UpdateState(r.Context(), todo, todos.StateUpdate{Status: &pending}); err != nil {
+	reviewer, err := requirePlanReviewProvider(provider)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	todo, err = reviewer.ApprovePlan(r.Context(), todo, todoReviewActor, "")
+	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -125,11 +131,13 @@ func (s *Server) handleTodoPlanReject(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status))
 		return
 	}
-	pending := types.StatusPending
-	clearedPath := ""
-	clearedStatus := types.PlanStatus("")
-	todo.Status = pending
-	if err := provider.UpdateState(r.Context(), todo, todos.StateUpdate{Status: &pending, PlanPath: &clearedPath, PlanStatus: &clearedStatus}); err != nil {
+	reviewer, err := requirePlanReviewProvider(provider)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	todo, err = reviewer.RejectPlan(r.Context(), todo, todoReviewActor, "")
+	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -173,8 +181,15 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record the feedback so the resumed prompt and the timeline see it.
-	if err := provider.Comment(r.Context(), todo, "**Requested changes:** "+feedback); err != nil {
+	reviewer, err := requirePlanReviewProvider(provider)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// The native review operation records the feedback and revision-requested
+	// state together; a separate provider comment would duplicate the timeline.
+	todo, err = reviewer.RequestPlanRevision(r.Context(), todo, todoReviewActor, feedback)
+	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -201,6 +216,14 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		SessionID: todo.LLM.SessionId,
 		Status:    "revising",
 	})
+}
+
+func requirePlanReviewProvider(provider todos.Provider) (todos.PlanReviewProvider, error) {
+	reviewer, ok := provider.(todos.PlanReviewProvider)
+	if !ok {
+		return nil, fmt.Errorf("PostgreSQL TODO runtime does not support durable plan review")
+	}
+	return reviewer, nil
 }
 
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's

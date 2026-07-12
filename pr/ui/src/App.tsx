@@ -203,6 +203,7 @@ export function App() {
   const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectError, setProjectError] = useState('');
   const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
@@ -365,9 +366,25 @@ export function App() {
 
   const fetchProjects = useCallback(() => {
     fetch('/api/projects')
-      .then(r => r.json())
-      .then((ps: Project[]) => setProjects(ps || []))
-      .catch(() => {});
+      .then(async r => {
+        const payload = await r.json().catch(() => null);
+        if (!r.ok) {
+          const message = payload && typeof payload === 'object' && 'error' in payload
+            ? String(payload.error)
+            : `Load projects failed (HTTP ${r.status})`;
+          throw new Error(message);
+        }
+        if (!Array.isArray(payload)) throw new Error('Load projects returned an invalid response');
+        return payload as Project[];
+      })
+      .then(ps => {
+        setProjects(ps);
+        setProjectError('');
+      })
+      .catch(err => {
+        setProjects([]);
+        setProjectError(err instanceof Error ? err.message : 'Load projects failed');
+      });
   }, []);
 
   const fetchProcStatus = useCallback(() => {
@@ -722,6 +739,11 @@ export function App() {
           />
         ) : activeTab === 'todos' ? (
           <div className="flex h-full min-h-0 flex-col">
+            {projectError && (
+              <div role="alert" className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                {projectError}
+              </div>
+            )}
             <PlanReviewBar review={review} todos={todos} />
             <div className="min-h-0 flex-1">
               <TodoDetailPane todos={todos} />

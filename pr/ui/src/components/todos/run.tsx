@@ -1194,7 +1194,7 @@ export function TodoRunAdvancedDialog({
     }
     const url = isVerify ? `/api/todos/verify/preview?${todoQuery(dir, provider)}` : `/api/todos/run/preview?${todoQuery(dir, provider)}`;
     const body = isVerify
-      ? { provider, dir, ref: list[0], backend: previewBackend, model: previewModel }
+      ? { dir, ref: list[0], backend: previewBackend, model: previewModel }
       : {
           refs: list,
           driver,
@@ -1245,7 +1245,7 @@ export function TodoRunAdvancedDialog({
       const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, dir, ref: list[0], backend: verifyBackend, model: previewModel, prompt: promptDraft }),
+        body: JSON.stringify({ dir, ref: list[0], backend: verifyBackend, model: previewModel, prompt: promptDraft }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verify failed");

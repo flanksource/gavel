@@ -1,12 +1,22 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func stubProjectTodoCounts(t *testing.T) {
+	t.Helper()
+	original := projectTodoCounts
+	projectTodoCounts = func(context.Context, string, string) (todoCounts, error) {
+		return todoCounts{}, nil
+	}
+	t.Cleanup(func() { projectTodoCounts = original })
+}
 
 // projectByNameReq builds a request for the per-entity handler with the {name}
 // path value populated the way the ServeMux pattern would at runtime.
@@ -22,6 +32,7 @@ func projectByNameReq(method, name, body string) *http.Request {
 }
 
 func TestHandleProjectGet(t *testing.T) {
+	stubProjectTodoCounts(t)
 	withProject(t, "gavel", "flanksource/gavel", "web: echo hi\n")
 
 	rec := httptest.NewRecorder()
@@ -90,6 +101,7 @@ func TestHandleProjectDelete(t *testing.T) {
 }
 
 func TestHandleProjectsClickyTable(t *testing.T) {
+	stubProjectTodoCounts(t)
 	withProject(t, "gavel", "flanksource/gavel", "")
 
 	req := httptest.NewRequest("GET", "/api/projects", nil)

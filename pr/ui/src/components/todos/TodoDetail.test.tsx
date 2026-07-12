@@ -163,6 +163,24 @@ afterEach(() => {
 });
 
 describe('TodoDetail Resume/Run/Plan guard', () => {
+  it('renders a deep-link database error with a menubar back action', () => {
+    render(
+      <TodoDetail
+        todo={null}
+        loading={false}
+        loadError="todo reference abc123 is ambiguous"
+        dir=""
+        provider="db"
+        onChanged={() => {}}
+        onDeleted={() => {}}
+        onBack={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toContain('todo reference abc123 is ambiguous');
+    expect(screen.getByRole('button', { name: 'Back to todos' })).toBeTruthy();
+  });
+
   it('keeps Resume, Run, and Plan enabled for a pending todo', async () => {
     await renderDetail({ ...baseTodo, status: 'pending' });
 

@@ -220,7 +220,7 @@ export function TodoSession({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider, dir, ref: todo.ref,
+        dir, ref: todo.ref,
         answer: decision.message || formatDecisionAnswers(decision.answers),
         answers: decision.answers,
         rejected: !decision.allow,

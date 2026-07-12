@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,12 +18,14 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
-	"github.com/flanksource/gavel/github/cache"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/native"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -52,6 +55,9 @@ type todoSummary struct {
 	Ref            string                `json:"ref"`
 	ID             string                `json:"id,omitempty"`
 	ShortID        string                `json:"shortId,omitempty"`
+	Version        int64                 `json:"version,omitempty"`
+	WorkspaceID    string                `json:"workspaceId,omitempty"`
+	ExecutionState string                `json:"executionState,omitempty"`
 	Title          string                `json:"title"`
 	Status         types.Status          `json:"status"`
 	Priority       types.Priority        `json:"priority"`
@@ -108,9 +114,8 @@ type todoSource struct {
 	Dir      string
 }
 
-// providerAuto resolves the provider per directory the way countProjectTodos
-// does: a Grite workspace if .grite exists, otherwise .todos files. It lets the
-// dashboard list a workspace's todos without the caller knowing which it uses.
+// providerAuto remains recognized only so the compatibility window can return
+// the actionable retired-provider error instead of silently selecting storage.
 const providerAuto = "auto"
 
 type todoPRVerificationPayload struct {
@@ -356,7 +361,7 @@ func (s *Server) handleTodoItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTodosList(w http.ResponseWriter, r *http.Request) {
 	source := todoSourceFromRequest(r)
-	provider, source, err := s.todoProvider(source)
+	provider, source, err := s.todoProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -406,12 +411,8 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	provider, source, err := s.todoProvider(todoSourceFromRequest(r))
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	todo, err := provider.Get(r.Context(), ref)
+	requestedSource := todoSourceFromRequest(r)
+	_, source, todo, err := s.resolveTodoReference(r.Context(), requestedSource, ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
@@ -420,6 +421,50 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 	sum := summarizeTodo(todo, true)
 	sum.Diff = diffStatFor(commitDiffStats(r.Context(), source.Dir), todo.ID)
 	json.NewEncoder(w).Encode(sum) //nolint:errcheck
+}
+
+// resolveTodoReference loads one issue and returns a provider scoped to its
+// owning workspace. With an explicit dir the lookup is workspace-local. With
+// no dir it first resolves a UUID/short UUID/imported alias globally, then
+// reopens the provider for the authoritative CWD so later mutations and run
+// lifecycle writes cannot accidentally target the server's default workspace.
+func (s *Server) resolveTodoReference(ctx context.Context, requested todoSource, ref string) (todos.Provider, todoSource, *types.TODO, error) {
+	globalLookup := strings.TrimSpace(requested.Dir) == ""
+	if !globalLookup {
+		provider, source, err := s.todoProviderContext(ctx, requested)
+		if err != nil {
+			return nil, source, nil, err
+		}
+		todo, err := provider.Get(ctx, ref)
+		return provider, source, todo, err
+	}
+
+	if err := todos.ValidateRuntimeProvider(requested.Provider); err != nil {
+		return nil, requested, nil, err
+	}
+	global, err := todoruntime.OpenGlobal(ctx)
+	if err != nil {
+		return nil, requested, nil, err
+	}
+	todo, err := global.GetGlobal(ctx, ref)
+	if err != nil {
+		return nil, requested, nil, err
+	}
+	ownerDir := strings.TrimSpace(todo.CWD)
+	if ownerDir == "" {
+		return nil, requested, nil, fmt.Errorf("resolved TODO %q has no owning workspace path", ref)
+	}
+	provider, source, err := s.todoProviderContext(ctx, todoSource{Provider: todos.ProviderDB, Dir: ownerDir})
+	if err != nil {
+		return nil, source, nil, err
+	}
+	// Re-read through the owning repository so the returned object and provider
+	// share the same optimistic-version and workspace boundary.
+	todo, err = provider.Get(ctx, todo.ID)
+	if err != nil {
+		return nil, source, nil, err
+	}
+	return provider, source, todo, nil
 }
 
 func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
@@ -435,7 +480,7 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
-	provider, _, err := s.todoProvider(source)
+	provider, _, err := s.todoProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -516,7 +561,7 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
-	provider, _, err := s.todoProvider(source)
+	provider, _, err := s.todoProviderContext(r.Context(), source)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -601,12 +646,7 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
-	provider, _, err := s.todoProvider(source)
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	todo, err := provider.Get(r.Context(), ref)
+	provider, _, todo, err := s.resolveTodoReference(r.Context(), source, ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
@@ -634,7 +674,7 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 	// Edits and comments mutate the body/event history; re-read so the response
 	// reflects the provider's authoritative state (new event, rewritten body).
 	if !edit.IsEmpty() || comment != "" {
-		if refreshed, gerr := provider.Get(r.Context(), ref); gerr == nil {
+		if refreshed, gerr := provider.Get(r.Context(), todo.ID); gerr == nil {
 			todo = refreshed
 		}
 	}
@@ -647,12 +687,7 @@ func (s *Server) handleTodoDelete(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	provider, _, err := s.todoProvider(todoSourceFromRequest(r))
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	todo, err := provider.Get(r.Context(), ref)
+	provider, _, todo, err := s.resolveTodoReference(r.Context(), todoSourceFromRequest(r), ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
@@ -683,12 +718,15 @@ func (s *Server) handleTodoTransfer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("toDir is required"))
 		return
 	}
-	source, src, err := s.todoProvider(todoSource{Provider: payload.FromProvider, Dir: payload.FromDir})
+	requestedSource := todoSource{Provider: payload.FromProvider, Dir: payload.FromDir}
+	source, src, resolvedTodo, err := s.resolveTodoReference(r.Context(), requestedSource, payload.Ref)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	target, dst, err := s.todoProvider(todoSource{Provider: payload.ToProvider, Dir: payload.ToDir})
+	// Transfer through the canonical native id after a legacy alias lookup.
+	payload.Ref = resolvedTodo.ID
+	target, dst, err := s.todoProviderContext(r.Context(), todoSource{Provider: payload.ToProvider, Dir: payload.ToDir})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -738,11 +776,27 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}
-	provider, source, err := s.todoProvider(source)
-	if err != nil {
+	if err := todos.ValidateRuntimeProvider(source.Provider); err != nil {
+		return nil, source, nil, opts, http.StatusBadRequest, err
+	}
+	globalLookup := strings.TrimSpace(source.Dir) == ""
+	if err := validateTodoRunCardinality(len(refs)); err != nil {
 		return nil, source, nil, opts, http.StatusBadRequest, err
 	}
 	origin := requestOrigin(r)
+	if globalLookup {
+		provider, owningSource, todo, err := s.resolveTodoReference(r.Context(), source, refs[0])
+		if err != nil {
+			return provider, owningSource, nil, opts, http.StatusNotFound, err
+		}
+		todo.MarkdownBody = absolutizeAttachmentURLs(todo.MarkdownBody, origin)
+		return provider, owningSource, []*types.TODO{todo}, opts, http.StatusOK, nil
+	}
+
+	provider, source, err := s.todoProviderContext(r.Context(), source)
+	if err != nil {
+		return nil, source, nil, opts, http.StatusBadRequest, err
+	}
 	todoList := make([]*types.TODO, 0, len(refs))
 	for _, ref := range refs {
 		todo, err := provider.Get(r.Context(), ref)
@@ -753,6 +807,13 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 		todoList = append(todoList, todo)
 	}
 	return provider, source, todoList, opts, http.StatusOK, nil
+}
+
+func validateTodoRunCardinality(count int) error {
+	if count <= 1 {
+		return nil
+	}
+	return fmt.Errorf("grouped TODO execution is not supported by the native PostgreSQL runtime; run one issue at a time")
 }
 
 func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
@@ -778,7 +839,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Backend:  backend,
 		Options:  opts,
 	}
-	if _, _, err := newTodoRunExecutor(req); err != nil {
+	if _, _, err := newTodoRunExecutorContext(r.Context(), req); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -824,12 +885,12 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_, source, todoList, opts, status, err := s.resolveTodoRunRequest(r)
+	provider, source, todoList, opts, status, err := s.resolveTodoRunRequest(r)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
 	}
-	previewPrompt, err := buildTodoRunPromptPreview(source.Dir, todoList, opts)
+	previewPrompt, err := buildTodoRunPromptPreview(r.Context(), provider, source.Dir, todoList, opts)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
@@ -852,7 +913,7 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 // schema instruction. The editable prompt override replaces the body but the
 // schema instruction is always re-appended, so the preview shows the full
 // contract the agent receives.
-func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
+func buildTodoRunPromptPreview(ctx context.Context, provider todos.Provider, dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
 	mode := opts.RunMode
 	if mode == "" {
 		mode = types.ModeRun
@@ -861,7 +922,13 @@ func buildTodoRunPromptPreview(dir string, todoList []*types.TODO, opts todoRunO
 	if err != nil {
 		return "", err
 	}
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{WorkDir: dir, Mode: mode, Effort: string(opts.Spec.Effort), Template: tmpl})
+	existingPlan, err := todoPlanMarkdown(ctx, provider, todoList, mode)
+	if err != nil {
+		return "", err
+	}
+	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
+		WorkDir: dir, Mode: mode, Effort: string(opts.Spec.Effort), Template: tmpl, ExistingPlan: existingPlan,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -882,80 +949,60 @@ func (s *Server) resolveTodoDir(dir string) string {
 	return dir
 }
 
-func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, error) {
+func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (todos.Provider, todoSource, error) {
 	source.Dir = s.resolveTodoDir(source.Dir)
-	switch source.Provider {
-	case "", providerAuto, todos.ProviderGrite, todos.ProviderFiles:
-		return providerForDir(source.Dir, source.Provider), source, nil
-	default:
-		return nil, source, fmt.Errorf("unknown todo provider %q", source.Provider)
+	provider, err := openTodoProvider(ctx, source.Dir, source.Provider)
+	if err != nil {
+		return nil, source, err
 	}
+	// Canonicalize every successful response to the only runtime backend. This
+	// prevents omitted compatibility parameters from leaking "auto" semantics
+	// back into API responses or subsequent run requests.
+	source.Provider = todos.ProviderDB
+	return provider, source, nil
 }
 
-// ProviderForProject resolves the todo provider for a stored project, honoring
-// its pinned TodoProvider (or auto-detecting from the resolved directory). The
-// `gavel todos transfer` command uses it to build a transfer target from a
-// named project the same way the dashboard resolves a workspace.
-func ProviderForProject(p Project) todos.Provider {
-	return providerForDir(p.ResolvedDir(), p.TodoProvider)
+// todoProvider is the temporary source-compatible wrapper for package-local
+// callers. HTTP paths use todoProviderContext so request cancellation reaches
+// database acquisition and workspace resolution.
+func (s *Server) todoProvider(source todoSource) (todos.Provider, todoSource, error) {
+	return s.todoProviderContext(context.Background(), source)
 }
 
-// providerForDir builds the todo provider for a workspace directory. An explicit
-// "grite" or "todos" pins the backend (Grite is scoped to the workspace's git
-// repo, "todos" to its .todos files); "" or "auto" auto-detects. dir is always
-// the workspace directory, never a .todos path.
-func providerForDir(dir, provider string) todos.Provider {
-	switch provider {
-	case todos.ProviderGrite:
-		return resolveGrite(dir)
-	case todos.ProviderFiles:
-		return todos.NewFileProvider(dir, "")
-	default:
-		return autoTodoProvider(dir)
-	}
+// ProviderForProject resolves a stored project to the PostgreSQL runtime. The
+// error is explicit because database unavailability and legacy pinned-provider
+// settings must reach callers; neither is allowed to trigger a fallback.
+func ProviderForProject(ctx context.Context, p Project) (todos.Provider, error) {
+	return openTodoProvider(ctx, p.ResolvedDir(), p.TodoProvider)
 }
 
-// autoTodoProvider resolves a directory's todo provider: a local .todos file
-// store if present, otherwise Grite (which tracks issues globally per repo and
-// needs no per-directory marker, so it must not be gated on a .grite dir).
-func autoTodoProvider(dir string) todos.Provider {
-	if _, err := os.Stat(filepath.Join(dir, ".todos")); err == nil {
-		return todos.NewFileProvider(dir, "")
+// openTodoProvider is the single API/UI runtime selection seam. Legacy values
+// remain parseable for one release solely to produce a migration error.
+func openTodoProvider(ctx context.Context, dir, configured string) (todos.Provider, error) {
+	if err := todos.ValidateRuntimeProvider(configured); err != nil {
+		return nil, err
 	}
-	return resolveGrite(dir)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return todoruntime.Open(ctx, dir)
 }
 
-// resolveTodoBackend reports which todo backend dir would use for the configured
-// value, and whether that result was auto-detected (configured empty / "auto").
-// It mirrors providerForDir's choice without building a provider.
-func resolveTodoBackend(dir, configured string) (name string, auto bool) {
-	switch configured {
-	case todos.ProviderGrite, todos.ProviderFiles:
-		return configured, false
-	}
-	if dir != "" {
-		if _, err := os.Stat(filepath.Join(dir, ".todos")); err == nil {
-			return todos.ProviderFiles, true
-		}
-	}
-	return todos.ProviderGrite, true
+// resolveTodoBackend reports the sole runtime backend. Deprecated project
+// provider settings are validated when a provider is opened, not presented as
+// a selectable backend in the UI.
+func resolveTodoBackend(_, _ string) (name string, auto bool) {
+	return todos.ProviderDB, false
 }
 
-// TodoBackendLabel renders the resolved todo backend for display, suffixing
-// " (auto)" when it was auto-detected rather than pinned in the project config.
+// TodoBackendLabel renders the runtime backend for project and process views.
+// The auto suffix remains wire-compatible but is never set by DB-only routing.
 func TodoBackendLabel(dir, configured string) string {
 	name, auto := resolveTodoBackend(dir, configured)
 	if auto {
 		return name + " (auto)"
 	}
 	return name
-}
-
-// resolveGrite returns a DB-backed Grite provider when the gavel cache is
-// configured (reads served from the DB, kept fresh by `grite export --since`),
-// falling back to direct grite CLI calls when no DB is available.
-func resolveGrite(dir string) todos.Provider {
-	return todos.ResolveGriteProvider(dir, cache.Shared(), 0)
 }
 
 func (s *Server) todoWorkDir() string {
@@ -997,6 +1044,9 @@ func todoFiltersFromRequest(r *http.Request) (todos.DiscoveryFilters, error) {
 // so idle/finished rows never read a session log. A missing or unreadable log is
 // the normal "no live session" case, so it leaves the persisted status untouched.
 func reconcileSessionStatus(todo *types.TODO, dir string) {
+	if todo != nil && todo.Provider == todos.ProviderDB {
+		return
+	}
 	if todo == nil || todo.Status != types.StatusFailed || todo.LLM == nil || todo.LLM.SessionId == "" {
 		return
 	}
@@ -1022,20 +1072,23 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		title = todo.Filename()
 	}
 	out := todoSummary{
-		Ref:           todos.TODOReference(todo),
-		ID:            todo.ID,
-		ShortID:       todo.DisplayID(),
-		Title:         title,
-		Status:        todo.Status,
-		Priority:      todo.Priority,
-		Provider:      todo.Provider,
-		ProviderState: todo.ProviderState,
-		FilePath:      todo.FilePath,
-		CWD:           todo.CWD,
-		Labels:        todo.Labels,
-		Attempts:      todo.Attempts,
-		Created:       todo.Created,
-		LastRun:       todo.LastRun,
+		Ref:            todos.TODOReference(todo),
+		ID:             todo.ID,
+		ShortID:        todo.DisplayID(),
+		Version:        todo.Version,
+		WorkspaceID:    todo.WorkspaceID,
+		ExecutionState: todo.ExecutionState,
+		Title:          title,
+		Status:         todo.Status,
+		Priority:       todo.Priority,
+		Provider:       todo.Provider,
+		ProviderState:  todo.ProviderState,
+		FilePath:       todo.FilePath,
+		CWD:            todo.CWD,
+		Labels:         todo.Labels,
+		Attempts:       todo.Attempts,
+		Created:        todo.Created,
+		LastRun:        todo.LastRun,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId
@@ -1113,6 +1166,18 @@ func validTodoPriority(priority types.Priority) bool {
 }
 
 func writeTodoError(w http.ResponseWriter, status int, err error) {
+	switch {
+	case errors.Is(err, database.ErrUnavailable):
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, todos.ErrProviderRetired):
+		status = http.StatusGone
+	case errors.Is(err, native.ErrAmbiguousReference), errors.Is(err, native.ErrVersionConflict), errors.Is(err, native.ErrAliasConflict):
+		status = http.StatusConflict
+	case errors.Is(err, native.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, native.ErrInvalidInput):
+		status = http.StatusBadRequest
+	}
 	w.WriteHeader(status)
 	msg := ""
 	if err != nil {
@@ -1453,6 +1518,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
+		runner.SetResume(req.Options.Resume)
 		var runErr error
 		var result *todos.ExecutionResult
 		// A single selection runs through Execute; a multi-select runs every todo
@@ -1533,6 +1599,10 @@ func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 }
 
 func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
+	return newTodoRunExecutorContext(context.Background(), req)
+}
+
+func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.Executor, string, error) {
 	kind, err := drivers.Parse(req.Options.Driver)
 	if err != nil {
 		return nil, "", err
@@ -1558,13 +1628,9 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 	// The todo's recorded plan feeds both flows: a plan re-run reports
 	// updated/unchanged, and an implement run follows the approved/edited plan.
 	// Single-todo only — a group run has no single plan to attribute.
-	existingPlan := ""
-	if len(req.Todos) == 1 && (mode == types.ModePlan || mode == types.ModeRun) {
-		content, _, _, err := todos.ReadPlanFile(req.Todos[0].PlanPath)
-		if err != nil {
-			return nil, "", err
-		}
-		existingPlan = content
+	existingPlan, err := todoPlanMarkdown(ctx, req.Provider, req.Todos, mode)
+	if err != nil {
+		return nil, "", err
 	}
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
@@ -1588,6 +1654,22 @@ func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
 		// brokered tool permissions can be surfaced and answered here.
 		Approvals: true,
 	})
+}
+
+func todoPlanMarkdown(ctx context.Context, provider todos.Provider, todoList []*types.TODO, mode types.RunMode) (string, error) {
+	if len(todoList) != 1 || (mode != types.ModePlan && mode != types.ModeRun) {
+		return "", nil
+	}
+	if content, ok := provider.(todos.PlanContentProvider); ok {
+		return content.PlanMarkdown(ctx, todoList[0], mode)
+	}
+	if todoList[0] != nil && todoList[0].Provider == todos.ProviderDB {
+		return "", fmt.Errorf("PostgreSQL TODO runtime does not support durable plan content")
+	}
+	// Compatibility only for legacy provider unit tests. Production routing is
+	// PostgreSQL-only and therefore never reads a plan file at runtime.
+	content, _, _, err := todos.ReadPlanFile(todoList[0].PlanPath)
+	return content, err
 }
 
 // toolModesFromPermissions flattens api.Tools (the Spec's allow/deny/modes
@@ -1643,14 +1725,17 @@ func firstTodoSessionID(todoList []*types.TODO) string {
 	return ""
 }
 
-func countProjectTodos(ctx context.Context, dir, provider string) todoCounts {
+func countProjectTodos(ctx context.Context, dir, provider string) (todoCounts, error) {
 	if dir == "" {
-		return todoCounts{}
+		return todoCounts{}, nil
 	}
-	items, err := providerForDir(dir, provider).List(ctx, todos.DiscoveryFilters{})
+	nativeProvider, err := openTodoProvider(ctx, dir, provider)
 	if err != nil {
-		logger.Debugf("count todos in %s: %v", dir, err)
-		return todoCounts{}
+		return todoCounts{}, err
 	}
-	return summarizeTodos(items)
+	items, err := nativeProvider.List(ctx, todos.DiscoveryFilters{})
+	if err != nil {
+		return todoCounts{}, err
+	}
+	return summarizeTodos(items), nil
 }

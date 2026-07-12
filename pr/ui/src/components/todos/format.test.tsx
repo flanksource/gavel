@@ -2,7 +2,7 @@ import type React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { TodoItem } from '../../types';
-import { TodoRow } from './format';
+import { TodoRow, todoQuery } from './format';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
@@ -28,6 +28,14 @@ const baseTodo: TodoItem = {
   status: 'pending',
   priority: 'medium',
 };
+
+describe('todoQuery', () => {
+  it('carries only the workspace directory regardless of legacy provider input', () => {
+    expect(todoQuery('/work/repo', 'grite')).toBe('dir=%2Fwork%2Frepo');
+    expect(todoQuery('/work/repo', 'todos')).toBe('dir=%2Fwork%2Frepo');
+    expect(todoQuery('', 'grite')).toBe('');
+  });
+});
 
 describe('TodoRow', () => {
   it('shows a plan indicator when hasPlan is true', () => {

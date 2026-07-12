@@ -110,6 +110,9 @@ export interface TodoItem {
   ref: string;
   id?: string;
   shortId?: string;
+  version?: number;
+  workspaceId?: string;
+  executionState?: string;
   title: string;
   status: TodoStatus;
   priority: TodoPriority;

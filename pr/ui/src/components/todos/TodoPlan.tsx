@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiSave } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
+import type { TodoItem } from '../../types';
 import { inputClass, todoQuery } from './format';
 
 // MdxEditorField lazily pulls in the heavy @mdxeditor/editor (the same markdown
@@ -17,22 +18,26 @@ interface PlanResponse {
   content?: string;
   onDisk?: boolean;
   slug?: string;
+  ref?: string;
+  version?: number;
+  todo?: TodoItem;
 }
 
-// TodoPlan shows the plan a plan-mode run produced — recovered from the Claude
-// session by the /api/todos/session/plan endpoint — in an editable markdown editor,
-// and saves edits back to the plan file so a human can refine the plan before
-// approving it. It is mounted only while the Plan tab is active.
+// TodoPlan shows the latest immutable Captain revision selected on the issue.
+// Human edits append another database revision; they never rewrite an agent's
+// local plan file.
 export function TodoPlan({
   dir,
   provider,
-  sessionId,
+  todo,
   active,
+  onChanged,
 }: {
   dir: string;
   provider: string;
-  sessionId: string | undefined;
+  todo: TodoItem;
   active: boolean;
+  onChanged?: (todo: TodoItem) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -48,14 +53,23 @@ export function TodoPlan({
     setPath('');
     setLoaded('');
     setDraft('');
-    if (!active || !sessionId) return;
+    if (!active || !todo.ref) return;
 
     let cancelled = false;
     setLoading(true);
     const params = new URLSearchParams(todoQuery(dir, provider));
-    params.set('sessionId', sessionId);
+    params.set('ref', todo.ref);
     fetch(`/api/todos/session/plan?${params.toString()}`)
-      .then(res => (res.ok ? res.json() : Promise.reject(new Error(`plan request failed (${res.status})`))))
+      .then(async res => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          const message = data && typeof data === 'object' && 'error' in data
+            ? String(data.error)
+            : `plan request failed (${res.status})`;
+          throw new Error(message);
+        }
+        return data as PlanResponse;
+      })
       .then((data: PlanResponse) => {
         if (cancelled) return;
         setFound(!!data.found);
@@ -70,23 +84,34 @@ export function TodoPlan({
     return () => {
       cancelled = true;
     };
-  }, [active, sessionId, dir, provider]);
+  }, [active, todo.ref, dir, provider]);
 
   async function save() {
-    if (saving || !path || draft === loaded) return;
+    if (saving || draft === loaded) return;
     setSaving(true);
     setError('');
     try {
-      const res = await fetch('/api/todos/session/plan', {
+      const params = new URLSearchParams(todoQuery(dir, provider));
+      const res = await fetch(`/api/todos/session/plan?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, path, content: draft }),
+        body: JSON.stringify({ ref: todo.ref, version: todo.version, content: draft }),
       });
-      if (!res.ok) throw new Error(`save failed (${res.status})`);
+      if (!res.ok) {
+        let detail = `save failed (${res.status})`;
+        try {
+          const data = await res.json();
+          detail = data.error || detail;
+        } catch {
+          // Keep the status fallback when the response is not JSON.
+        }
+        throw new Error(detail);
+      }
       const data = (await res.json()) as PlanResponse;
       const next = data.content ?? draft;
       setLoaded(next);
       setDraft(next);
+      if (data.todo) onChanged?.(data.todo);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -94,9 +119,6 @@ export function TodoPlan({
     }
   }
 
-  if (!sessionId) {
-    return <PlanEmpty message="This todo has no agent session yet." />;
-  }
   if (loading) {
     return (
       <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
@@ -106,6 +128,7 @@ export function TodoPlan({
     );
   }
   if (!found) {
+    if (error) return <div role="alert" className="px-4 py-3 text-sm text-red-600">{error}</div>;
     return <PlanEmpty message="No plan yet. Run this todo in Plan mode to produce one." />;
   }
 
@@ -114,7 +137,7 @@ export function TodoPlan({
     <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
       <div className="flex shrink-0 items-center justify-between gap-2">
         <div className="min-w-0 truncate text-xs text-muted-foreground" title={path}>
-          {path}
+          {path || 'PostgreSQL plan revision'}
         </div>
         <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={() => void save()}>
           {saving ? <Spinner /> : <UiSave />}

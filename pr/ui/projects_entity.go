@@ -10,6 +10,8 @@ import (
 	"github.com/flanksource/gavel/procfile"
 )
 
+var projectTodoCounts = countProjectTodos
+
 // statusForProjectErr maps the shared CRUD sentinel errors onto HTTP codes.
 func statusForProjectErr(err error) int {
 	switch {
@@ -27,9 +29,13 @@ func statusForProjectErr(err error) int {
 // newProjectInfo resolves a stored Project into the wire shape returned by the
 // projects entity: the directory is ~-expanded, hasProcfile reflects the
 // directory's current contents, and todo counts are scoped to the workspace.
-func newProjectInfo(ctx context.Context, p Project) projectInfo {
+func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
 	dir := p.ResolvedDir()
 	backend, auto := resolveTodoBackend(dir, p.TodoProvider)
+	counts, err := projectTodoCounts(ctx, dir, p.TodoProvider)
+	if err != nil {
+		return projectInfo{}, err
+	}
 	return projectInfo{
 		Name:            p.Name,
 		Dir:             dir,
@@ -38,8 +44,8 @@ func newProjectInfo(ctx context.Context, p Project) projectInfo {
 		TodoProvider:    p.TodoProvider,
 		TodoBackend:     backend,
 		TodoBackendAuto: auto,
-		TodoCounts:      countProjectTodos(ctx, dir, p.TodoProvider),
-	}
+		TodoCounts:      counts,
+	}, nil
 }
 
 // handleProjects is the collection endpoint of the projects entity:
@@ -54,7 +60,12 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		ps := LoadProjects()
 		out := make([]projectInfo, 0, len(ps))
 		for _, p := range ps {
-			out = append(out, newProjectInfo(r.Context(), p))
+			info, err := newProjectInfo(r.Context(), p)
+			if err != nil {
+				writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
+				return
+			}
+			out = append(out, info)
 		}
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
@@ -92,7 +103,11 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, fmt.Sprintf("unknown project %q", name))
 			return
 		}
-		info := newProjectInfo(r.Context(), p)
+		info, err := newProjectInfo(r.Context(), p)
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
+			return
+		}
 		if wantsClicky(r) {
 			writeProjectsClicky(w, []projectInfo{info})
 			return

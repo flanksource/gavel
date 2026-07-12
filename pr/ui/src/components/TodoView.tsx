@@ -111,7 +111,7 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 // group-by preference picks the grouping: workspace (the default, with batch-run
 // controls) or severity/age buckets that span workspaces.
 export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList } = todos;
+  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, providerFor, refresh, loadingList, error } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -138,7 +138,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
-            onSelect={ref => select({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
+            onSelect={ref => select({ dir: ws.dir, ref, provider: providerFor(ws.dir) })}
             multiSelect
             onRunStarted={refresh}
           />
@@ -159,7 +159,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             key={bucket.key}
             bucket={bucket}
             selected={selected}
-            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
+            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: providerFor(entry.workspace.dir) })}
             hiddenStatuses={hiddenStatuses}
             range={range}
             density={density}
@@ -172,6 +172,11 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <TodoSidebarActions todos={todos} />
+      {error && (
+        <div role="alert" className="shrink-0 border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {content}
       </div>
@@ -182,13 +187,14 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
 // TodoDetailPane is the AppShell body-main: the selected todo's detail (or the
 // empty "Select a todo" prompt).
 export function TodoDetailPane({ todos }: { todos: WorkspaceTodos }) {
-  const { detail, loadingDetail, selected, updateItem, deleted, workspaces, transferred } = todos;
+  const { detail, loadingDetail, detailError, selected, updateItem, deleted, workspaces, transferred } = todos;
   return (
     <TodoDetail
       todo={detail}
       loading={loadingDetail}
+      loadError={detailError}
       dir={selected?.dir ?? ''}
-      provider={selected?.provider ?? 'auto'}
+      provider={selected?.provider ?? 'db'}
       onChanged={updateItem}
       onDeleted={deleted}
       workspaces={workspaces}

@@ -29,11 +29,11 @@ export const emptyCounts: TodoCounts = {
   skipped: 0,
 };
 
-// Listing/detail/mutation requests carry the workspace dir and its provider.
-// Provider defaults to 'auto' (server resolves Grite-or-.todos); a workspace
-// pinned to 'grite'/'todos' passes that instead.
-export function todoQuery(dir: string, provider: string = 'auto') {
-  const params = new URLSearchParams({ provider: provider || 'auto' });
+// Listing/detail/mutation requests only carry the workspace dir. The provider
+// argument remains until the M7 type cleanup so existing callers do not need a
+// flag-day rewrite, but PostgreSQL is now the only runtime persistence backend.
+export function todoQuery(dir: string, _provider: string = 'auto') {
+  const params = new URLSearchParams();
   if (dir.trim()) params.set('dir', dir.trim());
   return params.toString();
 }

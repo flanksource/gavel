@@ -69,11 +69,7 @@ func (s *Server) loadTodoForWrite(r *http.Request, providerOverride, dir, ref st
 	if dir != "" {
 		source.Dir = dir
 	}
-	provider, source, err := s.todoProvider(source)
-	if err != nil {
-		return nil, todoSource{}, nil, http.StatusBadRequest, err
-	}
-	todo, err := provider.Get(r.Context(), ref)
+	provider, source, todo, err := s.resolveTodoReference(r.Context(), source, ref)
 	if err != nil {
 		return nil, todoSource{}, nil, http.StatusNotFound, err
 	}

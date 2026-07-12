@@ -101,12 +101,7 @@ func (s *Server) handleTodoCommits(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("ref is required"))
 		return
 	}
-	provider, source, err := s.todoProvider(todoSourceFromRequest(r))
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	todo, err := provider.Get(r.Context(), ref)
+	_, source, todo, err := s.resolveTodoReference(r.Context(), todoSourceFromRequest(r), ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return

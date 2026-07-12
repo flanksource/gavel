@@ -94,8 +94,8 @@ func projectSchema() map[string]any {
 			},
 			"todoProvider": map[string]any{
 				"type":        "string",
-				"enum":        []string{"", "grite", "todos"},
-				"description": "Pinned todo backend; empty means auto-detect",
+				"enum":        []string{"", "db"},
+				"description": "Deprecated compatibility field; PostgreSQL is always used",
 			},
 		},
 	}

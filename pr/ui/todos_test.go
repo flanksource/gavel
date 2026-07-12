@@ -2,7 +2,9 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -554,82 +556,27 @@ func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	}
 }
 
-func TestAutoTodoProviderSelection(t *testing.T) {
-	// A directory with a .todos store resolves to the file provider.
-	withTodos := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(withTodos, ".todos"), 0o755); err != nil {
-		t.Fatalf("mkdir .todos: %v", err)
-	}
-	if got := autoTodoProvider(withTodos); !isFileProvider(got) {
-		t.Errorf("autoTodoProvider(dir with .todos) = %T, want *todos.FileProvider", got)
-	}
-
-	// A directory without .todos resolves to Grite, which tracks issues globally
-	// per repo and must NOT be gated on a .grite marker dir.
-	plain := t.TempDir()
-	if got := autoTodoProvider(plain); !isGriteProvider(got) {
-		t.Errorf("autoTodoProvider(plain dir) = %T, want *todos.GriteProvider", got)
-	}
-}
-
-func TestProviderForDirSelection(t *testing.T) {
-	dir := t.TempDir()
-	if got := providerForDir(dir, "grite"); !isGriteProvider(got) {
-		t.Errorf("providerForDir(_, grite) = %T, want *todos.GriteProvider", got)
-	}
-	if got := providerForDir(dir, "todos"); !isFileProvider(got) {
-		t.Errorf("providerForDir(_, todos) = %T, want *todos.FileProvider", got)
-	}
-	// Empty/auto falls back to detection; no .todos here, so Grite.
-	if got := providerForDir(dir, ""); !isGriteProvider(got) {
-		t.Errorf("providerForDir(_, '') = %T, want *todos.GriteProvider (auto)", got)
-	}
-}
-
-func TestTodoProviderHonorsExplicitGriteWithDir(t *testing.T) {
+func TestTodoProviderRejectsLegacySelectionWithResolvedDir(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	// Grite scoped to an explicit workspace dir must be allowed (previously
-	// rejected with "dir is only supported with provider=todos").
-	p, src, err := s.todoProvider(todoSource{Provider: "grite", Dir: workDir})
-	if err != nil {
-		t.Fatalf("grite with dir errored: %v", err)
-	}
-	if !isGriteProvider(p) {
-		t.Errorf("provider = %T, want *todos.GriteProvider", p)
-	}
-	if src.Dir != workDir {
-		t.Errorf("resolved dir = %q, want %q", src.Dir, workDir)
-	}
-}
-
-func isFileProvider(p todos.Provider) bool {
-	_, ok := p.(*todos.FileProvider)
-	return ok
-}
-
-// isGriteProvider reports whether p is grite-backed. resolveGrite returns a
-// *todos.CachedGriteProvider when the gavel DB is configured and a plain
-// *todos.GriteProvider otherwise, so both count as "grite".
-func isGriteProvider(p todos.Provider) bool {
-	switch p.(type) {
-	case *todos.GriteProvider, *todos.CachedGriteProvider:
-		return true
-	default:
-		return false
+	for _, provider := range []string{todos.ProviderGrite, todos.ProviderFiles, providerAuto} {
+		_, src, err := s.todoProvider(todoSource{Provider: provider, Dir: workDir})
+		if !errors.Is(err, todos.ErrProviderRetired) {
+			t.Errorf("provider %q error = %v, want ErrProviderRetired", provider, err)
+		}
+		if src.Dir != workDir {
+			t.Errorf("provider %q resolved dir = %q, want %q", provider, src.Dir, workDir)
+		}
 	}
 }
 
 func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
-	dir := withProject(t, "gavel", "flanksource/gavel", "")
-	provider := todos.NewFileProvider(dir, "")
-	if _, err := provider.Create(t.Context(), todos.CreateRequest{
-		Title:    "Wire todos",
-		Priority: types.PriorityMedium,
-		Status:   types.StatusInProgress,
-	}); err != nil {
-		t.Fatalf("create todo: %v", err)
+	withProject(t, "gavel", "flanksource/gavel", "")
+	original := projectTodoCounts
+	projectTodoCounts = func(context.Context, string, string) (todoCounts, error) {
+		return todoCounts{Total: 1, Open: 1, InProgress: 1}, nil
 	}
+	t.Cleanup(func() { projectTodoCounts = original })
 
 	rec := httptest.NewRecorder()
 	(&Server{}).handleProjects(rec, httptest.NewRequest(http.MethodGet, "/api/projects", nil))

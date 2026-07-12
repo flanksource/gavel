@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Field, Combobox, Select } from '@flanksource/clicky-ui/components';
+import { Field, Combobox } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
 import type { Project, TodoProvider } from '../types';
 
@@ -36,7 +36,8 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
   const [name, setName] = useState('');
   const [dir, setDir] = useState('');
   const [repos, setRepos] = useState<string[]>([]);
-  // '' = auto-detect; 'grite' / 'todos' pin the workspace's todo backend.
+  // Retained until M7 removes the legacy provider field from the project type.
+  // Runtime persistence is PostgreSQL-only and this state is never saved.
   const [todoProvider, setTodoProvider] = useState<TodoProvider | ''>('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -63,7 +64,7 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
       const res = await fetch(url, {
         method: project ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), dir: dir.trim(), repos, todoProvider }),
+        body: JSON.stringify({ name: name.trim(), dir: dir.trim(), repos }),
       });
       if (!res.ok) {
         setError((await res.text()) || `HTTP ${res.status}`);
@@ -131,13 +132,10 @@ export function ProjectFields({ reg, repoOptions }: { reg: ProjectRegistration; 
         <Combobox multiple options={options} value={reg.repos}
           onChange={(v) => reg.setRepos(v as string[])} placeholder="owner/repo" />
       </Field>
-      <Field label="Todos" helper="Which todo backend this workspace uses">
-        <Select className={inputClass} value={reg.todoProvider}
-          onChange={(e) => reg.setTodoProvider(e.currentTarget.value as TodoProvider | '')}>
-          <option value="">Auto-detect</option>
-          <option value="grite">Grite</option>
-          <option value="todos">.todos files</option>
-        </Select>
+      <Field label="Todos" helper="Todo persistence is managed centrally">
+        <div className={`${inputClass} cursor-default text-muted-foreground`} aria-label="Todo persistence">
+          PostgreSQL
+        </div>
       </Field>
     </div>
   );

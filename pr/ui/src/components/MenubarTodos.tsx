@@ -23,7 +23,7 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 export function MenubarTodos({ projects }: { projects: Project[] }) {
   const {
     workspaces, byDir, loadingList, aggregate,
-    selected, setSelected, detail, loadingDetail,
+    selected, select, detail, loadingDetail, detailError, error, providerFor,
     updateItem, deleted, hiddenStatuses, toggleStatus,
     groupBy, setGroupBy, showCreate, setShowCreate, created,
   } = useWorkspaceTodos(projects);
@@ -34,11 +34,12 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
         <TodoDetail
           todo={detail}
           loading={loadingDetail}
+          loadError={detailError}
           dir={selected.dir}
           provider={selected.provider}
           onChanged={updateItem}
           onDeleted={deleted}
-          onBack={() => setSelected(null)}
+          onBack={() => select(null)}
         />
       </div>
     );
@@ -74,6 +75,11 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {error && (
+          <div role="alert" className="border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {error}
+          </div>
+        )}
         {workspaces.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
             <StatusIcon className="mb-2 text-2xl" />
@@ -87,7 +93,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
                   key={bucket.key}
                   bucket={bucket}
                   selected={selected}
-                  onSelect={entry => setSelected({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' })}
+                  onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: providerFor(entry.workspace.dir) })}
                   hiddenStatuses={hiddenStatuses}
                 />
               ))}
@@ -105,7 +111,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
                 hiddenStatuses={hiddenStatuses}
                 onToggleStatus={toggleStatus}
                 selectedRef=""
-                onSelect={ref => setSelected({ dir: ws.dir, ref, provider: ws.todoProvider || 'auto' })}
+                onSelect={ref => select({ dir: ws.dir, ref, provider: providerFor(ws.dir) })}
               />
             ))}
           </ListMenu>

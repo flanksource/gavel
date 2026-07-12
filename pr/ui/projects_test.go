@@ -127,37 +127,26 @@ func TestProjectServiceCRUD(t *testing.T) {
 }
 
 func TestResolveTodoBackend(t *testing.T) {
-	withTodos := t.TempDir()
-	if err := os.Mkdir(filepath.Join(withTodos, ".todos"), 0o755); err != nil {
-		t.Fatalf("mkdir .todos: %v", err)
-	}
-	noTodos := t.TempDir()
-
 	tests := []struct {
 		dir        string
 		configured string
-		wantName   string
-		wantAuto   bool
 	}{
-		{noTodos, "grite", "grite", false},
-		{noTodos, "todos", "todos", false},
-		{withTodos, "", "todos", true},   // auto-detected from .todos dir
-		{noTodos, "", "grite", true},     // auto, no .todos → grite
-		{noTodos, "auto", "grite", true}, // explicit "auto" behaves like empty
+		{t.TempDir(), ""},
+		{t.TempDir(), "db"},
+		{t.TempDir(), "grite"},
+		{t.TempDir(), "todos"},
+		{t.TempDir(), "auto"},
 	}
 	for _, tc := range tests {
 		name, auto := resolveTodoBackend(tc.dir, tc.configured)
-		if name != tc.wantName || auto != tc.wantAuto {
-			t.Errorf("resolveTodoBackend(%q, %q) = (%q, %v), want (%q, %v)",
-				tc.dir, tc.configured, name, auto, tc.wantName, tc.wantAuto)
+		if name != "db" || auto {
+			t.Errorf("resolveTodoBackend(%q, %q) = (%q, %v), want (db, false)",
+				tc.dir, tc.configured, name, auto)
 		}
 	}
 
-	if got := TodoBackendLabel(withTodos, ""); got != "todos (auto)" {
-		t.Errorf("TodoBackendLabel(auto) = %q, want %q", got, "todos (auto)")
-	}
-	if got := TodoBackendLabel(noTodos, "grite"); got != "grite" {
-		t.Errorf("TodoBackendLabel(explicit) = %q, want %q", got, "grite")
+	if got := TodoBackendLabel(t.TempDir(), ""); got != "db" {
+		t.Errorf("TodoBackendLabel = %q, want db", got)
 	}
 }
 

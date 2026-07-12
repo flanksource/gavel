@@ -19,6 +19,7 @@ import { TodoReviewBanner } from './planActions';
 export function TodoDetail({
   todo,
   loading,
+  loadError,
   dir,
   provider,
   onChanged,
@@ -29,6 +30,7 @@ export function TodoDetail({
 }: {
   todo: TodoItem | null;
   loading: boolean;
+  loadError?: string;
   dir: string;
   provider: string;
   onChanged: (todo: TodoItem) => void;
@@ -140,7 +142,6 @@ export function TodoDetail({
 
   async function transferTo(toDir: string) {
     if (!todo || busy || !toDir || !onTransferred) return;
-    const target = transferTargets.find(ws => ws.dir === toDir);
     setBusy(true);
     setError('');
     try {
@@ -150,9 +151,7 @@ export function TodoDetail({
         body: JSON.stringify({
           ref: todo.ref,
           fromDir: dir,
-          fromProvider: provider,
           toDir,
-          toProvider: target?.todoProvider || 'auto',
         }),
       });
       const data = await response.json();
@@ -226,10 +225,36 @@ export function TodoDetail({
 
   if (!todo) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        <div className="text-center">
-          <UiCheck className="mb-2 text-4xl" />
-          <p>Select a todo</p>
+      <div className="flex h-full min-h-0 flex-col text-sm text-muted-foreground">
+        {onBack && (
+          <div className="shrink-0 border-b border-border px-3 py-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              type="button"
+              onClick={onBack}
+              title="Back to todos"
+              aria-label="Back to todos"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted hover:text-foreground"
+            >
+              <UiArrowLeft className="text-base" />
+            </Button>
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1 items-center justify-center px-4">
+          {loading ? (
+            <div className="flex items-center gap-2"><Spinner /> Loading todo</div>
+          ) : loadError ? (
+            <div role="alert" className="max-w-lg text-center text-destructive">
+              <UiError className="mb-2 text-4xl" />
+              <p>{loadError}</p>
+            </div>
+          ) : (
+            <div className="text-center">
+              <UiCheck className="mb-2 text-4xl" />
+              <p>Select a todo</p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -450,7 +475,7 @@ export function TodoDetail({
             resumeDisabled={busy || runBusy || sessionInProgress}
           />
         ) : tab === 'plan' ? (
-          <TodoPlan dir={dir} provider={provider} sessionId={todo.sessionId} active={tab === 'plan'} />
+          <TodoPlan dir={dir} provider={provider} todo={todo} active={tab === 'plan'} onChanged={onChanged} />
         ) : tab === 'verification' ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             <TodoVerification dir={dir} provider={provider} todo={todo} onChanged={onChanged} />

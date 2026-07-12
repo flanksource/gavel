@@ -35,17 +35,16 @@ export function useWorkspaceTodos(
   // Every configured workspace with a directory is listed straight from
   // projects.json; ones with no todos render an empty "No todos" group.
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
-  // Each entry encodes the workspace dir and its provider (tab-separated) so the
-  // list refetches when either the set of workspaces or a pinned provider changes.
-  const dirsKey = useMemo(() => workspaces.map(w => `${w.dir}\t${w.todoProvider || 'auto'}`).join('|'), [workspaces]);
-  const providerFor = useCallback(
-    (dir: string) => workspaces.find(w => w.dir === dir)?.todoProvider || 'auto',
-    [workspaces],
-  );
+  // Runtime persistence is PostgreSQL-only. Keep the provider-shaped return
+  // values until M7 removes that plumbing, but never derive behavior from a
+  // project's legacy todoProvider setting.
+  const dirsKey = useMemo(() => JSON.stringify(workspaces.map(w => w.dir)), [workspaces]);
+  const providerFor = useCallback((_dir: string) => 'db', []);
 
   const [byDir, setByDir] = useState<Record<string, TodoListResponse>>({});
   const [loadingList, setLoadingList] = useState(false);
   const [error, setError] = useState('');
+  const [detailError, setDetailError] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
   const [detail, setDetail] = useState<TodoItem | null>(null);
@@ -96,92 +95,151 @@ export function useWorkspaceTodos(
   // projects poll. A per-workspace failure degrades to an empty group.
   useEffect(() => {
     if (!enabled) return;
-    const specs = dirsKey ? dirsKey.split('|').map(s => s.split('\t')) : [];
-    if (specs.length === 0) {
+    const dirs = JSON.parse(dirsKey) as string[];
+    if (dirs.length === 0) {
       setByDir({});
+      setError('');
+      setLoadingList(false);
       return;
     }
     let cancelled = false;
     setLoadingList(true);
     setError('');
     (async () => {
-      const entries = await Promise.all(specs.map(async ([dir, provider]) => {
+      const results = await Promise.all(dirs.map(async (dir) => {
         try {
-          const res = await fetch(`/api/todos?${todoQuery(dir, provider)}`);
-          const data = await res.json();
+          const res = await fetch(`/api/todos?${todoQuery(dir)}`);
+          const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || 'Load failed');
-          return [dir, data as TodoListResponse] as const;
-        } catch {
-          return [dir, { provider, dir, counts: emptyCounts, items: [] } as TodoListResponse] as const;
+          return { dir, data: data as TodoListResponse, error: '' };
+        } catch (err: any) {
+          return {
+            dir,
+            data: { provider: 'db', dir, counts: emptyCounts, items: [] } as TodoListResponse,
+            error: err?.message || 'Load failed',
+          };
         }
       }));
       if (!cancelled) {
-        setByDir(Object.fromEntries(entries));
+        setByDir(Object.fromEntries(results.map(result => [result.dir, result.data])));
+        setError([...new Set(results.map(result => result.error).filter(Boolean))].join('; '));
         setLoadingList(false);
       }
     })();
     return () => { cancelled = true; };
   }, [dirsKey, refreshTick, enabled]);
 
-  // Load the selected todo's detail (body + history).
+  // A route lookup below already returns the full detail. Skip the ordinary
+  // dir-scoped refetch for that exact canonical selection.
+  const skipDetailKey = useRef('');
+
+  // Load a clicked todo's detail (body + history).
   useEffect(() => {
     if (!selected) {
-      setDetail(null);
+      if (!selectedId) {
+        setDetail(null);
+        setDetailError('');
+        setLoadingDetail(false);
+      }
+      return;
+    }
+    const selectionKey = `${selected.dir}\u0000${selected.ref}`;
+    if (skipDetailKey.current === selectionKey) {
+      skipDetailKey.current = '';
+      setLoadingDetail(false);
       return;
     }
     let cancelled = false;
     setLoadingDetail(true);
+    setDetailError('');
     (async () => {
       try {
         const params = new URLSearchParams(todoQuery(selected.dir, selected.provider));
         params.set('ref', selected.ref);
         const res = await fetch(`/api/todos/item?${params.toString()}`);
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'Load failed');
         if (!cancelled) setDetail(data as TodoItem);
-      } catch {
-        if (!cancelled) setDetail(null);
+      } catch (err: any) {
+        if (!cancelled) {
+          setDetail(null);
+          setDetailError(err?.message || 'Load failed');
+        }
       } finally {
         if (!cancelled) setLoadingDetail(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, selectedId]);
 
   // select changes the active todo and pushes its ref into the URL (when the
   // caller wired onNavigate). The resolution effect below mirrors the reverse —
   // a URL change (deep link, back/forward) into `selected`.
-  const select = useCallback((next: SelectedTodo | null) => {
-    setSelected(next);
-    onNavigate?.(next?.ref ?? '');
-  }, [onNavigate]);
-
-  // Resolve the URL's selectedId into a concrete {dir, ref, provider} by finding
-  // which workspace's list holds that ref. appliedId tracks the last id we
-  // resolved so a user click (which sets `selected` before the URL catches up)
-  // is never clobbered, and a not-yet-loaded deep link retries when byDir fills.
   const appliedId = useRef('');
+  const selectedRef = useRef<SelectedTodo | null>(null);
+  const setSelection = useCallback((next: SelectedTodo | null) => {
+    selectedRef.current = next;
+    setSelected(next);
+  }, []);
+  const select = useCallback((next: SelectedTodo | null) => {
+    appliedId.current = next?.ref ?? '';
+    setDetailError('');
+    setSelection(next);
+    onNavigate?.(next?.ref ?? '');
+  }, [onNavigate, setSelection]);
+
+  // Resolve a deep link directly by reference, independently of the workspace
+  // list requests. The database endpoint resolves canonical IDs, short IDs, and
+  // imported aliases globally and returns the canonical ref plus workspace CWD.
+  // Adopt those for subsequent mutations but do not navigate: an alias URL must
+  // remain stable when it resolves successfully.
   useEffect(() => {
     if (selectedId === appliedId.current) return;
     if (!selectedId) {
       appliedId.current = '';
-      setSelected(null);
+      setSelection(null);
+      setDetail(null);
+      setDetailError('');
+      setLoadingDetail(false);
       return;
     }
-    for (const ws of workspaces) {
-      if (byDir[ws.dir]?.items.some(item => item.ref === selectedId)) {
-        appliedId.current = selectedId;
-        // Keep the existing selection object when it already points here (a user
-        // click set it before the URL caught up) so the detail effect doesn't
-        // refetch the same todo.
-        setSelected(prev =>
-          prev && prev.dir === ws.dir && prev.ref === selectedId
-            ? prev
-            : { dir: ws.dir, ref: selectedId, provider: ws.todoProvider || 'auto' });
-        return;
-      }
+    if (selectedRef.current?.ref === selectedId) {
+      appliedId.current = selectedId;
+      return;
     }
-  }, [selectedId, byDir, workspaces]);
+
+    let cancelled = false;
+    setSelection(null);
+    setDetail(null);
+    setDetailError('');
+    setLoadingDetail(true);
+    (async () => {
+      try {
+        const params = new URLSearchParams({ ref: selectedId });
+        const res = await fetch(`/api/todos/item?${params.toString()}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Load failed (HTTP ${res.status})`);
+        const todo = data as TodoItem & { dir?: string };
+        const canonicalRef = todo.ref?.trim();
+        const canonicalDir = todo.cwd?.trim() || todo.dir?.trim();
+        if (!canonicalRef) throw new Error('Database returned a todo without a canonical reference');
+        if (!canonicalDir) throw new Error('Database returned a todo without a workspace directory');
+        if (cancelled) return;
+        appliedId.current = selectedId;
+        skipDetailKey.current = `${canonicalDir}\u0000${canonicalRef}`;
+        setSelection({ dir: canonicalDir, ref: canonicalRef, provider: todo.provider || 'db' });
+        setDetail(todo);
+      } catch (err: any) {
+        if (!cancelled) {
+          appliedId.current = selectedId;
+          setDetailError(err?.message || 'Load failed');
+        }
+      } finally {
+        if (!cancelled) setLoadingDetail(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedId, setSelection]);
 
   const aggregate = useMemo(
     () => workspaces.reduce((acc, ws) => addCounts(acc, byDir[ws.dir]?.counts ?? ws.todoCounts ?? emptyCounts), emptyCounts),
@@ -221,9 +279,10 @@ export function useWorkspaceTodos(
     byDir,
     loadingList,
     error,
+    detailError,
     aggregate,
     selected,
-    setSelected,
+    setSelected: setSelection,
     select,
     detail,
     loadingDetail,
