@@ -397,6 +397,38 @@ func TestNormalizeWarningsAndStableWarningIDs(t *testing.T) {
 	assert.Empty(t, first.Relationships)
 }
 
+func TestNormalizeSkipsOrphanEventsAndRelationshipsWithReportWarning(t *testing.T) {
+	snapshot := decodeSnapshot(t, `{
+		"meta":{"schema_version":1,"event_count":3},
+		"issues":[{"issue_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","title":"Present","state":"open",
+		 "created_ts":1,"updated_ts":2}],
+		"events":[
+			{"event_id":"present-created","issue_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ts_unix_ms":1,
+			 "kind":{"IssueCreated":{"title":"Present","body":"body"}}},
+			{"event_id":"orphan-comment","issue_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ts_unix_ms":2,
+			 "kind":{"CommentAdded":{"body":"missing source"}}},
+			{"event_id":"orphan-dependency","issue_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ts_unix_ms":3,
+			 "kind":{"DependencyAdded":{"dep_type":"depends_on","target":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+		]
+	}`)
+
+	document, err := Normalize(snapshot)
+	require.NoError(t, err)
+	require.Len(t, document.Events, 1)
+	assert.Equal(t, "present-created", document.Events[0].SourceID)
+	assert.Empty(t, document.Relationships)
+	assert.Empty(t, document.RemovedRelationships)
+	require.Len(t, document.Warnings, 2)
+	for _, warning := range document.Warnings {
+		assert.Equal(t, "orphan_event_skipped", warning.Code)
+		assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", warning.IssueID)
+		assert.Contains(t, warning.Message, "event skipped")
+	}
+
+	batch := buildNativeBatch(document, native.ImportWorkspace{}, resolvedCaptain{}, document.Warnings)
+	assert.Empty(t, batch.Warnings, "report-only orphan warnings must not target absent native issues")
+}
+
 func TestNormalizeRejectsMetaCountMismatchAndConflictingEvents(t *testing.T) {
 	mismatch := decodeSnapshot(t, `{"meta":{"schema_version":1,"event_count":1},"issues":[],"events":[]}`)
 	_, err := Normalize(mismatch)

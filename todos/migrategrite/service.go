@@ -588,10 +588,18 @@ func buildNativeBatch(document Document, workspace native.ImportWorkspace, resol
 		issueTimes[issue.SourceID] = issue.CreatedAt
 	}
 	for _, warning := range warnings {
+		createdAt, exists := issueTimes[warning.IssueID]
+		if !exists {
+			// Some export warnings describe source records that cannot be
+			// represented as native issue events (for example, an event whose
+			// issue is absent from the snapshot). Keep those in the import report
+			// without attaching them to a nonexistent native issue.
+			continue
+		}
 		payload, _ := json.Marshal(map[string]string{"code": warning.Code})
 		batch.Warnings = append(batch.Warnings, native.ImportWarning{
 			IssueSourceID: warning.IssueID, SourceID: warning.SourceID(), Code: warning.Code,
-			Message: warning.Message, Payload: payload, CreatedAt: issueTimes[warning.IssueID], Order: math.MaxInt,
+			Message: warning.Message, Payload: payload, CreatedAt: createdAt, Order: math.MaxInt,
 		})
 	}
 	return batch

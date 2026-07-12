@@ -221,7 +221,12 @@ func Normalize(snapshot griteexport.Snapshot) (Document, error) {
 	for order, event := range events {
 		issueID := strings.ToLower(strings.TrimSpace(event.IssueID.String()))
 		if _, ok := issueIDs[issueID]; !ok {
-			return Document{}, fmt.Errorf("Grite event %s references missing issue %s", event.EventID, issueID)
+			document.Warnings = append(document.Warnings, Warning{
+				Code:    "orphan_event_skipped",
+				IssueID: issueID,
+				Message: fmt.Sprintf("Grite event %s references missing issue %s; event skipped", event.EventID, issueID),
+			})
+			continue
 		}
 		name, raw, err := event.Kind.NamePayload()
 		if err != nil {
@@ -575,6 +580,10 @@ func projectRelationships(events []griteexport.Event, issueIDs map[string]struct
 	states := map[string]relationshipState{}
 	var warnings []Warning
 	for _, event := range events {
+		issueID := strings.ToLower(strings.TrimSpace(event.IssueID.String()))
+		if _, ok := issueIDs[issueID]; !ok {
+			continue
+		}
 		name, raw, err := event.Kind.NamePayload()
 		if err != nil {
 			return nil, nil, nil, err
@@ -586,7 +595,6 @@ func projectRelationships(events []griteexport.Event, issueIDs map[string]struct
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, nil, nil, fmt.Errorf("decode dependency event %s: %w", event.EventID, err)
 		}
-		issueID := strings.ToLower(strings.TrimSpace(event.IssueID.String()))
 		targetID := strings.ToLower(strings.TrimSpace(payload.Target.String()))
 		if _, ok := issueIDs[targetID]; !ok {
 			warnings = append(warnings, Warning{Code: "missing_dependency_target", IssueID: issueID, Message: "Grite dependency target " + targetID + " is not in the snapshot"})
