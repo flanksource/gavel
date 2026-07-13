@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -153,15 +152,5 @@ func langFromExt(ext string) string {
 }
 
 func readTODOMarkdownBody(todo *types.TODO) string {
-	if todo.MarkdownBody != "" {
-		return strings.TrimSpace(todo.MarkdownBody)
-	}
-	if todo.FilePath == "" {
-		return ""
-	}
-	parsed, err := todos.ParseFrontmatterFromFile(todo.FilePath)
-	if err != nil {
-		return ""
-	}
-	return parsed.MarkdownContent
+	return strings.TrimSpace(todo.MarkdownBody)
 }

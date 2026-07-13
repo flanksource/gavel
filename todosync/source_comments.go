@@ -1,3 +1,5 @@
+// Package todosync synchronizes source TODO and FIXME comments into native
+// PostgreSQL-backed TODOs.
 package todosync
 
 import (
@@ -166,10 +168,7 @@ func SyncSourceComments(ctx context.Context, provider todos.Provider, opts Sourc
 
 	existing, err := provider.List(ctx, todos.DiscoveryFilters{IncludeLabels: []string{SourceTodoLabel}})
 	if err != nil {
-		if !strings.Contains(err.Error(), ".todos directory not found") {
-			return nil, fmt.Errorf("list generated source todos: %w", err)
-		}
-		existing = nil
+		return nil, fmt.Errorf("list generated source todos: %w", err)
 	}
 	existingByID := map[string]*types.TODO{}
 	for _, todo := range existing {
@@ -258,7 +257,7 @@ func syncExistingSourceTodo(ctx context.Context, provider todos.Provider, todo *
 		edit.Body = &wantBody
 		needsEdit = true
 	}
-	if todo.Provider == todos.ProviderFiles && !sameStringOrSlice(todo.Path, path) {
+	if !sameStringOrSlice(todo.Path, path) {
 		edit.Path = &path
 		needsEdit = true
 	}

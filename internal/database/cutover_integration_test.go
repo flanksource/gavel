@@ -77,6 +77,11 @@ func TestExplicitLegacyCaptainCutoverThenGavelHCLIsRepeatable(t *testing.T) {
 	)`).Error)
 	require.NoError(t, legacy.Exec(`INSERT INTO grite_issue_caches (repo, issue_id, title)
 		VALUES ('flanksource/gavel', 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', 'preserve Grite cache')`).Error)
+	require.NoError(t, legacy.Exec(`CREATE TABLE grite_sync_cursors (
+		repo text PRIMARY KEY, last_event_ts bigint, synced_at timestamptz
+	)`).Error)
+	require.NoError(t, legacy.Exec(`INSERT INTO grite_sync_cursors (repo, last_event_ts)
+		VALUES ('flanksource/gavel', 1234)`).Error)
 	require.NoError(t, legacy.Exec(`CREATE TABLE migration_unmanaged (id integer PRIMARY KEY, value text)`).Error)
 	require.NoError(t, legacy.Exec(`INSERT INTO migration_unmanaged VALUES (1, 'preserve me')`).Error)
 
@@ -112,17 +117,16 @@ func TestExplicitLegacyCaptainCutoverThenGavelHCLIsRepeatable(t *testing.T) {
 	for _, table := range []string{
 		"captain_sessions", "captain_prompt_runs", "captain_sessions_legacy_v1",
 		"captain_session_prompts_legacy_v1", "captain_legacy_session_cutovers",
-		"todo_workspaces", "grite_issue_caches", "migration_unmanaged",
+		"todo_workspaces", "migration_unmanaged",
 	} {
 		assert.True(t, legacy.Migrator().HasTable(table), "%s should exist after cutover", table)
 	}
-	var legacyTitle, unmanagedValue, promptMarkdown string
-	require.NoError(t, legacy.Raw(`SELECT title FROM grite_issue_caches
-		WHERE repo = 'flanksource/gavel' AND issue_id = 'e2a3b8c2d0f7c9a98b400dc78e8a94a5'`).Scan(&legacyTitle).Error)
+	assert.False(t, legacy.Migrator().HasTable("grite_issue_caches"))
+	assert.False(t, legacy.Migrator().HasTable("grite_sync_cursors"))
+	var unmanagedValue, promptMarkdown string
 	require.NoError(t, legacy.Raw(`SELECT value FROM migration_unmanaged WHERE id = 1`).Scan(&unmanagedValue).Error)
 	require.NoError(t, legacy.Raw(`SELECT prompt_markdown FROM captain_prompt_runs
 		WHERE origin = 'legacy-session-cache'`).Scan(&promptMarkdown).Error)
-	assert.Equal(t, "preserve Grite cache", legacyTitle)
 	assert.Equal(t, "preserve me", unmanagedValue)
 	assert.Equal(t, "Implement the cutover", promptMarkdown)
 

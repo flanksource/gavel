@@ -36,6 +36,15 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	require.NoError(t, legacy.Exec(`
 		INSERT INTO grite_issue_caches (repo, issue_id, title)
 		VALUES ('flanksource/gavel', 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', 'legacy issue')`).Error)
+	require.NoError(t, legacy.Exec(`
+		CREATE TABLE grite_sync_cursors (
+			repo text PRIMARY KEY,
+			last_event_ts bigint,
+			synced_at timestamptz
+		)`).Error)
+	require.NoError(t, legacy.Exec(`
+		INSERT INTO grite_sync_cursors (repo, last_event_ts)
+		VALUES ('flanksource/gavel', 1234)`).Error)
 	legacySQL, err := legacy.DB()
 	require.NoError(t, err)
 	require.NoError(t, legacySQL.Close())
@@ -67,11 +76,8 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	assert.True(t, db.Gorm().Migrator().HasTable("captain_prompt_runs"), "Captain migrations must run before the Gavel bundle")
 	assert.True(t, db.Gorm().Migrator().HasTable("captain_plans"), "Captain migrations must share the Gavel database")
 
-	var legacyTitle string
-	require.NoError(t, db.Gorm().Raw(`
-		SELECT title FROM grite_issue_caches
-		WHERE repo = 'flanksource/gavel' AND issue_id = 'e2a3b8c2d0f7c9a98b400dc78e8a94a5'`).Scan(&legacyTitle).Error)
-	assert.Equal(t, "legacy issue", legacyTitle, "the declarative upgrade must preserve legacy cache data")
+	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"), "retired Grite issue cache must be removed after native migration")
+	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"), "retired Grite sync cursor must be removed after native migration")
 
 	const (
 		workspaceOne   = "10000000-0000-0000-0000-000000000001"
@@ -195,7 +201,7 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	assert.EqualValues(t, 3, issueCount, "repeated apply must preserve native issue data")
 
 	// Remove only the native surface and prove the declarative bundle recreates
-	// it from an empty native schema without touching legacy/unmanaged tables.
+	// it without resurrecting the retired Grite cache tables.
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		todo_issue_events,
 		todo_issue_aliases,
@@ -211,8 +217,6 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	for _, table := range nativeTables {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should be recreated", table)
 	}
-	require.NoError(t, db.Gorm().Raw(`
-		SELECT title FROM grite_issue_caches
-		WHERE repo = 'flanksource/gavel' AND issue_id = 'e2a3b8c2d0f7c9a98b400dc78e8a94a5'`).Scan(&legacyTitle).Error)
-	assert.Equal(t, "legacy issue", legacyTitle)
+	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"))
+	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"))
 }

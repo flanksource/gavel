@@ -372,16 +372,19 @@ func (e *TODOExecutor) collectResults(todosInGroup []*types.TODO, resultMap map[
 
 // updateFrontmatter updates the TODO's frontmatter with execution results.
 func (e *TODOExecutor) activeProvider() Provider {
-	if e.provider != nil {
-		return e.provider
-	}
-	return &FileProvider{}
+	return e.provider
 }
 
 func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error {
+	provider := e.activeProvider()
+	if provider == nil {
+		// Pure outcome tests and embedders may intentionally omit persistence.
+		// Unlike the retired behavior, omission never falls back to `.todos`.
+		return nil
+	}
 	persistCtx, cancel := providerPersistenceContext(ctx)
 	defer cancel()
-	return e.activeProvider().SaveAttempt(persistCtx, todo, result)
+	return provider.SaveAttempt(persistCtx, todo, result)
 }
 
 func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error {
@@ -459,11 +462,16 @@ func (e *TODOExecutor) runStartPersister(ctx context.Context, todoList []*types.
 			return
 		}
 		body := renderRunStartComment(meta)
+		provider := e.activeProvider()
+		if provider == nil {
+			fmt.Fprintln(os.Stderr, "failed to comment TODO run metadata: native PostgreSQL provider is required")
+			return
+		}
 		for _, todo := range todoList {
 			if todo == nil {
 				continue
 			}
-			if err := e.activeProvider().Comment(persistCtx, todo, body); err != nil {
+			if err := provider.Comment(persistCtx, todo, body); err != nil {
 				fmt.Fprintf(os.Stderr, "failed to comment TODO run metadata: %v\n", err)
 			}
 		}
@@ -489,9 +497,14 @@ func commentValue(value, fallback string) string {
 }
 
 func (e *TODOExecutor) updateProviderState(ctx context.Context, todo *types.TODO, updates StateUpdate) {
+	provider := e.activeProvider()
+	if provider == nil {
+		applyStateUpdate(&todo.TODOFrontmatter, updates)
+		return
+	}
 	persistCtx, cancel := providerPersistenceContext(ctx)
 	defer cancel()
-	if err := e.activeProvider().UpdateState(persistCtx, todo, updates); err != nil {
+	if err := provider.UpdateState(persistCtx, todo, updates); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to update TODO state: %v\n", err)
 	}
 }

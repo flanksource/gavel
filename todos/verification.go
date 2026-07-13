@@ -2,10 +2,8 @@ package todos
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -13,9 +11,6 @@ import (
 // "## Verification" section (which holds verification *tests*) so writing a
 // result never clobbers a TODO's test fixtures.
 const verificationResultSection = "Verification Result"
-
-// verificationInsertBefore keeps the result section above the running history.
-var verificationInsertBefore = []string{"Attempts", "Failure History"}
 
 // RenderVerificationSection renders an issue verification verdict as a compact
 // "## Verification Result" markdown section suitable for a TODO body or an issue
@@ -86,24 +81,4 @@ func evidenceSuffix(evidence []verify.Evidence) string {
 		return fmt.Sprintf(" — %s: %s", loc, e.Message)
 	}
 	return " — " + e.Message
-}
-
-// UpdateVerificationSection rewrites the "## Verification Result" section in a
-// file-backed TODO, replacing any prior result in place (atomic write).
-func UpdateVerificationSection(todo *types.TODO, result *verify.VerifyResult) error {
-	content, err := os.ReadFile(todo.FilePath)
-	if err != nil {
-		return fmt.Errorf("failed to read TODO file: %w", err)
-	}
-	updated := ReplaceOrAppendSection(string(content), verificationResultSection, RenderVerificationSection(result), verificationInsertBefore...)
-
-	tmp := todo.FilePath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(updated), 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-	if err := os.Rename(tmp, todo.FilePath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-	return nil
 }

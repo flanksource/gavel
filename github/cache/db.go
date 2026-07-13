@@ -186,8 +186,6 @@ func (s *Store) Status() Status {
 		"workflow_def_caches",
 		"seen_prs",
 		"favicon_caches",
-		"grite_issue_caches",
-		"grite_sync_cursors",
 		"commit_stat_caches",
 		"commit_stat_cursors",
 		"test_run_caches",

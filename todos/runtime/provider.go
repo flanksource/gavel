@@ -1,9 +1,8 @@
-// Package runtime provides the transitional PostgreSQL-only TODO provider.
+// Package runtime provides the PostgreSQL-only TODO runtime.
 //
-// The package adapts the native repository to the legacy todos.Provider
-// interface while CLI, API, and UI callers are cut over. It deliberately does
-// not fall back to Grite or .todos files and never creates workspaces as a side
-// effect of opening a provider.
+// The package adapts the native repository to the shared TODO lifecycle
+// interface used by CLI, API, and UI callers. It never falls back to Grite or
+// .todos files and never creates workspaces as a side effect of opening it.
 package runtime
 
 import (

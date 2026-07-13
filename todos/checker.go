@@ -110,7 +110,8 @@ func updateTODOAfterCheck(ctx context.Context, provider Provider, todo *types.TO
 		Status:   &status,
 	}
 	if provider == nil {
-		provider = &FileProvider{}
+		log.Warnf("Cannot persist TODO check state for %s: native PostgreSQL provider is required", TODOReference(todo))
+		return
 	}
 	if err := provider.UpdateState(ctx, todo, updates); err != nil {
 		log.Warnf("Failed to update TODO state for %s: %v", todo.FilePath, err)

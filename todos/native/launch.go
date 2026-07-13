@@ -65,9 +65,8 @@ type ReviewedPlanSelection struct {
 	Issue *Issue
 }
 
-// LaunchCoordinator is the native-only boundary used by the future provider
-// cutover. Existing Grite and file providers never construct one and retain
-// their current execution behavior.
+// LaunchCoordinator is the native-only execution boundary. Only the
+// PostgreSQL runtime constructs one.
 //
 // Captain and Gavel must share the exact underlying *sql.DB pool. This lets the
 // coordinator use Captain's transaction handle for both owners' writes without

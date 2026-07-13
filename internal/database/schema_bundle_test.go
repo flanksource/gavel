@@ -22,6 +22,7 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	}
 	assert.Contains(t, names, "100_todo_captain_constraints.sql")
 	assert.Contains(t, names, "110_todo_captain_projection.sql")
+	assert.Contains(t, names, "120_drop_grite_runtime_cache.sql")
 
 	constraintSQL := readEmbeddedSchemaFile(t, "schema/100_todo_captain_constraints.sql")
 	assert.Contains(t, constraintSQL, "-- phase: post")
@@ -38,6 +39,16 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, projectionSQL, "gavel_todo_prompt_run_iteration_projection")
 	assert.Contains(t, projectionSQL, "{workflow,autoVerifyWithoutFixture}")
 	assert.GreaterOrEqual(t, strings.Count(projectionSQL, "SET search_path = pg_catalog, public"), 7)
+
+	cleanupSQL := readEmbeddedSchemaFile(t, "schema/120_drop_grite_runtime_cache.sql")
+	assert.Contains(t, cleanupSQL, "-- phase: post")
+	assert.NotContains(t, cleanupSQL, "-- runs: always", "the destructive cleanup must run once under migration hash tracking")
+	assert.Contains(t, cleanupSQL, "DROP TABLE IF EXISTS public.grite_sync_cursors, public.grite_issue_caches RESTRICT;")
+	assert.NotContains(t, strings.ToUpper(cleanupSQL), "CASCADE")
+
+	githubSchema := readEmbeddedSchemaFile(t, "schema/github_cache.hcl")
+	assert.NotContains(t, githubSchema, `table "grite_issue_caches"`)
+	assert.NotContains(t, githubSchema, `table "grite_sync_cursors"`)
 }
 
 func readEmbeddedSchemaFile(t *testing.T, name string) string {

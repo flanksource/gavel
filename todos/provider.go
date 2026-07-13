@@ -3,27 +3,14 @@ package todos
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/flanksource/gavel/verify"
 )
 
-const (
-	ProviderFiles = "todos"
-	ProviderGrite = "grite"
-	ProviderDB    = "db"
-)
+const ProviderDB = "db"
 
 var (
-	// ErrProviderRetired marks legacy runtime provider selection. Grite and
-	// .todos remain migration/import-export inputs only; they are never fallbacks.
-	ErrProviderRetired = errors.New("runtime TODO provider is retired")
-
 	// ErrRunDispatchAlreadyClaimed means another caller already won the durable
 	// admission for this exact Captain prompt run. The caller must not dispatch a
 	// second external agent for the idempotently resolved database record.
@@ -33,23 +20,6 @@ var (
 	// Captain operation using a different Gavel step kind.
 	ErrRunResumeModeMismatch = errors.New("native TODO run resume mode mismatch")
 )
-
-// ValidateRuntimeProvider accepts only the native database identity during the
-// one-release compatibility window. Legacy flags/parameters remain parseable
-// so callers receive a migration error instead of silently selecting old data.
-func ValidateRuntimeProvider(value string) error {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "", ProviderDB:
-		return nil
-	case ProviderGrite:
-		return fmt.Errorf("%w: provider %q cannot be selected; run gavel todos import-grite, then omit --provider or use --provider=%s", ErrProviderRetired, value, ProviderDB)
-	case ProviderFiles, "auto":
-		return fmt.Errorf("%w: provider %q cannot be selected; .todos is import/export-only and PostgreSQL is the runtime store", ErrProviderRetired, value)
-	default:
-		return fmt.Errorf("%w: unknown provider %q; PostgreSQL provider %q is the only runtime store", ErrProviderRetired, value, ProviderDB)
-	}
-}
 
 // Provider is the persistence boundary for TODO storage.
 type Provider interface {
@@ -88,9 +58,8 @@ type RunPromptProvider interface {
 	RenderRunPrompt(ctx *ExecutorContext, todo *types.TODO) (string, error)
 }
 
-// RunLifecycleProvider is implemented by the native PostgreSQL runtime. The
-// legacy provider interface remains temporarily for executor/test plumbing,
-// but native execution state is owned by Captain and projected into issues.
+// RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
+// execution state is owned by Captain and projected into issues.
 type RunLifecycleProvider interface {
 	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) error
 	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
@@ -110,8 +79,7 @@ type GlobalReferenceProvider interface {
 }
 
 // TransferProvider preserves native identity/history when moving an issue
-// between database workspaces. The legacy copy/delete fallback remains only
-// for explicit import/export cleanup until M7 removes runtime file providers.
+// between database workspaces.
 type TransferProvider interface {
 	MoveTo(ctx context.Context, todo *types.TODO, target Provider) (*types.TODO, error)
 }
@@ -163,147 +131,12 @@ func (e EditRequest) IsEmpty() bool {
 	return e.Title == nil && e.Body == nil && e.Path == nil && len(e.Labels) == 0 && len(e.Metadata) == 0
 }
 
-type FileProvider struct {
-	Dir     string
-	WorkDir string
-}
-
-func NewFileProvider(workDir, dir string) *FileProvider {
-	if dir == "" {
-		dir = filepath.Join(workDir, ".todos")
-	}
-	return &FileProvider{Dir: dir, WorkDir: workDir}
-}
-
-func (p *FileProvider) List(_ context.Context, filters DiscoveryFilters) (types.TODOS, error) {
-	if _, err := os.Stat(p.Dir); os.IsNotExist(err) {
-		return nil, fmt.Errorf(".todos directory not found: %s", p.Dir)
-	}
-	return DiscoverTODOs(p.Dir, filters)
-}
-
-func (p *FileProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
-	todoPath := ref
-	if !filepath.IsAbs(todoPath) && !strings.Contains(todoPath, string(filepath.Separator)) {
-		todoPath = filepath.Join(p.Dir, todoPath)
-	}
-	if _, err := os.Stat(todoPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("TODO file not found: %s", todoPath)
-	}
-	todo, err := ParseTODO(todoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse TODO: %w", err)
-	}
-	todo.Provider = ProviderFiles
-	return todo, nil
-}
-
-func (p *FileProvider) Create(_ context.Context, req CreateRequest) (*types.TODO, error) {
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		return nil, fmt.Errorf("title is required")
-	}
-	priority := req.Priority
-	if priority == "" {
-		priority = types.PriorityMedium
-	}
-	status := req.Status
-	if status == "" {
-		status = types.StatusPending
-	}
-	path := filepath.Join(p.Dir, uniqueTODOFilename(p.Dir, title))
-	frontmatter := types.TODOFrontmatter{
-		Title:    title,
-		Priority: priority,
-		Status:   status,
-		Path:     req.Path,
-	}
-	frontmatter.CWD = p.WorkDir
-	if len(req.Metadata) > 0 || len(req.Labels) > 0 {
-		frontmatter.Metadata = map[string]any{}
-		for k, v := range req.Metadata {
-			frontmatter.Metadata[k] = v
-		}
-		if len(req.Labels) > 0 {
-			frontmatter.Metadata["labels"] = append([]string(nil), req.Labels...)
-		}
-	}
-	todo := &types.TODO{
-		FilePath:        path,
-		Labels:          append([]string(nil), req.Labels...),
-		TODOFrontmatter: frontmatter,
-		Implementation:  strings.TrimSpace(req.Body),
-		MarkdownBody:    strings.TrimSpace(req.Body),
-		Provider:        ProviderFiles,
-	}
-	if err := WriteTODOFile(path, todo); err != nil {
-		return nil, err
-	}
-	return p.Get(context.Background(), path)
-}
-
-func (p *FileProvider) Delete(_ context.Context, todo *types.TODO) error {
-	if todo == nil || todo.FilePath == "" {
-		return fmt.Errorf("missing TODO file path")
-	}
-	return os.Remove(todo.FilePath)
-}
-
-func (p *FileProvider) Edit(_ context.Context, todo *types.TODO, edit EditRequest) error {
-	return EditTODOContent(todo, edit)
-}
-
-func (p *FileProvider) Comment(_ context.Context, todo *types.TODO, body string) error {
-	return AppendComment(todo, body)
-}
-
-func (p *FileProvider) UpdateState(_ context.Context, todo *types.TODO, updates StateUpdate) error {
-	return UpdateTODOState(todo, updates)
-}
-
-func (p *FileProvider) UpdateLatestFailure(_ context.Context, todo *types.TODO, result *types.TestResultInfo) error {
-	return UpdateLatestFailure(todo, result)
-}
-
-func (p *FileProvider) SaveAttempt(_ context.Context, todo *types.TODO, result *ExecutionResult) error {
-	return saveAttempt(todo, result)
-}
-
-func (p *FileProvider) SaveVerification(_ context.Context, todo *types.TODO, result *verify.VerifyResult) error {
-	if result == nil {
-		return nil
-	}
-	return UpdateVerificationSection(todo, result)
-}
-
 func TODOReference(todo *types.TODO) string {
 	if todo == nil {
 		return ""
-	}
-	if todo.Provider == ProviderGrite && todo.ID != "" {
-		return todo.ID
 	}
 	if todo.FilePath != "" {
 		return todo.FilePath
 	}
 	return todo.ID
-}
-
-var todoSlugInvalid = regexp.MustCompile(`[^a-z0-9]+`)
-
-func uniqueTODOFilename(dir, title string) string {
-	slug := strings.Trim(todoSlugInvalid.ReplaceAllString(strings.ToLower(title), "-"), "-")
-	if slug == "" {
-		slug = "todo"
-	}
-	name := slug + ".md"
-	if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-		return name
-	}
-	for i := 2; ; i++ {
-		name = fmt.Sprintf("%s-%d.md", slug, i)
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			return name
-		}
-	}
 }

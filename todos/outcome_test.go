@@ -229,9 +229,7 @@ func TestApplyOutcomePlanTransitions(t *testing.T) {
 		todo := writeOutcomeTodo(t, dir)
 		prior := writePlanFile(t, dir)
 		// The prior plan run persisted the path; an unchanged re-plan keeps it.
-		if err := UpdateTODOState(todo, StateUpdate{PlanPath: &prior}); err != nil {
-			t.Fatal(err)
-		}
+		applyStateUpdate(&todo.TODOFrontmatter, StateUpdate{PlanPath: &prior})
 		e := NewTODOExecutor(dir, plainExec{}, "")
 		e.SetMode(types.ModePlan)
 		if err := e.applyOutcome(context.Background(), todo, newPlanResult(types.PlanUnchanged, "")); err != nil {
