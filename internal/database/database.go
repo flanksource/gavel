@@ -76,19 +76,7 @@ func Open(ctx context.Context) (*DB, error) {
 			return err
 		}
 
-		if err := migrate.Apply(ctx, dsn, schemaFS,
-			migrate.WithDir("schema"),
-			migrate.WithName("gavel"),
-			migrate.WithExclude(
-				"captain_*",
-				"todo_issue_prompt_runs.todo_issue_prompt_runs_captain_prompt_run_fkey",
-				"todo_issue_plans.todo_issue_plans_captain_plan_fkey",
-				"todo_issue_plan_revision_details",
-			),
-		); err != nil {
-			return fmt.Errorf("migrate gavel database: %w", err)
-		}
-		return nil
+		return applyGavelSchema(ctx, dsn)
 	}); err != nil {
 		return nil, err
 	}
@@ -98,6 +86,22 @@ func Open(ctx context.Context) (*DB, error) {
 		return nil, fmt.Errorf("open gavel database: %w", err)
 	}
 	return &DB{gorm: gormDB, dsn: dsn, dsnSource: source}, nil
+}
+
+func applyGavelSchema(ctx context.Context, dsn string) error {
+	if err := migrate.Apply(ctx, dsn, schemaFS,
+		migrate.WithDir("schema"),
+		migrate.WithName("gavel"),
+		migrate.WithExclude(
+			"captain_*",
+			"todo_issue_prompt_runs.todo_issue_prompt_runs_captain_prompt_run_fkey",
+			"todo_issue_plans.todo_issue_plans_captain_plan_fkey",
+			"todo_issue_plan_revision_details",
+		),
+	); err != nil {
+		return fmt.Errorf("migrate gavel database: %w", err)
+	}
+	return nil
 }
 
 // withMigrationAdvisoryLock holds one PostgreSQL session-level advisory lock

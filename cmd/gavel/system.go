@@ -12,6 +12,7 @@ Subcommands:
   start      Start gavel pr list --all --ui --menu-bar detached in the background
   stop       Stop the running background instance
   status     Report whether the background instance is running
+  db-cutover Explicitly archive/backfill legacy Captain sessions and apply HCL
   install    Install a user-level launchd (macOS) or systemd (Linux) service
   uninstall  Remove the installed user-level service`,
 }
