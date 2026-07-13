@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,6 +31,55 @@ func projectByNameReq(method, name, body string) *http.Request {
 	}
 	r.SetPathValue("name", name)
 	return r
+}
+
+func TestHandleProjectsIgnoresLegacyTodoProvider(t *testing.T) {
+	originalPath := projectsPath
+	projectsPath = filepath.Join(t.TempDir(), "projects.json")
+	t.Cleanup(func() { projectsPath = originalPath })
+
+	legacy := []byte(`[
+  {
+    "name": "clicky",
+    "dir": "/srv/clicky",
+    "repos": ["flanksource/clicky"],
+    "todoProvider": "grite"
+  }
+]`)
+	if err := os.WriteFile(projectsPath, legacy, 0o600); err != nil {
+		t.Fatalf("write legacy projects config: %v", err)
+	}
+
+	originalCounts := projectTodoCounts
+	var countedDir string
+	projectTodoCounts = func(_ context.Context, dir string) (todoCounts, error) {
+		countedDir = dir
+		return todoCounts{Total: 14, Open: 12}, nil
+	}
+	t.Cleanup(func() { projectTodoCounts = originalCounts })
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleProjects(rec, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if countedDir != "/srv/clicky" {
+		t.Fatalf("TODO counts dir = %q, want /srv/clicky", countedDir)
+	}
+
+	var got []projectInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal projects response: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("projects response length = %d, want 1", len(got))
+	}
+	if got[0].Name != "clicky" || got[0].TodoBackend != "db" || got[0].TodoCounts.Total != 14 || got[0].TodoCounts.Open != 12 {
+		t.Fatalf("project response = %+v, want Clicky on db with 14 total and 12 open TODOs", got[0])
+	}
+	if body := rec.Body.String(); strings.Contains(body, "grite") || strings.Contains(body, "todoProvider") {
+		t.Fatalf("projects response leaked retired provider configuration: %s", body)
+	}
 }
 
 func TestHandleProjectGet(t *testing.T) {
