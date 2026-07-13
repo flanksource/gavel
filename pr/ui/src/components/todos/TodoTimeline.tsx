@@ -8,8 +8,8 @@ import { RelativeTime } from '../RelativeTime';
 
 type EventVisual = Pick<TimelineItem, 'icon' | 'tone'> & { action: string };
 
-// Grite emits CamelCase event kinds (IssueCreated, IssueUpdated, CommentAdded).
-// Map the known ones to an icon + disc tone + verb phrase; anything else falls
+// Imported and native events may use CamelCase kinds. Map the known ones to an
+// icon + disc tone + verb phrase; anything else falls
 // back to a neutral dot with the kind humanized ("StatusChanged" -> "status changed").
 function eventVisual(kind?: string): EventVisual {
   switch (kind) {
@@ -29,8 +29,8 @@ function humanizeKind(kind?: string): string {
   return kind.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
 }
 
-// Grite records the actor as an opaque id — a 32-char UUID without dashes or the
-// canonical dashed form. Those carry no meaning in the timeline, so surface the
+// Imported events may record the actor as an opaque id. Those carry no meaning
+// in the timeline, so surface the
 // actor only when it's a human-readable name; an id renders nothing.
 const OPAQUE_ACTOR_ID = /^[0-9a-f]{32}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -40,7 +40,7 @@ function actorName(actor?: string): string | undefined {
   return name;
 }
 
-// Provider events carry the zero-time sentinel when grite omits a timestamp.
+// Imported events may carry a zero-time sentinel when the source omitted a timestamp.
 // Returns the epoch ms (null when absent, used to sort), a relative age for
 // display ("2h ago"), and the absolute timestamp for the hover title.
 function eventTime(timestamp?: string): { ms: number | null; age: string; full: string } {

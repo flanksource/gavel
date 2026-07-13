@@ -80,7 +80,6 @@ describe('TodoVerification', () => {
     render(
       <TodoVerification
         dir="/workspace"
-        provider="todos"
         todo={todo}
         onChanged={() => {}}
       />,
@@ -101,7 +100,6 @@ describe('TodoVerification', () => {
     render(
       <TodoVerification
         dir="/workspace"
-        provider="todos"
         todo={todo}
         onChanged={() => {}}
       />,

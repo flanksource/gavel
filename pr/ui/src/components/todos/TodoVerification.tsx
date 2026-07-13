@@ -23,12 +23,10 @@ const GAVEL_FIXTURE_FENCES = [
 // checklist underneath.
 export function TodoVerification({
   dir,
-  provider,
   todo,
   onChanged,
 }: {
   dir: string;
-  provider: string;
   todo: TodoItem;
   onChanged: (todo: TodoItem) => void;
 }) {
@@ -66,7 +64,7 @@ export function TodoVerification({
     setBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/todos/verification/fixture?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/verification/fixture?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref, fixture }),
@@ -133,7 +131,7 @@ export function TodoVerification({
         {error && <div className="px-3 pb-3 text-xs text-red-600">{error}</div>}
       </section>
 
-      <AcceptanceCriteria dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
+      <AcceptanceCriteria dir={dir} todo={todo} onChanged={onChanged} />
     </div>
   );
 }

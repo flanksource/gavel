@@ -21,7 +21,6 @@ export function TodoDetail({
   loading,
   loadError,
   dir,
-  provider,
   onChanged,
   onDeleted,
   onBack,
@@ -32,7 +31,6 @@ export function TodoDetail({
   loading: boolean;
   loadError?: string;
   dir: string;
-  provider: string;
   onChanged: (todo: TodoItem) => void;
   onDeleted: () => void;
   // onBack renders a back arrow in the header; supplied only by the single-column
@@ -52,18 +50,16 @@ export function TodoDetail({
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
-  const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir, provider);
-  const isGrite = todo?.provider === 'grite';
+  const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
   // Projects this todo can move to: every configured workspace except its own.
   const transferTargets = workspaces.filter(ws => !!ws.dir && ws.dir !== dir);
-  // A todo is "closed" when completed (Grite also reports providerState).
-  const closed = todo?.status === 'completed' || todo?.providerState === 'closed';
+  const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
   const verificationCount = todo?.criteria?.length ?? 0;
-  const fullTodoId = todo ? todoFullId(todo, provider) : '';
+  const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
-  const { stats: headerSessionStats } = useSessionStats(dir, provider, todo?.sessionId, !!todo?.sessionId);
+  const { stats: headerSessionStats } = useSessionStats(dir, todo?.sessionId, !!todo?.sessionId);
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
   // A todo awaiting a human decision (plan review or a blocking question) must
   // route through TodoReviewBanner's approve/reject/answer flow, not have its
@@ -87,8 +83,8 @@ export function TodoDetail({
   }, [copyState]);
 
   // patch sends a partial update (status, priority, title, body, and/or comment)
-  // and adopts the server's returned todo so the view reflects provider-side side
-  // effects (labels, state, rewritten body, new comment). Resolves true on success.
+  // and adopts the server's returned todo so the view reflects server-side effects
+  // (labels, state, rewritten body, new comment). Resolves true on success.
   async function patch(payload: {
     status?: TodoStatus;
     priority?: TodoPriority;
@@ -100,7 +96,7 @@ export function TodoDetail({
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(`/api/todos/item?${todoQuery(dir, provider)}`, {
+      const response = await fetch(`/api/todos/item?${todoQuery(dir)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref, ...payload }),
@@ -166,11 +162,11 @@ export function TodoDetail({
 
   async function archiveTodo() {
     if (!todo || busy) return;
-    if (!window.confirm(isGrite ? 'Archive this Grite issue?' : 'Delete this TODO file?')) return;
+    if (!window.confirm('Archive this todo?')) return;
     setBusy(true);
     setError('');
     try {
-      const params = new URLSearchParams(todoQuery(dir, provider));
+      const params = new URLSearchParams(todoQuery(dir));
       params.set('ref', todo.ref);
       const response = await fetch(`/api/todos/item?${params.toString()}`, { method: 'DELETE' });
       if (!response.ok) {
@@ -209,7 +205,7 @@ export function TodoDetail({
 
   async function runTodo(options?: TodoRunOptions) {
     if (!todo) return;
-    const result = await run([todo.ref], options);
+    const result = await run(todo.ref, options);
     if (result?.status === 'started') {
       onChanged({
         ...todo,
@@ -316,7 +312,6 @@ export function TodoDetail({
               busy={busy}
               runBusy={runBusy}
               closed={closed}
-              isGrite={isGrite}
               sessionInProgress={sessionInProgress}
               awaitingHumanAction={awaitingHumanAction}
               fullTodoId={fullTodoId}
@@ -377,7 +372,6 @@ export function TodoDetail({
                 busy={busy}
                 runBusy={runBusy}
                 closed={closed}
-                isGrite={isGrite}
                 sessionInProgress={sessionInProgress}
                 awaitingHumanAction={awaitingHumanAction}
                 fullTodoId={fullTodoId}
@@ -452,10 +446,9 @@ export function TodoDetail({
         initialMode={advancedMode ?? 'run'}
         title={advancedMode === 'plan' ? 'Plan todo' : 'Run todo'}
         dir={dir}
-        provider={provider}
-        refs={[todo.ref]}
+        refID={todo.ref}
       />
-      <TodoReviewBanner todo={todo} dir={dir} provider={provider} onChanged={onChanged} />
+      <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} />
       <div className="flex shrink-0 gap-1 border-b border-border bg-background px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon={UiListFlat} label="Overview" />
         <DetailTab active={tab === 'verification'} onClick={() => setTab('verification')} icon={UiListDashes} label="Verification" count={verificationCount} />
@@ -466,7 +459,6 @@ export function TodoDetail({
         {tab === 'session' ? (
           <TodoSession
             dir={dir}
-            provider={provider}
             sessionId={todo.sessionId}
             active={tab === 'session'}
             todo={todo}
@@ -475,10 +467,10 @@ export function TodoDetail({
             resumeDisabled={busy || runBusy || sessionInProgress}
           />
         ) : tab === 'plan' ? (
-          <TodoPlan dir={dir} provider={provider} todo={todo} active={tab === 'plan'} onChanged={onChanged} />
+          <TodoPlan dir={dir} todo={todo} active={tab === 'plan'} onChanged={onChanged} />
         ) : tab === 'verification' ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <TodoVerification dir={dir} provider={provider} todo={todo} onChanged={onChanged} />
+            <TodoVerification dir={dir} todo={todo} onChanged={onChanged} />
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -523,7 +515,7 @@ export function TodoDetail({
                   busy={busy}
                   onComment={(text, reopen) => patch(reopen ? { status: 'pending', comment: text } : { comment: text })}
                 />
-                <TodoCommits dir={dir} provider={provider} todoRef={todo.ref} />
+                <TodoCommits dir={dir} todoRef={todo.ref} />
                 {events.length > 0 && <TodoTimeline events={events} />}
               </div>
             )}
@@ -534,11 +526,9 @@ export function TodoDetail({
   );
 }
 
-function todoFullId(todo: TodoItem, fallbackProvider: string): string {
-  const filePath = todo.filePath?.trim();
-  if (filePath?.startsWith('grite:')) return filePath;
-  if (todo.id) return `${todo.provider || fallbackProvider || 'todo'}:${todo.id}`;
-  return filePath || todo.ref;
+function todoFullId(todo: TodoItem): string {
+  if (todo.id) return `todo:${todo.id}`;
+  return todo.ref;
 }
 
 function todoHeaderLabels(todo: TodoItem): string[] {
@@ -715,7 +705,6 @@ function HeaderActionsMenu({
   busy,
   runBusy,
   closed,
-  isGrite,
   sessionInProgress,
   awaitingHumanAction,
   fullTodoId,
@@ -743,7 +732,6 @@ function HeaderActionsMenu({
   busy: boolean;
   runBusy: boolean;
   closed: boolean;
-  isGrite: boolean;
   sessionInProgress: boolean;
   awaitingHumanAction: boolean;
   fullTodoId: string;
@@ -921,7 +909,7 @@ function HeaderActionsMenu({
             />
             <MobileMenuItem
               icon={UiTrash}
-              label={isGrite ? 'Archive issue' : 'Delete file'}
+              label="Archive todo"
               disabled={busy}
               danger
               onClick={() => {

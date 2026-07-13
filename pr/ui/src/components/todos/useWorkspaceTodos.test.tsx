@@ -33,7 +33,6 @@ const projects: Project[] = [{
   name: 'gavel',
   dir: '/work/gavel',
   repos: ['flanksource/gavel'],
-  todoProvider: 'grite',
 }];
 
 const counts = {
@@ -71,7 +70,6 @@ describe('useWorkspaceTodos deep links', () => {
       ref: 'e2a3b8c2-d0f7-c9a9-8b40-0dc78e8a94a5',
       id: 'e2a3b8c2-d0f7-c9a9-8b40-0dc78e8a94a5',
       cwd: '/canonical/gavel',
-      provider: 'db',
       title: 'Standardize on PostgreSQL',
       status: 'pending',
       priority: 'high',
@@ -93,7 +91,6 @@ describe('useWorkspaceTodos deep links', () => {
     expect(result.current.selected).toEqual({
       dir: detail.cwd,
       ref: detail.ref,
-      provider: 'db',
     });
     expect(result.current.loadingList).toBe(true);
     expect(onNavigate).not.toHaveBeenCalled();
@@ -101,7 +98,7 @@ describe('useWorkspaceTodos deep links', () => {
       '/api/todos/item?ref=legacy%2Fref',
     ]);
 
-    const list: TodoListResponse = { provider: 'db', dir: '/work/gavel', counts, items: [] };
+    const list: TodoListResponse = { dir: '/work/gavel', counts, items: [] };
     await act(async () => resolveList(jsonResponse(list)));
     await waitFor(() => expect(result.current.loadingList).toBe(false));
     unmount();
@@ -116,7 +113,7 @@ describe('useWorkspaceTodos deep links', () => {
       if (url.startsWith('/api/todos/item?')) {
         return Promise.resolve(jsonResponse({ error: message }, false, status));
       }
-      return Promise.resolve(jsonResponse({ provider: 'db', dir: '/work/gavel', counts, items: [] }));
+      return Promise.resolve(jsonResponse({ dir: '/work/gavel', counts, items: [] }));
     });
     vi.stubGlobal('fetch', fetchMock);
 

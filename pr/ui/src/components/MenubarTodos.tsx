@@ -23,7 +23,7 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 export function MenubarTodos({ projects }: { projects: Project[] }) {
   const {
     workspaces, byDir, loadingList, aggregate,
-    selected, select, detail, loadingDetail, detailError, error, providerFor,
+    selected, select, detail, loadingDetail, detailError, error,
     updateItem, deleted, hiddenStatuses, toggleStatus,
     groupBy, setGroupBy, showCreate, setShowCreate, created,
   } = useWorkspaceTodos(projects);
@@ -36,7 +36,6 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
           loading={loadingDetail}
           loadError={detailError}
           dir={selected.dir}
-          provider={selected.provider}
           onChanged={updateItem}
           onDeleted={deleted}
           onBack={() => select(null)}
@@ -93,7 +92,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
                   key={bucket.key}
                   bucket={bucket}
                   selected={selected}
-                  onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: providerFor(entry.workspace.dir) })}
+                  onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
                   hiddenStatuses={hiddenStatuses}
                 />
               ))}
@@ -111,7 +110,7 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
                 hiddenStatuses={hiddenStatuses}
                 onToggleStatus={toggleStatus}
                 selectedRef=""
-                onSelect={ref => select({ dir: ws.dir, ref, provider: providerFor(ws.dir) })}
+                onSelect={ref => select({ dir: ws.dir, ref })}
               />
             ))}
           </ListMenu>

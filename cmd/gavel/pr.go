@@ -15,10 +15,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// statusDefaultTailLogs is the default --tail-logs value, re-used by other
-// pr-subcommands (e.g. `pr fix`) that piggyback on prwatch.
-const statusDefaultTailLogs = 100
-
 var prCmd = &cobra.Command{
 	Use:   "pr",
 	Short: "Pull request commands — the gavel replacement for gh pr / gh run",
@@ -26,14 +22,11 @@ var prCmd = &cobra.Command{
 
 Prefer these over raw gh for PR/CI work — gavel renders workflow steps,
 conclusions, timing, and failing-step logs in one view, and can feed failures
-into the AI. The former .todos sync workflow is retained only as a compatibility
-error with PostgreSQL migration guidance. Reserve raw gh for actions gavel does
-not cover.
+into the AI. Reserve raw gh for actions gavel does not cover.
 
 Subcommands:
   status   Show a PR's Actions status (replaces gh pr view / gh run view / gh run list)
   create   Cherry-pick a commit into a fresh worktree and open a PR (AI title/body/branch)
-  fix      Explain the retired file-backed PR TODO workflow
   list     List PRs, optionally with CI status or a live browser dashboard (--ui)
 
 Examples:
@@ -41,21 +34,19 @@ Examples:
   gavel pr status 123 --logs      # PR #123 with failing-job logs
   gavel pr status --follow        # block until checks complete
   gavel pr create <SHA>           # open a PR from one commit
-  gavel pr fix                    # show PostgreSQL migration guidance
   gavel pr list --ui              # live PR dashboard`,
 }
 
 type PRStatusOptions struct {
-	Repo      string          `flag:"repo" short:"R" help:"GitHub repository (owner/repo)"`
-	Follow    bool            `flag:"follow" help:"Keep watching until all checks complete"`
-	Interval  string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
-	Logs      bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
-	TailLogs  int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
-	SyncTodos string          `flag:"sync-todos" help:"Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"`
-	Comments  []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
-	Actions   []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, and workflow name"`
-	Args      []string        `args:"true"`
-	Context   context.Context `json:"-"`
+	Repo     string          `flag:"repo" short:"R" help:"GitHub repository (owner/repo)"`
+	Follow   bool            `flag:"follow" help:"Keep watching until all checks complete"`
+	Interval string          `flag:"interval" help:"Poll interval (e.g. 30s, 1m)" default:"30s"`
+	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
+	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
+	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
+	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, and workflow name"`
+	Args     []string        `args:"true"`
+	Context  context.Context `json:"-"`
 
 	AIFix         bool `flag:"ai-fix" help:"Feed the rendered PR status into the AI configured by 'captain configure' to fix failing checks/comments"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max AI iterations driven by the status prompt" default:"1"`
@@ -79,7 +70,6 @@ or a full PR URL.
 Key flags:
   --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
-  --sync-todos DIR  Retired compatibility flag; returns PostgreSQL migration guidance
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, or name
   --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
@@ -93,14 +83,10 @@ Examples:
   gavel pr status 123 --logs                   # include failing-job logs
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
-  gavel pr status --sync-todos                 # explain the retired file-backed workflow
   gavel pr status --ai-fix                     # feed status into the AI to fix failures`
 }
 
 func runPRStatus(opts PRStatusOptions) (any, error) {
-	if opts.SyncTodos != "" {
-		return nil, retiredTODOFileRuntimeError("gavel pr status", "--sync-todos")
-	}
 	repo, prNumber, err := parseStatusArgs(opts.Args)
 	if err != nil {
 		return nil, err
@@ -226,9 +212,5 @@ func resolveOrFallbackPR(ghOpts github.Options) int {
 
 func init() {
 	rootCmd.AddCommand(prCmd)
-	statusCmd := clicky.AddNamedCommand("status", prCmd, PRStatusOptions{}, runPRStatus)
-	if f := statusCmd.Flags().Lookup("sync-todos"); f != nil {
-		f.NoOptDefVal = ".todos"
-		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
-	}
+	clicky.AddNamedCommand("status", prCmd, PRStatusOptions{}, runPRStatus)
 }

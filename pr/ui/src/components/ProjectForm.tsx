@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Field, Combobox } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
-import type { Project, TodoProvider } from '../types';
+import type { Project } from '../types';
 
 const inputClass =
   'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
@@ -16,8 +16,6 @@ export interface ProjectRegistration {
   setDir: (v: string) => void;
   repos: string[];
   setRepos: (v: string[]) => void;
-  todoProvider: TodoProvider | '';
-  setTodoProvider: (v: TodoProvider | '') => void;
   error: string;
   saving: boolean;
   deleting: boolean;
@@ -36,9 +34,6 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
   const [name, setName] = useState('');
   const [dir, setDir] = useState('');
   const [repos, setRepos] = useState<string[]>([]);
-  // Retained until M7 removes the legacy provider field from the project type.
-  // Runtime persistence is PostgreSQL-only and this state is never saved.
-  const [todoProvider, setTodoProvider] = useState<TodoProvider | ''>('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -49,7 +44,6 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
     setName(project?.name || '');
     setDir(project?.dir || '');
     setRepos(project?.repos || []);
-    setTodoProvider(project?.todoProvider || '');
     setError('');
   }, [open, project?.name]);
 
@@ -103,7 +97,7 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
   }
 
   return {
-    name, setName, dir, setDir, repos, setRepos, todoProvider, setTodoProvider,
+    name, setName, dir, setDir, repos, setRepos,
     error, saving, deleting, editing, save, remove,
   };
 }

@@ -25,11 +25,10 @@ const todoReviewActor = "gavel-ui"
 // implementing run immediately; Options (optional) carries the run knobs the
 // dialog would send to /api/todos/run.
 type todoApprovePayload struct {
-	Provider string          `json:"provider,omitempty"`
-	Dir      string          `json:"dir,omitempty"`
-	Ref      string          `json:"ref"`
-	Run      bool            `json:"run,omitempty"`
-	Options  *todoRunPayload `json:"options,omitempty"`
+	Dir     string          `json:"dir,omitempty"`
+	Ref     string          `json:"ref"`
+	Run     bool            `json:"run,omitempty"`
+	Options *todoRunPayload `json:"options,omitempty"`
 }
 
 type todoApproveResponse struct {
@@ -44,7 +43,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -79,7 +78,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
-		req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: source.Provider, Options: opts}
+		req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 		if err := startTodoRun(req); err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
@@ -89,7 +88,6 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Ref:       todos.TODOReference(todo),
 			Count:     1,
 			Dir:       source.Dir,
-			Provider:  source.Provider,
 			Agent:     opts.Agent,
 			Mode:      opts.Mode,
 			Driver:    opts.Driver,
@@ -110,9 +108,8 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 // recorded plan pointer is cleared, so a later run re-plans from scratch rather
 // than following the discarded plan.
 type todoRejectPayload struct {
-	Provider string `json:"provider,omitempty"`
-	Dir      string `json:"dir,omitempty"`
-	Ref      string `json:"ref"`
+	Dir string `json:"dir,omitempty"`
+	Ref string `json:"ref"`
 }
 
 func (s *Server) handleTodoPlanReject(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +119,7 @@ func (s *Server) handleTodoPlanReject(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -148,7 +145,6 @@ func (s *Server) handleTodoPlanReject(w http.ResponseWriter, r *http.Request) {
 // feedback: the plan session resumes, the agent updates its native plan file,
 // and the todo returns to review with the revised plan.
 type todoRevisePayload struct {
-	Provider string          `json:"provider,omitempty"`
 	Dir      string          `json:"dir,omitempty"`
 	Ref      string          `json:"ref"`
 	Feedback string          `json:"feedback"`
@@ -167,7 +163,7 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("feedback is required"))
 		return
 	}
-	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -206,7 +202,7 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: source.Provider, Options: opts}
+	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	if err := startTodoAnswer(req, feedback); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -229,7 +225,6 @@ func requirePlanReviewProvider(provider todos.Provider) (todos.PlanReviewProvide
 // todoAnswerPayload answers the questions blocking an ask todo; the agent's
 // prior session is resumed with the answer as the next user turn.
 type todoAnswerPayload struct {
-	Provider string         `json:"provider,omitempty"`
 	Dir      string         `json:"dir,omitempty"`
 	Ref      string         `json:"ref"`
 	Answer   string         `json:"answer"`
@@ -272,7 +267,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("answer is required"))
 		return
 	}
-	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -308,7 +303,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: source.Provider, Options: opts}
+	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	if err := startTodoAnswer(req, answer); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return

@@ -108,10 +108,10 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 
 // TodoWorkspaceList is the AppShell bodySidebar: every configured workspace's
 // todos, grouped and independently scrollable beside the detail pane. The
-// group-by preference picks the grouping: workspace (the default, with batch-run
-// controls) or severity/age buckets that span workspaces.
+// group-by preference picks the grouping: workspace (the default) or
+// severity/age buckets that span workspaces.
 export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
-  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, providerFor, refresh, loadingList, error } = todos;
+  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList, error } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -138,9 +138,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             density={density}
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
-            onSelect={ref => select({ dir: ws.dir, ref, provider: providerFor(ws.dir) })}
-            multiSelect
-            onRunStarted={refresh}
+            onSelect={ref => select({ dir: ws.dir, ref })}
           />
         ))}
       </ListMenu>
@@ -159,7 +157,7 @@ export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
             key={bucket.key}
             bucket={bucket}
             selected={selected}
-            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: providerFor(entry.workspace.dir) })}
+            onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
             hiddenStatuses={hiddenStatuses}
             range={range}
             density={density}
@@ -194,7 +192,6 @@ export function TodoDetailPane({ todos }: { todos: WorkspaceTodos }) {
       loading={loadingDetail}
       loadError={detailError}
       dir={selected?.dir ?? ''}
-      provider={selected?.provider ?? 'db'}
       onChanged={updateItem}
       onDeleted={deleted}
       workspaces={workspaces}

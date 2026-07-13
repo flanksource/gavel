@@ -19,8 +19,8 @@ import (
 
 // attachmentsDir is where uploaded todo attachments (e.g. React Grab screenshots)
 // are persisted. It's centralized under the gavel config dir rather than a
-// workspace so it works for both file-backed (.todos) and grite todos. A package
-// var so tests can point it at a temp dir, mirroring settingsPath in settings.go.
+// workspace so native issues can keep stable attachment URLs when a checkout
+// moves. A package var lets tests point it at a temp dir.
 var attachmentsDir = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "attachments")
 
 // attachmentURLPrefix is the path the dashboard loads stored attachments from; the

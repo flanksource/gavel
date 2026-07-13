@@ -390,7 +390,6 @@ func TestPass(t *testing.T) {
 
 func TestRunnerRun(t *testing.T) {
 	tmpDir := t.TempDir()
-	todosDir := filepath.Join(tmpDir, ".todos")
 
 	// Create a simple test file
 	testFile := filepath.Join(tmpDir, "simple_test.go")
@@ -407,9 +406,7 @@ func TestPass(t *testing.T) {
 	}
 
 	opts := RunOptions{
-		TodosDir:  todosDir,
-		WorkDir:   tmpDir,
-		SyncTodos: false,
+		WorkDir: tmpDir,
 	}
 
 	results, err := Run(opts)

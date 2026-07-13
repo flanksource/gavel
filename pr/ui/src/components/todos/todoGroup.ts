@@ -75,7 +75,7 @@ export function saveSortBy(sortBy: TodoSortBy): void {
 }
 
 // A todo tagged with its owning workspace so severity/age buckets can mix todos
-// across workspaces while still routing a click back to the right dir/provider.
+// across workspaces while still routing a click back to the right directory.
 export interface TodoEntry {
   todo: TodoItem;
   workspace: Project;
@@ -107,8 +107,8 @@ export function ageMs(todo: TodoItem): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-// lastUpdatedMs is the row-order tie-breaker: Grite's updated time / file-backed
-// last_run when present, otherwise created time for never-run file-backed todos.
+// lastUpdatedMs is the row-order tie-breaker: last_run when present, otherwise
+// native issue creation time.
 function lastUpdatedMs(todo: TodoItem): number | null {
   const raw = todo.lastRun ?? todo.created;
   if (!raw) return null;
@@ -189,8 +189,8 @@ const AGE_BUCKETS: { key: string; label: string; maxDays: number }[] = [
   { key: 'older', label: 'Older', maxDays: Infinity },
 ];
 
-// lastActivityMs is the todo's most recent activity timestamp (grite's updated
-// time / the file provider's last_run) in epoch millis, or null when unknown.
+// lastActivityMs is the todo's most recent activity timestamp in epoch millis,
+// or null when unknown.
 function lastActivityMs(todo: TodoItem): number | null {
   if (!todo.lastRun) return null;
   const ms = Date.parse(todo.lastRun);

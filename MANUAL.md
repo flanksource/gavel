@@ -138,14 +138,16 @@ UI-related tips:
 
 ### TODO Flows
 
-Several features can turn failures into `.todos` entries:
+Native PostgreSQL is the only runtime TODO store. Use `gavel todos` to create,
+sync, inspect, run, and verify issues in the current registered workspace:
 
-- `gavel test --sync-todos`
-- `gavel lint --sync-todos`
-- `gavel pr status --sync-todos`
-- `gavel pr fix`
+- `gavel todos create "Describe the work"`
+- `gavel todos sync` to scan source `TODO`/`FIXME` comments into PostgreSQL
+- `gavel todos list`, `get`, `run`, and `verify` for the native queue
 
-If you use TODOs heavily, `gavel todos` becomes the hub for listing, checking, and executing those files.
+Repository-local `.todos` Markdown is an explicit interchange format, not a
+runtime provider. Use `gavel todos import [files...]` to load it into PostgreSQL
+and `gavel todos export [refs...]` to write portable snapshots.
 
 ### `.gavel.yaml`
 
@@ -268,7 +270,7 @@ Notes:
 
 ## Testing And Quality
 
-This is the biggest part of the CLI. The common pattern is: discover work automatically, run it with structured output, then optionally render it in a browser, export JSON/HTML artifacts, or sync failures into TODOs.
+This is the biggest part of the CLI. The common pattern is: discover work automatically, run it with structured output, then optionally render it in a browser or export JSON/HTML artifacts.
 
 ### `gavel test`
 
@@ -280,7 +282,6 @@ Reach for it when you want one of these flows:
 - Run only packages affected by local changes.
 - Open a live dashboard while tests run.
 - Re-run from a previous JSON baseline or only rerun failed targets.
-- Sync broken tests into `.todos`.
 
 Common workflows:
 
@@ -293,7 +294,6 @@ gavel test --ui
 gavel test --ui --detach --auto-stop=30m --idle-timeout=5m
 gavel test --bench .
 gavel test --fixtures
-gavel test --sync-todos
 gavel test history
 gavel test history ./pkg/foo
 ```
@@ -315,7 +315,7 @@ Use the framework subcommands when you want the full `test` flag surface but do 
 
 ### `gavel lint`
 
-Use `lint` when you want a single entrypoint for repo linting across languages and tools. Gavel auto-detects installed linters and can narrow to changed files, show a browser UI, auto-fix, or sync findings into TODOs.
+Use `lint` when you want a single entrypoint for repo linting across languages and tools. Gavel auto-detects installed linters and can narrow to changed files, show a browser UI, or auto-fix findings.
 
 It is the right command for:
 
@@ -332,7 +332,6 @@ gavel lint --fix
 gavel lint --triage
 gavel lint --changed
 gavel lint --ui
-gavel lint --sync-todos
 gavel lint eslint
 gavel lint secrets
 ```
@@ -525,27 +524,34 @@ gavel commit --force
 
 ### `gavel todos`
 
-`todos` is the task-execution side of Gavel's failure-to-fix loop. Other commands create `.todos`; this command helps you inspect, verify, group, and execute them.
+`todos` is the task-execution side of Gavel's failure-to-fix loop. Its runtime
+queue is stored in native PostgreSQL and shared by the CLI and UI.
 
-Use it when you already have TODO files and want to:
+Use it when you want to:
 
-- List them by status or grouping
-- Inspect one TODO in detail
+- Create or sync native issues
+- List issues by status or grouping
+- Inspect one issue in detail
 - Re-run verification checks
-- Execute them through the Claude Code integration
+- Execute them through the configured Claude or Codex driver
+- Explicitly import or export portable `.todos` Markdown
 
 Common workflows:
 
 ```bash
 gavel todos list
 gavel todos list --status pending
-gavel todos get .todos/fix-bug.md
+gavel todos get 3f2a1b
+gavel todos create "Fix the parser race"
+gavel todos sync ./pkg/parser
 gavel todos check
 gavel todos run
 gavel todos run --interactive
 gavel todos run --group-by directory
 gavel todos run --mode plan                # propose a plan; approve/reject via `gavel todos plan`
 gavel todos verify --strict                # AI-score committed work vs acceptance criteria
+gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
+gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
 
 `--mode` selects the agent's task: `run` (implement, default), `plan` (read-only plan
@@ -568,11 +574,9 @@ gavel todos run --check --driver claude-cmux   # primary path: resumes the live 
 The loop is **opt-in**. It runs when any of these enable it:
 
 - the `--check` flag (forces it on),
-- a project default in `.gavel.yaml` under `checks:`,
-- a per-issue override in a TODO's frontmatter `checks:` block.
+- a project default in `.gavel.yaml` under `checks:`.
 
-Configure what runs in `.gavel.yaml` (a TODO's frontmatter `checks:` overrides it
-field-by-field):
+Configure what runs in `.gavel.yaml`:
 
 ```yaml
 checks:
@@ -591,8 +595,6 @@ inline agent resumes via its session id, and agents that can't resume fall back 
 reporting the failures without iterating. See the [`checks`](SCHEMA.md#checks)
 schema for every field.
 
-`gavel pr fix` builds on the same execution engine, but starts from a pull request instead of an existing `.todos` directory.
-
 ## Pull Requests, Git History, And Repository Mapping
 
 These commands help when the unit of work is no longer "run tests" but "understand what changed", "watch a PR", or "classify a repository".
@@ -606,7 +608,6 @@ This is the fastest command for:
 - Checking whether a PR is green
 - Following checks until completion
 - Pulling failed log tails into the CLI
-- Syncing failed jobs or PR comments into TODO files
 
 Common workflows:
 
@@ -616,7 +617,6 @@ gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
 gavel pr status --logs --tail-logs 50
-gavel pr status --sync-todos
 ```
 
 ### `gavel pr list`
@@ -642,21 +642,6 @@ gavel pr list --menu-bar
 ```
 
 If you want the UI-first version of PR operations, this is it. `--ui` is for an explicit browser dashboard; `--menu-bar` is for ambient status on macOS.
-
-### `gavel pr fix`
-
-`pr fix` is the bridge from PR breakage to interactive remediation. It fetches PR status, syncs TODOs from failures and comments, lets you choose what to work on, and then executes the selected TODOs.
-
-Use it when your workflow is "show me what's broken on this PR and let me start fixing it now."
-
-Common workflows:
-
-```bash
-gavel pr fix
-gavel pr fix 42
-gavel pr fix --group-by directory
-gavel pr fix --dry-run
-```
 
 ### `gavel git history`
 
@@ -830,9 +815,10 @@ gavel ui serve gavel-results.json
 ### Triage and fix a broken PR
 
 ```bash
-gavel pr status --logs --sync-todos
+gavel pr status --logs
+gavel todos create "Fix the failing PR check" --body "Paste the relevant failure details"
 gavel todos list
-gavel pr fix
+gavel todos run
 ```
 
 ### Stand up a persistent PR dashboard
@@ -858,7 +844,7 @@ If you only remember a few entrypoints, use this map:
 | Browse many PRs | `gavel pr list` |
 | Analyze commit history semantically | `gavel git analyze` |
 | Understand file/scope classification | `gavel repomap` |
-| Work through synced TODOs | `gavel todos` |
+| Work through native TODOs | `gavel todos` |
 | Replay a saved UI snapshot | `gavel ui serve` |
 | Run a background PR dashboard | `gavel system` |
 | Turn pushes into local CI | `gavel ssh` |

@@ -16,10 +16,11 @@ tests exercise its own help output.
 |------|------|-----|
 | pr parent help mentions status | pr --help | stdout.contains("status") |
 | pr create help has examples | pr create --help | stdout.contains("Examples") |
-| pr fix help has examples | pr fix --help | stdout.contains("Examples") |
 | pr list help has examples | pr list --help | stdout.contains("Examples") |
 | todos parent help has examples | todos --help | stdout.contains("Examples") |
 | todos run help has examples | todos run --help | stdout.contains("Examples") |
+| todos import help names PostgreSQL | todos import --help | stdout.contains("PostgreSQL") |
+| todos export help names PostgreSQL | todos export --help | stdout.contains("PostgreSQL") |
 | commit help has examples | commit --help | stdout.contains("Examples") |
 
 ## todos verify is the AI-review surface

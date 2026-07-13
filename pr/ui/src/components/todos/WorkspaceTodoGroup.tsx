@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
-import { UiChevronDown, UiChevronRight, UiClose, UiFolder } from '@flanksource/clicky-ui/icons';
-import type { Project, TodoDensity, TodoListResponse, TodoRunOptions, TodoSortBy, TodoStatus } from '../../types';
+import { UiChevronDown, UiChevronRight, UiFolder } from '@flanksource/clicky-ui/icons';
+import type { Project, TodoDensity, TodoListResponse, TodoSortBy, TodoStatus } from '../../types';
 import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
 import { defaultSortBy, todoComparator } from './todoGroup';
-import { TodoRunAdvancedDialog, TodoRunSplitButton, useTodoRun } from './run';
 import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
 import type { ResolvedRange } from './todoTimeRange';
 
@@ -13,12 +12,7 @@ import type { ResolvedRange } from './todoTimeRange';
 // tab's per-repo grouping: a sticky header with the workspace name and its
 // open/failed/total counts, with the workspace's todos listed beneath. The
 // Closed/Status filter hides matching rows but leaves the header counts whole.
-//
-// With `multiSelect`, each row grows a checkbox and the header swaps its counts
-// for a "Run N" control once any are checked, dispatching the whole selection to
-// one agent session via /api/todos/run. Selection is per-workspace because a run
-// targets a single workspace dir/provider. The menubar omits multiSelect.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, range, density = 'comfortable', sortBy = defaultSortBy(), multiSelect = false, onRunStarted }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hiddenStatuses, onToggleStatus, range, density = 'comfortable', sortBy = defaultSortBy() }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
@@ -28,13 +22,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   range?: ResolvedRange | null;
   density?: TodoDensity;
   sortBy?: TodoSortBy;
-  multiSelect?: boolean;
-  onRunStarted?: () => void;
 }) {
   const [open, setOpen] = useState(true);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const { runBusy, runMessage, runError, run } = useTodoRun(workspace.dir, workspace.todoProvider || 'auto');
 
   const hidden = hiddenStatuses ?? defaultHiddenStatuses();
   const allItems = data?.items ?? [];
@@ -48,61 +37,9 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
   const repo = workspace.repos?.[0];
   const repoShort = repo ? repo.split('/').pop() || repo : '';
 
-  const checkedRefs = items.filter(item => checked.has(item.ref)).map(item => item.ref);
-  const allChecked = items.length > 0 && checkedRefs.length === items.length;
-
-  // Reflect partial selection as the header checkbox's indeterminate state, which
-  // is settable only via the DOM node, not a React prop.
-  const selectAllRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (selectAllRef.current) {
-      selectAllRef.current.indeterminate = checkedRefs.length > 0 && !allChecked;
-    }
-  }, [checkedRefs.length, allChecked]);
-
-  function toggle(ref: string) {
-    setChecked(prev => {
-      const next = new Set(prev);
-      if (next.has(ref)) next.delete(ref);
-      else next.add(ref);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setChecked(prev => {
-      const next = new Set(prev);
-      if (allChecked) items.forEach(item => next.delete(item.ref));
-      else items.forEach(item => next.add(item.ref));
-      return next;
-    });
-  }
-
-  async function runChecked(options?: TodoRunOptions) {
-    if (checkedRefs.length === 0) return;
-    const result = await run(checkedRefs, options);
-    // A real (non-dry-run) start consumes the selection and refreshes the list;
-    // a dry run keeps it so the user can follow up with an actual run.
-    if (result && result.status !== 'dry_run') {
-      setChecked(new Set());
-      onRunStarted?.();
-    }
-  }
-
   return (
     <ListMenuSection>
       <ListMenuHeader>
-        {multiSelect && items.length > 0 && (
-          <input
-            ref={selectAllRef}
-            type="checkbox"
-            checked={allChecked}
-            onChange={toggleAll}
-            aria-label={`Select all todos in ${workspace.name}`}
-            title="Select all"
-            className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
-          />
-        )}
         <Button
           variant="ghost"
           type="button"
@@ -122,51 +59,8 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             </>
           )}
         </Button>
-        {multiSelect && checkedRefs.length > 0 ? (
-          <div className="flex shrink-0 items-center gap-1.5">
-            <span className="text-[11px] tabular-nums text-muted-foreground">{checkedRefs.length} selected</span>
-            <TodoRunSplitButton
-              label={`Run ${checkedRefs.length}`}
-              title="Run selected todos in one agent session"
-              loading={runBusy}
-              disabled={runBusy}
-              onRun={runChecked}
-              onAdvanced={() => setAdvancedOpen(true)}
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              onClick={() => setChecked(new Set())}
-              title="Clear selection"
-              aria-label="Clear selection"
-              className="h-8 w-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <UiClose className="text-xs" />
-            </Button>
-          </div>
-        ) : (
-          <TodoCountsBar counts={counts} hidden={hidden} onToggle={onToggleStatus} />
-        )}
+        <TodoCountsBar counts={counts} hidden={hidden} onToggle={onToggleStatus} />
       </ListMenuHeader>
-      {(runError || runMessage) && (
-        <div className={`px-3 py-1 text-[11px] ${runError ? 'text-red-600' : 'text-emerald-600'}`}>{runError || runMessage}</div>
-      )}
-      {multiSelect && (
-        <TodoRunAdvancedDialog
-          open={advancedOpen}
-          onClose={() => setAdvancedOpen(false)}
-          onRun={options => {
-            setAdvancedOpen(false);
-            runChecked(options);
-          }}
-          loading={runBusy}
-          title={`Run ${checkedRefs.length} todo${checkedRefs.length === 1 ? '' : 's'}`}
-          dir={workspace.dir}
-          provider={workspace.todoProvider || 'auto'}
-          refs={checkedRefs}
-        />
-      )}
       {open && (items.length > 0 ? (
         items.map(item => (
           <TodoRow
@@ -175,11 +69,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, hid
             active={item.ref === selectedRef}
             onClick={() => onSelect(item.ref)}
             density={density}
-            selectable={multiSelect}
-            selected={checked.has(item.ref)}
-            onToggleSelect={() => toggle(item.ref)}
             dir={workspace.dir}
-            provider={workspace.todoProvider || 'auto'}
           />
         ))
       ) : (

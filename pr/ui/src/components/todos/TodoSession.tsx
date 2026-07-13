@@ -37,7 +37,7 @@ function stateView(state: string, error: string): SessionStateView {
 // captain SessionEntry, which we accumulate and hand to clicky-ui's
 // SessionViewer to render. The stream replays existing history on connect, then
 // follows new entries until unmounted.
-export function useTodoSession(dir: string, provider: string, sessionId: string | undefined, active: boolean) {
+export function useTodoSession(dir: string, sessionId: string | undefined, active: boolean) {
   const [entries, setEntries] = useState<SessionEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
@@ -48,7 +48,7 @@ export function useTodoSession(dir: string, provider: string, sessionId: string 
     setConnected(false);
     if (!active || !sessionId) return;
 
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('sessionId', sessionId);
     const es = new EventSource(`/api/todos/session/stream?${params.toString()}`);
 
@@ -74,7 +74,7 @@ export function useTodoSession(dir: string, provider: string, sessionId: string 
     });
 
     return () => es.close();
-  }, [dir, provider, sessionId, active]);
+  }, [dir, sessionId, active]);
 
   return { entries, connected, error };
 }
@@ -84,7 +84,7 @@ export function useTodoSession(dir: string, provider: string, sessionId: string 
 // POSTs the user's Allow/Deny. State is server-derived (the same source the
 // session timer uses), so the header badge and the approval banner stay in sync
 // without re-deriving anything from the event stream.
-export function useSessionStatus(dir: string, provider: string, sessionId: string | undefined, active: boolean) {
+export function useSessionStatus(dir: string, sessionId: string | undefined, active: boolean) {
   const [status, setStatus] = useState<{ state: string; error: string; inProgress: boolean; approval: TodoSessionApproval | null }>(
     { state: '', error: '', inProgress: false, approval: null },
   );
@@ -94,7 +94,7 @@ export function useSessionStatus(dir: string, provider: string, sessionId: strin
     setStatus({ state: '', error: '', inProgress: false, approval: null });
     if (!active || !sessionId) return;
     let cancelled = false;
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('sessionId', sessionId);
     const url = `/api/todos/session/stats?${params.toString()}`;
     const poll = async () => {
@@ -113,7 +113,7 @@ export function useSessionStatus(dir: string, provider: string, sessionId: strin
       cancelled = true;
       clearInterval(id);
     };
-  }, [dir, provider, sessionId, active]);
+  }, [dir, sessionId, active]);
 
   const approve = useCallback(
     async (allow: boolean, message?: string, updatedInput?: Record<string, unknown>) => {
@@ -148,7 +148,6 @@ export function useSessionStatus(dir: string, provider: string, sessionId: strin
 
 export function TodoSession({
   dir,
-  provider,
   sessionId,
   active,
   todo,
@@ -157,7 +156,6 @@ export function TodoSession({
   resumeDisabled,
 }: {
   dir: string;
-  provider: string;
   sessionId?: string;
   active: boolean;
   todo: TodoItem;
@@ -167,8 +165,8 @@ export function TodoSession({
   onResume?: () => void;
   resumeDisabled?: boolean;
 }) {
-  const { entries, connected, error } = useTodoSession(dir, provider, sessionId, active);
-  const { state, error: statusError, inProgress, approval, approve } = useSessionStatus(dir, provider, sessionId, active);
+  const { entries, connected, error } = useTodoSession(dir, sessionId, active);
+  const { state, error: statusError, inProgress, approval, approve } = useSessionStatus(dir, sessionId, active);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Host element for the SessionViewer's 3-dot menu: the viewer portals its menu
   // into this header slot so the filter/density controls sit in the same fixed
@@ -231,7 +229,7 @@ export function TodoSession({
       throw new Error(body.error || 'Could not resume the agent session');
     }
     onChanged?.(body.todo ?? todo);
-  }, [approval, approve, dir, onChanged, provider, sessionId, todo.ref]);
+  }, [approval, approve, dir, onChanged, sessionId, todo.ref]);
 
   if (!sessionId) {
     return (
@@ -253,7 +251,7 @@ export function TodoSession({
           {connected ? 'Following session' : 'Session idle'}
         </span>
         <span className="font-mono">{sessionId.slice(0, 8)}</span>
-        <TodoSessionTimer dir={dir} provider={provider} sessionId={sessionId} active={active} onResume={onResume} resumeDisabled={resumeDisabled} />
+        <TodoSessionTimer dir={dir} sessionId={sessionId} active={active} onResume={onResume} resumeDisabled={resumeDisabled} />
         <span ref={setMenuHost} className="ml-auto inline-flex items-center" />
       </div>
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">

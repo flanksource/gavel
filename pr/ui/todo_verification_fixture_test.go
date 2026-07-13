@@ -23,7 +23,7 @@ func verificationFixtureBody(description, fixture string) string {
 // TestHandleTodoVerificationFixtureSavesSection exercises the Verification
 // tab's save path: POST /api/todos/verification/fixture rewrites the todo's
 // "## Verification" section in place and the refreshed todo reflects it via
-// VerificationMarkdown, mirroring TestTodoAPIFileProviderCRUD's setup.
+// VerificationMarkdown through the native test provider.
 func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
@@ -38,7 +38,7 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 		t.Fatalf("marshal create payload: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos?provider=todos", bytes.NewReader(createRaw)))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos", bytes.NewReader(createRaw)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
 	}
@@ -59,7 +59,7 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 		t.Fatalf("marshal save payload: %v", err)
 	}
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/fixture?provider=todos", bytes.NewReader(saveRaw))
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/fixture", bytes.NewReader(saveRaw))
 	s.handleTodoVerificationFixture(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("save status = %d, want 200; body = %q", rec.Code, rec.Body.String())
@@ -79,7 +79,7 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodGet, "/api/todos/item?provider=todos&ref="+url.QueryEscape(created.Ref), nil))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodGet, "/api/todos/item?ref="+url.QueryEscape(created.Ref), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -99,7 +99,7 @@ func TestHandleTodoVerificationFixtureRequiresRef(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/fixture?provider=todos", strings.NewReader(`{"fixture":"x"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/fixture", strings.NewReader(`{"fixture":"x"}`))
 	s.handleTodoVerificationFixture(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())

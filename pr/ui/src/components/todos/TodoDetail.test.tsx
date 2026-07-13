@@ -128,7 +128,6 @@ async function renderDetail(todo: TodoItem) {
       todo={todo}
       loading={false}
       dir="/repo"
-      provider="todos"
       onChanged={() => {}}
       onDeleted={() => {}}
     />,
@@ -170,7 +169,6 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
         loading={false}
         loadError="todo reference abc123 is ambiguous"
         dir=""
-        provider="db"
         onChanged={() => {}}
         onDeleted={() => {}}
         onBack={() => {}}

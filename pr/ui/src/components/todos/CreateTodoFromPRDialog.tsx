@@ -219,7 +219,7 @@ function buildSections(candidates: Candidate[]): Section[] {
 }
 
 // todoHref builds the /todos/{ref} deep link the same way routes.buildRoute does,
-// encoding each path segment so a file-backed ref (a path) round-trips.
+// encoding each path segment so unusual native references round-trip.
 function todoHref(todo: TodoItem): string {
   return `/todos/${todo.ref.split('/').map(encodeURIComponent).join('/')}`;
 }
@@ -389,7 +389,6 @@ export function CreateTodoFromPRDialog({
     setBusy(true);
     setError('');
     try {
-      const provider = workspaces.find(w => w.dir === dir)?.todoProvider || 'auto';
       const sel = new Set(selectedKeys);
       const selected = candidates.filter(c => sel.has(c.key));
       const criteria: AcceptanceCriterion[] = selected
@@ -408,7 +407,7 @@ export function CreateTodoFromPRDialog({
         prVerification?: PRVerificationPayload;
       } = { title: title.trim(), body: bodyParts.join('\n\n'), priority, status, criteria };
       if (prVerification) payload.prVerification = prVerification;
-      const res = await fetch(`/api/todos/new?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/new?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -7,7 +7,7 @@ import { withinActivityRange, type ResolvedRange } from './todoTimeRange';
 export const CLOSED_STATUS: TodoStatus = 'completed';
 
 // Each pill maps a status to its label and the count field that feeds its badge.
-// "Closed" is the user-facing name for completed (grite's `closed` state), kept
+// "Closed" is the user-facing name for completed native issues, kept
 // last so it reads as the trailing "hide closed" control.
 export const STATUS_FILTER_DEFS: { status: TodoStatus; label: string; countKey: keyof TodoCounts }[] = [
   { status: 'draft', label: 'Draft', countKey: 'draft' },

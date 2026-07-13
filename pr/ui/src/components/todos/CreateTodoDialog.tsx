@@ -57,10 +57,9 @@ export function CreateTodoDialog({
     setBusy(true);
     setError('');
     try {
-      const provider = workspaces.find(w => w.dir === dir)?.todoProvider || 'auto';
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const url = `/api/todos/new?${todoQuery(dir, provider)}`;
+      const url = `/api/todos/new?${todoQuery(dir)}`;
       const response = attachments.length
         ? await fetch(url, { method: 'POST', body: todoFormData({ title, body, priority, status }, attachments) })
         : await fetch(url, {

@@ -32,7 +32,7 @@ function splitPath(path: string): { dir: string; base: string } {
 // useCommitFiles fetches the per-file change summary for one commit once its row
 // is expanded. Each file carries its repomap scope/language so the rows read as
 // a "repomap-based commit status" rather than a flat file list.
-function useCommitFiles(dir: string, provider: string, hash: string) {
+function useCommitFiles(dir: string, hash: string) {
   const [files, setFiles] = useState<TodoCommitFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -42,7 +42,7 @@ function useCommitFiles(dir: string, provider: string, hash: string) {
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('hash', hash);
     fetch(`/api/todos/commits/files?${params.toString()}`, { signal: controller.signal })
       .then(async res => {
@@ -60,7 +60,7 @@ function useCommitFiles(dir: string, provider: string, hash: string) {
       cancelled = true;
       controller.abort();
     };
-  }, [dir, provider, hash]);
+  }, [dir, hash]);
 
   return { files, loading, error };
 }
@@ -72,7 +72,7 @@ function Chip({ children, className }: { children: ReactNode; className: string 
 // FileDiffCard lazily loads and renders a single file's patch (the ANSI-colored
 // `git show -- <file>` output). It is the hover/expand payload for a file row,
 // shown in the same black terminal panel the full-commit diff used.
-function FileDiffCard({ dir, provider, hash, file }: { dir: string; provider: string; hash: string; file: TodoCommitFile }) {
+function FileDiffCard({ dir, hash, file }: { dir: string; hash: string; file: TodoCommitFile }) {
   const [diff, setDiff] = useState('');
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -83,7 +83,7 @@ function FileDiffCard({ dir, provider, hash, file }: { dir: string; provider: st
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('hash', hash);
     params.set('file', file.path);
     fetch(`/api/todos/commits/diff?${params.toString()}`, { signal: controller.signal })
@@ -106,7 +106,7 @@ function FileDiffCard({ dir, provider, hash, file }: { dir: string; provider: st
       cancelled = true;
       controller.abort();
     };
-  }, [dir, provider, hash, file.path]);
+  }, [dir, hash, file.path]);
 
   return (
     <div className="absolute left-0 right-0 top-full z-30 pt-1">
@@ -145,7 +145,7 @@ function FileDiffCard({ dir, provider, hash, file }: { dir: string; provider: st
 // CommitFileRow renders one changed file as a repomap-status row: a change-kind
 // icon, the path, scope/language chips, and +/- counts. Hovering the row (or
 // clicking to pin it) reveals that file's diff in a card anchored below it.
-function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: string; hash: string; file: TodoCommitFile }) {
+function CommitFileRow({ dir, hash, file }: { dir: string; hash: string; file: TodoCommitFile }) {
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
   const view = fileStatusView(file.status);
@@ -182,7 +182,7 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
           {file.dels > 0 && <span className="text-red-600">-{file.dels}</span>}
         </span>
       </Button>
-      {open && <FileDiffCard dir={dir} provider={provider} hash={hash} file={file} />}
+      {open && <FileDiffCard dir={dir} hash={hash} file={file} />}
     </li>
   );
 }
@@ -190,8 +190,8 @@ function CommitFileRow({ dir, provider, hash, file }: { dir: string; provider: s
 // CommitFiles is the expanded payload of a commit row: the repomap-based status
 // of every file the commit touched, each revealing its own diff on hover. It
 // replaces the single full-commit diff blob with a per-file breakdown.
-export function CommitFiles({ dir, provider, hash }: { dir: string; provider: string; hash: string }) {
-  const { files, loading, error } = useCommitFiles(dir, provider, hash);
+export function CommitFiles({ dir, hash }: { dir: string; hash: string }) {
+  const { files, loading, error } = useCommitFiles(dir, hash);
 
   if (loading) {
     return (
@@ -210,7 +210,7 @@ export function CommitFiles({ dir, provider, hash }: { dir: string; provider: st
   return (
     <ul className="border-t border-border bg-muted/30">
       {files.map(file => (
-        <CommitFileRow key={file.path} dir={dir} provider={provider} hash={hash} file={file} />
+        <CommitFileRow key={file.path} dir={dir} hash={hash} file={file} />
       ))}
     </ul>
   );

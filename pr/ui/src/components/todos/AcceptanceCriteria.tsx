@@ -9,12 +9,10 @@ import { inputClass, todoQuery } from './format';
 // "Draft" action and a "Verify" action that reviews the structured verdict.
 export function AcceptanceCriteria({
   dir,
-  provider,
   todo,
   onChanged,
 }: {
   dir: string;
-  provider: string;
   todo: TodoItem;
   onChanged: (todo: TodoItem) => void;
 }) {
@@ -69,7 +67,7 @@ export function AcceptanceCriteria({
     setError('');
     setCriteria(next); // optimistic
     try {
-      const res = await fetch(`/api/todos/criteria?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/criteria?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref, criteria: next }),
@@ -114,7 +112,7 @@ export function AcceptanceCriteria({
     setBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/todos/${path}?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/${path}?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref }),
@@ -134,7 +132,7 @@ export function AcceptanceCriteria({
     setVerifyBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/verify?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref }),

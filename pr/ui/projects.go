@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/todos"
 )
 
 // Project CRUD errors. Callers map these to a transport status (HTTP code / CLI
@@ -28,9 +27,6 @@ type Project struct {
 	Name  string   `json:"name"`
 	Dir   string   `json:"dir"`
 	Repos []string `json:"repos"`
-	// TodoProvider is retained for one compatibility release. Only empty or
-	// "db" is accepted; PostgreSQL is always the runtime store.
-	TodoProvider string `json:"todoProvider,omitempty"`
 }
 
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
@@ -137,9 +133,6 @@ func CreateProject(p Project) error {
 	if p.Name == "" || p.Dir == "" {
 		return ErrProjectInvalid
 	}
-	if err := todos.ValidateRuntimeProvider(p.TodoProvider); err != nil {
-		return fmt.Errorf("%w: %v", ErrProjectInvalid, err)
-	}
 	ps := LoadProjects()
 	if _, ok := projectByName(ps, p.Name); ok {
 		return fmt.Errorf("%w: %q", ErrProjectExists, p.Name)
@@ -159,9 +152,6 @@ func UpdateProject(name string, p Project) error {
 	p.Name = name
 	if p.Dir == "" {
 		return ErrProjectInvalid
-	}
-	if err := todos.ValidateRuntimeProvider(p.TodoProvider); err != nil {
-		return fmt.Errorf("%w: %v", ErrProjectInvalid, err)
 	}
 	SaveProjects(upsertProject(ps, p))
 	return nil

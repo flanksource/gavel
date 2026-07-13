@@ -41,8 +41,6 @@ func init() {
 	todosCmd.AddCommand(todosPlanCmd)
 	todosPlanCmd.AddCommand(todosPlanRejectCmd)
 	todosPlanCmd.AddCommand(todosPlanReviseCmd)
-	todosPlanRejectCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
-	todosPlanReviseCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosPlanReviseCmd.Flags().StringVar(&planReviseFeedback, "feedback", "", "The change request for the agent to fold into the plan (required)")
 }
 
@@ -53,7 +51,7 @@ func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provid
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return "", nil, nil, err
 	}

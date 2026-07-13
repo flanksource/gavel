@@ -8,8 +8,8 @@ import { todoQuery } from './format';
 
 // useTodoCommits fetches the git commits linked to a todo via its Gavel-Issue-Id
 // trailer. It refetches when the todo ref changes and reports nothing for a todo
-// with no linked commits (e.g. file-backed todos that carry no id).
-function useTodoCommits(dir: string, provider: string, todoRef: string) {
+// with no linked commits.
+function useTodoCommits(dir: string, todoRef: string) {
   const [commits, setCommits] = useState<TodoCommit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -24,7 +24,7 @@ function useTodoCommits(dir: string, provider: string, todoRef: string) {
     const controller = new AbortController();
     setLoading(true);
     setError('');
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('ref', todoRef);
     fetch(`/api/todos/commits?${params.toString()}`, { signal: controller.signal })
       .then(async res => {
@@ -42,7 +42,7 @@ function useTodoCommits(dir: string, provider: string, todoRef: string) {
       cancelled = true;
       controller.abort();
     };
-  }, [dir, provider, todoRef]);
+  }, [dir, todoRef]);
 
   return { commits, loading, error };
 }
@@ -50,7 +50,7 @@ function useTodoCommits(dir: string, provider: string, todoRef: string) {
 // CommitRow renders one linked commit with an expand toggle that reveals its
 // per-file repomap status (each file revealing its own diff on hover). The short
 // hash still links out to the commit on the origin remote.
-function CommitRow({ dir, provider, commit }: { dir: string; provider: string; commit: TodoCommit }) {
+function CommitRow({ dir, commit }: { dir: string; commit: TodoCommit }) {
   const [open, setOpen] = useState(false);
   const ChevronIcon = open ? UiChevronDown : UiChevronRight;
   return (
@@ -99,7 +99,7 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
           </div>
         </div>
       </div>
-      {open && <CommitFiles dir={dir} provider={provider} hash={commit.hash} />}
+      {open && <CommitFiles dir={dir} hash={commit.hash} />}
     </li>
   );
 }
@@ -108,8 +108,8 @@ function CommitRow({ dir, provider, commit }: { dir: string; provider: string; c
 // Gavel-Issue-Id git trailer, each linking to the commit on the origin remote
 // and expandable to show its diff. It renders nothing until at least one commit
 // is found, so todos with no linked commits show no empty section.
-export function TodoCommits({ dir, provider, todoRef }: { dir: string; provider: string; todoRef: string }) {
-  const { commits, error } = useTodoCommits(dir, provider, todoRef);
+export function TodoCommits({ dir, todoRef }: { dir: string; todoRef: string }) {
+  const { commits, error } = useTodoCommits(dir, todoRef);
 
   if (!error && commits.length === 0) return null;
 
@@ -127,7 +127,7 @@ export function TodoCommits({ dir, provider, todoRef }: { dir: string; provider:
       ) : (
         <ul className="divide-y divide-border">
           {commits.map(commit => (
-            <CommitRow key={commit.hash} dir={dir} provider={provider} commit={commit} />
+            <CommitRow key={commit.hash} dir={dir} commit={commit} />
           ))}
         </ul>
       )}

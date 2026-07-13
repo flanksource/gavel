@@ -1,43 +1,30 @@
 package main
 
-import (
-	"strings"
-	"testing"
+import "testing"
 
-	"github.com/flanksource/gavel/testrunner"
-)
-
-func TestLegacyFileBackedTODOCLIPathsFailBeforeRuntimeWork(t *testing.T) {
-	tests := []struct {
-		name string
-		run  func() error
-	}{
-		{name: "pr fix", run: func() error { return runPRFix(prFixCmd, nil) }},
-		{name: "pr status", run: func() error {
-			_, err := runPRStatus(PRStatusOptions{SyncTodos: ".todos"})
-			return err
-		}},
-		{name: "lint", run: func() error {
-			_, err := runLint(LintOptions{SyncTodos: ".todos"})
-			return err
-		}},
-		{name: "test", run: func() error {
-			_, err := runTests(testrunner.RunOptions{SyncTodos: true})
-			return err
-		}},
+func TestLegacyFileBackedTODOSyncCLISurfacesAreRemoved(t *testing.T) {
+	for _, command := range prCmd.Commands() {
+		if command.Name() == "fix" {
+			t.Fatal("retired gavel pr fix command is still registered")
+		}
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := test.run()
-			if err == nil {
-				t.Fatal("expected retired runtime error")
+	for _, test := range []struct {
+		path  []string
+		flags []string
+	}{
+		{path: []string{"pr", "status"}, flags: []string{"sync-todos"}},
+		{path: []string{"lint"}, flags: []string{"sync-todos", "group-by"}},
+		{path: []string{"test"}, flags: []string{"sync-todos", "todos-dir", "todo-template"}},
+	} {
+		command, _, err := rootCmd.Find(test.path)
+		if err != nil {
+			t.Fatalf("find %v: %v", test.path, err)
+		}
+		for _, flag := range test.flags {
+			if command.Flags().Lookup(flag) != nil {
+				t.Errorf("%v still exposes retired --%s", test.path, flag)
 			}
-			for _, want := range []string{"retired", "PostgreSQL", "gavel todos create", "gavel todos sync", "explicit import/export", "gavel todos import-grite"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("error = %q, want %q", err, want)
-				}
-			}
-		})
+		}
 	}
 }

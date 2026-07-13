@@ -1,6 +1,6 @@
 ---
 title: Todo engine
-description: Store, list, create, run, and verify work items with Grite or markdown-backed providers.
+description: Store, list, create, run, and verify PostgreSQL-backed work items, with explicit Markdown import and export.
 order: 6
 ---
 
@@ -14,29 +14,38 @@ gavel todos run 90ec80f0 # [!code focus] [!code note:agent loop]
 gavel todos verify 90ec80f0 # [!code info] [!code note:score result]
 ```
 
-Line 1 lists active work. Line 2 creates a provider-backed issue. Line 3 prints the full todo body, status, provider history, and parsed sections. Line 4 starts the agent loop. Line 5 scores committed work against the todo's acceptance criteria.
+Line 1 lists active work. Line 2 creates a native PostgreSQL issue. Line 3 prints the full todo body, status, event history, and parsed sections. Line 4 starts the agent loop. Line 5 scores committed work against the todo's acceptance criteria.
 
 `gavel todo` is an alias for `gavel todos`.
 
-## Providers
+## Storage and portable files
 
-Gavel has two todo providers:
+PostgreSQL is the only runtime TODO store. List, create, run, verify, and UI/API
+operations always resolve the native database workspace; they do not inspect
+`.grite`, `.todos`, provider flags, or project settings to choose a backend.
 
-| Provider | Select with | Storage |
-|----------|-------------|---------|
-| Grite | default, or `--provider=grite` | Grite issues, labels, comments, and event history |
-| Markdown files | `--provider=todos` | files in `.todos` or `--dir` |
-
-The Grite provider is the default. Use the file provider when you want portable markdown files inside a repository.
+`.todos` Markdown remains available as an explicit portable interchange format:
 
 ```bash
-gavel todos list --provider=grite # [!code focus]
-gavel todos list --provider=todos --dir .todos # [!code highlight] [!code word:.todos]
+gavel todos import                         # read .todos into PostgreSQL
+gavel todos import --dir ./archive/todos # [!code focus]
+gavel todos export                        # write PostgreSQL TODOs to .todos
+gavel todos export 3f2a1b --dir ./backup # [!code highlight]
 ```
 
-The first command uses Grite issues. The second reads markdown files from `.todos`. `--dir` is only meaningful for the file provider; Grite stores content in its issue database.
+Import accepts explicit file arguments, or discovers Markdown below `--dir` when
+none are supplied. Export accepts native IDs, short IDs, or imported aliases, or
+exports the current workspace when none are supplied. Relative directories are
+resolved beneath the selected working directory. Neither command enables a file
+runtime provider.
 
-Provider behavior is shared through one interface: list, get, create, delete, edit, comment, update state, save attempts, update latest failure, and save verification. The CLI and PR UI both use that provider boundary.
+The portable contract round-trips native ID, title, Markdown body (including
+acceptance criteria and verification fixtures), labels, `low`/`medium`/`high`
+priority, and `draft`/`pending`/`verified`/`completed` status. Captain execution
+state, event history, plan and prompt-run links, arbitrary front matter,
+`critical` priority, and `cancelled` status are database-owned. Arbitrary
+front-matter keys are outside the portable contract and ignored on import;
+non-representable priority/status values fail instead of being flattened.
 
 ## Creating todos
 
@@ -52,7 +61,7 @@ Create defaults:
 
 - priority: `medium`
 - status: `pending`
-- provider: Grite
+- storage: native PostgreSQL
 - acceptance criteria generation: enabled when a model is available
 
 Use `--criteria=false` to skip AI-drafted acceptance criteria. Use `--model` to choose the model for criteria generation.
@@ -76,32 +85,24 @@ Todos use these statuses:
 
 `gavel todos list` hides completed todos by default. Pass `--all` to include them.
 
-## Todo front matter
+## Portable todo front matter
 
-File-backed todos use YAML front matter. Grite-backed todos map the same fields onto labels, issue state, and comments where possible.
+Files used by the explicit import/export commands use YAML front matter. Runtime
+commands do not read these fields directly.
 
 ```yaml
 ---
 title: Fix parser error messages
 priority: high
 status: pending
-cwd: ./services/api # [!code focus] [!code note:agent cwd]
-llm:
-  model: claude-code-sonnet
-  max_turns: 12
-checks:
-  enabled: true # [!code highlight]
-  maxIterations: 3
-  test:
-    changed: true
-  lint:
-    changed: true
+id: 90ec80f0-1111-4222-8333-444444444444 # [!code focus]
+labels: [parser, bug]
 ---
 ```
 
-Lines 2-5 describe the work item and where the agent should run. Lines 6-8 choose model/session constraints. Lines 9-15 enable the fixture-backed test/lint loop for this todo. A Grite-backed todo stores equivalent state through labels and comments instead of local front matter.
-
-Useful fields include `title`, `priority`, `status`, `cwd`, `path`, `llm`, `checks`, `verify`, `plan_path`, `plan_status`, `run_mode`, `last_run_summary`, and `questions`.
+`id` lets a later import update the same native issue. Older files without an ID
+receive a stable workspace-and-relative-path-derived native ID. Fields outside
+the portable contract are not runtime configuration.
 
 ## Sections
 
@@ -110,6 +111,6 @@ A todo body can include normal markdown plus structured sections:
 - `## Steps To Reproduce` as fixture nodes used for the pre-check.
 - `## Acceptance Criteria` as editable done-ness criteria.
 - `## Verification` as fixture nodes used by the run loop.
-- comments, provider events, latest failure, attempts, and verification results.
+- comments, native issue events, latest failure, attempts, and verification results.
 
 The todo engine deliberately reuses fixture parsing for verification sections. That keeps command checks, test/lint runner steps, and AI review in one format.

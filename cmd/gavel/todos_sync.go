@@ -33,7 +33,7 @@ func runTodosSync(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,6 @@ func runTodosSync(cmd *cobra.Command, args []string) error {
 
 func init() {
 	todosCmd.AddCommand(todosSyncCmd)
-	todosSyncCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosSyncCmd.Flags().StringSliceVar(&todosSyncMarkers, "markers", []string{"TODO", "FIXME"}, "Source comment markers to sync")
 	todosSyncCmd.Flags().StringArrayVar(&todosSyncIgnore, "ignore", nil, "Additional path glob to ignore during source scan")
 	todosSyncCmd.Flags().BoolVar(&todosSyncDryRun, "dry-run", false, "Report planned sync changes without creating or updating TODOs")

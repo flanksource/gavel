@@ -28,13 +28,11 @@ interface PlanResponse {
 // local plan file.
 export function TodoPlan({
   dir,
-  provider,
   todo,
   active,
   onChanged,
 }: {
   dir: string;
-  provider: string;
   todo: TodoItem;
   active: boolean;
   onChanged?: (todo: TodoItem) => void;
@@ -57,7 +55,7 @@ export function TodoPlan({
 
     let cancelled = false;
     setLoading(true);
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('ref', todo.ref);
     fetch(`/api/todos/session/plan?${params.toString()}`)
       .then(async res => {
@@ -84,14 +82,14 @@ export function TodoPlan({
     return () => {
       cancelled = true;
     };
-  }, [active, todo.ref, dir, provider]);
+  }, [active, todo.ref, dir]);
 
   async function save() {
     if (saving || draft === loaded) return;
     setSaving(true);
     setError('');
     try {
-      const params = new URLSearchParams(todoQuery(dir, provider));
+      const params = new URLSearchParams(todoQuery(dir));
       const res = await fetch(`/api/todos/session/plan?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

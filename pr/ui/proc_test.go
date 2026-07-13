@@ -37,6 +37,7 @@ func withProject(t *testing.T, name, repo, procfileBody string) string {
 }
 
 func TestHandleProjectsListsHasProcfile(t *testing.T) {
+	stubProjectTodoCounts(t)
 	withProject(t, "gavel", "flanksource/gavel", "web: echo hi\n")
 
 	rec := httptest.NewRecorder()

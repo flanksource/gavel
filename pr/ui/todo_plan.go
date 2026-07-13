@@ -60,12 +60,11 @@ func (s *Server) handleTodoSessionPlan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var payload struct {
-		Provider string `json:"provider,omitempty"`
-		Dir      string `json:"dir,omitempty"`
-		Ref      string `json:"ref"`
-		Version  int64  `json:"version,omitempty"`
-		Content  string `json:"content"`
-		Actor    string `json:"actor,omitempty"`
+		Dir     string `json:"dir,omitempty"`
+		Ref     string `json:"ref"`
+		Version int64  `json:"version,omitempty"`
+		Content string `json:"content"`
+		Actor   string `json:"actor,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
@@ -80,9 +79,6 @@ func (s *Server) handleTodoSessionPlanSave(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	source := todoSourceFromRequest(r)
-	if payload.Provider != "" {
-		source.Provider = payload.Provider
-	}
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
 	}

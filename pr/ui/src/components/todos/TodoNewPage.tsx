@@ -123,7 +123,6 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
   const queryProject = useMemo(() => firstParam(params, 'project'), [params]);
   const queryRef = useMemo(() => firstParam(params, 'ref', 'todo', 'issue'), [params]);
   const sourceUrl = useMemo(() => firstParam(params, 'sourceUrl', 'sourceURL', 'url'), [params]);
-  const queryProvider = useMemo(() => firstParam(params, 'provider', 'todoProvider'), [params]);
   const autoSave = useMemo(() => parseBool(firstParam(params, 'autoSave', 'autosave', 'auto_save')), [params]);
   const initialMode = useMemo(() => modeFromParams(params), [params]);
   const queryProjectDir = useMemo(() => {
@@ -188,12 +187,6 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
     return () => window.removeEventListener('message', onMessage);
   }, [embed, add]);
 
-  const providerForDir = useCallback((target: string): string => {
-    if (queryProvider) return queryProvider;
-    const ws = workspaces.find(w => w.dir === target);
-    return ws?.todoProvider || 'auto';
-  }, [queryProvider, workspaces]);
-
   useEffect(() => {
     if (mode !== 'existing') return;
     if (!dir) {
@@ -205,7 +198,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
     setError('');
     (async () => {
       try {
-        const res = await fetch(`/api/todos?${todoQuery(dir, providerForDir(dir))}`, { signal: controller.signal });
+        const res = await fetch(`/api/todos?${todoQuery(dir)}`, { signal: controller.signal });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Load failed');
         setExistingTodos((data as TodoListResponse).items || []);
@@ -219,7 +212,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
       }
     })();
     return () => controller.abort();
-  }, [dir, mode, providerForDir]);
+  }, [dir, mode]);
 
   const selectableTodos = useMemo(
     () => existingTodos
@@ -264,7 +257,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
     setBusy(true);
     setError('');
     try {
-      const url = `/api/todos/new?${todoQuery(dir, providerForDir(dir))}`;
+      const url = `/api/todos/new?${todoQuery(dir)}`;
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
       const response = attachments.length
@@ -294,7 +287,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
     setBusy(true);
     setError('');
     try {
-      const url = `/api/todos/item?${todoQuery(dir, providerForDir(dir))}`;
+      const url = `/api/todos/item?${todoQuery(dir)}`;
       const response = attachments.length
         ? await fetch(url, { method: 'PATCH', body: todoCommentFormData({ ref: selectedRef, comment: body }, attachments) })
         : await fetch(url, {

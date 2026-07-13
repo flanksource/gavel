@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -29,13 +28,13 @@ func specPayload(model, effort string) api.Spec {
 	return api.Spec{Model: api.Model{Name: model, Effort: api.Effort(effort)}}
 }
 
-func TestTodoAPIFileProviderCRUD(t *testing.T) {
+func TestTodoAPINativeCRUD(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
 	createBody := `{"title":"Fix workspace","body":"Implement todo tab","priority":"high","status":"in_progress"}`
 	rec := httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos?provider=todos", strings.NewReader(createBody)))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos", strings.NewReader(createBody)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
 	}
@@ -46,12 +45,8 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	if created.Title != "Fix workspace" || created.Status != types.StatusInProgress || created.Priority != types.PriorityHigh {
 		t.Fatalf("unexpected created todo: %+v", created)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".todos", "fix-workspace.md")); err != nil {
-		t.Fatalf("expected TODO file to be created: %v", err)
-	}
-
 	rec = httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos?provider=todos", nil))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -64,7 +59,7 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodGet, "/api/todos/item?provider=todos&ref="+url.QueryEscape(created.Ref), nil))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodGet, "/api/todos/item?ref="+url.QueryEscape(created.Ref), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -78,7 +73,7 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	patchBody := `{"ref":` + strconvQuote(created.Ref) + `,"status":"completed"}`
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(patchBody)))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(patchBody)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -91,12 +86,12 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodDelete, "/api/todos/item?provider=todos&ref="+url.QueryEscape(created.Ref), nil))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodDelete, "/api/todos/item?ref="+url.QueryEscape(created.Ref), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(created.Ref); !os.IsNotExist(err) {
-		t.Fatalf("expected TODO file to be removed, stat err=%v", err)
+	if _, err := uiTestProviderFor(workDir).Get(t.Context(), created.Ref); err == nil {
+		t.Fatal("archived TODO remained in the native test provider")
 	}
 }
 
@@ -107,7 +102,7 @@ func TestTodoAPIFileProviderCRUD(t *testing.T) {
 func TestTodoAPIListExposesHasPlanAndHasVerification(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	provider := todos.NewFileProvider(workDir, "")
+	provider := uiTestProviderFor(workDir)
 
 	plain, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title:  "Plain todo",
@@ -138,12 +133,12 @@ func TestTodoAPIListExposesHasPlanAndHasVerification(t *testing.T) {
 		t.Fatal(err)
 	}
 	reviewStatus := types.StatusReview
-	if err := todos.UpdateTODOState(awaitingReview, todos.StateUpdate{Status: &reviewStatus, PlanPath: &planPath}); err != nil {
+	if err := provider.UpdateState(t.Context(), awaitingReview, todos.StateUpdate{Status: &reviewStatus, PlanPath: &planPath}); err != nil {
 		t.Fatalf("mark awaiting review: %v", err)
 	}
 
 	rec := httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos?provider=todos", nil))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -172,7 +167,7 @@ func TestTodoNewEndpointQueryDefaultsDraft(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/todos/new?provider=todos&dir="+url.QueryEscape(workDir)+"&title=Draft+from+query&priority=low", nil)
+	req := httptest.NewRequest(http.MethodPost, "/todos/new?dir="+url.QueryEscape(workDir)+"&title=Draft+from+query&priority=low", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("new status = %d, want %d; body = %q", rec.Code, http.StatusCreated, rec.Body.String())
@@ -195,7 +190,7 @@ func TestTodoNewEndpointJSONAutoSaveDefaultsPending(t *testing.T) {
 
 	body := `{"title":"JSON todo","body":"Created from json","autoSave":true}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -236,7 +231,7 @@ func TestTodoNewEndpointFoldsCriteriaIntoBody(t *testing.T) {
 	raw, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -282,7 +277,7 @@ func TestTodoNewEndpointAddsPRVerificationFixture(t *testing.T) {
 	raw, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -334,7 +329,7 @@ func TestTodoNewEndpointMultipartFiles(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), &body)
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -362,7 +357,7 @@ func TestTodoAPIPatchPriority(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:    "Tune severity",
 		Priority: types.PriorityMedium,
 		Status:   types.StatusPending,
@@ -375,7 +370,7 @@ func TestTodoAPIPatchPriority(t *testing.T) {
 	// PATCH priority only (no status) sets severity and leaves status alone.
 	rec := httptest.NewRecorder()
 	body := `{"ref":` + strconvQuote(ref) + `,"priority":"low"}`
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(body)))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch priority status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -393,7 +388,7 @@ func TestTodoAPIPatchPriority(t *testing.T) {
 	// PATCH with neither status nor priority is a 400.
 	rec = httptest.NewRecorder()
 	empty := `{"ref":` + strconvQuote(ref) + `}`
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(empty)))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(empty)))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("empty patch status = %d, want 400", rec.Code)
 	}
@@ -401,7 +396,7 @@ func TestTodoAPIPatchPriority(t *testing.T) {
 	// PATCH with an invalid priority is a 400.
 	rec = httptest.NewRecorder()
 	bad := `{"ref":` + strconvQuote(ref) + `,"priority":"urgent"}`
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(bad)))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(bad)))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("invalid priority status = %d, want 400", rec.Code)
 	}
@@ -411,7 +406,7 @@ func TestTodoAPIPatchEditsTitleBodyAndComments(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Before edit",
 		Body:   "Before body",
 		Status: types.StatusPending,
@@ -424,7 +419,7 @@ func TestTodoAPIPatchEditsTitleBodyAndComments(t *testing.T) {
 	patch := func(payload string) todoSummary {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(payload)))
+		s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(payload)))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("patch %s status = %d, want 200; body = %q", payload, rec.Code, rec.Body.String())
 		}
@@ -464,7 +459,7 @@ func TestTodoAPIPatchEditsTitleBodyAndComments(t *testing.T) {
 
 	// An empty-title edit is rejected.
 	rec := httptest.NewRecorder()
-	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos", strings.NewReader(`{"ref":`+strconvQuote(ref)+`,"title":"   "}`)))
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodPatch, "/api/todos/item", strings.NewReader(`{"ref":`+strconvQuote(ref)+`,"title":"   "}`)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty-title patch status = %d, want 400", rec.Code)
 	}
@@ -478,7 +473,7 @@ func TestTodoAPIPatchMultipartCommentWithAttachment(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Existing issue",
 		Body:   "Original body",
 		Status: types.StatusPending,
@@ -510,7 +505,7 @@ func TestTodoAPIPatchMultipartCommentWithAttachment(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/api/todos/item?provider=todos&dir="+url.QueryEscape(workDir), &body)
+	req := httptest.NewRequest(http.MethodPatch, "/api/todos/item?dir="+url.QueryEscape(workDir), &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	s.handleTodoItem(rec, req)
 	if rec.Code != http.StatusOK {
@@ -528,14 +523,12 @@ func TestTodoAPIPatchMultipartCommentWithAttachment(t *testing.T) {
 	}
 }
 
-func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
+func TestTodoAPINativeProviderListsWorkspace(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
-	// Seed a .todos workspace (no .grite present), so the auto provider must
-	// resolve the file provider for this directory.
-	if _, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
-		Title:    "Auto detect me",
+	if _, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
+		Title:    "List me",
 		Priority: types.PriorityHigh,
 		Status:   types.StatusPending,
 	}); err != nil {
@@ -543,7 +536,7 @@ func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos?provider=auto&dir="+url.QueryEscape(workDir), nil))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodGet, "/api/todos?dir="+url.QueryEscape(workDir), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -551,29 +544,15 @@ func TestTodoAPIAutoProviderListsWorkspace(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatalf("unmarshal list: %v", err)
 	}
-	if list.Counts.Total != 1 || len(list.Items) != 1 || list.Items[0].Title != "Auto detect me" {
-		t.Fatalf("auto provider did not list the .todos workspace: %+v", list)
-	}
-}
-
-func TestTodoProviderRejectsLegacySelectionWithResolvedDir(t *testing.T) {
-	workDir := t.TempDir()
-	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	for _, provider := range []string{todos.ProviderGrite, todos.ProviderFiles, providerAuto} {
-		_, src, err := s.todoProvider(todoSource{Provider: provider, Dir: workDir})
-		if !errors.Is(err, todos.ErrProviderRetired) {
-			t.Errorf("provider %q error = %v, want ErrProviderRetired", provider, err)
-		}
-		if src.Dir != workDir {
-			t.Errorf("provider %q resolved dir = %q, want %q", provider, src.Dir, workDir)
-		}
+	if list.Counts.Total != 1 || len(list.Items) != 1 || list.Items[0].Title != "List me" {
+		t.Fatalf("native provider did not list the workspace: %+v", list)
 	}
 }
 
 func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
 	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, string, string) (todoCounts, error) {
+	projectTodoCounts = func(context.Context, string) (todoCounts, error) {
 		return todoCounts{Total: 1, Open: 1, InProgress: 1}, nil
 	}
 	t.Cleanup(func() { projectTodoCounts = original })
@@ -597,7 +576,7 @@ func TestTodoAPITransferMovesBetweenWorkspaces(t *testing.T) {
 	dstDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: srcDir}}
 
-	created, err := todos.NewFileProvider(srcDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(srcDir).Create(t.Context(), todos.CreateRequest{
 		Title:    "Relocate me",
 		Body:     "Body that should travel with the todo.",
 		Priority: types.PriorityHigh,
@@ -608,11 +587,9 @@ func TestTodoAPITransferMovesBetweenWorkspaces(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(todoTransferPayload{
-		Ref:          todos.TODOReference(created),
-		FromDir:      srcDir,
-		FromProvider: "todos",
-		ToDir:        dstDir,
-		ToProvider:   "todos",
+		Ref:     todos.TODOReference(created),
+		FromDir: srcDir,
+		ToDir:   dstDir,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoTransfer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/transfer", strings.NewReader(string(body))))
@@ -623,21 +600,17 @@ func TestTodoAPITransferMovesBetweenWorkspaces(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal transfer: %v", err)
 	}
-	if resp.Dir != dstDir || resp.Provider != todos.ProviderFiles {
-		t.Fatalf("unexpected transfer target: dir=%q provider=%q", resp.Dir, resp.Provider)
+	if resp.Dir != dstDir {
+		t.Fatalf("unexpected transfer target dir: %q", resp.Dir)
 	}
 	if resp.Todo.Title != "Relocate me" || resp.Todo.Priority != types.PriorityHigh {
 		t.Fatalf("transferred todo lost fields: %+v", resp.Todo)
 	}
-	if !strings.HasPrefix(resp.Todo.FilePath, dstDir) {
-		t.Fatalf("transferred todo not in target dir %q: %s", dstDir, resp.Todo.FilePath)
-	}
-
 	// Gone from source, present in target.
-	if _, err := os.Stat(created.FilePath); !os.IsNotExist(err) {
-		t.Fatalf("expected source todo removed, stat err=%v", err)
+	if _, err := uiTestProviderFor(srcDir).Get(t.Context(), created.ID); err == nil {
+		t.Fatal("expected source TODO removed")
 	}
-	items, err := todos.NewFileProvider(dstDir, "").List(t.Context(), todos.DiscoveryFilters{})
+	items, err := uiTestProviderFor(dstDir).List(t.Context(), todos.DiscoveryFilters{})
 	if err != nil {
 		t.Fatalf("target list: %v", err)
 	}
@@ -650,7 +623,7 @@ func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: dir}}
 
-	created, err := todos.NewFileProvider(dir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(dir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Stay put",
 		Status: types.StatusPending,
 	})
@@ -659,11 +632,9 @@ func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(todoTransferPayload{
-		Ref:          todos.TODOReference(created),
-		FromDir:      dir,
-		FromProvider: "todos",
-		ToDir:        dir,
-		ToProvider:   "todos",
+		Ref:     todos.TODOReference(created),
+		FromDir: dir,
+		ToDir:   dir,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoTransfer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/transfer", strings.NewReader(string(body))))
@@ -671,7 +642,7 @@ func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
 		t.Fatalf("same-workspace transfer status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
 	// The original must survive a rejected transfer.
-	if _, err := os.Stat(created.FilePath); err != nil {
+	if _, err := uiTestProviderFor(dir).Get(t.Context(), created.ID); err != nil {
 		t.Fatalf("expected source todo to survive rejected transfer: %v", err)
 	}
 }
@@ -679,7 +650,7 @@ func TestTodoAPITransferRejectsSameWorkspace(t *testing.T) {
 func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:    "Run me",
 		Priority: types.PriorityMedium,
 		Status:   types.StatusPending,
@@ -709,7 +680,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 		},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -717,7 +688,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Status != "started" || resp.Provider != todos.ProviderFiles || resp.Agent != "codex" || resp.Mode != "cmux" {
+	if resp.Status != "started" || resp.Agent != "codex" || resp.Mode != "cmux" {
 		t.Fatalf("unexpected run response: %+v", resp)
 	}
 	if resp.Count != 1 {
@@ -726,7 +697,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if len(got.Todos) != 1 || got.Todos[0].Title != "Run me" {
 		t.Fatalf("run starter did not receive selected todo: %+v", got.Todos)
 	}
-	if got.Source.Dir != workDir || got.Backend != todos.ProviderFiles {
+	if got.Source.Dir != workDir || got.Backend != todos.ProviderDB {
 		t.Fatalf("unexpected run source: dir=%q backend=%q", got.Source.Dir, got.Backend)
 	}
 	if got.Options.Name != "gpt-5.5" || got.Options.Backend != "codex-cmux" || got.Options.Effort != "high" || got.Options.Budget.Cost != 1.25 || got.Options.Budget.MaxTurns != 12 || !specDirty(got.Options.Spec) {
@@ -737,7 +708,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:    "Fix the parser",
 		Body:     "The parser drops trailing commas.",
 		Priority: types.PriorityMedium,
@@ -752,7 +723,7 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		t.Helper()
 		body, _ := json.Marshal(payload)
 		rec := httptest.NewRecorder()
-		s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run/preview?provider=todos", strings.NewReader(string(body))))
+		s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run/preview", strings.NewReader(string(body))))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("preview status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 		}
@@ -797,7 +768,7 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Screenshot todo",
 		Body:   "See the bug:\n\n![screen.png](" + attachmentURLPrefix + "abc.png)",
 		Status: types.StatusPending,
@@ -809,7 +780,7 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 
 	body, _ := json.Marshal(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Spec: api.Spec{Model: api.Model{Name: "claude"}}})
 	rec := httptest.NewRecorder()
-	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("preview status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -924,7 +895,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			workDir := t.TempDir()
 			s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-			created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+			created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 				Title:  "Run me",
 				Status: types.StatusPending,
 			})
@@ -949,7 +920,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			payload.Workflow = tc.workflow
 			body, _ := json.Marshal(payload)
 			rec := httptest.NewRecorder()
-			s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+			s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 			}
@@ -972,7 +943,7 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Run me",
 		Status: types.StatusPending,
 	})
@@ -995,7 +966,7 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	payload.Workflow = &api.Workflow{PostRun: &api.PostRun{Commit: true, DryRun: true}}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -1014,10 +985,10 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	}
 }
 
-func TestTodoAPIRunStartsMultipleTodosInOneSession(t *testing.T) {
+func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	provider := todos.NewFileProvider(workDir, "")
+	provider := uiTestProviderFor(workDir)
 	first, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title:  "First todo",
 		Status: types.StatusPending,
@@ -1034,14 +1005,12 @@ func TestTodoAPIRunStartsMultipleTodosInOneSession(t *testing.T) {
 	}
 
 	oldStart := startTodoRun
-	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
-		got = req
+	startTodoRun = func(todoRunRequest) error {
+		t.Fatal("grouped native run must be rejected before dispatch")
 		return nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
-	// Duplicate the first ref to confirm the handler de-duplicates refs.
 	body, _ := json.Marshal(todoRunPayload{
 		Refs:  []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
 		Agent: "claude",
@@ -1049,29 +1018,19 @@ func TestTodoAPIRunStartsMultipleTodosInOneSession(t *testing.T) {
 		Spec:  specPayload("sonnet", "medium"),
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
-	var resp todoRunResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal run response: %v", err)
-	}
-	if resp.Status != "started" || resp.Count != 2 || len(resp.Refs) != 2 {
-		t.Fatalf("unexpected multi-run response: %+v", resp)
-	}
-	if resp.Message != "Started run for 2 todos" {
-		t.Fatalf("message = %q, want %q", resp.Message, "Started run for 2 todos")
-	}
-	if len(got.Todos) != 2 || got.Todos[0].Title != "First todo" || got.Todos[1].Title != "Second todo" {
-		t.Fatalf("run starter did not receive both todos in order: %+v", got.Todos)
+	if !strings.Contains(rec.Body.String(), "one issue at a time") {
+		t.Fatalf("unexpected grouped-run error: %q", rec.Body.String())
 	}
 }
 
 func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Run me",
 		Status: types.StatusPending,
 	})
@@ -1086,7 +1045,7 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 		Spec:  specPayload("codex", "medium"),
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
@@ -1098,7 +1057,7 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Plan me",
 		Status: types.StatusPending,
 	})
@@ -1122,7 +1081,7 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 		Plan:  true,
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -1144,7 +1103,7 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 func TestTodoAPIRunModeField(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Plan me",
 		Status: types.StatusPending,
 	})
@@ -1167,7 +1126,7 @@ func TestTodoAPIRunModeField(t *testing.T) {
 		RunMode: "plan",
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -1182,7 +1141,7 @@ func TestTodoAPIRunModeField(t *testing.T) {
 		RunMode: "verify",
 	})
 	rec = httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("verify runMode status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
@@ -1365,7 +1324,7 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Run headless",
 		Status: types.StatusPending,
 	})
@@ -1387,7 +1346,7 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 		Spec:   api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5", Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}

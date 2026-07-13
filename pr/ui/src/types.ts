@@ -57,12 +57,9 @@ export interface Project {
   dir: string;
   repos: string[];
   hasProcfile?: boolean;
-  // Pinned todo backend for this workspace; absent means auto-detect.
-  todoProvider?: TodoProvider;
   todoCounts?: TodoCounts;
 }
 
-export type TodoProvider = 'grite' | 'todos';
 export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'ask' | 'completed' | 'failed' | 'unverified' | 'verified' | 'skipped';
 export type TodoPriority = 'high' | 'medium' | 'low';
 // Row density for the todo lists: 'comfortable' is the two-line default,
@@ -116,18 +113,14 @@ export interface TodoItem {
   title: string;
   status: TodoStatus;
   priority: TodoPriority;
-  provider?: TodoProvider | string;
-  providerState?: string;
-  filePath?: string;
   cwd?: string;
   labels?: string[];
   attempts?: number;
-  // ISO timestamp the todo was created (grite's created time); absent for
-  // file-backed todos that record no creation time.
+  // ISO timestamp the native issue was created.
   created?: string;
   lastRun?: string;
   // Agent session id of the most recent run, used to follow the session live
-  // and to resume it. Recorded from the issue's session:<id> label / frontmatter.
+  // and to resume it. Recorded in the native issue execution state.
   sessionId?: string;
   body?: string;
   implementation?: string;
@@ -328,11 +321,7 @@ export interface TodoRunOptions extends AISpecRuntimeValue {
 export interface TodoRunResponse {
   status: 'started' | 'dry_run';
   ref: string;
-  // refs/count echo the full set when several todos run together in one session.
-  refs?: string[];
-  count?: number;
   dir: string;
-  provider: TodoProvider | string;
   agent: TodoRunAgent;
   mode: TodoRunMode;
   driver?: TodoRunDriver;
@@ -364,7 +353,6 @@ export interface TodoRunPreviewResponse {
 }
 
 export interface TodoListResponse {
-  provider: TodoProvider | string;
   dir?: string;
   counts: TodoCounts;
   items: TodoItem[];
@@ -383,7 +371,7 @@ export interface TodoCommit {
 
 export interface TodoCommitsResponse {
   // issueId is the todo's id that commits were matched against; absent for
-  // file-backed todos that carry no id.
+  // malformed or incomplete responses that carry no id.
   issueId?: string;
   commits: TodoCommit[];
 }

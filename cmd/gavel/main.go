@@ -113,7 +113,6 @@ func gavelMCPExcludedCommands() []string {
 		// expensive AI, history-rewriting, or large-analysis workflows
 		"^todos$", "^todos ",
 		"^bench$", "^bench ",
-		"^pr fix$",
 		"^git amend-commits$",
 		"^git analyze$",
 		"^git history$",
@@ -131,9 +130,6 @@ func gavelMCPGlobalIgnoredParams() []string {
 		"--loglevel",
 		"--ui",
 		"--triage",
-		"--sync-todos",
-		"--todo-template",
-		"--todos-dir",
 		"--baseline",
 		"--work-dir",
 	}

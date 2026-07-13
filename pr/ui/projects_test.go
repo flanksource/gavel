@@ -126,30 +126,6 @@ func TestProjectServiceCRUD(t *testing.T) {
 	}
 }
 
-func TestResolveTodoBackend(t *testing.T) {
-	tests := []struct {
-		dir        string
-		configured string
-	}{
-		{t.TempDir(), ""},
-		{t.TempDir(), "db"},
-		{t.TempDir(), "grite"},
-		{t.TempDir(), "todos"},
-		{t.TempDir(), "auto"},
-	}
-	for _, tc := range tests {
-		name, auto := resolveTodoBackend(tc.dir, tc.configured)
-		if name != "db" || auto {
-			t.Errorf("resolveTodoBackend(%q, %q) = (%q, %v), want (db, false)",
-				tc.dir, tc.configured, name, auto)
-		}
-	}
-
-	if got := TodoBackendLabel(t.TempDir(), ""); got != "db" {
-		t.Errorf("TodoBackendLabel = %q, want db", got)
-	}
-}
-
 // Guard against accidental writes to the real config during tests.
 func TestProjectsPathUnderConfigDir(t *testing.T) {
 	if filepath.Base(projectsPath) != "projects.json" {

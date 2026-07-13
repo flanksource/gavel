@@ -31,9 +31,6 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-	if err := validateRuntimeTODOSelection(opts.Dir); err != nil {
-		return nil, err
-	}
 	var since time.Time
 	if opts.Since != "" {
 		since, err = parseSince(opts.Since)
@@ -57,7 +54,7 @@ func runTodosList(opts TodosListOptions) (any, error) {
 			return nil, err
 		}
 	} else {
-		provider, err := newTodosProvider(workDir, opts.Dir)
+		provider, err := newTodosProvider(workDir)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +144,7 @@ func runTodosGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
@@ -166,12 +163,12 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
 
-	logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
+	logger.Infof("Discovering TODOs from PostgreSQL")
 	filters := todos.DiscoveryFilters{}
 	if filterStatus != "" {
 		filters.IncludeStatuses = []types.Status{types.Status(filterStatus)}
@@ -233,13 +230,11 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 func init() {
 	rootCmd.AddCommand(todosCmd)
-	todosCmd.PersistentFlags().StringVar(&todosProvider, "provider", todos.ProviderDB, "Deprecated compatibility selector; only db is accepted")
 	todosCmd.AddCommand(todosRunCmd)
 	clicky.AddCommand(todosCmd, TodosListOptions{}, runTodosList)
 	todosCmd.AddCommand(todosGetCmd)
 	todosCmd.AddCommand(todosCheckCmd)
 
-	todosRunCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosRunCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed TODOs")
 	todosRunCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status (pending, in_progress, failed)")
 	todosRunCmd.Flags().Float64Var(&maxBudget, "max-budget", 0, "Maximum budget in USD")
@@ -256,39 +251,12 @@ func init() {
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
 
-	todosGetCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
-
-	todosCheckCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
 }
 
-func selectedTodosProvider() string {
-	if strings.TrimSpace(todosProvider) == "" {
-		return todos.ProviderDB
-	}
-	return strings.TrimSpace(todosProvider)
-}
-
-func newTodosProvider(workDir, dir string) (todos.Provider, error) {
-	if err := validateRuntimeTODOSelection(dir); err != nil {
-		return nil, err
-	}
+func newTodosProvider(workDir string) (todos.Provider, error) {
 	return openRuntimeTodosProvider(context.Background(), workDir)
-}
-
-func validateRuntimeTODOSelection(dir string) error {
-	if err := todos.ValidateRuntimeProvider(selectedTodosProvider()); err != nil {
-		return err
-	}
-	if strings.TrimSpace(dir) != "" {
-		return fmt.Errorf("--dir is retired for runtime TODO commands; PostgreSQL is the only runtime store (omit --dir and use explicit import/export commands for .todos files)")
-	}
-	return nil
-}
-
-func retiredTODOFileRuntimeError(command, option string) error {
-	return fmt.Errorf("%s %s is retired: PostgreSQL is the only runtime TODO store; use `gavel todos create`, `gavel todos sync`, and `gavel todos run` for native TODOs, and reserve .todos/Grite data for explicit import/export migration commands (`gavel todos import-grite` for Grite)", command, option)
 }
 
 // resolveRequestedTODOs preserves direct native reference semantics for UUIDs,

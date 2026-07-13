@@ -30,10 +30,9 @@ const baseTodo: TodoItem = {
 };
 
 describe('todoQuery', () => {
-  it('carries only the workspace directory regardless of legacy provider input', () => {
-    expect(todoQuery('/work/repo', 'grite')).toBe('dir=%2Fwork%2Frepo');
-    expect(todoQuery('/work/repo', 'todos')).toBe('dir=%2Fwork%2Frepo');
-    expect(todoQuery('', 'grite')).toBe('');
+  it('carries only the native workspace directory', () => {
+    expect(todoQuery('/work/repo')).toBe('dir=%2Fwork%2Frepo');
+    expect(todoQuery('')).toBe('');
   });
 });
 

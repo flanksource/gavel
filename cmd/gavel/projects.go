@@ -20,7 +20,7 @@ var projectsCmd = &cobra.Command{
 type ProjectsListOptions struct{}
 
 // projectListRow is the display shape for `projects list`: the stored config
-// plus the resolved todo backend (suffixed " (auto)" when auto-detected).
+// plus the native TODO backend.
 type projectListRow struct {
 	Name        string   `json:"name"`
 	Dir         string   `json:"dir"`
@@ -36,7 +36,7 @@ func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
 			Name:        p.Name,
 			Dir:         p.Dir,
 			Repos:       p.Repos,
-			TodoBackend: ui.TodoBackendLabel(p.ResolvedDir(), p.TodoProvider),
+			TodoBackend: "db",
 		})
 	}
 	return rows, nil
@@ -60,14 +60,13 @@ func runProjectsGet(opts ProjectsGetOptions) (ui.Project, error) {
 type ProjectsAddOptions struct {
 	Args  []string `args:"true"`
 	Repos []string `flag:"repo" help:"GitHub repo this directory backs (owner/repo); repeatable"`
-	Todos string   `flag:"todos" help:"Todo backend: grite or todos (empty = auto-detect)"`
 }
 
 func runProjectsAdd(opts ProjectsAddOptions) (ui.Project, error) {
 	if len(opts.Args) < 2 {
-		return ui.Project{}, fmt.Errorf("usage: gavel projects add <name> <dir> [--repo owner/repo] [--todos grite|todos]")
+		return ui.Project{}, fmt.Errorf("usage: gavel projects add <name> <dir> [--repo owner/repo]")
 	}
-	p := ui.Project{Name: opts.Args[0], Dir: opts.Args[1], Repos: opts.Repos, TodoProvider: opts.Todos}
+	p := ui.Project{Name: opts.Args[0], Dir: opts.Args[1], Repos: opts.Repos}
 	if err := ui.CreateProject(p); err != nil {
 		return ui.Project{}, err
 	}
@@ -77,12 +76,11 @@ func runProjectsAdd(opts ProjectsAddOptions) (ui.Project, error) {
 type ProjectsUpdateOptions struct {
 	Args  []string `args:"true"`
 	Repos []string `flag:"repo" help:"Replace the repo list (owner/repo); repeatable"`
-	Todos string   `flag:"todos" help:"Todo backend: grite or todos"`
 }
 
 func runProjectsUpdate(opts ProjectsUpdateOptions) (ui.Project, error) {
 	if len(opts.Args) < 1 {
-		return ui.Project{}, fmt.Errorf("usage: gavel projects update <name> [dir] [--repo owner/repo] [--todos grite|todos]")
+		return ui.Project{}, fmt.Errorf("usage: gavel projects update <name> [dir] [--repo owner/repo]")
 	}
 	name := opts.Args[0]
 	p, ok := ui.GetProject(name)
@@ -96,9 +94,6 @@ func runProjectsUpdate(opts ProjectsUpdateOptions) (ui.Project, error) {
 	}
 	if len(opts.Repos) > 0 {
 		p.Repos = opts.Repos
-	}
-	if opts.Todos != "" {
-		p.TodoProvider = opts.Todos
 	}
 	if err := ui.UpdateProject(name, p); err != nil {
 		return ui.Project{}, err

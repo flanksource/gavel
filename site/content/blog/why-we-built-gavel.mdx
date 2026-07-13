@@ -30,7 +30,7 @@ Gavel is one binary that bundles four pieces we kept reaching for:
 - **Test runner** — Go and Ginkgo native, with fixtures in markdown and a live browser UI.
 - **Unified lint** — linters in parallel, auto-activated by discovering native configs and project signals.
 - **AI verify** — structured policy/correctness checks that run an LLM against each diff, with pass/fail verdicts and rationale.
-- **PR workflow** — AI-generated conventional commits, pre-commit hooks, and a `gavel pr fix` that applies review suggestions.
+- **TODO workflow** — a native PostgreSQL work queue for agent runs, with explicit `.todos` Markdown import and export when portability is needed.
 
 All of it emits a single `tests.json` + `tests.html` you can read, drop into a PR comment, or pipe into any downstream tool. The same command runs locally and in CI — there's a GitHub Action wrapper, but it's the same binary.
 

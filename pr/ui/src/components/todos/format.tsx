@@ -29,10 +29,8 @@ export const emptyCounts: TodoCounts = {
   skipped: 0,
 };
 
-// Listing/detail/mutation requests only carry the workspace dir. The provider
-// argument remains until the M7 type cleanup so existing callers do not need a
-// flag-day rewrite, but PostgreSQL is now the only runtime persistence backend.
-export function todoQuery(dir: string, _provider: string = 'auto') {
+// Listing/detail/mutation requests are scoped only by native workspace dir.
+export function todoQuery(dir: string) {
   const params = new URLSearchParams();
   if (dir.trim()) params.set('dir', dir.trim());
   return params.toString();
@@ -204,8 +202,8 @@ function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
 // elapsed time (plus cost, once known), and a finished run settles to Done/Ended
 // rather than spinning forever. Render it only for a row that has a session so it
 // never polls idle todos.
-function InProgressBadge({ dir, provider, sessionId }: { dir: string; provider: string; sessionId?: string }) {
-  const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, true);
+function InProgressBadge({ dir, sessionId }: { dir: string; sessionId?: string }) {
+  const { stats, elapsedMs } = useSessionStats(dir, sessionId, true);
   const view = sessionBadgeView(stats);
   const ViewIcon = view.icon;
   const cost = stats ? formatCost(stats.costUsd) : '';
@@ -326,7 +324,7 @@ function TodoVerificationIndicator() {
 
 // TodoAges shows the todo's created age and, when it differs, its last-activity
 // age. Absolute times sit in the tooltips. A todo with neither timestamp (some
-// file-backed todos) renders nothing. `short` collapses both ages into a single
+// incomplete records) renders nothing. `short` collapses both ages into a single
 // compact 'X' token (no "ago") for the single-line compact density.
 function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
   if (short) {
@@ -369,10 +367,10 @@ function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) 
 // Severity is intentionally only the ListMenu left border; identifiers and
 // severity labels belong in the detail pane.
 //
-// `dir`/`provider` locate the row's workspace so an in-progress todo's status
+// `dir` locates the row's workspace so an in-progress todo's status
 // badge can carry the live agent state + elapsed time; they are omitted by
 // callers (e.g. the menubar) that don't surface it.
-export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, provider }: {
+export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir }: {
   todo: TodoItem;
   active: boolean;
   onClick: () => void;
@@ -382,7 +380,6 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
   onToggleSelect?: () => void;
   workspace?: string;
   dir?: string;
-  provider?: string;
 }) {
   const compact = density === 'compact';
   // Only running sessions poll for stats, so the sidebar never fires a request
@@ -421,7 +418,7 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
       >
         <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
           {hasLiveSession ? (
-            <InProgressBadge dir={dir!} provider={provider || 'auto'} sessionId={todo.sessionId} />
+            <InProgressBadge dir={dir!} sessionId={todo.sessionId} />
           ) : (
             <StatusIcon status={todo.status} />
           )}

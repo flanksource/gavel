@@ -137,7 +137,6 @@ one selected framework, using a framework subcommand or a single
 | `--show-stdout` | When to show stdout: `Never`, `OnFailure` (default), `Always` |
 | `--show-stderr` | When to show stderr: `Never`, `OnFailure` (default), `Always` |
 | `--skip-hooks` | Skip `.gavel.yaml` pre/post hooks (default: skip locally, run in CI) |
-| `--sync-todos` | Sync test failures to TODO files |
 | `--dry-run` | Print test commands without executing |
 | `--auto-stop` | With `--ui`, fork a detached UI server that exits after this duration |
 | `--idle-timeout` | With `--ui --auto-stop`, exit the detached UI after no HTTP requests |
@@ -172,7 +171,6 @@ gavel lint --dry-run                        # show linter commands without execu
 gavel lint secrets                          # run betterleaks only (alias)
 gavel lint react-doctor                     # run React Doctor only
 gavel lint jscpd eslint                     # run specific linters by name
-gavel lint --sync-todos .todos              # sync violations to TODO files
 ```
 
 | Flag | Description |
@@ -186,8 +184,6 @@ gavel lint --sync-todos .todos              # sync violations to TODO files
 | `--ignore` | Glob patterns to exclude from linting |
 | `--ui` | Launch browser UI to view violations |
 | `--addr` | Interface to bind the UI server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
-| `--sync-todos` | Sync violations to TODO files in directory |
-| `--group-by` | Group synced TODOs by: `file`, `package`, `message` (default: `file`) |
 | `--no-cache` | Disable caching/debounce |
 | `--timeout` | Timeout per linter (default: `5m`) |
 | `--dry-run` | Print linter commands without executing |
@@ -398,7 +394,6 @@ gavel todos verify --model claude-code-sonnet
 | `--threshold` | Score at/above which an implemented TODO is promoted to verified (default: 80) |
 | `--strict` | Exit non-zero when any verified TODO is not implemented |
 | `--status` | Only verify TODOs in this status |
-| `--dir` | TODOs directory (with `--provider=todos`) |
 
 #### `gavel commit`
 
@@ -445,7 +440,6 @@ gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
 gavel pr status --logs --tail-logs 50
-gavel pr status --sync-todos
 ```
 
 | Flag | Description |
@@ -455,7 +449,6 @@ gavel pr status --sync-todos
 | `--interval` | Poll interval (default: `30s`) |
 | `--logs` | Fetch and include failed job logs (uses extra API quota) |
 | `--tail-logs` | Number of failed log lines to show per step (default: `100`) |
-| `--sync-todos` | Sync TODO files for failed jobs to directory |
 
 #### `gavel pr list`
 
@@ -489,28 +482,6 @@ gavel pr list --all --org myorg               # all repos in org
 | `--interval` | Poll interval for `--ui`/`--menu-bar` (default: `60s`) |
 | `--addr` | Interface to bind the `--ui`/`--menu-bar` server (default: `0.0.0.0`, all interfaces; set `localhost` to restrict to this machine) |
 | `--port` | UI port (default: `9092`, `0` to auto-scan upward for a free port) |
-
-#### `gavel pr fix`
-
-Sync TODOs from PR failures and interactively select which to fix with Claude Code.
-
-```bash
-gavel pr fix
-gavel pr fix 42
-gavel pr fix --group-by directory
-gavel pr fix --dry-run
-```
-
-| Flag | Description |
-|------|-------------|
-| `-R` / `--repo` | GitHub repository (`owner/repo`) |
-| `--dir` | TODOs directory (default: `.todos`) |
-| `--group-by` | Group TODOs by: `file`, `directory`, `all`, `none` |
-| `--max-retries` | Maximum retry attempts (default: `3`) |
-| `--max-budget` | Maximum budget in USD |
-| `--max-turns` | Maximum conversation turns |
-| `--dirty` | Skip git stash/checkout |
-| `--dry-run` | Print commands without executing |
 
 ### Git Analysis
 
@@ -700,21 +671,21 @@ and `<target-dir>/.gavel.yaml` (or the parent directory when the target is a fil
 
 #### `gavel todos`
 
-Manage and execute TODO items with Claude Code integration.
+Manage and execute native PostgreSQL TODO issues with Claude or Codex.
 
 ```bash
 gavel todos list
 gavel todos list --status pending
-gavel todos run .todos/fix-bug.md
+gavel todos run 3f2a1b
 gavel todos run --mode plan              # propose a reviewable plan first (read-only)
 gavel todos run --check                  # run tests/lint when the agent finishes, feed failures back to it
-gavel todos check .todos/fix-bug.md      # run a TODO's verification fixtures only
+gavel todos check 3f2a1b                 # run a TODO's verification fixtures only
 gavel todos verify --strict              # AI-score committed work vs acceptance criteria
 ```
 
 `--mode` selects what the agent does: `run` (implement, default), `plan` (produce a plan that parks the TODO in `review` for approval via `gavel todos plan reject|revise`), or `verify` (score committed work). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
 
-`--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt-in via the flag, `.gavel.yaml` `checks:`, or a TODO's frontmatter `checks:` block.
+`--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt in via the flag or `.gavel.yaml` `checks:` configuration.
 
 ## Output Formats
 

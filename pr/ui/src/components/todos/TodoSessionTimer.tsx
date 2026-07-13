@@ -11,7 +11,7 @@ import { todoQuery } from './format';
 // while a run is in progress, slower while waiting for the log to appear, and it
 // stops once a finished session's totals are final. Between polls of a running
 // session the displayed clock ticks locally so the timer advances smoothly.
-export function useSessionStats(dir: string, provider: string, sessionId: string | undefined, active: boolean) {
+export function useSessionStats(dir: string, sessionId: string | undefined, active: boolean) {
   const [stats, setStats] = useState<SessionStats | null>(null);
   const fetchedAtRef = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -21,7 +21,7 @@ export function useSessionStats(dir: string, provider: string, sessionId: string
     if (!active || !sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     params.set('sessionId', sessionId);
     const url = `/api/todos/session/stats?${params.toString()}`;
 
@@ -44,7 +44,7 @@ export function useSessionStats(dir: string, provider: string, sessionId: string
     };
     poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [dir, provider, sessionId, active]);
+  }, [dir, sessionId, active]);
 
   useEffect(() => {
     if (!stats?.inProgress) return;
@@ -100,9 +100,8 @@ function ctxBarColor(pct: number): string {
 // estimated cost, and a control to open the session's cmux terminal (focus or
 // resume). It renders nothing until the session has produced a log (found), and
 // returns a bare run of flex items so the caller's header owns the surrounding row.
-export function TodoSessionTimer({ dir, provider, sessionId, active = true, onResume, resumeDisabled }: {
+export function TodoSessionTimer({ dir, sessionId, active = true, onResume, resumeDisabled }: {
   dir: string;
-  provider: string;
   sessionId?: string;
   active?: boolean;
   // onResume continues this session in a fresh cmux run (claude --resume). Wired
@@ -110,7 +109,7 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true, onRe
   onResume?: () => void;
   resumeDisabled?: boolean;
 }) {
-  const { stats, elapsedMs } = useSessionStats(dir, provider, sessionId, active);
+  const { stats, elapsedMs } = useSessionStats(dir, sessionId, active);
 
   if (!sessionId || !stats?.found) return null;
 
@@ -173,7 +172,6 @@ export function TodoSessionTimer({ dir, provider, sessionId, active = true, onRe
       )}
       <CmuxSessionButton
         dir={dir}
-        provider={provider}
         sessionId={sessionId}
         agent={stats.agent}
         onResume={onResume}
@@ -201,14 +199,14 @@ interface CmuxSurface {
 // on. It only fetches while `enabled` (the menu is open) because each call shells
 // out to cmux; a stopped cmux or a closed terminal resolves to found=false with a
 // reason rather than throwing, so the control still offers Resume.
-function useCmuxSurface(dir: string, provider: string, agent: string | undefined, enabled: boolean) {
+function useCmuxSurface(dir: string, agent: string | undefined, enabled: boolean) {
   const [surface, setSurface] = useState<CmuxSurface | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    const params = new URLSearchParams(todoQuery(dir, provider));
+    const params = new URLSearchParams(todoQuery(dir));
     if (agent) params.set('agent', agent);
     setLoading(true);
     fetch(`/api/todos/session/cmux?${params.toString()}`)
@@ -220,7 +218,7 @@ function useCmuxSurface(dir: string, provider: string, agent: string | undefined
       .catch(() => { if (!cancelled) setSurface(null); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [dir, provider, agent, enabled]);
+  }, [dir, agent, enabled]);
 
   return { surface, loading };
 }
@@ -228,9 +226,8 @@ function useCmuxSurface(dir: string, provider: string, agent: string | undefined
 // CmuxSessionButton is the session header's cmux control: a dropdown that either
 // focuses the live cmux terminal for this session or resumes it in a fresh cmux
 // run, captioned with the resolved workspace/surface the session maps to.
-export function CmuxSessionButton({ dir, provider, sessionId, agent, onResume, resumeDisabled }: {
+export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisabled }: {
   dir: string;
-  provider: string;
   sessionId: string;
   agent?: string;
   onResume?: () => void;
@@ -239,7 +236,7 @@ export function CmuxSessionButton({ dir, provider, sessionId, agent, onResume, r
   const [focusBusy, setFocusBusy] = useState(false);
   const [focusError, setFocusError] = useState('');
   const [open, setOpen] = useState(false);
-  const { surface, loading } = useCmuxSurface(dir, provider, agent, open);
+  const { surface, loading } = useCmuxSurface(dir, agent, open);
 
   // focusSession brings the agent's cmux terminal to the front. The workspace is
   // keyed by the run's working directory and agent, so the server finds it without
@@ -250,7 +247,7 @@ export function CmuxSessionButton({ dir, provider, sessionId, agent, onResume, r
     setFocusBusy(true);
     setFocusError('');
     try {
-      const params = new URLSearchParams(todoQuery(dir, provider));
+      const params = new URLSearchParams(todoQuery(dir));
       if (agent) params.set('agent', agent);
       const res = await fetch(`/api/todos/session/focus?${params.toString()}`, { method: 'POST' });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not focus cmux session');

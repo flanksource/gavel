@@ -98,7 +98,7 @@ func (o OutputMode) ShouldShow(failed bool) bool {
 	}
 }
 
-// TestOrchestrator orchestrates test execution and TODO syncing.
+// TestOrchestrator orchestrates test execution.
 type TestOrchestrator struct {
 	RunOptions
 	registry *Registry
@@ -111,15 +111,12 @@ type TestOrchestrator struct {
 // The yaml tags mirror the CLI flag names so a `yaml test` fixture code block
 // unmarshals directly onto this struct (see fixtures/types/runstep.go).
 type RunOptions struct {
-	SyncTodos     bool                  `json:"sync_todos,omitempty" yaml:"sync-todos,omitempty" flag:"sync-todos"`                        // Whether to sync test failures to TODOs
 	StartingPaths []string              `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                               // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
 	ExtraArgs     []string              `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments broadcast to every selected test runner.
 	ShowPassed    bool                  `json:"show_passed,omitempty" yaml:"show-passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
 	Ignore        []string              `json:"ignore,omitempty" yaml:"ignore,omitempty" flag:"ignore"`                                    // Glob patterns for test packages/paths to exclude from discovery.
 	ShowStdout    OutputMode            `json:"show_stdout,omitempty" yaml:"show-stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
 	ShowStderr    OutputMode            `json:"show_stderr,omitempty" yaml:"show-stderr,omitempty" flag:"show-stderr" default:"OnFailure"` // When to show stderr: false|Never, OnFailure (default), true|Always
-	TodosDir      string                `json:"todos_dir,omitempty" yaml:"todos-dir,omitempty" flag:"todos-dir" default:".todos"`          // Directory to store TODO files (default: .todos/)
-	TodoTemplate  string                `json:"todo_template,omitempty" yaml:"todo-template,omitempty" flag:"todo-template"`               // Path to TODO template file
 	WorkDir       string                `json:"work_dir,omitempty" yaml:"work-dir,omitempty" flag:"work-dir"`                              // Working directory to run tests in
 	DryRun        bool                  `json:"dry_run,omitempty" yaml:"dry-run,omitempty" flag:"dry-run"`                                 // Show what tests would be executed without running them
 	Recursive     bool                  `json:"recursive,omitempty" yaml:"recursive,omitempty" flag:"recursive" default:"true"`            // Recursively discover test packages in subdirectories
@@ -153,11 +150,6 @@ type RunOptions struct {
 
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
-	// TodoSync, when set, records a failing test as a TODO and returns its path.
-	// It is supplied by the caller (see todosync.NewTestFailureRecorder) so the
-	// testrunner needn't import the todos package. Only invoked when SyncTodos is
-	// true and at least one test failed.
-	TodoSync func(failure TestFailure) (todoPath string, err error) `json:"-" yaml:"-"`
 }
 
 func (opts RunOptions) Pretty() api.Text {
@@ -176,13 +168,6 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if len(opts.Ignore) > 0 {
 		text = text.Space().Append("Ignore: ", "text-muted").Append(clicky.CompactList(opts.Ignore), "text-blue-500")
-	}
-	if opts.SyncTodos {
-		text = text.Space().Append("SyncTodos: ", "text-muted").Append(icons.Check, "text-green-500")
-		text = text.Space().Append("Dir: ", "text-muted").Append(opts.TodosDir, "text-blue-500")
-		if opts.TodoTemplate != "" {
-			text = text.Space().Append("TodoTemplate: ", "text-muted").Append(opts.TodoTemplate, "text-blue-500")
-		}
 	}
 	if opts.ShowPassed {
 		text = text.Space().Append("ShowPassed: ", "text-muted").Append(icons.Check, "text-green-500")
@@ -242,7 +227,7 @@ func (r RunOptions) Help() string {
 Auto-detects which frameworks are present and runs them, capturing output as
 structured JSON for reliable parsing. Layers CLI-only concerns on top: re-run
 only failures, gate on new-vs-baseline, cache passing packages, run linters in
-parallel (--lint), sync failures to .todos/, and stream to a browser UI (--ui).
+parallel (--lint), and stream to a browser UI (--ui).
 
 Positional args restrict the run to those package paths (recursive by default).
 Immediately after "--", -run PATTERN and --focus PATTERN are equivalent focus
@@ -664,7 +649,7 @@ func annotateTestsWorkDir(tests []parsers.Test, workDir string) []parsers.Test {
 	return tests
 }
 
-// Run executes tests and optionally syncs failures to TODOs.
+// Run executes tests.
 // Returns []parsers.TestResults with all package test results (passed, failed, skipped), or an error.
 func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	frameworks, err := o.registry.DetectAll()
@@ -686,11 +671,6 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	// as tick renders and can't interleave mid-frame.
 	logger.Infof("Test run completed. %d total failures.", len(failed))
 
-	if o.SyncTodos && len(failed) > 0 {
-		if err := o.syncTodos(failed); err != nil {
-			return nil, fmt.Errorf("failed to sync todos: %w", err)
-		}
-	}
 	if err != nil {
 		return results, err
 	}
@@ -2155,34 +2135,4 @@ func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
 		}}
 	}
 	return children
-}
-
-func (o *TestOrchestrator) syncTodos(failures []TestFailure) error {
-	if o.TodoSync == nil {
-		return fmt.Errorf("SyncTodos is enabled but no TodoSync recorder was provided (set RunOptions.TodoSync)")
-	}
-
-	for _, failure := range failures {
-		failure := failure // Capture for goroutine
-		taskName := fmt.Sprintf("Creating TODO for %s", failure.Name)
-
-		taskFunc := func(ctx commonsCtx.Context, t *task.Task) (string, error) {
-			return o.TodoSync(failure)
-		}
-
-		clickyTask := clicky.StartTask[string](taskName, taskFunc)
-		todoPath, err := clickyTask.GetResult()
-
-		if err != nil {
-			clickyTask.Errorf("Failed to sync TODO: %v", err)
-			clickyTask.Failed()
-			return err
-		}
-
-		relPath, _ := filepath.Rel(o.WorkDir, todoPath)
-		clickyTask.SetName(fmt.Sprintf("✓ %s", relPath))
-		clickyTask.Success()
-	}
-
-	return nil
 }

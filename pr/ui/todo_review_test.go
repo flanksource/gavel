@@ -18,14 +18,14 @@ import (
 
 func seedReviewTodo(t *testing.T, workDir string, status types.Status) *types.TODO {
 	t.Helper()
-	created, err := todos.NewFileProvider(workDir, "").Create(t.Context(), todos.CreateRequest{
+	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
 		Title:  "Reviewable",
 		Status: types.StatusPending,
 	})
 	if err != nil {
 		t.Fatalf("seed create: %v", err)
 	}
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{Status: &status}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{Status: &status}); err != nil {
 		t.Fatalf("seed status: %v", err)
 	}
 	return created
@@ -38,7 +38,7 @@ func TestTodoAPIPlanApprove(t *testing.T) {
 
 	body, _ := json.Marshal(todoApprovePayload{Ref: todos.TODOReference(created)})
 	rec := httptest.NewRecorder()
-	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -52,7 +52,7 @@ func TestTodoAPIPlanApprove(t *testing.T) {
 
 	// A second approve hits a todo no longer in review: 409, not a silent write.
 	rec = httptest.NewRecorder()
-	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second approve status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
@@ -82,7 +82,7 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 		},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanApprove(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/approve", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -108,13 +108,13 @@ func TestTodoAPIPlanReject(t *testing.T) {
 	// Record a plan pointer so we can assert reject clears it.
 	planPath := "/plans/plan-x.md"
 	planNew := types.PlanNew
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
 		t.Fatalf("seed plan: %v", err)
 	}
 
 	body, _ := json.Marshal(todoRejectPayload{Ref: todos.TODOReference(created)})
 	rec := httptest.NewRecorder()
-	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reject status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -131,7 +131,7 @@ func TestTodoAPIPlanReject(t *testing.T) {
 
 	// A second reject hits a todo no longer in review: 409.
 	rec = httptest.NewRecorder()
-	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanReject(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/reject", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second reject status = %d, want 409", rec.Code)
 	}
@@ -143,7 +143,7 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	created := seedReviewTodo(t, workDir, types.StatusReview)
 	sid := "sess-revise-1"
 	mode := types.ModePlan
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 		Options:  &todoRunPayload{Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("revise status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -188,7 +188,7 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	noSession := seedReviewTodo(t, workDir, types.StatusReview)
 	body2, _ := json.Marshal(todoRevisePayload{Ref: todos.TODOReference(noSession), Feedback: "x"})
 	rec = httptest.NewRecorder()
-	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise?provider=todos", strings.NewReader(string(body2))))
+	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise", strings.NewReader(string(body2))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("no-session revise status = %d, want 409", rec.Code)
 	}
@@ -200,7 +200,7 @@ func TestTodoAPIAnswer(t *testing.T) {
 	created := seedReviewTodo(t, workDir, types.StatusAsk)
 	sid := "sess-answer-1"
 	mode := types.ModePlan
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 
@@ -220,7 +220,7 @@ func TestTodoAPIAnswer(t *testing.T) {
 		Options: &todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -249,18 +249,18 @@ func TestTodoAPIAnswerRejectsWrongState(t *testing.T) {
 
 	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "hello"})
 	rec := httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("answer status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
 
 	// Ask status but no recorded session: also a 409 (nothing to resume).
 	ask := types.StatusAsk
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{Status: &ask}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{Status: &ask}); err != nil {
 		t.Fatal(err)
 	}
 	rec = httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("no-session answer status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
@@ -274,7 +274,7 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 	created := seedReviewTodo(t, workDir, types.StatusInProgress)
 	sid := "sess-zombie-ask"
 	mode := types.ModeRun
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sid, RunMode: &mode}); err != nil {
 		t.Fatal(err)
 	}
 	logPath, err := cmuxprov.SessionLogPath(workDir, sid)
@@ -299,7 +299,7 @@ func TestTodoAPIAnswerResumesStoppedAskSessionFromInProgressTodo(t *testing.T) {
 		Answers: map[string]any{"Which database?": "Postgres"},
 	})
 	rec := httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer?provider=todos", strings.NewReader(string(body))))
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}

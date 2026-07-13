@@ -17,13 +17,9 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func TestTodosProviderFlagRegistered(t *testing.T) {
-	flag := todosCmd.PersistentFlags().Lookup("provider")
-	if flag == nil {
-		t.Fatal("expected todos --provider flag to be registered")
-	}
-	if flag.DefValue != todos.ProviderDB {
-		t.Fatalf("expected default provider %q, got %q", todos.ProviderDB, flag.DefValue)
+func TestTodosHasNoRuntimeProviderSelection(t *testing.T) {
+	if flag := todosCmd.PersistentFlags().Lookup("provider"); flag != nil {
+		t.Fatalf("unexpected retired --provider flag: %+v", flag)
 	}
 }
 
@@ -42,7 +38,7 @@ func TestTodosCreateCommandRegistered(t *testing.T) {
 	if !stringSliceContains(todosCreateCmd.Aliases, "new") {
 		t.Fatalf("expected create command to have new alias, got %#v", todosCreateCmd.Aliases)
 	}
-	for _, name := range []string{"dir", "title", "body", "body-file", "priority", "status"} {
+	for _, name := range []string{"title", "body", "body-file", "priority", "status"} {
 		if flag := todosCreateCmd.Flags().Lookup(name); flag == nil {
 			t.Fatalf("expected todos create --%s flag to be registered", name)
 		}
@@ -50,7 +46,7 @@ func TestTodosCreateCommandRegistered(t *testing.T) {
 }
 
 func TestTodosSyncCommandRegistered(t *testing.T) {
-	for _, name := range []string{"dir", "markers", "ignore", "dry-run"} {
+	for _, name := range []string{"markers", "ignore", "dry-run"} {
 		if flag := todosSyncCmd.Flags().Lookup(name); flag == nil {
 			t.Fatalf("expected todos sync --%s flag to be registered", name)
 		}
@@ -59,29 +55,23 @@ func TestTodosSyncCommandRegistered(t *testing.T) {
 
 func TestRunTodosSyncRuntimeProviderDryRun(t *testing.T) {
 	workDir := t.TempDir()
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 	if err := os.WriteFile(filepath.Join(workDir, "main.go"), []byte("// TODO: dry run only\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	oldProvider := todosProvider
 	oldWorkingDir := workingDir
-	oldTodosDir := todosDir
 	oldMarkers := todosSyncMarkers
 	oldIgnore := todosSyncIgnore
 	oldDryRun := todosSyncDryRun
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		workingDir = oldWorkingDir
-		todosDir = oldTodosDir
 		todosSyncMarkers = oldMarkers
 		todosSyncIgnore = oldIgnore
 		todosSyncDryRun = oldDryRun
 	})
 
-	todosProvider = todos.ProviderDB
 	workingDir = workDir
-	todosDir = ""
 	todosSyncMarkers = []string{"TODO", "FIXME"}
 	todosSyncIgnore = nil
 	todosSyncDryRun = true
@@ -89,27 +79,23 @@ func TestRunTodosSyncRuntimeProviderDryRun(t *testing.T) {
 	if err := runTodosSync(todosSyncCmd, nil); err != nil {
 		t.Fatalf("runTodosSync: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".todos")); !os.IsNotExist(err) {
-		t.Fatalf("dry-run should not create .todos, stat err=%v", err)
+	if items, err := testProviderFor(workDir).List(t.Context(), todos.DiscoveryFilters{}); err != nil || len(items) != 0 {
+		t.Fatalf("dry-run created native TODOs: items=%v err=%v", items, err)
 	}
 }
 
 func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 	workDir := t.TempDir()
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 
-	oldProvider := todosProvider
 	oldWorkingDir := workingDir
-	oldTodosDir := todosDir
 	oldTitle := todoCreateTitle
 	oldBody := todoCreateBody
 	oldBodyFile := todoCreateBodyFile
 	oldPriority := todoCreatePriority
 	oldStatus := todoCreateStatus
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		workingDir = oldWorkingDir
-		todosDir = oldTodosDir
 		todoCreateTitle = oldTitle
 		todoCreateBody = oldBody
 		todoCreateBodyFile = oldBodyFile
@@ -117,9 +103,7 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 		todoCreateStatus = oldStatus
 	})
 
-	todosProvider = todos.ProviderDB
 	workingDir = workDir
-	todosDir = ""
 	todoCreateTitle = ""
 	todoCreateBody = "Created from the CLI."
 	todoCreateBodyFile = ""
@@ -130,7 +114,7 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 		t.Fatalf("runTodosCreate: %v", err)
 	}
 
-	items, err := todos.NewFileProvider(workDir, "").List(context.Background(), todos.DiscoveryFilters{})
+	items, err := testProviderFor(workDir).List(context.Background(), todos.DiscoveryFilters{})
 	if err != nil {
 		t.Fatalf("list created todos: %v", err)
 	}
@@ -140,7 +124,7 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 	if items[0].Title != "CLI todo" || items[0].Priority != types.PriorityHigh || items[0].Status != types.StatusDraft {
 		t.Fatalf("unexpected created todo: %+v", items[0])
 	}
-	detail, err := todos.NewFileProvider(workDir, "").Get(context.Background(), items[0].FilePath)
+	detail, err := testProviderFor(workDir).Get(context.Background(), items[0].ID)
 	if err != nil {
 		t.Fatalf("get created todo: %v", err)
 	}
@@ -150,8 +134,8 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 }
 
 func TestTodosPlanCommandsRegistered(t *testing.T) {
-	if todosPlanRejectCmd.Flags().Lookup("dir") == nil {
-		t.Error("expected plan reject --dir flag")
+	if todosPlanRejectCmd.Flags().Lookup("dir") != nil {
+		t.Error("unexpected retired plan reject --dir flag")
 	}
 	if todosPlanReviseCmd.Flags().Lookup("feedback") == nil {
 		t.Error("expected plan revise --feedback flag")
@@ -160,7 +144,7 @@ func TestTodosPlanCommandsRegistered(t *testing.T) {
 
 func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 	workDir := t.TempDir()
-	provider := &filePlanReviewProvider{FileProvider: todos.NewFileProvider(workDir, "")}
+	provider := &testPlanReviewProvider{testTODOProvider: testProviderFor(workDir)}
 	oldOpen := openRuntimeTodosProvider
 	openRuntimeTodosProvider = func(context.Context, string) (todos.Provider, error) { return provider, nil }
 	t.Cleanup(func() { openRuntimeTodosProvider = oldOpen })
@@ -171,13 +155,13 @@ func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 	review := types.StatusReview
 	planPath := "/plans/p.md"
 	planNew := types.PlanNew
-	if err := todos.UpdateTODOState(created, todos.StateUpdate{Status: &review, PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
+	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{Status: &review, PlanPath: &planPath, PlanStatus: &planNew}); err != nil {
 		t.Fatalf("seed review: %v", err)
 	}
 
-	oldProvider, oldWorkingDir, oldDir := todosProvider, workingDir, todosDir
-	todosProvider, workingDir, todosDir = todos.ProviderDB, workDir, ""
-	t.Cleanup(func() { todosProvider, workingDir, todosDir = oldProvider, oldWorkingDir, oldDir })
+	oldWorkingDir := workingDir
+	workingDir = workDir
+	t.Cleanup(func() { workingDir = oldWorkingDir })
 
 	if err := runTodosPlanReject(todosPlanRejectCmd, []string{"Reviewable plan"}); err != nil {
 		t.Fatalf("reject: %v", err)
@@ -194,15 +178,15 @@ func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 	}
 }
 
-type filePlanReviewProvider struct {
-	*todos.FileProvider
+type testPlanReviewProvider struct {
+	*testTODOProvider
 }
 
-func (p *filePlanReviewProvider) ApprovePlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
+func (p *testPlanReviewProvider) ApprovePlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
 	return p.Get(ctx, todo.FilePath)
 }
 
-func (p *filePlanReviewProvider) RejectPlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
+func (p *testPlanReviewProvider) RejectPlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
 	pending := types.StatusPending
 	clearedPath := ""
 	clearedStatus := types.PlanStatus("")
@@ -212,7 +196,7 @@ func (p *filePlanReviewProvider) RejectPlan(ctx context.Context, todo *types.TOD
 	return p.Get(ctx, todo.FilePath)
 }
 
-func (p *filePlanReviewProvider) RequestPlanRevision(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
+func (p *testPlanReviewProvider) RequestPlanRevision(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
 	return p.Get(ctx, todo.FilePath)
 }
 
@@ -326,16 +310,14 @@ func TestEffortDirective(t *testing.T) {
 	}
 }
 
-func TestNewTodosProviderAcceptsOnlyNativeDBSelection(t *testing.T) {
-	oldProvider := todosProvider
+func TestNewTodosProviderOpensNativeRuntime(t *testing.T) {
 	oldOpen := openRuntimeTodosProvider
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		openRuntimeTodosProvider = oldOpen
 	})
 
 	opened := 0
-	stub := todos.NewFileProvider("/repo", "/tmp/unused-todos")
+	stub := testProviderFor("/repo")
 	openRuntimeTodosProvider = func(_ context.Context, workDir string) (todos.Provider, error) {
 		opened++
 		if workDir != "/repo" {
@@ -343,52 +325,15 @@ func TestNewTodosProviderAcceptsOnlyNativeDBSelection(t *testing.T) {
 		}
 		return stub, nil
 	}
-	for _, selection := range []string{"", todos.ProviderDB} {
-		todosProvider = selection
-		provider, err := newTodosProvider("/repo", "")
-		if err != nil {
-			t.Fatalf("newTodosProvider(%q): %v", selection, err)
-		}
-		if provider != stub {
-			t.Fatalf("newTodosProvider(%q) returned %T, want runtime stub", selection, provider)
-		}
+	provider, err := newTodosProvider("/repo")
+	if err != nil {
+		t.Fatalf("newTodosProvider: %v", err)
 	}
-	if opened != 2 {
-		t.Fatalf("runtime opener calls = %d, want 2", opened)
+	if provider != stub {
+		t.Fatalf("newTodosProvider returned %T, want runtime stub", provider)
 	}
-}
-
-func TestNewTodosProviderRejectsRetiredSelectionsWithoutOpeningRuntime(t *testing.T) {
-	oldProvider := todosProvider
-	oldOpen := openRuntimeTodosProvider
-	t.Cleanup(func() {
-		todosProvider = oldProvider
-		openRuntimeTodosProvider = oldOpen
-	})
-	openRuntimeTodosProvider = func(context.Context, string) (todos.Provider, error) {
-		t.Fatal("retired provider selection must not open the runtime")
-		return nil, nil
-	}
-
-	for _, selection := range []string{todos.ProviderGrite, todos.ProviderFiles, "auto"} {
-		t.Run(selection, func(t *testing.T) {
-			todosProvider = selection
-			_, err := newTodosProvider("/repo", "")
-			if err == nil || !strings.Contains(err.Error(), "cannot be selected") {
-				t.Fatalf("newTodosProvider(%q) error = %v, want migration error", selection, err)
-			}
-		})
-	}
-}
-
-func TestNewTodosProviderRejectsLegacyDirWithDB(t *testing.T) {
-	old := todosProvider
-	todosProvider = todos.ProviderDB
-	defer func() { todosProvider = old }()
-
-	_, err := newTodosProvider("/repo", ".todos")
-	if err == nil || !strings.Contains(err.Error(), "--dir is retired") || !strings.Contains(err.Error(), "PostgreSQL") {
-		t.Fatalf("expected actionable --dir retirement error, got %v", err)
+	if opened != 1 {
+		t.Fatalf("runtime opener calls = %d, want 1", opened)
 	}
 }
 
@@ -418,14 +363,12 @@ func TestResolveRequestedTODOsUsesDirectGetForLegacyAlias(t *testing.T) {
 }
 
 func TestRunTodosRunRejectsGroupedNativeExecution(t *testing.T) {
-	oldProvider := todosProvider
 	oldOpen := openRuntimeTodosProvider
 	oldWorkingDir := workingDir
 	oldGroupBy := groupBy
 	oldMode := todosMode
 	oldRunMode := todosRunMode
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		openRuntimeTodosProvider = oldOpen
 		workingDir = oldWorkingDir
 		groupBy = oldGroupBy
@@ -442,7 +385,6 @@ func TestRunTodosRunRejectsGroupedNativeExecution(t *testing.T) {
 		},
 	}}
 	openRuntimeTodosProvider = func(context.Context, string) (todos.Provider, error) { return provider, nil }
-	todosProvider = todos.ProviderDB
 	workingDir = t.TempDir()
 	groupBy = todos.GroupByRepo
 	todosMode = string(types.ModeRun)
@@ -495,7 +437,7 @@ func (p *referenceSpyProvider) List(context.Context, todos.DiscoveryFilters) (ty
 
 func TestRunTodosListHidesDoneByDefault(t *testing.T) {
 	workDir := seedListTodos(t)
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 
 	got := runListWithGlobals(t, workDir, TodosListOptions{})
 
@@ -511,7 +453,7 @@ func TestRunTodosListHidesDoneByDefault(t *testing.T) {
 
 func TestRunTodosListDoneIncludesVerifiedAndCompleted(t *testing.T) {
 	workDir := seedListTodos(t)
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 
 	got := runListWithGlobals(t, workDir, TodosListOptions{Done: true})
 
@@ -528,7 +470,7 @@ func TestRunTodosListDoneIncludesVerifiedAndCompleted(t *testing.T) {
 
 func TestRunTodosListStatusCompletedOverridesDefaultHide(t *testing.T) {
 	workDir := seedListTodos(t)
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 
 	got := runListWithGlobals(t, workDir, TodosListOptions{Status: string(types.StatusCompleted)})
 
@@ -542,7 +484,7 @@ func TestRunTodosListStatusCompletedOverridesDefaultHide(t *testing.T) {
 
 func TestRunTodosListStatusVerifiedOverridesDefaultHide(t *testing.T) {
 	workDir := seedListTodos(t)
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 
 	got := runListWithGlobals(t, workDir, TodosListOptions{Status: string(types.StatusVerified)})
 
@@ -552,15 +494,15 @@ func TestRunTodosListStatusVerifiedOverridesDefaultHide(t *testing.T) {
 }
 
 func TestRunTodosListAllAggregatesRegisteredProjects(t *testing.T) {
-	stubRuntimeWithFileProvider(t)
+	stubRuntimeWithTestProvider(t)
 	firstDir := seedProjectTodos(t, "First pending", "First done")
 	secondDir := seedProjectTodos(t, "Second pending", "Second done")
 	oldLoad := loadTodoProjects
 	loadTodoProjects = func() []ui.Project {
 		return []ui.Project{
-			{Name: "first", Dir: firstDir, TodoProvider: todos.ProviderGrite},
-			{Name: "second", Dir: secondDir, TodoProvider: todos.ProviderDB},
-			{Name: "duplicate", Dir: firstDir, TodoProvider: todos.ProviderDB},
+			{Name: "first", Dir: firstDir},
+			{Name: "second", Dir: secondDir},
+			{Name: "duplicate", Dir: firstDir},
 		}
 	}
 	t.Cleanup(func() { loadTodoProjects = oldLoad })
@@ -600,7 +542,6 @@ func TestRunTodosListAllReturnsEveryDatabaseOpenAndListFailure(t *testing.T) {
 
 	oldOpen := openRuntimeTodosProvider
 	oldLoad := loadTodoProjects
-	oldProvider := todosProvider
 	oldWorkingDir := workingDir
 	openRuntimeTodosProvider = func(_ context.Context, workDir string) (todos.Provider, error) {
 		switch workDir {
@@ -619,12 +560,10 @@ func TestRunTodosListAllReturnsEveryDatabaseOpenAndListFailure(t *testing.T) {
 			{Name: "list project", Dir: listDir},
 		}
 	}
-	todosProvider = todos.ProviderDB
 	workingDir = t.TempDir()
 	t.Cleanup(func() {
 		openRuntimeTodosProvider = oldOpen
 		loadTodoProjects = oldLoad
-		todosProvider = oldProvider
 		workingDir = oldWorkingDir
 	})
 
@@ -642,36 +581,6 @@ func TestRunTodosListAllReturnsEveryDatabaseOpenAndListFailure(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("runTodosList error = %q, want %q", err, want)
 		}
-	}
-}
-
-func TestRunTodosListAllRejectsDir(t *testing.T) {
-	oldProvider := todosProvider
-	oldWorkingDir := workingDir
-	todosProvider = todos.ProviderDB
-	workingDir = t.TempDir()
-	t.Cleanup(func() {
-		todosProvider = oldProvider
-		workingDir = oldWorkingDir
-	})
-
-	if _, err := runTodosList(TodosListOptions{All: true, Dir: ".todos"}); err == nil || !strings.Contains(err.Error(), "--dir is retired") {
-		t.Fatalf("runTodosList error = %v, want --dir retirement error", err)
-	}
-}
-
-func TestRunTodosListAllRejectsRetiredProvider(t *testing.T) {
-	oldProvider := todosProvider
-	oldWorkingDir := workingDir
-	todosProvider = todos.ProviderGrite
-	workingDir = t.TempDir()
-	t.Cleanup(func() {
-		todosProvider = oldProvider
-		workingDir = oldWorkingDir
-	})
-
-	if _, err := runTodosList(TodosListOptions{All: true}); err == nil || !strings.Contains(err.Error(), "cannot be selected") {
-		t.Fatalf("runTodosList error = %v, want provider migration error", err)
 	}
 }
 
@@ -696,12 +605,9 @@ func TestFilterTODOsSinceUsesNewestCreatedOrUpdatedTimestamp(t *testing.T) {
 
 func TestRunTodosListRejectsInvalidSince(t *testing.T) {
 	workDir := seedListTodos(t)
-	oldProvider := todosProvider
 	oldWorkingDir := workingDir
-	todosProvider = todos.ProviderDB
 	workingDir = workDir
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		workingDir = oldWorkingDir
 	})
 
@@ -725,7 +631,7 @@ func TestTodoListSinceAcceptsDateMath(t *testing.T) {
 func seedListTodos(t *testing.T) string {
 	t.Helper()
 	workDir := t.TempDir()
-	provider := todos.NewFileProvider(workDir, "")
+	provider := testProviderFor(workDir)
 	for _, item := range []struct {
 		title  string
 		status types.Status
@@ -748,7 +654,7 @@ func seedListTodos(t *testing.T) string {
 func seedProjectTodos(t *testing.T, pendingTitle, completedTitle string) string {
 	t.Helper()
 	workDir := t.TempDir()
-	provider := todos.NewFileProvider(workDir, "")
+	provider := testProviderFor(workDir)
 	for _, item := range []struct {
 		title  string
 		status types.Status
@@ -765,12 +671,9 @@ func seedProjectTodos(t *testing.T, pendingTitle, completedTitle string) string 
 
 func runListWithGlobals(t *testing.T, workDir string, opts TodosListOptions) types.TODOS {
 	t.Helper()
-	oldProvider := todosProvider
 	oldWorkingDir := workingDir
-	todosProvider = todos.ProviderDB
 	workingDir = workDir
 	t.Cleanup(func() {
-		todosProvider = oldProvider
 		workingDir = oldWorkingDir
 	})
 
@@ -785,11 +688,11 @@ func runListWithGlobals(t *testing.T, workDir string, opts TodosListOptions) typ
 	return got
 }
 
-func stubRuntimeWithFileProvider(t *testing.T) {
+func stubRuntimeWithTestProvider(t *testing.T) {
 	t.Helper()
 	old := openRuntimeTodosProvider
 	openRuntimeTodosProvider = func(_ context.Context, workDir string) (todos.Provider, error) {
-		return todos.NewFileProvider(workDir, ""), nil
+		return testProviderFor(workDir), nil
 	}
 	t.Cleanup(func() { openRuntimeTodosProvider = old })
 }

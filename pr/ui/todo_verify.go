@@ -40,7 +40,6 @@ func (s *Server) handleCriteriaCatalog(w http.ResponseWriter, _ *http.Request) {
 // endpoints: a todo reference plus, for the save endpoint, the full criteria
 // list, and an optional model override for the AI endpoints.
 type todoCriteriaPayload struct {
-	Provider string                      `json:"provider,omitempty"`
 	Dir      string                      `json:"dir,omitempty"`
 	Ref      string                      `json:"ref,omitempty"`
 	Model    string                      `json:"model,omitempty"`
@@ -54,7 +53,7 @@ type todoCriteriaPayload struct {
 // loadTodoForWrite resolves the provider + source for a todo mutation and loads
 // the todo, mirroring handleTodoPatch's resolution. The returned status is the
 // HTTP code to use when err is non-nil.
-func (s *Server) loadTodoForWrite(r *http.Request, providerOverride, dir, ref string) (todos.Provider, todoSource, *types.TODO, int, error) {
+func (s *Server) loadTodoForWrite(r *http.Request, dir, ref string) (todos.Provider, todoSource, *types.TODO, int, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
 		ref = strings.TrimSpace(r.URL.Query().Get("ref"))
@@ -63,9 +62,6 @@ func (s *Server) loadTodoForWrite(r *http.Request, providerOverride, dir, ref st
 		return nil, todoSource{}, nil, http.StatusBadRequest, fmt.Errorf("ref is required")
 	}
 	source := todoSourceFromRequest(r)
-	if providerOverride != "" {
-		source.Provider = providerOverride
-	}
 	if dir != "" {
 		source.Dir = dir
 	}
@@ -85,7 +81,7 @@ func (s *Server) handleTodoCriteria(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -106,7 +102,7 @@ func (s *Server) handleTodoCriteriaGenerate(w http.ResponseWriter, r *http.Reque
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -140,7 +136,7 @@ func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -175,7 +171,7 @@ func (s *Server) handleTodoVerifyPreview(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	_, source, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	_, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return
@@ -217,10 +213,9 @@ func (s *Server) saveCriteria(r *http.Request, provider todos.Provider, todo *ty
 // todoVerificationFixturePayload is the request body for saving the
 // Verification tab's fixture markdown (edited via the dashboard's FixtureEditor).
 type todoVerificationFixturePayload struct {
-	Provider string `json:"provider,omitempty"`
-	Dir      string `json:"dir,omitempty"`
-	Ref      string `json:"ref,omitempty"`
-	Fixture  string `json:"fixture"`
+	Dir     string `json:"dir,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	Fixture string `json:"fixture"`
 }
 
 // handleTodoVerificationFixture saves a todo's "## Verification" fixture
@@ -233,7 +228,7 @@ func (s *Server) handleTodoVerificationFixture(w http.ResponseWriter, r *http.Re
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Provider, payload.Dir, payload.Ref)
+	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
 	if err != nil {
 		writeTodoError(w, status, err)
 		return

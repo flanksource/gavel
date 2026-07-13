@@ -46,7 +46,7 @@ func uploadScreenshot(t *testing.T, s *Server, workDir string) todoNewResponse {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?provider=todos&dir="+url.QueryEscape(workDir), &body)
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/new?dir="+url.QueryEscape(workDir), &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {

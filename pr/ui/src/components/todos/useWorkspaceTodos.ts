@@ -9,7 +9,6 @@ import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRang
 export interface SelectedTodo {
   dir: string;
   ref: string;
-  provider: string;
 }
 
 // useWorkspaceTodos drives the shared todos data layer: it lists every
@@ -35,11 +34,7 @@ export function useWorkspaceTodos(
   // Every configured workspace with a directory is listed straight from
   // projects.json; ones with no todos render an empty "No todos" group.
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
-  // Runtime persistence is PostgreSQL-only. Keep the provider-shaped return
-  // values until M7 removes that plumbing, but never derive behavior from a
-  // project's legacy todoProvider setting.
   const dirsKey = useMemo(() => JSON.stringify(workspaces.map(w => w.dir)), [workspaces]);
-  const providerFor = useCallback((_dir: string) => 'db', []);
 
   const [byDir, setByDir] = useState<Record<string, TodoListResponse>>({});
   const [loadingList, setLoadingList] = useState(false);
@@ -115,7 +110,7 @@ export function useWorkspaceTodos(
         } catch (err: any) {
           return {
             dir,
-            data: { provider: 'db', dir, counts: emptyCounts, items: [] } as TodoListResponse,
+            data: { dir, counts: emptyCounts, items: [] } as TodoListResponse,
             error: err?.message || 'Load failed',
           };
         }
@@ -154,7 +149,7 @@ export function useWorkspaceTodos(
     setDetailError('');
     (async () => {
       try {
-        const params = new URLSearchParams(todoQuery(selected.dir, selected.provider));
+        const params = new URLSearchParams(todoQuery(selected.dir));
         params.set('ref', selected.ref);
         const res = await fetch(`/api/todos/item?${params.toString()}`);
         const data = await res.json().catch(() => ({}));
@@ -227,7 +222,7 @@ export function useWorkspaceTodos(
         if (cancelled) return;
         appliedId.current = selectedId;
         skipDetailKey.current = `${canonicalDir}\u0000${canonicalRef}`;
-        setSelection({ dir: canonicalDir, ref: canonicalRef, provider: todo.provider || 'db' });
+        setSelection({ dir: canonicalDir, ref: canonicalRef });
         setDetail(todo);
       } catch (err: any) {
         if (!cancelled) {
@@ -250,10 +245,10 @@ export function useWorkspaceTodos(
 
   const created = useCallback((dir: string, todo: TodoItem) => {
     setShowCreate(false);
-    select({ dir, ref: todo.ref, provider: providerFor(dir) });
+    select({ dir, ref: todo.ref });
     setDetail(todo);
     refresh();
-  }, [providerFor, refresh, select]);
+  }, [refresh, select]);
 
   const updateItem = useCallback((todo: TodoItem) => {
     setDetail(todo);
@@ -269,10 +264,10 @@ export function useWorkspaceTodos(
   // A transferred todo now lives in the target workspace: follow it there so the
   // detail pane keeps showing it after the move (the source list loses it).
   const transferred = useCallback((toDir: string, todo: TodoItem) => {
-    select({ dir: toDir, ref: todo.ref, provider: providerFor(toDir) });
+    select({ dir: toDir, ref: todo.ref });
     setDetail(todo);
     refresh();
-  }, [providerFor, refresh, select]);
+  }, [refresh, select]);
 
   return {
     workspaces,
@@ -286,7 +281,6 @@ export function useWorkspaceTodos(
     select,
     detail,
     loadingDetail,
-    providerFor,
     refresh,
     showCreate,
     setShowCreate,

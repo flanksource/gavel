@@ -12,7 +12,7 @@ import (
 func stubProjectTodoCounts(t *testing.T) {
 	t.Helper()
 	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, string, string) (todoCounts, error) {
+	projectTodoCounts = func(context.Context, string) (todoCounts, error) {
 		return todoCounts{}, nil
 	}
 	t.Cleanup(func() { projectTodoCounts = original })

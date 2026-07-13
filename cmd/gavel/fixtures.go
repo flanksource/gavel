@@ -165,8 +165,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("ignore", "Glob patterns to exclude")).
 		Add(kv("fix", "Apply auto-fixes")).
 		Add(kv("changed, since, baseline, failed", "Only report new / prior violations")).
-		Add(kv("timeout", "Per-linter timeout (e.g. 5m)")).
-		Add(kv("group-by", "Group synced TODOs by file, package or message")).NewLine().
+		Add(kv("timeout", "Per-linter timeout (e.g. 5m)")).NewLine().
 		Add(sh("Rendering")).
 		Add(kv("show-passed", "Add passing tests / clean linters as child nodes (default: only failures)")).
 		Add(kv("show-failed", "Add failing tests / violations as child nodes (default: true)")).NewLine().

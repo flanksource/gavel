@@ -90,7 +90,7 @@ describe('CmuxSessionButton', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(
-      <CmuxSessionButton dir="/repo" provider="grite" sessionId="sess-1234" agent="claude" onResume={vi.fn()} />,
+      <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={vi.fn()} />,
     );
 
     // The surface comment maps the session to its cmux terminal.
@@ -109,13 +109,13 @@ describe('CmuxSessionButton', () => {
     const onResume = vi.fn();
 
     const { rerender } = render(
-      <CmuxSessionButton dir="/repo" provider="grite" sessionId="sess-1234" agent="claude" onResume={onResume} />,
+      <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={onResume} />,
     );
 
     fireEvent.click(await screen.findByRole('button', { name: /Resume in cmux/ }));
     expect(onResume).toHaveBeenCalledTimes(1);
 
-    rerender(<CmuxSessionButton dir="/repo" provider="grite" sessionId="sess-1234" agent="claude" />);
+    rerender(<CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" />);
     expect(screen.queryByRole('button', { name: /Resume in cmux/ })).toBeNull();
   });
 
@@ -125,7 +125,7 @@ describe('CmuxSessionButton', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CmuxSessionButton dir="/repo" provider="grite" sessionId="sess-9" agent="claude" onResume={vi.fn()} />);
+    render(<CmuxSessionButton dir="/repo" sessionId="sess-9" agent="claude" onResume={vi.fn()} />);
 
     const focus = await screen.findByRole('button', { name: /Focus in cmux/ });
     expect((focus as HTMLButtonElement).disabled).toBe(true);

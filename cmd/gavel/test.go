@@ -44,9 +44,6 @@ var (
 )
 
 func runTests(opts testrunner.RunOptions) (any, error) {
-	if opts.SyncTodos {
-		return nil, retiredTODOFileRuntimeError("gavel test", "--sync-todos")
-	}
 	opts.AutoStop = testDurationFlags.AutoStop
 	opts.IdleTimeout = testDurationFlags.IdleTimeout
 	opts.Timeout = testDurationFlags.Timeout
@@ -868,14 +865,6 @@ func init() {
 	if f := testCmd.Flags().Lookup("failed"); f != nil {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
-	}
-	if f := testCmd.Flags().Lookup("sync-todos"); f != nil {
-		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
-	}
-	for _, name := range []string{"todos-dir", "todo-template"} {
-		if f := testCmd.Flags().Lookup(name); f != nil {
-			f.Usage = "Retired file-backed TODO sync option; runtime TODOs use PostgreSQL"
-		}
 	}
 }
 

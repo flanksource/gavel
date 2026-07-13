@@ -31,20 +31,17 @@ func statusForProjectErr(err error) int {
 // directory's current contents, and todo counts are scoped to the workspace.
 func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
 	dir := p.ResolvedDir()
-	backend, auto := resolveTodoBackend(dir, p.TodoProvider)
-	counts, err := projectTodoCounts(ctx, dir, p.TodoProvider)
+	counts, err := projectTodoCounts(ctx, dir)
 	if err != nil {
 		return projectInfo{}, err
 	}
 	return projectInfo{
-		Name:            p.Name,
-		Dir:             dir,
-		Repos:           p.Repos,
-		HasProcfile:     dir != "" && procfile.Find(dir, "") != "",
-		TodoProvider:    p.TodoProvider,
-		TodoBackend:     backend,
-		TodoBackendAuto: auto,
-		TodoCounts:      counts,
+		Name:        p.Name,
+		Dir:         dir,
+		Repos:       p.Repos,
+		HasProcfile: dir != "" && procfile.Find(dir, "") != "",
+		TodoBackend: "db",
+		TodoCounts:  counts,
 	}, nil
 }
 

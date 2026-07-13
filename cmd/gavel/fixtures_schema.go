@@ -45,17 +45,14 @@ func fixturesSchemaDocument() (map[string]any, error) {
 
 	testSchema := commandSchema(testCommand, "paths", commandSchemaOptions{
 		Exclude: map[string]bool{
-			"addr":          true,
-			"auto-stop":     true,
-			"detach":        true,
-			"diagnostics":   true,
-			"idle-timeout":  true,
-			"lint":          true,
-			"lint-timeout":  true,
-			"sync-todos":    true,
-			"todo-template": true,
-			"todos-dir":     true,
-			"ui":            true,
+			"addr":         true,
+			"auto-stop":    true,
+			"detach":       true,
+			"diagnostics":  true,
+			"idle-timeout": true,
+			"lint":         true,
+			"lint-timeout": true,
+			"ui":           true,
 		},
 	})
 	lintSchema := commandSchema(lintCommand, "files", commandSchemaOptions{
@@ -73,7 +70,6 @@ func fixturesSchemaDocument() (map[string]any, error) {
 			"edit":                  true,
 			"effort":                true,
 			"fix":                   true,
-			"group-by":              true,
 			"hooks":                 true,
 			"max-tokens":            true,
 			"max-turns":             true,
@@ -95,7 +91,6 @@ func fixturesSchemaDocument() (map[string]any, error) {
 			"skills":                true,
 			"summary":               true,
 			"summary-limit":         true,
-			"sync-todos":            true,
 			"temperature":           true,
 			"triage":                true,
 			"ui":                    true,

@@ -468,11 +468,8 @@ export function rememberTodoRunOptionsForMode(options: TodoRunOptions, advanced 
   return rememberTodoRunOptions(actionFromRunOptions(options), options, advanced);
 }
 
-// useTodoRun POSTs a run for one or more todo refs in a workspace. A single ref
-// runs on its own; multiple refs run together in one agent session (the server
-// dispatches them as a combined group). Both the single-todo detail pane and the
-// list's multi-select bar drive runs through this one hook.
-export function useTodoRun(dir: string, provider: string) {
+// useTodoRun POSTs a run for one native TODO in a workspace.
+export function useTodoRun(dir: string) {
   const [runBusy, setRunBusy] = useState(false);
   const [runMessage, setRunMessage] = useState("");
   const [runError, setRunError] = useState("");
@@ -483,17 +480,15 @@ export function useTodoRun(dir: string, provider: string) {
   }, []);
 
   const run = useCallback(
-    async (refs: string[], options: TodoRunOptions = defaultRunOptions): Promise<TodoRunResponse | null> => {
-      const cleaned = refs.map((r) => r.trim()).filter(Boolean);
-      if (cleaned.length === 0 || runBusy) return null;
+    async (ref: string, options: TodoRunOptions = defaultRunOptions): Promise<TodoRunResponse | null> => {
+      const cleaned = ref.trim();
+      if (!cleaned || runBusy) return null;
       setRunBusy(true);
       setRunError("");
       setRunMessage("");
       try {
-        // Send `ref` for a single todo (matching the original payload) and `refs`
-        // for a multi-select group run.
-        const body = cleaned.length === 1 ? { ref: cleaned[0], ...options } : { refs: cleaned, ...options };
-        const response = await fetch(`/api/todos/run?${todoQuery(dir, provider)}`, {
+        const body = { ref: cleaned, ...options };
+        const response = await fetch(`/api/todos/run?${todoQuery(dir)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -510,7 +505,7 @@ export function useTodoRun(dir: string, provider: string) {
         setRunBusy(false);
       }
     },
-    [dir, provider, runBusy],
+    [dir, runBusy],
   );
 
   return { runBusy, runMessage, runError, reset, run };
@@ -1018,8 +1013,7 @@ export function TodoRunAdvancedDialog({
   title = "Run todo",
   initialMode = "run",
   dir,
-  provider,
-  refs,
+  refID,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1027,11 +1021,10 @@ export function TodoRunAdvancedDialog({
   loading?: boolean;
   title?: string;
   initialMode?: RunMode;
-  // dir/provider/refs identify the todo(s) this dialog will run, so it can fetch
+  // dir/refID identify the TODO this dialog will run, so it can fetch
   // a live preview of the prompt that will be sent as the options change.
   dir: string;
-  provider: string;
-  refs: string[];
+  refID: string;
 }) {
   // Run/Plan share one AISpecRuntimeValue (model/backend/effort/budget/
   // permissions/prompt), edited via clicky's PromptRunEditor. Verify only ever
@@ -1071,7 +1064,7 @@ export function TodoRunAdvancedDialog({
   const { driver, runBackend } = driverForSelection(context, agent, runtimeValue.backend);
   const plan = mode === "plan";
   const isVerify = mode === "verify";
-  const canVerify = refs.length === 1; // verify scores one issue's commits
+  const canVerify = !!refID; // verify scores one issue's commits
   const verifyBackends = backendsForAgent(context, verifyAgent).filter((item) => !isCmuxBackend(verifyAgent, item.id));
   const verifyBackendCatalog =
     verifyBackends.find((item) => item.id === verifyBackend) ??
@@ -1170,9 +1163,6 @@ export function TodoRunAdvancedDialog({
     };
   }, [open, initialMode]);
 
-  // refs is a fresh array each render at the call sites, so key the preview fetch
-  // on its contents rather than its identity to avoid an endless refetch loop.
-  const refsKey = refs.join("\n");
   const previewModel = isVerify ? verifyModel.trim() || verifyModelFallback : runtimeValue.model?.trim() || modelFallback;
   const previewBackend = isVerify ? verifyBackend : runBackend;
 
@@ -1187,16 +1177,15 @@ export function TodoRunAdvancedDialog({
       setPreviewError("");
       return;
     }
-    const list = refsKey.split("\n").filter(Boolean);
-    if (list.length === 0) {
+    if (!refID) {
       setPreviewError("");
       return;
     }
-    const url = isVerify ? `/api/todos/verify/preview?${todoQuery(dir, provider)}` : `/api/todos/run/preview?${todoQuery(dir, provider)}`;
+    const url = isVerify ? `/api/todos/verify/preview?${todoQuery(dir)}` : `/api/todos/run/preview?${todoQuery(dir)}`;
     const body = isVerify
-      ? { dir, ref: list[0], backend: previewBackend, model: previewModel }
+      ? { dir, ref: refID, backend: previewBackend, model: previewModel }
       : {
-          refs: list,
+          ref: refID,
           driver,
           backend: previewBackend,
           model: previewModel,
@@ -1230,22 +1219,21 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, provider, refsKey, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, isVerify, regenNonce]);
+  }, [open, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, isVerify, regenNonce]);
 
   if (!open) return null;
 
   // runVerify POSTs the (edited) verify prompt to the verification endpoint and
   // closes on success; the parent's todo polling reflects the new status.
   async function runVerify() {
-    const list = refsKey.split("\n").filter(Boolean);
-    if (list.length === 0) return;
+    if (!refID) return;
     setVerifyBusy(true);
     setVerifyError("");
     try {
-      const res = await fetch(`/api/todos/verify?${todoQuery(dir, provider)}`, {
+      const res = await fetch(`/api/todos/verify?${todoQuery(dir)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dir, ref: list[0], backend: verifyBackend, model: previewModel, prompt: promptDraft }),
+        body: JSON.stringify({ dir, ref: refID, backend: verifyBackend, model: previewModel, prompt: promptDraft }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verify failed");

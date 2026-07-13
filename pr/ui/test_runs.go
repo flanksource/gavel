@@ -124,7 +124,7 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 
 // collectTestRuns groups cached runs under the live project list (so renames /
 // removals reflect immediately). Falls back to a direct .gavel scan when no DB
-// is configured, mirroring CachedGriteProvider's cache-optional design.
+// is configured so test-history browsing remains available without caching.
 func collectTestRuns(ctx context.Context) []projectRuns {
 	projects := LoadProjects()
 	store := cache.Shared()

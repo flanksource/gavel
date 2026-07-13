@@ -32,7 +32,7 @@ describe('TodoPlan', () => {
       json: async () => ({ error: 'native TODO storage requires PostgreSQL' }),
     }) as Response));
 
-    render(<TodoPlan dir="/repo" provider="db" todo={todo} active />);
+    render(<TodoPlan dir="/repo" todo={todo} active />);
     await act(async () => {});
 
     expect(screen.getByRole('alert').textContent).toContain('native TODO storage requires PostgreSQL');

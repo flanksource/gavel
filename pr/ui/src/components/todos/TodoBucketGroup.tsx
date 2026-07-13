@@ -23,7 +23,7 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // TodoBucketGroup is one collapsible severity/age section of the flattened todo
 // list. Unlike WorkspaceTodoGroup it spans workspaces, so each row names its
 // owning workspace and there is no batch-run control (a run targets a single
-// workspace dir/provider). The Closed/Status filter hides matching rows but
+// workspace directory). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
 export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, density = 'comfortable' }: {
   bucket: TodoBucket;
@@ -65,7 +65,6 @@ export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, ra
             density={density}
             workspace={entry.workspace.name}
             dir={entry.workspace.dir}
-            provider={entry.workspace.todoProvider || 'auto'}
           />
         ))
       ) : (

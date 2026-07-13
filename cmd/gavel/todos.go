@@ -27,7 +27,6 @@ import (
 )
 
 var (
-	todosDir      string
 	maxRetries    int
 	filterStatus  string
 	checkTimeout  time.Duration
@@ -39,7 +38,6 @@ var (
 	dryRun        bool
 	commitAfter   bool
 	checkAfter    bool
-	todosProvider string
 	todosMode     string
 	todosDriver   string
 	todoModel     string
@@ -58,15 +56,14 @@ var todosCmd = &cobra.Command{
 	Long: `Run, verify, and manage TODOs — units of work an AI coding agent implements
 and gavel then scores against their acceptance criteria.
 
-A TODO is a markdown file with YAML frontmatter (title, status, priority,
-working_commit, branch, verify, checks, ...). Its GitHub task-list items
-("- [ ] ...") are the acceptance criteria that 'todos verify' scores. Todos come
-from source TODO/FIXME comments ('todos sync'), from a PR's failures
-('gavel pr fix' / 'gavel pr status --sync-todos'), or by hand ('todos create').
+A TODO is a PostgreSQL-backed issue with a title, body, status, priority,
+acceptance criteria, verification fixtures, and execution history. Todos come
+from source TODO/FIXME comments ('todos sync'), explicit portable/Grite imports,
+or by hand ('todos create').
 
 Subcommands:
   list      List TODOs (filter by --status, group with --group-by)
-  get       Show one TODO in detail (accepts a short id, full id, or file path)
+  get       Show one TODO in detail (accepts a short id, full id, title, or alias)
   create    Create a TODO
   run       Have a coding agent implement TODOs (--mode run|plan|verify)
   verify    AI-score whether a TODO's commits implement its criteria
@@ -89,7 +86,7 @@ var todosRunCmd = &cobra.Command{
 	Short:        "Have a coding agent implement TODOs (run/plan/verify modes)",
 	Long: `Drive an AI coding agent (Claude or Codex, via cmux or headless) to work TODOs.
 
-With no arguments it runs every pending TODO; pass titles/ids/paths to select a
+With no arguments it runs every pending TODO; pass titles, ids, or aliases to select a
 subset, or -i to pick interactively. --mode chooses the operation:
   run     implement the TODO (default)
   plan    propose a reviewable plan instead of editing (see 'todos plan')
@@ -112,7 +109,6 @@ Examples:
 }
 
 type TodosListOptions struct {
-	Dir     string `json:"dir" flag:"dir" help:"Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)"`
 	Status  string `json:"status" flag:"status" help:"Filter TODOs by status"`
 	All     bool   `json:"all" flag:"all" help:"List PostgreSQL-backed TODOs from all registered projects"`
 	Done    bool   `json:"done" flag:"done" help:"Include verified and completed TODOs"`
@@ -123,34 +119,34 @@ type TodosListOptions struct {
 func (opts TodosListOptions) GetName() string { return "list" }
 
 var todosGetCmd = &cobra.Command{
-	Use:          "get <id-or-file>",
+	Use:          "get <id-or-alias>",
 	SilenceUsage: true,
-	Short:        "Display detailed information about a TODO (accepts a full or short id, or a file path)",
-	Long: `Show one TODO in full — frontmatter, body, acceptance criteria, and run history.
+	Short:        "Display detailed information about a PostgreSQL-backed TODO",
+	Long: `Show one TODO in full — metadata, body, acceptance criteria, and run history.
 
-The argument matches a short id, a full id, the title, or a file path.
+The argument matches a short id, a full id, the title, or an imported alias.
 
 Examples:
   gavel todos get 3f2a1b
-  gavel todos get "Fix flaky parser test"
-  gavel todos get .todos/fix-parser.md`,
+
+  gavel todos get "Fix flaky parser test"`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTodosGet,
 }
 
 var todosCheckCmd = &cobra.Command{
-	Use:          "check [todo-files...]",
+	Use:          "check [ids-or-aliases...]",
 	SilenceUsage: true,
 	Short:        "Check TODOs by running their verification tests",
 	Long: `Run each TODO's verification commands (the 'verify' fixtures) and report pass/fail.
 
 This runs the deterministic checks attached to a TODO — unlike 'todos verify',
 which uses AI to score acceptance criteria. Exits non-zero if any TODO fails.
-With no arguments it checks every discovered TODO; pass ids/paths to select some.
+With no arguments it checks every discovered TODO; pass ids or aliases to select some.
 
 Examples:
   gavel todos check
-  gavel todos check .todos/fix-parser.md
+  gavel todos check 3f2a1b
   gavel todos check --status in_progress`,
 	RunE: runTodosCheck,
 }
@@ -174,11 +170,11 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
-	logger.Infof("Discovering TODOs using provider: %s", selectedTodosProvider())
+	logger.Infof("Discovering TODOs from PostgreSQL")
 
 	filters := todos.DiscoveryFilters{
 		ExcludeStatuses: []types.Status{types.StatusCompleted},
@@ -545,7 +541,7 @@ func cleanupTODOStatus(todo *types.TODO, result *todos.ExecutionResult) {
 	} else {
 		todo.Status = types.StatusFailed
 	}
-	// FIXME: Persist frontmatter updates back to file
+	// The executor persists lifecycle state through the native provider.
 }
 
 func safeResult(results []*todos.ExecutionResult, i int) *todos.ExecutionResult {

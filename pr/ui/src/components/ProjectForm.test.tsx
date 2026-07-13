@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectFields, useProjectRegistration, type ProjectRegistration } from './ProjectForm';
 
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('ProjectForm PostgreSQL cutover', () => {
-  it('does not persist the retained legacy todoProvider field', async () => {
+  it('persists only native project identity fields', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
       { ok: true, text: async () => '' }
     ) as Response);
@@ -31,9 +31,7 @@ describe('ProjectForm PostgreSQL cutover', () => {
       result.current.setName('gavel');
       result.current.setDir('/work/gavel');
       result.current.setRepos(['flanksource/gavel']);
-      result.current.setTodoProvider('grite');
     });
-    await waitFor(() => expect(result.current.todoProvider).toBe('grite'));
 
     let saved = false;
     await act(async () => { saved = await result.current.save(); });
@@ -58,8 +56,6 @@ describe('ProjectForm PostgreSQL cutover', () => {
       setDir: noop,
       repos: [],
       setRepos: noop,
-      todoProvider: 'grite',
-      setTodoProvider: noop,
       error: '',
       saving: false,
       deleting: false,
@@ -71,7 +67,6 @@ describe('ProjectForm PostgreSQL cutover', () => {
     render(<ProjectFields reg={reg} repoOptions={[]} />);
 
     expect(screen.getByLabelText('Todo persistence').textContent).toBe('PostgreSQL');
-    expect(screen.queryByText('Grite')).toBeNull();
-    expect(screen.queryByText('.todos files')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /provider/i })).toBeNull();
   });
 });

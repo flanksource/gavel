@@ -2,7 +2,7 @@
 // and by other packages (e.g. fixtures/types) that need to run linters
 // programmatically. It owns linter discovery, executable resolution, execution
 // fan-out across project roots, and the post-run filter cascade. CLI-only
-// concerns (cobra wiring, the --ui dashboard, interactive triage, TODO sync,
+// concerns (cobra wiring, the --ui dashboard, interactive triage,
 // snapshot persistence, and the AI-fix loop) stay in cmd/gavel and call into
 // this package.
 package lint
@@ -25,8 +25,6 @@ type Options struct {
 	Fix          bool            `flag:"fix" yaml:"fix,omitempty" help:"Enable auto-fixing"`
 	NoCache      bool            `flag:"no-lint-cache" yaml:"no-lint-cache,omitempty" help:"Disable linter result caching/debounce"`
 	Timeout      string          `flag:"timeout" yaml:"timeout,omitempty" help:"Timeout per linter (e.g. 5m, 30s)" default:"5m"`
-	SyncTodos    string          `flag:"sync-todos" yaml:"sync-todos,omitempty" help:"Sync violations to TODO files in directory (default: .todos/lint)"`
-	GroupBy      string          `flag:"group-by" yaml:"group-by,omitempty" help:"Group synced TODOs by: file, package, message" default:"file"`
 	WorkDir      string          `flag:"work-dir" yaml:"work-dir,omitempty" help:"Working directory"`
 	Changed      bool            `flag:"changed" yaml:"changed,omitempty" help:"Only report new issues vs origin/main (or $GAVEL_CHANGED_BASE)"`
 	Since        string          `flag:"since" yaml:"since,omitempty" help:"Only report new issues since <ref> (merge-base with HEAD)"`

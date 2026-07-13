@@ -28,7 +28,7 @@ scores. Subcommands: list, add, remove, edit, generate (AI re-draft).`,
 }
 
 var todosCriteriaListCmd = &cobra.Command{
-	Use:          "list <id-or-file>",
+	Use:          "list <id-or-alias>",
 	SilenceUsage: true,
 	Short:        "List a TODO's acceptance criteria",
 	Args:         cobra.ExactArgs(1),
@@ -36,7 +36,7 @@ var todosCriteriaListCmd = &cobra.Command{
 }
 
 var todosCriteriaAddCmd = &cobra.Command{
-	Use:          "add <id-or-file> <criterion...>",
+	Use:          "add <id-or-alias> <criterion...>",
 	SilenceUsage: true,
 	Short:        "Add a custom acceptance criterion",
 	Args:         cobra.MinimumNArgs(2),
@@ -44,7 +44,7 @@ var todosCriteriaAddCmd = &cobra.Command{
 }
 
 var todosCriteriaRemoveCmd = &cobra.Command{
-	Use:          "remove <id-or-file> <number>",
+	Use:          "remove <id-or-alias> <number>",
 	SilenceUsage: true,
 	Short:        "Remove an acceptance criterion by its list number",
 	Args:         cobra.ExactArgs(2),
@@ -52,7 +52,7 @@ var todosCriteriaRemoveCmd = &cobra.Command{
 }
 
 var todosCriteriaEditCmd = &cobra.Command{
-	Use:          "edit <id-or-file> <number> <criterion...>",
+	Use:          "edit <id-or-alias> <number> <criterion...>",
 	SilenceUsage: true,
 	Short:        "Replace an acceptance criterion's text by its list number",
 	Args:         cobra.MinimumNArgs(3),
@@ -60,7 +60,7 @@ var todosCriteriaEditCmd = &cobra.Command{
 }
 
 var todosCriteriaGenerateCmd = &cobra.Command{
-	Use:          "generate <id-or-file>",
+	Use:          "generate <id-or-alias>",
 	SilenceUsage: true,
 	Short:        "(Re)draft acceptance criteria for a TODO using an AI model",
 	Args:         cobra.ExactArgs(1),
@@ -73,7 +73,6 @@ func init() {
 		todosCriteriaListCmd, todosCriteriaAddCmd, todosCriteriaRemoveCmd,
 		todosCriteriaEditCmd, todosCriteriaGenerateCmd,
 	} {
-		c.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 		todosCriteriaCmd.AddCommand(c)
 	}
 	todosCriteriaGenerateCmd.Flags().StringVar(&todoCriteriaModel, "model", "", "LLM model for acceptance-criteria generation")
@@ -84,7 +83,7 @@ func loadCriteriaTODO(ctx context.Context, ref string) (todos.Provider, *types.T
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return nil, nil, err
 	}

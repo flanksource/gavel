@@ -24,27 +24,27 @@ var (
 )
 
 var todosEditCmd = &cobra.Command{
-	Use:          "edit <id-or-file>",
+	Use:          "edit <id-or-alias>",
 	SilenceUsage: true,
 	Short:        "Edit a TODO's title and/or body",
 	Example: `  gavel todos edit 3f2a1b --title "Fix parser panic"
-  gavel todos edit .todos/fix-parser.md --body-file new-body.md`,
+  gavel todos edit 3f2a1b --body-file new-body.md`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTodosEdit,
 }
 
 var todosCommentCmd = &cobra.Command{
-	Use:          "comment <id-or-file> [message...]",
+	Use:          "comment <id-or-alias> [message...]",
 	SilenceUsage: true,
 	Short:        "Add a comment to a TODO",
 	Example: `  gavel todos comment 3f2a1b "blocked on the upstream fix"
-  gavel todos comment .todos/fix-parser.md --body-file note.md`,
+  gavel todos comment 3f2a1b --body-file note.md`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runTodosComment,
 }
 
 var todosReopenCmd = &cobra.Command{
-	Use:          "reopen <id-or-file>",
+	Use:          "reopen <id-or-alias>",
 	SilenceUsage: true,
 	Short:        "Reopen a completed TODO, optionally with a comment",
 	Example: `  gavel todos reopen 3f2a1b
@@ -55,18 +55,15 @@ var todosReopenCmd = &cobra.Command{
 
 func init() {
 	todosCmd.AddCommand(todosEditCmd)
-	todosEditCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
 	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body")
 	todosEditCmd.Flags().StringVar(&todoEditBodyFile, "body-file", "", "Read new body from file")
 
 	todosCmd.AddCommand(todosCommentCmd)
-	todosCommentCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosCommentCmd.Flags().StringVar(&todoCommentBody, "body", "", "Comment body")
 	todosCommentCmd.Flags().StringVar(&todoCommentBodyFile, "body-file", "", "Read comment body from file")
 
 	todosCmd.AddCommand(todosReopenCmd)
-	todosReopenCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosReopenCmd.Flags().StringVar(&todoReopenComment, "comment", "", "Comment to add while reopening")
 	todosReopenCmd.Flags().StringVar(&todoReopenCommentFile, "comment-file", "", "Read reopen comment from file")
 }
@@ -76,7 +73,7 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
@@ -116,7 +113,7 @@ func runTodosComment(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}
@@ -149,7 +146,7 @@ func runTodosReopen(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}

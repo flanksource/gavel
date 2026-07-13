@@ -28,9 +28,6 @@ func init() {
 		f.NoOptDefVal = failedAutoSentinel
 		f.Usage = "Path to previous results JSON; re-run only linters/files that had violations. Pass without a value to use .gavel/last.json."
 	}
-	if f := lintCmd.Flags().Lookup("sync-todos"); f != nil {
-		f.Usage = "Retired .todos export compatibility flag; runtime TODOs use PostgreSQL"
-	}
 }
 
 // resolveAIFix reports whether the AI fix loop should run: either --ai-fix was
@@ -38,9 +35,6 @@ func init() {
 func resolveAIFix(o LintOptions) bool { return o.AIFix || o.Yes }
 
 func runLint(opts LintOptions) (any, error) {
-	if opts.SyncTodos != "" {
-		return nil, retiredTODOFileRuntimeError("gavel lint", "--sync-todos")
-	}
 	var err error
 	opts, err = lint.NormalizeRootArg(opts)
 	if err != nil {

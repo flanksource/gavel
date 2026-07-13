@@ -34,7 +34,7 @@ export interface PlanAnswerResult {
 
 // usePlanActions exposes approve/answer against a workspace, with shared
 // busy/error state so a bar or a detail pane can drive either action.
-export function usePlanActions(dir: string, provider: string) {
+export function usePlanActions(dir: string) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -48,7 +48,7 @@ export function usePlanActions(dir: string, provider: string) {
       try {
         const body: Record<string, unknown> = { ref: ref.trim(), run: !!opts.run };
         if (opts.run) body.options = opts.options ?? defaultRunOptions;
-        const res = await fetch(`/api/todos/plan/approve?${todoQuery(dir, provider)}`, {
+        const res = await fetch(`/api/todos/plan/approve?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -63,7 +63,7 @@ export function usePlanActions(dir: string, provider: string) {
         setBusy(false);
       }
     },
-    [dir, provider, busy],
+    [dir, busy],
   );
 
   const answer = useCallback(
@@ -75,7 +75,7 @@ export function usePlanActions(dir: string, provider: string) {
       try {
         const body: Record<string, unknown> = { ref: ref.trim(), answer: trimmed };
         if (options) body.options = options;
-        const res = await fetch(`/api/todos/answer?${todoQuery(dir, provider)}`, {
+        const res = await fetch(`/api/todos/answer?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -90,7 +90,7 @@ export function usePlanActions(dir: string, provider: string) {
         setBusy(false);
       }
     },
-    [dir, provider, busy],
+    [dir, busy],
   );
 
   const reject = useCallback(
@@ -99,7 +99,7 @@ export function usePlanActions(dir: string, provider: string) {
       setBusy(true);
       setError('');
       try {
-        const res = await fetch(`/api/todos/plan/reject?${todoQuery(dir, provider)}`, {
+        const res = await fetch(`/api/todos/plan/reject?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ref: ref.trim() }),
@@ -114,7 +114,7 @@ export function usePlanActions(dir: string, provider: string) {
         setBusy(false);
       }
     },
-    [dir, provider, busy],
+    [dir, busy],
   );
 
   const revise = useCallback(
@@ -124,7 +124,7 @@ export function usePlanActions(dir: string, provider: string) {
       setBusy(true);
       setError('');
       try {
-        const res = await fetch(`/api/todos/plan/revise?${todoQuery(dir, provider)}`, {
+        const res = await fetch(`/api/todos/plan/revise?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ref: ref.trim(), feedback: trimmed }),
@@ -139,7 +139,7 @@ export function usePlanActions(dir: string, provider: string) {
         setBusy(false);
       }
     },
-    [dir, provider, busy],
+    [dir, busy],
   );
 
   return { busy, error, reset, approve, answer, reject, revise };
@@ -301,15 +301,13 @@ export function QuestionsPanel({ questions }: { questions: TodoQuestion[] }) {
 export function TodoReviewBanner({
   todo,
   dir,
-  provider,
   onChanged,
 }: {
   todo: TodoItem;
   dir: string;
-  provider: string;
   onChanged: (todo: TodoItem) => void;
 }) {
-  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(dir, provider);
+  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(dir);
   const [answerText, setAnswerText] = useState('');
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);

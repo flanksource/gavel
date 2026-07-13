@@ -36,17 +36,13 @@ func (p projectInfo) Columns() []api.ColumnDef {
 }
 
 func (p projectInfo) Row() map[string]any {
-	backend := p.TodoBackend
-	if p.TodoBackendAuto {
-		backend += " (auto)"
-	}
 	return map[string]any{
 		"name":     p.Name,
 		"dir":      p.Dir,
 		"repos":    strings.Join(p.Repos, ", "),
 		"procfile": yesNo(p.HasProcfile),
 		"todos":    fmt.Sprintf("%d/%d", p.TodoCounts.Open, p.TodoCounts.Total),
-		"provider": backend,
+		"provider": p.TodoBackend,
 	}
 }
 
@@ -91,11 +87,6 @@ func projectSchema() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "GitHub repos this directory backs (owner/repo)",
-			},
-			"todoProvider": map[string]any{
-				"type":        "string",
-				"enum":        []string{"", "db"},
-				"description": "Deprecated compatibility field; PostgreSQL is always used",
 			},
 		},
 	}

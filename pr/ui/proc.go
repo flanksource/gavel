@@ -20,19 +20,12 @@ import (
 // expanded) and hasProcfile reports whether the directory currently contains a
 // Procfile, so the frontend knows which repo headers can show process controls.
 type projectInfo struct {
-	Name        string   `json:"name"`
-	Dir         string   `json:"dir"`
-	Repos       []string `json:"repos"`
-	HasProcfile bool     `json:"hasProcfile"`
-	// TodoProvider echoes the configured provider ("grite"/"todos"/"" for auto)
-	// so the dashboard can scope its per-workspace todo requests the same way.
-	TodoProvider string `json:"todoProvider,omitempty"`
-	// TodoBackend is the backend actually resolved for the directory ("grite" or
-	// "todos"); TodoBackendAuto is true when it was auto-detected rather than
-	// pinned by TodoProvider.
-	TodoBackend     string     `json:"todoBackend"`
-	TodoBackendAuto bool       `json:"todoBackendAuto"`
-	TodoCounts      todoCounts `json:"todoCounts"`
+	Name        string     `json:"name"`
+	Dir         string     `json:"dir"`
+	Repos       []string   `json:"repos"`
+	HasProcfile bool       `json:"hasProcfile"`
+	TodoBackend string     `json:"todoBackend"`
+	TodoCounts  todoCounts `json:"todoCounts"`
 }
 
 // procStatus is the wire shape for /api/proc/status. hasProcfile=false is the

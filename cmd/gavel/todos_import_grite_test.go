@@ -20,9 +20,7 @@ func TestImportGriteCommandIsDisposableAndRuntimeDefaultsToDB(t *testing.T) {
 	for _, name := range []string{"input", "probe-input", "workspace", "artifact-dir", "finalize", "plan-root", "frozen", "strict"} {
 		assert.NotNil(t, todosImportGriteCmd.Flags().Lookup(name), name)
 	}
-	provider := todosCmd.PersistentFlags().Lookup("provider")
-	require.NotNil(t, provider)
-	assert.Equal(t, "db", provider.DefValue, "runtime TODO routing must remain PostgreSQL-only")
+	assert.Nil(t, todosCmd.PersistentFlags().Lookup("provider"), "runtime TODO routing must not expose retired provider selection")
 }
 
 func TestValidateImportGriteOptions(t *testing.T) {

@@ -5,7 +5,7 @@ import type { TodoDensity } from '../../types';
 
 // Row density is a per-user view preference for the todo lists, persisted
 // alongside the status filter so it survives reloads. 'comfortable' keeps the
-// two-line layout (status + title, then id/priority/provider); 'compact'
+// two-line layout (status + title, then metadata); 'compact'
 // collapses each todo onto a single line.
 export const DENSITY_OPTIONS: { value: TodoDensity; label: string; icon: ComponentType<IconProps> }[] = [
   { value: 'comfortable', label: 'Comfortable', icon: UiRows },

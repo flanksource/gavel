@@ -57,7 +57,7 @@ func TestCollectTodoCommits(t *testing.T) {
 		t.Fatalf("url = %q, want %q", got.URL, wantURL)
 	}
 
-	// An empty issue id (file-backed todos) returns no commits without scanning.
+	// An empty issue id returns no commits without scanning.
 	empty, err := collectTodoCommits(dir, "")
 	if err != nil {
 		t.Fatalf("collectTodoCommits(empty): %v", err)
@@ -69,20 +69,24 @@ func TestCollectTodoCommits(t *testing.T) {
 
 func TestHandleTodoCommits(t *testing.T) {
 	workDir := t.TempDir()
+	gitInDir(t, workDir, "init", "-q")
+	gitInDir(t, workDir, "config", "user.email", "test@example.com")
+	gitInDir(t, workDir, "config", "user.name", "Test User")
+	gitInDir(t, workDir, "config", "commit.gpgsign", "false")
+	gitInDir(t, workDir, "commit", "--allow-empty", "-m", "chore: initialize repository")
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 
 	// Missing ref is a 400.
 	rec := httptest.NewRecorder()
-	s.handleTodoCommits(rec, httptest.NewRequest(http.MethodGet, "/api/todos/commits?provider=todos", nil))
+	s.handleTodoCommits(rec, httptest.NewRequest(http.MethodGet, "/api/todos/commits", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing ref status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
 
-	// Create a file-backed todo (no id), then ask for its linked commits: the
-	// endpoint resolves the todo and returns an empty list (file todos carry no
-	// Gavel-Issue-Id to match against).
+	// Create a native todo, then ask for its linked commits. The repository has
+	// no commit carrying that issue ID, so the result is empty.
 	rec = httptest.NewRecorder()
-	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos?provider=todos", strings.NewReader(`{"title":"Wire commits"}`)))
+	s.handleTodos(rec, httptest.NewRequest(http.MethodPost, "/api/todos", strings.NewReader(`{"title":"Wire commits"}`)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201; body = %q", rec.Code, rec.Body.String())
 	}
@@ -92,7 +96,7 @@ func TestHandleTodoCommits(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleTodoCommits(rec, httptest.NewRequest(http.MethodGet, "/api/todos/commits?provider=todos&ref="+url.QueryEscape(created.Ref), nil))
+	s.handleTodoCommits(rec, httptest.NewRequest(http.MethodGet, "/api/todos/commits?ref="+url.QueryEscape(created.Ref), nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("commits status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -100,11 +104,11 @@ func TestHandleTodoCommits(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal commits: %v", err)
 	}
-	if resp.IssueID != "" {
-		t.Fatalf("issueId = %q, want empty for a file todo", resp.IssueID)
+	if resp.IssueID != created.ID {
+		t.Fatalf("issueId = %q, want native id %q", resp.IssueID, created.ID)
 	}
 	if len(resp.Commits) != 0 {
-		t.Fatalf("got %d commits, want 0 for a file todo", len(resp.Commits))
+		t.Fatalf("got %d commits, want 0 without a matching trailer", len(resp.Commits))
 	}
 }
 

@@ -33,7 +33,7 @@ export function useReviewMode(todos: WorkspaceTodos) {
   const goToEntry = useCallback(
     (entry: TodoEntry | undefined) => {
       if (!entry) return;
-      todos.select({ dir: entry.workspace.dir, ref: entry.todo.ref, provider: entry.workspace.todoProvider || 'auto' });
+      todos.select({ dir: entry.workspace.dir, ref: entry.todo.ref });
     },
     [todos],
   );
@@ -97,7 +97,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const detail = todos.detail && sel && todos.detail.ref === sel.ref ? todos.detail : null;
   const queueTodo = review.queue[review.index]?.todo;
   const current: TodoItem | null = detail ?? queueTodo ?? null;
-  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(sel?.dir ?? '', sel?.provider ?? 'auto');
+  const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(sel?.dir ?? '');
   const [answerText, setAnswerText] = useState('');
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);

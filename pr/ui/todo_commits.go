@@ -45,8 +45,8 @@ func commitDiffStats(ctx context.Context, dir string) map[string]gavelgit.DiffSt
 	return stats
 }
 
-// repoStatKey normalizes a workspace directory into the stable cache key the
-// commit-stat tables use, matching how the grite cache keys its rows.
+// repoStatKey normalizes a workspace directory into the stable key used by the
+// commit-stat cache tables.
 func repoStatKey(dir string) string {
 	if abs, err := filepath.Abs(dir); err == nil {
 		return filepath.Clean(abs)
@@ -67,7 +67,7 @@ type todoCommit struct {
 
 type todoCommitsResponse struct {
 	// IssueID is the todo's id (the Gavel-Issue-Id trailer value commits are
-	// matched against); empty for file todos that carry no id.
+	// matched against).
 	IssueID string       `json:"issueId,omitempty"`
 	Commits []todoCommit `json:"commits"`
 }
@@ -184,8 +184,7 @@ func (s *Server) handleTodoCommitFiles(w http.ResponseWriter, r *http.Request) {
 
 // collectTodoCommits finds the commits in dir whose Gavel-Issue-Id trailer
 // equals issueID and maps them to todoCommit rows with a web link resolved from
-// the origin remote. An empty issueID (e.g. a file-backed todo) returns no
-// commits without touching git.
+// the origin remote. An empty issueID returns no commits without touching git.
 func collectTodoCommits(dir, issueID string) ([]todoCommit, error) {
 	issueID = strings.TrimSpace(issueID)
 	if issueID == "" {

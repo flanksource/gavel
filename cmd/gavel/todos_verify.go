@@ -17,7 +17,7 @@ var (
 )
 
 var todosVerifyCmd = &cobra.Command{
-	Use:          "verify [ids-or-files...]",
+	Use:          "verify [ids-or-aliases...]",
 	SilenceUsage: true,
 	Short:        "AI-verify whether a TODO's commits implement its acceptance criteria",
 	Long: `AI code review for TODOs: score whether the committed work actually implements
@@ -31,7 +31,7 @@ is promoted to "verified" when it is implemented and scores at/above --threshold
 which makes it usable as a CI/quality gate. The model defaults to .gavel.yaml
 verify.model; override with --model.
 
-With no arguments it verifies every TODO matching --status; pass ids/paths to
+With no arguments it verifies every TODO matching --status; pass ids or aliases to
 select a subset. The same scoring engine is also available as AI-verification
 fixtures (see 'gavel fixtures --help', FORMAT 3).
 
@@ -46,7 +46,6 @@ Examples:
 
 func init() {
 	todosCmd.AddCommand(todosVerifyCmd)
-	todosVerifyCmd.Flags().StringVar(&todosDir, "dir", "", "Deprecated; runtime TODOs are stored in PostgreSQL (must be omitted)")
 	todosVerifyCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosVerifyCmd.Flags().StringVar(&verifyCmdModel, "model", "", "Model for verification (default: .gavel.yaml verify.model)")
 	todosVerifyCmd.Flags().IntVar(&verifyCmdThreshold, "threshold", 0, "Score at/above which (with implemented) a TODO is promoted to verified (default 80)")
@@ -58,7 +57,7 @@ func runTodosVerify(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	provider, err := newTodosProvider(workDir, todosDir)
+	provider, err := newTodosProvider(workDir)
 	if err != nil {
 		return err
 	}

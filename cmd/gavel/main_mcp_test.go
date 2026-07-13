@@ -16,14 +16,20 @@ func TestGavelMCPProfileIgnoresWorkflowOnlyParams(t *testing.T) {
 	for _, want := range []string{
 		"--ui",
 		"--triage",
-		"--sync-todos",
-		"--todo-template",
-		"--todos-dir",
 		"--baseline",
 		"--work-dir",
 	} {
 		if !containsString(ignored, want) {
 			t.Fatalf("missing MCP ignored param %q in %v", want, ignored)
+		}
+	}
+}
+
+func TestGavelMCPProfileDoesNotReferenceRetiredTODOSyncParams(t *testing.T) {
+	ignored := gavelMCPGlobalIgnoredParams()
+	for _, retired := range []string{"--sync-todos", "--todo-template", "--todos-dir"} {
+		if containsString(ignored, retired) {
+			t.Fatalf("retired TODO sync param %q remains in MCP profile: %v", retired, ignored)
 		}
 	}
 }
