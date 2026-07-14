@@ -28,12 +28,44 @@ func (r ConfigResult) Pretty() api.Text {
 	return clicky.Text(body, "font-mono")
 }
 
+func (r ResolvedConfigResult) Pretty() api.Text {
+	t := clicky.Text("Resolved Gavel config", "font-bold text-purple-600").NewLine().
+		Add(clicky.CodeBlock("yaml", renderMergedConfigYAML(r.Trace, stdoutIsTerminal()))).
+		NewLine().Append("AI prompts", "font-bold text-purple-600").NewLine()
+	for _, resolved := range r.Prompts {
+		t = t.Add(resolved.Pretty()).NewLine()
+	}
+	return t
+}
+
 func (r ConfigResult) MarshalJSON() ([]byte, error) {
 	return json.Marshal(prunedConfigValue(r.Merged))
 }
 
+func (r ResolvedConfigResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Config  any `json:"config"`
+		Prompts any `json:"prompts"`
+	}{
+		Config:  prunedConfigValue(r.Config),
+		Prompts: r.Prompts,
+	})
+}
+
 func (r ConfigResult) MarshalYAML() ([]byte, error) {
 	return []byte(renderMergedConfigYAML(r.configTrace(), false)), nil
+}
+
+func (r ResolvedConfigResult) MarshalYAML() ([]byte, error) {
+	data, err := json.Marshal(r)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(data, &normalized); err != nil {
+		return nil, err
+	}
+	return yamlv3.Marshal(normalized)
 }
 
 func (r ConfigResult) configTrace() verify.GavelConfigTrace {
@@ -303,6 +335,16 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 			return nil, false
 		}
 		v = v.Elem()
+	}
+	if v.IsValid() && v.Type() == reflect.TypeOf(json.RawMessage{}) {
+		if v.Len() == 0 {
+			return nil, false
+		}
+		var decoded any
+		if err := json.Unmarshal(v.Interface().(json.RawMessage), &decoded); err != nil {
+			return nil, false
+		}
+		return buildYAMLNode(reflect.ValueOf(decoded), meta, parent)
 	}
 
 	switch v.Kind() {

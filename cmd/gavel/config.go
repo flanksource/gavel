@@ -9,13 +9,15 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	gaveldocs "github.com/flanksource/gavel"
+	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 type ConfigOptions struct {
-	Args []string `json:"-" args:"true"`
+	Args    []string `json:"-" args:"true"`
+	Resolve bool     `json:"resolve,omitempty" flag:"resolve" short:"r" help:"Resolve registered AI prompts, files, specs, and effective models"`
 }
 
 type ConfigResult struct {
@@ -24,6 +26,12 @@ type ConfigResult struct {
 	GitRoot    string                     `json:"gitRoot,omitempty" yaml:"gitRoot,omitempty"`
 	Sources    []verify.GavelConfigSource `json:"sources,omitempty" yaml:"sources,omitempty"`
 	Merged     verify.GavelConfig         `json:"merged" yaml:"merged"`
+}
+
+type ResolvedConfigResult struct {
+	Config  verify.GavelConfig              `json:"config" yaml:"config"`
+	Prompts []promptregistry.ResolvedPrompt `json:"prompts" yaml:"prompts"`
+	Trace   verify.GavelConfigTrace         `json:"-" yaml:"-"`
 }
 
 func init() {
@@ -53,6 +61,13 @@ func runConfig(opts ConfigOptions) (any, error) {
 	trace, err := verify.LoadGavelConfigTrace(target)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config trace: %w", err)
+	}
+	if opts.Resolve {
+		resolved, err := promptregistry.Resolve(trace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve AI config: %w", err)
+		}
+		return ResolvedConfigResult{Config: trace.Merged, Prompts: resolved, Trace: trace}, nil
 	}
 
 	return ConfigResult{
@@ -86,11 +101,16 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  interactive output shows merged YAML with comments for non-git-root sources", muted).NewLine().
 		Append("  redirected output writes merged YAML only", muted).NewLine().
 		Append("  use ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" for machine-readable merged config", muted).NewLine().NewLine().
+		Append("RESOLVED AI CONFIG", heading).NewLine().
+		Append("  ").Append("--resolve", flag).Append(" / ").Append("-r", flag).Append(" expands every registered prompt", muted).NewLine().
+		Append("  shows built-in, inline, or file provenance plus declared and effective model details", muted).NewLine().
+		Append("  with ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" returns {config, prompts}", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  ").Append("gavel config", code).Append("                         inspect config for the current directory", muted).NewLine().
 		Append("  ").Append("gavel config ./pkg/api", code).Append("               inspect config for a nested directory", muted).NewLine().
 		Append("  ").Append("gavel config ./cmd/gavel/main.go", code).Append("   inspect config for a specific file path", muted).NewLine().
 		Append("  ").Append("gavel config --yaml", code).Append("                 emit merged config as YAML", muted).NewLine().
+		Append("  ").Append("gavel config --resolve", code).Append("              inspect resolved prompts and models", muted).NewLine().
 		Append("  ").Append("gavel config > merged.gavel.yaml", code).Append("      write merged YAML without source comments", muted).NewLine().
 		Append("  ").Append("gavel --cwd ../repo config src/app.ts", code).Append("  resolve a relative path from another working tree", muted).NewLine().NewLine().
 		Append("UBER EXAMPLE", heading).NewLine().

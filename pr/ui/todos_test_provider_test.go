@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 var uiTestProviders = struct {
@@ -44,7 +44,24 @@ func (uiTestGlobalProvider) GetGlobal(ctx context.Context, ref string) (*types.T
 			return todo, nil
 		}
 	}
-	return nil, fmt.Errorf("todo %q not found", ref)
+	return nil, fmt.Errorf("%w: todo %q", native.ErrNotFound, ref)
+}
+
+func (uiTestGlobalProvider) GetGlobalBySession(_ context.Context, ref string) (*types.TODO, string, error) {
+	uiTestProviders.Lock()
+	providers := make([]*uiTestTODOProvider, 0, len(uiTestProviders.byDir))
+	for _, provider := range uiTestProviders.byDir {
+		providers = append(providers, provider)
+	}
+	uiTestProviders.Unlock()
+	for _, provider := range providers {
+		for _, todo := range provider.items {
+			if todo.LLM != nil && strings.EqualFold(strings.TrimSpace(todo.LLM.SessionId), strings.TrimSpace(ref)) {
+				return todo, todo.LLM.SessionId, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("%w: session %q", native.ErrNotFound, ref)
 }
 
 func uiTestProviderFor(dir string) *uiTestTODOProvider {
@@ -177,9 +194,6 @@ func (p *uiTestTODOProvider) UpdateLatestFailure(context.Context, *types.TODO, *
 	return nil
 }
 func (p *uiTestTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.ExecutionResult) error {
-	return nil
-}
-func (p *uiTestTODOProvider) SaveVerification(context.Context, *types.TODO, *verify.VerifyResult) error {
 	return nil
 }
 func (p *uiTestTODOProvider) SupportsGroupedExecution() bool { return false }

@@ -23,12 +23,12 @@ tests exercise its own help output.
 | todos export help names PostgreSQL | todos export --help | stdout.contains("PostgreSQL") |
 | commit help has examples | commit --help | stdout.contains("Examples") |
 
-## todos verify is the AI-review surface
+## todos check is the definition-of-done surface
 
-| Name | Args | CEL |
-|------|------|-----|
-| verify help names acceptance criteria | todos verify --help | stdout.contains("acceptance criteria") |
-| verify help notes it replaces gavel verify | todos verify --help | stdout.contains("gavel verify") |
+| Name | Args | Exit Code | CEL |
+|------|------|-----------|-----|
+| check help names definition of done | todos check --help | 0 | stdout.contains("definition of done") |
+| removed verify command is rejected | todos verify | 1 | stderr.contains('unknown command "verify"') |
 
 ## Help no longer uses the old fork name
 

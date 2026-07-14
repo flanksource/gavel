@@ -9,7 +9,6 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 func TestScanSourceCommentsFindsMarkersAndIgnoresStrings(t *testing.T) {
@@ -234,9 +233,5 @@ func (p *sourceSyncProvider) UpdateLatestFailure(context.Context, *types.TODO, *
 }
 
 func (p *sourceSyncProvider) SaveAttempt(context.Context, *types.TODO, *todos.ExecutionResult) error {
-	return nil
-}
-
-func (p *sourceSyncProvider) SaveVerification(context.Context, *types.TODO, *verify.VerifyResult) error {
 	return nil
 }

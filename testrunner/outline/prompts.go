@@ -18,6 +18,7 @@ func Prompts() []prompts.Prompt {
 		Description: "One-line AI summary of what each test verifies for `gavel test outline --ai-summary`. Variables: {{ids}} (the test ids), {{file}}, {{source}}. Output schema is fixed (tests[]).",
 		ConfigPath:  "test.outlineSummaryPrompt",
 		Default:     testSummaryPromptTemplate,
+		ModelPolicy: prompts.ModelFromDefault,
 	}}
 }
 

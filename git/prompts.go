@@ -16,6 +16,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Generates the conventional-commit message for `gavel commit`.",
 			ConfigPath:  "commit.messagePrompt",
 			Default:     commitMessagePrompt,
+			ModelPolicy: prompts.ModelFromCommitConfig,
 		},
 		{
 			ID:          prompts.CommitFuncRemoved,
@@ -23,6 +24,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Detects user-visible functionality a diff removes (pre-commit warning).",
 			ConfigPath:  "commit.functionalityRemovedPrompt",
 			Default:     functionalityRemovedPrompt,
+			ModelPolicy: prompts.ModelFromCommitConfig,
 		},
 		{
 			ID:          prompts.CommitCompatibility,
@@ -30,6 +32,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Detects backward-compatibility / breaking changes in a diff.",
 			ConfigPath:  "commit.compatibilityPrompt",
 			Default:     compatibilityIssuesPrompt,
+			ModelPolicy: prompts.ModelFromCommitConfig,
 		},
 		{
 			ID:          prompts.CommitSummary,
@@ -37,6 +40,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Names and summarises a group of commits (`gavel git analyze --summary`).",
 			ConfigPath:  "commit.summaryPrompt",
 			Default:     summaryGroupPrompt,
+			ModelPolicy: prompts.ModelFromDefault,
 		},
 	}
 }

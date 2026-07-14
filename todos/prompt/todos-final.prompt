@@ -1,1 +1,0 @@
-{{#if timedOut}}Your session hit its time limit and is wrapping up.{{else}}Your session is wrapping up.{{/if}} Do not run any more tools. Based on the work completed so far, reply now with ONLY the final result JSON object described below — no prose.

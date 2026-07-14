@@ -241,7 +241,7 @@ func init() {
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
 	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
-	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Todo operation: run (implement), plan (propose a reviewable plan), or verify (score committed work)")
+	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Todo operation: run (implement) or plan (propose a reviewable plan)")
 	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Agent driver: claude-cmux, claude-headless, codex-cmux, codex-headless (default: <agent>-cmux)")
 	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution (empty: the mode's .prompt frontmatter default)")
 	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "medium", "Reasoning effort directive: low, medium, high, or xhigh")

@@ -157,7 +157,7 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 
 	switch req.Source {
 	case "inline":
-		*ov = verify.PromptOverride{Inline: newText}
+		*ov = verify.InlinePrompt(newText)
 	case "file":
 		target := req.Path
 		if !filepath.IsAbs(target) {
@@ -220,7 +220,7 @@ func overrideSource(ov *verify.PromptOverride) string {
 	switch {
 	case ov.IsZero():
 		return "default"
-	case strings.TrimSpace(ov.Inline) != "":
+	case ov.HasInline():
 		return "inline"
 	default:
 		return "file"

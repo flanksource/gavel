@@ -23,8 +23,6 @@ const (
 	PRContent           = "pr.content"
 	TodosRun            = "todos.run"
 	TodosPlan           = "todos.plan"
-	TodosVerify         = "todos.verify"
-	TodosFinal          = "todos.final"
 	StatusSummary       = "status.summary"
 	TestOutlineSummary  = "test.outlineSummary"
 )
@@ -43,4 +41,19 @@ type Prompt struct {
 	// Default is the embedded .prompt source used when the override is unset; the
 	// UI shows it as the built-in default.
 	Default string `json:"default"`
+	// ModelPolicy identifies how the current call site chooses its effective
+	// runtime model. It is resolver metadata, not part of the settings API.
+	ModelPolicy ModelPolicy `json:"-"`
 }
+
+type ModelPolicy string
+
+const (
+	ModelFromVerifyConfig ModelPolicy = "verify-config"
+	ModelFromCommitConfig ModelPolicy = "commit-config"
+	ModelFromGroupConfig  ModelPolicy = "group-config"
+	ModelFromPrompt       ModelPolicy = "prompt"
+	ModelFromTodo         ModelPolicy = "todo"
+	ModelFromSession      ModelPolicy = "session"
+	ModelFromDefault      ModelPolicy = "default"
+)

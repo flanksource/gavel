@@ -66,6 +66,8 @@ func (p *Provider) todoFromIssue(
 	todo.Priority = priority
 	todo.Status = status
 	todo.Created = &created
+	lastActivity := issue.UpdatedAt
+	todo.LastRun = &lastActivity
 	todo.CWD = sourceDir
 	if includeEvents {
 		events, err := p.repository.ListEvents(ctx, issue.ID)

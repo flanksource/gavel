@@ -105,6 +105,56 @@ func TestRepositoryGlobalReferenceResolution(t *testing.T) {
 	assert.Equal(t, nativeIssue.ID, byID.ID)
 }
 
+func TestRepositorySessionReferenceResolution(t *testing.T) {
+	repo, db := openRepository(t)
+	ctx := t.Context()
+	workspace, err := repo.CreateWorkspace(ctx, native.CreateWorkspaceInput{
+		RepoKey: "github.com/example/session-reference",
+	})
+	require.NoError(t, err)
+	issue, err := repo.CreateIssue(ctx, native.CreateIssueInput{
+		WorkspaceID: workspace.ID,
+		Title:       "Session-owned issue",
+	})
+	require.NoError(t, err)
+
+	providerSessionID := uuid.New()
+	orchestrationSessionID := uuid.New()
+	transcriptSessionID := uuid.New()
+	promptRunID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO captain_sessions (id, provider_session_id, source, provider, host_id)
+		VALUES
+			(?, ?, 'gavel', 'headless-codex', 'local'),
+			(?, ?, 'codex', '', 'local')`,
+		orchestrationSessionID, providerSessionID.String(),
+		transcriptSessionID, providerSessionID.String(),
+	).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO captain_prompt_runs (id, session_id, root_session_id, origin)
+		VALUES (?, ?, ?, 'session-reference-test')`,
+		promptRunID, orchestrationSessionID, orchestrationSessionID,
+	).Error)
+	_, err = repo.LinkPromptRun(ctx, issue.ID, promptRunID, native.StepPlan, 0, issue.Version, "test")
+	require.NoError(t, err)
+
+	for _, ref := range []string{
+		providerSessionID.String(),
+		orchestrationSessionID.String(),
+		transcriptSessionID.String(),
+	} {
+		resolved, sessionID, err := repo.GetIssueBySessionRef(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, issue.ID, resolved.ID)
+		assert.Equal(t, providerSessionID.String(), sessionID)
+	}
+
+	_, _, err = repo.GetIssueBySessionRef(ctx, uuid.NewString())
+	require.ErrorIs(t, err, native.ErrNotFound)
+	_, _, err = repo.GetIssueBySessionRef(ctx, "not-a-uuid")
+	require.ErrorIs(t, err, native.ErrInvalidInput)
+}
+
 func TestRepositoryMoveIssueWorkspace(t *testing.T) {
 	repo, db := openRepository(t)
 	ctx := t.Context()

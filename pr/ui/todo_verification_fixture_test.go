@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -103,6 +104,66 @@ func TestHandleTodoVerificationFixtureRequiresRef(t *testing.T) {
 	s.handleTodoVerificationFixture(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body = %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestHandleTodoVerificationRunExecutesPersistedFixture(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := uiTestProviderFor(workDir)
+	created, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title: "Run verification fixture",
+		Body: verificationFixtureBody("Some description.", `### command: verification smoke
+
+`+"```bash"+`
+echo dashboard-verification-ok
+`+"```"+`
+
+- contains: dashboard-verification-ok`),
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	payload, err := json.Marshal(todoCriteriaPayload{Ref: todos.TODOReference(created)})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/todos/verification/run", bytes.NewReader(payload))
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Verification types.CheckResult `json:"verification"`
+		Todo         todoSummary       `json:"todo"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !response.Verification.AllPassed || response.Verification.Output == nil {
+		t.Fatalf("verification did not pass with evidence: %+v", response.Verification)
+	}
+	if len(response.Verification.Output.Results) != 1 ||
+		!strings.Contains(response.Verification.Output.Results[0].Stdout, "dashboard-verification-ok") {
+		t.Fatalf("unexpected verification evidence: %+v", response.Verification.Output)
+	}
+	if response.Todo.Status != types.StatusVerified {
+		t.Fatalf("todo status = %q, want verified", response.Todo.Status)
+	}
+}
+
+func TestLegacyTodoVerifyRoutesRemoved(t *testing.T) {
+	s := &Server{}
+	for _, path := range []string{"/api/todos/verify", "/api/todos/verify/preview"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404; body = %q", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

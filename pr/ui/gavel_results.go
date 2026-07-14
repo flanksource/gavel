@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -46,17 +47,15 @@ type GavelResultsSummary struct {
 // per PR. The detail page renders the shards individually and does not use
 // this. Returns nil if shards is empty.
 func aggregateGavelSummaries(shards []*GavelResultsSummary) *GavelResultsSummary {
-	if len(shards) == 0 {
-		return nil
-	}
-	if len(shards) == 1 {
-		return shards[0]
-	}
+	var only *GavelResultsSummary
 	agg := &GavelResultsSummary{}
+	count := 0
 	for _, s := range shards {
 		if s == nil {
 			continue
 		}
+		count++
+		only = s
 		agg.TestsPassed += s.TestsPassed
 		agg.TestsFailed += s.TestsFailed
 		agg.TestsSkipped += s.TestsSkipped
@@ -79,6 +78,12 @@ func aggregateGavelSummaries(shards []*GavelResultsSummary) *GavelResultsSummary
 			}
 			agg.TopLintViolations = append(agg.TopLintViolations, v)
 		}
+	}
+	if count == 0 {
+		return nil
+	}
+	if count == 1 {
+		return only
 	}
 	return agg
 }
@@ -239,12 +244,13 @@ func derefString(p *string) string {
 	return *p
 }
 
-// fetchGavelArtifacts downloads each artifact and writes the resulting
-// summary into out[i]. Concurrency is capped so a PR with many matrix
-// shards doesn't fan out one goroutine per shard onto GitHub's artifacts
-// API. The caller owns out and must size it to len(artifacts).
-func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact, out []*GavelResultsSummary) {
+// fetchGavelArtifacts downloads each artifact and returns the usable summaries.
+// Artifacts without a JSON result payload are omitted: the download succeeded,
+// but there is no gavel result to render. Concurrency is capped so a PR with
+// many matrix shards does not fan out onto GitHub's artifacts API.
+func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact) []*GavelResultsSummary {
 	const maxConcurrent = 4
+	out := make([]*GavelResultsSummary, len(artifacts))
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	for i, a := range artifacts {
@@ -255,6 +261,9 @@ func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact, 
 			defer func() { <-sem }()
 			jsonBytes, err := github.DownloadArtifact(opts, a.ArtifactID)
 			if err != nil {
+				if errors.Is(err, github.ErrArtifactResultsNotFound) {
+					return
+				}
 				logger.Warnf("artifact %d (%s) download failed: %v", a.ArtifactID, a.StickyID, err)
 				out[i] = &GavelResultsSummary{
 					StickyID:    a.StickyID,
@@ -270,6 +279,14 @@ func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact, 
 		}(i, a)
 	}
 	wg.Wait()
+
+	usable := make([]*GavelResultsSummary, 0, len(out))
+	for _, summary := range out {
+		if summary != nil {
+			usable = append(usable, summary)
+		}
+	}
+	return usable
 }
 
 // artifactCache caches downloaded artifact servers keyed by artifact ID.

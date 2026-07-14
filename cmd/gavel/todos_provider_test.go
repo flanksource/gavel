@@ -31,6 +31,17 @@ func TestTodosRunFlagsRegistered(t *testing.T) {
 	}
 }
 
+func TestTodosVerifyCommandRemoved(t *testing.T) {
+	for _, command := range todosCmd.Commands() {
+		if command.Name() == "verify" {
+			t.Fatalf("unexpected removed todos verify command: %+v", command)
+		}
+	}
+	if err := todosCmd.Args(todosCmd, []string{"verify"}); err == nil {
+		t.Fatal("expected removed todos verify invocation to be rejected")
+	}
+}
+
 func TestTodosCreateCommandRegistered(t *testing.T) {
 	if !stringSliceContains(todosCmd.Aliases, "todo") {
 		t.Fatalf("expected singular todo alias on todos command, got %#v", todosCmd.Aliases)
@@ -207,7 +218,7 @@ func TestValidateTodosRunOptions(t *testing.T) {
 		todoEffort = oldEffort
 	}()
 
-	for _, mode := range []string{"", "run", "plan", "verify"} {
+	for _, mode := range []string{"", "run", "plan"} {
 		todosMode = mode
 		todoEffort = "xhigh"
 		if err := validateTodosRunOptions(); err != nil {
@@ -217,7 +228,7 @@ func TestValidateTodosRunOptions(t *testing.T) {
 
 	// The legacy mechanism values are rejected — --mode is the todo operation
 	// now; the mechanism is --driver.
-	for _, mode := range []string{"cmux", "inline", "bad"} {
+	for _, mode := range []string{"verify", "cmux", "inline", "bad"} {
 		todosMode = mode
 		if err := validateTodosRunOptions(); err == nil || !strings.Contains(err.Error(), "run mode") {
 			t.Fatalf("expected mode %q to be rejected, got %v", mode, err)

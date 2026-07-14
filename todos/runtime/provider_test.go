@@ -2,6 +2,9 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/todos"
@@ -11,6 +14,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPlanResultContentPrefersReferencedPlanFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.md")
+	const detailed = "# Detailed plan\n\n1. Inspect the parser.\n2. Add regression coverage.\n"
+	require.NoError(t, os.WriteFile(path, []byte(detailed), 0o600))
+
+	content, gotPath, err := planResultContent(&types.TODO{}, &todos.ExecutionResult{
+		Plan: &types.PlanResult{
+			Path:    path,
+			Content: "The existing plan remains correct.",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, path, gotPath)
+	assert.Equal(t, strings.TrimSpace(detailed), content)
+}
 
 func TestTodoStatusKeepsDurableAndExecutionStateSeparate(t *testing.T) {
 	tests := []struct {
@@ -94,4 +113,15 @@ func TestTodoFromIssueUsesDatabaseIdentityAndVerification(t *testing.T) {
 	assert.Equal(t, "Gavel", todo.Workspace)
 	assert.Equal(t, "/retained/gavel", todo.CWD)
 	assert.Equal(t, "```bash\ntrue\n```", todos.ExtractVerificationFixture(todo.MarkdownBody))
+}
+
+func TestVerificationWorkflowPersistsIssueFixture(t *testing.T) {
+	fixture := "```bash\necho ok\n```"
+	workflow := verificationWorkflow(fixture)
+	assert.Equal(t, false, workflow["autoVerifyWithoutFixture"])
+	assert.Equal(t, map[string]any{"fixture": fixture}, workflow["verify"])
+
+	empty := verificationWorkflow("  ")
+	assert.Equal(t, false, empty["autoVerifyWithoutFixture"])
+	assert.NotContains(t, empty, "verify")
 }

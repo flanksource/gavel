@@ -1,91 +1,21 @@
-## Grite
+# gavel — agent notes
 
-This repository uses **Grite** as the canonical task and memory system. **Always use grite commands** (not git) for task/issue tracking.
+Shared ways of working, the gavel todo workflow, and global skills come from the root ~/.agents/AGENTS.md.
 
-### When to use grite
+## Skills
+- [gavel-ci-migrator](.agents/skills/gavel-ci-migrator/SKILL.md) — migrate a repo's GitHub Actions lint/test workflows onto the flanksource/gavel composite action: discover existing golangci-lint / go test / make jobs, ask per-workflow whether to replace or add, rewrite YAML, verify with actionlint without auto-committing
+- [gavel-fixture-tester](.agents/skills/gavel-fixture-tester/SKILL.md) — create and run gavel fixture-based tests using markdown files with command blocks, tables, and CEL assertions
+- [gavel-git](.agents/skills/gavel-git/SKILL.md) — use gavel instead of gh/git for pull requests, CI status, and commits: check PR checks with `gavel pr status`, open PRs with AI-generated content, commit with `gavel commit`
+- [gavel-runner](.agents/skills/gavel-runner/SKILL.md) — run gavel test and lint, focus on a subset, re-run only failures (defaults to .gavel/last.json), filter noise with baselines, and pull JSON/markdown results from finished or live runs
+- [gavel-todos](.agents/skills/gavel-todos/SKILL.md) — run and manage gavel TODOs, implement or plan work with an AI coding agent, and execute the fixture/CEL definition of done with `gavel todos check`
 
-- **"What tasks are done/open?"** → `grite issue list`
-- **"What did I work on?"** → `grite issue list --state closed`
-- **"What do I know about X?"** → `grite issue list --label memory`
-- **"What should I work on next?"** → `grite issue dep topo --state open`
-- **Starting a new task** → `grite issue create`
-- **Making progress** → `grite issue comment`
-- **Task A depends on B** → `grite issue dep add`
-
-### Startup routine
-
-Run at the beginning of each session:
-
-```bash
-grite issue list --json
-grite issue dep topo --state open --json
-```
-
-### Creating tasks/memories
-
-```bash
-# Create a task
-grite issue create --title "Task title" --body "Description" --label agent:todo --json
-
-# Store a discovery as memory
-grite issue create --title "[Memory] Topic" --body "What you learned..." --label memory --json
-```
-
-### Working on issues
-
-```bash
-# Add a comment with your plan before coding
-grite issue comment <ID> --body "Plan: ..." --json
-
-# Add checkpoint comments after milestones
-grite issue comment <ID> --body "Checkpoint: what changed, why, tests run" --json
-
-# Close when done
-grite issue close <ID> --json
-```
-
-### Querying tasks
-
-```bash
-# All issues
-grite issue list --json
-
-# Open tasks
-grite issue list --state open --json
-
-# Completed tasks
-grite issue list --state closed --json
-
-# Memories
-grite issue list --label memory --json
-```
-
-### Dependencies
-
-Track task ordering and blockers with a dependency DAG:
-
-```bash
-# Task A depends on Task B (B must complete first)
-grite issue dep add <A> --target <B> --type depends_on --json
-
-# Task A blocks Task B (A must complete first)
-grite issue dep add <A> --target <B> --type blocks --json
-
-# Mark tasks as related (no ordering constraint)
-grite issue dep add <A> --target <B> --type related_to --json
-
-# List what an issue depends on
-grite issue dep list <ID> --json
-
-# List what depends on an issue (reverse)
-grite issue dep list <ID> --reverse --json
-
-# Get execution order (topological sort of open tasks)
-grite issue dep topo --state open --json
-```
-
-
-### Key flags
-
-- `--json` - Use for all commands (machine-readable output)
-- `--quiet` - Suppress human output
+## Memory
+- [Config Resolution & Prompt Registry](.agents/memory/config-and-prompts.md) — `gavel config --resolve`, `prompts/registry` as the prompt-descriptor source of truth, inline override shapes, and clicky prompt routing (module-vs-package replace gotcha)
+- [TODO Lifecycle, Plans & Session Storage](.agents/memory/todo-lifecycle-plans-and-sessions.md) — session-centric turns/prompt-run modeling on Captain's native lifecycle, inline `plan.content`, and the session DSN precedence resolver
+- [TODO Providers, CRUD & Rendering](.agents/memory/todo-providers-and-crud.md) — `todos/provider.go` as the abstraction point, JSON-first issue CRUD, `/todos/new` create surfaces, Todos shell/detail seams, and markdown rendering via clicky-ui + streamdown
+- [Todo Run/Plan UI & Run Context](.agents/memory/todo-run-ui.md) — `/api/todos/run/context` catalog path, split-button + remembered run options, approval reuse, and Captain `whoami` parity/reconciliation
+- [cmux TODO Execution](.agents/memory/cmux-execution.md) — workspace/surface ref handling, prompt-file delivery, send + send-key Enter submission, and hook-session idle polling with backoff
+- [PR UI Dashboard & Shared clicky-ui Components](.agents/memory/pr-ui-and-shared-components.md) — StatusIndicator consolidation, process metrics/menubar/Wails tray, PR diff seams, ListMenu/MenubarView shared primitives, and duplicate React/React Query resolution fixes
+- [Commit Workflow & PR Content](.agents/memory/commit-workflow.md) — Captain prompt bridge for PR content, 40-rune title limit, interactive AI summaries, the linked-deps commit gate, and `task build:prod`
+- [Fixtures, Test History & Linter Integration](.agents/memory/fixtures-testing-and-linters.md) — fixture runner/Ginkgo seams, `gavel fixtures outline` + AI criteria nodes, `.gavel/run-*.json` test history, and signal-based linter auto-activation (react-doctor)
+- [commons-db Logging & GitHub Cache](.agents/memory/database-and-logging.md) — SQL classification and `SchemaChangeSession` live in commons-db/gorm, exact log-level overrides, and the Postgres-backed GitHub cache wiring

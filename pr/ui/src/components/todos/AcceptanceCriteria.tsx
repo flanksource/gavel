@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Button, Combobox } from '@flanksource/clicky-ui/components';
-import { UiBeaker, UiEdit, UiError, UiListDashes, UiPass, UiSparkles, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { AcceptanceCriterion, CriteriaCatalogItem, CriterionResult, TodoItem, VerifyResult } from '../../types';
+import { UiEdit, UiListDashes, UiSparkles, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
+import type { AcceptanceCriterion, CriteriaCatalogItem, TodoItem } from '../../types';
 import { inputClass, todoQuery } from './format';
 
 // AcceptanceCriteria renders a todo's acceptance criteria as a structured,
 // editable list (add / edit / remove / toggle, each auto-saved) with an AI
-// "Draft" action and a "Verify" action that reviews the structured verdict.
+// "Draft" action. Verification is run from the fixture panel above so there is
+// one definition-of-done path.
 export function AcceptanceCriteria({
   dir,
   todo,
@@ -21,8 +22,6 @@ export function AcceptanceCriteria({
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
-  const [verifyBusy, setVerifyBusy] = useState(false);
-  const [verdict, setVerdict] = useState<VerifyResult | null>(null);
   const [catalog, setCatalog] = useState<CriteriaCatalogItem[]>([]);
 
   // Load the standard-check catalog once so the add control can offer them.
@@ -56,7 +55,6 @@ export function AcceptanceCriteria({
   // Reset transient view state only when switching to a different todo.
   useEffect(() => {
     setEditing(null);
-    setVerdict(null);
     setError('');
   }, [todo.ref]);
 
@@ -127,29 +125,6 @@ export function AcceptanceCriteria({
     }
   }
 
-  async function runVerify() {
-    if (verifyBusy) return;
-    setVerifyBusy(true);
-    setError('');
-    try {
-      const res = await fetch(`/api/todos/verify?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Verification failed');
-      setVerdict(data.result as VerifyResult);
-      if (data.todo) onChanged(data.todo as TodoItem);
-    } catch (err: any) {
-      setError(err?.message || 'Verification failed');
-    } finally {
-      setVerifyBusy(false);
-    }
-  }
-
-  const failedChecks = Object.entries(verdict?.checks ?? {}).filter(([, c]) => !c.pass);
-
   return (
     <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3 py-2.5">
@@ -169,24 +144,12 @@ export function AcceptanceCriteria({
           size="sm"
           onClick={() => callTodoAction('criteria/generate')}
           loading={busy}
-          disabled={busy || verifyBusy}
+          disabled={busy}
           title="Draft acceptance criteria with AI"
           className="h-7 gap-1 px-2 text-xs"
         >
           <UiSparkles className="text-xs" />
           Draft with AI
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={runVerify}
-          loading={verifyBusy}
-          disabled={busy || verifyBusy}
-          title="Verify the committed work against these criteria"
-          className="h-7 gap-1 px-2 text-xs"
-        >
-          <UiBeaker className="text-xs" />
-          Verify
         </Button>
       </div>
 
@@ -252,7 +215,6 @@ export function AcceptanceCriteria({
         />
 
         {error && <div className="text-xs text-red-600">{error}</div>}
-        {verdict && <VerifyReview verdict={verdict} failedChecks={failedChecks} />}
       </div>
     </section>
   );
@@ -273,65 +235,5 @@ function IconButton({ icon, label, onClick, disabled }: { icon: ComponentType<Ic
     >
       <Icon className="text-xs" />
     </Button>
-  );
-}
-
-// VerifyReview renders the structured verdict: score + implemented badge,
-// per-criterion met/unmet rows, failed static checks, and completeness.
-function VerifyReview({ verdict, failedChecks }: { verdict: VerifyResult; failedChecks: [string, { pass: boolean }][] }) {
-  const scoreColor = verdict.score >= 80 ? 'text-emerald-600' : verdict.score >= 60 ? 'text-amber-600' : 'text-red-600';
-  const ImplementedIcon = verdict.implemented ? UiPass : UiError;
-  return (
-    <div className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5">
-      <div className="flex items-center gap-2 text-sm">
-        <span className={`font-semibold ${scoreColor}`}>Score {verdict.score}/100</span>
-        {verdict.implemented !== undefined && (
-          <span className={`inline-flex items-center gap-1 font-medium ${verdict.implemented ? 'text-emerald-600' : 'text-red-600'}`}>
-            <ImplementedIcon className="text-sm" />
-            {verdict.implemented ? 'Implemented' : 'Not implemented'}
-          </span>
-        )}
-      </div>
-      {(verdict.acceptance_criteria?.length ?? 0) > 0 && (
-        <ul className="space-y-1">
-          {verdict.acceptance_criteria!.map((c, i) => <ResultRow key={i} result={c} />)}
-        </ul>
-      )}
-      {failedChecks.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold uppercase text-muted-foreground">Failed checks</p>
-          <ul className="mt-1 space-y-0.5">
-            {failedChecks.map(([id]) => (
-              <li key={id} className="flex items-center gap-1.5 text-sm text-red-600">
-                <UiError className="text-xs" />
-                {id}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {verdict.completeness?.summary && (
-        <p className="text-xs text-muted-foreground">
-          <span className="font-semibold">Completeness:</span> {verdict.completeness.summary}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ResultRow({ result }: { result: CriterionResult }) {
-  const ResultIcon = result.met ? UiPass : UiError;
-  return (
-    <li className="text-sm">
-      <span className="flex items-start gap-1.5">
-        <ResultIcon className={`mt-0.5 shrink-0 text-sm ${result.met ? 'text-emerald-600' : 'text-red-600'}`} />
-        <span className="min-w-0">{result.criterion}</span>
-      </span>
-      {result.evidence?.map((e, i) => (
-        <span key={i} className="ml-5 block text-xs text-muted-foreground">
-          {e.file}{e.line ? `:${e.line}` : ''} — {e.message}
-        </span>
-      ))}
-    </li>
   );
 }

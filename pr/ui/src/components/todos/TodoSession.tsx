@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
-import { SessionViewer, questionsFromToolInput, type SessionEntry, type SessionPendingTool, type SessionQuestion, type SessionToolDecision } from '@flanksource/clicky-ui/ai';
+import { SessionViewer, questionsFromToolInput, type SessionEntry, type SessionPendingTool, type SessionQuestion, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiCancel, UiCheck, UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoItem, TodoSessionApproval } from '../../types';
+import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionApproval } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
 import { TodoSessionTimer } from './TodoSessionTimer';
+import { TodoSessionStart } from './TodoSessionStart';
+import type { TodoRunAction } from './run';
 
 interface SessionStateView {
   label: string;
@@ -38,7 +40,7 @@ function stateView(state: string, error: string): SessionStateView {
 // SessionViewer to render. The stream replays existing history on connect, then
 // follows new entries until unmounted.
 export function useTodoSession(dir: string, sessionId: string | undefined, active: boolean) {
-  const [entries, setEntries] = useState<SessionEntry[]>([]);
+  const [entries, setEntries] = useState<Array<SessionEntry | SessionUIMessage>>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
 
@@ -55,8 +57,8 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
     es.onopen = () => setConnected(true);
     es.addEventListener('entry', (e: MessageEvent) => {
       try {
-        const entry = JSON.parse(e.data) as SessionEntry;
-        setEntries(prev => [...prev, entry]);
+        const entry = JSON.parse(e.data) as SessionEntry | SessionUIMessage;
+        setEntries(prev => mergeSessionEntry(prev, entry));
       } catch {
         // Ignore malformed frames; the next well-formed entry recovers.
       }
@@ -154,6 +156,10 @@ export function TodoSession({
   onChanged,
   onResume,
   resumeDisabled,
+  onRun,
+  onAdvanced,
+  runBusy,
+  runDisabled,
 }: {
   dir: string;
   sessionId?: string;
@@ -164,6 +170,12 @@ export function TodoSession({
   // wired from the todo detail's run flow.
   onResume?: () => void;
   resumeDisabled?: boolean;
+  // onRun/onAdvanced/runBusy/runDisabled back the never-run start hero
+  // (TodoSessionStart), wired from the todo detail's run flow.
+  onRun?: (options?: TodoRunOptions) => void;
+  onAdvanced?: (action: TodoRunAction) => void;
+  runBusy?: boolean;
+  runDisabled?: boolean;
 }) {
   const { entries, connected, error } = useTodoSession(dir, sessionId, active);
   const { state, error: statusError, inProgress, approval, approve } = useSessionStatus(dir, sessionId, active);
@@ -233,10 +245,14 @@ export function TodoSession({
 
   if (!sessionId) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-6 text-center text-sm text-muted-foreground">
-        <UiComment className="mb-2 text-3xl" />
-        <p>No agent session yet. Run this todo to start one.</p>
-      </div>
+      <TodoSessionStart
+        dir={dir}
+        todo={todo}
+        onRun={onRun}
+        onAdvanced={onAdvanced}
+        runBusy={runBusy}
+        runDisabled={runDisabled}
+      />
     );
   }
 
@@ -260,7 +276,7 @@ export function TodoSession({
           <div className="text-xs text-muted-foreground">Waiting for session activity…</div>
         )}
         {entries.length > 0 && (
-          <SessionViewer session={entries} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />
+          <SessionViewer session={entries as SessionEntry[] | SessionUIMessage[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />
         )}
         {entries.length === 0 && pendingTools.length > 0 && (
           <SessionViewer session={[]} pendingTools={pendingTools} onPendingToolDecision={decide} showHeader={false} menuContainer={menuHost} className="text-xs" />
@@ -270,9 +286,30 @@ export function TodoSession({
   );
 }
 
-function latestQuestionTool(entries: SessionEntry[]): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
+function mergeSessionEntry(entries: Array<SessionEntry | SessionUIMessage>, entry: SessionEntry | SessionUIMessage): Array<SessionEntry | SessionUIMessage> {
+  if (!('parts' in entry) || !entry.id) return [...entries, entry];
+  const index = entries.findIndex(existing => 'parts' in existing && existing.id === entry.id);
+  if (index < 0) return [...entries, entry];
+  const next = [...entries];
+  next[index] = entry;
+  return next;
+}
+
+function latestQuestionTool(entries: Array<SessionEntry | SessionUIMessage>): { input?: Record<string, unknown>; toolCallId?: string } | undefined {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
+    if ('parts' in entry) {
+      for (let partIndex = entry.parts.length - 1; partIndex >= 0; partIndex--) {
+        const part = entry.parts[partIndex];
+        if (part.toolName === 'AskUserQuestion') {
+          const input = typeof part.input === 'object' && part.input !== null && !Array.isArray(part.input)
+            ? part.input as Record<string, unknown>
+            : undefined;
+          return { input, toolCallId: part.toolCallId };
+        }
+      }
+      continue;
+    }
     if (entry.tool_use?.tool === 'AskUserQuestion') return { input: entry.tool_use.input, toolCallId: entry.tool_use.tool_use_id };
     const blocks = entry.message?.content ?? [];
     for (let blockIndex = blocks.length - 1; blockIndex >= 0; blockIndex--) {

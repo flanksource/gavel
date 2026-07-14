@@ -222,7 +222,7 @@ Field reference:
 
 | Key | Purpose |
 | --- | --- |
-| `verify.model` | Default AI CLI or model name for `gavel todos verify` and AI-verification fixtures |
+| `verify.model` | Default AI CLI or model name for generic AI-verification fixtures |
 | `verify.prompt` | Optional custom verify prompt text |
 | `verify.checks.disabled` | Disable specific verify checks by ID |
 | `verify.checks.disabledCategories` | Disable whole verify categories |
@@ -467,32 +467,18 @@ This is the command to reach for when someone hands you `gavel-results.json` and
 
 This part of the CLI is about turning diffs and failure reports into actionable next steps: review findings, generated commit messages, and TODO execution loops.
 
-### `gavel todos verify`
+### `gavel todos check`
 
-Use `todos verify` for AI-assisted review: it scores whether a TODO's committed
-work implements its acceptance criteria, applying a prescribed review structure
-across completeness, code quality, testing, consistency, security, and
-performance. (This replaces the former top-level `gavel verify` command; the
-same scoring engine also backs AI-verification fixtures.)
-
-It fits best when you want:
-
-- A review pass over the work a TODO produced before merging
-- A pass/fail gate on committed work (`--strict`)
-- A minimum-quality bar enforced by score (`--threshold`)
-
-Common workflows:
+Use `todos check` to run a TODO's complete fixture-backed definition of done
+without starting an implementation agent. It executes configured test/lint
+checks, the persisted `## Verification` fixture, and any acceptance-criteria
+checklist step through the same CEL verdict used inside `todos run`.
 
 ```bash
-gavel todos verify                       # score all todos
-gavel todos verify 3f2a1b                 # score one todo
-gavel todos verify --threshold 90         # require a higher score
-gavel todos verify --strict               # non-zero if any is unimplemented
-gavel todos verify --model claude-code-sonnet
+gavel todos check                       # check selected runnable TODOs
+gavel todos check 3f2a1b                 # check one TODO
+gavel todos check --timeout 10m          # bound each verification run
 ```
-
-To review arbitrary diffs or commit ranges outside the TODO flow, use an
-AI-verification fixture (`ai:`/`verify:` front-matter — see `gavel fixtures --help`).
 
 ### `gavel commit`
 
@@ -549,13 +535,12 @@ gavel todos run
 gavel todos run --interactive
 gavel todos run --group-by directory
 gavel todos run --mode plan                # propose a plan; approve/reject via `gavel todos plan`
-gavel todos verify --strict                # AI-score committed work vs acceptance criteria
 gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
 gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```
 
-`--mode` selects the agent's task: `run` (implement, default), `plan` (read-only plan
-that parks the TODO in `review`), or `verify`. `--driver` selects the agent and
+`--mode` selects the agent's task: `run` (implement, default) or `plan` (read-only plan
+that parks the TODO in `review`). `--driver` selects the agent and
 mechanism: `claude-cmux` (default), `claude-headless`, or `codex-headless`.
 
 #### Run the tests and linters when the agent is done (`--check`)
@@ -838,7 +823,7 @@ If you only remember a few entrypoints, use this map:
 | Run tests across the repo | `gavel test` |
 | Run linters across the repo | `gavel lint` |
 | Run declarative Markdown tests | `gavel fixtures` |
-| Review committed work with AI | `gavel todos verify` |
+| Re-run a TODO's definition of done | `gavel todos check` |
 | Generate a commit message | `gavel commit` |
 | Check PR status | `gavel pr status` |
 | Browse many PRs | `gavel pr list` |

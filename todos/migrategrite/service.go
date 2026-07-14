@@ -549,7 +549,7 @@ func buildNativeBatch(document Document, workspace native.ImportWorkspace, resol
 	for _, issue := range document.Issues {
 		input := native.ImportIssue{
 			SourceID: issue.SourceID, Title: issue.Title, Body: issue.Body, Verification: issue.Verification,
-			Labels: issue.Labels, Priority: issue.Priority, Status: issue.Status, ExecutionState: issue.ExecutionState,
+			Labels: issue.Labels, Priority: issue.Priority, Status: issue.Status,
 			CreatedAt: issue.CreatedAt, UpdatedAt: issue.UpdatedAt,
 		}
 		if runID, ok := resolved.activeRuns[issue.SourceID]; ok {

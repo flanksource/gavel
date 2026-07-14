@@ -564,7 +564,7 @@ func (f TODOFrontmatter) Pretty() api.Text {
 	return result
 }
 
-// TODOVerifyConfig specifies gavel verify gate settings for a TODO.
+// TODOVerifyConfig specifies legacy AI gate settings carried by a TODO.
 type TODOVerifyConfig struct {
 	Categories     []string `yaml:"categories,omitempty" json:"categories,omitempty"`
 	ScoreThreshold int      `yaml:"score_threshold,omitempty" json:"score_threshold,omitempty"`
@@ -945,12 +945,23 @@ type BuildTestResultInfoOptions struct {
 
 // CheckResult contains the result of checking a single TODO by running its verification tests.
 type CheckResult struct {
-	TODO       *TODO
-	Results    []fixtures.FixtureResult
-	AllPassed  bool
-	Duration   time.Duration
-	Error      error
-	TestResult *TestResultInfo // Comprehensive test result info for updating todo file
+	TODO       *TODO                    `json:"todo,omitempty"`
+	Results    []fixtures.FixtureResult `json:"results,omitempty"`
+	AllPassed  bool                     `json:"allPassed"`
+	Duration   time.Duration            `json:"duration"`
+	Error      error                    `json:"-"`
+	ErrorText  string                   `json:"error,omitempty"`
+	Output     *VerificationOutput      `json:"output,omitempty"`
+	TestResult *TestResultInfo          `json:"testResult,omitempty"` // Comprehensive test result info for updating todo file
+}
+
+// VerificationOutput is the shared result of a TODO definition-of-done run.
+// It is returned by both in-loop verification and verify-only issue checks so
+// every surface renders the same fixture/checklist evidence.
+type VerificationOutput struct {
+	Results   []fixtures.FixtureResult `json:"results,omitempty"`
+	Checklist []map[string]any         `json:"checklist,omitempty"`
+	Summary   map[string]any           `json:"summary"`
 }
 
 // Pretty returns a formatted text representation of the CheckResult

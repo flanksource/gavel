@@ -173,30 +173,28 @@ type AliasInput struct {
 }
 
 type CreateIssueInput struct {
-	ID             uuid.UUID
-	WorkspaceID    uuid.UUID
-	Aliases        []AliasInput
-	Title          string
-	Body           string
-	Verification   string
-	Labels         []string
-	Priority       Priority
-	Status         IssueStatus
-	ExecutionState ExecutionState
-	Actor          string
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	Aliases      []AliasInput
+	Title        string
+	Body         string
+	Verification string
+	Labels       []string
+	Priority     Priority
+	Status       IssueStatus
+	Actor        string
 }
 
 // IssuePatch uses pointers so callers can distinguish no change from setting
 // a field to its zero value.
 type IssuePatch struct {
-	Title          *string
-	Body           *string
-	Verification   *string
-	Labels         *[]string
-	Priority       *Priority
-	Status         *IssueStatus
-	ExecutionState *ExecutionState
-	Actor          string
+	Title        *string
+	Body         *string
+	Verification *string
+	Labels       *[]string
+	Priority     *Priority
+	Status       *IssueStatus
+	Actor        string
 }
 
 type EventInput struct {

@@ -1,5 +1,5 @@
-// Package prompt owns the built-in todo agent prompts (run, plan, and the
-// final-result resume turn) as captain dotprompt templates. Rendering goes
+// Package prompt owns the built-in todo run and plan prompts as captain
+// dotprompt templates. Rendering goes
 // through captain's engine end-to-end: a template's frontmatter (model,
 // permissions.mode, budget, effort) is folded into the returned ai.Request, so
 // the .prompt file — not Go code — declares how a mode executes. The per-todo
@@ -30,13 +30,10 @@ var runTemplate string
 //go:embed todos-plan.prompt
 var planTemplate string
 
-//go:embed todos-final.prompt
-var finalTemplate string
-
 // Options configures Render.
 type Options struct {
 	WorkDir string
-	Mode    types.RunMode // ModeRun or ModePlan (ModeVerify runs through the verify engine)
+	Mode    types.RunMode // ModeRun or ModePlan
 	Effort  string
 	// Template is the resolved .gavel.yaml override source (see ResolveTemplate);
 	// empty renders the embedded default for Mode.
@@ -148,7 +145,7 @@ func templateSource(opts Options) (string, error) {
 
 // EnvelopeSchemaJSON is the JSON schema of the mode's structured final result.
 // The executor computes it once per run session and threads the same bytes to
-// every turn (initial, retry, feedback, final-result resume) so the claude-agent
+// every turn (initial, retry, and feedback) so the claude-agent
 // provider's per-turn byte-equality guard holds by identity.
 func EnvelopeSchemaJSON(mode types.RunMode) (json.RawMessage, error) {
 	var v any
@@ -165,43 +162,6 @@ func EnvelopeSchemaJSON(mode types.RunMode) (json.RawMessage, error) {
 		return nil, fmt.Errorf("build %s envelope schema: %w", mode, err)
 	}
 	return raw, nil
-}
-
-// ResolveFinalTemplate reads the todos.finalPrompt override for dir, returning
-// the inline/file source or "" when unset (FinalResultRequest then renders the
-// embedded default). A configured-but-missing file is a hard error.
-func ResolveFinalTemplate(dir string) (string, error) {
-	cfg, err := verify.LoadGavelConfig(dir)
-	if err != nil {
-		return "", fmt.Errorf("load .gavel.yaml for todos final prompt: %w", err)
-	}
-	tmpl, err := cfg.Todos.FinalPrompt.Resolve(dir, "")
-	if err != nil {
-		return "", fmt.Errorf("resolve todos.finalPrompt override: %w", err)
-	}
-	return tmpl, nil
-}
-
-// FinalResultRequest renders the resume turn that asks a finished (or timed
-// out) session to emit ONLY the mode's final result JSON. template is the
-// resolved todos.finalPrompt override; empty renders the embedded default. The
-// schema rides on the request as a native field; the caller passes the same
-// bytes the run session was pinned with so the resume turn matches.
-func FinalResultRequest(template, sessionID string, timedOut bool, schemaJSON json.RawMessage) (captainai.Request, error) {
-	if sessionID == "" {
-		return captainai.Request{}, fmt.Errorf("final-result request needs a session to resume")
-	}
-	if strings.TrimSpace(template) == "" {
-		template = finalTemplate
-	}
-	req, _, err := dotprompt.Load(template).Render(map[string]any{"timedOut": timedOut}, nil)
-	if err != nil {
-		return captainai.Request{}, fmt.Errorf("render todos final prompt: %w", err)
-	}
-	req.Prompt.SchemaJSON = schemaJSON
-	req.Prompt.Source = "todos.final"
-	req.SessionID = sessionID
-	return req, nil
 }
 
 // EffortDirective renders the leading reasoning-effort instruction for a run,
@@ -222,8 +182,7 @@ func EffortDirective(effort string) string {
 }
 
 // Prompts returns the overridable todo prompt descriptors for the settings
-// registry: run, plan, and the todo-verification override of the verify
-// template.
+// registry: run and plan.
 func Prompts() []prompts.Prompt {
 	return []prompts.Prompt{
 		{
@@ -232,6 +191,7 @@ func Prompts() []prompts.Prompt {
 			Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
 			ConfigPath:  "todos.runPrompt",
 			Default:     runTemplate,
+			ModelPolicy: prompts.ModelFromPrompt,
 		},
 		{
 			ID:          prompts.TodosPlan,
@@ -239,20 +199,7 @@ func Prompts() []prompts.Prompt {
 			Description: "The agent prompt for plan-mode runs: read-only investigation that produces a reviewable implementation plan.",
 			ConfigPath:  "todos.planPrompt",
 			Default:     planTemplate,
-		},
-		{
-			ID:          prompts.TodosVerify,
-			Title:       "Todo verify prompt",
-			Description: "Overrides the verify template for TODO verification only; `gavel verify` keeps verify.promptTemplate.",
-			ConfigPath:  "todos.verifyPrompt",
-			Default:     verify.DefaultPromptTemplate(),
-		},
-		{
-			ID:          prompts.TodosFinal,
-			Title:       "Todo final-result prompt",
-			Description: "The resume-turn framing that asks a finished or timed-out session to emit ONLY the final result JSON. The output schema is fixed in Go and is NOT overridable; only the framing text changes.",
-			ConfigPath:  "todos.finalPrompt",
-			Default:     finalTemplate,
+			ModelPolicy: prompts.ModelFromPrompt,
 		},
 	}
 }

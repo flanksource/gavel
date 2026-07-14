@@ -2,8 +2,8 @@ package verify
 
 import "github.com/flanksource/gavel/prompts"
 
-// DefaultPromptTemplate is the embedded verify reviewer template — the default
-// other packages' prompt descriptors resolve against (todos.verifyPrompt).
+// DefaultPromptTemplate is the embedded generic AI-review template used by AI
+// fixture steps.
 func DefaultPromptTemplate() string { return verifyPromptTemplate }
 
 // Prompts returns the overridable prompt templates owned by the verify package.
@@ -13,9 +13,10 @@ func DefaultPromptTemplate() string { return verifyPromptTemplate }
 func Prompts() []prompts.Prompt {
 	return []prompts.Prompt{{
 		ID:          prompts.Verify,
-		Title:       "Verify reviewer",
-		Description: "The reviewer prompt for `gavel verify` and fixture AI checks.",
+		Title:       "AI fixture reviewer",
+		Description: "The reviewer prompt used by AI fixture steps.",
 		ConfigPath:  "verify.promptTemplate",
 		Default:     verifyPromptTemplate,
+		ModelPolicy: prompts.ModelFromVerifyConfig,
 	}}
 }

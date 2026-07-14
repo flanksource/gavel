@@ -1,8 +1,55 @@
 package github
 
 import (
+	"archive/zip"
+	"bytes"
+	"errors"
 	"testing"
 )
+
+func TestExtractJSONFromZip(t *testing.T) {
+	t.Run("extracts nested JSON result", func(t *testing.T) {
+		data := artifactZip(t, map[string]string{
+			"report/index.html":         "<html></html>",
+			"report/gavel-results.json": `{"tests":[]}`,
+		})
+		got, err := extractJSONFromZip(data)
+		if err != nil {
+			t.Fatalf("extract JSON: %v", err)
+		}
+		if string(got) != `{"tests":[]}` {
+			t.Fatalf("content = %q", got)
+		}
+	})
+
+	t.Run("classifies artifact without JSON as no results", func(t *testing.T) {
+		_, err := extractJSONFromZip(artifactZip(t, map[string]string{
+			"report/index.html": "<html></html>",
+		}))
+		if !errors.Is(err, ErrArtifactResultsNotFound) {
+			t.Fatalf("error = %v, want ErrArtifactResultsNotFound", err)
+		}
+	})
+}
+
+func artifactZip(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, content := range files {
+		entry, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 func TestParseArtifactURL(t *testing.T) {
 	tests := []struct {

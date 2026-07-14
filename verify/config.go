@@ -338,14 +338,6 @@ type TodosConfig struct {
 	// PlanPrompt overrides the built-in plan-mode prompt template. Empty uses the
 	// embedded default. See prompts.TodosPlan.
 	PlanPrompt PromptOverride `yaml:"planPrompt,omitempty" json:"planPrompt,omitempty"`
-	// VerifyPrompt overrides the verify template for TODO verification only
-	// (`gavel verify` keeps verify.promptTemplate). See prompts.TodosVerify.
-	VerifyPrompt PromptOverride `yaml:"verifyPrompt,omitempty" json:"verifyPrompt,omitempty"`
-	// FinalPrompt overrides the resume-turn template that asks a finished/timed-out
-	// session to emit ONLY the final result JSON. The output schema is force-applied
-	// in Go and is NOT overridable here — an override changes only the framing text.
-	// See prompts.TodosFinal.
-	FinalPrompt PromptOverride `yaml:"finalPrompt,omitempty" json:"finalPrompt,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -520,6 +512,7 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if err := yaml.Unmarshal(data, &gc); err != nil {
 		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
+	setPromptOverrideBaseDirs(&gc, filepath.Dir(path))
 	return gc, string(data), nil
 }
 
@@ -580,12 +573,6 @@ func MergeTodosConfig(base, override TodosConfig) TodosConfig {
 	}
 	if !override.PlanPrompt.IsZero() {
 		base.PlanPrompt = override.PlanPrompt
-	}
-	if !override.VerifyPrompt.IsZero() {
-		base.VerifyPrompt = override.VerifyPrompt
-	}
-	if !override.FinalPrompt.IsZero() {
-		base.FinalPrompt = override.FinalPrompt
 	}
 	return base
 }

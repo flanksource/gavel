@@ -4,17 +4,35 @@ import (
 	"os"
 	"testing"
 
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func clearDatabaseEnvironment(t *testing.T) {
 	t.Helper()
+	databaseURL = ""
+	t.Cleanup(func() { databaseURL = "" })
 	t.Setenv(EnvDSN, "")
 	t.Setenv(EnvDisable, "")
 	t.Setenv(LegacyEnvDSN, "")
 	t.Setenv(LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
+}
+
+func TestDatabaseURLFlagPrecedence(t *testing.T) {
+	clearDatabaseEnvironment(t)
+	t.Setenv(EnvDSN, "postgres://preferred")
+	t.Setenv(LegacyEnvDSN, "postgres://legacy")
+
+	flags := pflag.NewFlagSet("gavel", pflag.ContinueOnError)
+	BindDatabaseURLFlag(flags)
+	require.NoError(t, flags.Parse([]string{"--db-url=postgres://flag/gavel"}))
+
+	dsn, source, err := resolveDSN()
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://flag/gavel", dsn)
+	assert.Equal(t, "--db-url", source)
 }
 
 func TestOpenWithoutConfigurationIsDisabled(t *testing.T) {

@@ -1,10 +1,10 @@
 ---
 title: Getting started
-description: Install gavel and run your first test, lint, and AI verify pass.
+description: Install gavel and run your first tests, linters, and fixtures.
 order: 1
 ---
 
-Gavel is a single CLI that runs your tests, linters in parallel, and an AI-powered verify pass — locally and in CI.
+Gavel is a single CLI that runs your tests, linters, and declarative Markdown fixtures — locally and in CI.
 
 ## Install
 
@@ -28,7 +28,7 @@ From the root of any Go project:
 gavel test
 ```
 
-Gavel discovers your `go test` packages, runs them, and writes a structured `dist/tests.json` plus a browsable `dist/tests.html`. Pass `--lint` to also run every linter whose config file is present in the repo, and `--verify` to layer on the AI verify pass.
+Gavel discovers your `go test` packages, runs them, and writes a structured `dist/tests.json` plus a browsable `dist/tests.html`. Pass `--lint` to also run every linter whose config file is present in the repo.
 
 ## Lint in parallel
 
@@ -46,19 +46,21 @@ Supported linters (activated when their native config or project signal is disco
 
 All run concurrently and merge into a single report.
 
-## Verify: AI code review with checks
+## Run declarative fixtures
 
 ```bash
-gavel verify
+gavel fixtures checks.fixture.md
 ```
 
-`verify` runs a configured set of AI-graded checks against the changes in your working tree or the current PR. Each check produces a structured pass/fail verdict with a rationale — useful for policy (e.g. "every public function needs a doc comment") or correctness (e.g. "new code paths are covered by tests").
+Fixtures combine Markdown tables, executable command blocks, test/lint runner
+steps, CEL assertions, and optional AI review steps. TODO `## Verification`
+sections use the same fixture engine.
 
 ## What's next
 
 - Learn how to turn markdown into runnable checks in [Fixture overview](/docs/fixtures-overview).
 - Use [Fixture formats](/docs/fixture-formats) when you need tables, command blocks, CEL assertions, templates, or working-directory rules.
-- Read [Todo engine](/docs/todo-engine) to understand how Gavel stores, runs, and verifies work items.
-- See [Todo run loop](/docs/todo-run-loop) for Plan, Run, Verify, checks, and `## Verification` behavior.
+- Read [Todo engine](/docs/todo-engine) to understand how Gavel stores, runs, and checks work items.
+- See [Todo run loop](/docs/todo-run-loop) for plan, run, checks, and `## Verification` behavior.
 - [Join the waitlist](/#waitlist) for the hosted tier.
 - Star the repo on [GitHub](https://github.com/flanksource/gavel) — the CLI is MIT-licensed.

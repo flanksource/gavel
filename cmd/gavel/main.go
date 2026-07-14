@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +58,7 @@ func getWorkingDir() (string, error) {
 
 func init() {
 	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
+	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
 	logger.Configure(logger.Flags{LogToStderr: true, Color: true})
 	rootCmd.PersistentFlags().StringVar(&workingDir, "cwd", "", "Working directory")
 
@@ -132,6 +134,7 @@ func gavelMCPGlobalIgnoredParams() []string {
 		"--triage",
 		"--baseline",
 		"--work-dir",
+		"--db-url",
 	}
 }
 

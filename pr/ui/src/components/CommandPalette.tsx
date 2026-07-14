@@ -38,6 +38,15 @@ function prMatchesQuery(pr: PRItem, q: string): boolean {
   );
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// uuidQuery deliberately accepts every UUID version: native Todo IDs, Captain
+// IDs, and provider-issued Claude/Codex IDs do not all use the same version.
+export function uuidQuery(value: string): string | null {
+  const trimmed = value.trim();
+  return UUID_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
 // SearchTrigger is the top-bar affordance that stands in for the old inline
 // search box: a click (or the ⌘K/Ctrl+K shortcut) opens the palette. Present on
 // every tab so global search is always one key away.
@@ -46,11 +55,11 @@ export function SearchTrigger({ onOpen }: { onOpen: () => void }) {
     <button
       type="button"
       onClick={onOpen}
-      aria-label="Search pull requests and todos"
+      aria-label="Search pull requests, todos, and sessions"
       className="flex w-full items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/70"
     >
       <UiSearch className="shrink-0 text-sm" />
-      <span className="flex-1 truncate text-left">Search PRs &amp; todos…</span>
+      <span className="flex-1 truncate text-left">Search PRs, todos, or UUID…</span>
       <kbd className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
         {paletteShortcutLabel}
       </kbd>
@@ -58,7 +67,7 @@ export function SearchTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSelectPR, onSelectTodo }: {
+export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSelectPR, onSelectTodo, onOpenUUID }: {
   open: boolean;
   onClose: () => void;
   prs: PRItem[];
@@ -66,6 +75,7 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
   todosLoading: boolean;
   onSelectPR: (pr: PRItem) => void;
   onSelectTodo: (entry: TodoEntry) => void;
+  onOpenUUID: (uuid: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -92,6 +102,7 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
   }, [open]);
 
   const q = query.trim().toLowerCase();
+  const directUUID = uuidQuery(query);
   const prMatches = useMemo(() => (q ? prs.filter(pr => prMatchesQuery(pr, q)) : []), [prs, q]);
   const todoMatches = useMemo(() => (q ? todos.filter(e => todoMatchesQuery(e.todo, q)) : []), [todos, q]);
 
@@ -99,6 +110,16 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
   // rendered groups index into it so the highlight and Enter stay in sync.
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
+    if (directUUID) {
+      out.push({
+        key: `uuid:${directUUID}`,
+        icon: UiSearch,
+        title: 'Open Todo or session UUID',
+        subtitle: directUUID,
+        meta: 'UUID',
+        onSelect: () => { onClose(); onOpenUUID(directUUID); },
+      });
+    }
     for (const pr of prMatches.slice(0, GROUP_CAP)) {
       out.push({
         key: `pr:${pr.repo}#${pr.number}`,
@@ -120,7 +141,7 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
       });
     }
     return out;
-  }, [prMatches, todoMatches, onClose, onSelectPR, onSelectTodo]);
+  }, [directUUID, prMatches, todoMatches, onClose, onOpenUUID, onSelectPR, onSelectTodo]);
 
   // Keep the active index in range as results change while typing.
   useEffect(() => { setActive(a => (rows.length === 0 ? 0 : Math.min(a, rows.length - 1))); }, [rows.length]);
@@ -144,7 +165,9 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
     }
   }
 
-  const todoBase = Math.min(prMatches.length, GROUP_CAP);
+  const directBase = directUUID ? 1 : 0;
+  const prBase = directBase;
+  const todoBase = directBase + Math.min(prMatches.length, GROUP_CAP);
 
   return (
     <Modal open={open} onClose={onClose} size="lg" hideClose closeOnBackdrop closeOnEsc>
@@ -155,8 +178,8 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
           value={query}
           onChange={e => { setQuery((e.target as HTMLInputElement).value); setActive(0); }}
           onKeyDown={onKeyDown}
-          placeholder="Search pull requests and todos…"
-          aria-label="Search pull requests and todos"
+          placeholder="Search pull requests, todos, or paste a UUID…"
+          aria-label="Search pull requests, todos, and sessions"
           className="flex-1 min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
         <kbd className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">esc</kbd>
@@ -165,18 +188,23 @@ export function CommandPalette({ open, onClose, prs, todos, todosLoading, onSele
       <div ref={listRef} className="pt-2">
         {!q ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            Type to search pull requests and todos across every tab.
+            Type to search pull requests and todos, or paste a Todo or session UUID.
           </div>
         ) : rows.length === 0 && !todosLoading ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No pull requests or todos match “{query.trim()}”.
+            No pull requests, todos, or sessions match “{query.trim()}”.
           </div>
         ) : (
           <>
+            {directUUID && (
+              <Group label="UUID" overflow={0}>
+                <PaletteRow row={rows[0]} index={0} active={active} onHover={setActive} />
+              </Group>
+            )}
             {prMatches.length > 0 && (
               <Group label="Pull requests" overflow={prMatches.length - GROUP_CAP}>
                 {prMatches.slice(0, GROUP_CAP).map((_, i) => (
-                  <PaletteRow key={rows[i].key} row={rows[i]} index={i} active={active} onHover={setActive} />
+                  <PaletteRow key={rows[prBase + i].key} row={rows[prBase + i]} index={prBase + i} active={active} onHover={setActive} />
                 ))}
               </Group>
             )}

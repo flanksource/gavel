@@ -16,6 +16,8 @@ import stackThin from '@iconify-icons/ph/stack-thin';
 import playThin from '@iconify-icons/ph/play-thin';
 import lightningThin from '@iconify-icons/ph/lightning-thin';
 import terminalWindowThin from '@iconify-icons/ph/terminal-window-thin';
+import chartLineThin from '@iconify-icons/ph/chart-line-thin';
+import treeStructureThin from '@iconify-icons/ph/tree-structure-thin';
 
 // SettingsIcon is a plain component so it can be handed straight to clicky-ui's
 // Tabs (`icon`) and rendered as a section-header label glyph (`labelIcon`).
@@ -30,6 +32,8 @@ function ph(glyph: IconifyIcon): SettingsIcon {
 // sectionIcon is keyed by the .gavel.yaml top-level section name.
 export const sectionIcon: Record<string, SettingsIcon> = {
   verify: UiSparkles,
+  status: ph(chartLineThin),
+  test: ph(treeStructureThin),
   commit: ph(gitCommitThin),
   lint: ph(warningThin),
   secrets: ph(shieldCheckThin),

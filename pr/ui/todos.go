@@ -50,24 +50,28 @@ type todoListResponse struct {
 }
 
 type todoSummary struct {
-	Ref            string                `json:"ref"`
-	ID             string                `json:"id,omitempty"`
-	ShortID        string                `json:"shortId,omitempty"`
-	Version        int64                 `json:"version,omitempty"`
-	WorkspaceID    string                `json:"workspaceId,omitempty"`
-	ExecutionState string                `json:"executionState,omitempty"`
-	Title          string                `json:"title"`
-	Status         types.Status          `json:"status"`
-	Priority       types.Priority        `json:"priority"`
-	CWD            string                `json:"cwd,omitempty"`
-	Labels         []string              `json:"labels,omitempty"`
-	Attempts       int                   `json:"attempts,omitempty"`
-	Created        *time.Time            `json:"created,omitempty"`
-	LastRun        *time.Time            `json:"lastRun,omitempty"`
-	SessionID      string                `json:"sessionId,omitempty"`
-	Body           string                `json:"body,omitempty"`
-	Implementation string                `json:"implementation,omitempty"`
-	Events         []types.ProviderEvent `json:"events,omitempty"`
+	Ref            string         `json:"ref"`
+	ID             string         `json:"id,omitempty"`
+	ShortID        string         `json:"shortId,omitempty"`
+	Version        int64          `json:"version,omitempty"`
+	WorkspaceID    string         `json:"workspaceId,omitempty"`
+	ExecutionState string         `json:"executionState,omitempty"`
+	Title          string         `json:"title"`
+	Status         types.Status   `json:"status"`
+	Priority       types.Priority `json:"priority"`
+	CWD            string         `json:"cwd,omitempty"`
+	Labels         []string       `json:"labels,omitempty"`
+	Attempts       int            `json:"attempts,omitempty"`
+	Created        *time.Time     `json:"created,omitempty"`
+	LastRun        *time.Time     `json:"lastRun,omitempty"`
+	SessionID      string         `json:"sessionId,omitempty"`
+	// LookupSessionID is set only when a global detail request used a Captain
+	// session UUID instead of an issue reference. The client uses it to open the
+	// exact historical session without replacing the Todo's active SessionID.
+	LookupSessionID string                `json:"lookupSessionId,omitempty"`
+	Body            string                `json:"body,omitempty"`
+	Implementation  string                `json:"implementation,omitempty"`
+	Events          []types.ProviderEvent `json:"events,omitempty"`
 	// Criteria are the todo's acceptance criteria, parsed from its
 	// "## Acceptance Criteria" section; populated on detail responses so the
 	// dashboard can render and edit them structurally.
@@ -389,14 +393,66 @@ func (s *Server) handleTodoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestedSource := todoSourceFromRequest(r)
-	_, source, todo, err := s.resolveTodoReference(r.Context(), requestedSource, ref)
+	_, source, todo, lookupSessionID, err := s.resolveTodoGetReference(r.Context(), requestedSource, ref)
 	if err != nil {
 		writeTodoError(w, http.StatusNotFound, err)
 		return
 	}
 	sum := summarizeTodo(todo, true)
+	sum.LookupSessionID = lookupSessionID
 	sum.Diff = diffStatFor(commitDiffStats(r.Context(), source.Dir), todo.ID)
 	json.NewEncoder(w).Encode(sum) //nolint:errcheck
+}
+
+// resolveTodoGetReference extends the ordinary global issue lookup with an
+// exact UUID-only session fallback. Issue UUIDs and UUID-shaped aliases remain
+// authoritative; only a genuine issue miss is allowed to resolve through
+// Captain's prompt-run links. The canonical issue is then re-read through its
+// owning workspace provider so all detail fields retain their normal boundary.
+func (s *Server) resolveTodoGetReference(
+	ctx context.Context,
+	requested todoSource,
+	ref string,
+) (todos.Provider, todoSource, *types.TODO, string, error) {
+	provider, source, todo, err := s.resolveTodoReference(ctx, requested, ref)
+	if err == nil {
+		return provider, source, todo, "", nil
+	}
+	if strings.TrimSpace(requested.Dir) != "" || !errors.Is(err, native.ErrNotFound) {
+		return nil, source, nil, "", err
+	}
+	if _, parseErr := uuid.Parse(strings.TrimSpace(ref)); parseErr != nil {
+		return nil, source, nil, "", err
+	}
+
+	global, globalErr := openGlobalTodoProvider(ctx)
+	if globalErr != nil {
+		return nil, source, nil, "", err
+	}
+	sessions, ok := global.(todos.GlobalSessionReferenceProvider)
+	if !ok {
+		return nil, source, nil, "", err
+	}
+	sessionTodo, sessionID, sessionErr := sessions.GetGlobalBySession(ctx, ref)
+	if sessionErr != nil {
+		if errors.Is(sessionErr, native.ErrNotFound) {
+			return nil, source, nil, "", fmt.Errorf("%w: TODO or session UUID %q", native.ErrNotFound, ref)
+		}
+		return nil, source, nil, "", sessionErr
+	}
+	ownerDir := strings.TrimSpace(sessionTodo.CWD)
+	if ownerDir == "" {
+		return nil, source, nil, "", fmt.Errorf("resolved session %q has no owning workspace path", ref)
+	}
+	provider, source, err = s.todoProviderContext(ctx, todoSource{Dir: ownerDir})
+	if err != nil {
+		return nil, source, nil, "", err
+	}
+	todo, err = provider.Get(ctx, sessionTodo.ID)
+	if err != nil {
+		return nil, source, nil, "", err
+	}
+	return provider, source, todo, sessionID, nil
 }
 
 // resolveTodoReference loads one issue and returns a provider scoped to its
@@ -1327,10 +1383,6 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if err != nil {
 		return todoRunOptions{}, err
 	}
-	if runMode == types.ModeVerify {
-		return todoRunOptions{}, fmt.Errorf("verify runs through POST /api/todos/verify, not the run endpoint")
-	}
-
 	effort := api.Effort(strings.ToLower(strings.TrimSpace(string(payload.Effort))))
 	if effort == "" {
 		effort = "medium"
@@ -1451,8 +1503,8 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 		}
 	}
 	// Verification is the run loop's definition of done (the fixture/CEL verdict),
-	// not a separate post-commit scoring pass. `POST /api/todos/verify` re-runs it
-	// manually.
+	// not a separate post-commit scoring pass. The Verification tab and
+	// `gavel todos check` re-run it manually.
 }
 
 // resolveDriverFromPayload selects the driver kind: the explicit Driver field

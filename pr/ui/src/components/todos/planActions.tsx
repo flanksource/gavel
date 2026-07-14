@@ -124,10 +124,11 @@ export function usePlanActions(dir: string) {
       setBusy(true);
       setError('');
       try {
+        const options = loadLastTodoRunOptions('plan');
         const res = await fetch(`/api/todos/plan/revise?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ref: ref.trim(), feedback: trimmed }),
+          body: JSON.stringify({ ref: ref.trim(), feedback: trimmed, options }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Revise failed');

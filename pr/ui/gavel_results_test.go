@@ -164,6 +164,17 @@ func TestComputeGavelSummary_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestAggregateGavelSummariesIgnoresMissingArtifacts(t *testing.T) {
+	if got := aggregateGavelSummaries([]*GavelResultsSummary{nil, nil}); got != nil {
+		t.Fatalf("all-missing aggregate = %+v, want nil", got)
+	}
+
+	want := &GavelResultsSummary{StickyID: "gavel-test", TestsTotal: 3, TestsPassed: 3}
+	if got := aggregateGavelSummaries([]*GavelResultsSummary{nil, want}); got != want {
+		t.Fatalf("single usable aggregate = %+v, want original summary", got)
+	}
+}
+
 func TestGavelResultJSON_UnmarshalArray(t *testing.T) {
 	var g gavelResultJSON
 	if err := json.Unmarshal([]byte(`[{"name":"T1","passed":true}]`), &g); err != nil {

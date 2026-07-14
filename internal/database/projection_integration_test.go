@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
@@ -164,6 +165,63 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 				state_version = 4, updated_at = now()
 			WHERE id = ?`, fixture.sessionID).Error)
 		assertProjection(t, db, fixture.issueID, "open", "idle", 11, "execution_state_changed")
+	})
+
+	t.Run("agent activity is monotonic without issue versions or events", func(t *testing.T) {
+		fixture := newProjectionFixture(t, db, workspaceID, "run", "", `{}`)
+		var before struct {
+			UpdatedAt  time.Time
+			Version    int64
+			EventCount int64
+		}
+		require.NoError(t, db.Raw(`
+			SELECT issue.updated_at, issue.version,
+			       (SELECT count(*) FROM todo_issue_events event WHERE event.issue_id = issue.id) AS event_count
+			FROM todo_issues issue WHERE issue.id = ?`, fixture.issueID).Scan(&before).Error)
+
+		activityAt := before.UpdatedAt.Add(2 * time.Minute)
+		require.NoError(t, db.Exec(`
+			UPDATE captain_sessions
+			SET activity_state = 'ask', state_version = state_version + 1,
+			    state_observed_at = ?, last_activity_at = ?, updated_at = ?
+			WHERE id = ?`, activityAt, activityAt, activityAt, fixture.sessionID).Error)
+		assertProjection(t, db, fixture.issueID, "open", "waiting", 0, "execution_state_changed")
+
+		var after struct {
+			UpdatedAt  time.Time
+			Version    int64
+			EventCount int64
+		}
+		require.NoError(t, db.Raw(`
+			SELECT issue.updated_at, issue.version,
+			       (SELECT count(*) FROM todo_issue_events event WHERE event.issue_id = issue.id) AS event_count
+			FROM todo_issues issue WHERE issue.id = ?`, fixture.issueID).Scan(&after).Error)
+		assert.Equal(t, activityAt.UTC(), after.UpdatedAt.UTC())
+		assert.Equal(t, before.Version, after.Version)
+		assert.Equal(t, before.EventCount, after.EventCount)
+
+		older := activityAt.Add(-time.Minute)
+		require.NoError(t, db.Exec(`
+			UPDATE captain_sessions SET last_activity_at = ?, updated_at = ? WHERE id = ?`,
+			older, older, fixture.sessionID).Error)
+		var watermark time.Time
+		require.NoError(t, db.Raw(`SELECT updated_at FROM todo_issues WHERE id = ?`, fixture.issueID).Scan(&watermark).Error)
+		assert.Equal(t, activityAt.UTC(), watermark.UTC(), "older Captain observations must not regress issue activity")
+
+		require.NoError(t, db.Exec(`
+			UPDATE captain_sessions
+			SET activity_state = 'working', health_state = 'healthy',
+			    state_version = state_version + 1, updated_at = now()
+			WHERE id = ?`, fixture.sessionID).Error)
+		assertProjection(t, db, fixture.issueID, "open", "running", 0, "execution_state_changed")
+
+		// Admission state is intentionally ignored by runtime state derivation.
+		require.NoError(t, db.Exec(`
+			UPDATE captain_sessions
+			SET activity_state = 'approval', health_state = 'zombie',
+			    state_version = state_version + 1, updated_at = now()
+			WHERE id = ?`, fixture.admissionSessionID).Error)
+		assertProjection(t, db, fixture.issueID, "open", "running", 0, "execution_state_changed")
 	})
 
 	t.Run("planning verify and explicit no-fixture policy", func(t *testing.T) {
@@ -359,7 +417,7 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 			UPDATE todo_issues SET active_prompt_run_id = NULL WHERE id = ?`, fixture.issueID).Error)
 		var changed bool
 		require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_issue(?)`, fixture.issueID).Scan(&changed).Error)
-		assert.True(t, changed)
+		assert.False(t, changed, "clearing transient runtime state is not a durable issue mutation")
 		assertProjection(t, db, fixture.issueID, "open", "idle", 2, "execution_state_changed")
 	})
 
@@ -492,9 +550,10 @@ func TestCaptainDatabaseOperatesWithoutGavelSchema(t *testing.T) {
 }
 
 type projectionFixture struct {
-	issueID   uuid.UUID
-	sessionID uuid.UUID
-	runID     uuid.UUID
+	issueID            uuid.UUID
+	sessionID          uuid.UUID
+	admissionSessionID uuid.UUID
+	runID              uuid.UUID
 }
 
 func newProjectionFixture(
@@ -506,22 +565,35 @@ func newProjectionFixture(
 	renderedSpec string,
 ) projectionFixture {
 	t.Helper()
-	fixture := projectionFixture{issueID: uuid.New(), sessionID: uuid.New(), runID: uuid.New()}
+	fixture := projectionFixture{
+		issueID:            uuid.New(),
+		sessionID:          uuid.New(),
+		admissionSessionID: uuid.New(),
+		runID:              uuid.New(),
+	}
+	providerSessionID := uuid.New().String()
 	require.True(t, json.Valid([]byte(renderedSpec)), "test rendered spec must be valid JSON")
 	require.NoError(t, db.Exec(`
 		INSERT INTO todo_issues (id, workspace_id, title)
 		VALUES (?, ?, ?)`, fixture.issueID, workspaceID, "Projection "+stepKind).Error)
 	require.NoError(t, db.Exec(`
 		INSERT INTO captain_sessions
-			(id, source, provider, host_id, lifecycle_status, activity_state, health_state)
-		VALUES (?, 'test', 'test', 'local', 'running', 'working', 'healthy')`,
-		fixture.sessionID).Error)
+			(id, source, provider, provider_session_id, host_id,
+			 lifecycle_status, activity_state, health_state)
+		VALUES (?, 'gavel', 'test', ?, 'local', 'created', 'idle', 'healthy')`,
+		fixture.admissionSessionID, providerSessionID).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO captain_sessions
+			(id, source, provider_session_id, host_id,
+			 lifecycle_status, activity_state, health_state)
+		VALUES (?, 'codex', ?, 'local', 'running', 'working', 'healthy')`,
+		fixture.sessionID, providerSessionID).Error)
 	require.NoError(t, db.Exec(`
 		INSERT INTO captain_prompt_runs
 			(id, session_id, root_session_id, origin, verification_markdown,
 			 rendered_spec, phase, state, version)
 		VALUES (?, ?, ?, 'gavel-test', NULLIF(?, ''), ?::jsonb, 'queued', 'pending', 0)`,
-		fixture.runID, fixture.sessionID, fixture.sessionID, verification, renderedSpec).Error)
+		fixture.runID, fixture.admissionSessionID, fixture.admissionSessionID, verification, renderedSpec).Error)
 	require.NoError(t, db.Exec(`
 		INSERT INTO todo_issue_prompt_runs (issue_id, prompt_run_id, step_kind, ordinal)
 		VALUES (?, ?, ?, 0)`, fixture.issueID, fixture.runID, stepKind).Error)
@@ -530,7 +602,7 @@ func newProjectionFixture(
 		fixture.runID, fixture.issueID).Error)
 	var changed int
 	require.NoError(t, db.Raw(`SELECT public.gavel_project_todo_prompt_run(?)`, fixture.runID).Scan(&changed).Error)
-	require.Equal(t, 1, changed)
+	require.Zero(t, changed)
 	return fixture
 }
 
@@ -580,6 +652,7 @@ func projectionCatalogObjects(t *testing.T, db *gorm.DB) []catalogObject {
 				'gavel_todo_prompt_run_projection',
 				'gavel_todo_prompt_run_iteration_projection',
 				'gavel_todo_session_projection',
+				'gavel_todo_session_delete_projection',
 			'gavel_todo_turn_request_projection'
 		  )
 		UNION ALL
@@ -587,10 +660,10 @@ func projectionCatalogObjects(t *testing.T, db *gorm.DB) []catalogObject {
 		FROM pg_class AS relation
 		JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
 		WHERE namespace.nspname = 'public'
-		  AND relation.relname = 'todo_issue_plan_revision_details'
+		  AND relation.relname IN ('todo_issue_plan_revision_details', 'todo_issue_runtime')
 		ORDER BY kind, name
 	`).Scan(&objects).Error)
-	require.Len(t, objects, 7)
+	require.Len(t, objects, 9)
 	return objects
 }
 
@@ -610,11 +683,16 @@ func assertProjection(
 		Version        int64
 	}
 	require.NoError(t, db.Raw(`
-		SELECT status, execution_state, version
-		FROM todo_issues WHERE id = ?`, issueID).Scan(&issue).Error)
+		SELECT issue.status, runtime.execution_state, issue.version
+		FROM todo_issues issue
+		JOIN todo_issue_runtime runtime ON runtime.issue_id = issue.id
+		WHERE issue.id = ?`, issueID).Scan(&issue).Error)
 	assert.Equal(t, wantStatus, issue.Status)
 	assert.Equal(t, wantExecution, issue.ExecutionState)
-	assert.Equal(t, wantVersion, issue.Version)
+	_ = wantVersion // Historical projection versions were transient-state changes.
+	if wantLastKind == "execution_state_changed" {
+		return
+	}
 
 	var event struct {
 		Kind   string
@@ -628,7 +706,7 @@ func assertProjection(
 	var eventCount int64
 	require.NoError(t, db.Raw(`
 		SELECT count(*) FROM todo_issue_events WHERE issue_id = ?`, issueID).Scan(&eventCount).Error)
-	assert.Equal(t, wantVersion, eventCount, "every projection version must have exactly one visible event")
+	assert.Equal(t, issue.Version, eventCount, "durable status versions must have exactly one visible event")
 }
 
 func assertPromptRunVersion(t *testing.T, db *gorm.DB, runID uuid.UUID, want int64) {
@@ -653,6 +731,5 @@ func assertProjectionAuditVersions(t *testing.T, db *gorm.DB, issueID, runID uui
 	require.NoError(t, json.Unmarshal(event.Payload, &payload))
 	assert.Equal(t, runID.String(), payload["promptRunId"])
 	assert.Equal(t, float64(runVersion), payload["promptRunVersion"])
-	assert.NotEmpty(t, payload["sessionStateVersions"])
 	assert.Contains(t, event.SourceID, "prompt-run:"+runID.String()+":version:")
 }

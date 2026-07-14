@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -185,10 +185,6 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, provider.UpdateLatestFailure(t.Context(), created, &types.TestResultInfo{
 		Command: "go test ./...", CWD: oldRoot, Output: "failed", Duration: time.Second,
 	}))
-	require.NoError(t, provider.SaveVerification(t.Context(), created, &verify.VerifyResult{Score: 91}))
-	assert.NotEmpty(t, created.ProviderEvents)
-	assert.Equal(t, "verification_result", created.ProviderEvents[len(created.ProviderEvents)-1].Kind)
-
 	verified := types.StatusVerified
 	require.NoError(t, provider.UpdateState(t.Context(), created, todos.StateUpdate{Status: &verified}))
 	stored, err = repository.GetIssue(t.Context(), mustUUID(t, created.ID))
@@ -209,6 +205,19 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	}))
 	require.NotNil(t, runTodo.LLM)
 	assert.Equal(t, "runtime-run-1", runTodo.LLM.SessionId)
+	runningIssue, err := repository.GetIssue(t.Context(), mustUUID(t, runTodo.ID))
+	require.NoError(t, err)
+	require.NotNil(t, runningIssue.ActivePromptRunID)
+	runningPromptRun, err := provider.Captain().GetPromptRun(t.Context(), *runningIssue.ActivePromptRunID)
+	require.NoError(t, err)
+	admissionSession, err := provider.Captain().GetSession(t.Context(), runningPromptRun.RootSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, "gavel", admissionSession.Source)
+	assert.Equal(t, captaindb.SessionLifecycleCreated, admissionSession.LifecycleStatus)
+	agentSession, err := provider.Captain().GetSessionByIdentity(t.Context(), "runtime-run-1", "codex", "", "local")
+	require.NoError(t, err)
+	assert.NotEqual(t, admissionSession.ID, agentSession.ID)
+	assert.Equal(t, captaindb.SessionLifecycleRunning, agentSession.LifecycleStatus)
 	require.NoError(t, provider.SaveAttempt(t.Context(), runTodo, &todos.ExecutionResult{
 		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
 		Summary: "implementation finished without explicit verification",
@@ -223,6 +232,12 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "succeeded", string(captainRun.State))
 	assert.Equal(t, "finished", string(captainRun.Phase))
+	agentSession, err = provider.Captain().GetSession(t.Context(), agentSession.ID)
+	require.NoError(t, err)
+	assert.Equal(t, captaindb.SessionLifecycleSucceeded, agentSession.LifecycleStatus)
+	admissionSession, err = provider.Captain().GetSession(t.Context(), admissionSession.ID)
+	require.NoError(t, err)
+	assert.Equal(t, captaindb.SessionLifecycleCreated, admissionSession.LifecycleStatus)
 
 	tracingTodo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Runtime exact prompt", Body: "The issue body is not the rendered agent prompt", Status: types.StatusPending,

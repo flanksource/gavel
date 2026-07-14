@@ -6,6 +6,8 @@ import { loadGroupBy, loadSortBy, saveGroupBy, saveSortBy } from './todoGroup';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
 
+const activeTodoDetailPollInterval = 1000;
+
 export interface SelectedTodo {
   dir: string;
   ref: string;
@@ -127,6 +129,11 @@ export function useWorkspaceTodos(
   // A route lookup below already returns the full detail. Skip the ordinary
   // dir-scoped refetch for that exact canonical selection.
   const skipDetailKey = useRef('');
+  // Tracks the route identity that produced the current selection. It is
+  // declared before the detail effect so a route change can suppress a stale
+  // refetch of the previously selected canonical Todo while the new global
+  // UUID/alias lookup is in flight.
+  const appliedId = useRef('');
 
   // Load a clicked todo's detail (body + history).
   useEffect(() => {
@@ -138,6 +145,7 @@ export function useWorkspaceTodos(
       }
       return;
     }
+    if (onNavigate && selectedId !== appliedId.current) return;
     const selectionKey = `${selected.dir}\u0000${selected.ref}`;
     if (skipDetailKey.current === selectionKey) {
       skipDetailKey.current = '';
@@ -165,12 +173,52 @@ export function useWorkspaceTodos(
       }
     })();
     return () => { cancelled = true; };
-  }, [selected, selectedId]);
+  }, [selected, selectedId, onNavigate]);
+
+  // Inline agents discover their provider session ID after the run request has
+  // already returned. Keep the selected detail current while execution is live
+  // so the Session tab can attach as soon as that identity is persisted, and so
+  // the terminal plan/run projection replaces the optimistic in-progress row
+  // without requiring a manual page refresh. This deliberately polls only the
+  // selected detail; workspace lists refresh once when the run leaves the
+  // active state instead of fanning out on every tick.
+  useEffect(() => {
+    if (!selected || detail?.status !== 'in_progress') return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      let stillActive = true;
+      try {
+        const params = new URLSearchParams(todoQuery(selected.dir));
+        params.set('ref', selected.ref);
+        const res = await fetch(`/api/todos/item?${params.toString()}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Load failed');
+        if (cancelled) return;
+        const next = data as TodoItem;
+        stillActive = next.status === 'in_progress';
+        setDetail(next);
+        if (!stillActive) setRefreshTick(tick => tick + 1);
+      } catch {
+        // A transient detail read must not disconnect a live session. The next
+        // tick retries while the locally projected todo is still active.
+      }
+      if (!cancelled && stillActive) {
+        timer = window.setTimeout(poll, activeTodoDetailPollInterval);
+      }
+    };
+
+    timer = window.setTimeout(poll, activeTodoDetailPollInterval);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [detail?.status, selected]);
 
   // select changes the active todo and pushes its ref into the URL (when the
   // caller wired onNavigate). The resolution effect below mirrors the reverse —
   // a URL change (deep link, back/forward) into `selected`.
-  const appliedId = useRef('');
   const selectedRef = useRef<SelectedTodo | null>(null);
   const setSelection = useCallback((next: SelectedTodo | null) => {
     selectedRef.current = next;

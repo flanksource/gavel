@@ -95,6 +95,36 @@ func TestTodoAPINativeCRUD(t *testing.T) {
 	}
 }
 
+func TestTodoAPIGetResolvesSessionUUIDAndPreservesExactSession(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := uiTestProviderFor(workDir)
+	created, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title:  "Open me from my session",
+		Status: types.StatusPending,
+	})
+	if err != nil {
+		t.Fatalf("create todo: %v", err)
+	}
+	sessionID := "019f5b29-7890-7c11-8e7a-838e5d373e39"
+	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sessionID}); err != nil {
+		t.Fatalf("record session: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleTodoItem(rec, httptest.NewRequest(http.MethodGet, "/api/todos/item?ref="+url.QueryEscape(sessionID), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get by session status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var detail todoSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	if detail.Ref != created.ID || detail.LookupSessionID != sessionID {
+		t.Fatalf("session lookup = %+v, want todo %q and session %q", detail, created.ID, sessionID)
+	}
+}
+
 // The list response must expose hasPlan/hasVerification on every item (not
 // just detail responses) so the todo row can render its plan/verification
 // indicators without a round-trip per row — see HasPlan (todos/plans.go) and

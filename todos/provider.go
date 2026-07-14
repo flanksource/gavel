@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 const ProviderDB = "db"
@@ -34,9 +33,6 @@ type Provider interface {
 	UpdateState(ctx context.Context, todo *types.TODO, updates StateUpdate) error
 	UpdateLatestFailure(ctx context.Context, todo *types.TODO, result *types.TestResultInfo) error
 	SaveAttempt(ctx context.Context, todo *types.TODO, result *ExecutionResult) error
-	// SaveVerification records an issue-verification verdict as a persistent
-	// "## Verification Result" section/comment, replacing any prior result.
-	SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error
 }
 
 // RunPreparation is the durable identity needed before an external agent is
@@ -76,6 +72,16 @@ type GroupExecutionPolicy interface {
 // be reported rather than guessed.
 type GlobalReferenceProvider interface {
 	GetGlobal(ctx context.Context, ref string) (*types.TODO, error)
+}
+
+// GlobalSessionReferenceProvider resolves a Captain session UUID to the native
+// TODO that owns its linked prompt run. The returned session ID is the
+// canonical provider identity when Captain knows one, otherwise the native
+// Captain session UUID. Keeping it separate from GlobalReferenceProvider makes
+// ordinary issue aliases authoritative when the same UUID-shaped token could
+// identify both records.
+type GlobalSessionReferenceProvider interface {
+	GetGlobalBySession(ctx context.Context, ref string) (*types.TODO, string, error)
 }
 
 // TransferProvider preserves native identity/history when moving an issue

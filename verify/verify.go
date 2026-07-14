@@ -28,8 +28,8 @@ type RunOptions struct {
 	// AgentConfig, when set, runs the review through a captain agentic backend
 	// (claude-code / claude-agent): the agent fetches the diff via its own tools
 	// and is told to emit JSON matching the schema, which is parsed here. Fixture
-	// AI steps and todo verification always set it; `gavel verify` and the autofix
-	// loop leave it nil and use the legacy per-provider CLI adapters.
+	// AI steps and TODO definition-of-done checks set it when they need an
+	// explicit backend; other library callers can leave it nil to use defaults.
 	AgentConfig *ai.AgentConfig
 	// SchemaCEL, when non-empty, overrides the built-in schema.cel expression that
 	// generates the JSON output schema from the review's checks/criteria (the

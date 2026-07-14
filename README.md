@@ -372,29 +372,6 @@ gavel bench compare --base base.json --head head.json --threshold 15 --ui
 
 ### Code Review & Commits
 
-#### `gavel todos verify`
-
-AI-powered code review: score whether a TODO's committed work implements its
-acceptance criteria, across completeness, code quality, testing, consistency,
-security, and performance. (This replaces the former top-level `gavel verify`
-command; the same engine also backs AI-verification fixtures — see
-`gavel fixtures --help`.)
-
-```bash
-gavel todos verify                       # score all todos
-gavel todos verify 3f2a1b                 # score one todo
-gavel todos verify --threshold 90         # require a higher score
-gavel todos verify --strict               # exit non-zero if any is unimplemented
-gavel todos verify --model claude-code-sonnet
-```
-
-| Flag | Description |
-|------|-------------|
-| `--model` | AI model for verification (default: `.gavel.yaml` `verify.model`) |
-| `--threshold` | Score at/above which an implemented TODO is promoted to verified (default: 80) |
-| `--strict` | Exit non-zero when any verified TODO is not implemented |
-| `--status` | Only verify TODOs in this status |
-
 #### `gavel commit`
 
 Generate a conventional commit message via LLM and run pre-commit hooks from `.gavel.yaml`.
@@ -655,12 +632,18 @@ View the merged `.gavel.yaml` for a path.
 
 Interactive output shows merged YAML with comments for non-git-root sources.
 Redirected output, `--yaml`, and `--json` emit only the merged config.
+Pass `--resolve` (`-r`) to expand all registered AI prompts, including inline
+Captain specs and file-backed templates, and show both declared and effective
+model/backend details. With `--json` or `--yaml`, resolved output is wrapped as
+`{config, prompts}`.
 
 ```bash
 gavel config
 gavel config ./pkg/api
 gavel config ./cmd/gavel/main.go
 gavel config --yaml ./cmd/gavel/main.go
+gavel config --resolve ./cmd/gavel/main.go
+gavel config --resolve --json
 gavel config > merged.gavel.yaml
 ```
 
@@ -679,13 +662,16 @@ gavel todos list --status pending
 gavel todos run 3f2a1b
 gavel todos run --mode plan              # propose a reviewable plan first (read-only)
 gavel todos run --check                  # run tests/lint when the agent finishes, feed failures back to it
-gavel todos check 3f2a1b                 # run a TODO's verification fixtures only
-gavel todos verify --strict              # AI-score committed work vs acceptance criteria
+gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 
-`--mode` selects what the agent does: `run` (implement, default), `plan` (produce a plan that parks the TODO in `review` for approval via `gavel todos plan reject|revise`), or `verify` (score committed work). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
+`--mode` selects what the agent does: `run` (implement, default) or `plan` (produce a plan that parks the TODO in `review` for approval via `gavel todos plan reject|revise`). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
 
 `--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt in via the flag or `.gavel.yaml` `checks:` configuration.
+
+`gavel todos check` manually runs the same fixture/CEL definition of done used by
+the implementation loop: configured test/lint checks, the issue's persisted
+`## Verification` fixture, and any acceptance-criteria checklist step.
 
 ## Output Formats
 
@@ -715,7 +701,7 @@ A full annotated example lives in `gavel.yaml.example` and is also rendered in `
 
 ```yaml
 verify:
-  model: claude                      # AI model for gavel todos verify / AI fixtures
+  model: claude                      # AI model for generic AI verification fixtures
   checks:
     disabled: [SEC-1, PERF-2]        # disable specific check IDs
     disabledCategories: [performance] # disable entire categories
@@ -902,7 +888,7 @@ Gavel ships [Agent Skills](https://agentskills.io/) that teach AI coding agents 
 | [`gavel-fixture-tester`](.agents/skills/gavel-fixture-tester/SKILL.md) | **Author** fixture-based tests in markdown — YAML front-matter, tables, command blocks, and CEL assertions for stdout/stderr/exitCode/json. |
 | [`gavel-runner`](.agents/skills/gavel-runner/SKILL.md) | **Run** gavel test and lint — focus on a subset (`--changed`, `--cache`, framework, runner pass-through), re-run only failures (`--failed` defaults to `.gavel/last.json`), suppress noise with baselines, pull JSON / markdown / HTML out via `--format`, attach to live runs through the UI server's HTTP+SSE API, and tune the four-layer timeout stack. |
 | [`gavel-git`](.agents/skills/gavel-git/SKILL.md) | **Use gavel over gh/git** — `gavel pr status` for PR + CI status (replaces `gh pr view`/`gh run view`), `gavel commit -p` / `gavel pr create` to open PRs with AI-generated content, and `gavel commit` (session-scoped, conventional message, hooks) for commits. |
-| [`gavel-todos`](.agents/skills/gavel-todos/SKILL.md) | **Run the TODO loop** — have a coding agent implement TODOs (`gavel todos run`, run/plan/verify modes) and AI-score committed work against acceptance criteria (`gavel todos verify --strict`, the home of the former `gavel verify`). |
+| [`gavel-todos`](.agents/skills/gavel-todos/SKILL.md) | **Run the TODO loop** — have a coding agent implement or plan TODOs, then execute the same fixture/CEL definition of done manually with `gavel todos check`. |
 | [`gavel-ci-migrator`](.agents/skills/gavel-ci-migrator/SKILL.md) | **Migrate CI** — discover existing `golangci-lint` / `go test` / `make lint|test` jobs in `.github/workflows/`, ask per-workflow whether to replace with `flanksource/gavel@…` or add alongside, rewrite YAML with the right `permissions:` and `fetch-depth: 0`, and verify with `actionlint`. Never auto-commits. |
 
 ### Install

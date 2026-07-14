@@ -17,6 +17,7 @@ func Prompts() []prompts.Prompt {
 		Description: "One-line AI summary of each changed file for `gavel status --ai`. Variable: {{details}} (the staged/unstaged diff or file contents). Output schema is fixed ({summary}).",
 		ConfigPath:  "status.summaryPrompt",
 		Default:     fileSummaryPromptTemplate,
+		ModelPolicy: prompts.ModelFromDefault,
 	}}
 }
 

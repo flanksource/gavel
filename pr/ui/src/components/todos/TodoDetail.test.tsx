@@ -11,7 +11,9 @@ import { useSessionStats } from './TodoSessionTimer';
 // is stubbed to keep the surface narrow.
 vi.mock('./TodoTimeline', () => ({ TodoTimeline: () => null }));
 vi.mock('./TodoCommits', () => ({ TodoCommits: () => null }));
-vi.mock('./TodoSession', () => ({ TodoSession: () => null }));
+vi.mock('./TodoSession', () => ({
+  TodoSession: ({ sessionId }: { sessionId?: string }) => <div data-testid="session-viewer">{sessionId}</div>,
+}));
 vi.mock('./TodoPlan', () => ({ TodoPlan: () => null }));
 vi.mock('./TodoVerification', () => ({ TodoVerification: () => null }));
 vi.mock('./TodoCompose', () => ({
@@ -177,6 +179,17 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
 
     expect(screen.getByRole('alert').textContent).toContain('todo reference abc123 is ambiguous');
     expect(screen.getByRole('button', { name: 'Back to todos' })).toBeTruthy();
+  });
+
+  it('opens the exact historical Session tab resolved from a session UUID', async () => {
+    const historicalSession = '019f5b29-7890-7c11-8e7a-838e5d373e39';
+    await renderDetail({
+      ...baseTodo,
+      sessionId: '019f5b2e-75b7-7de2-911b-de8b70266479',
+      lookupSessionId: historicalSession,
+    });
+
+    expect(screen.getByTestId('session-viewer').textContent).toBe(historicalSession);
   });
 
   it('keeps Resume, Run, and Plan enabled for a pending todo', async () => {

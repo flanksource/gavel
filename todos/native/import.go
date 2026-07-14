@@ -573,12 +573,8 @@ func normalizeImportBatch(batch ImportBatch) (*normalizedImport, error) {
 		if !issue.Status.valid() {
 			return nil, fmt.Errorf("%w: import issue %s has status %q", ErrInvalidInput, sourceID, issue.Status)
 		}
-		if issue.ExecutionState == "" {
-			issue.ExecutionState = ExecutionIdle
-		}
-		if !issue.ExecutionState.valid() {
-			return nil, fmt.Errorf("%w: import issue %s has execution state %q", ErrInvalidInput, sourceID, issue.ExecutionState)
-		}
+		// Execution state is a read-time Captain projection. Legacy artifacts may
+		// still carry the retired cached value, but it is not imported.
 		issue.CreatedAt = stableImportTime(issue.CreatedAt, workspace.CreatedAt)
 		issue.UpdatedAt = stableImportTime(issue.UpdatedAt, issue.CreatedAt)
 		if existing, ok := issuesBySource[sourceID]; ok {
@@ -1100,10 +1096,10 @@ func applyImportIssues(
 			insert := tx.Exec(`
 				INSERT INTO todo_issues
 					(id, workspace_id, title, body, verification, labels, priority, status,
-					 execution_state, version, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+					 version, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
 				id, workspaceID, input.Title, input.Body, input.Verification, pq.Array(input.Labels),
-				input.Priority, input.Status, input.ExecutionState, input.CreatedAt, input.UpdatedAt)
+				input.Priority, input.Status, input.CreatedAt, input.UpdatedAt)
 			if insert.Error != nil {
 				return nil, nil, nil, fmt.Errorf("insert imported issue %s: %w", input.SourceID, insert.Error)
 			}
@@ -1132,20 +1128,18 @@ func applyImportIssues(
 			changedIssues[input.SourceID] = !importIssueMatches(before, input)
 			if changedIssues[input.SourceID] {
 				status := input.Status
-				executionState := input.ExecutionState
 				if input.ActivePromptRunID != nil {
-					// Once an authoritative Captain run is selected, projection owns
-					// both fields. Re-importing an older Grite open/idle snapshot must
-					// not reset them and manufacture another projection event.
+					// Once an authoritative Captain run is selected, reconciliation
+					// owns durable status. Re-importing an older snapshot must not
+					// reset it and manufacture another event.
 					status = before.Status
-					executionState = before.ExecutionState
 				}
 				if err := tx.Exec(`
 					UPDATE todo_issues
 					SET title = ?, body = ?, verification = ?, labels = ?, priority = ?, status = ?,
-					    execution_state = ?, created_at = ?, updated_at = ?
+					    created_at = ?, updated_at = ?
 					WHERE id = ?`, input.Title, input.Body, input.Verification, pq.Array(input.Labels),
-					input.Priority, status, executionState, input.CreatedAt, input.UpdatedAt, id).Error; err != nil {
+					input.Priority, status, input.CreatedAt, input.UpdatedAt, id).Error; err != nil {
 					return nil, nil, nil, err
 				}
 			}
@@ -1664,14 +1658,12 @@ func equalNormalizedImportEvent(left, right normalizedImportEvent) bool {
 
 func importIssueMatches(current *Issue, imported ImportIssue) bool {
 	statusMatches := current.Status == imported.Status
-	executionMatches := current.ExecutionState == imported.ExecutionState
 	if imported.ActivePromptRunID != nil {
 		statusMatches = true
-		executionMatches = true
 	}
 	return current.Title == imported.Title && current.Body == imported.Body && current.Verification == imported.Verification &&
 		slices.Equal(current.Labels, imported.Labels) && current.Priority == imported.Priority && statusMatches &&
-		executionMatches && current.CreatedAt.Equal(imported.CreatedAt) && current.UpdatedAt.Equal(imported.UpdatedAt)
+		current.CreatedAt.Equal(imported.CreatedAt) && current.UpdatedAt.Equal(imported.UpdatedAt)
 }
 
 func cloneUUIDPointer(value *uuid.UUID) *uuid.UUID {

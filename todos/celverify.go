@@ -73,12 +73,13 @@ func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) 
 	results := v.runDeterministic(hc)
 	checklist := v.runChecklist(hc)
 	summary := resultsSummary(results, checklist)
+	output := types.VerificationOutput{Results: results, Checklist: checklist, Summary: summary}
 	retry, err := evalRetry(v.retryExpr, results, checklist, hc)
 	if err != nil {
 		return agent.VerifyResult{}, err
 	}
 	if !retry {
-		return agent.VerifyResult{Valid: true, Output: summary}, nil
+		return agent.VerifyResult{Valid: true, Output: output}, nil
 	}
 	// Build the next iteration's request explicitly: the same rendered request
 	// (permissions/model/setup unchanged) with a fresh feedback prompt, threading
@@ -92,7 +93,7 @@ func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) 
 		Source:     "todos.check",
 	}
 	retryReq.SessionID = hc.Workspace().SessionID
-	return agent.VerifyResult{Valid: false, Retry: &retryReq, Output: summary}, nil
+	return agent.VerifyResult{Valid: false, Retry: &retryReq, Output: output}, nil
 }
 
 // runDeterministic executes the configured checks and the todo's `## Verification`

@@ -9,7 +9,6 @@ import (
 
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 var testProviders = struct {
@@ -125,10 +124,6 @@ func (p *testTODOProvider) UpdateLatestFailure(context.Context, *types.TODO, *ty
 }
 
 func (p *testTODOProvider) SaveAttempt(context.Context, *types.TODO, *todos.ExecutionResult) error {
-	return nil
-}
-
-func (p *testTODOProvider) SaveVerification(context.Context, *types.TODO, *verify.VerifyResult) error {
 	return nil
 }
 

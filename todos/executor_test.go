@@ -9,7 +9,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 func TestAllPassed_AllSuccess(t *testing.T) {
@@ -291,8 +290,4 @@ func (p *recordingProvider) SaveAttempt(ctx context.Context, _ *types.TODO, _ *E
 	p.saveCalls++
 	p.saveCtxErr = ctx.Err()
 	return ctx.Err()
-}
-
-func (p *recordingProvider) SaveVerification(context.Context, *types.TODO, *verify.VerifyResult) error {
-	return nil
 }

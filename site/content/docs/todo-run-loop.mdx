@@ -1,6 +1,6 @@
 ---
 title: Todo run loop
-description: Plan, Run, Verify, checks, sessions, result envelopes, and fixture-backed definitions of done.
+description: Plan, run, check, sessions, result envelopes, and fixture-backed definitions of done.
 order: 7
 ---
 
@@ -9,11 +9,11 @@ order: 7
 ```bash
 gavel todos run 90ec80f0
 gavel todos run --mode plan 90ec80f0 # [!code highlight] [!code note:reviewable plan]
-gavel todos run --mode verify 90ec80f0 # [!code info]
-gavel todos run --check --commit --verify 90ec80f0 # [!code focus] [!code note:full loop]
+gavel todos run --check --commit 90ec80f0 # [!code focus] [!code note:full loop]
+gavel todos check 90ec80f0 # [!code info] [!code note:manual definition of done]
 ```
 
-Line 1 runs the default implementation mode. Line 2 asks the agent to produce a reviewable plan. Line 3 delegates to issue verification. Line 4 runs implementation, fixture-backed checks, auto-commit, and issue verification as one workflow.
+Line 1 runs the default implementation mode. Line 2 asks the agent to produce a reviewable plan. Line 3 runs implementation, fixture-backed checks, and auto-commit as one workflow. Line 4 re-runs the same definition of done without an implementation agent.
 
 ## Modes
 
@@ -23,9 +23,6 @@ Line 1 runs the default implementation mode. Line 2 asks the agent to produce a 
 |------|----------|
 | `run` | implement the todo |
 | `plan` | investigate and produce or revise a reviewable plan |
-| `verify` | score committed work against acceptance criteria |
-
-`todos run --mode verify` delegates to `gavel todos verify`. It does not construct an implementation agent.
 
 Plan mode is read-oriented. A completed plan run reports a native plan file path and moves the todo to `review` when the plan is new or updated. If the existing plan is unchanged, the todo returns to `pending`. If the agent needs input, the todo becomes `ask`.
 
@@ -130,15 +127,18 @@ Line 1 names the section Gavel parses as verification fixtures. Lines 5-9 run an
 
 The verification fixture is evaluated inside the agent loop. Passing nodes promote the todo to `verified`; failures become feedback for the next iteration or leave the todo `unverified` when the budget runs out.
 
-## Commit and issue verification
+## Commit and manual verification
 
 `--commit` is enabled by default for implementation runs. When the executor did not already commit, Gavel runs the same commit pipeline as `gavel commit` over the agent's changes.
 
-`--verify` runs issue verification after commit. It scores the committed work against the issue body and acceptance criteria, then records the result through the provider.
+`gavel todos check` runs the same fixture/CEL definition of done on demand and
+records the resulting verified or unverified lifecycle state.
 
 ```bash
-gavel todos run --commit=true --verify 90ec80f0 # [!code focus]
-gavel todos verify --threshold 80 --strict 90ec80f0 # [!code warning]
+gavel todos run --commit=true --check 90ec80f0 # [!code focus]
+gavel todos check 90ec80f0 # [!code warning]
 ```
 
-The first command commits successful agent work and immediately scores those commits. The second command can be run later; `--strict` makes the command fail when any selected todo is judged not implemented.
+The first command feeds failing checks back into the implementation loop before
+committing successful work. The second command can be run later without starting
+an implementation agent.

@@ -1,136 +1,159 @@
 package headless
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/ai/agent"
-	"github.com/flanksource/captain/pkg/api"
 	todopkg "github.com/flanksource/gavel/todos"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// envelope is the mode-erased parse target: run mode fills the base fields,
-// plan mode also carries the plan definition.
 type envelope struct {
 	types.ResultEnvelope
 	Plan *types.PlanResult
 }
 
-// captureEnvelope obtains the structured result envelope for a finished (or
-// timed-out) run: first from the final iteration's assistant text, then — when
-// that has none — by resuming the session with a final-result request on a
-// fresh context (the run context is already dead after a timeout). A plan run
-// without an envelope is a hard error (its plan status/path are unknowable);
-// run mode degrades to the transport result with a logged warning, leaving
-// EndStatus empty so the degradation is visible to callers.
-func (e *Executor) captureEnvelope(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, result *todopkg.ExecutionResult, rres agent.Result[string], todosInGroup []*types.TODO, timedOut bool, schemaJSON json.RawMessage) error {
-	if env := e.envelopeFromRun(rres); env != nil {
-		applyEnvelope(result, env)
-		return nil
+func (e *Executor) captureEnvelope(result *todopkg.ExecutionResult, response *captainai.Response) error {
+	env, err := e.envelopeFromResponse(response)
+	if err != nil {
+		return err
 	}
-
-	sessionID := runSessionID(rres, todosInGroup)
-	if sessionID != "" {
-		workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-		template, err := todoprompt.ResolveFinalTemplate(workDir)
-		if err != nil {
-			return err
-		}
-		if env := e.requestFinalResult(ctx, provider, sessionID, workDir, timedOut, schemaJSON, template); env != nil {
-			applyEnvelope(result, env)
-			return nil
-		}
-	}
-
-	if e.config.Mode == types.ModePlan {
-		return fmt.Errorf("plan run produced no result envelope (session %q): plan status and path are unknown", sessionID)
-	}
-	ctx.Logger.Warnf("%s: no result envelope captured; falling back to the transport result", e.Name())
+	applyEnvelope(result, env)
 	return nil
 }
 
-// envelopeFromRun parses the envelope out of the final iteration's assistant
-// text: the last text event alone first (the final reply is usually the bare
-// JSON), then the iteration's full text.
-func (e *Executor) envelopeFromRun(rres agent.Result[string]) *envelope {
-	if rres.Loop == nil || len(rres.Loop.Iterations) == 0 {
-		return nil
+func (e *Executor) envelopeFromResponse(response *captainai.Response) (*envelope, error) {
+	if response == nil {
+		return nil, fmt.Errorf("no result envelope: agent response is missing")
 	}
-	last := rres.Loop.Iterations[len(rres.Loop.Iterations)-1]
-	var texts []string
-	for _, ev := range last.Events {
-		if ev.Kind == captainai.EventText && ev.Text != "" {
-			texts = append(texts, ev.Text)
-		}
+	if response.TerminalOutcome != nil {
+		return e.envelopeFromTerminalOutcome(response.TerminalOutcome)
 	}
-	return e.parseEnvelopeTexts(texts)
-}
-
-// requestFinalResult resumes the session with the mode's final-result turn and
-// parses the reply. Failures are logged, not fatal — the caller decides what a
-// missing envelope means for the mode.
-func (e *Executor) requestFinalResult(ctx *todopkg.ExecutorContext, provider captainai.StreamingProvider, sessionID, workDir string, timedOut bool, schemaJSON json.RawMessage, template string) *envelope {
-	freq, err := todoprompt.FinalResultRequest(template, sessionID, timedOut, schemaJSON)
-	if err != nil {
-		ctx.Logger.Warnf("%s: final-result request: %v", e.Name(), err)
-		return nil
-	}
-	freq.Budget = api.Budget{MaxTurns: finalResultMaxTurns}
-	freq.SetCwd(workDir)
-
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalResultTimeout)
-	defer cancel()
-
-	ctx.Logger.Infof("%s: requesting final result from session %s (timedOut=%t)", e.Name(), sessionID, timedOut)
-	events, err := provider.ExecuteStream(fctx, freq)
-	if err != nil {
-		ctx.Logger.Warnf("%s: final-result resume failed: %v", e.Name(), err)
-		return nil
-	}
-	var texts []string
-	for ev := range events {
-		if ev.Kind == captainai.EventText && ev.Text != "" {
-			texts = append(texts, ev.Text)
-		}
-	}
-	return e.parseEnvelopeTexts(texts)
-}
-
-// parseEnvelopeTexts tries the last text alone, then the joined whole.
-func (e *Executor) parseEnvelopeTexts(texts []string) *envelope {
-	if len(texts) == 0 {
-		return nil
-	}
-	if env := e.parseEnvelope(texts[len(texts)-1]); env != nil {
-		return env
-	}
-	if len(texts) == 1 {
-		return nil
-	}
-	return e.parseEnvelope(strings.Join(texts, "\n"))
-}
-
-func (e *Executor) parseEnvelope(text string) *envelope {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	if e.config.Mode == types.ModePlan {
-		pe, err := captainai.ParseStructured(text, (*types.PlanEnvelope).Validate)
+	if response.StructuredData != nil {
+		text, err := structuredDataText(response.StructuredData)
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("result envelope structured data: %w", err)
 		}
-		return &envelope{ResultEnvelope: pe.ResultEnvelope, Plan: &pe.Plan}
+		env, err := e.parseEnvelope(text)
+		if err != nil {
+			return nil, fmt.Errorf("result envelope structured data: %w", err)
+		}
+		return env, nil
 	}
-	re, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
+	if strings.TrimSpace(response.Text) != "" {
+		env, err := e.parseEnvelope(response.Text)
+		if err != nil {
+			return nil, fmt.Errorf("result envelope response text: %w", err)
+		}
+		return env, nil
+	}
+	return nil, fmt.Errorf("no result envelope: terminal outcome, structured data, and response text are empty")
+}
+
+func (e *Executor) envelopeFromTerminalOutcome(outcome *captainai.TerminalOutcome) (*envelope, error) {
+	if err := outcome.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid terminal outcome: %w", err)
+	}
+	switch outcome.Kind {
+	case captainai.TerminalOutcomePlan:
+		if e.config.Mode != types.ModePlan {
+			return nil, fmt.Errorf("native plan outcome is invalid in %s mode", e.config.Mode)
+		}
+		status := e.nativePlanStatus(outcome.Plan.Content)
+		return &envelope{
+			ResultEnvelope: types.ResultEnvelope{Summary: nativePlanSummary(status), EndStatus: types.EndCompleted},
+			Plan: &types.PlanResult{
+				Status:  status,
+				Path:    outcome.Plan.Path,
+				Content: outcome.Plan.Content,
+			},
+		}, nil
+	case captainai.TerminalOutcomeQuestions:
+		questions := make([]types.AgentQuestion, len(outcome.Questions))
+		for i, question := range outcome.Questions {
+			questions[i] = types.AgentQuestion{
+				Text:    question.Text,
+				Context: question.Context,
+				Options: append([]string(nil), question.Options...),
+			}
+		}
+		return &envelope{ResultEnvelope: types.ResultEnvelope{
+			Summary:   "The agent is waiting for answers.",
+			EndStatus: types.EndAsk,
+			Questions: questions,
+		}}, nil
+	default:
+		return nil, fmt.Errorf("unsupported terminal outcome kind %q", outcome.Kind)
+	}
+}
+
+func (e *Executor) nativePlanStatus(content string) types.PlanStatus {
+	existing := normalizePlanContent(e.config.ExistingPlan)
+	if existing == "" {
+		return types.PlanNew
+	}
+	if existing == normalizePlanContent(content) {
+		return types.PlanUnchanged
+	}
+	return types.PlanUpdated
+}
+
+func nativePlanSummary(status types.PlanStatus) string {
+	switch status {
+	case types.PlanNew:
+		return "The agent created a plan."
+	case types.PlanUpdated:
+		return "The agent updated the plan."
+	case types.PlanUnchanged:
+		return "The existing plan is unchanged."
+	default:
+		return "The agent completed planning."
+	}
+}
+
+func normalizePlanContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	return strings.TrimSpace(content)
+}
+
+func structuredDataText(value any) (string, error) {
+	var data []byte
+	switch typed := value.(type) {
+	case json.RawMessage:
+		data = typed
+	case []byte:
+		data = typed
+	case string:
+		data = []byte(typed)
+	default:
+		var err error
+		data, err = json.Marshal(value)
+		if err != nil {
+			return "", err
+		}
+	}
+	if strings.TrimSpace(string(data)) == "" || string(data) == "null" {
+		return "", fmt.Errorf("value is empty")
+	}
+	return string(data), nil
+}
+
+func (e *Executor) parseEnvelope(text string) (*envelope, error) {
+	if e.config.Mode == types.ModePlan {
+		parsed, err := captainai.ParseStructured(text, (*types.PlanEnvelope).Validate)
+		if err != nil {
+			return nil, err
+		}
+		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Plan: &parsed.Plan}, nil
+	}
+	parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &envelope{ResultEnvelope: *re}
+	return &envelope{ResultEnvelope: *parsed}, nil
 }
 
 func applyEnvelope(result *todopkg.ExecutionResult, env *envelope) {
@@ -138,14 +161,4 @@ func applyEnvelope(result *todopkg.ExecutionResult, env *envelope) {
 	result.EndStatus = env.EndStatus
 	result.Questions = env.Questions
 	result.Plan = env.Plan
-}
-
-// runSessionID prefers the session the Runner observed on the event stream
-// (folded onto the response Workspace), falling back to the todos' recorded
-// prior session.
-func runSessionID(rres agent.Result[string], todosInGroup []*types.TODO) string {
-	if rres.Response != nil && rres.Response.Workspace != nil && rres.Response.Workspace.SessionID != "" {
-		return rres.Response.Workspace.SessionID
-	}
-	return priorSessionID(todosInGroup)
 }

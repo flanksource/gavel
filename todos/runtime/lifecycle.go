@@ -84,7 +84,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		executorName = "unknown"
 	}
 	promptMarkdown := preparation.PromptMarkdown
-	if strings.TrimSpace(promptMarkdown) == "" {
+	if strings.TrimSpace(promptMarkdown) == "" && mode != types.ModeVerify {
 		promptMarkdown = issue.Body
 	}
 	cwd := strings.TrimSpace(todo.CWD)
@@ -157,7 +157,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		Origin:               "gavel.todos",
 		SpecProfile:          string(mode),
 		AdmissionKey:         "gavel-todo:" + seed,
-		RenderedSpec:         map[string]any{"workflow": map[string]any{"autoVerifyWithoutFixture": false}},
+		RenderedSpec:         map[string]any{"workflow": verificationWorkflow(issue.Verification)},
 		PromptMarkdown:       promptMarkdown,
 		VerificationMarkdown: issue.Verification,
 	}
@@ -184,9 +184,17 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	return p.replaceTODO(ctx, todo, launch.Issue, cwd)
 }
 
-// RecordRunStart binds the external provider's session identity exactly once
-// and advances Captain's session/run state. Captain triggers project those
-// updates back into the linked Gavel issue.
+func verificationWorkflow(fixture string) map[string]any {
+	workflow := map[string]any{"autoVerifyWithoutFixture": false}
+	if strings.TrimSpace(fixture) != "" {
+		workflow["verify"] = map[string]any{"fixture": fixture}
+	}
+	return workflow
+}
+
+// RecordRunStart binds the external provider identity to the admission root,
+// then advances lifecycle on the monitored Claude/Codex session itself. The
+// source='gavel' root exists only to admit and group prompt runs.
 func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadata todos.RunStartMetadata) error {
 	active, err := p.loadActiveRun(ctx, todo)
 	if err != nil {
@@ -194,18 +202,33 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 	}
 	p.markPrepared(active.issue.ID, active.run.ID)
 
-	lifecycle := captaindb.SessionLifecycleRunning
-	activity := captaindb.SessionActivityWorking
-	reason := runStartReason(metadata)
 	sessionUpdate := captaindb.UpdateSessionStateInput{
 		ID: active.session.ID, ExpectedVersion: active.session.StateVersion,
-		LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
 	}
 	if sessionID := strings.TrimSpace(metadata.SessionID); sessionID != "" {
 		sessionUpdate.ProviderSessionID = &sessionID
 	}
-	if _, err := p.captain.UpdateSessionState(ctx, sessionUpdate); err != nil {
-		return fmt.Errorf("record Captain session start: %w", err)
+	if sessionUpdate.ProviderSessionID != nil {
+		root, err := p.captain.UpdateSessionState(ctx, sessionUpdate)
+		if err != nil {
+			return fmt.Errorf("bind Captain admission session: %w", err)
+		}
+		active.session = root
+	}
+	agentSession, err := p.ensureAgentSession(ctx, active.session)
+	if err != nil {
+		return err
+	}
+	if agentSession != nil {
+		lifecycle := captaindb.SessionLifecycleRunning
+		activity := captaindb.SessionActivityWorking
+		reason := runStartReason(metadata)
+		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
+			ID: agentSession.ID, ExpectedVersion: agentSession.StateVersion,
+			LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
+		}); err != nil {
+			return fmt.Errorf("record monitored Captain session start: %w", err)
+		}
 	}
 
 	state := captaindb.PromptRunStateRunning
@@ -288,6 +311,34 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 			if active.issue.SelectedPlanID == nil {
 				return true, fmt.Errorf("plan run reported unchanged but issue %s has no selected Captain plan", active.issue.ID)
 			}
+			// Codex plan mode keeps the full Markdown in its native plan file and
+			// may return only a short summary in plan.content. An "unchanged"
+			// result therefore still needs to reconcile Captain when an earlier
+			// attempt persisted that summary instead of the referenced file.
+			path := strings.TrimSpace(result.Plan.Path)
+			if path != "" {
+				fileMarkdown, _, exists, readErr := todos.ReadPlanFile(path)
+				if readErr != nil {
+					return true, readErr
+				}
+				if exists && strings.TrimSpace(fileMarkdown) != "" {
+					plan, getErr := p.captain.GetPlan(ctx, *active.issue.SelectedPlanID)
+					if getErr != nil {
+						return true, getErr
+					}
+					if plan.LatestRevision == nil || normalizePlanResultMarkdown(plan.LatestRevision.PlanMarkdown) != normalizePlanResultMarkdown(fileMarkdown) {
+						if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
+							_ = p.failPromptRun(ctx, active, err.Error())
+							p.clearPrepared(active.issue.ID, active.run.ID)
+							return true, err
+						}
+						active, err = p.loadActiveRun(ctx, todo)
+						if err != nil {
+							return true, err
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -313,11 +364,11 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 		}
 		active.run = updatedRun
 	}
-	currentSession, err := p.captain.GetSession(ctx, active.session.ID)
+	currentSession, err := p.ensureAgentSession(ctx, active.session)
 	if err != nil {
 		return true, err
 	}
-	if !terminalSession(currentSession.LifecycleStatus) || lifecycle == captaindb.SessionLifecycleRunning {
+	if currentSession != nil && (!terminalSession(currentSession.LifecycleStatus) || lifecycle == captaindb.SessionLifecycleRunning) {
 		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
 			ID: currentSession.ID, ExpectedVersion: currentSession.StateVersion,
 			LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
@@ -375,11 +426,11 @@ func (p *Provider) failPromptRun(ctx context.Context, active *activeRun, reason 
 			return err
 		}
 	}
-	session, err := p.captain.GetSession(ctx, active.session.ID)
+	session, err := p.ensureAgentSession(ctx, active.session)
 	if err != nil {
 		return err
 	}
-	if !terminalSession(session.LifecycleStatus) {
+	if session != nil && !terminalSession(session.LifecycleStatus) {
 		lifecycle := captaindb.SessionLifecycleFailed
 		activity := captaindb.SessionActivityIdle
 		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
@@ -390,6 +441,47 @@ func (p *Provider) failPromptRun(ctx context.Context, active *activeRun, reason 
 		}
 	}
 	return nil
+}
+
+func agentSessionSource(executor string) string {
+	executor = strings.ToLower(strings.TrimSpace(executor))
+	switch {
+	case strings.Contains(executor, "codex"):
+		return "codex"
+	case strings.Contains(executor, "claude"):
+		return "claude"
+	default:
+		return ""
+	}
+}
+
+// ensureAgentSession resolves or creates the monitor-owned session identity.
+// Captain's transcript ingestor uses the same (source, host, provider ID)
+// identity, so later ingest enriches this row rather than creating another
+// agent record. The admission root remains a separate bookkeeping row.
+func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.Session) (*captaindb.Session, error) {
+	if admission == nil || strings.TrimSpace(admission.ProviderSessionID) == "" {
+		return nil, nil
+	}
+	source := agentSessionSource(admission.Provider)
+	if source == "" {
+		return nil, nil
+	}
+	session, err := p.captain.CreateOrGetSession(ctx, captaindb.CreateSessionInput{
+		ProviderSessionID: admission.ProviderSessionID,
+		Source:            source,
+		HostID:            admission.HostID,
+		Project:           admission.Project,
+		CWD:               admission.CWD,
+		Title:             admission.Title,
+		InitialPrompt:     admission.InitialPrompt,
+		AgentType:         admission.Provider,
+		Description:       "Agent session for " + admission.Description,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve monitored Captain session: %w", err)
+	}
+	return session, nil
 }
 
 func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, active *activeRun, result *todos.ExecutionResult) error {
@@ -448,9 +540,10 @@ func planResultContent(todo *types.TODO, result *todos.ExecutionResult) (content
 		return "", "", fmt.Errorf("plan result is missing")
 	}
 	path = strings.TrimSpace(result.Plan.Path)
-	if content = strings.TrimSpace(result.Plan.Content); content != "" {
-		return content, path, nil
-	}
+	// The native plan file is authoritative when the agent supplies one.
+	// Codex commonly puts the detailed plan there while plan.content is only a
+	// short completion summary, so preferring inline content truncates the
+	// immutable Captain revision and the dashboard's Plan tab.
 	if path != "" {
 		read, _, exists, readErr := todos.ReadPlanFile(path)
 		if readErr != nil {
@@ -460,6 +553,9 @@ func planResultContent(todo *types.TODO, result *todos.ExecutionResult) (content
 			return strings.TrimSpace(read), path, nil
 		}
 	}
+	if content = strings.TrimSpace(result.Plan.Content); content != "" {
+		return content, path, nil
+	}
 	resolvedPath, resolved := todos.ResolveSessionPlan(todo)
 	if strings.TrimSpace(resolved) != "" {
 		if path == "" {
@@ -468,6 +564,12 @@ func planResultContent(todo *types.TODO, result *todos.ExecutionResult) (content
 		return strings.TrimSpace(resolved), path, nil
 	}
 	return "", path, fmt.Errorf("plan run produced no durable markdown content")
+}
+
+func normalizePlanResultMarkdown(markdown string) string {
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
+	markdown = strings.ReplaceAll(markdown, "\r", "\n")
+	return strings.TrimSpace(markdown)
 }
 
 func (p *Provider) attachInputPlan(ctx context.Context, issue *native.Issue, mode types.RunMode, input *captaindb.CreatePromptRunInput) error {
@@ -517,7 +619,9 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		if todo.LLM == nil {
 			todo.LLM = &types.LLM{}
 		}
-		todo.LLM.Model = session.Provider
+		// session.Provider is the executor/driver identity (e.g. "cmux-claude"),
+		// never an LLM model — assigning it to LLM.Model poisons the next run's
+		// --model resolution. Only the session id is a legitimate LLM field here.
 		if strings.TrimSpace(session.ProviderSessionID) != "" {
 			todo.LLM.SessionId = session.ProviderSessionID
 		}
@@ -527,6 +631,9 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 		}
 		if run.FinishedAt != nil {
 			lastRun = *run.FinishedAt
+		}
+		if issue.UpdatedAt.After(lastRun) {
+			lastRun = issue.UpdatedAt
 		}
 		todo.LastRun = &lastRun
 		todo.LastRunSummary = strings.TrimSpace(run.ResultText)
@@ -714,7 +821,7 @@ func executionResultJSON(result *todos.ExecutionResult) map[string]any {
 		out["plan"] = map[string]any{"status": result.Plan.Status, "path": result.Plan.Path}
 	}
 	if result.DoD != nil {
-		out["definitionOfDone"] = map[string]any{"ran": result.DoD.Ran, "passed": result.DoD.Passed}
+		out["definitionOfDone"] = result.DoD
 	}
 	return out
 }

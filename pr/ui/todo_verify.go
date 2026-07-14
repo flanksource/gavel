@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -36,18 +37,14 @@ func (s *Server) handleCriteriaCatalog(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(items) //nolint:errcheck
 }
 
-// todoCriteriaPayload is the shared request body for the criteria/verify
-// endpoints: a todo reference plus, for the save endpoint, the full criteria
-// list, and an optional model override for the AI endpoints.
+// todoCriteriaPayload is the shared request body for acceptance-criteria
+// endpoints: a todo reference, the full criteria list, and an optional model
+// override for AI drafting.
 type todoCriteriaPayload struct {
 	Dir      string                      `json:"dir,omitempty"`
 	Ref      string                      `json:"ref,omitempty"`
 	Model    string                      `json:"model,omitempty"`
-	Backend  string                      `json:"backend,omitempty"`
 	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
-	// Prompt, when non-empty, overrides the rendered verify prompt verbatim — the
-	// dashboard's editable prompt.
-	Prompt string `json:"prompt,omitempty"`
 }
 
 // loadTodoForWrite resolves the provider + source for a todo mutation and loads
@@ -126,10 +123,11 @@ func (s *Server) handleTodoCriteriaGenerate(w http.ResponseWriter, r *http.Reque
 	s.writeRefreshedTodo(w, r, provider, todo)
 }
 
-// handleTodoVerify scores a todo's commits against its acceptance criteria and
-// returns the structured verdict plus the refreshed todo (its status may have
-// moved to verified/pending).
-func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
+// handleTodoVerificationRun executes the persisted issue Verification fixture
+// through the same verify-only Captain lifecycle used by `gavel todos check`.
+// The response contains fixture/checklist evidence rather than a parallel
+// score-oriented AI verdict.
+func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var payload todoCriteriaPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -141,51 +139,22 @@ func (s *Server) handleTodoVerify(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
-	result, err := todos.RunIssueVerification(r.Context(), provider, todo, todos.VerifyOptions{
-		WorkDir: todoVerifyWorkDir(source.Dir, todo),
-		Model:   payload.Model,
-		Backend: payload.Backend,
-		Prompt:  payload.Prompt,
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	result := todos.CheckTODO(ctx, todo, todos.CheckOptions{
+		WorkDir:  todoVerifyWorkDir(source.Dir, todo),
+		Timeout:  10 * time.Minute,
+		Logger:   logger.StandardLogger(),
+		Provider: provider,
 	})
-	if err != nil {
-		writeTodoError(w, http.StatusBadGateway, err)
-		return
-	}
 	refreshed := todo
 	if rt, gerr := provider.Get(r.Context(), todos.TODOReference(todo)); gerr == nil {
 		refreshed = rt
 	}
 	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-		"result": result,
-		"todo":   summarizeTodo(refreshed, true),
+		"verification": result,
+		"todo":         summarizeTodo(refreshed, true),
 	})
-}
-
-// handleTodoVerifyPreview renders the verify prompt a verify run would send, so
-// the dashboard's editable prompt can be seeded for Verify mode (mirrors
-// handleTodoRunPreview for Run/Plan).
-func (s *Server) handleTodoVerifyPreview(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	var payload todoCriteriaPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
-		return
-	}
-	_, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
-	if err != nil {
-		writeTodoError(w, status, err)
-		return
-	}
-	prompt, err := todos.PreviewIssueVerification(todo, todos.VerifyOptions{
-		WorkDir: todoVerifyWorkDir(source.Dir, todo),
-		Model:   payload.Model,
-		Backend: payload.Backend,
-	})
-	if err != nil {
-		writeTodoError(w, http.StatusBadGateway, err)
-		return
-	}
-	json.NewEncoder(w).Encode(todoRunPreviewResponse{Prompt: prompt, Mode: "verify", Count: 1}) //nolint:errcheck
 }
 
 // handleTodoVerificationSchema exposes the CLI-owned `gavel fixtures --schema`

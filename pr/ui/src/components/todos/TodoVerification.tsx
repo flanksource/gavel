@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { FixtureEditor } from '@flanksource/clicky-ui/data';
 import type { FixtureFenceOption, FixtureFenceSchemas } from '@flanksource/clicky-ui/data';
-import { UiBeaker, UiCopy } from '@flanksource/clicky-ui/icons';
-import type { TodoItem } from '../../types';
+import { UiBeaker, UiCopy, UiError, UiPass, UiPlay } from '@flanksource/clicky-ui/icons';
+import type { TodoFixtureResult, TodoItem, TodoVerificationRunResponse } from '../../types';
 import { todoQuery } from './format';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
 import { fixtureFenceSchemasFromDocument } from './fixtureSchema';
@@ -34,7 +34,9 @@ export function TodoVerification({
   const [fixture, setFixture] = useState(saved);
   const [schemas, setSchemas] = useState<FixtureFenceSchemas>({});
   const [busy, setBusy] = useState(false);
+  const [runBusy, setRunBusy] = useState(false);
   const [error, setError] = useState('');
+  const [verification, setVerification] = useState<TodoVerificationRunResponse['verification'] | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,13 +56,14 @@ export function TodoVerification({
   // after this todo's own save round-trips back through props.
   useEffect(() => {
     setFixture(saved);
+    setVerification(null);
     setError('');
   }, [todo.ref, saved]);
 
   const dirty = fixture !== saved;
 
-  async function save() {
-    if (busy || !dirty) return;
+  async function save(): Promise<TodoItem | null> {
+    if (busy || !dirty) return todo;
     setBusy(true);
     setError('');
     try {
@@ -71,11 +74,37 @@ export function TodoVerification({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Save failed');
-      onChanged(data as TodoItem);
+      const refreshed = data as TodoItem;
+      onChanged(refreshed);
+      return refreshed;
     } catch (err: any) {
       setError(err?.message || 'Save failed');
+      return null;
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function runVerification() {
+    if (busy || runBusy) return;
+    setRunBusy(true);
+    setError('');
+    try {
+      const current = dirty ? await save() : todo;
+      if (!current) return;
+      const res = await fetch(`/api/todos/verification/run?${todoQuery(dir)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: current.ref }),
+      });
+      const data = await res.json() as TodoVerificationRunResponse & { error?: string };
+      if (!res.ok) throw new Error(data.error || 'Verification failed');
+      setVerification(data.verification);
+      onChanged(data.todo);
+    } catch (err: any) {
+      setError(err?.message || 'Verification failed');
+    } finally {
+      setRunBusy(false);
     }
   }
 
@@ -117,6 +146,18 @@ export function TodoVerification({
           >
             Save
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={runVerification}
+            loading={runBusy}
+            disabled={busy || runBusy}
+            title="Run the persisted verification fixture"
+            className="h-7 gap-1 px-2 text-xs"
+          >
+            <UiPlay className="text-xs" />
+            Run verification
+          </Button>
         </div>
         <div className="px-3 py-3">
           <FixtureEditor
@@ -129,9 +170,65 @@ export function TodoVerification({
           />
         </div>
         {error && <div className="px-3 pb-3 text-xs text-red-600">{error}</div>}
+        {verification && <VerificationResults verification={verification} />}
       </section>
 
       <AcceptanceCriteria dir={dir} todo={todo} onChanged={onChanged} />
     </div>
+  );
+}
+
+function VerificationResults({ verification }: { verification: TodoVerificationRunResponse['verification'] }) {
+  const results = verification.output?.results ?? [];
+  const checklist = verification.output?.checklist ?? [];
+  const StatusIcon = verification.allPassed ? UiPass : UiError;
+  return (
+    <div className="space-y-2 border-t border-border px-3 py-3">
+      <div className={`flex items-center gap-1.5 text-sm font-medium ${verification.allPassed ? 'text-emerald-600' : 'text-red-600'}`}>
+        <StatusIcon className="text-sm" />
+        {verification.allPassed ? 'Verification passed' : 'Verification failed'}
+      </div>
+      {verification.error && <div className="text-xs text-red-600">{verification.error}</div>}
+      {results.length > 0 && (
+        <ul className="space-y-1">
+          {results.map((result, index) => <FixtureResultRow key={`${result.name}:${index}`} result={result} />)}
+        </ul>
+      )}
+      {checklist.length > 0 && (
+        <ul className="space-y-1">
+          {checklist.map((item, index) => {
+            const Icon = item.passed ? UiPass : UiError;
+            return (
+              <li key={`${item.item}:${index}`} className="flex items-start gap-1.5 text-sm">
+                <Icon className={`mt-0.5 shrink-0 text-sm ${item.passed ? 'text-emerald-600' : 'text-red-600'}`} />
+                <span>
+                  {item.item}
+                  {item.message ? <span className="block text-xs text-muted-foreground">{item.message}</span> : null}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FixtureResultRow({ result }: { result: TodoFixtureResult }) {
+  const passed = ['pass', 'passed', 'success'].includes((result.status ?? '').toLowerCase());
+  const Icon = passed ? UiPass : UiError;
+  return (
+    <li className="rounded border border-border bg-muted/20 px-2 py-1.5 text-sm">
+      <span className="flex items-start gap-1.5">
+        <Icon className={`mt-0.5 shrink-0 text-sm ${passed ? 'text-emerald-600' : 'text-red-600'}`} />
+        <span className="min-w-0">
+          <span className="font-medium">{result.name || result.type || 'Verification step'}</span>
+          {result.command && <code className="ml-2 text-xs text-muted-foreground">{result.command}</code>}
+          {result.error && <span className="block text-xs text-red-600">{result.error}</span>}
+          {result.stderr && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-red-600">{result.stderr}</pre>}
+          {result.stdout && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{result.stdout}</pre>}
+        </span>
+      </span>
+    </li>
   );
 }

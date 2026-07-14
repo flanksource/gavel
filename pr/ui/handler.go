@@ -408,8 +408,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/criteria/catalog", s.handleCriteriaCatalog)
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
 	mux.HandleFunc("POST /api/todos/criteria/generate", s.handleTodoCriteriaGenerate)
-	mux.HandleFunc("POST /api/todos/verify", s.handleTodoVerify)
-	mux.HandleFunc("POST /api/todos/verify/preview", s.handleTodoVerifyPreview)
+	mux.HandleFunc("POST /api/todos/verification/run", s.handleTodoVerificationRun)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
 	mux.HandleFunc("GET /api/todos/commits", s.handleTodoCommits)
@@ -443,6 +442,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/settings/prompts", s.handleSettingsPrompts)
 	mux.HandleFunc("/api/settings/prompts/{id}", s.handleSettingsPromptDetail)
 	mux.HandleFunc("/api/settings/gavel", s.handleSettingsGavel)
+	mux.HandleFunc("/api/settings/gavel/trace", s.handleSettingsGavelTrace)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
@@ -1258,12 +1258,12 @@ func (s *Server) handleDetail(w http.ResponseWriter, r *http.Request) {
 	// don't hammer the artifacts API.
 	allComments := append(pr.Comments, pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(allComments)
-	gavelSummaries := make([]*GavelResultsSummary, len(artifacts))
+	var gavelSummaries []*GavelResultsSummary
 	gavelDone := make(chan struct{})
 	if len(artifacts) > 0 {
 		go func() {
 			defer close(gavelDone)
-			fetchGavelArtifacts(opts, artifacts, gavelSummaries)
+			gavelSummaries = fetchGavelArtifacts(opts, artifacts)
 		}()
 	} else {
 		close(gavelDone)
@@ -1351,8 +1351,7 @@ func (s *Server) fetchPRDetail(repo string, number int) prDetail {
 	allComments := append(pr.Comments, pr.ReviewThreads...)
 	artifacts := github.FindGavelArtifacts(allComments)
 	if len(artifacts) > 0 {
-		summaries := make([]*GavelResultsSummary, len(artifacts))
-		fetchGavelArtifacts(opts, artifacts, summaries)
+		summaries := fetchGavelArtifacts(opts, artifacts)
 		result.GavelResults = summaries
 		s.setGavelSummary(repo, number, aggregateGavelSummaries(summaries))
 	}

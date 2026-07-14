@@ -108,16 +108,15 @@ func Import(ctx context.Context, db *gorm.DB, workDir, directory string, files [
 			switch {
 			case errors.Is(err, native.ErrNotFound):
 				if _, err := repository.CreateIssue(ctx, native.CreateIssueInput{
-					ID:             input.ID,
-					WorkspaceID:    workspace.ID,
-					Title:          input.Title,
-					Body:           input.Body,
-					Verification:   input.Verification,
-					Labels:         input.Labels,
-					Priority:       input.Priority,
-					Status:         input.Status,
-					ExecutionState: native.ExecutionIdle,
-					Actor:          "todos-file-import",
+					ID:           input.ID,
+					WorkspaceID:  workspace.ID,
+					Title:        input.Title,
+					Body:         input.Body,
+					Verification: input.Verification,
+					Labels:       input.Labels,
+					Priority:     input.Priority,
+					Status:       input.Status,
+					Actor:        "todos-file-import",
 				}); err != nil {
 					return fmt.Errorf("import %s: %w", input.File, err)
 				}

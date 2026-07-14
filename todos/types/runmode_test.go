@@ -12,7 +12,7 @@ func TestParseRunMode(t *testing.T) {
 		{name: "empty defaults to run", input: "", want: ModeRun},
 		{name: "run", input: "run", want: ModeRun},
 		{name: "plan", input: "plan", want: ModePlan},
-		{name: "verify", input: "verify", want: ModeVerify},
+		{name: "internal verify mode is rejected publicly", input: "verify", wantErr: true},
 		{name: "legacy cmux mechanism is rejected", input: "cmux", wantErr: true},
 		{name: "legacy inline mechanism is rejected", input: "inline", wantErr: true},
 		{name: "unknown value is rejected", input: "bogus", wantErr: true},

@@ -20,11 +20,11 @@ const faqs = [
   },
   {
     q: "How is this different from mega-linter or reviewdog?",
-    a: "Gavel bundles a native test runner, AI-powered verify pass, PR/commit automation, and a live UI — not just a linter fan-out. Each piece can stand alone, but they share a single config, cache, and report format.",
+    a: "Gavel bundles a native test runner, fixture-based checks with optional AI steps, PR/commit automation, and a live UI — not just a linter fan-out. Each piece can stand alone, but they share a single config, cache, and report format.",
   },
   {
     q: "Does gavel require sending my code to an LLM?",
-    a: "Only AI-assisted flows such as `todos run`, `todos verify`, and `commit` call an LLM, and they are opt-in. Tests and linting run entirely locally.",
+    a: "Only AI-assisted flows such as `todos run`, AI fixture steps, and `commit` call an LLM, and they are opt-in. Tests and linting run entirely locally.",
   },
   {
     q: "Where does gavel store TODOs?",

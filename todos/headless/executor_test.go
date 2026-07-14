@@ -2,6 +2,7 @@ package headless
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +19,18 @@ func fakeStream(events ...captainai.Event) streamFunc {
 	return func(_ context.Context, _ captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		ch := make(chan captainai.Event, len(events))
 		for _, ev := range events {
-			ch <- ev
+			ch <- withRunEnvelope(ev)
 		}
 		close(ch)
 		return ch, nil
 	}
+}
+
+func withRunEnvelope(event captainai.Event) captainai.Event {
+	if event.Kind == captainai.EventResult && event.Success && len(event.StructuredData) == 0 {
+		event.StructuredData = json.RawMessage(runEnvelopeJSON)
+	}
+	return event
 }
 
 func newTestCtx() *todopkg.ExecutorContext {
@@ -101,7 +109,7 @@ func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 		gotPrompt = req.Prompt.User
 		gotSchema = string(req.Prompt.SchemaJSON)
 		ch := make(chan captainai.Event, 1)
-		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+		ch <- withRunEnvelope(captainai.Event{Kind: captainai.EventResult, Success: true})
 		close(ch)
 		return ch, nil
 	}
@@ -128,7 +136,7 @@ func TestHeadlessPreparedPromptMatchesDispatchWithApprovedPlan(t *testing.T) {
 	capture := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 		dispatched = req.Prompt.User
 		ch := make(chan captainai.Event, 1)
-		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+		ch <- withRunEnvelope(captainai.Event{Kind: captainai.EventResult, Success: true})
 		close(ch)
 		return ch, nil
 	}
@@ -186,7 +194,7 @@ func captureReq(into *captainai.Request, canUseTool *captainai.PermissionFunc) s
 		*into = req
 		*canUseTool = fn
 		ch := make(chan captainai.Event, 1)
-		ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+		ch <- withRunEnvelope(captainai.Event{Kind: captainai.EventResult, Success: true})
 		close(ch)
 		return ch, nil
 	}
@@ -285,7 +293,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		return func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 			*out = req
 			ch := make(chan captainai.Event, 1)
-			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+			ch <- withRunEnvelope(captainai.Event{Kind: captainai.EventResult, Success: true})
 			close(ch)
 			return ch, nil
 		}

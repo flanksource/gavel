@@ -1,4 +1,660 @@
 {
+  "$defs": {
+    "AWSConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "accessKey": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "assumeRole": {
+          "type": "string"
+        },
+        "connection": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "secretKey": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "sessionToken": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "skipTLSVerify": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AzureConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "clientID": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "clientSecret": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "connection": {
+          "type": "string"
+        },
+        "tenantID": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "maxTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxTurns": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "CNRMConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "clusterResource": {
+          "type": "string"
+        },
+        "clusterResourceNamespace": {
+          "type": "string"
+        },
+        "gke": {
+          "$ref": "#/$defs/GKEConnection"
+        }
+      },
+      "type": "object"
+    },
+    "Checkout": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "string"
+        },
+        "depth": {
+          "type": "integer"
+        },
+        "dirty": {
+          "$ref": "#/$defs/Dirty"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "worktree": {
+          "$ref": "#/$defs/Worktree"
+        }
+      },
+      "type": "object"
+    },
+    "ConfigMapKeySelector": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Dirty": {
+      "additionalProperties": false,
+      "properties": {
+        "since": {
+          "type": "string"
+        },
+        "stash": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "EKSConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "accessKey": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "assumeRole": {
+          "type": "string"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "connection": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "secretKey": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "sessionToken": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "skipTLSVerify": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "EnvVar": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "valueFrom": {
+          "$ref": "#/$defs/EnvVarSource"
+        }
+      },
+      "type": "object"
+    },
+    "EnvVarSource": {
+      "additionalProperties": false,
+      "properties": {
+        "configMapKeyRef": {
+          "$ref": "#/$defs/ConfigMapKeySelector"
+        },
+        "helmRef": {
+          "$ref": "#/$defs/HelmRefKeySelector"
+        },
+        "onePassword": {
+          "type": "string"
+        },
+        "secretKeyRef": {
+          "$ref": "#/$defs/SecretKeySelector"
+        },
+        "serviceAccount": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ExecConnections": {
+      "additionalProperties": false,
+      "properties": {
+        "aws": {
+          "$ref": "#/$defs/AWSConnection"
+        },
+        "azure": {
+          "$ref": "#/$defs/AzureConnection"
+        },
+        "eksPodIdentity": {
+          "type": "boolean"
+        },
+        "fromConfigItem": {
+          "type": "string"
+        },
+        "gcp": {
+          "$ref": "#/$defs/GCPConnection"
+        },
+        "kubernetes": {
+          "$ref": "#/$defs/KubernetesConnection"
+        },
+        "serviceAccount": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "GCPConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "type": "string"
+        },
+        "credentials": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "skipTLSVerify": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "GKEConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "connection": {
+          "type": "string"
+        },
+        "credentials": {
+          "$ref": "#/$defs/EnvVar"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "projectID": {
+          "type": "string"
+        },
+        "skipTLSVerify": {
+          "type": "boolean"
+        },
+        "zone": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HelmRefKeySelector": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "KubernetesConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "cnrm": {
+          "$ref": "#/$defs/CNRMConnection"
+        },
+        "connection": {
+          "type": "string"
+        },
+        "eks": {
+          "$ref": "#/$defs/EKSConnection"
+        },
+        "gke": {
+          "$ref": "#/$defs/GKEConnection"
+        },
+        "kubeconfig": {
+          "$ref": "#/$defs/EnvVar"
+        }
+      },
+      "type": "object"
+    },
+    "MCP": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "Memory": {
+      "additionalProperties": false,
+      "properties": {
+        "bare": {
+          "type": "boolean"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skipHooks": {
+          "type": "boolean"
+        },
+        "skipMemory": {
+          "type": "boolean"
+        },
+        "skipProject": {
+          "type": "boolean"
+        },
+        "skipSkills": {
+          "type": "boolean"
+        },
+        "skipUser": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Model": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "effort": {
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "type": "string"
+        },
+        "fallbacks": {
+          "items": {
+            "$ref": "#/$defs/Model"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "noCache": {
+          "type": "boolean"
+        },
+        "temperature": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "Permissions": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp": {
+          "$ref": "#/$defs/MCP"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "plugins": {
+          "$ref": "#/$defs/ResourcePolicies"
+        },
+        "presets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "$ref": "#/$defs/ResourcePolicies"
+        },
+        "tools": {
+          "$ref": "#/$defs/Tools"
+        }
+      },
+      "type": "object"
+    },
+    "PostRun": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "type": "boolean"
+        },
+        "commitMessage": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "keepWorktree": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Prompt": {
+      "additionalProperties": false,
+      "properties": {
+        "appendSystem": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "schemaJSON": true,
+        "schemaStrictness": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "system": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "user"
+      ],
+      "type": "object"
+    },
+    "ResourcePolicies": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "SecretKeySelector": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Setup": {
+      "additionalProperties": false,
+      "properties": {
+        "baseDir": {
+          "type": "string"
+        },
+        "checkout": {
+          "$ref": "#/$defs/Checkout"
+        },
+        "connections": {
+          "$ref": "#/$defs/ExecConnections"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "dotenv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "envVars": {
+          "items": {
+            "$ref": "#/$defs/EnvVar"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Spec": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/$defs/Budget"
+        },
+        "cliArgs": {
+          "type": "object"
+        },
+        "effort": {
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "type": "string"
+        },
+        "fallbacks": {
+          "items": {
+            "$ref": "#/$defs/Model"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory": {
+          "$ref": "#/$defs/Memory"
+        },
+        "model": {
+          "type": "string"
+        },
+        "noCache": {
+          "type": "boolean"
+        },
+        "permissions": {
+          "$ref": "#/$defs/Permissions"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Prompt"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "setup": {
+          "$ref": "#/$defs/Setup"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "workflow": {
+          "$ref": "#/$defs/Workflow"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "Tools": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "Verify": {
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fixture": {
+          "type": "string"
+        },
+        "maxIterations": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "enum": [
+            "",
+            "all",
+            "changed"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Workflow": {
+      "additionalProperties": false,
+      "properties": {
+        "autoVerifyWithoutFixture": {
+          "type": "boolean"
+        },
+        "postRun": {
+          "$ref": "#/$defs/PostRun"
+        },
+        "verify": {
+          "$ref": "#/$defs/Verify"
+        }
+      },
+      "type": "object"
+    },
+    "Worktree": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "keep": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
   "$id": "https://raw.githubusercontent.com/flanksource/gavel/main/gavel.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
@@ -115,8 +771,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -134,8 +798,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -164,8 +836,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -253,8 +933,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -276,8 +964,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -322,8 +1018,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -548,8 +1252,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -574,8 +1286,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -591,25 +1311,6 @@
       "additionalProperties": false,
       "description": "Settings for `gavel todos run`.",
       "properties": {
-        "finalPrompt": {
-          "additionalProperties": false,
-          "description": "Override the resume-turn prompt that asks a finished/timed-out session to emit ONLY the final result JSON. The output schema is fixed in Go and is NOT overridable — the override changes only the framing. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "todos.final"
-        },
         "planPrompt": {
           "additionalProperties": false,
           "description": "Override the built-in plan-mode prompt (dotprompt template): the read-only investigation framing that produces a reviewable implementation plan. Last-write-wins across layers.",
@@ -619,8 +1320,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -638,8 +1347,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [
@@ -647,32 +1364,13 @@
             "object"
           ],
           "x-prompt-id": "todos.run"
-        },
-        "verifyPrompt": {
-          "additionalProperties": false,
-          "description": "Override the verify reviewer template for TODO verification only; `gavel verify` keeps verify.promptTemplate. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "todos.verify"
         }
       },
       "type": "object"
     },
     "verify": {
       "additionalProperties": false,
-      "description": "Settings for `gavel verify`, the AI code-review engine.",
+      "description": "Settings for AI verification fixture steps.",
       "properties": {
         "checks": {
           "additionalProperties": false,
@@ -697,11 +1395,11 @@
         },
         "model": {
           "default": "claude",
-          "description": "AI CLI / model used for review. Common values: claude, gemini, codex, or a fully qualified model name. Last-write-wins across layers.",
+          "description": "AI CLI / model used by AI fixture steps. Common values: claude, gemini, codex, or a fully qualified model name. Last-write-wins across layers.",
           "type": "string"
         },
         "prompt": {
-          "description": "Optional repo-specific review policy appended to Gavel's built-in verify prompt. Last-write-wins across layers.",
+          "description": "Optional repo-specific review policy appended to Gavel's built-in AI fixture prompt. Last-write-wins across layers.",
           "type": "string"
         },
         "promptTemplate": {
@@ -713,8 +1411,16 @@
               "type": "string"
             },
             "inline": {
-              "description": "Inline prompt template text used verbatim.",
-              "type": "string"
+              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+              "oneOf": [
+                {
+                  "description": "Complete inline .prompt template text used verbatim.",
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/Spec"
+                }
+              ]
             }
           },
           "type": [

@@ -3,6 +3,7 @@ package verify
 import (
 	"encoding/json"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -26,6 +27,7 @@ func ConfigJSONSchema() (string, error) {
 }
 
 func gavelConfigSchema() map[string]any {
+	specSchema := captainSpecSchema()
 	schema := object(
 		"Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, "+
 			"or the target directory; layers merge in that order with later layers overriding earlier ones. "+
@@ -49,18 +51,19 @@ func gavelConfigSchema() map[string]any {
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = ConfigSchemaID
 	schema["title"] = "Gavel configuration (.gavel.yaml)"
+	schema["$defs"] = specSchema["$defs"]
 	return schema
 }
 
 func verifySchema() map[string]any {
 	return object(
-		"Settings for `gavel verify`, the AI code-review engine.",
+		"Settings for AI verification fixture steps.",
 		map[string]any{
 			"model": stringWithDefault(
-				"AI CLI / model used for review. Common values: claude, gemini, codex, or a fully "+
+				"AI CLI / model used by AI fixture steps. Common values: claude, gemini, codex, or a fully "+
 					"qualified model name. Last-write-wins across layers.", "claude"),
 			"prompt": stringProp(
-				"Optional repo-specific review policy appended to Gavel's built-in verify prompt. " +
+				"Optional repo-specific review policy appended to Gavel's built-in AI fixture prompt. " +
 					"Last-write-wins across layers."),
 			"promptTemplate": promptOverrideSchema(prompts.Verify,
 				"Replace the built-in reviewer prompt entirely (dotprompt template). Unlike prompt, "+
@@ -208,13 +211,6 @@ func todosSchema() map[string]any {
 				"Override the built-in plan-mode prompt (dotprompt template): the read-only "+
 					"investigation framing that produces a reviewable implementation plan. "+
 					"Last-write-wins across layers."),
-			"verifyPrompt": promptOverrideSchema(prompts.TodosVerify,
-				"Override the verify reviewer template for TODO verification only; `gavel verify` "+
-					"keeps verify.promptTemplate. Last-write-wins across layers."),
-			"finalPrompt": promptOverrideSchema(prompts.TodosFinal,
-				"Override the resume-turn prompt that asks a finished/timed-out session to emit ONLY "+
-					"the final result JSON. The output schema is fixed in Go and is NOT overridable — the "+
-					"override changes only the framing. Last-write-wins across layers."),
 		},
 	)
 }
@@ -256,11 +252,29 @@ func promptOverrideSchema(promptID, desc string) map[string]any {
 		"additionalProperties": false,
 		"x-prompt-id":          promptID,
 		"properties": map[string]any{
-			"inline": stringProp("Inline prompt template text used verbatim."),
+			"inline": inlinePromptSchema(),
 			"file": stringProp(
 				"Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory."),
 		},
 	}
+}
+
+func inlinePromptSchema() map[string]any {
+	spec := captainSpecSchema()
+	return map[string]any{
+		"description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
+		"oneOf": []any{
+			stringProp("Complete inline .prompt template text used verbatim."),
+			map[string]any{"$ref": spec["$ref"]},
+		},
+	}
+}
+
+func captainSpecSchema() map[string]any {
+	raw, _ := api.SchemaJSON(&api.Spec{})
+	var spec map[string]any
+	_ = json.Unmarshal(raw, &spec)
+	return spec
 }
 
 func checksSchema() map[string]any {

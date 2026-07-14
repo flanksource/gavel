@@ -29,8 +29,8 @@ export function defaultHiddenStatuses(): Set<TodoStatus> {
 }
 
 // todoMatchesQuery is the free-text search over a todo's identity fields — title,
-// its short/ref/full ids, and labels. It backs the ⌘K command palette's todo
-// results. An empty query matches everything.
+// its short/ref/full ids, current session id, and labels. It backs the ⌘K
+// command palette's todo results. An empty query matches everything.
 export function todoMatchesQuery(item: TodoItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -39,6 +39,7 @@ export function todoMatchesQuery(item: TodoItem, query: string): boolean {
     (item.shortId || '').toLowerCase().includes(q) ||
     (item.ref || '').toLowerCase().includes(q) ||
     (item.id || '').toLowerCase().includes(q) ||
+    (item.sessionId || '').toLowerCase().includes(q) ||
     (item.labels || []).some(label => label.toLowerCase().includes(q))
   );
 }

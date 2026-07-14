@@ -1,7 +1,7 @@
 import type React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CmuxSessionButton, cmuxSurfaceLabel } from './TodoSessionTimer';
+import { CmuxSessionButton, cmuxSurfaceLabel, useSessionStats } from './TodoSessionTimer';
 
 // DropdownMenu is mocked to render its trigger and menu content inline and to
 // report itself open (so the lazy cmux-surface fetch runs), letting the test
@@ -67,7 +67,57 @@ function mockFetch(handlers: Record<string, () => unknown>) {
 }
 
 afterEach(() => {
+	vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe('useSessionStats', () => {
+  it('continues the live clock across server polls', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-13T12:00:00Z'));
+    const durations = [30_000, 32_000];
+    const fetchMock = vi.fn(async () => {
+      const durationMs = durations.shift() ?? 32_000;
+      return {
+        ok: true,
+        json: async () => ({
+          found: true,
+          inProgress: true,
+          durationMs,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          totalTokens: 0,
+          contextTokens: 0,
+          contextWindow: 0,
+          turns: 0,
+          compactions: 0,
+          costUsd: 0,
+        }),
+      } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-clock', true));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.elapsedMs).toBe(30_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(result.current.elapsedMs).toBe(31_000);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.elapsedMs).toBeGreaterThanOrEqual(32_000);
+    unmount();
+  });
 });
 
 describe('cmuxSurfaceLabel', () => {

@@ -89,6 +89,21 @@ func TestNewRejectsModelAgentMismatch(t *testing.T) {
 	}
 }
 
+func TestNewRejectsExecutorIdentityAsModel(t *testing.T) {
+	// The executor Name() ("cmux-claude") is a driver/executor identity, not a
+	// model. If it round-trips through storage into Config.Model it must fail
+	// loudly, never launch `--model cmux-claude`.
+	for _, model := range []string{"cmux-claude", "headless-claude", "cmux-codex", "headless-codex"} {
+		if _, _, err := New(ClaudeCmux, Config{WorkDir: "/repo", Model: model}); err == nil {
+			t.Errorf("New(claude-cmux, model=%q) should reject the executor identity", model)
+		}
+	}
+	// A real hyphenated model must still be accepted.
+	if _, _, err := New(ClaudeCmux, Config{WorkDir: "/repo", Model: "claude-opus-4-8"}); err != nil {
+		t.Errorf("New(claude-cmux, model=claude-opus-4-8): unexpected error %v", err)
+	}
+}
+
 func TestNewHeadlessDrivers(t *testing.T) {
 	exec, sessionID, err := New(ClaudeHeadless, Config{WorkDir: "/repo"})
 	if err != nil {

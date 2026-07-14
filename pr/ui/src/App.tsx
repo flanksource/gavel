@@ -15,7 +15,7 @@ import { MenubarTodos } from './components/MenubarTodos';
 import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
-import { SettingsDialog, type SettingsScope } from './components/SettingsDialog';
+import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
 import { ProjectsBar } from './components/ProjectsBar';
 import { ProcessManager } from './components/ProcessManager';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -225,6 +225,14 @@ export function App() {
   // their own views.
   const useMenubarLayout = isMenubar || (isMobile && !isProcessesPage && !isTodoNewPage);
 
+  // The native menu-bar webview stays resident when the popover is dismissed and
+  // reports its page hidden even while it is on screen (see useDocumentVisible),
+  // so the Page Visibility API is the wrong signal there: gating the live streams
+  // on `visible` leaves the popover stuck on stale or empty process/PR data. Treat
+  // the menu-bar as always active — the open SSE stream is what keeps the backend
+  // sampling — while the desktop tab keeps the pause-on-hide optimization.
+  const streamsActive = visible || isMenubar;
+
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
   const routeState: RouteState = useMemo(
@@ -295,12 +303,14 @@ export function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Pull the PR snapshot and keep it live over SSE — but only while visible. The
-  // menubar webview stays resident when dismissed; holding the stream open (and
-  // re-rendering on every push) there is pure waste, so close it on hide and
-  // reopen — refetching fresh — on show.
+  // Pull the PR snapshot and keep it live over SSE while the streams are active
+  // (always in the menu-bar; only while visible on the desktop — see
+  // streamsActive). The menu-bar webview stays resident when dismissed, but it
+  // reports hidden even when shown, so pausing there would strand the popover on
+  // stale data; on the desktop tab the stream still closes on hide and reopens —
+  // refetching fresh — on show.
   useEffect(() => {
-    if (!visible) return;
+    if (!streamsActive) return;
     fetch('/api/prs')
       .then(r => r.json())
       .then((snap: Snapshot) => applySnapshot(snap))
@@ -313,7 +323,7 @@ export function App() {
     es.onerror = () => setError('Connection lost — retrying...');
 
     return () => { es.close(); };
-  }, [visible]);
+  }, [streamsActive]);
 
   // Relative timestamps refresh themselves: each <RelativeTime/> (and the process
   // uptime / sync countdown leaves) subscribes to the shared useNow() clock, so
@@ -364,8 +374,11 @@ export function App() {
     }
   }, [selectedPath, prs]);
 
-  const fetchProjects = useCallback(() => {
-    fetch('/api/projects')
+  // Resolves true once the list has been applied, false on failure, so the mount
+  // loader below can retry. A failed refetch keeps the last good list rather than
+  // blanking every tab to "No projects/workspaces configured" on a transient blip.
+  const fetchProjects = useCallback((): Promise<boolean> => {
+    return fetch('/api/projects')
       .then(async r => {
         const payload = await r.json().catch(() => null);
         if (!r.ok) {
@@ -380,10 +393,11 @@ export function App() {
       .then(ps => {
         setProjects(ps);
         setProjectError('');
+        return true;
       })
       .catch(err => {
-        setProjects([]);
         setProjectError(err instanceof Error ? err.message : 'Load projects failed');
+        return false;
       });
   }, []);
 
@@ -399,24 +413,42 @@ export function App() {
     fetchProcStatus();
   }, [fetchProjects, fetchProcStatus]);
 
-  useEffect(() => { fetchProjects(); }, [fetchProjects]);
+  // Load the project list on mount and retry until it succeeds. The list has no
+  // live stream, and the menu-bar webview navigates to the dashboard as `gavel
+  // system start` brings the server up — a one-shot fetch that lost that race
+  // would strand every tab on "No projects/workspaces configured" with no
+  // recovery. Back off up to a cap; onProcChanged refetches after that.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const attempt = (delay: number) => {
+      fetchProjects().then(ok => {
+        if (cancelled || ok) return;
+        timer = setTimeout(() => attempt(Math.min(delay * 2, 15000)), delay);
+      });
+    };
+    attempt(1000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [fetchProjects]);
 
-  // Stream process status over SSE while projects are configured and the tab is
-  // visible — this is the sole driver of the sidebar's per-repo proc badges and
-  // is intentionally decoupled from the GitHub PR poller. The server pushes a
-  // fresh frame on connect and then drives the cadence (faster while a process
-  // is starting/restarting), replacing the old client-side poll. Closing on hide
-  // lets the backend stop sampling; reopening on show pushes an immediate frame.
+  // Stream process status over SSE while projects are configured and the streams
+  // are active (always in the menu-bar; only while visible on the desktop — see
+  // streamsActive) — this is the sole driver of the sidebar's per-repo proc
+  // badges and is intentionally decoupled from the GitHub PR poller. The server
+  // pushes a fresh frame on connect and then drives the cadence (faster while a
+  // process is starting/restarting), replacing the old client-side poll. On the
+  // desktop, closing on hide lets the backend stop sampling; reopening on show
+  // pushes an immediate frame.
   useEffect(() => {
     if (projects.length === 0) { setProcStatus({}); return; }
-    if (!visible) return;
+    if (!streamsActive) return;
     const es = new EventSource('/api/proc/status/stream');
     es.addEventListener('message', (e: MessageEvent) => {
       try { setProcStatus(JSON.parse(e.data)); } catch { /* ignore malformed frame */ }
     });
     // EventSource auto-reconnects; proc status is best-effort, so swallow errors.
     return () => { es.close(); };
-  }, [projects.length, visible]);
+  }, [projects.length, streamsActive]);
 
   const projectsByRepo = useMemo(() => {
     const m: Record<string, Project> = {};
@@ -614,6 +646,12 @@ export function App() {
   function selectTodoFromPalette(entry: TodoEntry) {
     commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, filters });
   }
+  function openUUIDFromPalette(uuid: string) {
+    // Keep the pasted identity in the URL. The global detail endpoint resolves
+    // Todo UUIDs directly and Captain/provider session UUIDs through durable
+    // prompt-run links, so reload/back navigation preserves the same lookup.
+    commitRoute({ tab: 'todos', selectedPath: uuid, filters });
+  }
 
   if (useMenubarLayout) {
     return (
@@ -764,11 +802,19 @@ export function App() {
         todosLoading={todos.loadingList}
         onSelectPR={selectPRFromPalette}
         onSelectTodo={selectTodoFromPalette}
+        onOpenUUID={openUUIDFromPalette}
       />
 
       <CreateTodoDialog open={todos.showCreate} onClose={() => todos.setShowCreate(false)} workspaces={todos.workspaces} onCreated={todos.created} defaultDir={todos.selected?.dir} />
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onSaved={onProcChanged} repoOptions={reposList} />
-      <SettingsDialog open={!!settingsScope} scope={settingsScope ?? { kind: 'global' }} onClose={() => setSettingsScope(null)} repoOptions={reposList} onSaved={onProcChanged} />
+      {settingsScope && (
+        <SettingsPage
+          scope={settingsScope}
+          repoOptions={reposList}
+          onClose={() => setSettingsScope(null)}
+          onSaved={onProcChanged}
+        />
+      )}
     </>
   );
 }

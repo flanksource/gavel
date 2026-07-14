@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { promptModelCatalog } from './SettingsDialog';
-import type { RunContext } from './todos/providers';
+import { promptModelCatalog } from './models';
+import type { RunContext } from '../todos/providers';
 
 describe('promptModelCatalog', () => {
   it('preserves backend membership when de-duplicating shared models', () => {

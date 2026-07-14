@@ -199,36 +199,6 @@ func TestRenderRejectsVerifyMode(t *testing.T) {
 	}
 }
 
-func TestFinalResultRequest(t *testing.T) {
-	planSchema, err := EnvelopeSchemaJSON(types.ModePlan)
-	if err != nil {
-		t.Fatalf("EnvelopeSchemaJSON: %v", err)
-	}
-	req, err := FinalResultRequest("", "sess-123", true, planSchema)
-	if err != nil {
-		t.Fatalf("FinalResultRequest: %v", err)
-	}
-	if req.SessionID != "sess-123" {
-		t.Errorf("SessionID = %q", req.SessionID)
-	}
-	for _, want := range []string{"time limit", "ONLY the final result JSON"} {
-		if !strings.Contains(req.Prompt.User, want) {
-			t.Errorf("final prompt missing %q", want)
-		}
-	}
-	// The schema is threaded verbatim onto the native field (byte-identical to the
-	// run session's pin), never appended to the prompt text.
-	if string(req.Prompt.SchemaJSON) != string(planSchema) {
-		t.Errorf("final request schema not threaded through: %s", req.Prompt.SchemaJSON)
-	}
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"plan"`) {
-		t.Errorf("plan final schema missing plan field: %s", req.Prompt.SchemaJSON)
-	}
-	if _, err := FinalResultRequest("", "", false, planSchema); err == nil {
-		t.Fatal("empty session must error")
-	}
-}
-
 func TestPlanEnvelopeSchemaIsCodexCompatible(t *testing.T) {
 	raw, err := EnvelopeSchemaJSON(types.ModePlan)
 	if err != nil {
@@ -308,14 +278,9 @@ func TestRenderExcludesPRButIncludesSource(t *testing.T) {
 	}
 }
 
-// TestEnvelopeSchemaBytesIdenticalAcrossTurnSites pins the invariant the
-// claude-agent provider enforces per turn (bytes.Equal against the session's
-// first-turn schema): the run session's initial prompt, the final-result resume,
-// and a recomputed EnvelopeSchemaJSON must all carry byte-identical schema. The
-// executor threads the initial bytes to the retry/feedback turns, and this test
-// guards the two independently-sourced sites (Render vs FinalResultRequest) plus
-// the reflector's own call-to-call stability.
-func TestEnvelopeSchemaBytesIdenticalAcrossTurnSites(t *testing.T) {
+// TestEnvelopeSchemaBytesStable pins the schema identity shared by initial,
+// retry, and feedback turns in a claude-agent session.
+func TestEnvelopeSchemaBytesStable(t *testing.T) {
 	for _, mode := range []types.RunMode{types.ModeRun, types.ModePlan} {
 		req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: mode})
 		if err != nil {
@@ -333,21 +298,13 @@ func TestEnvelopeSchemaBytesIdenticalAcrossTurnSites(t *testing.T) {
 		if string(recomputed) != initial {
 			t.Errorf("%s: recomputed schema differs from Render's:\n initial=%s\n recomputed=%s", mode, initial, recomputed)
 		}
-
-		final, err := FinalResultRequest("", "sess-1", false, recomputed)
-		if err != nil {
-			t.Fatalf("FinalResultRequest(%s): %v", mode, err)
-		}
-		if string(final.Prompt.SchemaJSON) != initial {
-			t.Errorf("%s: final-result schema differs from the run session's pin:\n initial=%s\n final=%s", mode, initial, final.Prompt.SchemaJSON)
-		}
 	}
 }
 
 func TestPromptsRegistered(t *testing.T) {
 	got := Prompts()
-	if len(got) != 4 {
-		t.Fatalf("Prompts() returned %d entries, want run/plan/verify/final", len(got))
+	if len(got) != 2 {
+		t.Fatalf("Prompts() returned %d entries, want run/plan", len(got))
 	}
 	for _, p := range got {
 		if p.ID == "" || strings.TrimSpace(p.Default) == "" || p.ConfigPath == "" {

@@ -40,8 +40,7 @@ type AgentQuestion struct {
 }
 
 // PlanResult reports the plan a plan-mode session produced. Path is the agent's
-// native plan-mode file when the backend has one. Content is for backends like
-// Codex that keep the latest plan inline instead of writing a plan file.
+// native plan-mode file when it has one; Content carries the captured markdown.
 type PlanResult struct {
 	Status  PlanStatus `json:"status,omitempty" jsonschema:"required,enum=new,enum=updated,enum=unchanged" jsonschema_description:"new = first plan, updated = revised, unchanged = existing plan still stands"`
 	Path    string     `json:"path,omitempty" jsonschema_description:"Absolute path of the native plan-mode file this session wrote, when available"`
@@ -49,7 +48,7 @@ type PlanResult struct {
 }
 
 // ResultEnvelope is the structured final result every run-mode agent session
-// must emit (and is re-requested when a session ends without one or times out).
+// must emit.
 type ResultEnvelope struct {
 	Summary   string          `json:"summary" jsonschema:"required" jsonschema_description:"What was done, found, or attempted — a few sentences"`
 	EndStatus EndStatus       `json:"endStatus" jsonschema:"required,enum=completed,enum=failed,enum=ask"`

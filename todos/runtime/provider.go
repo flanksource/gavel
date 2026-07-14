@@ -22,7 +22,6 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -241,6 +240,25 @@ func (p *Provider) GetGlobal(ctx context.Context, ref string) (*types.TODO, erro
 	return todo, err
 }
 
+// GetGlobalBySession implements todos.GlobalSessionReferenceProvider. Session
+// ownership is resolved through Gavel's durable prompt-run links, then decoded
+// through the owning workspace exactly like an ordinary global issue lookup.
+func (p *Provider) GetGlobalBySession(ctx context.Context, ref string) (*types.TODO, string, error) {
+	issue, sessionID, err := p.repository.GetIssueBySessionRef(ctx, ref)
+	if err != nil {
+		return nil, "", err
+	}
+	workspace, err := p.repository.GetWorkspace(ctx, issue.WorkspaceID)
+	if err != nil {
+		return nil, "", err
+	}
+	todo, err := p.todoFromIssue(ctx, issue, workspace.RootPath, true)
+	if err != nil {
+		return nil, "", err
+	}
+	return todo, sessionID, nil
+}
+
 func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*types.TODO, error) {
 	title := strings.TrimSpace(request.Title)
 	if title == "" {
@@ -263,10 +281,7 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		Labels:       request.Labels,
 		Priority:     priority,
 		Status:       status,
-		// Execution is projected from an attached Captain prompt run. A create
-		// request never manufactures transient execution state.
-		ExecutionState: native.ExecutionIdle,
-		Actor:          mutationActor,
+		Actor:        mutationActor,
 	})
 	if err != nil {
 		return nil, err
@@ -425,18 +440,6 @@ func (p *Provider) SaveAttempt(ctx context.Context, todo *types.TODO, result *to
 			"commit":         result.CommitSHA,
 			"error":          result.ErrorMessage,
 		},
-	})
-}
-
-func (p *Provider) SaveVerification(ctx context.Context, todo *types.TODO, result *verify.VerifyResult) error {
-	if result == nil {
-		return nil
-	}
-	return p.appendEvent(ctx, todo, native.EventInput{
-		Kind:    "verification_result",
-		Actor:   mutationActor,
-		Body:    todos.RenderVerificationSection(result),
-		Payload: result,
 	})
 }
 

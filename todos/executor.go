@@ -71,8 +71,9 @@ type ExecutionResult struct {
 // (captain "condition-met"), false when the iteration budget ran out with a
 // verifier still failing.
 type DoDOutcome struct {
-	Ran    bool
-	Passed bool
+	Ran    bool                      `json:"ran"`
+	Passed bool                      `json:"passed"`
+	Output *types.VerificationOutput `json:"output,omitempty"`
 }
 
 // ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
@@ -175,7 +176,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 
 	// Check if test already passes (skip if so). A plan run changes nothing, so
 	// neither the pre-check nor post-verification applies to it.
-	if e.Mode() != types.ModePlan && len(todo.StepsToReproduce) > 0 {
+	if e.Mode() == types.ModeRun && len(todo.StepsToReproduce) > 0 {
 		ctx.Logger.Debugf("Checking if test already passes")
 		ctx.Notify(Notification{
 			Type:    NotifyProgress,
@@ -545,11 +546,20 @@ func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workD
 	opts := fixtures.RunOptions{WorkDir: workDir, Evaluator: evaluator}
 
 	var results []fixtures.FixtureResult
-	for _, node := range nodes {
-		if node == nil || node.Test == nil {
-			continue
+	var walk func(*fixtures.FixtureNode)
+	walk = func(node *fixtures.FixtureNode) {
+		if node == nil {
+			return
 		}
-		results = append(results, dispatchFixture(ctx, *node.Test, opts))
+		if node.Test != nil {
+			results = append(results, dispatchFixture(ctx, *node.Test, opts))
+		}
+		for _, child := range node.Children {
+			walk(child)
+		}
+	}
+	for _, node := range nodes {
+		walk(node)
 	}
 	return results
 }

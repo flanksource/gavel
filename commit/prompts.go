@@ -15,6 +15,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Generates the PR title, body, and branch name when opening a pull request.",
 			ConfigPath:  "commit.prContentPrompt",
 			Default:     prContentPromptTemplate,
+			ModelPolicy: prompts.ModelFromCommitConfig,
 		},
 		{
 			ID:          prompts.CommitGrouping,
@@ -22,6 +23,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Groups uncommitted changes into logical commits for `gavel commit -A`. Available variables: {{table}} (the status table), {{maxCommits}}. Output schema is groups[]+ignore[]; {{maxCommits}} also caps the groups array via maxItems in the frontmatter output.schema, enforced by captain's schemaStrictness=retry policy.",
 			ConfigPath:  "commit.groupingPrompt",
 			Default:     groupingPromptTemplate,
+			ModelPolicy: prompts.ModelFromGroupConfig,
 		},
 	}
 }

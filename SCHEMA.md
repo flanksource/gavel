@@ -21,6 +21,7 @@ Inspect the merged result for any path with:
 
 ```bash
 gavel config [path]
+gavel config --resolve [path] # include resolved prompt specs and effective models
 ```
 
 The merge is **not** a blind overwrite. Scalars are last-write-wins, lists are
@@ -58,14 +59,47 @@ field is left undocumented.
 
 ## `verify`
 
-Settings for `gavel verify`, the AI code-review engine.
+Settings for AI verification fixture steps.
 
 | Key | Type | Default | Merge | Description |
 | --- | --- | --- | --- | --- |
-| `verify.model` | string | `claude` | last non-empty wins | AI CLI / model. Common values: `claude`, `gemini`, `codex`, or a fully qualified model name. |
-| `verify.prompt` | string | `""` | last non-empty wins | Repo-specific review policy appended to Gavel's built-in verify prompt. |
+| `verify.model` | string | `claude` | last non-empty wins | AI CLI / model used by AI fixture steps. Common values: `claude`, `gemini`, `codex`, or a fully qualified model name. |
+| `verify.prompt` | string | `""` | last non-empty wins | Repo-specific review policy appended to Gavel's built-in AI fixture prompt. |
+| `verify.promptTemplate` | prompt override | built-in | last configured override wins | Complete reviewer prompt supplied inline or from a file. |
 | `verify.checks.disabled` | string[] | `[]` | appended | Individual check IDs to disable (e.g. `SEC-1`, `PERF-2`). |
 | `verify.checks.disabledCategories` | string[] | `[]` | appended | Whole categories to disable: `completeness`, `code-quality`, `testing`, `consistency`, `security`, `performance`. |
+
+### Prompt overrides
+
+Every registered AI prompt accepts a bare string, an `inline` value, or a `file`
+reference. A string is complete dotprompt `.prompt` source. `inline` may also be
+a structured Captain `api.Spec`; in that form `prompt.user` becomes the template
+body and the remaining fields become prompt frontmatter. Relative files resolve
+against the `.gavel.yaml` layer that declared them, and a missing or malformed
+file is an error.
+
+```yaml
+todos:
+  planPrompt:
+    inline:
+      model: claude-sonnet-5
+      effort: high
+      prompt:
+        system: You produce implementation plans.
+        user: Plan this work: {{{body}}}
+
+commit:
+  messagePrompt:
+    file: .gavel/prompts/commit-message.prompt
+```
+
+Prompt override paths are `verify.promptTemplate`,
+`commit.{messagePrompt,functionalityRemovedPrompt,compatibilityPrompt,summaryPrompt,groupingPrompt,prContentPrompt}`,
+`todos.{runPrompt,planPrompt}`, `status.summaryPrompt`, and
+`test.outlineSummaryPrompt`. Use `gavel config --resolve` (`-r`) to see each
+prompt's built-in/inline/file source, complete body, declared Captain spec, and
+effective model/backend. Structured `--json`/`--yaml` output has the shape
+`{config, prompts}`.
 
 ## `lint`
 

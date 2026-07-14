@@ -59,6 +59,8 @@ export function TodoDetail({
   const verificationCount = todo?.criteria?.length ?? 0;
   const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
+  const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
+  const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
   const { stats: headerSessionStats } = useSessionStats(dir, todo?.sessionId, !!todo?.sessionId);
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
   // A todo awaiting a human decision (plan review or a blocking question) must
@@ -70,11 +72,11 @@ export function TodoDetail({
     setError('');
     resetRun();
     setAdvancedMode(null);
-    setTab('overview');
+    setTab(todo?.lookupSessionId ? 'session' : 'overview');
     setEditingTitle(false);
     setEditingBody(false);
     setCopyState('idle');
-  }, [todo?.ref, resetRun]);
+  }, [todo?.ref, todo?.lookupSessionId, resetRun]);
 
   useEffect(() => {
     if (copyState === 'idle') return;
@@ -459,12 +461,16 @@ export function TodoDetail({
         {tab === 'session' ? (
           <TodoSession
             dir={dir}
-            sessionId={todo.sessionId}
+            sessionId={viewSessionId}
             active={tab === 'session'}
             todo={todo}
             onChanged={onChanged}
             onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
-            resumeDisabled={busy || runBusy || sessionInProgress}
+            resumeDisabled={busy || runBusy || sessionInProgress || viewingHistoricalSession}
+            onRun={runTodo}
+            onAdvanced={setAdvancedMode}
+            runBusy={runBusy}
+            runDisabled={busy || runBusy || awaitingHumanAction}
           />
         ) : tab === 'plan' ? (
           <TodoPlan dir={dir} todo={todo} active={tab === 'plan'} onChanged={onChanged} />

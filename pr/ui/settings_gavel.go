@@ -8,12 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flanksource/gavel/commit"
-	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/prompts"
-	"github.com/flanksource/gavel/status"
-	"github.com/flanksource/gavel/testrunner/outline"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -48,14 +44,7 @@ func (s *Server) handleSettingsSchema(w http.ResponseWriter, r *http.Request) {
 // default. Composed explicitly (not via init) so a dropped import surfaces as a
 // missing prompt at compile time rather than a silent gap in the UI.
 func registeredPrompts() []prompts.Prompt {
-	var all []prompts.Prompt
-	all = append(all, verify.Prompts()...)
-	all = append(all, gavelgit.Prompts()...)
-	all = append(all, commit.Prompts()...)
-	all = append(all, todoprompt.Prompts()...)
-	all = append(all, status.Prompts()...)
-	all = append(all, outline.Prompts()...)
-	return all
+	return promptregistry.All()
 }
 
 // handleSettingsPrompts serves the prompt registry (ID, metadata, and embedded
@@ -90,6 +79,30 @@ func resolveSettingsDir(r *http.Request) (scope, dir string, err error) {
 		return "", "", errors.New("unknown project " + name)
 	}
 	return name, p.ResolvedDir(), nil
+}
+
+// handleSettingsGavelTrace serves the layered config trace for the requested
+// scope: each contributing .gavel.yaml's parsed config plus the merged result.
+// The settings UI derives per-field provenance badges from the source list — it
+// is read-only and never used to save (the layer switch edits one file via
+// handleSettingsGavel). Origins map to the UI's two layers: user-home → "user",
+// git-root/target-directory → "project".
+func (s *Server) handleSettingsGavelTrace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	_, dir, err := resolveSettingsDir(r)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	trace, err := verify.LoadGavelConfigTrace(dir)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, trace)
 }
 
 // handleSettingsGavel reads (GET) or writes (PUT) a single .gavel.yaml file for

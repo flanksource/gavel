@@ -9,8 +9,8 @@ verify:
 
 An AI reviewer inspects the change (the working-tree diff by default) against the
 acceptance criteria below and returns a structured score. Checklist items whose
-text is a built-in check ID (run `gavel verify --list` to see them, e.g.
-`tests-added`, `no-hardcoded-secrets`) run that static check; every other item is
+text is a built-in check ID (for example `tests-added` or
+`no-hardcoded-secrets`) run that static check; every other item is
 scored by the model as a free-text criterion. Run it with:
 
     gavel fixtures examples/ai-review.fixture.md

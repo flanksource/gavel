@@ -58,8 +58,8 @@ func TestPromptOverridePtr_IsSettable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promptOverridePtr: %v", err)
 	}
-	*ov = verify.PromptOverride{Inline: "hi"}
-	if cfg.Commit.MessagePrompt.Inline != "hi" {
+	*ov = verify.InlinePrompt("hi")
+	if text, ok := cfg.Commit.MessagePrompt.InlineText(); !ok || text != "hi" {
 		t.Errorf("write did not reach cfg.Commit.MessagePrompt: %+v", cfg.Commit.MessagePrompt)
 	}
 }
@@ -295,7 +295,7 @@ func TestHandleSettingsPromptDetail_GetMalformedInline(t *testing.T) {
 	dir := withProject(t, "gavel", "flanksource/gavel", "")
 
 	cfg := verify.GavelConfig{}
-	cfg.Verify.PromptTemplate = verify.PromptOverride{Inline: "---\nmodel: [broken\n---\nbody\n"}
+	cfg.Verify.PromptTemplate = verify.InlinePrompt("---\nmodel: [broken\n---\nbody\n")
 	if err := verify.SaveGavelConfig(dir, cfg); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}

@@ -24,15 +24,16 @@ import {
   type RunContext,
 } from "./providers";
 
-// RunMode is the prompt the dialog runs: Run (implement), Plan (propose only),
-// or Verify (score the committed work against acceptance criteria).
-export type RunMode = "run" | "plan" | "verify";
+// RunMode is the public agent prompt the dialog runs: Run (implement) or Plan
+// (propose only). Verification is a fixture-backed issue lifecycle action in
+// the Verification tab, not an agent run mode.
+export type RunMode = "run" | "plan";
 export type TodoRunAction = "run" | "plan";
 export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
 // The spec editor exposes exactly what gavel's dispatch reads: model/effort/budget,
 // the prompt override, tool/permission posture, plus the run's Workspace (dirty
-// worktree), Verify (checks), and Commit (auto-commit / dry-run). The last three
+// worktree), Verify (definition-of-done checks), and Commit (auto-commit / dry-run). The last three
 // replace the old loose checkboxes now that those options live on the api.Spec.
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 
@@ -389,6 +390,13 @@ export function runButtonQualifierForOptions(options: TodoRunOptions, context: R
   return `(${runtimeModeLabel(runtimeModeForBackend(backend))}:${shortTodoRunModelName(labelForRunModel(backend, model))})`;
 }
 
+// todoRunModeLabel is the runtime mechanism a run would use (Agent/cmux/cli/API),
+// resolved from the run options against the backend catalog — the same derivation
+// the run buttons use, exposed for the start-of-session hero's "Runtime" chip.
+export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): string {
+  return runtimeModeLabel(runtimeModeForBackend(backendForOptions(context, options)));
+}
+
 export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
   return `${RUN_ACTION_CONFIG[action].label} ${runButtonQualifierForOptions(options, context)}`;
 }
@@ -671,7 +679,7 @@ function effortIconColor(effort: TodoRunEffort | undefined): string {
   }
 }
 
-function TodoRunEffortBadge({ effort, className = "" }: { effort: TodoRunEffort | undefined; className?: string }) {
+export function TodoRunEffortBadge({ effort, className = "" }: { effort: TodoRunEffort | undefined; className?: string }) {
   const presentation = todoRunEffortPresentation(effort);
   const EffortIcon = presentation.icon;
   return (
@@ -1002,8 +1010,6 @@ function TodoRunAdvancedRuntimeControls({
 }
 
 const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-agent", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT };
-const INITIAL_VERIFY_BACKEND = "claude-agent";
-const INITIAL_VERIFY_MODEL = "claude-sonnet-5";
 
 export function TodoRunAdvancedDialog({
   open,
@@ -1027,28 +1033,19 @@ export function TodoRunAdvancedDialog({
   refID: string;
 }) {
   // Run/Plan share one AISpecRuntimeValue (model/backend/effort/budget/
-  // permissions/prompt), edited via clicky's PromptRunEditor. Verify only ever
-  // needs a captain backend + model (its wire body has no effort/budget/
-  // permissions), so it keeps its own small, independent selection instead of
-  // sharing — and instead of showing Effort/Budget/Permissions controls that
-  // verify's request would silently ignore.
+  // permissions/prompt), edited via clicky's PromptRunEditor.
   const [runtimeValue, setRuntimeValue] = useState<AISpecRuntimeValue>(INITIAL_RUNTIME_VALUE);
   const [mode, setMode] = useState<RunMode>("run");
   // Resume stays a discrete toggle (session-identity decision, cmux only); dirty,
   // auto-commit, dry-run, and checks now live on runtimeValue's spec (Workspace/
   // Commit/Verify sections), not as parallel booleans.
   const [resume, setResume] = useState(false);
-  const [verifyAgent, setVerifyAgent] = useState<TodoRunAgent>("claude");
-  const [verifyBackend, setVerifyBackend] = useState(INITIAL_VERIFY_BACKEND);
-  const [verifyModel, setVerifyModel] = useState(INITIAL_VERIFY_MODEL);
   // promptDraft is the editable prompt body sent as the verbatim override;
   // promptDirty stops the live preview from clobbering the user's edits.
   const [promptDraft, setPromptDraft] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
-  const [verifyBusy, setVerifyBusy] = useState(false);
-  const [verifyError, setVerifyError] = useState("");
   const [regenNonce, setRegenNonce] = useState(0);
   const [runContext, setRunContext] = useState<RunContext | null>(null);
   // Ref mirror of promptDirty so the preview effect can read it without
@@ -1063,14 +1060,6 @@ export function TodoRunAdvancedDialog({
   const modelFallback = defaultModelForSelection(context, agent, runtimeValue.backend);
   const { driver, runBackend } = driverForSelection(context, agent, runtimeValue.backend);
   const plan = mode === "plan";
-  const isVerify = mode === "verify";
-  const canVerify = !!refID; // verify scores one issue's commits
-  const verifyBackends = backendsForAgent(context, verifyAgent).filter((item) => !isCmuxBackend(verifyAgent, item.id));
-  const verifyBackendCatalog =
-    verifyBackends.find((item) => item.id === verifyBackend) ??
-    verifyBackends[0] ??
-    findBackendCatalog(context, verifyBackend, verifyAgent);
-  const verifyModelFallback = verifyBackendCatalog.defaultModel;
   const advancedAction: TodoRunAction = plan ? "plan" : "run";
   const recentAdvanced = loadRecentAdvancedTodoRunOptions(advancedAction, context);
 
@@ -1095,7 +1084,6 @@ export function TodoRunAdvancedDialog({
     setMode(next);
     setPromptDirty(false);
     promptDirtyRef.current = false;
-    setVerifyError("");
   }
 
   function editPrompt(v: string) {
@@ -1110,33 +1098,14 @@ export function TodoRunAdvancedDialog({
     setRegenNonce((n) => n + 1);
   }
 
-  function changeVerifyAgent(next: TodoRunAgent) {
-    const nextBackend =
-      backendsForAgent(context, next).find((item) => !isCmuxBackend(next, item.id)) ??
-      defaultBackendForAgent(context, next);
-    setVerifyAgent(next);
-    setVerifyBackend(nextBackend.id);
-    setVerifyModel(nextBackend.defaultModel);
-  }
-
-  function changeVerifyBackend(next: string) {
-    const nextBackend = findBackendCatalog(context, next, verifyAgent);
-    setVerifyBackend(nextBackend.id);
-    setVerifyModel(nextBackend.defaultModel);
-  }
-
   useEffect(() => {
     if (!open) return;
     setRuntimeValue(INITIAL_RUNTIME_VALUE);
     setMode(initialMode);
     setResume(false);
-    setVerifyAgent("claude");
-    setVerifyBackend(INITIAL_VERIFY_BACKEND);
-    setVerifyModel(INITIAL_VERIFY_MODEL);
     setPromptDraft("");
     setPromptDirty(false);
     promptDirtyRef.current = false;
-    setVerifyError("");
   }, [open, initialMode]);
 
   useEffect(() => {
@@ -1149,10 +1118,8 @@ export function TodoRunAdvancedDialog({
         if (!cancelled) {
           const resolved = runContextWithFallback(data as RunContext);
           setRunContext(data as RunContext);
-          if (initialMode !== "verify") {
-            const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
-            setRuntimeValue(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, resolved), resolved));
-          }
+          const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
+          setRuntimeValue(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, resolved), resolved));
         }
       })
       .catch(() => {
@@ -1163,15 +1130,14 @@ export function TodoRunAdvancedDialog({
     };
   }, [open, initialMode]);
 
-  const previewModel = isVerify ? verifyModel.trim() || verifyModelFallback : runtimeValue.model?.trim() || modelFallback;
-  const previewBackend = isVerify ? verifyBackend : runBackend;
+  const previewModel = runtimeValue.model?.trim() || modelFallback;
+  const previewBackend = runBackend;
 
   // Fetch the prompt that will be sent whenever the dialog is open and a
   // prompt-affecting option changes (driver/model/effort/plan/resume). The
   // server builds it from the same code path the run uses, so it matches exactly.
-  // Fetch the generated prompt body (Run/Plan) or verify prompt (Verify) and seed
-  // the editor with it unless the user has edited it. The server builds it from
-  // the same code path the run/verify uses, so it matches what would be sent.
+  // Fetch the generated Run/Plan prompt body and seed the editor unless the
+  // user has edited it. The server uses the same rendering path as dispatch.
   useEffect(() => {
     if (!open) {
       setPreviewError("");
@@ -1181,18 +1147,16 @@ export function TodoRunAdvancedDialog({
       setPreviewError("");
       return;
     }
-    const url = isVerify ? `/api/todos/verify/preview?${todoQuery(dir)}` : `/api/todos/run/preview?${todoQuery(dir)}`;
-    const body = isVerify
-      ? { dir, ref: refID, backend: previewBackend, model: previewModel }
-      : {
-          ref: refID,
-          driver,
-          backend: previewBackend,
-          model: previewModel,
-          effort: runtimeValue.effort,
-          runMode: plan ? "plan" : "run",
-          resume: isCmux ? resume : undefined,
-        };
+    const url = `/api/todos/run/preview?${todoQuery(dir)}`;
+    const body = {
+      ref: refID,
+      driver,
+      backend: previewBackend,
+      model: previewModel,
+      effort: runtimeValue.effort,
+      runMode: plan ? "plan" : "run",
+      resume: isCmux ? resume : undefined,
+    };
 
     let cancelled = false;
     const controller = new AbortController();
@@ -1219,37 +1183,11 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, isVerify, regenNonce]);
+  }, [open, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce]);
 
   if (!open) return null;
 
-  // runVerify POSTs the (edited) verify prompt to the verification endpoint and
-  // closes on success; the parent's todo polling reflects the new status.
-  async function runVerify() {
-    if (!refID) return;
-    setVerifyBusy(true);
-    setVerifyError("");
-    try {
-      const res = await fetch(`/api/todos/verify?${todoQuery(dir)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dir, ref: refID, backend: verifyBackend, model: previewModel, prompt: promptDraft }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Verify failed");
-      onClose();
-    } catch (err: any) {
-      setVerifyError(err?.message || "Verify failed");
-    } finally {
-      setVerifyBusy(false);
-    }
-  }
-
   function submit() {
-    if (isVerify) {
-      void runVerify();
-      return;
-    }
     // spec carries the model/effort/permissions plus the run's setup (dirty),
     // workflow.verify (checks) and workflow.postRun (auto-commit / dry-run) — all
     // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
@@ -1271,16 +1209,8 @@ export function TodoRunAdvancedDialog({
 
   const modeOptions: { id: RunMode; label: string }[] = [{ id: "run", label: "Run" }];
   modeOptions.push({ id: "plan", label: "Plan" });
-  if (canVerify) modeOptions.push({ id: "verify", label: "Verify" });
-  const verifyBackendOptions = verifyBackends.map((item) => ({
-    value: item.id,
-    label: item.configured === false ? `${item.label} (not ready)` : item.label,
-  }));
 
-  // Shared regenerate/error/editor/dirty-note block: passed to PromptRunEditor's
-  // `promptEditor` slot for Run/Plan (it supplies the "Prompt" block title), and
-  // rendered under a matching manual title for Verify (which doesn't use
-  // PromptRunEditor, since its wire body has no effort/budget/permissions to edit).
+  // Shared regenerate/error/editor/dirty-note block passed to PromptRunEditor.
   const promptEditorNode = (
     <div className="space-y-1">
       <div className="flex items-center justify-end gap-2">
@@ -1315,8 +1245,8 @@ export function TodoRunAdvancedDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} loading={isVerify ? verifyBusy : loading}>
-            {isVerify ? "Verify" : plan ? "Plan" : "Run"}
+          <Button onClick={submit} loading={loading}>
+            {plan ? "Plan" : "Run"}
           </Button>
         </div>
       }
@@ -1325,48 +1255,27 @@ export function TodoRunAdvancedDialog({
         <Field label="Mode">
           <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
         </Field>
-        {isVerify ? (
-          <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Field label="Agent">
-                <ProviderSelector ariaLabel="Agent" value={verifyAgent} onChange={changeVerifyAgent} providers={PROVIDERS.map((p) => ({ id: p.id, label: p.label, icon: p.icon }))} />
-              </Field>
-              <Field label="Backend">
-                <Combobox ariaLabel="Captain backend" value={verifyBackendCatalog.id} onChange={changeVerifyBackend} options={verifyBackendOptions} allowCustomValue={false} required />
-              </Field>
-              <Field label="Model">
-                <ModelSelector models={verifyBackendCatalog.models} value={verifyModel} onChange={setVerifyModel} className="w-full" />
-              </Field>
-            </div>
-            <div className="space-y-1">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Verify prompt</div>
-              {promptEditorNode}
-              {verifyError && <div className="text-xs text-red-600">{verifyError}</div>}
-            </div>
-          </>
-        ) : (
-          <PromptRunEditor
-            value={runtimeValue}
-            onChange={changeRuntime}
-            models={activeModels}
-            families={families}
-            tools={context.tools}
-            specSections={RUN_SPEC_SECTIONS}
-            promptEditor={promptEditorNode}
-            promptLabel="Prompt"
-            runtimeControls={<TodoRunAdvancedRuntimeControls context={context} value={runtimeValue} onChange={changeRuntime} recent={recentAdvanced} />}
-          >
-            {isCmux && (
-              // Resume is the one run-orchestration toggle without a spec home: it
-              // continues the todo's prior claude session (--resume) rather than
-              // minting a fresh one, and only applies to cmux runs.
-              <label className="inline-flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
-                <span>Resume session</span>
-              </label>
-            )}
-          </PromptRunEditor>
-        )}
+        <PromptRunEditor
+          value={runtimeValue}
+          onChange={changeRuntime}
+          models={activeModels}
+          families={families}
+          tools={context.tools}
+          specSections={RUN_SPEC_SECTIONS}
+          promptEditor={promptEditorNode}
+          promptLabel="Prompt"
+          runtimeControls={<TodoRunAdvancedRuntimeControls context={context} value={runtimeValue} onChange={changeRuntime} recent={recentAdvanced} />}
+        >
+          {isCmux && (
+            // Resume is the one run-orchestration toggle without a spec home: it
+            // continues the todo's prior claude session (--resume) rather than
+            // minting a fresh one, and only applies to cmux runs.
+            <label className="inline-flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
+              <span>Resume session</span>
+            </label>
+          )}
+        </PromptRunEditor>
       </div>
     </Modal>
   );

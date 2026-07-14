@@ -1,5 +1,5 @@
 import type React from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FixtureEditorProps } from '@flanksource/clicky-ui/data';
 import type { TodoItem } from '../../types';
@@ -113,5 +113,54 @@ describe('TodoVerification', () => {
         'yaml lint': lintSchema,
       });
     });
+  });
+
+  it('saves a dirty fixture before running the shared verification endpoint', async () => {
+    const updatedTodo = { ...todo, verificationMarkdown: '### command: smoke' };
+    const onChanged = vi.fn();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/todos/verification/schema') {
+        return { ok: true, json: async () => ({ fences: {} }), text: async (): Promise<string> => '' };
+      }
+      if (url.startsWith('/api/todos/verification/fixture')) {
+        expect(init?.method).toBe('POST');
+        return { ok: true, json: async () => updatedTodo, text: async (): Promise<string> => '' };
+      }
+      if (url.startsWith('/api/todos/verification/run')) {
+        expect(init?.method).toBe('POST');
+        return {
+          ok: true,
+          json: async () => ({
+            verification: {
+              allPassed: true,
+              duration: 10,
+              output: {
+                results: [{ name: 'smoke', status: 'PASS', command: 'echo ok', stdout: 'ok\n' }],
+              },
+            },
+            todo: { ...updatedTodo, status: 'verified' },
+          }),
+          text: async (): Promise<string> => '',
+        };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={onChanged} />);
+    await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
+    act(() => fixtureEditorCalls.props.at(-1)?.onChange('### command: smoke'));
+    fireEvent.click(screen.getByRole('button', { name: /run verification/i }));
+
+    await waitFor(() => expect(screen.getByText('Verification passed')).toBeTruthy());
+    expect(screen.getByText('smoke')).toBeTruthy();
+    expect(screen.getByText('echo ok')).toBeTruthy();
+    const mutationURLs = fetchMock.mock.calls
+      .map(call => String(call[0]))
+      .filter(url => url.includes('/api/todos/verification/') && !url.endsWith('/schema'));
+    expect(mutationURLs[0]).toContain('/api/todos/verification/fixture');
+    expect(mutationURLs[1]).toContain('/api/todos/verification/run');
+    expect(onChanged).toHaveBeenCalledTimes(2);
   });
 });

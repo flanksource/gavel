@@ -27,7 +27,7 @@ func shouldCommitAfter(result *todos.ExecutionResult) bool {
 // maybeCommitAfter runs the `gavel commit` pipeline over the agent's changes
 // when `todos run --commit` is set and the executor did not already commit them.
 // Verification is the run loop's definition-of-done (the fixture/CEL verdict),
-// not a separate post-commit scoring pass — `gavel todos verify` re-runs it
+// not a separate post-commit scoring pass. `gavel todos check` re-runs it
 // manually.
 func maybeCommitAfter(workDir string, provider todos.Provider, todo *types.TODO, result *todos.ExecutionResult) {
 	if shouldCommitAfter(result) {

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/commons-db/migrate"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/service"
+	"github.com/spf13/pflag"
 	"gorm.io/gorm"
 )
 
@@ -27,6 +28,7 @@ const (
 	// LegacyEnvDSN and LegacyEnvDisable remain supported for compatibility.
 	LegacyEnvDSN     = "GAVEL_GITHUB_CACHE_DSN"
 	LegacyEnvDisable = "GAVEL_GITHUB_CACHE"
+	databaseURLFlag  = "db-url"
 
 	// migrationAdvisoryLockID is the ASCII encoding of "GavelDBM". A stable
 	// PostgreSQL session lock serializes independently started Gavel processes
@@ -34,6 +36,14 @@ const (
 	migrationAdvisoryLockID int64 = 0x476176656c44424d
 	migrationUnlockTimeout        = 5 * time.Second
 )
+
+var databaseURL string
+
+// BindDatabaseURLFlag exposes the shared process database as a root persistent
+// flag. The explicit CLI value wins over environment variables and db.json.
+func BindDatabaseURLFlag(flags *pflag.FlagSet) {
+	flags.StringVar(&databaseURL, databaseURLFlag, "", "PostgreSQL database URL (overrides environment and db.json)")
+}
 
 //go:embed schema/*.hcl schema/*.sql
 var schemaFS embed.FS
@@ -97,6 +107,7 @@ func applyGavelSchema(ctx context.Context, dsn string) error {
 			"todo_issue_prompt_runs.todo_issue_prompt_runs_captain_prompt_run_fkey",
 			"todo_issue_plans.todo_issue_plans_captain_plan_fkey",
 			"todo_issue_plan_revision_details",
+			"todo_issue_runtime",
 		),
 	); err != nil {
 		return fmt.Errorf("migrate gavel database: %w", err)
@@ -157,6 +168,9 @@ func disabledByEnvironment() (string, bool) {
 }
 
 func resolveDSN() (string, string, error) {
+	if dsn := strings.TrimSpace(databaseURL); dsn != "" {
+		return dsn, "--" + databaseURLFlag, nil
+	}
 	if dsn := strings.TrimSpace(os.Getenv(EnvDSN)); dsn != "" {
 		return dsn, EnvDSN, nil
 	}

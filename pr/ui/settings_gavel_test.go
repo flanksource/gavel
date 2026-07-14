@@ -119,7 +119,7 @@ func TestHandleSettingsGavel_ProjectRoundTrip(t *testing.T) {
 	if !got.Exists || got.Config.Verify.Model != "gemini" {
 		t.Errorf("GET = %+v, want exists with verify.model=gemini", got)
 	}
-	if got.Config.Verify.PromptTemplate.Inline != "be strict" {
+	if text, ok := got.Config.Verify.PromptTemplate.InlineText(); !ok || text != "be strict" {
 		t.Errorf("promptTemplate not persisted: %+v", got.Config.Verify.PromptTemplate)
 	}
 }
@@ -138,6 +138,70 @@ func TestHandleSettingsGavel_GlobalMissingReturnsEmpty(t *testing.T) {
 	}
 	if got.Exists {
 		t.Errorf("global config should not exist yet: %+v", got)
+	}
+}
+
+func TestHandleSettingsGavelTrace_LayeredProvenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// User layer sets verify.model; project layer sets commit + overrides nothing
+	// in verify, so the two layers own distinct fields for the provenance badges.
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("verify:\n  model: gemini\n"), 0o644); err != nil {
+		t.Fatalf("write home config: %v", err)
+	}
+	dir := withProject(t, "gavel", "flanksource/gavel", "")
+	if err := os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("commit:\n  model: claude-opus\n"), 0o644); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleSettingsGavelTrace(rec, httptest.NewRequest("GET", "/api/settings/gavel/trace?project=gavel", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+
+	var trace struct {
+		Sources []struct {
+			Origin string `json:"origin"`
+			Config struct {
+				Verify struct {
+					Model string `json:"model"`
+				} `json:"verify"`
+				Commit struct {
+					Model string `json:"model"`
+				} `json:"commit"`
+			} `json:"config"`
+		} `json:"sources"`
+		Merged struct {
+			Verify struct {
+				Model string `json:"model"`
+			} `json:"verify"`
+			Commit struct {
+				Model string `json:"model"`
+			} `json:"commit"`
+		} `json:"merged"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &trace); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	byOrigin := map[string]string{}
+	for _, s := range trace.Sources {
+		if s.Config.Verify.Model != "" {
+			byOrigin["verify.model"] = s.Origin
+		}
+		if s.Config.Commit.Model != "" {
+			byOrigin["commit.model"] = s.Origin
+		}
+	}
+	if byOrigin["verify.model"] != "user-home" {
+		t.Errorf("verify.model provenance = %q, want user-home", byOrigin["verify.model"])
+	}
+	if byOrigin["commit.model"] != "target-directory" {
+		t.Errorf("commit.model provenance = %q, want target-directory", byOrigin["commit.model"])
+	}
+	if trace.Merged.Verify.Model != "gemini" || trace.Merged.Commit.Model != "claude-opus" {
+		t.Errorf("merged did not combine both layers: %+v", trace.Merged)
 	}
 }
 

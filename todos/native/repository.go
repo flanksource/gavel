@@ -123,9 +123,15 @@ const workspaceFrom = `
 	  ON primary_path.workspace_id = workspace.id AND primary_path.is_primary`
 
 const issueColumns = `
-	id, workspace_id, title, body, verification, labels, priority, status,
-	execution_state, active_prompt_run_id, selected_plan_id, version,
-	created_at, updated_at`
+	issue.id, issue.workspace_id, issue.title, issue.body, issue.verification,
+	issue.labels, issue.priority, issue.status,
+	COALESCE(runtime.execution_state, 'idle') AS execution_state,
+	issue.active_prompt_run_id, issue.selected_plan_id, issue.version,
+	issue.created_at, issue.updated_at`
+
+const issueFrom = `
+	todo_issues AS issue
+	LEFT JOIN todo_issue_runtime AS runtime ON runtime.issue_id = issue.id`
 
 func (r *Repository) CreateWorkspace(ctx context.Context, input CreateWorkspaceInput) (*Workspace, error) {
 	repoKey := normalizeToken(input.RepoKey)
@@ -342,13 +348,6 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 	if !status.valid() {
 		return nil, fmt.Errorf("%w: unsupported status %q", ErrInvalidInput, status)
 	}
-	executionState := input.ExecutionState
-	if executionState == "" {
-		executionState = ExecutionIdle
-	}
-	if !executionState.valid() {
-		return nil, fmt.Errorf("%w: unsupported execution state %q", ErrInvalidInput, executionState)
-	}
 	aliases, err := normalizeAliases(input.Aliases)
 	if err != nil {
 		return nil, err
@@ -371,10 +370,10 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 		result := tx.Exec(`
 			INSERT INTO todo_issues
 				(id, workspace_id, title, body, verification, labels, priority, status,
-				 execution_state, version, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
+				 version, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
 			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(labels),
-			priority, status, executionState,
+			priority, status,
 		)
 		if result.Error != nil {
 			return result.Error
@@ -408,7 +407,7 @@ func (r *Repository) GetIssue(ctx context.Context, id uuid.UUID) (*Issue, error)
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
 	var records []issueRecord
 	result := r.db.WithContext(ctx).Raw(
-		`SELECT `+issueColumns+` FROM todo_issues WHERE workspace_id = ? ORDER BY updated_at DESC, id`,
+		`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE issue.workspace_id = ? ORDER BY issue.updated_at DESC, issue.id`,
 		workspaceID,
 	).Scan(&records)
 	if result.Error != nil {
@@ -547,6 +546,63 @@ func (r *Repository) GetIssueByGlobalRef(ctx context.Context, ref string) (*Issu
 		return getIssue(r.db.WithContext(ctx), `id = ?`, matches[0].IssueID)
 	default:
 		return nil, fmt.Errorf("%w: issue reference %q", ErrAmbiguousReference, ref)
+	}
+}
+
+// GetIssueBySessionRef resolves either a Captain-native session UUID or a
+// provider session UUID to the one native issue whose prompt run is linked to
+// that session. A provider session can have separate Gavel orchestration and
+// Claude/Codex transcript rows; matching the shared provider identity bridges
+// those rows without making Captain own Gavel's issue links.
+func (r *Repository) GetIssueBySessionRef(ctx context.Context, ref string) (*Issue, string, error) {
+	ref = normalizeToken(ref)
+	parsed, err := uuid.Parse(ref)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: session reference must be a UUID", ErrInvalidInput)
+	}
+	ref = parsed.String()
+
+	var matches []struct {
+		IssueID         uuid.UUID
+		SessionIdentity string
+	}
+	result := r.db.WithContext(ctx).Raw(`
+		WITH target_sessions AS (
+			SELECT id, NULLIF(btrim(provider_session_id), '') AS provider_session_id
+			FROM captain_sessions
+			WHERE id = ? OR provider_session_id = ?
+		), candidate_sessions AS (
+			SELECT DISTINCT
+				session.id,
+				COALESCE(NULLIF(btrim(session.provider_session_id), ''), session.id::text) AS session_identity
+			FROM captain_sessions AS session
+			WHERE session.id IN (SELECT id FROM target_sessions)
+			   OR NULLIF(btrim(session.provider_session_id), '') IN (
+				SELECT provider_session_id
+				FROM target_sessions
+				WHERE provider_session_id IS NOT NULL
+			   )
+		)
+		SELECT
+			link.issue_id,
+			MIN(candidate.session_identity) AS session_identity
+		FROM todo_issue_prompt_runs AS link
+		JOIN captain_prompt_runs AS run ON run.id = link.prompt_run_id
+		JOIN candidate_sessions AS candidate ON candidate.id = run.session_id
+		GROUP BY link.issue_id
+		LIMIT 2`, parsed, ref,
+	).Scan(&matches)
+	if result.Error != nil {
+		return nil, "", result.Error
+	}
+	switch len(matches) {
+	case 0:
+		return nil, "", fmt.Errorf("%w: session reference %q", ErrNotFound, ref)
+	case 1:
+		issue, err := getIssue(r.db.WithContext(ctx), `id = ?`, matches[0].IssueID)
+		return issue, matches[0].SessionIdentity, err
+	default:
+		return nil, "", fmt.Errorf("%w: session reference %q", ErrAmbiguousReference, ref)
 	}
 }
 
@@ -715,13 +771,6 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 		updates["status"] = *patch.Status
 		payload["status"] = *patch.Status
 	}
-	if patch.ExecutionState != nil {
-		if !patch.ExecutionState.valid() {
-			return nil, fmt.Errorf("%w: unsupported execution state %q", ErrInvalidInput, *patch.ExecutionState)
-		}
-		updates["execution_state"] = *patch.ExecutionState
-		payload["executionState"] = *patch.ExecutionState
-	}
 	if len(updates) == 0 {
 		return nil, ErrNoChanges
 	}
@@ -779,10 +828,6 @@ func pruneUnchangedIssueUpdates(current *Issue, updates, payload map[string]any)
 	if value, ok := updates["status"].(IssueStatus); ok && current.Status == value {
 		delete(updates, "status")
 		delete(payload, "status")
-	}
-	if value, ok := updates["execution_state"].(ExecutionState); ok && current.ExecutionState == value {
-		delete(updates, "execution_state")
-		delete(payload, "executionState")
 	}
 }
 
@@ -937,7 +982,7 @@ func lockIssue(tx *gorm.DB, id uuid.UUID, expectedVersion int64) (*lockedIssue, 
 
 func getIssue(db *gorm.DB, condition string, args ...any) (*Issue, error) {
 	var record issueRecord
-	result := db.Raw(`SELECT `+issueColumns+` FROM todo_issues WHERE `+condition, args...).Scan(&record)
+	result := db.Raw(`SELECT `+issueColumns+` FROM `+issueFrom+` WHERE `+condition, args...).Scan(&record)
 	if result.Error != nil {
 		return nil, result.Error
 	}

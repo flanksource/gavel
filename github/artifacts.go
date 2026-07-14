@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -16,6 +17,12 @@ import (
 var artifactURLPattern = regexp.MustCompile(
 	`github\.com/([^/]+/[^/]+)/actions/runs/(\d+)/artifacts/(\d+)`,
 )
+
+// ErrArtifactResultsNotFound means the artifact downloaded successfully but
+// does not contain a JSON results payload. Some workflows publish an empty or
+// non-results gavel artifact; callers may ignore it without reporting a
+// download failure.
+var ErrArtifactResultsNotFound = errors.New("no .json file found in artifact zip")
 
 // ParseArtifactURL extracts the repo, run ID, and artifact ID from a GitHub
 // Actions artifact URL like:
@@ -138,5 +145,5 @@ func extractJSONFromZip(data []byte) ([]byte, error) {
 		}
 		return content, nil
 	}
-	return nil, fmt.Errorf("no .json file found in artifact zip")
+	return nil, ErrArtifactResultsNotFound
 }

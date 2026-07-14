@@ -9,6 +9,8 @@
 #
 # Merge order is exactly the list above, with later layers overriding earlier ones.
 # Use `gavel config [path]` to inspect the merged result for a specific file or directory.
+# Use `gavel config --resolve [path]` to expand prompt files/inline specs and show
+# the effective AI model/backend for every registered prompt.
 #
 # Merge behavior summary:
 #   - Last-write-wins scalars:
@@ -34,6 +36,19 @@ verify:
   prompt: |
     Prioritize API compatibility, migration safety, and operator-facing errors.
     Flag missing tests for behavior changes and any undocumented config changes.
+
+  # Replace the complete reviewer prompt with either .prompt text or a structured
+  # Captain api.Spec. In the object form, prompt.user is the template body:
+  # promptTemplate:
+  #   inline:
+  #     model: claude-sonnet-5
+  #     effort: high
+  #     prompt:
+  #       system: You are a strict code reviewer.
+  #       user: Review {{changedFiles}} against {{issue.description}}.
+  # Alternatively, resolve a file relative to this .gavel.yaml:
+  # promptTemplate:
+  #   file: .gavel/prompts/review.prompt
 
   checks:
     # Disable individual check IDs emitted by the verify engine.

@@ -12,7 +12,157 @@ import (
 	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/session"
+	"github.com/google/uuid"
 )
+
+type fakeCaptainSessionStore struct {
+	run        *captaindb.Session
+	transcript *captaindb.Session
+	overview   *captaindb.SessionOverview
+	messages   []captaindb.TranscriptMessage
+}
+
+func (f fakeCaptainSessionStore) GetSessionByIdentity(_ context.Context, _ string, source, _, _ string) (*captaindb.Session, error) {
+	switch source {
+	case "gavel":
+		if f.run != nil {
+			return f.run, nil
+		}
+	case "codex", "claude":
+		if f.transcript != nil && f.transcript.Source == source {
+			return f.transcript, nil
+		}
+	}
+	return nil, captaindb.ErrSessionNotFound
+}
+
+func (f fakeCaptainSessionStore) GetSessionOverviewByIdentity(context.Context, string) (*captaindb.SessionOverview, error) {
+	if f.overview == nil {
+		return nil, captaindb.ErrSessionNotFound
+	}
+	return f.overview, nil
+}
+
+func (f fakeCaptainSessionStore) ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error) {
+	return f.messages, nil
+}
+
+func TestStreamCaptainSessionEmitsUnifiedMessages(t *testing.T) {
+	sessionID := "019f5b08-dfee-7b80-aef3-15a58eb6371b"
+	transcriptID := uuid.New()
+	messageID := uuid.New()
+	now := time.Now().UTC()
+	parts, err := json.Marshal([]session.Part{{
+		Type: session.PartTool, ToolName: "Bash", ToolCallID: "call-1",
+		State:  session.ToolStateOutputAvailable,
+		Input:  json.RawMessage(`{"command":"go test ./..."}`),
+		Output: json.RawMessage(`"ok"`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := fakeCaptainSessionStore{
+		run: &captaindb.Session{
+			ID: uuid.New(), Source: "gavel", Provider: "headless-codex",
+			ProviderSessionID: sessionID, LifecycleStatus: captaindb.SessionLifecycleRunning,
+		},
+		transcript: &captaindb.Session{
+			ID: transcriptID, Source: "codex", CWD: "/work/captain", ProviderSessionID: sessionID,
+		},
+		messages: []captaindb.TranscriptMessage{{
+			ID: messageID, SessionID: transcriptID, Sequence: 1, Role: "assistant",
+			Parts: parts, OccurredAt: &now,
+		}},
+	}
+	resolved, err := resolveCaptainSession(t.Context(), store, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.known || resolved.run == nil || resolved.transcript == nil {
+		t.Fatalf("resolution = %#v, want run and transcript", resolved)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest("GET", "/api/todos/session/stream", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	streamCaptainSession(rec, req, store, sessionID, resolved)
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`event: entry`, `"id":"` + messageID.String() + `"`, `"role":"assistant"`,
+		`"toolName":"Bash"`, `go test ./...`, `"source":"codex"`, `"cwd":"/work/captain"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Captain session stream missing %q in:\n%s", want, body)
+		}
+	}
+}
+
+func TestCaptainSessionStatsUsesMonitoredSessionClock(t *testing.T) {
+	now := time.Now().UTC()
+	rootStarted := now.Add(-6 * time.Hour)
+	agentStarted := now.Add(-35 * time.Second)
+	lastActivity := now.Add(-2 * time.Second)
+	providerSessionID := "session-clock"
+	store := fakeCaptainSessionStore{
+		run: &captaindb.Session{
+			ID: uuid.New(), Source: "gavel", Provider: "headless-codex",
+			ProviderSessionID: providerSessionID, CreatedAt: rootStarted,
+		},
+		transcript: &captaindb.Session{
+			ID: uuid.New(), Source: "codex", AgentType: "codex",
+			ProviderSessionID: providerSessionID, CreatedAt: agentStarted,
+		},
+		overview: &captaindb.SessionOverview{
+			LifecycleStatus: string(captaindb.SessionLifecycleRunning),
+			ActivityState:   string(captaindb.SessionActivityWorking),
+			HealthState:     string(captaindb.SessionHealthHealthy),
+			StartedAt:       &agentStarted, LastActivityAt: &lastActivity,
+		},
+	}
+	resolved, err := resolveCaptainSession(t.Context(), store, providerSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := captainSessionStats(t.Context(), store, providerSessionID, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Found || !first.InProgress {
+		t.Fatalf("stats = %#v, want found live monitored session", first.SessionStats)
+	}
+	if first.DurationMs < 34_000 || first.DurationMs > 37_000 {
+		t.Fatalf("durationMs = %d, want monitored session age near 35s", first.DurationMs)
+	}
+	if first.DurationMs > int64(time.Hour/time.Millisecond) {
+		t.Fatalf("durationMs = %d, admission-root clock leaked into agent stats", first.DurationMs)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	second, err := captainSessionStats(t.Context(), store, providerSessionID, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.DurationMs < first.DurationMs {
+		t.Fatalf("live duration regressed from %d to %d", first.DurationMs, second.DurationMs)
+	}
+}
+
+func TestCaptainSessionStatsHidesAdmissionWithoutMonitoredSession(t *testing.T) {
+	resolved := captainSessionResolution{run: &captaindb.Session{
+		ID: uuid.New(), Source: "gavel", ProviderSessionID: "admission-only",
+	}, known: true}
+	got, err := captainSessionStats(t.Context(), fakeCaptainSessionStore{}, "admission-only", resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Found {
+		t.Fatalf("found = true, admission-only sessions must not supply agent stats")
+	}
+}
 
 func TestHandleTodoSessionStreamEmitsEvents(t *testing.T) {
 	home := t.TempDir()

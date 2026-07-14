@@ -25,9 +25,27 @@ func TestConfigHelpIncludesExample(t *testing.T) {
 		"precommit:",
 		"fixtures:",
 		"secrets:",
+		"--resolve",
+		"{config, prompts}",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("config help missing %q:\n%s", want, help)
 		}
+	}
+}
+
+func TestRunConfigResolveReturnsResolvedResult(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	target := t.TempDir()
+	result, err := runConfig(ConfigOptions{Args: []string{target}, Resolve: true})
+	if err != nil {
+		t.Fatalf("run config --resolve: %v", err)
+	}
+	resolved, ok := result.(ResolvedConfigResult)
+	if !ok {
+		t.Fatalf("result type = %T, want ResolvedConfigResult", result)
+	}
+	if len(resolved.Prompts) != 12 {
+		t.Fatalf("resolved prompts = %d, want 12", len(resolved.Prompts))
 	}
 }

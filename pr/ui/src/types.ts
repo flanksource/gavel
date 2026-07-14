@@ -122,6 +122,10 @@ export interface TodoItem {
   // Agent session id of the most recent run, used to follow the session live
   // and to resume it. Recorded in the native issue execution state.
   sessionId?: string;
+  // Present only when this detail was resolved from a session UUID. It selects
+  // that exact historical transcript while sessionId continues to identify the
+  // Todo's active/latest run for lifecycle actions.
+  lookupSessionId?: string;
   body?: string;
   implementation?: string;
   events?: TodoEvent[];
@@ -157,8 +161,8 @@ export interface TodoItem {
 // TodoPlanStatus is how a plan run classified its plan relative to any prior one.
 export type TodoPlanStatus = 'new' | 'updated' | 'unchanged';
 
-// TodoRunModeValue is the operation a run performed: implement, propose a plan,
-// or score committed work. (Distinct from the legacy TodoRunMode mechanism.)
+// TodoRunModeValue includes the internal/historical verify-only lifecycle value.
+// New interactive runs only select run or plan.
 export type TodoRunModeValue = 'run' | 'plan' | 'verify';
 
 // TodoQuestion is one blocking question from an agent that parked in `ask`.
@@ -194,41 +198,38 @@ export interface TodoDiffStat {
   dels: number;
 }
 
-// Evidence points at a file (and optionally line) supporting a verify verdict.
-export interface VerifyEvidence {
-  file: string;
-  line?: number;
-  message: string;
+export interface TodoFixtureResult {
+  name: string;
+  type?: string;
+  status?: string;
+  duration?: number;
+  error?: string;
+  command?: string;
+  stdout?: string;
+  stderr?: string;
 }
 
-// CriterionResult is the AI verdict for one stored acceptance criterion.
-export interface CriterionResult {
-  criterion: string;
-  met: boolean;
-  evidence?: VerifyEvidence[];
+export interface TodoVerificationChecklistItem {
+  item: string;
+  passed: boolean;
+  message?: string;
 }
 
-// VerifyCheck is a boolean pass/fail static check from a verification run.
-export interface VerifyCheck {
-  pass: boolean;
-  evidence?: VerifyEvidence[];
+export interface TodoVerificationOutput {
+  results?: TodoFixtureResult[];
+  checklist?: TodoVerificationChecklistItem[];
+  summary?: Record<string, unknown>;
 }
 
-// VerifyResult mirrors the server's verify.VerifyResult for an issue-aware run:
-// an overall score + implemented verdict, per-criterion results, static checks,
-// and a completeness assessment.
-export interface VerifyResult {
-  score: number;
-  implemented?: boolean;
-  acceptance_criteria?: CriterionResult[];
-  checks?: Record<string, VerifyCheck>;
-  completeness?: { pass: boolean; summary?: string; evidence?: VerifyEvidence[] };
-}
-
-// TodoVerifyResponse is the /api/todos/verify payload: the structured verdict
-// plus the refreshed todo (whose status may have moved to verified/pending).
-export interface TodoVerifyResponse {
-  result: VerifyResult;
+// TodoVerificationRunResponse is the fixture-backed manual verification result
+// returned by POST /api/todos/verification/run.
+export interface TodoVerificationRunResponse {
+  verification: {
+    allPassed: boolean;
+    duration: number;
+    error?: string;
+    output?: TodoVerificationOutput;
+  };
   todo: TodoItem;
 }
 
@@ -306,9 +307,9 @@ export interface TodoRunOptions extends AISpecRuntimeValue {
   driver?: TodoRunDriver;
   agent?: TodoRunAgent;
   mode?: TodoRunMode;
-  // runMode is the operation the run performs (run/plan/verify). Supersedes the
+  // runMode is the operation the run performs (run/plan). Supersedes the
   // `plan` bool; the server accepts both (plan:true is treated as runMode:plan).
-  runMode?: TodoRunModeValue;
+  runMode?: 'run' | 'plan';
   // Plan-only run: the agent proposes an implementation plan without changing
   // code. Requires cmux mode. Legacy — prefer runMode.
   plan?: boolean;

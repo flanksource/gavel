@@ -43,8 +43,8 @@ var (
 	todoModel     string
 	todoEffort    string
 	resumeSession bool
-	// todosRunMode is the parsed --mode (run/plan); verify short-circuits to the
-	// verification loop before it is set. Resolved once in runTodosRun.
+	// todosRunMode is the parsed public --mode (run/plan). Verify is an internal
+	// issue lifecycle step entered by `todos check`, not an agent run mode.
 	todosRunMode types.RunMode
 )
 
@@ -52,9 +52,13 @@ var todosCmd = &cobra.Command{
 	Use:          "todos",
 	Aliases:      []string{"todo"},
 	SilenceUsage: true,
-	Short:        "Automated TODO execution + AI verification with coding agents",
-	Long: `Run, verify, and manage TODOs — units of work an AI coding agent implements
-and gavel then scores against their acceptance criteria.
+	Args:         cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return cmd.Help()
+	},
+	Short: "Automated TODO execution and fixture-backed verification",
+	Long: `Run, check, and manage TODOs — units of work an AI coding agent implements
+and gavel verifies with their persisted definition-of-done fixture.
 
 A TODO is a PostgreSQL-backed issue with a title, body, status, priority,
 acceptance criteria, verification fixtures, and execution history. Todos come
@@ -65,9 +69,8 @@ Subcommands:
   list      List TODOs (filter by --status, group with --group-by)
   get       Show one TODO in detail (accepts a short id, full id, title, or alias)
   create    Create a TODO
-  run       Have a coding agent implement TODOs (--mode run|plan|verify)
-  verify    AI-score whether a TODO's commits implement its criteria
-  check     Run a TODO's verification tests
+  run       Have a coding agent implement TODOs (--mode run|plan)
+  check     Run a TODO's fixture-backed definition of done
   edit / comment / reopen / criteria / sync / plan / transfer
 
 Examples:
@@ -77,20 +80,19 @@ Examples:
   gavel todos get <id>
   gavel todos run                  # implement all pending todos
   gavel todos run --mode plan      # propose a reviewable plan first
-  gavel todos verify --strict      # score committed work, non-zero if unmet`,
+  gavel todos check <id>           # run the issue's definition of done`,
 }
 
 var todosRunCmd = &cobra.Command{
 	Use:          "run [todo-titles...]",
 	SilenceUsage: true,
-	Short:        "Have a coding agent implement TODOs (run/plan/verify modes)",
+	Short:        "Have a coding agent implement TODOs (run/plan modes)",
 	Long: `Drive an AI coding agent (Claude or Codex, via cmux or headless) to work TODOs.
 
 With no arguments it runs every pending TODO; pass titles, ids, or aliases to select a
 subset, or -i to pick interactively. --mode chooses the operation:
   run     implement the TODO (default)
   plan    propose a reviewable plan instead of editing (see 'todos plan')
-  verify  score committed work (delegates to 'todos verify')
 
 After each TODO's agent finishes, gavel commits its changes (--commit, on by
 default; disable with --commit=false). --check additionally runs the configured
@@ -137,11 +139,13 @@ Examples:
 var todosCheckCmd = &cobra.Command{
 	Use:          "check [ids-or-aliases...]",
 	SilenceUsage: true,
-	Short:        "Check TODOs by running their verification tests",
-	Long: `Run each TODO's verification commands (the 'verify' fixtures) and report pass/fail.
+	Short:        "Run TODOs' fixture-backed definitions of done",
+	Long: `Run each TODO's complete definition of done and report pass/fail.
 
-This runs the deterministic checks attached to a TODO — unlike 'todos verify',
-which uses AI to score acceptance criteria. Exits non-zero if any TODO fails.
+The check is a verify-only issue lifecycle run: configured test/lint steps, the
+persisted Verification fixture, and acceptance-criteria AI checklist all use the
+same gavel fixture/CEL pipeline as verification after implementation. Exits
+non-zero if any TODO fails.
 With no arguments it checks every discovered TODO; pass ids or aliases to select some.
 
 Examples:
@@ -151,17 +155,13 @@ Examples:
 	RunE: runTodosCheck,
 }
 
-func runTodosRun(cmd *cobra.Command, args []string) error {
+func runTodosRun(_ *cobra.Command, args []string) error {
 	if err := validateTodosRunOptions(); err != nil {
 		return err
 	}
 	mode, err := types.ParseRunMode(todosMode)
 	if err != nil {
 		return err
-	}
-	if mode == types.ModeVerify {
-		// `todos run --mode verify` is the same operation as `todos verify`.
-		return runTodosVerify(cmd, args)
 	}
 	todosRunMode = mode
 
@@ -289,7 +289,7 @@ func newExecutor(workDir string, todo *types.TODO, provider todos.Provider) (tod
 // resolveDriverKind selects the driver: the explicit --driver flag when set,
 // otherwise "<agent>-cmux" for the model's agent (cmux is the default —
 // drivers.Default; headless is the non-interactive opt-in). --mode selects the
-// todo OPERATION (run/plan/verify), not the mechanism.
+// todo OPERATION (run/plan), not the mechanism.
 func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 	if strings.TrimSpace(todosDriver) != "" {
 		return drivers.Parse(todosDriver)

@@ -114,7 +114,7 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, verifySpec 
 		return nil, 0, err
 	}
 
-	if len(steps) == 0 && len(verNodes) == 0 && aiStep == nil {
+	if len(steps) == 0 && !hasFixtureTests(verNodes) && aiStep == nil {
 		return nil, 0, nil
 	}
 	maxIter := cfg.MaxIterations
@@ -134,6 +134,18 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, verifySpec 
 		workDir:   gitRoot,
 	}
 	return []agent.Verify{verifier}, maxIter + 1, nil
+}
+
+func hasFixtureTests(nodes []*fixtures.FixtureNode) bool {
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		if node.Test != nil || hasFixtureTests(node.Children) {
+			return true
+		}
+	}
+	return false
 }
 
 // newChecklistStep builds the acceptance-criteria checklist step: an ai fixture

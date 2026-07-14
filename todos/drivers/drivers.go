@@ -223,11 +223,33 @@ func resolveModel(kind Kind, model string) (string, error) {
 		}
 		return "", nil
 	}
+	// A driver/executor identity (e.g. "cmux-claude", "headless-codex") is never a
+	// model. Guard against it round-tripping through storage into the model field,
+	// which would otherwise launch `--model cmux-claude` and fail at the CLI.
+	if isExecutorIdentity(model) {
+		return "", fmt.Errorf("driver %q: %q is a driver/executor identity, not a model", kind, model)
+	}
 	got, _ := claude.ResolveAgent(model)
 	if got != agent {
 		return "", fmt.Errorf("driver %q expects a %s model but %q resolves to %s", kind, agent, model, got)
 	}
 	return model, nil
+}
+
+// isExecutorIdentity reports whether s has the "<mechanism>-<agent>" shape of an
+// executor Name() (e.g. "cmux-claude") — the reverse of a driver Kind — so such a
+// value can never be mistaken for an LLM model.
+func isExecutorIdentity(s string) bool {
+	mechanism, agent, ok := strings.Cut(s, "-")
+	if !ok {
+		return false
+	}
+	switch mechanism {
+	case "cmux", "headless", "sdk", "api":
+	default:
+		return false
+	}
+	return agent == "claude" || agent == "codex"
 }
 
 func joinKinds(kinds []Kind) string {

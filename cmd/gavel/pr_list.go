@@ -337,6 +337,9 @@ func runPRUI(opts PRListOptions) error {
 	poller := ui.NewPoller(srv, searchFn, interval)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if err := startServeRuntime(ctx, defaultServeRuntimeDependencies); err != nil {
+		return err
+	}
 	poller.Start(ctx)
 
 	syncer := ui.NewDetailSyncer(srv, srv.DetailCache(), ghOpts)

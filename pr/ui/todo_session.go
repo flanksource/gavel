@@ -14,7 +14,10 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/history"
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/captain/pkg/session"
 	"github.com/flanksource/gavel/todos"
+	"github.com/google/uuid"
 )
 
 const (
@@ -30,6 +33,69 @@ const (
 // appear timeout (e.g. a stale/unknown session id, or a run that never started).
 var errSessionLogMissing = errors.New("session log did not appear")
 
+// captainSessionStore is the native session read seam used by the TODO UI.
+// Runtime providers expose Captain's handle over the same pool Gavel owns;
+// tests and non-native compatibility providers can omit it and retain the
+// legacy on-disk Claude stream below.
+type captainSessionStore interface {
+	GetSessionByIdentity(context.Context, string, string, string, string) (*captaindb.Session, error)
+	GetSessionOverviewByIdentity(context.Context, string) (*captaindb.SessionOverview, error)
+	ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error)
+}
+
+type captainSessionProvider interface {
+	Captain() *captaindb.DB
+}
+
+type captainSessionResolution struct {
+	run        *captaindb.Session
+	transcript *captaindb.Session
+	known      bool
+}
+
+func todoCaptainSessionStore(ctx context.Context, dir string) (captainSessionStore, bool) {
+	provider, err := openTodoProvider(ctx, dir)
+	if err != nil {
+		return nil, false
+	}
+	native, ok := provider.(captainSessionProvider)
+	if !ok || native.Captain() == nil {
+		return nil, false
+	}
+	return native.Captain(), true
+}
+
+// resolveCaptainSession finds the admission root and the monitored agent row.
+// The root is only a provider-identity bridge; live state, timing, messages and
+// accounting all come from the Claude/Codex session.
+func resolveCaptainSession(ctx context.Context, store captainSessionStore, sessionID string) (captainSessionResolution, error) {
+	var resolved captainSessionResolution
+	run, err := store.GetSessionByIdentity(ctx, sessionID, "gavel", "", "")
+	if err == nil {
+		resolved.run = run
+		resolved.known = true
+	} else if !errors.Is(err, captaindb.ErrSessionNotFound) {
+		return resolved, err
+	}
+
+	sources := []string{"codex", "claude"}
+	if run != nil && strings.Contains(strings.ToLower(run.Provider), "claude") {
+		sources[0], sources[1] = sources[1], sources[0]
+	}
+	for _, source := range sources {
+		transcript, transcriptErr := store.GetSessionByIdentity(ctx, sessionID, source, "", "")
+		if transcriptErr == nil {
+			resolved.transcript = transcript
+			resolved.known = true
+			return resolved, nil
+		}
+		if !errors.Is(transcriptErr, captaindb.ErrSessionNotFound) {
+			return resolved, transcriptErr
+		}
+	}
+	return resolved, nil
+}
+
 // handleTodoSessionStats returns the rolled-up stats for a TODO's agent session
 // — agent/model/effort, elapsed time, token usage and derived cost. Live runs are
 // served from the in-memory cache the cmux tailer feeds; sessions no tailer is
@@ -44,6 +110,27 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
+		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if resolved.known {
+			resp, err := captainSessionStats(r.Context(), store, sessionID, resolved)
+			if err != nil {
+				writeTodoError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if req, ok := todos.GlobalApprovals().Pending(sessionID); ok {
+				resp.State = "approval"
+				pending := req
+				resp.Approval = &pending
+			}
+			json.NewEncoder(w).Encode(resp) //nolint:errcheck
+			return
+		}
+	}
 	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
@@ -71,6 +158,76 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 type todoSessionStatsResponse struct {
 	cmuxprov.SessionStats
 	Approval *todos.ApprovalRequest `json:"approval,omitempty"`
+}
+
+func captainSessionStats(ctx context.Context, store captainSessionStore, sessionID string, resolved captainSessionResolution) (todoSessionStatsResponse, error) {
+	stats := cmuxprov.SessionStats{SessionID: sessionID, Found: resolved.transcript != nil}
+	if resolved.transcript == nil {
+		return todoSessionStatsResponse{SessionStats: stats}, nil
+	}
+	overview, err := store.GetSessionOverviewByIdentity(ctx, resolved.transcript.ID.String())
+	if err != nil {
+		return todoSessionStatsResponse{}, err
+	}
+	stats.Found = true
+	stats.Agent = resolved.transcript.AgentType
+	if stats.Agent == "" && resolved.run != nil {
+		stats.Agent = resolved.run.Provider
+	}
+	stats.StartedAt = resolved.transcript.CreatedAt
+	if overview.StartedAt != nil {
+		stats.StartedAt = *overview.StartedAt
+	}
+	if overview.LastActivityAt != nil {
+		stats.UpdatedAt = *overview.LastActivityAt
+	}
+	if stats.UpdatedAt.IsZero() {
+		stats.UpdatedAt = stats.StartedAt
+	}
+	stats.InProgress = overview.LifecycleStatus == string(captaindb.SessionLifecycleRunning) || overview.ProcessActive
+	if stats.InProgress {
+		stats.UpdatedAt = time.Now().UTC()
+	}
+	if !stats.StartedAt.IsZero() && stats.UpdatedAt.After(stats.StartedAt) {
+		stats.DurationMs = stats.UpdatedAt.Sub(stats.StartedAt).Milliseconds()
+	} else if overview.DurationSeconds != nil {
+		stats.DurationMs = int64(*overview.DurationSeconds * 1000)
+	}
+	switch {
+	case overview.LifecycleStatus == string(captaindb.SessionLifecycleFailed) || overview.HealthState == string(captaindb.SessionHealthZombie):
+		stats.State, stats.Error = "error", resolved.transcript.StateReason
+	case overview.HealthState == string(captaindb.SessionHealthStalled):
+		stats.State = "stalled"
+	case overview.ActivityState != "" && overview.ActivityState != string(captaindb.SessionActivityIdle):
+		stats.State = overview.ActivityState
+	case stats.InProgress:
+		stats.State = "working"
+	case overview.LifecycleStatus == string(captaindb.SessionLifecycleSucceeded):
+		stats.State = "completed"
+	}
+	if overview.Model != nil {
+		stats.Model = *overview.Model
+	}
+	if overview.Effort != nil {
+		stats.Effort = *overview.Effort
+	}
+	stats.InputTokens = int(overview.InputTokens)
+	stats.OutputTokens = int(overview.OutputTokens)
+	stats.CacheReadTokens = int(overview.CacheReadTokens)
+	stats.CacheCreationTokens = int(overview.CacheWriteTokens)
+	stats.TotalTokens = int(overview.TotalTokens)
+	stats.ContextTokens = intValue(overview.ContextTokens)
+	stats.ContextWindow = intValue(overview.ContextWindowTokens)
+	stats.Turns = int(overview.TurnCount)
+	stats.CostUSD = overview.CostUSD
+	return todoSessionStatsResponse{SessionStats: stats}, nil
+}
+
+func intValue(value *int64) int {
+	if value == nil {
+		return 0
+	}
+	return int(*value)
 }
 
 // handleTodoSessionApprove resolves a pending tool-permission request for a
@@ -193,6 +350,18 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
+		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if resolved.known {
+			streamCaptainSession(w, r, store, sessionID, resolved)
+			return
+		}
+	}
 	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -208,6 +377,99 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	streamSessionLog(w, r, flusher, path)
+}
+
+// streamCaptainSession replays and follows the monitor-owned unified message
+// projection. It emits a row again when a later ingest enriches the same
+// message (for example, when tool output arrives); the browser deduplicates by
+// message ID and replaces the earlier version.
+func streamCaptainSession(w http.ResponseWriter, r *http.Request, store captainSessionStore, sessionID string, resolved captainSessionResolution) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	emit := func(event string, data any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+		flusher.Flush()
+	}
+	deadline := time.Now().Add(sessionLogAppearTimeout)
+	seen := map[uuid.UUID]string{}
+	for {
+		if resolved.transcript == nil {
+			next, err := resolveCaptainSession(r.Context(), store, sessionID)
+			if err != nil {
+				emit("error", map[string]string{"error": err.Error()})
+				return
+			}
+			resolved = next
+			if resolved.transcript == nil && time.Now().After(deadline) {
+				emit("error", map[string]string{"error": "no monitored session activity yet"})
+				return
+			}
+		}
+		if resolved.transcript != nil {
+			rows, err := store.ListTranscriptMessages(r.Context(), captaindb.TranscriptPage{SessionID: resolved.transcript.ID})
+			if err != nil {
+				emit("error", map[string]string{"error": err.Error()})
+				return
+			}
+			for _, row := range rows {
+				message, fingerprint, err := captainTranscriptMessage(row, resolved.transcript)
+				if err != nil {
+					continue
+				}
+				if seen[row.ID] == fingerprint {
+					continue
+				}
+				seen[row.ID] = fingerprint
+				emit("entry", message)
+			}
+		}
+		if len(seen) == 0 {
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(sessionStreamPoll):
+		}
+	}
+}
+
+func captainTranscriptMessage(row captaindb.TranscriptMessage, owner *captaindb.Session) (session.Message, string, error) {
+	var parts []session.Part
+	if err := json.Unmarshal(row.Parts, &parts); err != nil {
+		return session.Message{}, "", err
+	}
+	message := session.Message{
+		ID: row.ID.String(), Role: row.Role, Parts: parts,
+		Provenance: &session.Provenance{CWD: owner.CWD, Source: owner.Source, SessionID: owner.ProviderSessionID},
+	}
+	if row.TurnID != nil {
+		message.TurnID = row.TurnID.String()
+	}
+	if row.OccurredAt != nil {
+		message.Provenance.Timestamp = row.OccurredAt
+	}
+	if row.Model != nil {
+		message.Provenance.Model = *row.Model
+	}
+	if row.SourceLine != nil {
+		message.SourceLine = *row.SourceLine
+	}
+	fingerprintBytes, err := json.Marshal(message)
+	if err != nil {
+		return session.Message{}, "", err
+	}
+	return message, string(fingerprintBytes), nil
 }
 
 // streamSessionLog tails path, parsing each complete line into a captain

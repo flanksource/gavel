@@ -126,6 +126,18 @@ func TestConfigJSONSchema_DefaultsAndEnums(t *testing.T) {
 	assert.ElementsMatch(t, []any{"prompt", "fail", "skip"}, stringBranch["enum"])
 }
 
+func TestConfigJSONSchema_InlinePromptSupportsStringOrCaptainSpec(t *testing.T) {
+	schema := parsedConfigSchema(t)
+	inline := nodeAt(t, schema, "todos", "runPrompt", "inline")
+	oneOf, ok := inline["oneOf"].([]any)
+	require.True(t, ok)
+	require.Len(t, oneOf, 2)
+	assert.Equal(t, "string", oneOf[0].(map[string]any)["type"])
+	spec := oneOf[1].(map[string]any)
+	assert.NotEmpty(t, spec["$ref"])
+	assert.NotEmpty(t, schema["$defs"])
+}
+
 // nodeAt walks properties[...] nodes by key, returning the leaf schema map.
 func nodeAt(t *testing.T, schema map[string]any, keys ...string) map[string]any {
 	t.Helper()

@@ -133,11 +133,6 @@ table "todo_issues" {
     type    = text
     default = "open"
   }
-  column "execution_state" {
-    null    = false
-    type    = text
-    default = "idle"
-  }
   column "active_prompt_run_id" {
     null = true
     type = uuid
@@ -195,9 +190,6 @@ table "todo_issues" {
   index "todo_issues_status_idx" {
     columns = [column.workspace_id, column.status]
   }
-  index "todo_issues_execution_state_idx" {
-    columns = [column.workspace_id, column.execution_state]
-  }
   index "todo_issues_labels_idx" {
     columns = [column.labels]
     type    = GIN
@@ -211,9 +203,6 @@ table "todo_issues" {
   }
   check "todo_issues_status_check" {
     expr = "status = ANY (ARRAY['draft'::text, 'open'::text, 'verified'::text, 'closed'::text, 'cancelled'::text])"
-  }
-  check "todo_issues_execution_state_check" {
-    expr = "execution_state = ANY (ARRAY['idle'::text, 'planning'::text, 'running'::text, 'waiting'::text, 'stalled'::text, 'failed'::text, 'verifying'::text, 'verification_failed'::text])"
   }
   check "todo_issues_version_nonnegative" {
     expr = "version >= 0"
