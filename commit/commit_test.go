@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -133,4 +134,19 @@ var _ = Describe("Options model resolution", func() {
 		Entry("defaults to sonnet-class when nothing set",
 			Options{}, defaultGroupModel),
 	)
+})
+
+var _ = Describe("BuildAgent errors", func() {
+	It("preserves provider-specific credential guidance without appending every provider key", func() {
+		previousAgent := newAgentFunc
+		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
+			return nil, errors.New("API key not found for backend openai; similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)")
+		}
+		DeferCleanup(func() { newAgentFunc = previousAgent })
+
+		_, err := BuildAgent(Options{}, "api:terra")
+		Expect(err).To(MatchError("LLM agent unavailable: API key not found for backend openai; similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)"))
+		Expect(err.Error()).ToNot(ContainSubstring("ANTHROPIC_API_KEY"))
+		Expect(errors.Is(err, ErrLLMUnavailable)).To(BeTrue())
+	})
 })

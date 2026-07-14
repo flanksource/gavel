@@ -14,35 +14,37 @@ import (
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
+	"github.com/spf13/cobra"
 )
 
 type CommitOptions struct {
-	Stage        string `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id" default:"session"`
-	CommitAll    bool   `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
-	Interactive  bool   `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
-	Tree         bool   `flag:"tree" short:"t" help:"Alias for --interactive"`
-	Summary      bool   `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
-	MaxCommits   int    `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
-	Message      string `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	Model        string `flag:"model" help:"Override LLM model for chooser summaries, commit-message, and PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
-	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
-	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
-	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
-	NoCache      bool   `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
-	AutoMerge    bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
-	MergeType    string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
-	Fixup        string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
-	NoAutosquash bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
-	Since        string `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
-	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
-	Compat       string `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
-	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
-	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
-	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
-	WorkDir      string `flag:"work-dir" help:"Working directory"`
-	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
-	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
+	Args         []string `json:"-" args:"true"`
+	Stage        string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id" default:"session"`
+	CommitAll    bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
+	Interactive  bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Tree         bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
+	Summary      bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
+	MaxCommits   int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
+	Message      string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
+	Model        string   `flag:"model" help:"Override LLM model for chooser summaries, commit-message, and PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
+	GroupModel   string   `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
+	DryRun       bool     `flag:"dry-run" help:"Print the generated message without committing"`
+	Force        bool     `flag:"force" help:"Skip pre-commit hooks"`
+	NoCache      bool     `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
+	Push         bool     `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	AutoMerge    bool     `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
+	MergeType    string   `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
+	Fixup        string   `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
+	NoAutosquash bool     `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
+	Since        string   `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
+	Precommit    string   `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
+	Compat       string   `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
+	Lint         string   `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
+	LintSecrets  string   `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
+	Tidy         string   `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
+	WorkDir      string   `flag:"work-dir" help:"Working directory"`
+	Yes          bool     `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
+	AddMetadata  bool     `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
 }
 
 func (o CommitOptions) Help() string {
@@ -72,6 +74,11 @@ AI analysis can also check for removed functionality and compatibility issues.
 By default this is skipped. Use --compat=prompt|fail to enable it; skip|false
 disables the compatibility AI checks entirely, and non-TTY runs auto-escalate
 prompt -> fail.
+
+Positional file arguments (gavel commit <files>) commit exactly those paths:
+gavel resets the index and stages only the named files or directories, so
+--stage is ignored. Combine with -A to group just those paths into logical
+commits. Not valid with -i, --fixup, or --since.
 
 The -i / -t flags open an interactive tree picker over every changed file
 (staged, unstaged, and untracked) — no need to git add first. Each row
@@ -114,6 +121,8 @@ chosen method isn't enabled, no branch protection), gavel exits non-zero.
 
 Examples:
   gavel commit                          # session-scoped: commits only the running agent's edits, else staged changes
+  gavel commit foo.go bar.go            # commit exactly these files (index is reset to just them, --stage ignored)
+  gavel commit -A pkg/ internal/        # LLM-grouped logical commits over just the named paths
   gavel commit -i                       # tree picker over all changed files; no git add needed
   gavel commit -t                       # alias for the tree picker
   gavel commit -i -s                    # stream one-line AI summaries into the picker rows
@@ -143,6 +152,8 @@ Examples:
 
 func init() {
 	cmd := clicky.AddNamedCommand("commit", rootCmd, CommitOptions{}, runCommit)
+	cmd.Use = "commit [files...]"
+	cmd.Args = cobra.ArbitraryArgs
 	// Allow `gavel commit --fixup` (no value) to mean "auto-route per file";
 	// `--fixup=<hash>` keeps explicit semantics. NoOptDefVal is the cobra
 	// hook for this; clicky's struct-tag binding doesn't surface it.
@@ -151,10 +162,11 @@ func init() {
 	}
 }
 
-func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig) commitpkg.Options {
+func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig, files []string) commitpkg.Options {
 	return commitpkg.Options{
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
+		Files:           files,
 		CommitAll:       opts.CommitAll,
 		Interactive:     opts.Interactive || opts.Tree,
 		Summary:         opts.Summary,
@@ -183,16 +195,27 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 }
 
 func runCommit(opts CommitOptions) (any, error) {
-	workDir := opts.WorkDir
-	if workDir == "" {
+	baseDir := opts.WorkDir
+	if baseDir == "" {
 		wd, err := getWorkingDir()
 		if err != nil {
 			return nil, err
 		}
-		workDir = wd
+		baseDir = wd
 	}
-	if root := repomap.FindGitRoot(workDir); root != "" {
+	// Resolve positional file args against the invocation dir BEFORE normalizing
+	// to the git root, so relative paths (and runs from a subdirectory) map to
+	// git-root-relative pathspecs correctly.
+	workDir := baseDir
+	if root := repomap.FindGitRoot(baseDir); root != "" {
 		workDir = root
+	}
+
+	files, err := commitpkg.ResolveCommitFiles(workDir, baseDir, opts.Args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		exitCode = 1
+		return nil, nil
 	}
 
 	if opts.Push && opts.AutoMerge {
@@ -206,7 +229,7 @@ func runCommit(opts CommitOptions) (any, error) {
 		logger.Warnf("Failed to load .gavel.yaml: %v", err)
 	}
 
-	result, err := commitpkg.Run(context.Background(), buildCommitOptions(opts, workDir, cfg))
+	result, err := commitpkg.Run(context.Background(), buildCommitOptions(opts, workDir, cfg, files))
 
 	if err != nil {
 		if errors.Is(err, commitpkg.ErrNothingStaged) {
@@ -248,6 +271,13 @@ func runCommit(opts CommitOptions) (any, error) {
 			exitCode = 1
 			return nil, nil
 		}
+		if errors.Is(err, commitpkg.ErrFilesWithInteractive) ||
+			errors.Is(err, commitpkg.ErrFilesWithSince) ||
+			errors.Is(err, commitpkg.ErrFilesWithFixup) {
+			fmt.Fprintln(os.Stderr, err.Error())
+			exitCode = 1
+			return nil, nil
+		}
 		if errors.Is(err, commitpkg.ErrFixupWithCommitAll) ||
 			errors.Is(err, commitpkg.ErrFixupWithInteractive) ||
 			errors.Is(err, commitpkg.ErrFixupWithMessage) ||
@@ -275,7 +305,7 @@ func runCommit(opts CommitOptions) (any, error) {
 			outcome := handleCommitLintFindings(workDir, result, opts.Yes)
 			switch outcome {
 			case lintFindingsContinueOnce:
-				retry := buildCommitOptions(opts, workDir, cfg)
+				retry := buildCommitOptions(opts, workDir, cfg, files)
 				retry.LintFlag = "false"
 				retry.LintSecretsFlag = "false"
 				logger.Infof("lint: continuing this commit with lint gate disabled (one-time bypass)")
@@ -285,7 +315,7 @@ func runCommit(opts CommitOptions) (any, error) {
 				}
 				return retryResult, nil
 			case lintFindingsAIFixed:
-				retry := buildCommitOptions(opts, workDir, cfg)
+				retry := buildCommitOptions(opts, workDir, cfg, files)
 				logger.Infof("lint: ai-fix applied edits; re-running commit with lint gate enabled")
 				retryResult, retryErr := commitpkg.Run(context.Background(), retry)
 				if retryErr != nil {

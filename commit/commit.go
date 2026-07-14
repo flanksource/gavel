@@ -29,6 +29,10 @@ var (
 	ErrInteractiveNonTTY        = errors.New("--interactive requires an interactive terminal")
 	ErrInteractiveCancelled     = errors.New("commit cancelled: interactive selection aborted")
 	ErrInteractiveEmpty         = errors.New("commit cancelled: no files selected in interactive prompt")
+	ErrFilesWithInteractive     = errors.New("file arguments cannot be combined with --interactive")
+	ErrFilesWithSince           = errors.New("file arguments cannot be combined with --since")
+	ErrFilesWithFixup           = errors.New("file arguments cannot be combined with --fixup")
+	ErrFilesOutsideRepo         = errors.New("file argument is outside the repository")
 
 	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return clickyai.NewAgent(cfg) }
 	analyzeCommitMessageWithAIFunc                  = git.AnalyzeWithAI
@@ -55,6 +59,11 @@ const (
 type Options struct {
 	WorkDir string
 	Stage   string
+	// Files are explicit git-root-relative pathspecs from `gavel commit
+	// <files>`. When non-empty, Run() resets the index and stages exactly these
+	// paths (see stageExplicitFiles), so --stage is ignored. Rejected together
+	// with --interactive / --since / --fixup (see validateFilesOptions).
+	Files []string
 	// CommitAll stages all changes and asks the LLM to split them into logical
 	// commit groups (plus a separate chore commit for lock/generated files).
 	// Set implicitly when MaxCommits is provided.
@@ -186,6 +195,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.MaxCommits != 0 {
 		opts.CommitAll = true
 	}
+	if err := validateFilesOptions(opts); err != nil {
+		return nil, err
+	}
 	if err := validateInteractiveOptions(opts); err != nil {
 		return nil, err
 	}
@@ -212,6 +224,18 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.lintGates = gates
+
+	// Explicit file arguments (`gavel commit <files>`) define the commit set:
+	// reset the index and stage exactly those paths, then treat the pre-staged
+	// set as the source for every downstream flow. stageFiles(StageStaged) and
+	// stageCommitAllSource both no-op on a non-empty index, so no per-flow
+	// change is needed.
+	if len(opts.Files) > 0 {
+		if err := stageExplicitFiles(opts.WorkDir, opts.Files); err != nil {
+			return nil, err
+		}
+		opts.Stage = StageStaged
+	}
 
 	var (
 		result *Result
@@ -908,7 +932,7 @@ func BuildAgent(opts Options, model string) (clickyai.Agent, error) {
 
 	agent, err := newAgentFunc(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w (set ANTHROPIC_API_KEY / CLAUDE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)", ErrLLMUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrLLMUnavailable, err)
 	}
 	return agent, nil
 }

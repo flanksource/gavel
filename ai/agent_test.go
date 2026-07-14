@@ -1,8 +1,12 @@
 package ai
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"testing"
+
+	captainai "github.com/flanksource/captain/pkg/ai"
 )
 
 func TestNormalizeEnv_CopiesClaudeKeyToAnthropic(t *testing.T) {
@@ -83,6 +87,56 @@ func TestNormalizeEnv_NoKeyNoChange(t *testing.T) {
 		if got := os.Getenv(canonical); got != "" {
 			t.Errorf("%s = %q, want empty", canonical, got)
 		}
+	}
+}
+
+func TestNewProvider_ReportsBackendKeyAndSimilarEnvName(t *testing.T) {
+	clearAllKnownKeys(t)
+	t.Setenv("OPEN_AI_API_KEY", "must-not-leak")
+
+	_, err := NewProvider(AgentConfig{Model: "api:terra"})
+	if err == nil {
+		t.Fatal("expected missing OpenAI API key error")
+	}
+	message := err.Error()
+	for _, want := range []string{
+		`API key not found for backend "openai"`,
+		`model "api:terra"`,
+		"set OPENAI_API_KEY (also accepts OPENAI_KEY)",
+		"similar environment variable found: OPEN_AI_API_KEY (did you mean OPENAI_API_KEY?)",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error = %q, want %q", message, want)
+		}
+	}
+	if strings.Contains(message, "must-not-leak") {
+		t.Fatalf("error leaked environment value: %q", message)
+	}
+	if strings.Contains(message, "ANTHROPIC_API_KEY") || strings.Contains(message, "GEMINI_API_KEY") {
+		t.Fatalf("error contains unrelated provider keys: %q", message)
+	}
+	if !errors.Is(err, captainai.ErrNoAPIKey) {
+		t.Fatalf("error = %v, want ErrNoAPIKey", err)
+	}
+}
+
+func TestNewProvider_DoesNotSuggestKeyWhenConfigured(t *testing.T) {
+	clearAllKnownKeys(t)
+	t.Setenv("OPENAI_API_KEY", "configured")
+
+	provider, err := NewProvider(AgentConfig{Model: "api:terra"})
+	if err != nil {
+		t.Fatalf("NewProvider(api:terra) with OPENAI_API_KEY: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("NewProvider(api:terra) returned nil provider")
+	}
+}
+
+func TestWithCredentialHint_IgnoresNonCredentialErrors(t *testing.T) {
+	cause := errors.New("model unavailable")
+	if got := withCredentialHint(AgentConfig{Model: "api:terra"}, cause); got != cause {
+		t.Fatalf("non-credential error was decorated: %v", got)
 	}
 }
 

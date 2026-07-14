@@ -9,10 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/middleware"
+	_ "github.com/flanksource/captain/pkg/ai/provider"
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/collections"
 )
 
 // Type aliases to captain so existing call sites compile unchanged.
@@ -51,7 +56,11 @@ var normalizeOnce sync.Once
 // wrapper cannot express. NewAgent is the higher-level surface built on top.
 func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	return middleware.NewProvider(cfg.toCaptain())
+	provider, err := middleware.NewProvider(cfg.toCaptain())
+	if err != nil {
+		return nil, withCredentialHint(cfg, err)
+	}
+	return provider, nil
 }
 
 // NewAgent builds a captain-backed agent from cfg after normalizing env keys.
@@ -103,4 +112,139 @@ func normalizeEnv() {
 			}
 		}
 	}
+}
+
+func withCredentialHint(cfg AgentConfig, err error) error {
+	if !captainai.IsMissingAPIKey(err) {
+		return err
+	}
+	backend := credentialBackend(cfg)
+	canonical := captainai.AuthEnvVars(backend)
+	if len(canonical) == 0 {
+		return err
+	}
+
+	accepted := append([]string(nil), canonical...)
+	for _, name := range canonical {
+		accepted = appendUnique(accepted, envAliases[name]...)
+	}
+	hint := "set " + strings.Join(canonical, " or ")
+	aliases := difference(accepted, canonical)
+	if len(aliases) > 0 {
+		hint += " (also accepts " + strings.Join(aliases, " or ") + ")"
+	}
+	if suggestions := similarCredentialEnvVars(accepted); len(suggestions) > 0 {
+		parts := make([]string, len(suggestions))
+		for i, suggestion := range suggestions {
+			parts[i] = fmt.Sprintf("%s (did you mean %s?)", suggestion.found, suggestion.expected)
+		}
+		hint += "; similar environment variable"
+		if len(parts) > 1 {
+			hint += "s"
+		}
+		hint += " found: " + strings.Join(parts, ", ")
+	}
+	return &credentialHintError{
+		cause:   err,
+		model:   cfg.Model,
+		backend: backend,
+		hint:    hint,
+	}
+}
+
+type credentialHintError struct {
+	cause   error
+	model   string
+	backend captainai.Backend
+	hint    string
+}
+
+func (e *credentialHintError) Error() string {
+	return fmt.Sprintf("API key not found for backend %q (model %q; %s)", e.backend, e.model, e.hint)
+}
+
+func (e *credentialHintError) Unwrap() error { return e.cause }
+
+func credentialBackend(cfg AgentConfig) captainai.Backend {
+	if backend := api.Backend(cfg.Backend); backend.Valid() {
+		return backend
+	}
+	resolved, resolveErr := captainai.ResolveModelSelectors(api.Model{Name: cfg.Model})
+	if resolveErr == nil && resolved.Backend.Valid() {
+		return resolved.Backend
+	}
+	if backend, inferErr := captainai.InferBackend(cfg.Model); inferErr == nil {
+		return backend
+	}
+	return ""
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]bool, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			values = append(values, value)
+			seen[value] = true
+		}
+	}
+	return values
+}
+
+func difference(values, excluded []string) []string {
+	skip := make(map[string]bool, len(excluded))
+	for _, value := range excluded {
+		skip[value] = true
+	}
+	var out []string
+	for _, value := range values {
+		if !skip[value] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+type credentialEnvSuggestion struct {
+	found    string
+	expected string
+	distance int
+}
+
+func similarCredentialEnvVars(expected []string) []credentialEnvSuggestion {
+	expectedSet := make(map[string]bool, len(expected))
+	for _, name := range expected {
+		expectedSet[name] = true
+	}
+
+	var suggestions []credentialEnvSuggestion
+	for _, item := range os.Environ() {
+		name, _, _ := strings.Cut(item, "=")
+		if expectedSet[name] {
+			continue
+		}
+		closest := credentialEnvSuggestion{found: name, distance: -1}
+		for _, candidate := range expected {
+			distance := collections.Levenshtein(strings.ToUpper(name), candidate)
+			if closest.distance < 0 || distance < closest.distance {
+				closest.expected = candidate
+				closest.distance = distance
+			}
+		}
+		if closest.distance >= 0 && closest.distance <= 2 {
+			suggestions = append(suggestions, closest)
+		}
+	}
+	sort.Slice(suggestions, func(i, j int) bool {
+		if suggestions[i].distance != suggestions[j].distance {
+			return suggestions[i].distance < suggestions[j].distance
+		}
+		return suggestions[i].found < suggestions[j].found
+	})
+	if len(suggestions) > 3 {
+		suggestions = suggestions[:3]
+	}
+	return suggestions
 }
