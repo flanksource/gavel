@@ -2,13 +2,36 @@ package cache
 
 import (
 	"context"
+	"net"
 	nethttp "net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type publicTestTransport struct {
+	target *url.URL
+	base   nethttp.RoundTripper
+}
+
+func (t publicTestTransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = t.target.Scheme
+	clone.URL.Host = t.target.Host
+	return t.base.RoundTrip(clone)
+}
+
+func publicTestClient(t *testing.T, srv *httptest.Server) (*nethttp.Client, string) {
+	t.Helper()
+	target, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	client := srv.Client()
+	client.Transport = publicTestTransport{target: target, base: client.Transport}
+	return client, "http://example.com"
+}
 
 func TestNormalizeHomepage(t *testing.T) {
 	tests := []struct {
@@ -36,6 +59,83 @@ func TestNormalizeHomepage(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestValidateFaviconURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{name: "public hostname", url: "https://example.com/icon.png"},
+		{name: "public IP", url: "http://8.8.8.8/icon.png"},
+		{name: "loopback IPv4", url: "http://127.0.0.1/icon.png", wantErr: true},
+		{name: "loopback IPv6", url: "http://[::1]/icon.png", wantErr: true},
+		{name: "private IPv4", url: "http://10.0.0.1/icon.png", wantErr: true},
+		{name: "private IPv6", url: "http://[fd00::1]/icon.png", wantErr: true},
+		{name: "link local", url: "http://169.254.169.254/latest/meta-data", wantErr: true},
+		{name: "carrier grade NAT", url: "http://100.64.0.1/icon.png", wantErr: true},
+		{name: "unsupported scheme", url: "file:///etc/passwd", wantErr: true},
+		{name: "user information", url: "https://user@example.com/icon.png", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateFaviconURL(tc.url)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNewFaviconHTTPClient_BlocksRestrictedAddress(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		hits++
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer srv.Close()
+
+	target, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	for _, targetURL := range []string{srv.URL, "http://localhost:" + target.Port()} {
+		_, err := newFaviconHTTPClient().Get(targetURL)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "restricted address")
+	}
+	assert.Zero(t, hits)
+}
+
+func TestNewFaviconHTTPClient_BlocksRestrictedRedirect(t *testing.T) {
+	client := newFaviconHTTPClient()
+	target, err := url.Parse("http://127.0.0.1/favicon.ico")
+	require.NoError(t, err)
+
+	err = client.CheckRedirect(&nethttp.Request{URL: target}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restricted address")
+}
+
+func TestIsRestrictedFaviconIP(t *testing.T) {
+	tests := map[string]bool{
+		"8.8.8.8":         false,
+		"2001:4860::8888": false,
+		"0.0.0.0":         true,
+		"127.0.0.1":       true,
+		"10.0.0.1":        true,
+		"169.254.1.1":     true,
+		"224.0.0.1":       true,
+		"100.64.0.1":      true,
+		"::1":             true,
+		"fd00::1":         true,
+	}
+	for raw, want := range tests {
+		t.Run(raw, func(t *testing.T) {
+			assert.Equal(t, want, isRestrictedFaviconIP(net.ParseIP(raw)))
 		})
 	}
 }
@@ -81,8 +181,8 @@ func TestParseLinkCandidates_PicksLargestFirst(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := srv.Client()
-	got, err := parseLinkCandidates(context.Background(), client, srv.URL)
+	client, homepage := publicTestClient(t, srv)
+	got, err := parseLinkCandidates(context.Background(), client, homepage)
 	require.NoError(t, err)
 
 	// Expect ordering: 180x180, 32x32, 16x16. Stylesheet must be absent.
@@ -111,7 +211,8 @@ func TestDiscoverFavicon_FallsBackToFaviconIco(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	iconURL, data, mime, err := discoverFavicon(context.Background(), srv.URL)
+	client, homepage := publicTestClient(t, srv)
+	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, iconHits, "/favicon.ico should be fetched as fallback")
 	assert.Contains(t, iconURL, "/favicon.ico")
@@ -140,7 +241,8 @@ func TestDiscoverFavicon_PrefersLinkTagOverFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	iconURL, data, mime, err := discoverFavicon(context.Background(), srv.URL)
+	client, homepage := publicTestClient(t, srv)
+	iconURL, data, mime, err := discoverFaviconWithClient(context.Background(), client, homepage)
 	require.NoError(t, err)
 	assert.Equal(t, 1, explicitHits)
 	assert.Equal(t, 0, fallbackHits, "explicit link must win; fallback never hit")
@@ -156,6 +258,7 @@ func TestFetchIcon_RejectsHTMLResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := fetchIcon(context.Background(), srv.Client(), srv.URL+"/favicon.ico")
+	client, homepage := publicTestClient(t, srv)
+	_, _, err := fetchIcon(context.Background(), client, homepage+"/favicon.ico")
 	assert.Error(t, err, "html content-type must be rejected")
 }

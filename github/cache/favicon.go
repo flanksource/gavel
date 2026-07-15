@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +38,93 @@ const (
 	faviconMaxBytes    = 64 * 1024
 	faviconHTTPTimeout = 5 * time.Second
 )
+
+var faviconHTTPURLPattern = regexp.MustCompile(`^https?://`)
+
+// newFaviconHTTPClient owns the network boundary for favicon discovery. It
+// bypasses proxies and pins each connection to addresses checked after DNS
+// resolution, preventing redirects and DNS rebinding from reaching internal
+// services.
+func newFaviconHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dialPublicAddress
+
+	return &http.Client{
+		Timeout:   faviconHTTPTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			_, err := validateFaviconURL(req.URL.String())
+			return err
+		},
+	}
+}
+
+func validateFaviconURL(raw string) (string, error) {
+	if !faviconHTTPURLPattern.MatchString(raw) {
+		return "", errors.New("favicon URL must be absolute HTTP or HTTPS")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse favicon URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("unsupported favicon URL scheme %q", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return "", errors.New("favicon URL missing host")
+	}
+	if u.User != nil {
+		return "", errors.New("favicon URL must not contain user information")
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && isRestrictedFaviconIP(ip) {
+		return "", fmt.Errorf("favicon URL resolves to restricted address %s", ip)
+	}
+	return u.String(), nil
+}
+
+func dialPublicAddress(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parse favicon address %q: %w", address, err)
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve favicon host %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("resolve favicon host %q: no addresses", host)
+	}
+	for _, ip := range ips {
+		if isRestrictedFaviconIP(ip) {
+			return nil, fmt.Errorf("favicon host %q resolves to restricted address %s", host, ip)
+		}
+	}
+
+	dialer := &net.Dialer{Timeout: faviconHTTPTimeout}
+	var dialErrs []error
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		dialErrs = append(dialErrs, err)
+	}
+	return nil, fmt.Errorf("dial favicon host %q: %w", host, errors.Join(dialErrs...))
+}
+
+func isRestrictedFaviconIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+		if v4[0] == 100 && v4[1]&0xc0 == 64 {
+			return true
+		}
+	}
+	return !ip.IsGlobalUnicast() || ip.IsPrivate()
+}
 
 // normalizeHomepage reduces a homepage URL to scheme://host (lowercased host,
 // no path, no trailing slash) so that multiple repos pointing at the same site
@@ -166,8 +255,10 @@ func (s *Store) saveFavicon(homepage, iconURL string, data []byte, mime string) 
 // icon URL alongside its bytes so the cache can record where the icon came
 // from (useful for debugging).
 func discoverFavicon(ctx context.Context, homepage string) (iconURL string, data []byte, mime string, err error) {
-	client := &http.Client{Timeout: faviconHTTPTimeout}
+	return discoverFaviconWithClient(ctx, newFaviconHTTPClient(), homepage)
+}
 
+func discoverFaviconWithClient(ctx context.Context, client *http.Client, homepage string) (iconURL string, data []byte, mime string, err error) {
 	candidates, htmlErr := parseLinkCandidates(ctx, client, homepage)
 	if htmlErr != nil {
 		logger.Debugf("favicon html fetch %s: %v", homepage, htmlErr)
@@ -204,7 +295,11 @@ type iconCandidate struct {
 // candidate URLs ordered by declared size (largest first). Missing size hints
 // sort last so "any" / default icons are tried after explicit high-res ones.
 func parseLinkCandidates(ctx context.Context, client *http.Client, homepage string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, homepage, nil)
+	safeURL, err := validateFaviconURL(homepage)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +413,11 @@ func sortBySize(cands []iconCandidate) {
 }
 
 func fetchIcon(ctx context.Context, client *http.Client, iconURL string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, iconURL, nil)
+	safeURL, err := validateFaviconURL(iconURL)
+	if err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
