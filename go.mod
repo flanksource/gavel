@@ -45,7 +45,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/timberio/go-datemath v0.1.0
 	github.com/yuin/goldmark v1.7.16
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/mod v0.35.0
 	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.45.0
