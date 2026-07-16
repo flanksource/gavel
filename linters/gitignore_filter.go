@@ -6,26 +6,30 @@ import (
 )
 
 // FilterViolationsByGitIgnoreInResults removes gitignored violations from each
-// result in place, using each result's own WorkDir to discover .gitignore
-// patterns. Returns the total number of filtered violations.
-func FilterViolationsByGitIgnoreInResults(results []*LinterResult) int {
+// result in place, using each result's own WorkDir to resolve every Git exclude
+// source. Returns the total number of filtered violations.
+func FilterViolationsByGitIgnoreInResults(results []*LinterResult) (int, error) {
 	filtered := 0
 	for _, result := range results {
 		if result == nil || len(result.Violations) == 0 {
 			continue
 		}
 		before := len(result.Violations)
-		result.Violations = FilterViolationsByGitIgnore(result.Violations, result.WorkDir)
+		violations, err := FilterViolationsByGitIgnore(result.Violations, result.WorkDir)
+		if err != nil {
+			return 0, err
+		}
+		result.Violations = violations
 		filtered += before - len(result.Violations)
 	}
-	return filtered
+	return filtered, nil
 }
 
 // FilterViolationsByGitIgnore removes violations whose File is matched by
-// .gitignore patterns found in the git repository containing workDir.
-func FilterViolationsByGitIgnore(violations []models.Violation, workDir string) []models.Violation {
+// Git's repository, info, global, or XDG exclude rules for workDir.
+func FilterViolationsByGitIgnore(violations []models.Violation, workDir string) ([]models.Violation, error) {
 	if len(violations) == 0 {
-		return violations
+		return violations, nil
 	}
 
 	seen := make(map[string]bool, len(violations))
@@ -37,16 +41,16 @@ func FilterViolationsByGitIgnore(violations []models.Violation, workDir string) 
 		}
 	}
 
-	kept := make(map[string]bool, len(paths))
-	for _, p := range utils.FilterGitIgnored(paths, workDir) {
-		kept[p] = true
+	ignored, err := utils.GitIgnoredPaths(paths, workDir)
+	if err != nil {
+		return nil, err
 	}
 
 	var result []models.Violation
 	for _, v := range violations {
-		if v.File == "" || kept[v.File] {
+		if _, excluded := ignored[v.File]; v.File == "" || !excluded {
 			result = append(result, v)
 		}
 	}
-	return result
+	return result, nil
 }

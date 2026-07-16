@@ -215,7 +215,9 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 		}
 	}
 
-	applyPostLintFilters(allResults, opts.WorkDir, opts.Files)
+	if err := applyPostLintFilters(allResults, opts.WorkDir, opts.Files); err != nil {
+		return nil, err
+	}
 	return allResults, nil
 }
 
@@ -226,27 +228,32 @@ func Execute(opts Options) ([]*linters.LinterResult, error) {
 // entries and to locate the layered .gavel.yaml; each result's own WorkDir is
 // used for gitignore discovery and absolute-path relativization inside
 // FilterIgnoredViolations.
-func applyPostLintFilters(results []*linters.LinterResult, workDir string, files []string) {
+func applyPostLintFilters(results []*linters.LinterResult, workDir string, files []string) error {
 	if len(results) == 0 {
-		return
+		return nil
 	}
 	if dropped := linters.FilterViolationsByUserScope(results, workDir, files); dropped > 0 {
 		logger.Infof("Filtered %d violations outside requested paths in %s", dropped, workDir)
 	}
-	if filtered := linters.FilterViolationsByGitIgnoreInResults(results); filtered > 0 {
+	filtered, err := linters.FilterViolationsByGitIgnoreInResults(results)
+	if err != nil {
+		return fmt.Errorf("filter gitignored lint violations: %w", err)
+	}
+	if filtered > 0 {
 		logger.Infof("Filtered %d gitignored violations in %s", filtered, workDir)
 	}
 	if workDir == "" {
-		return
+		return nil
 	}
 	cfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
 		logger.Warnf("Failed to load .gavel.yaml for %s: %v", workDir, err)
-		return
+		return nil
 	}
 	if filtered := linters.FilterIgnoredViolations(results, cfg.Lint.Ignore); filtered > 0 {
 		logger.Infof("Filtered %d ignored violations in %s", filtered, workDir)
 	}
+	return nil
 }
 
 // Group is one git root and the files (relative to it) scoped to that root.

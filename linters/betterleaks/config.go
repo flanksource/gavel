@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/verify"
@@ -140,8 +142,24 @@ func appendExtraConfigs(acc []string, baseDir string, extras []string) []string 
 //   - otherwise parses each TOML, merges them additively (dedupe rules by
 //     ID, union disabledRules, append allowlists, later files win for
 //     scalars), writes the result to <workDir>/.tmp/betterleaks.toml, and
-//     returns that path.
-func ResolveConfig(workDir string, configs []string) (string, error) {
+//     returns that path;
+//   - when ignored paths are present, wraps the resolved config with a Git
+//     ignore path allowlist in <workDir>/.tmp/betterleaks-scan.toml.
+type ResolveConfigOptions struct {
+	WorkDir      string
+	Configs      []string
+	IgnoredPaths []string
+}
+
+func ResolveConfig(opts ResolveConfigOptions) (string, error) {
+	base, err := resolveBaseConfig(opts.WorkDir, opts.Configs)
+	if err != nil || len(opts.IgnoredPaths) == 0 {
+		return base, err
+	}
+	return writeScanConfig(opts, base)
+}
+
+func resolveBaseConfig(workDir string, configs []string) (string, error) {
 	if len(configs) == 0 {
 		return "", nil
 	}
@@ -175,6 +193,53 @@ func ResolveConfig(workDir string, configs []string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", out, err)
 	}
 	return out, nil
+}
+
+func writeScanConfig(opts ResolveConfigOptions, base string) (string, error) {
+	cfg := tomlConfig{
+		Allowlists: []tomlAllowlist{{
+			Description: "Paths ignored by Git",
+			Paths:       ignoredPathRegexes(opts.IgnoredPaths),
+		}},
+	}
+	if base == "" {
+		cfg.Extend.UseDefault = true
+	} else {
+		cfg.Extend.Path = base
+	}
+
+	tmpDir := filepath.Join(opts.WorkDir, ".tmp")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return "", fmt.Errorf("create .tmp: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return "", fmt.Errorf("encode betterleaks scan config: %w", err)
+	}
+	out := filepath.Join(tmpDir, "betterleaks-scan.toml")
+	if err := os.WriteFile(out, buf.Bytes(), 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", out, err)
+	}
+	return out, nil
+}
+
+func ignoredPathRegexes(paths []string) []string {
+	regexes := make([]string, 0, len(paths))
+	for _, path := range paths {
+		directory := strings.HasSuffix(path, "/")
+		path = strings.TrimSuffix(filepath.ToSlash(path), "/")
+		if path == "" {
+			continue
+		}
+		pattern := "^" + regexp.QuoteMeta(path)
+		if directory {
+			pattern += "(?:/|$)"
+		} else {
+			pattern += "$"
+		}
+		regexes = append(regexes, pattern)
+	}
+	return regexes
 }
 
 // tomlConfig is an INTERNAL minimal mirror of the gitleaks/betterleaks TOML

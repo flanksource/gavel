@@ -39,7 +39,7 @@ type Options struct {
 	OutputTee    io.Writer       `json:"-" yaml:"-"`
 	Context      context.Context `json:"-" yaml:"-"`
 
-	AIFix         bool `flag:"ai-fix" yaml:"ai-fix,omitempty" help:"Invoke the AI configured by 'captain configure' to fix violations and re-lint until clean (or bounded by --ai-fix-max-iterations / --budget)"`
+	AIFix         bool `flag:"ai-fix" yaml:"ai-fix,omitempty" help:"Use lint.fix from Gavel config to repair violations and re-lint until clean; --model/--budget override it"`
 	AIFixMaxIters int  `flag:"ai-fix-max-iterations" yaml:"ai-fix-max-iterations,omitempty" help:"Max AI→re-lint cycles" default:"3"`
 	Yes           bool `flag:"yes" short:"y" yaml:"yes,omitempty" help:"Assume yes: auto-AI-fix lint violations (implies --ai-fix). Does not enable --triage."`
 
@@ -47,7 +47,8 @@ type Options struct {
 	// --budget, --debug, --max-tokens, --temperature, --permission-mode,
 	// --edit, --allowed-tools, --disallowed-tools, --mcp, --hooks,
 	// --skills, --skill-dir, --user, --project, --memory, --bare.
-	// Defaults overlay from ~/.captain.yaml via captain configure.
+	// Explicit flags override lint.fix; Captain supplies any remaining runtime
+	// defaults.
 	captaincli.AIRuntimeOptions
 }
 
