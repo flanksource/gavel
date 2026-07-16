@@ -40,10 +40,6 @@ type FixtureAIConfig struct {
 	MaxConcurrent int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
 	CacheTTL      time.Duration `yaml:"cacheTTL,omitempty" json:"cacheTTL,omitempty"`
 	NoCache       bool          `yaml:"noCache,omitempty" json:"noCache,omitempty"`
-	// SchemaCEL is a CEL expression (the `schema.cel` key) that generates the JSON
-	// output schema from the parsed fixture outline (criteria, checks,
-	// rating_dimensions, issue_aware). Empty uses verify.DefaultSchemaCEL.
-	SchemaCEL string `yaml:"schema.cel,omitempty" json:"schema.cel,omitempty"`
 }
 
 // ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig, falling back
@@ -87,6 +83,16 @@ type FixtureVerifyConfig struct {
 type ChecklistItem struct {
 	Text    string `json:"text"`
 	Checked bool   `json:"checked"`
+}
+
+// ChecklistResult is the per-criterion verdict an AI step returns: whether the
+// change satisfies the criterion, with a one-line justification. It is the
+// ai-step's structured output — one entry per ChecklistItem — and is surfaced to
+// the definition-of-done predicate as the `results.checklist` list.
+type ChecklistResult struct {
+	Item    string `json:"item" description:"The acceptance-criterion text, echoed verbatim."`
+	Passed  bool   `json:"passed" description:"True only when the change clearly satisfies this criterion."`
+	Message string `json:"message,omitempty" description:"One-line justification: the evidence for a pass or the gap for a fail."`
 }
 
 // AIStepSpec carries the parsed inputs for an AI verification step: the optional
