@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, type ReactNode, type ComponentType } from 'r
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
 import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
-import { PRActions } from './PRActions';
+import { PRActions, type ExtraAction } from './PRActions';
 import { RelativeTime } from './RelativeTime';
 import { ansiToHtml, stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
@@ -21,6 +21,7 @@ import {
   UiChevronRight,
   UiChevronUp,
   UiClock,
+  UiClose,
   UiComment,
   UiCopy,
   UiDebugStepOver,
@@ -43,6 +44,8 @@ import { VercelIcon } from '../icons/VercelIcon';
 import { Button } from '@flanksource/clicky-ui/components';
 import { GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitDiffPayload, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
+import { copyText } from '../clipboard';
+import { useContainerWidth } from '../useContainerWidth';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -144,37 +147,66 @@ interface Props {
   // onActionDone fires after a merge/approve/auto-merge action lands so the host
   // can re-fetch the PR detail and reflect the new state.
   onActionDone?: () => void;
+  // onClose, when set, renders a close button in the header that dismisses the
+  // panel. Only the desktop split-pane layout wires it; the menu-bar view has
+  // its own back button and leaves this unset.
+  onClose?: () => void;
 }
 
 type DetailTab = 'overview' | 'commits' | 'files';
 
-export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, onActionDone }: Props) {
+export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, onActionDone, onClose }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const workspaces = useMemo(() => (projects ?? []).filter(p => !!p.dir), [projects]);
+  const [containerRef, containerWidth] = useContainerWidth<HTMLDivElement>();
+
+  // Below this the header can't lay Approve / Merge / Update / New todo out
+  // beside the title, so they collapse into an overflow dropdown. The menu-bar
+  // window is 760 wide by default (min 520) and the desktop split pane can be
+  // dragged narrower still, so this tracks the panel's own width, not the viewport.
+  const collapsedActions = containerWidth > 0 && containerWidth < 560;
+  const extraActions = useMemo<ExtraAction[]>(
+    () => (workspaces.length > 0
+      ? [{
+          label: 'New todo',
+          icon: UiAdd,
+          onClick: () => setShowCreate(true),
+          title: "Create a todo from this PR's failures and comments",
+        }]
+      : []),
+    [workspaces.length],
+  );
 
   const info = detail?.pr;
   const commits = info?.prCommits ?? [];
   const files = info?.prFiles ?? [];
 
   return (
-    <div className="p-4 bg-card h-full overflow-y-auto">
+    <div ref={containerRef} className="p-4 bg-card h-full overflow-y-auto">
       <PRHeader
         pr={pr}
         detail={detail}
         action={
           <div className="flex items-center gap-2">
-            <PRActions pr={pr} detail={detail} onChanged={onActionDone} />
-            {workspaces.length > 0 && (
+            <PRActions
+              pr={pr}
+              detail={detail}
+              onChanged={onActionDone}
+              collapsed={collapsedActions}
+              extras={extraActions}
+            />
+            {onClose && (
               <Button
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 gap-1 px-2 text-xs"
-                onClick={() => setShowCreate(true)}
-                title="Create a todo from this PR's failures and comments"
+                variant="ghost"
+                size="icon"
+                type="button"
+                onClick={onClose}
+                title="Close"
+                aria-label="Close pull request details"
+                className="h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
               >
-                <UiAdd className="text-xs" />
-                New todo
+                <UiClose className="text-base" />
               </Button>
             )}
           </div>
@@ -1201,48 +1233,58 @@ function Section({ title, children, actions }: { title: string; children: any; a
   );
 }
 
-function SectionActionsBar({ actions, title }: { actions: SectionActions; title: string }) {
-  const [copied, flashCopied] = useTimeoutFlash<'text' | 'json' | 'markdown' | null>(null, 1200);
+type CopyKind = 'text' | 'markdown' | 'json';
+type CopyFlash = { kind: CopyKind; status: 'copied' | 'error' };
 
-  const flash = (kind: 'text' | 'json' | 'markdown', content: string) => {
-    navigator.clipboard.writeText(content).then(() => flashCopied(kind)).catch(() => {});
+function SectionActionsBar({ actions, title }: { actions: SectionActions; title: string }) {
+  const [flash, setFlash] = useTimeoutFlash<CopyFlash | null>(null, 1200);
+
+  const copy = (kind: CopyKind, content: string) => {
+    copyText(content)
+      .then(() => setFlash({ kind, status: 'copied' }))
+      .catch(() => setFlash({ kind, status: 'error' }));
   };
 
   return (
     <div className="flex items-center gap-1 text-muted-foreground">
       {actions.text && (
-        <Button
-          type="button"
-          variant="ghost"
-          title={copied === 'text' ? 'Copied!' : `Copy ${title} as text`}
-          className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'text' ? 'text-green-600' : ''}`}
-          onClick={(e) => { e.stopPropagation(); flash('text', actions.text!()); }}
-        >
-          {copied === 'text' ? <UiCheck className="text-sm" /> : <UiCopy className="text-sm" />}
-        </Button>
+        <CopyActionButton kind="text" idle={UiCopy} label={`Copy ${title} as text`} flash={flash}
+          onCopy={() => copy('text', actions.text!())} />
       )}
       {actions.markdown && (
-        <Button
-          type="button"
-          variant="ghost"
-          title={copied === 'markdown' ? 'Copied!' : `Copy ${title} as Markdown`}
-          className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'markdown' ? 'text-green-600' : ''}`}
-          onClick={(e) => { e.stopPropagation(); flash('markdown', actions.markdown!()); }}
-        >
-          {copied === 'markdown' ? <UiCheck className="text-sm" /> : <UiMarkdown className="text-sm" />}
-        </Button>
+        <CopyActionButton kind="markdown" idle={UiMarkdown} label={`Copy ${title} as Markdown`} flash={flash}
+          onCopy={() => copy('markdown', actions.markdown!())} />
       )}
       {actions.json && (
-        <Button
-          type="button"
-          variant="ghost"
-          title={copied === 'json' ? 'Copied!' : `Copy ${title} as JSON`}
-          className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${copied === 'json' ? 'text-green-600' : ''}`}
-          onClick={(e) => { e.stopPropagation(); flash('json', JSON.stringify(actions.json!(), null, 2)); }}
-        >
-          {copied === 'json' ? <UiCheck className="text-sm" /> : <UiJson className="text-sm" />}
-        </Button>
+        <CopyActionButton kind="json" idle={UiJson} label={`Copy ${title} as JSON`} flash={flash}
+          onCopy={() => copy('json', JSON.stringify(actions.json!(), null, 2))} />
       )}
     </div>
+  );
+}
+
+function CopyActionButton({ kind, idle: Idle, label, flash, onCopy }: {
+  kind: CopyKind;
+  idle: ComponentType<IconProps>;
+  label: string;
+  flash: CopyFlash | null;
+  onCopy: () => void;
+}) {
+  const status = flash?.kind === kind ? flash.status : null;
+  const tone = status === 'copied' ? 'text-green-600' : status === 'error' ? 'text-red-600' : '';
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      title={status === 'copied' ? 'Copied!' : status === 'error' ? 'Copy failed' : label}
+      className={`p-0.5 rounded hover:bg-muted hover:text-foreground h-auto ${tone}`}
+      onClick={(e) => { e.stopPropagation(); onCopy(); }}
+    >
+      {status === 'copied'
+        ? <UiCheck className="text-sm" />
+        : status === 'error'
+          ? <UiCancel className="text-sm" />
+          : <Idle className="text-sm" />}
+    </Button>
   );
 }

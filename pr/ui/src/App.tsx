@@ -34,10 +34,11 @@ import {
   type Tab,
 } from './routes';
 import { copyCurrentViewForAgent, downloadCurrentView } from './export';
+import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiArrowLeft, UiBeaker, UiCheck, UiClose, UiCog, UiCopy, UiGitPr, UiJson, UiMarkdown } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiArrowLeft, UiBeaker, UiCheck, UiClose, UiCog, UiCopy, UiGitPr, UiJson, UiLink, UiMarkdown } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import { Spinner } from './icons/Spinner';
@@ -232,6 +233,18 @@ export function App() {
   // the menu-bar as always active — the open SSE stream is what keeps the backend
   // sampling — while the desktop tab keeps the pause-on-hide optimization.
   const streamsActive = visible || isMenubar;
+
+  // The native menu-bar webview is a small always-on-top popover, so shrink the
+  // root font-size a notch: Tailwind's text and spacing are rem-based, so the
+  // whole compact window scales down together and fits more without restyling
+  // every element. Scoped to the webview — the desktop app keeps 16px.
+  useEffect(() => {
+    if (!isMenubar) return;
+    const root = document.documentElement;
+    const previous = root.style.fontSize;
+    root.style.fontSize = '13px';
+    return () => { root.style.fontSize = previous; };
+  }, [isMenubar]);
 
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
@@ -564,6 +577,14 @@ export function App() {
     setDetailLoading(false);
   }
 
+  // Closing the desktop detail pane tears down the stream + state and drops the
+  // selection from the URL, so the pane returns to its empty state and browser
+  // back reopens the PR (selecting a PR pushes history the same way).
+  function closeSelectedPR() {
+    clearSelectedPR();
+    commitRoute({ ...routeState, selectedPath: '' });
+  }
+
   function handleFiltersChange(next: Filters) {
     commitRoute({ ...routeState, filters: next });
   }
@@ -764,7 +785,7 @@ export function App() {
             }
             right={
               selected ? (
-                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} onActionDone={() => { if (selected) loadPR(selected); }} />
+                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   <div className="text-center">
@@ -874,6 +895,39 @@ function ProcessesPage({
   );
 }
 
+// CopyLinkButton copies a PR's URL to the clipboard. It uses copyText so it
+// works inside the native menu-bar WKWebView, where navigator.clipboard is
+// denied and the async Clipboard API silently fails.
+function CopyLinkButton({ url }: { url: string }) {
+  const { copyState, beginCopy, resetCopyFeedback } = useCopyFeedback();
+  const copied = copyState === 'copied';
+  const errored = copyState === 'error';
+
+  async function onCopy() {
+    beginCopy();
+    try {
+      await copyText(url);
+      resetCopyFeedback('copied');
+    } catch {
+      resetCopyFeedback('error');
+    }
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      type="button"
+      onClick={onCopy}
+      className={`h-8 w-8 rounded-md hover:bg-muted hover:text-foreground ${copied ? 'text-green-600' : errored ? 'text-red-600' : 'text-muted-foreground'}`}
+      title={copied ? 'Link copied' : errored ? 'Copy failed' : 'Copy link to this PR'}
+      aria-label="Copy link to this PR"
+    >
+      {copied ? <UiCheck className="text-base" /> : <UiLink className="text-base" />}
+    </Button>
+  );
+}
+
 function MenubarView({
   prs,
   selected,
@@ -950,9 +1004,12 @@ function MenubarView({
               <div className="truncate text-[11px] text-muted-foreground">{selected.title}</div>
             </div>
           </div>
-          <div className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+          <div className="flex shrink-0 items-center gap-1">
+            <CopyLinkButton url={selected.url} />
+            <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+          </div>
         </div>
-        <div className="h-[calc(100vh-44px)] overflow-hidden">
+        <div className="h-[calc(100vh-2.75rem)] overflow-hidden">
           <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onActionDone={() => { if (selected) onSelect(selected); }} />
         </div>
       </div>
