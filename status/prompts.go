@@ -15,9 +15,8 @@ func Prompts() []prompts.Prompt {
 		ID:          prompts.StatusSummary,
 		Title:       "Status file summary",
 		Description: "One-line AI summary of each changed file for `gavel status --ai`. Variable: {{details}} (the staged/unstaged diff or file contents). Output schema is fixed ({summary}).",
-		ConfigPath:  "status.summaryPrompt",
+		ConfigPath:  "status.summary",
 		Default:     fileSummaryPromptTemplate,
-		ModelPolicy: prompts.ModelFromDefault,
 	}}
 }
 
@@ -29,5 +28,5 @@ func ResolveSummaryPrompt(workDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load .gavel.yaml for status summary prompt: %w", err)
 	}
-	return cfg.Status.SummaryPrompt.Resolve(workDir, fileSummaryPromptTemplate)
+	return cfg.Status.Summary.TemplateSource(workDir, fileSummaryPromptTemplate)
 }

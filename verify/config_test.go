@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,7 +129,7 @@ func TestLoadGavelConfig_WithLintIgnore(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
-	cfgData := []byte(`verify:
+	cfgData := []byte(`ai:
   model: gemini
 lint:
   ignore:
@@ -142,7 +143,7 @@ lint:
 	cfg, err := LoadGavelConfig(dir)
 	require.NoError(t, err)
 
-	assert.Equal(t, "gemini", cfg.Verify.Model)
+	assert.Equal(t, "gemini", cfg.AI.Model.Name)
 	assert.Len(t, cfg.Lint.Ignore, 2)
 	assert.Equal(t, "errcheck", cfg.Lint.Ignore[0].Rule)
 	assert.Equal(t, "golangci-lint", cfg.Lint.Ignore[0].Source)
@@ -154,7 +155,7 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := GavelConfig{
-		Verify: VerifyConfig{Model: "claude"},
+		AI: api.Spec{Model: api.Model{Name: "claude"}},
 		Lint: LintConfig{
 			Ignore: []LintIgnoreRule{
 				{Rule: "errcheck", Source: "golangci-lint"},
@@ -169,7 +170,7 @@ func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	loaded, err := LoadGavelConfig(dir)
 	require.NoError(t, err)
 
-	assert.Equal(t, cfg.Verify.Model, loaded.Verify.Model)
+	assert.Equal(t, cfg.AI.Model.Name, loaded.AI.Model.Name)
 	assert.Equal(t, cfg.Lint.Ignore, loaded.Lint.Ignore)
 }
 
@@ -268,18 +269,21 @@ func TestMergeLintConfig(t *testing.T) {
 	enabledFalse := false
 	enabledTrue := true
 	base := LintConfig{
+		Fix:    PromptSpec{Spec: api.Spec{Model: api.Model{Name: "agent:sonnet"}}},
 		Ignore: []LintIgnoreRule{{Rule: "errcheck"}},
 		Linters: map[string]LintLinterConfig{
 			"jscpd": {Enabled: &enabledFalse},
 		},
 	}
 	override := LintConfig{
+		Fix:    PromptSpec{Spec: api.Spec{Model: api.Model{Name: "agent:opus"}}},
 		Ignore: []LintIgnoreRule{{Rule: "unused", Source: "ruff"}},
 		Linters: map[string]LintLinterConfig{
 			"jscpd": {Enabled: &enabledTrue},
 		},
 	}
 	merged := MergeLintConfig(base, override)
+	assert.Equal(t, "agent:opus", merged.Fix.Model.Name)
 	assert.Len(t, merged.Ignore, 2)
 	assert.Equal(t, "errcheck", merged.Ignore[0].Rule)
 	assert.Equal(t, "unused", merged.Ignore[1].Rule)
@@ -309,9 +313,7 @@ func TestLoadGavelConfig_WithPushHooksAndSSH(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 
-	cfgData := []byte(`verify:
-  model: claude
-pre:
+	cfgData := []byte(`pre:
   - name: deps
     run: make deps
   - run: echo warming
@@ -476,8 +478,8 @@ func TestSaveGavelConfig_RoundTripPreservesPreAndSSH(t *testing.T) {
     run: make tidy
 ssh:
   cmd: make all
-verify:
-  model: claude
+commit:
+  maxCommits: 7
 `)
 	path := filepath.Join(dir, ".gavel.yaml")
 	require.NoError(t, os.WriteFile(path, original, 0o644))
@@ -493,7 +495,7 @@ verify:
 	assert.Contains(t, body, "name: deps")
 	assert.Contains(t, body, "run: make tidy")
 	assert.Contains(t, body, "cmd: make all")
-	assert.Contains(t, body, "model: claude")
+	assert.Contains(t, body, "maxCommits: 7")
 }
 
 func TestMergeSecretsConfig(t *testing.T) {
@@ -550,28 +552,29 @@ func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
 		assert.Equal(t, CheckMode("skip"), out.Precommit.Mode)
 	})
 
-	t.Run("linkedDeps mode override wins when non-empty", func(t *testing.T) {
-		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "prompt"}}
-		out := MergeCommitConfig(base, CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "fail"}})
-		assert.Equal(t, CheckMode("fail"), out.LinkedDeps.Mode)
+	t.Run("maxCommits override wins when non-zero", func(t *testing.T) {
+		base := CommitConfig{MaxCommits: 3}
+		out := MergeCommitConfig(base, CommitConfig{MaxCommits: 9})
+		assert.Equal(t, 9, out.MaxCommits)
 	})
 
-	t.Run("linkedDeps empty override preserves base mode", func(t *testing.T) {
-		base := CommitConfig{LinkedDeps: LinkedDepsConfig{Mode: "skip"}}
+	t.Run("maxCommits zero override preserves base", func(t *testing.T) {
+		base := CommitConfig{MaxCommits: 5}
 		out := MergeCommitConfig(base, CommitConfig{})
-		assert.Equal(t, CheckMode("skip"), out.LinkedDeps.Mode)
+		assert.Equal(t, 5, out.MaxCommits)
 	})
 
-	t.Run("compatibility mode override wins when non-empty", func(t *testing.T) {
-		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "prompt"}}
-		out := MergeCommitConfig(base, CommitConfig{Compatibility: CompatibilityConfig{Mode: "fail"}})
-		assert.Equal(t, CheckMode("fail"), out.Compatibility.Mode)
+	t.Run("message spec override wins when set", func(t *testing.T) {
+		base := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "base-m"}}}}
+		override := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "over-m"}}}}
+		out := MergeCommitConfig(base, override)
+		assert.Equal(t, "over-m", out.Message.Model.Name)
 	})
 
-	t.Run("compatibility empty override preserves base mode", func(t *testing.T) {
-		base := CommitConfig{Compatibility: CompatibilityConfig{Mode: "skip"}}
+	t.Run("message empty override preserves base spec", func(t *testing.T) {
+		base := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "base-m"}}}}
 		out := MergeCommitConfig(base, CommitConfig{})
-		assert.Equal(t, CheckMode("skip"), out.Compatibility.Mode)
+		assert.Equal(t, "base-m", out.Message.Model.Name)
 	})
 }
 
@@ -608,18 +611,16 @@ func TestRestartPolicyUnmarshal(t *testing.T) {
 
 func TestMergeProcfileConfig(t *testing.T) {
 	t.Run("scalar overrides win when set, omitted keep base", func(t *testing.T) {
-		base := ProcfileConfig{Path: "Procfile", AutoRestart: RestartNo, MaxRestarts: 3, Profile: "dev"}
+		base := ProcfileConfig{AutoRestart: RestartNo, MaxRestarts: 3, Profile: "dev"}
 		out := MergeProcfileConfig(base, ProcfileConfig{AutoRestart: RestartAlways, MaxRestarts: 9})
-		assert.Equal(t, "Procfile", out.Path)
 		assert.Equal(t, RestartAlways, out.AutoRestart)
 		assert.Equal(t, 9, out.MaxRestarts)
 		assert.Equal(t, "dev", out.Profile, "omitted profile override keeps base")
 	})
 
 	t.Run("empty override preserves base scalars", func(t *testing.T) {
-		base := ProcfileConfig{Path: "Procfile.dev", AutoRestart: RestartOnFailure, MaxRestarts: 2, Profile: "prod"}
+		base := ProcfileConfig{AutoRestart: RestartOnFailure, MaxRestarts: 2, Profile: "prod"}
 		out := MergeProcfileConfig(base, ProcfileConfig{})
-		assert.Equal(t, "Procfile.dev", out.Path)
 		assert.Equal(t, RestartOnFailure, out.AutoRestart)
 		assert.Equal(t, 2, out.MaxRestarts)
 		assert.Equal(t, "prod", out.Profile)
@@ -716,14 +717,14 @@ func TestLoadGavelConfigTrace_FilePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(targetFile, []byte("package api\n"), 0o644))
 	t.Setenv("HOME", home)
 
-	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`verify:
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`ai:
   model: gemini
 pre:
   - name: home
     run: echo home
 `), 0o644))
 
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`verify:
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`ai:
   model: claude
 pre:
   - name: repo
@@ -732,7 +733,7 @@ ssh:
   cmd: make ci
 `), 0o644))
 
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".gavel.yaml"), []byte(`verify:
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, ".gavel.yaml"), []byte(`ai:
   model: codex
 pre:
   - name: target
@@ -757,7 +758,7 @@ lint:
 	assert.Equal(t, "parent-directory", trace.Sources[2].Origin)
 	assert.Equal(t, filepath.Join(targetDir, ".gavel.yaml"), trace.Sources[2].Path)
 
-	assert.Equal(t, "codex", trace.Merged.Verify.Model)
+	assert.Equal(t, "codex", trace.Merged.AI.Model.Name)
 	require.Len(t, trace.Merged.Pre, 3)
 	assert.Equal(t, "home", trace.Merged.Pre[0].Name)
 	assert.Equal(t, "repo", trace.Merged.Pre[1].Name)
@@ -773,10 +774,10 @@ func TestLoadGavelConfigTrace_DedupesGitRootTarget(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`verify:
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte(`ai:
   model: gemini
 `), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`verify:
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gavel.yaml"), []byte(`ai:
   model: claude
 `), 0o644))
 
@@ -786,5 +787,5 @@ func TestLoadGavelConfigTrace_DedupesGitRootTarget(t *testing.T) {
 	require.Len(t, trace.Sources, 2)
 	assert.Equal(t, "user-home", trace.Sources[0].Origin)
 	assert.Equal(t, "git-root", trace.Sources[1].Origin)
-	assert.Equal(t, "claude", trace.Merged.Verify.Model)
+	assert.Equal(t, "claude", trace.Merged.AI.Model.Name)
 }

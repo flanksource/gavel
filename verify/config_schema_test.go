@@ -7,10 +7,21 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/prompts"
 	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// specBoundaryTypes are the captain-spec-shaped config types the schema documents
+// with a curated, hand-built shape (aiSchema / promptSpecSchema) rather than a
+// 1:1 reflection of every nested api.Spec field. The parity walk asserts the node
+// exists at the parent but does not descend into the spec internals.
+var specBoundaryTypes = map[reflect.Type]bool{
+	reflect.TypeOf(api.Spec{}):   true,
+	reflect.TypeOf(PromptSpec{}): true,
+}
 
 func parsedConfigSchema(t *testing.T) map[string]any {
 	t.Helper()
@@ -45,6 +56,12 @@ func assertSchemaCoversType(t *testing.T, typ reflect.Type, node map[string]any,
 	t.Helper()
 	for typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
+	}
+
+	// api.Spec / PromptSpec are curated schema boundaries: the parent already
+	// asserted the node exists; the spec's internal shape is hand-built.
+	if specBoundaryTypes[typ] {
+		return
 	}
 
 	switch typ.Kind() {
@@ -109,16 +126,13 @@ func indexByte(s string, b byte) int {
 func TestConfigJSONSchema_DefaultsAndEnums(t *testing.T) {
 	schema := parsedConfigSchema(t)
 
-	assert.Equal(t, "claude", nodeAt(t, schema, "verify", "model")["default"],
-		"verify.model default should be claude")
+	assert.Equal(t, DefaultAIModel, nodeAt(t, schema, "ai", "model")["default"],
+		"ai.model default should be the built-in global default model")
 	assert.Equal(t, "gavel test --lint", nodeAt(t, schema, "ssh", "cmd")["default"],
 		"ssh.cmd default should be the fallback command")
 
 	mode := nodeAt(t, schema, "commit", "precommit", "mode")
 	assert.Equal(t, "prompt", mode["default"], "precommit.mode default should be prompt")
-
-	compatMode := nodeAt(t, schema, "commit", "compatibility", "mode")
-	assert.Equal(t, "skip", compatMode["default"], "compatibility.mode default should be skip")
 
 	oneOf, ok := mode["oneOf"].([]any)
 	require.True(t, ok, "mode should be a oneOf")
@@ -126,16 +140,52 @@ func TestConfigJSONSchema_DefaultsAndEnums(t *testing.T) {
 	assert.ElementsMatch(t, []any{"prompt", "fail", "skip"}, stringBranch["enum"])
 }
 
-func TestConfigJSONSchema_InlinePromptSupportsStringOrCaptainSpec(t *testing.T) {
+// TestConfigJSONSchema_PromptSpecShape asserts a PromptSpec node renders as the
+// string|object union carrying x-prompt-id and the spec sub-fields the settings
+// UI edits (model/prompt/budget), so the schema stays in step with promptSpecSchema.
+func TestConfigJSONSchema_PromptSpecShape(t *testing.T) {
 	schema := parsedConfigSchema(t)
-	inline := nodeAt(t, schema, "todos", "runPrompt", "inline")
-	oneOf, ok := inline["oneOf"].([]any)
-	require.True(t, ok)
-	require.Len(t, oneOf, 2)
-	assert.Equal(t, "string", oneOf[0].(map[string]any)["type"])
-	spec := oneOf[1].(map[string]any)
-	assert.NotEmpty(t, spec["$ref"])
-	assert.NotEmpty(t, schema["$defs"])
+	msg := nodeAt(t, schema, "commit", "message")
+	fix := nodeAt(t, schema, "lint", "fix")
+
+	assert.Equal(t, prompts.CommitMessage, msg["x-prompt-id"],
+		"commit.message x-prompt-id must match the prompts registry ID")
+	assert.ElementsMatch(t, []any{"string", "object"}, msg["type"],
+		"a PromptSpec accepts a bare string or an object")
+
+	props, ok := msg["properties"].(map[string]any)
+	require.True(t, ok, "commit.message should document object properties")
+	for _, key := range []string{"model", "fallbacks", "effort", "budget", "prompt", "file"} {
+		assert.Contains(t, props, key, "commit.message should document %q", key)
+	}
+	promptProps, ok := props["prompt"].(map[string]any)["properties"].(map[string]any)
+	require.True(t, ok, "prompt should document user/system")
+	assert.Contains(t, promptProps, "user")
+	assert.Contains(t, promptProps, "system")
+	assert.Equal(t, prompts.LintFix, fix["x-prompt-id"],
+		"lint.fix must be documented as a separate AI operation")
+}
+
+func TestConfigJSONSchema_AIDefaultsUsePromptPickerSpec(t *testing.T) {
+	schema := parsedConfigSchema(t)
+	ai := nodeAt(t, schema, "ai")
+
+	assert.Equal(t, true, ai["x-prompt-picker"],
+		"ai defaults should render through the shared PromptPicker field")
+	props, ok := ai["properties"].(map[string]any)
+	require.True(t, ok, "ai defaults should expose the complete Captain spec")
+	for _, key := range []string{"model", "prompt", "budget", "memory", "permissions", "setup", "workflow", "cliArgs"} {
+		assert.Contains(t, props, key, "ai defaults should document %q", key)
+	}
+	prompt := props["prompt"].(map[string]any)
+	assert.Equal(t, "#/$defs/Prompt", prompt["$ref"])
+	defs, ok := schema["$defs"].(map[string]any)
+	require.True(t, ok, "Captain definitions should be embedded")
+	promptDef, ok := defs["Prompt"].(map[string]any)
+	require.True(t, ok, "Captain Prompt definition should be embedded")
+	promptProps, ok := promptDef["properties"].(map[string]any)
+	require.True(t, ok, "Captain Prompt definition should document its fields")
+	assert.Contains(t, promptProps, "system", "AI defaults must support a system prompt")
 }
 
 // nodeAt walks properties[...] nodes by key, returning the leaf schema map.

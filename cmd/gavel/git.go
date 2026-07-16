@@ -101,9 +101,9 @@ func init() {
 				MaxCategories: 7,
 			}
 			if cfg, cfgErr := verify.LoadGavelConfig(options.Path); cfgErr == nil {
-				summaryPrompt, err := cfg.Commit.SummaryPrompt.Resolve(options.Path, "")
+				summaryPrompt, err := cfg.Commit.Summary.TemplateSource(options.Path, "")
 				if err != nil {
-					return nil, fmt.Errorf("resolve commit.summaryPrompt override: %w", err)
+					return nil, fmt.Errorf("resolve commit.summary prompt override: %w", err)
 				}
 				opts.SummaryPrompt = summaryPrompt
 			}

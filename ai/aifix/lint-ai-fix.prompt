@@ -1,0 +1,15 @@
+---
+model: agent:sonnet
+effort: high
+prompt:
+  system: >-
+    You are running inside a developer's git working tree at {{workDir}}.
+    Fix the linter violations the user lists, then stop.
+    Edit files in place. Do not run any commit-related commands.
+    Prefer minimal, targeted edits over rewrites.
+    {{#if linters}}The active linters are: {{linters}}.{{/if}}
+    After your edits, the user will re-run the linters to verify.
+---
+Fix the following linter violations:
+
+{{violations}}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/clicky"
 	gaveldocs "github.com/flanksource/gavel"
 )
 
@@ -17,20 +18,55 @@ func TestConfigHelpIncludesExample(t *testing.T) {
 		t.Fatalf("find config command: %v", err)
 	}
 
-	help := configHelp(cmd).ANSI()
+	helpText := configHelp(cmd)
+	help := helpText.String()
 	for _, want := range []string{
 		"UBER EXAMPLE",
 		"gavel.yaml.example",
-		"verify:",
+		"ai:",
+		"lint:",
+		"fix:",
+		"lint.fix.model",
+		"commit:",
+		"message:",
+		"commit.message.model",
+		"grouping:",
+		"summary:",
+		"todos:",
+		"run:",
+		"plan:",
+		"status:",
+		"test:",
+		"outlineSummary:",
+		"pr:",
+		"content:",
 		"precommit:",
 		"fixtures:",
+		"checks:",
+		"ssh:",
+		"pre:",
+		"post:",
 		"secrets:",
+		"procfile:",
 		"--resolve",
 		"{config, prompts}",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("config help missing %q:\n%s", want, help)
 		}
+	}
+	for _, removed := range []string{"verify:", "compatibility:", "aiFix:"} {
+		if strings.Contains(help, removed) {
+			t.Fatalf("config help contains removed config %q:\n%s", removed, help)
+		}
+	}
+
+	coloredExample := clicky.CodeBlock("yaml", gaveldocs.GavelConfigExample).ANSI()
+	if !strings.Contains(helpText.ANSI(), coloredExample) {
+		t.Fatalf("config help should render the uber example as colorized YAML:\n%s", helpText.ANSI())
+	}
+	if !strings.Contains(helpText.Markdown(), "```yaml\n"+gaveldocs.GavelConfigExample) {
+		t.Fatalf("config help should preserve the uber example as a YAML code block in markdown")
 	}
 }
 
@@ -45,7 +81,7 @@ func TestRunConfigResolveReturnsResolvedResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("result type = %T, want ResolvedConfigResult", result)
 	}
-	if len(resolved.Prompts) != 12 {
-		t.Fatalf("resolved prompts = %d, want 12", len(resolved.Prompts))
+	if len(resolved.Prompts) != 9 {
+		t.Fatalf("resolved prompts = %d, want 9", len(resolved.Prompts))
 	}
 }

@@ -22,7 +22,7 @@ type PRCommitInput struct {
 
 type PRContentInput struct {
 	Commits []PRCommitInput
-	// PromptOverride is the resolved .gavel.yaml commit.prContentPrompt override
+	// PromptOverride is the resolved .gavel.yaml pr.content prompt template
 	// (inline text or file contents); empty uses the embedded default template.
 	PromptOverride string
 }

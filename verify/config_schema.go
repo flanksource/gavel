@@ -33,7 +33,7 @@ func gavelConfigSchema() map[string]any {
 			"or the target directory; layers merge in that order with later layers overriding earlier ones. "+
 			"Run `gavel config [path]` to inspect the merged result.",
 		map[string]any{
-			"verify":   verifySchema(),
+			"ai":       aiSchema(specSchema),
 			"lint":     lintSchema(),
 			"commit":   commitSchema(),
 			"fixtures": fixturesSchema(),
@@ -46,6 +46,7 @@ func gavelConfigSchema() map[string]any {
 			"todos":    todosSchema(),
 			"status":   statusSchema(),
 			"test":     testSchema(),
+			"pr":       prSchema(),
 		},
 	)
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
@@ -55,37 +56,70 @@ func gavelConfigSchema() map[string]any {
 	return schema
 }
 
-func verifySchema() map[string]any {
-	return object(
-		"Settings for AI verification fixture steps.",
-		map[string]any{
-			"model": stringWithDefault(
-				"AI CLI / model used by AI fixture steps. Common values: claude, gemini, codex, or a fully "+
-					"qualified model name. Last-write-wins across layers.", "claude"),
-			"prompt": stringProp(
-				"Optional repo-specific review policy appended to Gavel's built-in AI fixture prompt. " +
-					"Last-write-wins across layers."),
-			"promptTemplate": promptOverrideSchema(prompts.Verify,
-				"Replace the built-in reviewer prompt entirely (dotprompt template). Unlike prompt, "+
-					"which is appended, this is the whole template. Last-write-wins across layers."),
-			"checks": object(
-				"Selectively disable checks emitted by the verify engine.",
-				map[string]any{
-					"disabled": stringArray(
-						"Individual check IDs to disable (e.g. SEC-1, PERF-2). Appended across layers."),
-					"disabledCategories": stringArray(
-						"Whole check categories to disable. Known categories: completeness, code-quality, " +
-							"testing, consistency, security, performance. Appended across layers."),
-				},
-			),
-		},
-	)
+// aiSchema exposes the complete Captain spec because every field is a valid
+// inherited default, including prompt.system, workspace, permissions, and env.
+// x-prompt-picker tells the settings UI to replace the generic object form with
+// the shared rich PromptPicker editor.
+func aiSchema(schema map[string]any) map[string]any {
+	defs, ok := schema["$defs"].(map[string]any)
+	if !ok {
+		panic("captain spec schema has no $defs")
+	}
+	spec, ok := defs["Spec"].(map[string]any)
+	if !ok {
+		panic("captain spec schema has no Spec definition")
+	}
+	node := make(map[string]any, len(spec)+2)
+	for key, value := range spec {
+		node[key] = value
+	}
+	node["description"] = "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here."
+	node["x-prompt-picker"] = true
+
+	props, ok := spec["properties"].(map[string]any)
+	if !ok {
+		panic("captain Spec definition has no properties")
+	}
+	props = cloneSchemaMap(props)
+	model, ok := props["model"].(map[string]any)
+	if !ok {
+		panic("captain Spec definition has no model property")
+	}
+	model = cloneSchemaMap(model)
+	model["default"] = DefaultAIModel
+	model["description"] = "Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5)."
+	props["model"] = model
+	node["properties"] = props
+	return node
+}
+
+func cloneSchemaMap(source map[string]any) map[string]any {
+	clone := make(map[string]any, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func captainSpecSchema() map[string]any {
+	raw, err := api.SchemaJSON(&api.Spec{})
+	if err != nil {
+		panic("generate Captain spec schema: " + err.Error())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		panic("decode Captain spec schema: " + err.Error())
+	}
+	return schema
 }
 
 func lintSchema() map[string]any {
 	return object(
 		"Settings for `gavel lint`.",
 		map[string]any{
+			"fix": promptSpecSchema(prompts.LintFix,
+				"AI spec for repairing lint violations from `gavel lint --ai-fix` and the `gavel commit` lint gate. "+
+					"This is independent of commit.message because fixing source requires an editing-capable agent."),
 			"ignore": arrayOf(
 				"Rules that suppress matching lint violations. Each rule matches when every populated "+
 					"field matches; an empty rule never matches. Appended across layers.",
@@ -123,13 +157,17 @@ func commitSchema() map[string]any {
 	return object(
 		"Settings for `gavel commit`.",
 		map[string]any{
-			"model": stringProp(
-				"AI CLI / model used for commit-message generation and compatibility analysis. " +
-					"Last-write-wins across layers."),
-			"groupModel": stringProp(
-				"AI model used for AI commit grouping (`gavel commit -G`). Grouping reasons over the " +
-					"whole change set and benefits from a more capable model than message generation; " +
-					"falls back to model, then a sonnet-class default. Last-write-wins across layers."),
+			"message": promptSpecSchema(prompts.CommitMessage,
+				"AI spec for commit-message generation. Model/prompt/budget/effort override the base "+
+					"ai: spec field-wise."),
+			"grouping": promptSpecSchema(prompts.CommitGrouping,
+				"AI spec for AI commit grouping (`gavel commit -G`) that sorts uncommitted changes into "+
+					"logical commits. The output schema (groups[]+ignore[]) is fixed; the prompt changes "+
+					"only the instructions."),
+			"summary": promptSpecSchema(prompts.CommitSummary,
+				"AI spec for naming and summarising a group of commits (`gavel git analyze --summary`)."),
+			"maxCommits": intProp(
+				"Maximum number of commits AI grouping may produce. 0 uses the built-in default."),
 			"hooks": arrayOf(
 				"Hooks run during `gavel commit` before the final commit is written. Appended across "+
 					"layers in declaration order.",
@@ -152,12 +190,6 @@ func commitSchema() map[string]any {
 			"precommit": checkModeObject(
 				"Gate for commit.gitignore prompts and linked-dependency checks (package.json file:/link: "+
 					"refs and go.mod replace directives pointing outside the repo).", "prompt"),
-			"linkedDeps": checkModeObject(
-				"Deprecated: superseded by commit.precommit. Retained for backward-compatible loading; "+
-					"prefer commit.precommit.mode in new config.", "prompt"),
-			"compatibility": checkModeObject(
-				"Gate for the AI warning that surfaces removed functionality and backward-compatibility issues.",
-				"skip"),
 			"lint": object(
 				"Gates that run linters over the staged file set before the commit is created. CLI flags "+
 					"--lint and --lint-secrets override these per invocation.",
@@ -177,25 +209,19 @@ func commitSchema() map[string]any {
 						"Toggle the tidy step. Omit to keep on.", true),
 				},
 			),
-			"messagePrompt": promptOverrideSchema(prompts.CommitMessage,
-				"Override the built-in commit-message generation prompt (dotprompt template). "+
-					"Last-write-wins across layers."),
-			"functionalityRemovedPrompt": promptOverrideSchema(prompts.CommitFuncRemoved,
-				"Override the built-in prompt that detects user-visible functionality removed by a diff. "+
-					"Last-write-wins across layers."),
-			"compatibilityPrompt": promptOverrideSchema(prompts.CommitCompatibility,
-				"Override the built-in prompt that detects backward-compatibility/breaking issues. "+
-					"Last-write-wins across layers."),
-			"summaryPrompt": promptOverrideSchema(prompts.CommitSummary,
-				"Override the built-in prompt that names and summarises a group of commits "+
-					"(`gavel git analyze --summary`). Last-write-wins across layers."),
-			"groupingPrompt": promptOverrideSchema(prompts.CommitGrouping,
-				"Override the built-in AI commit-grouping prompt (`gavel commit -G`) that sorts "+
-					"uncommitted changes into logical commits. The output schema (groups[]+ignore[]) is "+
-					"fixed; the override changes only the instructions. Last-write-wins across layers."),
-			"prContentPrompt": promptOverrideSchema(prompts.PRContent,
-				"Override the built-in prompt that generates PR title, body, and branch name. "+
-					"Last-write-wins across layers."),
+		},
+	)
+}
+
+func prSchema() map[string]any {
+	return object(
+		"Settings for `gavel pr`.",
+		map[string]any{
+			"content": promptSpecSchema(prompts.PRContent,
+				"AI spec for generating the PR title, body, and branch name."),
+			"base": stringProp(
+				"Base branch for the pull request (e.g. origin/main). Last-write-wins across layers."),
+			"draft": boolProp("Open the pull request as a draft."),
 		},
 	)
 }
@@ -204,13 +230,19 @@ func todosSchema() map[string]any {
 	return object(
 		"Settings for `gavel todos run`.",
 		map[string]any{
-			"runPrompt": promptOverrideSchema(prompts.TodosRun,
-				"Override the built-in todo run prompt (dotprompt template): the framing, the TODO "+
-					"items injected as {{{body}}}, and the instructions. Last-write-wins across layers."),
-			"planPrompt": promptOverrideSchema(prompts.TodosPlan,
-				"Override the built-in plan-mode prompt (dotprompt template): the read-only "+
-					"investigation framing that produces a reviewable implementation plan. "+
-					"Last-write-wins across layers."),
+			"run": promptSpecSchema(prompts.TodosRun,
+				"AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, "+
+					"and the instructions."),
+			"plan": promptSpecSchema(prompts.TodosPlan,
+				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
+					"reviewable implementation plan."),
+			"driver": stringProp(
+				"Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from " +
+					"the model. Last-write-wins across layers."),
+			"timeout": stringProp(
+				"Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers."),
+			"groupBy": stringProp(
+				"How todos are grouped into runs. Last-write-wins across layers."),
 		},
 	)
 }
@@ -219,10 +251,9 @@ func statusSchema() map[string]any {
 	return object(
 		"Settings for `gavel status`.",
 		map[string]any{
-			"summaryPrompt": promptOverrideSchema(prompts.StatusSummary,
-				"Override the built-in per-file AI summary prompt (`gavel status --ai`). Variable: "+
-					"{{details}} (staged/unstaged diff or file contents). The output schema ({summary}) is "+
-					"fixed. Last-write-wins across layers."),
+			"summary": promptSpecSchema(prompts.StatusSummary,
+				"AI spec for the per-file summary prompt (`gavel status --ai`). Variable: {{details}} "+
+					"(staged/unstaged diff or file contents). The output schema ({summary}) is fixed."),
 		},
 	)
 }
@@ -231,50 +262,79 @@ func testSchema() map[string]any {
 	return object(
 		"Settings for `gavel test`.",
 		map[string]any{
-			"outlineSummaryPrompt": promptOverrideSchema(prompts.TestOutlineSummary,
-				"Override the built-in per-test AI summary prompt (`gavel test outline --ai-summary`). "+
-					"Variables: {{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is "+
-					"fixed. Last-write-wins across layers."),
+			"outlineSummary": promptSpecSchema(prompts.TestOutlineSummary,
+				"AI spec for the per-test summary prompt (`gavel test outline --ai-summary`). Variables: "+
+					"{{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed."),
 		},
 	)
 }
 
-// promptOverrideSchema models a PromptOverride: a bare string is shorthand for
-// inline text, or an object with inline/file keys. The union `type` keeps both
-// hand-written forms valid; the properties document the object form (and let the
-// settings form render inline/file inputs). desc documents which prompt it
-// replaces; promptID is stamped as x-prompt-id so the settings UI links this
-// field to its prompts.Prompt descriptor (default + metadata).
-func promptOverrideSchema(promptID, desc string) map[string]any {
+// promptSpecSchema models a PromptSpec: one AI operation's captain api.Spec
+// (model + fallbacks, budget, effort, prompt) plus an optional .prompt file. A
+// bare string is shorthand for prompt.user, so the union `type` keeps both
+// hand-written forms valid. desc documents the operation; promptID is stamped as
+// x-prompt-id so the settings UI links this field to its prompts.Prompt
+// descriptor (default + metadata).
+func promptSpecSchema(promptID, desc string) map[string]any {
 	return map[string]any{
 		"description":          desc,
 		"type":                 []any{"string", "object"},
 		"additionalProperties": false,
 		"x-prompt-id":          promptID,
 		"properties": map[string]any{
-			"inline": inlinePromptSchema(),
+			"model": stringProp(
+				"Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base " +
+					"ai.model."),
+			"fallbacks": modelFallbacksSchema(),
+			"effort":    effortSchema(),
+			"budget":    budgetSchema(),
+			"prompt":    promptBodySchema(),
 			"file": stringProp(
-				"Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory."),
+				"Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative " +
+					"paths resolve against the .gavel.yaml directory."),
 		},
 	}
 }
 
-func inlinePromptSchema() map[string]any {
-	spec := captainSpecSchema()
+// modelFallbacksSchema documents Model.Fallbacks: alternative model slugs tried
+// in order when the primary is unavailable.
+func modelFallbacksSchema() map[string]any {
+	return stringArray(
+		"Alternative model slugs tried in order when the primary is unavailable or its provider " +
+			"cannot be constructed.")
+}
+
+// effortSchema documents Model.Effort (reasoning effort for thinking-capable models).
+func effortSchema() map[string]any {
 	return map[string]any{
-		"description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-		"oneOf": []any{
-			stringProp("Complete inline .prompt template text used verbatim."),
-			map[string]any{"$ref": spec["$ref"]},
-		},
+		"type":        "string",
+		"description": "Reasoning effort for thinking-capable models.",
+		"enum":        []any{"", "low", "medium", "high", "xhigh", "max", "ultra"},
 	}
 }
 
-func captainSpecSchema() map[string]any {
-	raw, _ := api.SchemaJSON(&api.Spec{})
-	var spec map[string]any
-	_ = json.Unmarshal(raw, &spec)
-	return spec
+// budgetSchema documents api.Budget: the per-operation resource ceilings.
+func budgetSchema() map[string]any {
+	return object(
+		"Resource ceilings for the run. Zero/unset means unbounded.",
+		map[string]any{
+			"cost":      numberProp("Maximum spend in USD; 0 = no ceiling."),
+			"maxTokens": intProp("Cap on output tokens per model call; 0 = backend default."),
+			"maxTurns":  intProp("Cap on agent turns; 0 = backend default."),
+		},
+	)
+}
+
+// promptBodySchema documents api.Prompt's user/system fields. A bare string on
+// the parent PromptSpec is shorthand for prompt.user.
+func promptBodySchema() map[string]any {
+	return object(
+		"The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+		map[string]any{
+			"user":   stringProp("The user prompt / template body (Handlebars)."),
+			"system": stringProp("Optional system-prompt framing."),
+		},
+	)
 }
 
 func checksSchema() map[string]any {
@@ -370,9 +430,6 @@ func procfileSchema() map[string]any {
 			"entries are either `name: command` or `name:` with command/default/autoRestart/cpu/mem/"+
 			"profiles/env/maxRestarts. This section holds only defaults + the active profile.",
 		map[string]any{
-			"path": stringProp(
-				"Override Procfile discovery. Relative paths resolve against the .gavel.yaml directory. " +
-					"If omitted, the nearest Procfile up to the git root is used."),
 			"profile": stringProp(
 				"Default active profile. A Procfile entry with `profiles` auto-starts only when one of " +
 					"them is the active profile; `gavel proc --profile <name>` overrides this."),

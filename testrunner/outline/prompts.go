@@ -16,9 +16,8 @@ func Prompts() []prompts.Prompt {
 		ID:          prompts.TestOutlineSummary,
 		Title:       "Test outline summary",
 		Description: "One-line AI summary of what each test verifies for `gavel test outline --ai-summary`. Variables: {{ids}} (the test ids), {{file}}, {{source}}. Output schema is fixed (tests[]).",
-		ConfigPath:  "test.outlineSummaryPrompt",
+		ConfigPath:  "test.outlineSummary",
 		Default:     testSummaryPromptTemplate,
-		ModelPolicy: prompts.ModelFromDefault,
 	}}
 }
 
@@ -30,5 +29,5 @@ func resolveSummaryPrompt(workDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load .gavel.yaml for test outline summary prompt: %w", err)
 	}
-	return cfg.Test.OutlineSummaryPrompt.Resolve(workDir, testSummaryPromptTemplate)
+	return cfg.Test.OutlineSummary.TemplateSource(workDir, testSummaryPromptTemplate)
 }

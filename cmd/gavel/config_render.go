@@ -130,7 +130,7 @@ func buildConfigProvenance(trace verify.GavelConfigTrace) *configProvenanceNode 
 		Comment: "from built-in defaults",
 	}
 
-	current := verify.GavelConfig{Verify: verify.DefaultVerifyConfig()}
+	current := verify.DefaultGavelConfig()
 	currentTree := normalizedConfigValue(current)
 	provenance := buildProvenanceTree(currentTree, builtIn)
 
@@ -357,6 +357,18 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 				continue
 			}
 
+			// Anonymous embeds with no explicit tag name (plain embed or
+			// `yaml:",inline"`) are promoted into the parent mapping, matching how
+			// encoding/json and ghodss serialize them — otherwise the embedded
+			// api.Spec/api.Model surface as capitalized Go field names ("Spec",
+			// "Model") instead of their inline keys ("model", "prompt", …).
+			if isInlineEmbed(field) {
+				if childNode, ok := buildYAMLNode(v.Field(i), meta, parent); ok && childNode.Kind == yamlv3.MappingNode {
+					node.Content = append(node.Content, childNode.Content...)
+				}
+				continue
+			}
+
 			key := yamlFieldName(field)
 			if key == "" || key == "-" {
 				continue
@@ -463,6 +475,20 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 // yamlFieldName returns the YAML key for a struct field. Emptiness is handled
 // uniformly by buildYAMLNode/isEmptyConfigValue, so the omitempty tag option is
 // not consulted here.
+// isInlineEmbed reports whether an anonymous embedded field is promoted into its
+// parent mapping — a plain embed with no yaml tag, or one tagged `,inline`.
+func isInlineEmbed(field reflect.StructField) bool {
+	if !field.Anonymous {
+		return false
+	}
+	tag := field.Tag.Get("yaml")
+	if tag == "" {
+		tag = field.Tag.Get("json")
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	return name == ""
+}
+
 func yamlFieldName(field reflect.StructField) string {
 	tag := field.Tag.Get("yaml")
 	if tag == "" {

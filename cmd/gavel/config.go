@@ -85,7 +85,6 @@ func configHelp(cmd *cobra.Command) api.Text {
 		flag    = "text-cyan-600 font-bold"
 		code    = "text-green-500"
 		muted   = "text-muted"
-		mono    = "font-mono"
 	)
 
 	t := clicky.Text("Show the merged .gavel.yaml for a path and every file that contributed to it.", "font-bold").
@@ -104,6 +103,8 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("RESOLVED AI CONFIG", heading).NewLine().
 		Append("  ").Append("--resolve", flag).Append(" / ").Append("-r", flag).Append(" expands every registered prompt", muted).NewLine().
 		Append("  shows built-in, inline, or file provenance plus declared and effective model details", muted).NewLine().
+		Append("  ").Append("lint.fix.model", code).Append(" controls source repair for lint --ai-fix and commit --fix", muted).NewLine().
+		Append("  ").Append("commit.message.model", code).Append(" controls commit-message generation independently", muted).NewLine().
 		Append("  with ", muted).Append("--json", flag).Append(" or ", muted).Append("--yaml", flag).Append(" returns {config, prompts}", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  ").Append("gavel config", code).Append("                         inspect config for the current directory", muted).NewLine().
@@ -115,7 +116,7 @@ func configHelp(cmd *cobra.Command) api.Text {
 		Append("  ").Append("gavel --cwd ../repo config src/app.ts", code).Append("  resolve a relative path from another working tree", muted).NewLine().NewLine().
 		Append("UBER EXAMPLE", heading).NewLine().
 		Append("  bundled from ", muted).Append("gavel.yaml.example", code).Append(" so the file and help stay in sync", muted).NewLine().
-		Append(indentBlock(gaveldocs.GavelConfigExample), mono).
+		Add(clicky.CodeBlock("yaml", gaveldocs.GavelConfigExample)).
 		NewLine().
 		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
 		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
@@ -244,17 +245,4 @@ func pruneEmpty(v any) any {
 	default:
 		return x
 	}
-}
-
-func indentBlock(s string) string {
-	s = strings.TrimRight(s, "\n")
-	if s == "" {
-		return "    {}\n"
-	}
-
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		lines[i] = "    " + line
-	}
-	return strings.Join(lines, "\n") + "\n"
 }

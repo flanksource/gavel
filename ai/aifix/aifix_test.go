@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/verify"
 )
 
 func ptr(s string) *string { return &s }
@@ -49,12 +50,16 @@ func TestHasViolations_FalseWhenNoViolations(t *testing.T) {
 	}
 }
 
-func TestBuildPrompt_FormatsViolationsWithRuleAndLocation(t *testing.T) {
+func TestResolveSpecFormatsViolationsWithRuleAndLocation(t *testing.T) {
 	res := resultsWith("betterleaks",
 		violation(".env", "AWS access key", "AWS_KEY", 3),
 		violation("config.yaml", "GCP key", "", 0),
 	)
-	out := buildPrompt("/repo", res)
+	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", []string{"betterleaks"}, res)
+	if err != nil {
+		t.Fatalf("ResolveSpec err: %v", err)
+	}
+	out := spec.Prompt.User
 	if !strings.Contains(out, ".env:3 [betterleaks/AWS_KEY] AWS access key") {
 		t.Errorf("missing first violation line; out=%q", out)
 	}
@@ -63,13 +68,17 @@ func TestBuildPrompt_FormatsViolationsWithRuleAndLocation(t *testing.T) {
 	}
 }
 
-func TestBuildPrompt_SkipsSkippedAndEmptyResults(t *testing.T) {
+func TestResolveSpecSkipsSkippedAndEmptyResults(t *testing.T) {
 	res := []*linters.LinterResult{
 		{Linter: "skipped", Skipped: true, Violations: []models.Violation{violation("x", "x", "X", 1)}},
 		{Linter: "empty"},
 		{Linter: "real", Violations: []models.Violation{violation("a.go", "msg", "R", 5)}},
 	}
-	out := buildPrompt("/repo", res)
+	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", nil, res)
+	if err != nil {
+		t.Fatalf("ResolveSpec err: %v", err)
+	}
+	out := spec.Prompt.User
 	if strings.Contains(out, "skipped/") || strings.Contains(out, "[empty]") {
 		t.Errorf("prompt included skipped/empty linters: %q", out)
 	}
@@ -78,8 +87,12 @@ func TestBuildPrompt_SkipsSkippedAndEmptyResults(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_MentionsLintersWhenProvided(t *testing.T) {
-	out := buildSystemPrompt("/repo", []string{"betterleaks", "ruff"})
+func TestResolveSpecSystemPromptMentionsLintersWhenProvided(t *testing.T) {
+	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", []string{"betterleaks", "ruff"}, resultsWith("ruff", violation("x.py", "bad", "R", 1)))
+	if err != nil {
+		t.Fatalf("ResolveSpec err: %v", err)
+	}
+	out := spec.Prompt.System
 	if !strings.Contains(out, "betterleaks, ruff") {
 		t.Errorf("system prompt missing linter list: %q", out)
 	}
@@ -88,8 +101,12 @@ func TestBuildSystemPrompt_MentionsLintersWhenProvided(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_OmitsLinterClauseWhenEmpty(t *testing.T) {
-	out := buildSystemPrompt("/repo", nil)
+func TestResolveSpecSystemPromptOmitsLinterClauseWhenEmpty(t *testing.T) {
+	spec, err := ResolveSpec(api.Spec{Model: api.Model{Name: "agent:sonnet"}}, verify.PromptSpec{}, "/repo", nil, resultsWith("ruff", violation("x.py", "bad", "R", 1)))
+	if err != nil {
+		t.Fatalf("ResolveSpec err: %v", err)
+	}
+	out := spec.Prompt.System
 	if strings.Contains(out, "active linters") {
 		t.Errorf("system prompt should not mention linters when none given: %q", out)
 	}

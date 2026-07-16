@@ -243,14 +243,14 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
 	base, _ := deps.defaultBranch(ghOpts)
 
-	agent, err := BuildAgent(opts, opts.messageModel())
+	agent, err := BuildAgent(opts, opts.prContentModel())
 	if err != nil {
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}
 
-	prContentPrompt, err := opts.Config.PRContentPrompt.Resolve(opts.WorkDir, "")
+	prContentPrompt, err := opts.PR.Content.TemplateSource(opts.WorkDir, prContentPromptTemplate)
 	if err != nil {
-		return fmt.Errorf("resolve commit.prContentPrompt override: %w", err)
+		return fmt.Errorf("resolve pr.content prompt override: %w", err)
 	}
 	prIn := PRContentInput{
 		Commits:        commitInputsFromResults(result.Commits),

@@ -13,56 +13,46 @@
 # the effective AI model/backend for every registered prompt.
 #
 # Merge behavior summary:
+#   - Field-wise specs:
+#       ai supplies defaults; each operation spec replaces the same operation
+#       from an earlier layer, then inherits unset fields from ai and its built-in prompt
 #   - Last-write-wins scalars:
-#       verify.model, verify.prompt, commit.model, commit.precommit.mode,
-#       commit.compatibility.mode, ssh.cmd
+#       commit.precommit.mode, todos.driver, todos.timeout, todos.groupBy,
+#       pr.base, ssh.cmd, procfile.profile/autoRestart/maxRestarts/mem/cpu
 #   - Appended lists:
-#       verify.checks.disabled, verify.checks.disabledCategories, lint.ignore,
-#       commit.hooks, commit.gitignore, commit.allow, pre, post, secrets.configs
-#   - Per-linter overrides:
-#       lint.linters.<name>.enabled overrides by linter name
+#       lint.ignore, commit.hooks, commit.gitignore, commit.allow, pre, post,
+#       secrets.configs
+#   - Keyed-map overrides:
+#       lint.linters.<name>.enabled and procfile.env merge by key
 #   - Sticky booleans:
-#       fixtures.enabled and secrets.disabled stay true once any layer enables them
-#   - Replacement lists:
-#       fixtures.files replaces the parent layer instead of appending
+#       fixtures.enabled, secrets.disabled, and pr.draft stay true once enabled
+#   - Replacement values:
+#       fixtures.files and checks.test/checks.lint replace their parent values
 
-verify:
-  # AI CLI / model selection for `gavel verify`.
-  # Common values: claude, gemini, codex, or a fully qualified model name.
-  model: claude
-
-  # Optional prompt suffix appended to Gavel's built-in verify prompt.
-  # Use this for repo-specific review policy, not for one-off instructions.
-  prompt: |
-    Prioritize API compatibility, migration safety, and operator-facing errors.
-    Flag missing tests for behavior changes and any undocumented config changes.
-
-  # Replace the complete reviewer prompt with either .prompt text or a structured
-  # Captain api.Spec. In the object form, prompt.user is the template body:
-  # promptTemplate:
-  #   inline:
-  #     model: claude-sonnet-5
-  #     effort: high
-  #     prompt:
-  #       system: You are a strict code reviewer.
-  #       user: Review {{changedFiles}} against {{issue.description}}.
-  # Alternatively, resolve a file relative to this .gavel.yaml:
-  # promptTemplate:
-  #   file: .gavel/prompts/review.prompt
-
-  checks:
-    # Disable individual check IDs emitted by the verify engine.
-    disabled:
-      - SEC-1
-      - PERF-2
-
-    # Disable entire categories of checks.
-    # Known categories include: completeness, code-quality, testing,
-    # consistency, security, performance.
-    disabledCategories:
-      - performance
+ai:
+  # Base model settings inherited by every registered AI operation below.
+  # A compact model can include a mechanism and effort: cli:model-name:high.
+  model: claude-haiku-4-5
+  fallbacks:
+    - codex-mini-latest:medium
+  effort: medium
+  prompt:
+    system: Follow repository instructions and report verification evidence.
+  budget:
+    cost: 2
+    maxTokens: 8192
+    maxTurns: 20
 
 lint:
+  # Source repair uses an editing-capable agent independently of the compact
+  # commit.message model below. `gavel lint --model` overrides this per run.
+  fix:
+    model: agent:sonnet
+    effort: high
+    budget:
+      cost: 2
+      maxTurns: 20
+
   # Ignore rules are appended across layers.
   # Each rule may match by source, rule ID, file glob, or any combination.
   ignore:
@@ -83,8 +73,35 @@ lint:
       enabled: false
 
 commit:
-  # AI CLI / model selection for `gavel commit`.
-  model: claude
+  # Each AI operation accepts a bare prompt string, an object like these, or a
+  # `file` path relative to this .gavel.yaml. Unset model fields inherit from ai.
+  message:
+    # Commit messages only summarize a diff, so this can use a smaller model.
+    model: claude-haiku-4-5
+    prompt:
+      system: Write precise Conventional Commit messages.
+      user: |
+        Describe the intent of this patch, not its file inventory:
+        {{patch}}
+
+  grouping:
+    model: codex-mini-latest
+    effort: high
+    budget:
+      maxTokens: 4096
+    prompt:
+      user: |
+        Group these changes into at most {{maxCommits}} cohesive commits:
+        {{table}}
+
+  summary:
+    prompt:
+      user: Summarize {{window}} changes in {{scope}} from {{commits}} and {{files}}.
+    # A prompt can instead be loaded relative to this config:
+    # file: .gavel/prompts/commit-summary.prompt
+
+  # Cap the number of commits produced by AI grouping. Zero uses the default.
+  maxCommits: 4
 
   # Hooks run during `gavel commit` before the final commit is written.
   # Hooks are appended across layers in declaration order.
@@ -124,14 +141,14 @@ commit:
     #   false   alias for skip
     mode: prompt
 
-  compatibility:
-    # Controls AI warnings for removed functionality and compatibility issues.
-    # Values:
-    #   prompt  ask before committing when warnings are present (default)
-    #   fail    hard-fail the commit when warnings are present
-    #   skip    bypass compatibility AI checks entirely
-    #   false   alias for skip
-    mode: prompt
+  lint:
+    # Run non-secrets linters over staged files; secrets defaults to true.
+    enabled: true
+    secrets: true
+
+  tidy:
+    # Run `go mod tidy` in every Go module and stage go.mod/go.sum changes.
+    enabled: true
 
 fixtures:
   # When true, `gavel test` auto-discovers fixture files.
@@ -143,6 +160,56 @@ fixtures:
     - "tests/**/*.fixture.md"
     - "fixtures/**/*.md"
 
+todos:
+  # AI specs for normal and read-only plan runs. The {{{body}}} variable is the
+  # selected TODO content injected by Gavel.
+  run:
+    model: claude-sonnet-4-5
+    prompt:
+      user: |
+        Implement the selected work and satisfy its definition of done:
+        {{{body}}}
+
+  plan:
+    prompt:
+      user: |
+        Produce a read-only implementation plan for:
+        {{{body}}}
+
+  # Execution mechanism: cmux, cli, sdk, or api.
+  driver: cli
+  timeout: 45m
+  # Group values: file, directory, repo, all, or none.
+  groupBy: none
+
+status:
+  # Per-file summary used by `gavel status --ai`; receives {{details}}.
+  summary:
+    prompt:
+      user: |
+        Summarize the user-visible intent of these changes:
+        {{details}}
+
+test:
+  # Per-test summary used by `gavel test outline --ai-summary`.
+  outlineSummary:
+    model: claude-haiku-4-5
+    prompt:
+      user: Summarize tests {{ids}} from {{file}} using {{source}}.
+
+pr:
+  # AI-generated pull-request title, body, and branch name.
+  content:
+    model: claude-sonnet-4-5
+    prompt:
+      user: |
+        Create pull-request content for these commits:
+        {{#each commits}}
+        - {{message}} ({{files}})
+        {{/each}}
+  base: origin/main
+  draft: true
+
 checks:
   # The post-completion check loop for `gavel todos run --check`. Once an agent
   # reports it is done, gavel runs the configured test/lint suite below; if it
@@ -153,6 +220,8 @@ checks:
   enabled: true
   # Maximum number of agent re-runs before giving up (default 3).
   maxIterations: 3
+  # CEL predicate evaluated after each iteration; true runs the agent again.
+  retry: results.failed > 0 || results.warned > 0 || !results.checklist.all(i, i.passed)
   # Omit `test` to skip tests; omit `lint` to skip linting. When the loop is
   # enabled with neither set, it defaults to running both against changed files.
   test:
@@ -202,10 +271,6 @@ procfile:
   # Global defaults for `gavel proc`. Per-process settings (command, default,
   # autoRestart, cpu, mem, profiles, env, maxRestarts) live in the Procfile
   # itself — this section only holds defaults and the active profile.
-
-  # Override Procfile discovery. Relative paths resolve from this file's dir.
-  # If omitted, the nearest `Procfile` up to the git root is used.
-  path: Procfile
 
   # Default active profile. A Procfile entry with `profiles` auto-starts only
   # when one of them is active; `gavel proc --profile <name>` overrides this.

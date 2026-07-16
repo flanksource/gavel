@@ -97,8 +97,16 @@ func defaultPRCreateDeps() prCreateDeps {
 }
 
 func runPRCreate(cmd *cobra.Command, args []string) error {
+	// When --base is not explicitly passed, fall back to pr.base from .gavel.yaml;
+	// the flag default (origin/main) applies only when config leaves it empty.
+	base := prCreateBase
+	if !cmd.Flags().Changed("base") {
+		if cfg, err := verify.LoadGavelConfig("."); err == nil && cfg.PR.Base != "" {
+			base = cfg.PR.Base
+		}
+	}
 	return runPRCreateWithDeps(cmd.Context(), args[0], prCreateOptions{
-		Base:     prCreateBase,
+		Base:     base,
 		Draft:    prCreateDraft,
 		Mainline: prCreateMainline,
 		Repo:     prCreateRepo,
@@ -286,9 +294,9 @@ func prContentInputForSHA(wtPath string) (commitpkg.PRContentInput, error) {
 	if err != nil {
 		return commitpkg.PRContentInput{}, fmt.Errorf("load .gavel.yaml for PR content prompt: %w", err)
 	}
-	prContentPrompt, err := cfg.Commit.PRContentPrompt.Resolve(wtPath, "")
+	prContentPrompt, err := cfg.PR.Content.TemplateSource(wtPath, "")
 	if err != nil {
-		return commitpkg.PRContentInput{}, fmt.Errorf("resolve commit.prContentPrompt override: %w", err)
+		return commitpkg.PRContentInput{}, fmt.Errorf("resolve pr.content prompt override: %w", err)
 	}
 	return commitpkg.PRContentInput{
 		Commits:        []commitpkg.PRCommitInput{{Message: strings.TrimSpace(msg), Files: files}},

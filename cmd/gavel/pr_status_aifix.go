@@ -7,6 +7,7 @@ import (
 	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
@@ -32,7 +33,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		return fmt.Errorf("rendered status was empty")
 	}
 
-	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions)
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, api.Spec{})
 	if err != nil {
 		return err
 	}
@@ -75,7 +76,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 			turn.Prompt.User = prompt
 			return turn, true
 		},
-		OnEvent: newAIFixRenderer(aiCfg),
+		OnEvent: newAIFixRenderer(),
 	})
 	if err != nil {
 		return err

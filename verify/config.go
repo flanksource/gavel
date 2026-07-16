@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/gavel/models"
 	"github.com/flanksource/gavel/todos/types"
@@ -15,6 +16,22 @@ import (
 	"github.com/ghodss/yaml"
 	yamlv3 "gopkg.in/yaml.v3"
 )
+
+// DefaultAIModel is the built-in global default model used when neither the
+// base ai: spec nor an operation spec pins one. It mirrors the value returned
+// by ai.DefaultConfig().Model; it is duplicated here as a const so the
+// low-level verify package need not import the heavier gavel/ai package.
+const DefaultAIModel = "claude-haiku-4-5"
+
+// DefaultAIConfig is the built-in global default base spec (precedence floor).
+func DefaultAIConfig() api.Spec {
+	return api.Spec{Model: api.Model{Name: DefaultAIModel}}
+}
+
+// DefaultGavelConfig seeds the built-in defaults every loaded config layers on.
+func DefaultGavelConfig() GavelConfig {
+	return GavelConfig{AI: DefaultAIConfig()}
+}
 
 // RestartPolicy is the supervisor restart policy for a process. It accepts a
 // bool (true→on-failure, false→no) or an enum string (no|on-failure|always)
@@ -88,21 +105,6 @@ func (p *RestartPolicy) UnmarshalYAML(node *yamlv3.Node) error {
 	return nil
 }
 
-type ChecksConfig struct {
-	Disabled           []string `yaml:"disabled" json:"disabled"`
-	DisabledCategories []string `yaml:"disabledCategories" json:"disabledCategories"`
-}
-
-type VerifyConfig struct {
-	Model  string       `yaml:"model" json:"model"`
-	Prompt string       `yaml:"prompt" json:"prompt"`
-	Checks ChecksConfig `yaml:"checks" json:"checks"`
-	// PromptTemplate replaces the built-in reviewer prompt entirely (inline or a
-	// file reference). Distinct from Prompt, which is appended as additional
-	// instructions to the default template.
-	PromptTemplate PromptOverride `yaml:"promptTemplate,omitempty" json:"promptTemplate,omitempty"`
-}
-
 // LintIgnoreRule suppresses lint violations matching every populated field.
 // Rule and Source accept collections.MatchItem patterns: literal strings,
 // `*` globs ("acme-*"), and `!`-prefixed negations. File uses doublestar
@@ -140,6 +142,10 @@ func (r LintIgnoreRule) MatchesViolation(v models.Violation) bool {
 }
 
 type LintConfig struct {
+	// AIFix is the AI spec used to repair lint violations. It is independent of
+	// commit.message because source repair needs an editing-capable agent while
+	// commit-message generation only needs to summarize a diff.
+	Fix     PromptSpec                  `yaml:"fix,omitempty" json:"fix,omitempty"`
 	Ignore  []LintIgnoreRule            `yaml:"ignore,omitempty" json:"ignore,omitempty"`
 	Linters map[string]LintLinterConfig `yaml:"linters,omitempty" json:"linters,omitempty"`
 }
@@ -194,35 +200,21 @@ func (m *CheckMode) UnmarshalJSON(data []byte) error {
 }
 
 type CommitConfig struct {
-	// Model is the LLM used for commit-message and PR-content generation. These
-	// are prose tasks that run well on a fast, cheap model (the default is a
-	// haiku-class model). GroupModel overrides the model for AI commit grouping.
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
-	// GroupModel is the LLM used for AI commit grouping (`gavel commit -G`).
-	// Grouping reasons over the whole change set and benefits from a more capable
-	// model than message generation; when unset it falls back to Model and then
-	// to a sonnet-class default.
-	GroupModel    string              `yaml:"groupModel,omitempty" json:"groupModel,omitempty"`
-	Hooks         []CommitHook        `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	GitIgnore     []string            `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
-	Allow         []string            `yaml:"allow,omitempty" json:"allow,omitempty"`
-	Precommit     PrecommitConfig     `yaml:"precommit,omitempty" json:"precommit,omitempty"`
-	LinkedDeps    LinkedDepsConfig    `yaml:"linkedDeps,omitempty" json:"linkedDeps,omitempty"`
-	Compatibility CompatibilityConfig `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
-	Lint          CommitLintConfig    `yaml:"lint,omitempty" json:"lint,omitempty"`
-	Tidy          CommitTidyConfig    `yaml:"tidy,omitempty" json:"tidy,omitempty"`
-	// MessagePrompt, FunctionalityRemovedPrompt, CompatibilityPrompt, SummaryPrompt,
-	// GroupingPrompt, and PRContentPrompt override the built-in AI prompt templates
-	// for commit-message generation, the compatibility analysis, commit-grouping
-	// summaries (`gavel git analyze --summary`), AI commit grouping (`gavel commit
-	// -G`), and PR title/body generation (inline or a file reference). Empty uses
-	// the default.
-	MessagePrompt              PromptOverride `yaml:"messagePrompt,omitempty" json:"messagePrompt,omitempty"`
-	FunctionalityRemovedPrompt PromptOverride `yaml:"functionalityRemovedPrompt,omitempty" json:"functionalityRemovedPrompt,omitempty"`
-	CompatibilityPrompt        PromptOverride `yaml:"compatibilityPrompt,omitempty" json:"compatibilityPrompt,omitempty"`
-	SummaryPrompt              PromptOverride `yaml:"summaryPrompt,omitempty" json:"summaryPrompt,omitempty"`
-	GroupingPrompt             PromptOverride `yaml:"groupingPrompt,omitempty" json:"groupingPrompt,omitempty"`
-	PRContentPrompt            PromptOverride `yaml:"prContentPrompt,omitempty" json:"prContentPrompt,omitempty"`
+	Hooks     []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	GitIgnore []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
+	Allow     []string         `yaml:"allow,omitempty" json:"allow,omitempty"`
+	Precommit PrecommitConfig  `yaml:"precommit,omitempty" json:"precommit,omitempty"`
+	Lint      CommitLintConfig `yaml:"lint,omitempty" json:"lint,omitempty"`
+	Tidy      CommitTidyConfig `yaml:"tidy,omitempty" json:"tidy,omitempty"`
+	// Message, Grouping, and Summary are the AI specs (model/prompt/budget/effort)
+	// for commit-message generation, AI commit grouping (`gavel commit -G`), and
+	// commit-group summaries (`gavel git analyze --summary`). Each overrides the
+	// base ai: spec field-wise; empty uses the built-in default.
+	Message  PromptSpec `yaml:"message,omitempty" json:"message,omitempty"`
+	Grouping PromptSpec `yaml:"grouping,omitempty" json:"grouping,omitempty"`
+	Summary  PromptSpec `yaml:"summary,omitempty" json:"summary,omitempty"`
+	// MaxCommits caps the number of commits AI grouping may produce (0 = default).
+	MaxCommits int `yaml:"maxCommits,omitempty" json:"maxCommits,omitempty"`
 }
 
 // CommitTidyConfig controls whether `gavel commit` runs `go mod tidy` in every
@@ -250,21 +242,6 @@ type CommitLintConfig struct {
 // and linked dependency checks. Mode is "prompt" (default), "fail", "skip",
 // or false (alias for skip).
 type PrecommitConfig struct {
-	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
-}
-
-// LinkedDepsConfig configures the pre-commit check that blocks go.mod
-// replace directives and package.json file:/link: references pointing
-// outside the git root. This remains for backward-compatible config loading;
-// new config should use commit.precommit.mode.
-type LinkedDepsConfig struct {
-	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
-}
-
-// CompatibilityConfig configures the AI-powered pre-commit warning that
-// surfaces removed functionality and backward compatibility issues. Mode is
-// "skip" (default), "prompt", "fail", or false (alias for skip).
-type CompatibilityConfig struct {
 	Mode CheckMode `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
@@ -298,7 +275,9 @@ func (f FixturesConfig) ResolvedFiles() []string {
 }
 
 type GavelConfig struct {
-	Verify   VerifyConfig   `yaml:"verify" json:"verify"`
+	// AI is the base spec (model/fallbacks/budget/effort defaults) that every AI
+	// operation inherits and overrides field-wise. See DefaultAIConfig.
+	AI       api.Spec       `yaml:"ai,omitempty" json:"ai,omitempty"`
 	Lint     LintConfig     `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Commit   CommitConfig   `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Fixtures FixturesConfig `yaml:"fixtures,omitempty" json:"fixtures,omitempty"`
@@ -313,40 +292,52 @@ type GavelConfig struct {
 	Todos  TodosConfig             `yaml:"todos,omitempty" json:"todos,omitempty"`
 	Status StatusConfig            `yaml:"status,omitempty" json:"status,omitempty"`
 	Test   TestConfig              `yaml:"test,omitempty" json:"test,omitempty"`
+	PR     PRConfig                `yaml:"pr,omitempty" json:"pr,omitempty"`
+}
+
+// PRConfig configures `gavel pr`.
+type PRConfig struct {
+	// Content is the AI spec for generating the PR title, body, and branch name.
+	Content PromptSpec `yaml:"content,omitempty" json:"content,omitempty"`
+	// Base is the base branch for the PR (e.g. origin/main).
+	Base string `yaml:"base,omitempty" json:"base,omitempty"`
+	// Draft opens the PR as a draft.
+	Draft bool `yaml:"draft,omitempty" json:"draft,omitempty"`
 }
 
 // StatusConfig configures `gavel status`.
 type StatusConfig struct {
-	// SummaryPrompt overrides the built-in per-file AI summary prompt used by
-	// `gavel status --ai`. Empty uses the embedded default. See prompts.StatusSummary.
-	SummaryPrompt PromptOverride `yaml:"summaryPrompt,omitempty" json:"summaryPrompt,omitempty"`
+	// Summary is the AI spec for the per-file summary used by `gavel status --ai`.
+	// Empty uses the built-in default. See prompts.StatusSummary.
+	Summary PromptSpec `yaml:"summary,omitempty" json:"summary,omitempty"`
 }
 
 // TestConfig configures `gavel test`.
 type TestConfig struct {
-	// OutlineSummaryPrompt overrides the built-in per-test AI summary prompt used
-	// by `gavel test outline --ai-summary`. Empty uses the embedded default. See
+	// OutlineSummary is the AI spec for the per-test summary used by
+	// `gavel test outline --ai-summary`. Empty uses the built-in default. See
 	// prompts.TestOutlineSummary.
-	OutlineSummaryPrompt PromptOverride `yaml:"outlineSummaryPrompt,omitempty" json:"outlineSummaryPrompt,omitempty"`
+	OutlineSummary PromptSpec `yaml:"outlineSummary,omitempty" json:"outlineSummary,omitempty"`
 }
 
 // TodosConfig configures `gavel todos run`.
 type TodosConfig struct {
-	// RunPrompt overrides the built-in todo run prompt template (inline or a file
-	// reference). Empty uses the embedded default. See prompts.TodosRun.
-	RunPrompt PromptOverride `yaml:"runPrompt,omitempty" json:"runPrompt,omitempty"`
-	// PlanPrompt overrides the built-in plan-mode prompt template. Empty uses the
-	// embedded default. See prompts.TodosPlan.
-	PlanPrompt PromptOverride `yaml:"planPrompt,omitempty" json:"planPrompt,omitempty"`
+	// Run is the AI spec for the todo run prompt; Plan is the plan-mode spec.
+	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
+	Run  PromptSpec `yaml:"run,omitempty" json:"run,omitempty"`
+	Plan PromptSpec `yaml:"plan,omitempty" json:"plan,omitempty"`
+	// Driver is the execution mechanism: cmux | cli | sdk | api.
+	Driver string `yaml:"driver,omitempty" json:"driver,omitempty"`
+	// Timeout caps a run's wall-clock duration (e.g. "30m"); empty = default.
+	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// GroupBy selects how todos are grouped into runs.
+	GroupBy string `yaml:"groupBy,omitempty" json:"groupBy,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
 // declared in the Procfile (per-process settings live in the Procfile itself).
 // Every field is optional.
 type ProcfileConfig struct {
-	// Path overrides Procfile discovery. Relative paths resolve against the
-	// directory of the .gavel.yaml that declared them.
-	Path string `yaml:"path,omitempty" json:"path,omitempty"`
 	// Profile is the default active profile: a Procfile entry with `profiles`
 	// auto-starts only when one of them is active. `gavel proc --profile` overrides.
 	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
@@ -394,19 +385,8 @@ type GavelConfigTrace struct {
 	Merged     GavelConfig         `json:"merged" yaml:"merged"`
 }
 
-func DefaultVerifyConfig() VerifyConfig {
-	return VerifyConfig{
-		Model: "claude",
-	}
-}
-
-func LoadConfig(cwd string) (VerifyConfig, error) {
-	gc, err := LoadGavelConfig(cwd)
-	return gc.Verify, err
-}
-
 func LoadGavelConfig(cwd string) (GavelConfig, error) {
-	cfg := GavelConfig{Verify: DefaultVerifyConfig()}
+	cfg := DefaultGavelConfig()
 
 	home, err := os.UserHomeDir()
 	if err == nil {
@@ -440,9 +420,7 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 	trace := GavelConfigTrace{
 		TargetPath: targetPath,
 		TargetDir:  targetDir,
-		Merged: GavelConfig{
-			Verify: DefaultVerifyConfig(),
-		},
+		Merged:     DefaultGavelConfig(),
 	}
 
 	var candidates []GavelConfigSource
@@ -512,7 +490,7 @@ func loadSingleGavelConfig(path string) (GavelConfig, string, error) {
 	if err := yaml.Unmarshal(data, &gc); err != nil {
 		return GavelConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
 	}
-	setPromptOverrideBaseDirs(&gc, filepath.Dir(path))
+	setPromptSpecBaseDirs(&gc, filepath.Dir(path))
 	return gc, string(data), nil
 }
 
@@ -534,7 +512,7 @@ func mergeFromFile(base GavelConfig, path string) GavelConfig {
 }
 
 func mergeGavelConfig(base, override GavelConfig) GavelConfig {
-	base.Verify = MergeVerifyConfig(base.Verify, override.Verify)
+	base.AI = base.AI.Merge(override.AI)
 	base.Lint = MergeLintConfig(base.Lint, override.Lint)
 	base.Commit = MergeCommitConfig(base.Commit, override.Commit)
 	base.Fixtures = MergeFixturesConfig(base.Fixtures, override.Fixtures)
@@ -547,32 +525,58 @@ func mergeGavelConfig(base, override GavelConfig) GavelConfig {
 	base.Todos = MergeTodosConfig(base.Todos, override.Todos)
 	base.Status = MergeStatusConfig(base.Status, override.Status)
 	base.Test = MergeTestConfig(base.Test, override.Test)
+	base.PR = MergePRConfig(base.PR, override.PR)
 	return base
 }
 
-// MergeStatusConfig merges override onto base: a set prompt override wins.
+// MergePRConfig merges override onto base: a set content spec wins; Base is
+// last-write-wins when non-empty; Draft is OR (any layer enabling wins).
+func MergePRConfig(base, override PRConfig) PRConfig {
+	if !override.Content.IsZero() {
+		base.Content = override.Content
+	}
+	if override.Base != "" {
+		base.Base = override.Base
+	}
+	if override.Draft {
+		base.Draft = true
+	}
+	return base
+}
+
+// MergeStatusConfig merges override onto base: a set summary spec wins.
 func MergeStatusConfig(base, override StatusConfig) StatusConfig {
-	if !override.SummaryPrompt.IsZero() {
-		base.SummaryPrompt = override.SummaryPrompt
+	if !override.Summary.IsZero() {
+		base.Summary = override.Summary
 	}
 	return base
 }
 
-// MergeTestConfig merges override onto base: a set prompt override wins.
+// MergeTestConfig merges override onto base: a set outline-summary spec wins.
 func MergeTestConfig(base, override TestConfig) TestConfig {
-	if !override.OutlineSummaryPrompt.IsZero() {
-		base.OutlineSummaryPrompt = override.OutlineSummaryPrompt
+	if !override.OutlineSummary.IsZero() {
+		base.OutlineSummary = override.OutlineSummary
 	}
 	return base
 }
 
-// MergeTodosConfig merges override onto base: each set prompt override wins.
+// MergeTodosConfig merges override onto base: each set spec wins; driver/groupBy
+// are last-write-wins when non-empty; timeout wins when non-zero.
 func MergeTodosConfig(base, override TodosConfig) TodosConfig {
-	if !override.RunPrompt.IsZero() {
-		base.RunPrompt = override.RunPrompt
+	if !override.Run.IsZero() {
+		base.Run = override.Run
 	}
-	if !override.PlanPrompt.IsZero() {
-		base.PlanPrompt = override.PlanPrompt
+	if !override.Plan.IsZero() {
+		base.Plan = override.Plan
+	}
+	if override.Driver != "" {
+		base.Driver = override.Driver
+	}
+	if override.Timeout != "" {
+		base.Timeout = override.Timeout
+	}
+	if override.GroupBy != "" {
+		base.GroupBy = override.GroupBy
 	}
 	return base
 }
@@ -581,9 +585,6 @@ func MergeTodosConfig(base, override TodosConfig) TodosConfig {
 // (a non-empty/non-zero override replaces the base); Env is merged key-by-key so
 // a repo config can add to a home default without discarding it.
 func MergeProcfileConfig(base, override ProcfileConfig) ProcfileConfig {
-	if override.Path != "" {
-		base.Path = override.Path
-	}
 	if override.Profile != "" {
 		base.Profile = override.Profile
 	}
@@ -675,26 +676,10 @@ func MergeSSHConfig(base, override SSHConfig) SSHConfig {
 	return base
 }
 
-func MergeVerifyConfig(base, override VerifyConfig) VerifyConfig {
-	if override.Model != "" {
-		base.Model = override.Model
-	}
-	if override.Prompt != "" {
-		base.Prompt = override.Prompt
-	}
-	if len(override.Checks.Disabled) > 0 {
-		base.Checks.Disabled = append(base.Checks.Disabled, override.Checks.Disabled...)
-	}
-	if len(override.Checks.DisabledCategories) > 0 {
-		base.Checks.DisabledCategories = append(base.Checks.DisabledCategories, override.Checks.DisabledCategories...)
-	}
-	if !override.PromptTemplate.IsZero() {
-		base.PromptTemplate = override.PromptTemplate
-	}
-	return base
-}
-
 func MergeLintConfig(base, override LintConfig) LintConfig {
+	if !override.Fix.IsZero() {
+		base.Fix = override.Fix
+	}
 	if len(override.Ignore) > 0 {
 		base.Ignore = append(base.Ignore, override.Ignore...)
 	}
@@ -714,12 +699,6 @@ func MergeLintConfig(base, override LintConfig) LintConfig {
 }
 
 func MergeCommitConfig(base, override CommitConfig) CommitConfig {
-	if override.Model != "" {
-		base.Model = override.Model
-	}
-	if override.GroupModel != "" {
-		base.GroupModel = override.GroupModel
-	}
 	if len(override.Hooks) > 0 {
 		base.Hooks = append(base.Hooks, override.Hooks...)
 	}
@@ -728,35 +707,23 @@ func MergeCommitConfig(base, override CommitConfig) CommitConfig {
 	if override.Precommit.Mode != "" {
 		base.Precommit.Mode = override.Precommit.Mode
 	}
-	if override.LinkedDeps.Mode != "" {
-		base.LinkedDeps.Mode = override.LinkedDeps.Mode
-	}
-	if override.Compatibility.Mode != "" {
-		base.Compatibility.Mode = override.Compatibility.Mode
-	}
 	if override.Lint.Enabled != nil {
 		base.Lint.Enabled = override.Lint.Enabled
 	}
 	if override.Lint.Secrets != nil {
 		base.Lint.Secrets = override.Lint.Secrets
 	}
-	if !override.MessagePrompt.IsZero() {
-		base.MessagePrompt = override.MessagePrompt
+	if !override.Message.IsZero() {
+		base.Message = override.Message
 	}
-	if !override.FunctionalityRemovedPrompt.IsZero() {
-		base.FunctionalityRemovedPrompt = override.FunctionalityRemovedPrompt
+	if !override.Grouping.IsZero() {
+		base.Grouping = override.Grouping
 	}
-	if !override.CompatibilityPrompt.IsZero() {
-		base.CompatibilityPrompt = override.CompatibilityPrompt
+	if !override.Summary.IsZero() {
+		base.Summary = override.Summary
 	}
-	if !override.SummaryPrompt.IsZero() {
-		base.SummaryPrompt = override.SummaryPrompt
-	}
-	if !override.GroupingPrompt.IsZero() {
-		base.GroupingPrompt = override.GroupingPrompt
-	}
-	if !override.PRContentPrompt.IsZero() {
-		base.PRContentPrompt = override.PRContentPrompt
+	if override.MaxCommits != 0 {
+		base.MaxCommits = override.MaxCommits
 	}
 	return base
 }

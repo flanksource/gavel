@@ -6,25 +6,25 @@
 // Prompts() function returning these descriptors; the settings UI composes them
 // to render one editor per prompt (showing the default and whether it is
 // overridden). Resolution of an override stays at each call site — the typed
-// verify.PromptOverride.Resolve runs against the embedded default — so this
-// package is a leaf with no dependencies and never participates in rendering.
+// verify.PromptSpec.Resolve layers the operation's spec over the base ai: spec
+// and the embedded default — so this package is a leaf with no dependencies and
+// never participates in rendering.
 package prompts
 
 // Stable prompt IDs. They are the JSON-Schema x-prompt-id that links an override
 // field's schema node to its registry descriptor, so they MUST match the
-// x-prompt-id stamped by the config schema generator.
+// x-prompt-id stamped by the config schema generator. Each ID is also the dotted
+// .gavel.yaml path of the operation's PromptSpec field (e.g. commit.message).
 const (
-	Verify              = "verify"
-	CommitMessage       = "commit.message"
-	CommitFuncRemoved   = "commit.functionalityRemoved"
-	CommitCompatibility = "commit.compatibility"
-	CommitSummary       = "commit.summary"
-	CommitGrouping      = "commit.grouping"
-	PRContent           = "pr.content"
-	TodosRun            = "todos.run"
-	TodosPlan           = "todos.plan"
-	StatusSummary       = "status.summary"
-	TestOutlineSummary  = "test.outlineSummary"
+	CommitMessage      = "commit.message"
+	CommitSummary      = "commit.summary"
+	CommitGrouping     = "commit.grouping"
+	LintFix            = "lint.fix"
+	PRContent          = "pr.content"
+	TodosRun           = "todos.run"
+	TodosPlan          = "todos.plan"
+	StatusSummary      = "status.summary"
+	TestOutlineSummary = "test.outlineSummary"
 )
 
 // Prompt describes one overridable AI prompt template for the settings UI.
@@ -35,25 +35,10 @@ type Prompt struct {
 	Title string `json:"title"`
 	// Description explains what the prompt drives and when it runs.
 	Description string `json:"description"`
-	// ConfigPath is the dotted .gavel.yaml location of the typed override field,
-	// e.g. "verify.promptTemplate".
+	// ConfigPath is the dotted .gavel.yaml location of the typed PromptSpec field;
+	// it equals ID (e.g. "commit.message").
 	ConfigPath string `json:"configPath"`
 	// Default is the embedded .prompt source used when the override is unset; the
 	// UI shows it as the built-in default.
 	Default string `json:"default"`
-	// ModelPolicy identifies how the current call site chooses its effective
-	// runtime model. It is resolver metadata, not part of the settings API.
-	ModelPolicy ModelPolicy `json:"-"`
 }
-
-type ModelPolicy string
-
-const (
-	ModelFromVerifyConfig ModelPolicy = "verify-config"
-	ModelFromCommitConfig ModelPolicy = "commit-config"
-	ModelFromGroupConfig  ModelPolicy = "group-config"
-	ModelFromPrompt       ModelPolicy = "prompt"
-	ModelFromTodo         ModelPolicy = "todo"
-	ModelFromSession      ModelPolicy = "session"
-	ModelFromDefault      ModelPolicy = "default"
-)

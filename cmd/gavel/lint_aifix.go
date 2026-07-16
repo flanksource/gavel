@@ -9,12 +9,13 @@ import (
 	"github.com/flanksource/gavel/ai/aifix"
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
+	"github.com/flanksource/gavel/verify"
 )
 
-// runAIFix invokes the AI configured by `captain configure` (overlaid by any
-// `gavel lint --model=… --budget=…` flags) to repair the violations in
-// allResults, then re-lints with the same scope. It loops until clean,
-// MaxIterations is reached, or the configured BudgetUSD is hit.
+// runAIFix resolves lint.fix from Gavel config (overlaid by any `gavel lint
+// --model=… --budget=…` flags) to repair the violations in allResults, then
+// re-lints with the same scope. It loops until clean, MaxIterations is reached,
+// or the configured budget is hit.
 //
 // On stop reasons "max-iterations" / "max-cost" with residual violations,
 // runAIFix prints a summary to stderr but does NOT itself set exitCode —
@@ -26,7 +27,15 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		ctx = context.Background()
 	}
 
-	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions)
+	gavelCfg, err := verify.LoadGavelConfig(opts.WorkDir)
+	if err != nil {
+		return initial, err
+	}
+	operation, err := aifix.ResolveSpec(gavelCfg.AI, gavelCfg.Lint.Fix, opts.WorkDir, opts.Linters, initial)
+	if err != nil {
+		return initial, err
+	}
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, operation)
 	if err != nil {
 		return initial, err
 	}
@@ -38,13 +47,15 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		MaxIterations:  opts.AIFixMaxIters,
 		AIConfig:       aiCfg,
 		AIRequestProto: aiProto,
+		BaseAI:         gavelCfg.AI,
+		PromptSpec:     gavelCfg.Lint.Fix,
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			rerunOpts := opts
 			rerunOpts.Context = rctx
 			rerunOpts.AIFix = false
 			return lint.Execute(rerunOpts)
 		},
-		OnEvent: newAIFixRenderer(aiCfg),
+		OnEvent: newAIFixRenderer(),
 	})
 	if err != nil {
 		return initial, err
