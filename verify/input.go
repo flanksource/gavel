@@ -40,7 +40,7 @@ func (s ReviewScope) String() string {
 }
 
 var (
-	prURLPattern  = regexp.MustCompile(`github\.com/.+/pull/(\d+)`)
+	prURLPattern  = regexp.MustCompile(`^https://github\.com/[^/\s]+/[^/\s]+/pull/(\d+)(?:[/?#].*)?$`)
 	prHashPattern = regexp.MustCompile(`^#(\d+)$`)
 	bareDigits    = regexp.MustCompile(`^\d{1,5}$`)
 	dateRangeRe   = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$`)
