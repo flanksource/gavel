@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/flanksource/commons/logger"
-	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
@@ -20,8 +17,6 @@ var (
 	todoCreateBodyFile string
 	todoCreatePriority string
 	todoCreateStatus   string
-	todoCreateCriteria bool
-	todoCriteriaModel  string
 )
 
 var todosCreateCmd = &cobra.Command{
@@ -29,11 +24,10 @@ var todosCreateCmd = &cobra.Command{
 	Aliases:      []string{"new"},
 	SilenceUsage: true,
 	Short:        "Create a TODO",
-	Long: `Create a TODO from a title (and optional body). When a model is available, gavel
-drafts AI acceptance criteria from the title/body (disable with --criteria=false).`,
+	Long:         `Create a TODO from a title and optional body.`,
 	Example: `  gavel todos create "Fix flaky parser test"
   gavel todos create --title "Add retry" --body "wrap the client in backoff"
-  gavel todos create "Refactor auth" --priority high --criteria=false`,
+  gavel todos create "Refactor auth" --priority high`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runTodosCreate,
 }
@@ -45,8 +39,6 @@ func init() {
 	todosCreateCmd.Flags().StringVar(&todoCreateBodyFile, "body-file", "", "Read TODO body from file")
 	todosCreateCmd.Flags().StringVar(&todoCreatePriority, "priority", string(types.PriorityMedium), "TODO priority: high, medium, or low")
 	todosCreateCmd.Flags().StringVar(&todoCreateStatus, "status", string(types.StatusPending), "TODO status: draft, pending, in_progress, failed, verified, completed, or skipped")
-	todosCreateCmd.Flags().BoolVar(&todoCreateCriteria, "criteria", true, "Draft AI acceptance criteria from the title/body when a model is available (use --criteria=false to skip)")
-	todosCreateCmd.Flags().StringVar(&todoCriteriaModel, "model", "", "LLM model for acceptance-criteria generation")
 }
 
 func runTodosCreate(_ *cobra.Command, args []string) error {
@@ -81,10 +73,6 @@ func runTodosCreate(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	if todoCreateCriteria {
-		body = withGeneratedCriteria(title, body)
-	}
-
 	todo, err := provider.Create(context.Background(), todos.CreateRequest{
 		Title:    title,
 		Body:     body,
@@ -97,32 +85,6 @@ func runTodosCreate(_ *cobra.Command, args []string) error {
 
 	fmt.Println(todo.PrettyDetailed().ANSI())
 	return nil
-}
-
-// withGeneratedCriteria drafts acceptance criteria for a new TODO and folds them
-// into its body. Generation is best-effort: when no model/key is available it
-// logs and returns the body unchanged rather than blocking creation.
-func withGeneratedCriteria(title, body string) string {
-	if strings.Contains(body, "## "+"Acceptance Criteria") {
-		return body
-	}
-	agent, err := commitpkg.BuildAgent(commitpkg.Options{}, todoCriteriaModel)
-	if err != nil {
-		logger.Warnf("acceptance-criteria generation skipped: %v", err)
-		return body
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	criteria, err := todos.Generate(ctx, agent, title, body)
-	if err != nil {
-		logger.Warnf("acceptance-criteria generation failed: %v", err)
-		return body
-	}
-	if len(criteria) == 0 {
-		return body
-	}
-	logger.Infof("Drafted %d acceptance criteria (edit with `gavel todos criteria`)", len(criteria))
-	return todos.UpsertCriteriaSection(body, criteria)
 }
 
 func todoCreateBodyText() (string, error) {

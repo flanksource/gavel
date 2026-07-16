@@ -10,32 +10,9 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
-
-// criteriaCatalogItem is one standard acceptance-criterion check the dashboard
-// offers in the "add criteria" combobox.
-type criteriaCatalogItem struct {
-	ID          string `json:"id"`
-	Category    string `json:"category"`
-	Description string `json:"description"`
-}
-
-// handleCriteriaCatalog returns the static verify.AllChecks catalog (id +
-// category + description) so the dashboard can offer the standard checks as
-// selectable options when adding acceptance criteria. The list is grouped by
-// category in catalog order.
-func (s *Server) handleCriteriaCatalog(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	items := make([]criteriaCatalogItem, 0, len(verify.AllChecks))
-	for _, c := range verify.AllChecks {
-		items = append(items, criteriaCatalogItem{ID: c.ID, Category: c.Category, Description: c.Description})
-	}
-	json.NewEncoder(w).Encode(items) //nolint:errcheck
-}
 
 // todoCriteriaPayload is the shared request body for acceptance-criteria
 // endpoints: a todo reference, the full criteria list, and an optional model
@@ -84,39 +61,6 @@ func (s *Server) handleTodoCriteria(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.saveCriteria(r, provider, todo, payload.Criteria); err != nil {
-		writeTodoError(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.writeRefreshedTodo(w, r, provider, todo)
-}
-
-// handleTodoCriteriaGenerate drafts acceptance criteria for a todo with an AI
-// model (the same catalog-seeded generator the CLI uses) and saves them.
-func (s *Server) handleTodoCriteriaGenerate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	var payload todoCriteriaPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
-		return
-	}
-	provider, _, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
-	if err != nil {
-		writeTodoError(w, status, err)
-		return
-	}
-	agent, err := commit.BuildAgent(commit.Options{}, payload.Model)
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	criteria, err := todos.Generate(ctx, agent, todo.Title, todo.MarkdownBody)
-	if err != nil {
-		writeTodoError(w, http.StatusBadGateway, err)
-		return
-	}
-	if err := s.saveCriteria(r, provider, todo, criteria); err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
-import { Button, Combobox } from '@flanksource/clicky-ui/components';
-import { UiEdit, UiListDashes, UiSparkles, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { AcceptanceCriterion, CriteriaCatalogItem, TodoItem } from '../../types';
+import { useEffect, useState, type ComponentType } from 'react';
+import { Button } from '@flanksource/clicky-ui/components';
+import { UiEdit, UiListDashes, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
+import type { AcceptanceCriterion, TodoItem } from '../../types';
 import { inputClass, todoQuery } from './format';
 
 // AcceptanceCriteria renders a todo's acceptance criteria as a structured,
-// editable list (add / edit / remove / toggle, each auto-saved) with an AI
-// "Draft" action. Verification is run from the fixture panel above so there is
-// one definition-of-done path.
+// editable list (add / edit / remove / toggle, each auto-saved). Verification is
+// run from the fixture panel above so there is one definition-of-done path.
 export function AcceptanceCriteria({
   dir,
   todo,
@@ -22,28 +21,7 @@ export function AcceptanceCriteria({
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
-  const [catalog, setCatalog] = useState<CriteriaCatalogItem[]>([]);
-
-  // Load the standard-check catalog once so the add control can offer them.
-  useEffect(() => {
-    let active = true;
-    fetch('/api/todos/criteria/catalog')
-      .then(res => (res.ok ? res.json() : []))
-      .then(items => active && setCatalog(items as CriteriaCatalogItem[]))
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Standard checks not already added, as grouped combobox options. Typing a
-  // value not in this list adds a custom criterion (allowCustomValue).
-  const addOptions = useMemo(() => {
-    const added = new Set(criteria.filter(c => c.checkId).map(c => c.checkId));
-    return catalog
-      .filter(item => !added.has(item.id))
-      .map(item => ({ value: item.id, label: item.description, group: item.category }));
-  }, [catalog, criteria]);
+  const [adding, setAdding] = useState('');
 
   // Adopt the server's criteria whenever they change (a save returns the
   // re-parsed list); keep this independent of the verdict so showing a verdict
@@ -83,19 +61,11 @@ export function AcceptanceCriteria({
     }
   }
 
-  // addFromCombobox adds the just-selected standard checks and/or a typed custom
-  // criterion. The combobox value is kept empty, so `next` holds exactly the
-  // newly chosen values: catalog ids become static criteria, anything else a
-  // custom one.
-  function addFromCombobox(next: string[]) {
-    const byId = new Map(catalog.map(c => [c.id, c]));
-    const additions: AcceptanceCriterion[] = [];
-    for (const v of next) {
-      const item = byId.get(v);
-      if (item) additions.push({ checkId: item.id, text: item.description });
-      else if (v.trim()) additions.push({ text: v.trim() });
-    }
-    if (additions.length) save([...criteria, ...additions]);
+  // addCustom appends a typed custom criterion, clearing the input on success.
+  function addCustom() {
+    const text = adding.trim();
+    if (!text) return;
+    save([...criteria, { text }]).then(ok => ok && setAdding(''));
   }
 
   function saveEdit(i: number) {
@@ -104,25 +74,6 @@ export function AcceptanceCriteria({
     // Editing the text makes it a custom criterion (drops any static check id).
     const next = criteria.map((c, idx) => (idx === i ? { text, done: c.done } : c));
     save(next).then(ok => ok && setEditing(null));
-  }
-
-  async function callTodoAction(path: string): Promise<void> {
-    setBusy(true);
-    setError('');
-    try {
-      const res = await fetch(`/api/todos/${path}?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Request failed');
-      onChanged(data as TodoItem);
-    } catch (err: any) {
-      setError(err?.message || 'Request failed');
-    } finally {
-      setBusy(false);
-    }
   }
 
   return (
@@ -139,23 +90,11 @@ export function AcceptanceCriteria({
             {criteria.length}
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => callTodoAction('criteria/generate')}
-          loading={busy}
-          disabled={busy}
-          title="Draft acceptance criteria with AI"
-          className="h-7 gap-1 px-2 text-xs"
-        >
-          <UiSparkles className="text-xs" />
-          Draft with AI
-        </Button>
       </div>
 
       <div className="space-y-2 px-3 py-3">
         {criteria.length === 0 && (
-          <p className="text-sm text-muted-foreground">No acceptance criteria yet — add one below or draft with AI.</p>
+          <p className="text-sm text-muted-foreground">No acceptance criteria yet — add one below.</p>
         )}
 
         <ul className="space-y-1">
@@ -203,15 +142,16 @@ export function AcceptanceCriteria({
           ))}
         </ul>
 
-        <Combobox
-          multiple
-          value={[]}
-          options={addOptions}
-          onChange={addFromCombobox}
+        <input
+          className={inputClass}
+          value={adding}
           disabled={busy}
-          allowCustomValue
-          placeholder="Add criteria — pick standard checks or type a custom one…"
-          ariaLabel="Add acceptance criteria"
+          onChange={e => setAdding(e.currentTarget.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') addCustom();
+          }}
+          placeholder="Add a criterion…"
+          aria-label="Add acceptance criterion"
         />
 
         {error && <div className="text-xs text-red-600">{error}</div>}
