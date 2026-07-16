@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/verify"
 )
@@ -35,8 +36,12 @@ func putBody(t *testing.T, req promptDetailRequest) string {
 	return string(b)
 }
 
+// ptr returns a pointer to v, for the optional pointer fields of
+// promptDetailRequest (which distinguish an absent field from an empty value).
+func ptr[T any](v T) *T { return &v }
+
 // Every registered prompt's dotted config path must resolve to a settable
-// PromptOverride, so a new prompt is editable with no per-id server code.
+// PromptSpec, so a new prompt is editable with no per-id server code.
 func TestPromptOverridePtr_AllRegistered(t *testing.T) {
 	cfg := verify.GavelConfig{}
 	for _, p := range registeredPrompts() {
@@ -54,19 +59,19 @@ func TestPromptOverridePtr_AllRegistered(t *testing.T) {
 // The returned pointer writes through to the config field.
 func TestPromptOverridePtr_IsSettable(t *testing.T) {
 	cfg := verify.GavelConfig{}
-	ov, err := promptOverridePtr(&cfg, "commit.messagePrompt")
+	ov, err := promptOverridePtr(&cfg, prompts.CommitMessage)
 	if err != nil {
 		t.Fatalf("promptOverridePtr: %v", err)
 	}
-	*ov = verify.InlinePrompt("hi")
-	if text, ok := cfg.Commit.MessagePrompt.InlineText(); !ok || text != "hi" {
-		t.Errorf("write did not reach cfg.Commit.MessagePrompt: %+v", cfg.Commit.MessagePrompt)
+	*ov = verify.PromptSpec{Spec: api.Spec{Prompt: api.Prompt{User: "hi"}}}
+	if cfg.Commit.Message.Spec.Prompt.User != "hi" {
+		t.Errorf("write did not reach cfg.Commit.Message: %+v", cfg.Commit.Message)
 	}
 }
 
 func TestPromptOverridePtr_BadPath(t *testing.T) {
 	cfg := verify.GavelConfig{}
-	if _, err := promptOverridePtr(&cfg, "verify.nope"); err == nil {
+	if _, err := promptOverridePtr(&cfg, "commit.nope"); err == nil {
 		t.Error("expected an error for a non-existent config path")
 	}
 }
@@ -90,7 +95,7 @@ func TestHandleSettingsPromptDetail_GetDefault(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.Verify, "scope=global", ""))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.CommitMessage, "scope=global", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -120,11 +125,11 @@ func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 
 	body := putBody(t, promptDetailRequest{
 		Source: "inline",
-		Spec:   map[string]any{"model": "claude-test"},
-		Body:   "Do the review of {{diff}}.",
+		Spec:   ptr(map[string]any{"model": "claude-test"}),
+		Body:   ptr("Write a message for {{diff}}."),
 	})
 	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.Verify, "project=gavel", body))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -133,7 +138,7 @@ func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.Verify, "project=gavel", ""))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.CommitMessage, "project=gavel", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -144,11 +149,11 @@ func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 	if got.Source != "inline" {
 		t.Errorf("source = %q, want inline", got.Source)
 	}
-	if got.Spec["model"] != "claude-test" {
-		t.Errorf("spec.model = %v, want claude-test", got.Spec["model"])
+	if got.Spec == nil || (*got.Spec)["model"] != "claude-test" {
+		t.Errorf("spec.model = %v, want claude-test", got.Spec)
 	}
-	if !strings.Contains(got.Body, "Do the review") {
-		t.Errorf("body not persisted: %q", got.Body)
+	if got.Body == nil || !strings.Contains(*got.Body, "Write a message") {
+		t.Errorf("body not persisted: %v", got.Body)
 	}
 }
 
@@ -157,11 +162,11 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 
 	body := putBody(t, promptDetailRequest{
 		Source: "inline",
-		Spec:   map[string]any{"model": "claude-test"},
-		Body:   "Custom review body.",
+		Spec:   ptr(map[string]any{"model": "claude-test"}),
+		Body:   ptr("Custom message body."),
 	})
 	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.Verify, "project=gavel", body))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("inline PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -169,7 +174,7 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 	rec = httptest.NewRecorder()
 	(&Server{}).handleSettingsPromptDetail(
 		rec,
-		promptReq("PUT", prompts.Verify, "project=gavel", putBody(t, promptDetailRequest{Source: "default"})),
+		promptReq("PUT", prompts.CommitMessage, "project=gavel", putBody(t, promptDetailRequest{Source: "default"})),
 	)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("default PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
@@ -181,20 +186,21 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 	if got.Source != "default" {
 		t.Errorf("source = %q, want default", got.Source)
 	}
-	if strings.Contains(got.Raw, "Custom review body.") {
+	if strings.Contains(got.Raw, "Custom message body.") {
 		t.Errorf("default response still contains old override:\n%s", got.Raw)
 	}
 	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(dir, ".gavel.yaml"))
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if !cfg.Verify.PromptTemplate.IsZero() {
-		t.Errorf("prompt override was not cleared: %+v", cfg.Verify.PromptTemplate)
+	if !cfg.Commit.Message.IsZero() {
+		t.Errorf("prompt override was not cleared: %+v", cfg.Commit.Message)
 	}
 }
 
-// Editing one modeled key (model) must not drop an unmodeled frontmatter block
-// (output.schema) the base document carried.
+// Editing one modeled key (model) via a structured edit must not drop an
+// unmodeled frontmatter block (output.schema) the base document carried. Only a
+// file override retains dotprompt-only keys, so this exercises the file source.
 func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
 
@@ -203,10 +209,11 @@ func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T)
 		"output:\n  schema:\n    type: object\n    properties:\n      title:\n        type: string\n" +
 		"---\nWrite {{topic}}.\n"
 	body := putBody(t, promptDetailRequest{
-		Source:  "inline",
-		Spec:    map[string]any{"model": "new-model"},
-		Body:    "Write {{topic}}.",
-		BaseRaw: baseRaw,
+		Source:  "file",
+		Path:    "commit-message.prompt",
+		Spec:    ptr(map[string]any{"model": "new-model"}),
+		Body:    ptr("Write {{topic}}."),
+		BaseRaw: ptr(baseRaw),
 	})
 	rec := httptest.NewRecorder()
 	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
@@ -217,8 +224,8 @@ func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T)
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Spec["model"] != "new-model" {
-		t.Errorf("spec.model = %v, want new-model", got.Spec["model"])
+	if got.Spec == nil || (*got.Spec)["model"] != "new-model" {
+		t.Errorf("spec.model = %v, want new-model", got.Spec)
 	}
 	if !strings.Contains(got.Raw, "output") || !strings.Contains(got.Raw, "schema") {
 		t.Errorf("unmodeled output.schema was dropped from the saved prompt:\n%s", got.Raw)
@@ -231,9 +238,9 @@ func TestHandleSettingsPromptDetail_ScopeIsolation(t *testing.T) {
 	t.Setenv("HOME", home)
 	withProject(t, "gavel", "flanksource/gavel", "")
 
-	body := putBody(t, promptDetailRequest{Source: "inline", Spec: map[string]any{"model": "proj-model"}, Body: "project body"})
+	body := putBody(t, promptDetailRequest{Source: "inline", Spec: ptr(map[string]any{"model": "proj-model"}), Body: ptr("project body")})
 	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.Verify, "project=gavel", body))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
@@ -242,7 +249,7 @@ func TestHandleSettingsPromptDetail_ScopeIsolation(t *testing.T) {
 		t.Errorf("global .gavel.yaml should not exist after a project PUT (err=%v)", err)
 	}
 	rec = httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.Verify, "scope=global", ""))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.CommitMessage, "scope=global", ""))
 	var global promptDetailResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &global); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -257,9 +264,9 @@ func TestHandleSettingsPromptDetail_ScopeIsolation(t *testing.T) {
 func TestHandleSettingsPromptDetail_InvalidSpecRejected(t *testing.T) {
 	dir := withProject(t, "gavel", "flanksource/gavel", "")
 
-	body := putBody(t, promptDetailRequest{Source: "inline", Spec: map[string]any{"bogusKey": "x"}, Body: "body"})
+	body := putBody(t, promptDetailRequest{Source: "inline", Spec: ptr(map[string]any{"bogusKey": "x"}), Body: ptr("body")})
 	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.Verify, "project=gavel", body))
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
@@ -287,22 +294,5 @@ func TestHandleSettingsPromptDetail_ThroughMux(t *testing.T) {
 	}
 	if got.Source != "default" {
 		t.Errorf("source = %q, want default", got.Source)
-	}
-}
-
-// A malformed inline override surfaces the captain parse error on GET.
-func TestHandleSettingsPromptDetail_GetMalformedInline(t *testing.T) {
-	dir := withProject(t, "gavel", "flanksource/gavel", "")
-
-	cfg := verify.GavelConfig{}
-	cfg.Verify.PromptTemplate = verify.InlinePrompt("---\nmodel: [broken\n---\nbody\n")
-	if err := verify.SaveGavelConfig(dir, cfg); err != nil {
-		t.Fatalf("seed config: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	(&Server{}).handleSettingsPromptDetail(rec, promptReq("GET", prompts.Verify, "project=gavel", ""))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
 }

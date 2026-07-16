@@ -17,28 +17,61 @@ import (
 )
 
 // promptDetailResponse is the resolved view of one registered prompt for a
-// config layer: its source (default/inline/file), the parsed spec + body, and
-// the raw .prompt text (echoed back by the editor as the merge base on PUT).
+// config layer: its source (default/inline/file) and the raw .prompt text
+// (echoed back by the editor as the merge base on PUT). When the frontmatter
+// parses, Spec and Body carry the parsed view; when it does not, ParseError
+// carries the parser message and Spec/Body are absent — the raw text is the
+// only repair source, so it is always retained.
 type promptDetailResponse struct {
-	ID     string         `json:"id"`
-	Scope  string         `json:"scope"`
-	Source string         `json:"source"` // default | inline | file
-	Path   string         `json:"path,omitempty"`
-	Spec   map[string]any `json:"spec"`
-	Body   string         `json:"body"`
-	Raw    string         `json:"raw"`
+	ID         string          `json:"id"`
+	Scope      string          `json:"scope"`
+	Source     string          `json:"source"` // default | inline | file
+	Path       string          `json:"path,omitempty"`
+	Spec       *map[string]any `json:"spec,omitempty"`
+	Body       *string         `json:"body,omitempty"`
+	Raw        string          `json:"raw"`
+	ParseError string          `json:"parseError,omitempty"`
 }
 
-// promptDetailRequest is the editor's save payload. Spec carries only the keys
-// the editor models; the server merges them over the base frontmatter so
-// unmodeled keys (config/input/output) survive. BaseRaw is the raw the editor
-// last read, used as a stable merge base.
+// promptDetailRequest is the editor's save payload, a strict union keyed by
+// which fields are present:
+//   - Source "default": reset the override; no content fields.
+//   - structured edit: Spec and Body present, Raw absent — merged over BaseRaw.
+//   - raw repair: Raw present, Spec and Body absent — validated and persisted
+//     verbatim (BaseRaw, which may be malformed, is never parsed here).
+//
+// The pointers distinguish an absent field from a valid empty map/string.
 type promptDetailRequest struct {
-	Source  string         `json:"source"` // default | inline | file
-	Path    string         `json:"path,omitempty"`
-	Spec    map[string]any `json:"spec"`
-	Body    string         `json:"body"`
-	BaseRaw string         `json:"baseRaw,omitempty"`
+	Source  string          `json:"source"` // default | inline | file
+	Path    string          `json:"path,omitempty"`
+	Spec    *map[string]any `json:"spec,omitempty"`
+	Body    *string         `json:"body,omitempty"`
+	BaseRaw *string         `json:"baseRaw,omitempty"`
+	Raw     *string         `json:"raw,omitempty"`
+}
+
+// promptDetailInput is the resolved raw prompt for one layer, before parsing.
+type promptDetailInput struct {
+	ID, Scope, Source, Path, Raw string
+}
+
+// buildPromptDetailResponse parses the resolved raw text into a detail. Raw is
+// always retained; a clean parse fills Spec and Body, a syntax error fills
+// ParseError (leaving Spec/Body absent rather than inventing empty values) so
+// the editor can render a recoverable repair state instead of a dead row.
+func buildPromptDetailResponse(input promptDetailInput) promptDetailResponse {
+	resp := promptDetailResponse{
+		ID: input.ID, Scope: input.Scope, Source: input.Source, Path: input.Path, Raw: input.Raw,
+	}
+	doc, err := dotprompt.Parse(input.Raw)
+	if err != nil {
+		resp.ParseError = err.Error()
+		return resp
+	}
+	spec := specToMap(doc.Spec)
+	resp.Spec = &spec
+	resp.Body = &doc.Body
+	return resp
 }
 
 // handleSettingsPromptDetail resolves (GET) or persists (PUT) one registered
@@ -65,46 +98,34 @@ func (s *Server) handleSettingsPromptDetail(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// getPromptDetail resolves the effective .prompt for the layer and returns it
-// parsed. A parse error is surfaced (400) so the dialog can render it.
+// getPromptDetail resolves the effective .prompt for the layer and returns it.
+// A frontmatter syntax error is not fatal: it comes back as HTTP 200 with the
+// raw text and parseError so the dialog can repair it. Resolution, config, and
+// file errors remain non-2xx.
 func (s *Server) getPromptDetail(w http.ResponseWriter, desc prompts.Prompt, scope, dir string) {
-	ov, err := loadPromptOverride(dir, desc.ConfigPath)
+	ov, err := loadPromptSpec(dir, desc.ConfigPath)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	text, err := ov.Resolve(dir, desc.Default)
+	text, err := promptSpecRaw(ov, dir, desc.Default)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	doc, err := dotprompt.Parse(text)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	respondJSON(w, http.StatusOK, promptDetailResponse{
-		ID: desc.ID, Scope: scope, Source: overrideSource(ov), Path: ov.File,
-		Spec: specToMap(doc.Spec), Body: doc.Body, Raw: text,
-	})
+	respondJSON(w, http.StatusOK, buildPromptDetailResponse(promptDetailInput{
+		ID: desc.ID, Scope: scope, Source: overrideSource(ov), Path: ov.File, Raw: text,
+	}))
 }
 
-// putPromptDetail merges the editor's spec over the base frontmatter, reserializes
-// and re-validates the .prompt with captain, then persists by source: inline into
-// the layer's .gavel.yaml, file into the referenced .prompt file (config points
-// at it). Nothing is written if validation fails.
+// putPromptDetail persists an edit as one of three strict variants: a reset to
+// default, a structured edit (spec+body merged over the base frontmatter), or a
+// raw repair (exact validated source). It validates before writing anything, so
+// an invalid edit leaves both .gavel.yaml and any prompt file unchanged.
 func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc prompts.Prompt, scope, dir string) {
 	var req promptDetailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request: "+err.Error())
-		return
-	}
-	if req.Source != "default" && req.Source != "inline" && req.Source != "file" {
-		respondError(w, http.StatusBadRequest, `source must be "default", "inline" or "file"`)
-		return
-	}
-	if req.Source == "file" && strings.TrimSpace(req.Path) == "" {
-		respondError(w, http.StatusBadRequest, "file source requires a path")
 		return
 	}
 
@@ -118,71 +139,124 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if req.Source == "default" {
-		*ov = verify.PromptOverride{}
+
+	switch req.Source {
+	case "default":
+		if req.Spec != nil || req.Body != nil || req.Raw != nil {
+			respondError(w, http.StatusBadRequest, `source "default" does not accept spec, body, or raw`)
+			return
+		}
+		*ov = verify.PromptSpec{}
 		if err := verify.SaveGavelConfig(dir, cfg); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		s.getPromptDetail(w, desc, scope, dir)
 		return
-	}
-
-	baseText := req.BaseRaw
-	if strings.TrimSpace(baseText) == "" {
-		if baseText, err = ov.Resolve(dir, desc.Default); err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	baseDoc, err := dotprompt.Parse(baseText)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "base prompt: "+err.Error())
+	case "inline", "file":
+		// handled below
+	default:
+		respondError(w, http.StatusBadRequest, `source must be "default", "inline" or "file"`)
 		return
 	}
 
-	newText, err := (&dotprompt.Document{
-		Frontmatter: mergeFrontmatter(baseDoc.Frontmatter, req.Spec),
-		Body:        req.Body,
-	}).String()
+	if req.Source == "file" && strings.TrimSpace(req.Path) == "" {
+		respondError(w, http.StatusBadRequest, "file source requires a path")
+		return
+	}
+
+	newText, status, err := buildPromptText(dir, desc, ov, req)
 	if err != nil {
+		respondError(w, status, err.Error())
+		return
+	}
+	if err := persistPromptOverride(dir, &cfg, ov, req.Source, req.Path, newText); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Re-parse with captain before persisting; on error save nothing.
-	if _, err := dotprompt.Parse(newText); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
+	respondJSON(w, http.StatusOK, buildPromptDetailResponse(promptDetailInput{
+		ID: desc.ID, Scope: scope, Source: req.Source, Path: ov.File, Raw: newText,
+	}))
+}
 
-	switch req.Source {
+// buildPromptText produces the validated .prompt text to persist for an
+// inline/file save. Exactly one content form must be present: a structured edit
+// (spec+body) merges over the valid base frontmatter; a raw repair (raw) is the
+// exact source, validated but never merged with the possibly-malformed base. It
+// returns the HTTP status to use on error.
+func buildPromptText(dir string, desc prompts.Prompt, ov *verify.PromptSpec, req promptDetailRequest) (string, int, error) {
+	switch {
+	case req.Raw != nil && req.Spec == nil && req.Body == nil:
+		newText := *req.Raw
+		if _, err := dotprompt.Parse(newText); err != nil {
+			return "", http.StatusBadRequest, err
+		}
+		return newText, http.StatusOK, nil
+	case req.Raw == nil && req.Spec != nil && req.Body != nil:
+		return mergeStructuredPrompt(dir, desc, ov, req)
+	default:
+		return "", http.StatusBadRequest, errors.New("provide either spec and body (structured edit) or raw (repair), not both or neither")
+	}
+}
+
+// mergeStructuredPrompt merges the editor's spec over the base frontmatter (so
+// unmodeled keys survive), reserializes, and re-validates. An invalid base
+// frontmatter is a 400: a structured edit cannot merge onto malformed YAML —
+// that override must be repaired through the raw path first.
+func mergeStructuredPrompt(dir string, desc prompts.Prompt, ov *verify.PromptSpec, req promptDetailRequest) (string, int, error) {
+	baseText := ""
+	if req.BaseRaw != nil {
+		baseText = *req.BaseRaw
+	}
+	if strings.TrimSpace(baseText) == "" {
+		resolved, err := promptSpecRaw(ov, dir, desc.Default)
+		if err != nil {
+			return "", http.StatusInternalServerError, err
+		}
+		baseText = resolved
+	}
+	baseDoc, err := dotprompt.Parse(baseText)
+	if err != nil {
+		return "", http.StatusBadRequest, fmt.Errorf("base prompt: %w", err)
+	}
+	newText, err := (&dotprompt.Document{
+		Frontmatter: mergeFrontmatter(baseDoc.Frontmatter, *req.Spec),
+		Body:        *req.Body,
+	}).String()
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if _, err := dotprompt.Parse(newText); err != nil {
+		return "", http.StatusBadRequest, err
+	}
+	return newText, http.StatusOK, nil
+}
+
+// persistPromptOverride writes the validated text by source: inline stores the
+// parsed api.Spec structurally in the layer's .gavel.yaml; file writes the
+// referenced .prompt file with the config pointing at it. Called only after
+// validation, so it never persists bad text. cfg is taken by pointer because ov
+// points into it: mutating *ov and then saving *cfg must reflect the same
+// struct, not a copy.
+func persistPromptOverride(dir string, cfg *verify.GavelConfig, ov *verify.PromptSpec, source, path, newText string) error {
+	switch source {
 	case "inline":
-		*ov = verify.InlinePrompt(newText)
+		spec, err := promptTextToSpec(newText)
+		if err != nil {
+			return err
+		}
+		*ov = verify.PromptSpec{Spec: spec}
 	case "file":
-		target := req.Path
+		target := path
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(dir, target)
 		}
 		if err := os.WriteFile(target, []byte(newText), 0o644); err != nil {
-			respondError(w, http.StatusInternalServerError, err.Error())
-			return
+			return err
 		}
-		*ov = verify.PromptOverride{File: req.Path}
+		*ov = verify.PromptSpec{File: path}
 	}
-	if err := verify.SaveGavelConfig(dir, cfg); err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	doc, err := dotprompt.Parse(newText)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondJSON(w, http.StatusOK, promptDetailResponse{
-		ID: desc.ID, Scope: scope, Source: req.Source, Path: ov.File,
-		Spec: specToMap(doc.Spec), Body: doc.Body, Raw: newText,
-	})
+	return verify.SaveGavelConfig(dir, *cfg)
 }
 
 // findRegisteredPrompt looks up a prompt descriptor by its stable id.
@@ -195,9 +269,9 @@ func findRegisteredPrompt(id string) (prompts.Prompt, bool) {
 	return prompts.Prompt{}, false
 }
 
-// loadPromptOverride reads the layer's .gavel.yaml and returns the override at
-// the descriptor's dotted config path.
-func loadPromptOverride(dir, configPath string) (*verify.PromptOverride, error) {
+// loadPromptSpec reads the layer's .gavel.yaml and returns the PromptSpec at the
+// descriptor's dotted config path.
+func loadPromptSpec(dir, configPath string) (*verify.PromptSpec, error) {
 	cfg, err := loadSingleConfig(dir)
 	if err != nil {
 		return nil, err
@@ -215,23 +289,76 @@ func loadSingleConfig(dir string) (verify.GavelConfig, error) {
 	return cfg, nil
 }
 
+// promptSpecRaw returns the full .prompt document for one layer's override: the
+// built-in default when unset, the file's contents for a file override, or the
+// inline spec reserialized to a .prompt document (frontmatter carries
+// model/budget/effort/…, the body carries prompt.user) for an inline override.
+func promptSpecRaw(ov *verify.PromptSpec, dir, def string) (string, error) {
+	switch {
+	case ov.IsZero():
+		return def, nil
+	case ov.File != "":
+		return ov.TemplateSource(dir, def)
+	default:
+		return specToPromptText(ov.Spec)
+	}
+}
+
+// specToPromptText serializes an inline api.Spec back into a .prompt document so
+// the editor round-trips it: the body carries prompt.user and the remaining spec
+// fields (model, budget, effort, prompt.system, …) become the frontmatter.
+func specToPromptText(spec api.Spec) (string, error) {
+	body := spec.Prompt.User
+	fm := specToMap(spec)
+	if p, ok := fm["prompt"].(map[string]any); ok {
+		delete(p, "user")
+		if len(p) == 0 {
+			delete(fm, "prompt")
+		} else {
+			fm["prompt"] = p
+		}
+	}
+	if m, ok := fm["model"].(string); ok && m == "" {
+		delete(fm, "model")
+	}
+	if len(fm) == 0 {
+		return body, nil
+	}
+	return (&dotprompt.Document{Frontmatter: fm, Body: body}).String()
+}
+
+// promptTextToSpec parses a validated .prompt document into the api.Spec stored
+// as an inline override: frontmatter → spec, body → prompt.user when the
+// frontmatter does not set it.
+func promptTextToSpec(text string) (api.Spec, error) {
+	doc, err := dotprompt.Parse(text)
+	if err != nil {
+		return api.Spec{}, err
+	}
+	spec := doc.Spec
+	if spec.Prompt.User == "" {
+		spec.Prompt.User = doc.Body
+	}
+	return spec, nil
+}
+
 // overrideSource classifies an override for the row's source badge.
-func overrideSource(ov *verify.PromptOverride) string {
+func overrideSource(ov *verify.PromptSpec) string {
 	switch {
 	case ov.IsZero():
 		return "default"
-	case ov.HasInline():
-		return "inline"
-	default:
+	case ov.File != "":
 		return "file"
+	default:
+		return "inline"
 	}
 }
 
 // promptOverridePtr walks cfg by the descriptor's dotted json path (e.g.
-// "commit.messagePrompt") to the settable *PromptOverride, so any registered
-// prompt is addressable with no per-id code. It fails loud on a bad path or a
-// non-PromptOverride target.
-func promptOverridePtr(cfg *verify.GavelConfig, dotted string) (*verify.PromptOverride, error) {
+// "commit.message") to the settable *PromptSpec, so any registered prompt is
+// addressable with no per-id code. It fails loud on a bad path or a
+// non-PromptSpec target.
+func promptOverridePtr(cfg *verify.GavelConfig, dotted string) (*verify.PromptSpec, error) {
 	v := reflect.ValueOf(cfg).Elem()
 	segments := strings.Split(dotted, ".")
 	for i, seg := range segments {
@@ -244,9 +371,9 @@ func promptOverridePtr(cfg *verify.GavelConfig, dotted string) (*verify.PromptOv
 		}
 		v = field
 	}
-	ov, ok := v.Addr().Interface().(*verify.PromptOverride)
+	ov, ok := v.Addr().Interface().(*verify.PromptSpec)
 	if !ok {
-		return nil, fmt.Errorf("prompt config path %q resolves to %s, not a PromptOverride", dotted, v.Type())
+		return nil, fmt.Errorf("prompt config path %q resolves to %s, not a PromptSpec", dotted, v.Type())
 	}
 	return ov, nil
 }

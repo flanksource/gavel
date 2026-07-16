@@ -18,7 +18,13 @@ vi.mock('@flanksource/clicky-ui/ai', async () => {
       const [label, setLabel] = React.useState('Loading prompt...');
       React.useEffect(() => {
         void props.loadDetail()
-          .then((detail) => setLabel(`${String(detail.spec.model ?? 'Default model')} · ${detail.body}`))
+          .then((detail) =>
+            setLabel(
+              detail.parseError
+                ? `parse error: ${detail.parseError}`
+                : `${String(detail.spec?.model ?? 'Default model')} · ${detail.body}`,
+            ),
+          )
           .catch((error: Error) => setLabel(error.message));
       }, [props.loadDetail]);
       return (
@@ -44,6 +50,16 @@ vi.mock('@flanksource/clicky-ui/ai', async () => {
           >
             Save prompt
           </button>
+          {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky prompt picker itself. */}
+          <button
+            type="button"
+            onClick={async () => {
+              const next = await props.saveDetail({ source: 'inline', raw: 'fixed', baseRaw: 'bad' });
+              props.onChange(next.source === 'file' ? { file: next.path ?? '' } : { inline: next.raw });
+            }}
+          >
+            Repair prompt
+          </button>
         </div>
       );
     },
@@ -59,7 +75,7 @@ const detail: PromptSpecDetail = {
   raw: 'Review {{diff}}.',
 };
 
-function mockFetch(impl: (url: string, init?: RequestInit) => Promise<{ ok: boolean; json: () => Promise<unknown>; text?: () => Promise<string> }>) {
+function mockFetch(impl: (url: string, init?: RequestInit) => Promise<{ ok: boolean; status?: number; json: () => Promise<unknown>; text?: () => Promise<string> }>) {
   vi.stubGlobal('fetch', vi.fn(impl));
 }
 
@@ -142,9 +158,67 @@ describe('PromptOverrideField adapter', () => {
   });
 
   it('surfaces a load error instead of badges', async () => {
-    mockFetch(async () => ({ ok: false, json: async () => ({}), text: async () => 'boom' }));
+    mockFetch(async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' }));
     renderRow();
 
     expect(await screen.findByText('boom')).toBeTruthy();
+  });
+
+  it('delivers a 200 parseError detail to the shared picker', async () => {
+    const invalid: PromptSpecDetail = {
+      id: 'verify',
+      scope: 'global',
+      source: 'inline',
+      parseError: 'parse prompt frontmatter: yaml: line 2: could not find expected \':\'',
+      raw: '---\nmodel: [broken\n---\nbody\n',
+    };
+    mockFetch(async () => ({ ok: true, json: async () => invalid }));
+    renderRow();
+
+    expect(await screen.findByText(`parse error: ${invalid.parseError}`)).toBeTruthy();
+  });
+
+  it('forwards a raw-repair PUT payload and syncs the persisted override', async () => {
+    const saved: PromptSpecDetail = {
+      id: 'verify',
+      scope: 'global',
+      source: 'inline',
+      spec: { model: 'fixed' },
+      body: 'ok',
+      raw: '---\nmodel: fixed\n---\nok',
+    };
+    let putBody = '';
+    mockFetch(async (url, init) => {
+      if (init?.method === 'PUT') {
+        putBody = String(init.body);
+        return { ok: true, json: async () => saved };
+      }
+      return { ok: true, json: async () => detail };
+    });
+    const onChange = renderRow();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Repair prompt' }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ inline: saved.raw }));
+    expect(JSON.parse(putBody)).toEqual({ source: 'inline', raw: 'fixed', baseRaw: 'bad' });
+  });
+
+  it('normalizes a JSON error body into its message', async () => {
+    mockFetch(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+      text: async () => '{"error":"parse prompt frontmatter: line 13"}',
+    }));
+    renderRow();
+
+    expect(await screen.findByText('parse prompt frontmatter: line 13')).toBeTruthy();
+  });
+
+  it('falls back to a status message for an empty error body', async () => {
+    mockFetch(async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => '' }));
+    renderRow();
+
+    expect(await screen.findByText('load failed (500)')).toBeTruthy();
   });
 });

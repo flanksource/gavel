@@ -13,6 +13,27 @@ import type { ChatModel } from '@flanksource/clicky-ui/chat';
 // built-in default is used.
 export type PromptOverrideValue = PromptPickerValue;
 
+// promptResponseError turns a non-ok settings response into a readable Error.
+// Gavel replies with a `{ "error": "..." }` body, so it extracts that message;
+// it falls back to trimmed plain text, then to a status-based fallback. This
+// keeps repair errors human-readable instead of surfacing raw JSON.
+async function promptResponseError(response: Response, fallback: string): Promise<Error> {
+  const text = await response.text().catch(() => '');
+  const trimmed = text.trim();
+  if (trimmed) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: unknown };
+      if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
+        return new Error(parsed.error.trim());
+      }
+    } catch {
+      // Body was not JSON — fall through and surface the plain text as-is.
+    }
+    return new Error(trimmed);
+  }
+  return new Error(fallback);
+}
+
 interface Props {
   value: PromptOverrideValue | undefined;
   onChange: (next: PromptOverrideValue | undefined) => void;
@@ -35,7 +56,7 @@ export function PromptOverrideField({ value, onChange, description, id, title, s
   const loadDetail = useCallback(() => {
     return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
       .then(async (response) => {
-        if (!response.ok) throw new Error((await response.text()) || `load failed (${response.status})`);
+        if (!response.ok) throw await promptResponseError(response, `load failed (${response.status})`);
         return response.json() as Promise<PromptSpecDetail>;
       });
   }, [id, scopeQuery]);
@@ -46,7 +67,7 @@ export function PromptOverrideField({ value, onChange, description, id, title, s
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).then(async (response) => {
-      if (!response.ok) throw new Error((await response.text()) || `save failed (${response.status})`);
+      if (!response.ok) throw await promptResponseError(response, `save failed (${response.status})`);
       return response.json() as Promise<PromptSpecDetail>;
     });
   }, [id, scopeQuery]);
