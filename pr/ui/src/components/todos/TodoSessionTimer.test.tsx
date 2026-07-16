@@ -72,6 +72,24 @@ afterEach(() => {
 });
 
 describe('useSessionStats', () => {
+  it('keeps failed response details out of stats render state', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: async () => JSON.stringify({
+        error: 'captain session conflict: provider session ID "session-1" is ambiguous',
+      }),
+    }));
+
+    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-1', true));
+
+    await waitFor(() => expect(result.current.error).toContain('HTTP 500 Internal Server Error'));
+    expect(result.current.error).toContain('provider session ID "session-1" is ambiguous');
+    expect(result.current.stats).toBeNull();
+    unmount();
+  });
+
   it('continues the live clock across server polls', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-13T12:00:00Z'));

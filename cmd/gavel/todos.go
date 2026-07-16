@@ -23,11 +23,72 @@ import (
 	"github.com/flanksource/gavel/todos/drivers"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 	"github.com/spf13/cobra"
 )
 
+// todosDefaults holds the `.gavel.yaml` `todos` values resolved once per
+// invocation. They sit beneath the CLI flags — and, for model/budget/turns,
+// beneath per-todo frontmatter — giving the precedence:
+//
+//	explicit CLI flag > per-todo frontmatter > .gavel.yaml todos > built-in default
+//
+// The zero value contributes nothing, so flags/frontmatter/built-ins apply
+// exactly as before when no todos config is present.
+type todosDefaults struct {
+	Driver string
+	Model  string
+	// Fallbacks are the .gavel.yaml todos.run fallback models, tried in order
+	// after the primary (captain Model.Candidates).
+	Fallbacks api.ModelList
+	Effort    string
+	MaxCost   float64
+	MaxTurns  int
+	GroupBy   string
+	Timeout   time.Duration
+}
+
+// todosDef is populated by loadTodosDefaults at the start of a run; the driver
+// factory (resolveDriverKind/newDriverConfig) reads it as the base layer.
+var todosDef todosDefaults
+
+// loadTodosDefaults resolves the merged .gavel.yaml `todos` config for workDir
+// into todosDef. A malformed todos.timeout is surfaced, not swallowed.
+func loadTodosDefaults(workDir string) error {
+	cfg, err := verify.LoadGavelConfig(workDir)
+	if err != nil {
+		return err
+	}
+	tc := cfg.Todos
+	todosDef = todosDefaults{
+		Driver:    tc.Driver,
+		Model:     tc.Run.Name,
+		Fallbacks: tc.Run.Model.Fallbacks,
+		Effort:    string(tc.Run.Effort),
+		MaxCost:   tc.Run.Budget.Cost,
+		MaxTurns:  tc.Run.Budget.MaxTurns,
+		GroupBy:   tc.GroupBy,
+	}
+	if strings.TrimSpace(tc.Timeout) != "" {
+		d, err := time.ParseDuration(tc.Timeout)
+		if err != nil {
+			return fmt.Errorf("invalid todos.timeout %q in .gavel.yaml: %w", tc.Timeout, err)
+		}
+		todosDef.Timeout = d
+	}
+	return nil
+}
+
+// runTimeout is the resolved wall-clock deadline: the .gavel.yaml todos.timeout
+// when set, else the built-in 30-minute default.
+func (d todosDefaults) runTimeout() time.Duration {
+	if d.Timeout > 0 {
+		return d.Timeout
+	}
+	return 30 * time.Minute
+}
+
 var (
-	maxRetries    int
 	filterStatus  string
 	checkTimeout  time.Duration
 	maxBudget     float64
@@ -105,7 +166,7 @@ Examples:
   gavel todos run -i                       # interactively select
   gavel todos run --mode plan              # propose plans for review
   gavel todos run --check                  # run checks + fix failures in-loop
-  gavel todos run --driver codex-headless --model o3 # codex-agent app-server
+  gavel todos run --driver cli --model o3            # headless CLI; o3 selects codex
   gavel todos run --dry-run                # preview prompts, no changes`,
 	RunE: runTodosRun,
 }
@@ -155,7 +216,7 @@ Examples:
 	RunE: runTodosCheck,
 }
 
-func runTodosRun(_ *cobra.Command, args []string) error {
+func runTodosRun(cmd *cobra.Command, args []string) error {
 	if err := validateTodosRunOptions(); err != nil {
 		return err
 	}
@@ -168,6 +229,15 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	if err := loadTodosDefaults(workDir); err != nil {
+		return err
+	}
+	// --effort defaults to "medium", so fall back to the todos config only when
+	// the flag was not explicitly set (config still loses to an explicit flag).
+	if !cmd.Flags().Changed("effort") && todosDef.Effort != "" {
+		todoEffort = todosDef.Effort
 	}
 
 	provider, err := newTodosProvider(workDir)
@@ -207,6 +277,9 @@ func runTodosRun(_ *cobra.Command, args []string) error {
 	}
 
 	effectiveGroupBy := groupBy
+	if effectiveGroupBy == "" {
+		effectiveGroupBy = todosDef.GroupBy
+	}
 	if policy, ok := provider.(todos.GroupExecutionPolicy); ok && !policy.SupportsGroupedExecution() {
 		if effectiveGroupBy != "" && effectiveGroupBy != todos.GroupByNone {
 			return fmt.Errorf("--group-by is not supported by the native PostgreSQL runtime; run one issue at a time")
@@ -286,20 +359,19 @@ func newExecutor(workDir string, todo *types.TODO, provider todos.Provider) (tod
 	return drivers.New(kind, cfg)
 }
 
-// resolveDriverKind selects the driver: the explicit --driver flag when set,
-// otherwise "<agent>-cmux" for the model's agent (cmux is the default —
-// drivers.Default; headless is the non-interactive opt-in). --mode selects the
-// todo OPERATION (run/plan), not the mechanism.
-func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
+// resolveDriverKind selects the driver mechanism: the explicit --driver flag
+// when set, otherwise the .gavel.yaml todos.driver, otherwise drivers.Default
+// (cmux; cli is the non-interactive opt-in). The mechanism combines with the
+// model — which alone determines the coding agent — inside drivers.New. --mode
+// selects the todo OPERATION (run/plan), not the mechanism.
+func resolveDriverKind(_ *types.TODO) (drivers.Kind, error) {
 	if strings.TrimSpace(todosDriver) != "" {
 		return drivers.Parse(todosDriver)
 	}
-	model := todoModel
-	if model == "" && todo != nil && todo.LLM != nil {
-		model = todo.LLM.Model
+	if strings.TrimSpace(todosDef.Driver) != "" {
+		return drivers.Parse(todosDef.Driver)
 	}
-	agent, _ := claude.ResolveAgent(model)
-	return drivers.Parse(agent + "-cmux")
+	return drivers.Default, nil
 }
 
 // newDriverConfig assembles the shared driver config from flags and the todo.
@@ -307,15 +379,23 @@ func resolveDriverKind(todo *types.TODO) (drivers.Kind, error) {
 // the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
 // resume by carrying the prior session id explicitly.
 func newDriverConfig(ctx context.Context, kind drivers.Kind, workDir string, todo *types.TODO, provider todos.Provider) (drivers.Config, error) {
-	model := ""
+	// Base layer: the .gavel.yaml todos config. Per-todo frontmatter overrides it,
+	// and an explicit CLI flag overrides that.
+	model := todosDef.Model
 	prior := ""
-	var maxCost float64
-	var turns int
+	maxCost := todosDef.MaxCost
+	turns := todosDef.MaxTurns
 	if todo != nil && todo.LLM != nil {
-		model = todo.LLM.Model
+		if todo.LLM.Model != "" {
+			model = todo.LLM.Model
+		}
 		prior = todo.LLM.SessionId
-		maxCost = todo.LLM.MaxCost
-		turns = todo.LLM.MaxTurns
+		if todo.LLM.MaxCost > 0 {
+			maxCost = todo.LLM.MaxCost
+		}
+		if todo.LLM.MaxTurns > 0 {
+			turns = todo.LLM.MaxTurns
+		}
 	}
 	if todoModel != "" {
 		model = todoModel
@@ -336,13 +416,28 @@ func newDriverConfig(ctx context.Context, kind drivers.Kind, workDir string, tod
 		}
 	}
 
+	// Expand the effective (possibly compact) model into a plain api.Model early,
+	// folding in the config fallbacks, so ResolveAgent / the driver-kind switch in
+	// drivers.New see a plain Name while the fallback chain rides alongside. A
+	// malformed compact string fails loud here rather than at provider construction.
+	eff, err := (api.Model{Name: model, Fallbacks: todosDef.Fallbacks}).Expand()
+	if err != nil {
+		return drivers.Config{}, fmt.Errorf("invalid todos model %q: %w", model, err)
+	}
+	effort := todoEffort
+	if eff.Effort != "" {
+		effort = string(eff.Effort)
+	}
+
 	cfg := drivers.Config{
 		WorkDir:      cwd,
-		Model:        model,
-		Effort:       todoEffort,
+		Model:        eff.Name,
+		Backend:      string(eff.Backend),
+		Fallbacks:    eff.Fallbacks,
+		Effort:       effort,
 		Mode:         todosRunMode,
 		Resume:       resumeSession,
-		Timeout:      30 * time.Minute,
+		Timeout:      todosDef.runTimeout(),
 		MaxBudgetUsd: maxCost,
 		MaxTurns:     turns,
 		Tools:        drivers.DefaultTools(),
@@ -384,7 +479,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing Group %d/%d: %s (%d TODOs) ===",
 			gi+1, len(groups), group.Name, len(group.TODOs)), "text-blue-600 font-bold").ANSI())
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), todosDef.runTimeout())
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		executor, sessionID, err := newExecutor(workDir, group.TODOs[0], provider)
@@ -457,7 +552,7 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), todosDef.runTimeout())
 
 		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		executor, sessionID, err := newExecutor(workDir, todo, provider)

@@ -1,5 +1,5 @@
 -- phase: post
--- dependsOn: 110_todo_captain_projection.sql
+-- dependsOn: 111_todo_projection_triggers.sql
 
 -- One-time migration for issues whose monitored agent activity already
 -- predates the activity propagation trigger.

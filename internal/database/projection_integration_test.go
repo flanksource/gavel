@@ -32,9 +32,15 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 	require.NoError(t, db.Raw(`
 		SELECT count(*) FROM schema_migration_scripts
 		WHERE scope = 'gavel'
-		  AND path IN ('100_todo_captain_constraints.sql', '110_todo_captain_projection.sql')
+		  AND path IN (
+		    '100_todo_captain_constraints.sql',
+		    '105_view_todo_plan_revisions.sql',
+		    '110_todo_projection_functions.sql',
+		    '111_todo_projection_triggers.sql',
+		    '112_view_todo_issue_runtime.sql'
+		  )
 	`).Scan(&scriptRows).Error)
-	assert.EqualValues(t, 2, scriptRows)
+	assert.EqualValues(t, 5, scriptRows)
 
 	workspaceID := uuid.New()
 	require.NoError(t, db.Exec(`

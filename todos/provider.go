@@ -3,6 +3,7 @@ package todos
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -42,9 +43,39 @@ type RunPreparation struct {
 	Mode         types.RunMode
 	ExecutorName string
 	Resume       bool
+	Requested    RunRuntimeSelection
 	// PromptMarkdown is the exact user prompt the executor will dispatch. Native
 	// storage persists it on Captain's prompt run before external execution.
 	PromptMarkdown string
+}
+
+// RunRuntimeSelection records one requested or resolved agent configuration.
+// It deliberately keeps driver/provider/backend/model/effort separate because
+// they describe different resolution layers in Captain.
+type RunRuntimeSelection struct {
+	Provider string `json:"provider,omitempty"`
+	Backend  string `json:"backend,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+}
+
+// RunRuntimeProvider exposes the configuration known before dispatch.
+type RunRuntimeProvider interface {
+	RunRuntimeSelection() RunRuntimeSelection
+}
+
+// RuntimeProviderForBackend maps Captain's built-in backend families to their
+// provider. Unknown custom backends remain unreported instead of being guessed.
+func RuntimeProviderForBackend(backend string) string {
+	backend = strings.ToLower(strings.TrimSpace(backend))
+	switch {
+	case strings.Contains(backend, "claude"):
+		return "anthropic"
+	case strings.Contains(backend, "codex"), strings.Contains(backend, "openai"):
+		return "openai"
+	default:
+		return ""
+	}
 }
 
 // RunPromptProvider exposes the exact initial user prompt an executor will

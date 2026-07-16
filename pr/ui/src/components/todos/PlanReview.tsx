@@ -6,7 +6,14 @@ import type { WorkspaceTodos } from './useWorkspaceTodos';
 import type { TodoEntry } from './todoGroup';
 import { flattenTodos } from './todoGroup';
 import { buildReviewQueue, nextIndexAfterRemoval, reviewableCount } from './reviewQueue';
-import { AnswerBox, PlanApproveButtons, QuestionsPanel, usePlanActions } from './planActions';
+import {
+  AnswerBox,
+  buildTodoAnswerInput,
+  PlanApproveButtons,
+  QuestionsPanel,
+  usePlanActions,
+  type TodoQuestionSelections,
+} from './planActions';
 import { loadLastTodoRunOptions } from './run';
 import { statusClass, statusLabel } from './format';
 
@@ -99,6 +106,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   const current: TodoItem | null = detail ?? queueTodo ?? null;
   const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(sel?.dir ?? '');
   const [answerText, setAnswerText] = useState('');
+  const [questionSelections, setQuestionSelections] = useState<TodoQuestionSelections>({});
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);
   const answerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -107,6 +115,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   // Reset the drafts and any stale error whenever the focused todo changes.
   useEffect(() => {
     setAnswerText('');
+    setQuestionSelections({});
     setChangesText('');
     setShowChanges(false);
     reset();
@@ -114,6 +123,7 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
 
   const ref = current?.ref ?? '';
   const status = current?.status;
+  const questions = current?.questions ?? [];
 
   const onApprove = useCallback(
     async (run: boolean, options?: TodoRunOptions) => {
@@ -128,14 +138,15 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
   );
 
   const onAnswer = useCallback(async () => {
-    if (!ref || !answerText.trim()) return;
-    const result = await answer(ref, answerText);
+    if (!ref) return;
+    const result = await answer(ref, buildTodoAnswerInput(questions, questionSelections, answerText));
     if (!result) return;
     todos.updateItem(result.todo);
     setAnswerText('');
+    setQuestionSelections({});
     review.advanceAfterAction();
     todos.refresh();
-  }, [ref, answerText, answer, todos, review]);
+  }, [ref, questions, questionSelections, answerText, answer, todos, review]);
 
   const onReject = useCallback(async () => {
     if (!ref) return;
@@ -285,12 +296,22 @@ export function PlanReviewBar({ review, todos }: { review: ReviewMode; todos: Wo
       )}
       {status === 'ask' && current && (
         <div className="flex flex-col gap-2">
-          {current.questions && current.questions.length > 0 && <QuestionsPanel questions={current.questions} />}
+          {questions.length > 0 && (
+            <QuestionsPanel
+              questions={questions}
+              selections={questionSelections}
+              onSelectionChange={(questionIndex, option) => {
+                setQuestionSelections(previous => ({ ...previous, [questionIndex]: option }));
+              }}
+              disabled={busy}
+            />
+          )}
           <AnswerBox
             value={answerText}
             onChange={setAnswerText}
             onSubmit={() => void onAnswer()}
             busy={busy}
+            canSubmit={answerText.trim().length > 0 || Object.values(questionSelections).some(value => value.trim().length > 0)}
             inputRef={el => (answerRef.current = el)}
           />
         </div>

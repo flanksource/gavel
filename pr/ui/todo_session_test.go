@@ -94,6 +94,7 @@ func TestStreamCaptainSessionEmitsUnifiedMessages(t *testing.T) {
 	for _, want := range []string{
 		`event: entry`, `"id":"` + messageID.String() + `"`, `"role":"assistant"`,
 		`"toolName":"Bash"`, `go test ./...`, `"source":"codex"`, `"cwd":"/work/captain"`,
+		`"agentId":"` + transcriptID.String() + `"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Captain session stream missing %q in:\n%s", want, body)

@@ -95,7 +95,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		ID:            sessionID,
 		Source:        "gavel",
 		Provider:      executorName,
-		HostID:        "local",
+		HostID:        captaindb.LocalHostID(),
 		Project:       p.workspace.RepoKey,
 		CWD:           cwd,
 		Title:         issue.Title,
@@ -153,11 +153,18 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	}
 
 	promptInput := captaindb.CreatePromptRunInput{
-		ID:                   promptRunID,
-		Origin:               "gavel.todos",
-		SpecProfile:          string(mode),
-		AdmissionKey:         "gavel-todo:" + seed,
-		RenderedSpec:         map[string]any{"workflow": verificationWorkflow(issue.Verification)},
+		ID:           promptRunID,
+		Origin:       "gavel.todos",
+		SpecProfile:  string(mode),
+		AdmissionKey: "gavel-todo:" + seed,
+		RenderedSpec: map[string]any{
+			"workflow": verificationWorkflow(issue.Verification),
+			"runtime": map[string]any{
+				"mode":      string(mode),
+				"driver":    executorName,
+				"requested": runtimeSelectionMap(preparation.Requested),
+			},
+		},
 		PromptMarkdown:       promptMarkdown,
 		VerificationMarkdown: issue.Verification,
 	}
@@ -192,9 +199,8 @@ func verificationWorkflow(fixture string) map[string]any {
 	return workflow
 }
 
-// RecordRunStart binds the external provider identity to the admission root,
-// then advances lifecycle on the monitored Claude/Codex session itself. The
-// source='gavel' root exists only to admit and group prompt runs.
+// RecordRunStart binds the external provider identity and execution thread to
+// the prompt run. Provider-thread lifecycle remains monitor-owned.
 func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadata todos.RunStartMetadata) error {
 	active, err := p.loadActiveRun(ctx, todo)
 	if err != nil {
@@ -215,20 +221,9 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		}
 		active.session = root
 	}
-	agentSession, err := p.ensureAgentSession(ctx, active.session)
+	agentSession, err := p.ensureAgentSession(ctx, active.session, metadata)
 	if err != nil {
 		return err
-	}
-	if agentSession != nil {
-		lifecycle := captaindb.SessionLifecycleRunning
-		activity := captaindb.SessionActivityWorking
-		reason := runStartReason(metadata)
-		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
-			ID: agentSession.ID, ExpectedVersion: agentSession.StateVersion,
-			LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
-		}); err != nil {
-			return fmt.Errorf("record monitored Captain session start: %w", err)
-		}
 	}
 
 	state := captaindb.PromptRunStateRunning
@@ -237,10 +232,23 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		phase = captaindb.PromptRunPhaseVerify
 	}
 	if !terminalPromptRun(active.run.State) {
-		if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
+		renderedSpec := cloneMap(active.run.RenderedSpec)
+		runtimeSpec := mapValue(renderedSpec["runtime"])
+		runtimeSpec["mode"] = strings.TrimSpace(metadata.Mode)
+		runtimeSpec["driver"] = strings.TrimSpace(metadata.Driver)
+		runtimeSpec["resolved"] = runtimeSelectionMap(todos.RunRuntimeSelection{
+			Provider: metadata.Provider, Backend: metadata.Backend,
+			Model: metadata.ResolvedModel, Effort: metadata.Effort,
+		})
+		renderedSpec["runtime"] = runtimeSpec
+		update := captaindb.UpdatePromptRunInput{
 			ID: active.run.ID, ExpectedVersion: active.run.Version,
-			State: &state, Phase: &phase,
-		}); err != nil {
+			State: &state, Phase: &phase, RenderedSpec: &renderedSpec,
+		}
+		if agentSession != nil {
+			update.ExecutionSessionID = &agentSession.ID
+		}
+		if _, err := p.captain.UpdatePromptRun(ctx, update); err != nil {
 			return fmt.Errorf("record Captain prompt-run start: %w", err)
 		}
 	}
@@ -342,7 +350,7 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 		}
 	}
 
-	state, phase, lifecycle, activity, reason := terminalState(result, active.link.StepKind)
+	state, phase, _, _, reason := terminalState(result, active.link.StepKind)
 	resultText := ""
 	resultJSON := executionResultJSON(result)
 	errorText := ""
@@ -363,18 +371,6 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 			return true, fmt.Errorf("finish Captain prompt run: %w", updateErr)
 		}
 		active.run = updatedRun
-	}
-	currentSession, err := p.ensureAgentSession(ctx, active.session)
-	if err != nil {
-		return true, err
-	}
-	if currentSession != nil && (!terminalSession(currentSession.LifecycleStatus) || lifecycle == captaindb.SessionLifecycleRunning) {
-		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
-			ID: currentSession.ID, ExpectedVersion: currentSession.StateVersion,
-			LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
-		}); err != nil {
-			return true, fmt.Errorf("finish Captain session: %w", err)
-		}
 	}
 	if state != captaindb.PromptRunStateWaiting {
 		p.clearPrepared(active.issue.ID, active.run.ID)
@@ -426,20 +422,6 @@ func (p *Provider) failPromptRun(ctx context.Context, active *activeRun, reason 
 			return err
 		}
 	}
-	session, err := p.ensureAgentSession(ctx, active.session)
-	if err != nil {
-		return err
-	}
-	if session != nil && !terminalSession(session.LifecycleStatus) {
-		lifecycle := captaindb.SessionLifecycleFailed
-		activity := captaindb.SessionActivityIdle
-		if _, err := p.captain.UpdateSessionState(ctx, captaindb.UpdateSessionStateInput{
-			ID: session.ID, ExpectedVersion: session.StateVersion,
-			LifecycleStatus: &lifecycle, ActivityState: &activity, StateReason: &reason,
-		}); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -459,7 +441,7 @@ func agentSessionSource(executor string) string {
 // Captain's transcript ingestor uses the same (source, host, provider ID)
 // identity, so later ingest enriches this row rather than creating another
 // agent record. The admission root remains a separate bookkeeping row.
-func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.Session) (*captaindb.Session, error) {
+func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.Session, metadata todos.RunStartMetadata) (*captaindb.Session, error) {
 	if admission == nil || strings.TrimSpace(admission.ProviderSessionID) == "" {
 		return nil, nil
 	}
@@ -470,7 +452,8 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 	session, err := p.captain.CreateOrGetSession(ctx, captaindb.CreateSessionInput{
 		ProviderSessionID: admission.ProviderSessionID,
 		Source:            source,
-		HostID:            admission.HostID,
+		Provider:          strings.TrimSpace(metadata.Provider),
+		HostID:            captaindb.LocalHostID(),
 		Project:           admission.Project,
 		CWD:               admission.CWD,
 		Title:             admission.Title,
@@ -482,6 +465,38 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 		return nil, fmt.Errorf("resolve monitored Captain session: %w", err)
 	}
 	return session, nil
+}
+
+func runtimeSelectionMap(selection todos.RunRuntimeSelection) map[string]any {
+	values := map[string]any{}
+	if value := strings.TrimSpace(selection.Provider); value != "" {
+		values["provider"] = value
+	}
+	if value := strings.TrimSpace(selection.Backend); value != "" {
+		values["backend"] = value
+	}
+	if value := strings.TrimSpace(selection.Model); value != "" {
+		values["model"] = value
+	}
+	if value := strings.TrimSpace(selection.Effort); value != "" {
+		values["effort"] = value
+	}
+	return values
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func mapValue(value any) map[string]any {
+	if values, ok := value.(map[string]any); ok {
+		return cloneMap(values)
+	}
+	return map[string]any{}
 }
 
 func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, active *activeRun, result *todos.ExecutionResult) error {
@@ -781,6 +796,17 @@ func terminalState(result *todos.ExecutionResult, step native.StepKind) (
 		return captaindb.PromptRunStateFailed, captaindb.PromptRunPhaseGenerate,
 			captaindb.SessionLifecycleFailed, captaindb.SessionActivityIdle, "agent run returned no result"
 	}
+	if result.Cancelled {
+		reason := strings.TrimSpace(result.Summary)
+		if reason == "" {
+			reason = strings.TrimSpace(result.ErrorMessage)
+		}
+		if reason == "" {
+			reason = todos.ErrExecutionCancelled.Error()
+		}
+		return captaindb.PromptRunStateCancelled, phase,
+			captaindb.SessionLifecycleCancelled, captaindb.SessionActivityIdle, reason
+	}
 	if result.EndStatus == types.EndAsk {
 		return captaindb.PromptRunStateWaiting, captaindb.PromptRunPhaseGenerate,
 			captaindb.SessionLifecycleRunning, captaindb.SessionActivityAsk, strings.TrimSpace(result.Summary)
@@ -811,7 +837,7 @@ func executionResultJSON(result *todos.ExecutionResult) map[string]any {
 		return map[string]any{}
 	}
 	out := map[string]any{
-		"success": result.Success, "skipped": result.Skipped,
+		"success": result.Success, "skipped": result.Skipped, "cancelled": result.Cancelled,
 		"executor": result.ExecutorName, "tokens": result.TokensUsed,
 		"costUsd": result.CostUSD, "turns": result.NumTurns,
 		"summary": result.Summary, "endStatus": result.EndStatus,
@@ -826,31 +852,10 @@ func executionResultJSON(result *todos.ExecutionResult) map[string]any {
 	return out
 }
 
-func runStartReason(metadata todos.RunStartMetadata) string {
-	parts := make([]string, 0, 3)
-	if value := strings.TrimSpace(metadata.Mode); value != "" {
-		parts = append(parts, "mode="+value)
-	}
-	if value := strings.TrimSpace(metadata.ResolvedModel); value != "" {
-		parts = append(parts, "model="+value)
-	}
-	if value := strings.TrimSpace(metadata.Effort); value != "" {
-		parts = append(parts, "effort="+value)
-	}
-	return strings.Join(parts, " ")
-}
-
 func terminalPromptRun(state captaindb.PromptRunState) bool {
 	return state == captaindb.PromptRunStateSucceeded ||
 		state == captaindb.PromptRunStateFailed ||
 		state == captaindb.PromptRunStateCancelled
-}
-
-func terminalSession(state captaindb.SessionLifecycleStatus) bool {
-	return state == captaindb.SessionLifecycleSucceeded ||
-		state == captaindb.SessionLifecycleFailed ||
-		state == captaindb.SessionLifecycleCancelled ||
-		state == captaindb.SessionLifecycleInterrupted
 }
 
 func (p *Provider) markPrepared(issueID, runID uuid.UUID) {

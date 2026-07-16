@@ -263,7 +263,7 @@ func TestNewDriverConfigModelOverride(t *testing.T) {
 	todoModel = "opus"
 	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
 
-	cfg, err := newDriverConfig(context.Background(), drivers.ClaudeHeadless, "/repo", todo, nil)
+	cfg, err := newDriverConfig(context.Background(), drivers.Cli, "/repo", todo, nil)
 	if err != nil {
 		t.Fatalf("newDriverConfig: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestNewDriverConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
 			PlanPath: "/definitely/not/a/runtime/plan.md",
 		},
 	}
-	cfg, err := newDriverConfig(context.Background(), drivers.ClaudeHeadless, "/repo", todo, provider)
+	cfg, err := newDriverConfig(context.Background(), drivers.Cli, "/repo", todo, provider)
 	if err != nil {
 		t.Fatalf("newDriverConfig: %v", err)
 	}

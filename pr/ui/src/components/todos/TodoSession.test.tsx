@@ -1,47 +1,12 @@
 import type React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ApprovalBanner, formatQuestionApprovalMessage } from './TodoSession';
+import { useSessionStatus } from './TodoSession';
+import { SessionErrorDetails } from './SessionErrorDetails';
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
+  SessionInspector: () => <div data-testid="session-inspector" />,
   SessionViewer: () => <div data-testid="session-viewer" />,
-  questionsFromToolInput: (input?: Record<string, unknown>) => {
-    if (!input) return [];
-    const raw = input.questions;
-    if (Array.isArray(raw)) {
-      return raw.map((q, index) => {
-        const record = q as Record<string, unknown>;
-        const text = String(record.question || record.text || record.prompt || '').trim();
-        if (!text) return null;
-        return {
-          id: String(record.id || index + 1),
-          text,
-          context: typeof record.header === 'string' ? record.header : undefined,
-          multiSelect: record.multiSelect === true,
-          options: Array.isArray(record.options)
-            ? record.options.map(option => {
-                if (typeof option === 'string') return { value: option, label: option };
-                const optionRecord = option as Record<string, unknown>;
-                return {
-                  value: String(optionRecord.value || optionRecord.id || optionRecord.label),
-                  label: String(optionRecord.label),
-                  description: typeof optionRecord.description === 'string' ? optionRecord.description : undefined,
-                };
-              })
-            : [],
-        };
-      }).filter(Boolean);
-    }
-    const text = String(input.question || input.prompt || input.text || '').trim();
-    if (!text) return [];
-    return [{
-      id: '1',
-      text,
-      context: typeof input.header === 'string' ? input.header : undefined,
-      multiSelect: false,
-      options: [],
-    }];
-  },
 }));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
@@ -64,143 +29,87 @@ vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => {
     ...(await importOriginal<object>()),
     UiCancel: Icon,
     UiCheck: Icon,
+    UiChevronDown: Icon,
+    UiChevronRight: Icon,
     UiCircleFilled: Icon,
     UiComment: Icon,
+    UiCopy: Icon,
     UiError: Icon,
     UiLightbulb: Icon,
     UiPass: Icon,
     UiShield: Icon,
+    UiWarningTriangle: Icon,
   };
 });
 
-describe('ApprovalBanner', () => {
-  it('shows AskUserQuestion options and submits the selected answer', () => {
-    const onDecide = vi.fn();
-    render(
-      <ApprovalBanner
-        approval={{
-          sessionId: 'session-1',
-          toolUseId: 'tool-1',
-          tool: 'AskUserQuestion',
-          input: {
-            questions: [{
-              question: 'Which scope should the rule use?',
-              header: 'Scope',
-              options: [{ label: 'Project', description: 'Current workspace' }, { label: 'Global' }],
-            }],
-          },
-        }}
-        busy={false}
-        onDecide={onDecide}
-      />,
-    );
-
-    expect(screen.getByText('Which scope should the rule use?')).toBeTruthy();
-    expect(screen.getByText('Scope')).toBeTruthy();
-    expect(screen.getByText('Project')).toBeTruthy();
-    expect(screen.getByText('Current workspace')).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText(/Project/));
-    fireEvent.change(screen.getByPlaceholderText(/Additional details/), { target: { value: 'Use the project scope' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }));
-
-    expect(onDecide).toHaveBeenCalledWith(true, 'Scope: Project\nAdditional details: Use the project scope');
-  });
-
-  it('shows normal permission approval details and keeps the allow action', () => {
-    const onDecide = vi.fn();
-    render(
-      <ApprovalBanner
-        approval={{
-          sessionId: 'session-1',
-          tool: 'Bash',
-          input: { command: 'npm test' },
-        }}
-        busy={false}
-        onDecide={onDecide}
-      />,
-    );
-
-    expect(screen.getAllByText('npm test').length).toBeGreaterThanOrEqual(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
-    expect(onDecide).toHaveBeenCalledWith(true);
-  });
-
-  it('submits reject comments for permission approvals', () => {
-    const onDecide = vi.fn();
-    render(
-      <ApprovalBanner
-        approval={{
-          sessionId: 'session-1',
-          tool: 'Bash',
-          input: { command: 'npm test' },
-        }}
-        busy={false}
-        onDecide={onDecide}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reject with comment' }));
-    fireEvent.change(screen.getByPlaceholderText(/why this request is rejected/), {
-      target: { value: 'Tests are already running' },
+describe('session errors', () => {
+  it('keeps the complete backend error from a failed stats request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: async () => JSON.stringify({
+        error: 'captain session conflict: provider session ID "session-1" is ambiguous',
+        matches: ['captain-1', 'captain-2'],
+      }),
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Reject with comment' }));
+    vi.stubGlobal('fetch', fetchMock);
 
-    expect(onDecide).toHaveBeenCalledWith(false, 'Tests are already running');
+    const { result, unmount } = renderHook(() => useSessionStatus('/repo', 'session-1', true));
+
+    await waitFor(() => expect(result.current.error).toContain('HTTP 500 Internal Server Error'));
+    expect(result.current.error).toContain('provider session ID "session-1" is ambiguous');
+    expect(result.current.error).toContain('"captain-1"');
+    expect(result.current.error).toContain('"captain-2"');
+    unmount();
+    vi.unstubAllGlobals();
   });
 
-  it('keeps a free-text answer fallback for unstructured question payloads', () => {
-    const onDecide = vi.fn();
-    render(
-      <ApprovalBanner
-        approval={{
-          sessionId: 'session-1',
-          toolUseId: 'tool-1',
-          tool: 'AskUserQuestion',
-          input: { questions: [{ options: ['Yes', 'No'] }] },
-        }}
-        busy={false}
-        onDecide={onDecide}
-      />,
-    );
-
-    fireEvent.change(screen.getByPlaceholderText("Answer the agent's question..."), {
-      target: { value: 'Use the project scope' },
+  it('reveals and copies every labeled session error', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }));
+    render(<SessionErrorDetails errors={[
+      { source: 'Session stream', message: 'stream failed\nprovider session ID is ambiguous' },
+      { source: 'Session status', message: 'HTTP 500 Internal Server Error\nsecond backend detail' },
+    ]} />);
 
-    expect(onDecide).toHaveBeenCalledWith(true, 'Use the project scope');
-  });
-});
+    expect(screen.queryByText('provider session ID is ambiguous')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+    expect(screen.getByText(/provider session ID is ambiguous/)).toBeTruthy();
+    expect(screen.getByText(/second backend detail/)).toBeTruthy();
 
-describe('formatQuestionApprovalMessage', () => {
-  it('formats selected options, free text and additional details', () => {
-    expect(formatQuestionApprovalMessage([
-      {
-        id: 'scope',
-        text: 'Which scope?',
-        context: 'Scope',
-        options: [
-          { value: 'project', label: 'Project' },
-          { value: 'global', label: 'Global' },
-        ],
-      },
-      {
-        id: 'reason',
-        text: 'Why?',
-        options: [],
-      },
-    ], {
-      scope: 'project',
-      reason: 'It matches the current workspace',
-    }, 'Keep it narrow')).toBe([
-      'Scope: Project',
-      'reason: It matches the current workspace',
-      'Additional details: Keep it narrow',
-    ].join('\n'));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy error details' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith([
+      'Session stream',
+      'stream failed\nprovider session ID is ambiguous',
+      '',
+      'Session status',
+      'HTTP 500 Internal Server Error\nsecond backend detail',
+    ].join('\n')));
   });
 
-  it('formats fallback answers without a label when no question parsed', () => {
-    expect(formatQuestionApprovalMessage([], {}, 'Use the project scope')).toBe('Use the project scope');
+  it('uses the DOM copy path when clipboard permission is denied', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard permission denied'));
+    const execCommand = vi.fn().mockReturnValue(true);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+    render(<SessionErrorDetails errors={[
+      { source: 'Session status', message: 'HTTP 500 Internal Server Error' },
+    ]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy error details' }));
+
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(screen.getByRole('button', { name: 'Copy error details' }).textContent).toContain('Copied');
   });
 });

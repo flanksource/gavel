@@ -56,17 +56,17 @@ func ResolveTemplate(dir string, mode types.RunMode) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load .gavel.yaml for todos prompts: %w", err)
 	}
-	var override verify.PromptOverride
+	var override verify.PromptSpec
 	var key string
 	switch mode {
 	case types.ModeRun:
-		override, key = cfg.Todos.RunPrompt, "todos.runPrompt"
+		override, key = cfg.Todos.Run, "todos.run"
 	case types.ModePlan:
-		override, key = cfg.Todos.PlanPrompt, "todos.planPrompt"
+		override, key = cfg.Todos.Plan, "todos.plan"
 	default:
 		return "", fmt.Errorf("mode %q has no todo prompt template", mode)
 	}
-	tmpl, err := override.Resolve(dir, "")
+	tmpl, err := override.TemplateSource(dir, "")
 	if err != nil {
 		return "", fmt.Errorf("resolve %s override: %w", key, err)
 	}
@@ -189,17 +189,15 @@ func Prompts() []prompts.Prompt {
 			ID:          prompts.TodosRun,
 			Title:       "Todo run prompt",
 			Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
-			ConfigPath:  "todos.runPrompt",
+			ConfigPath:  "todos.run",
 			Default:     runTemplate,
-			ModelPolicy: prompts.ModelFromPrompt,
 		},
 		{
 			ID:          prompts.TodosPlan,
 			Title:       "Todo plan prompt",
 			Description: "The agent prompt for plan-mode runs: read-only investigation that produces a reviewable implementation plan.",
-			ConfigPath:  "todos.planPrompt",
+			ConfigPath:  "todos.plan",
 			Default:     planTemplate,
-			ModelPolicy: prompts.ModelFromPrompt,
 		},
 	}
 }

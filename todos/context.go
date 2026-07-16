@@ -31,6 +31,9 @@ type ExecutorContext struct {
 type RunStartMetadata struct {
 	SessionID     string
 	Mode          string
+	Driver        string
+	Provider      string
+	Backend       string
 	ResolvedModel string
 	Effort        string
 }

@@ -21,22 +21,41 @@ import (
 // permission mode are the defaults; explicit user config overrides them. It
 // returns the request, the fresh provider session id (cmux only), and the
 // tool-permission broker.
-func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO, base captainai.Request, resume bool) (captainai.Request, string, captainai.PermissionFunc) {
+func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO, base captainai.Request, resume bool) (captainai.Request, string, captainai.PermissionFunc, error) {
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	req := base
-	req.Budget = api.Budget{MaxTurns: e.config.MaxTurns}
+	req.Budget = api.Budget{MaxTurns: e.config.MaxTurns, Cost: e.config.MaxBudgetUsd}
 	req.SetCwd(workDir)
+	// Expand a compact model string ("opus:high", "agent:opus, sonnet:medium")
+	// into a plain Name plus Backend/Effort and a Fallbacks chain; a plain name is
+	// returned unchanged. Config.Fallbacks (the resolved .gavel.yaml/CLI fallbacks)
+	// are folded in so captain's Candidates() tries them after the primary.
+	expanded, err := (api.Model{Name: strings.TrimSpace(e.config.Model), Fallbacks: e.config.Fallbacks}).Expand()
+	if err != nil {
+		return captainai.Request{}, "", nil, fmt.Errorf("%s: invalid model %q: %w", e.Name(), e.config.Model, err)
+	}
 	// claude conveys effort through the prompt directive (rendered by
-	// todos/prompt); codex takes a real reasoning-effort flag.
+	// todos/prompt); codex takes a real reasoning-effort flag. The explicit
+	// Config.Effort wins; a compact model's effort applies only when none is set.
+	effort := e.config.Effort
+	if effort == "" {
+		effort = string(expanded.Effort)
+	}
 	if e.config.Agent == "codex" {
-		req.Effort = api.Effort(e.config.Effort)
+		req.Effort = api.Effort(effort)
 	}
 	// Explicit user model/backend overrides win over the template frontmatter.
-	if m := strings.TrimSpace(e.config.Model); m != "" {
-		req.Name = m
+	if expanded.Name != "" {
+		req.Name = expanded.Name
+	}
+	if expanded.Backend != "" {
+		req.Backend = expanded.Backend
 	}
 	if b := strings.TrimSpace(e.config.Backend); b != "" {
 		req.Backend = captainai.Backend(b)
+	}
+	if len(expanded.Fallbacks) > 0 {
+		req.Model.Fallbacks = expanded.Fallbacks
 	}
 
 	templateMode := base.Permissions.Mode
@@ -107,7 +126,7 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 			req.Permissions.Tools.Allow = withoutBash(e.config.Tools)
 		}
 	}
-	return req, providerSessionID, canUseTool
+	return req, providerSessionID, canUseTool, nil
 }
 
 // resolveMode picks the request's base permission posture: an explicit user

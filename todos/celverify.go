@@ -9,7 +9,6 @@ import (
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 	"github.com/google/cel-go/cel"
 )
 
@@ -281,32 +280,35 @@ func verifierFeedback(results []fixtures.FixtureResult, checklist []map[string]a
 	return strings.Join(parts, "\n")
 }
 
-// checklistFromResult maps the ai checklist step's per-criterion verify result
-// into the CEL `results.checklist` shape ([]{item, passed, message}). A step that
-// errored before producing results surfaces as a single failed item so the
+// checklistFromResult maps the ai checklist step's per-criterion verdicts into
+// the CEL `results.checklist` shape ([]{item, passed, message}). A step that
+// errored before producing verdicts surfaces as a single failed item so the
 // predicate never verifies on a missing checklist.
 func checklistFromResult(res fixtures.FixtureResult) []map[string]any {
-	vr := verifyResultFrom(res)
-	if vr == nil {
+	verdicts := checklistVerdicts(res)
+	if verdicts == nil {
 		return []map[string]any{{"item": res.Name, "passed": false, "message": res.Error}}
 	}
-	checklist := make([]map[string]any, 0, len(vr.AcceptanceCriteria))
-	for _, c := range vr.AcceptanceCriteria {
+	checklist := make([]map[string]any, 0, len(verdicts))
+	for _, c := range verdicts {
 		checklist = append(checklist, map[string]any{
-			"item":    c.Criteria,
-			"passed":  c.Pass,
-			"message": c.Comments,
+			"item":    c.Item,
+			"passed":  c.Passed,
+			"message": c.Message,
 		})
 	}
 	return checklist
 }
 
-func verifyResultFrom(res fixtures.FixtureResult) *verify.VerifyResult {
+// checklistVerdicts pulls the ai-step's per-item results back off the fixture
+// result (stored under Metadata["checklist"] by RunAIStep). nil when the step did
+// not produce a checklist (e.g. it errored building the agent).
+func checklistVerdicts(res fixtures.FixtureResult) []fixtures.ChecklistResult {
 	if res.Metadata == nil {
 		return nil
 	}
-	if vr, ok := res.Metadata["verify"].(*verify.VerifyResult); ok {
-		return vr
+	if verdicts, ok := res.Metadata["checklist"].([]fixtures.ChecklistResult); ok {
+		return verdicts
 	}
 	return nil
 }

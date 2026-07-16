@@ -251,6 +251,7 @@ type todoRunPreviewResponse struct {
 
 type todoRunRequest struct {
 	Provider todos.Provider
+	Registry *todoRunRegistry
 	// Todos are executed together in a single agent session (multi-select run);
 	// a single-element slice is the ordinary one-todo run.
 	Todos   []*types.TODO
@@ -844,6 +845,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	opts.Spec.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
+		Registry: &s.todoRuns,
 		Todos:    todoList,
 		Source:   source,
 		Backend:  backend,
@@ -1359,16 +1361,17 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if err != nil {
 		return todoRunOptions{}, err
 	}
-	agent := kind.Agent()
 	backend, model, err := resolveTodoRunBackendModel(kind, string(payload.Backend), payload.Name)
 	if err != nil {
 		return todoRunOptions{}, err
 	}
+	// The coding agent is derived from the resolved model, not the driver.
+	agent, _ := claude.ResolveAgent(model)
 
 	// Mode is the legacy mechanism label (cmux vs inline) some response/preview
 	// paths still read; the authoritative selection is Driver.
 	mode := "inline"
-	if kind.Mechanism() == "cmux" {
+	if kind == drivers.Cmux {
 		mode = "cmux"
 	}
 
@@ -1444,15 +1447,25 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 }
 
 func defaultStartTodoRun(req todoRunRequest) error {
+	if req.Registry == nil {
+		return errors.New("todo run registry is required")
+	}
 	executor, sessionID, err := newTodoRunExecutor(req)
 	if err != nil {
 		return err
 	}
+	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
+	runCtx, stop := context.WithCancelCause(ctx)
+	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), strings.HasPrefix(executor.Name(), "headless-"), stop)
+	if err != nil {
+		timeoutCancel()
+		return err
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), req.Options.timeout())
-		defer cancel()
+		defer timeoutCancel()
+		defer cleanup()
 
-		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
+		execCtx := todos.NewExecutorContext(runCtx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
 		runner.SetResume(req.Options.Resume)
@@ -1469,7 +1482,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 				result = results[0]
 			}
 		}
-		if runErr != nil {
+		if runErr != nil && (result == nil || !result.Cancelled) {
 			logger.Warnf("todo run %s failed: %v", todoRunLabel(req.Todos), runErr)
 		}
 		maybeCommitAfterRun(req, result)
@@ -1507,9 +1520,10 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	// `gavel todos check` re-run it manually.
 }
 
-// resolveDriverFromPayload selects the driver kind: the explicit Driver field
-// when set, otherwise the legacy agent+mode pair (mode cmux → "<agent>-cmux",
-// mode inline → claude-sdk; codex was never an inline agent).
+// resolveDriverFromPayload selects the driver mechanism: the explicit Driver
+// field when set, otherwise the legacy agent+mode pair (mode cmux → cmux, mode
+// inline → sdk; codex was never an inline agent). The driver is mechanism-only;
+// the coding agent is derived from the model downstream.
 func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 	if s := strings.TrimSpace(p.Driver); s != "" {
 		return drivers.Parse(s)
@@ -1524,12 +1538,12 @@ func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 	}
 	switch mode {
 	case "cmux":
-		return drivers.Parse(agent + "-cmux")
+		return drivers.Cmux, nil
 	case "inline":
 		if agent == "codex" {
 			return "", fmt.Errorf("codex runs require a cmux driver")
 		}
-		return drivers.ClaudeSDK, nil
+		return drivers.Sdk, nil
 	default:
 		return "", fmt.Errorf("invalid mode %q", p.Mode)
 	}
@@ -1573,6 +1587,7 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 		WorkDir:        req.Source.Dir,
 		Model:          req.Options.Spec.Name,
 		Backend:        string(req.Options.Spec.Backend),
+		Fallbacks:      req.Options.Spec.Model.Fallbacks,
 		Effort:         string(req.Options.Spec.Effort),
 		Mode:           mode,
 		ExistingPlan:   existingPlan,

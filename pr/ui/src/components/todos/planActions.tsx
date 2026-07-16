@@ -1,39 +1,50 @@
-import { useCallback, useEffect, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useState, type KeyboardEvent } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { UiCancel, UiCheck, UiChevronDown, UiEdit, UiEye, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoQuestion, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
-import {
-  defaultRunOptions,
-  loadLastTodoRunOptions,
-  rememberTodoRunOptions,
-  runButtonQualifierForOptions,
-  TodoRunDropdownContent,
-  useTodoRunContext,
-} from './run';
+import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, runButtonQualifierForOptions, TodoRunDropdownContent, useTodoRunContext } from './run';
 
-// Plan-review actions shared by the TodoDetail surfacing and Plan Review mode:
-// approving a reviewed plan (optionally chaining the implementing run) and
-// answering an agent's blocking questions. Both hit the domain endpoints that
-// validate the todo's state server-side, so a stale view gets a 409 rather than
-// silently clobbering a concurrent change.
-
-// Server response of POST /api/todos/plan/approve.
 export interface PlanApproveResult {
   todo: TodoItem;
   run?: { status: string; message?: string; sessionId?: string };
 }
 
-// Server response of POST /api/todos/answer.
 export interface PlanAnswerResult {
   todo: TodoItem;
   sessionId?: string;
   status: string;
 }
 
-// usePlanActions exposes approve/answer against a workspace, with shared
-// busy/error state so a bar or a detail pane can drive either action.
+export type TodoQuestionSelections = Record<number, string>;
+export interface TodoAnswerInput {
+  answer?: string;
+  answers?: Record<string, string>;
+  options?: TodoRunOptions;
+}
+export function buildTodoAnswerInput(questions: TodoQuestion[], selections: TodoQuestionSelections, details: string): TodoAnswerInput {
+  const questionTexts = questions.map((question, index) => question.text.trim() || `Question ${index + 1}`);
+  const textCounts = questionTexts.reduce<Record<string, number>>((counts, text) => {
+    counts[text] = (counts[text] ?? 0) + 1;
+    return counts;
+  }, {});
+  const trimmedDetails = details.trim();
+  const answers: Record<string, string> = {};
+
+  questions.forEach((_question, index) => {
+    const selection = selections[index]?.trim();
+    if (!selection) return;
+    const text = questionTexts[index];
+    const needsNumber = textCounts[text] > 1 || (trimmedDetails && text === 'Additional details');
+    answers[needsNumber ? `${text} (${index + 1})` : text] = selection;
+  });
+
+  if (Object.keys(answers).length === 0) return { answer: trimmedDetails };
+  if (trimmedDetails) answers['Additional details'] = trimmedDetails;
+  return { answers };
+}
+
 export function usePlanActions(dir: string) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -67,14 +78,26 @@ export function usePlanActions(dir: string) {
   );
 
   const answer = useCallback(
-    async (ref: string, text: string, options?: TodoRunOptions): Promise<PlanAnswerResult | null> => {
-      const trimmed = text.trim();
-      if (busy || !ref.trim() || !trimmed) return null;
+    async (ref: string, input: TodoAnswerInput): Promise<PlanAnswerResult | null> => {
+      const trimmedAnswer = input.answer?.trim() ?? '';
+      const normalizedAnswers = Object.fromEntries(
+        Object.entries(input.answers ?? {})
+          .map(([question, value]) => [question.trim(), value.trim()])
+          .filter(([question, value]) => question && value),
+      );
+      const hasAnswers = Object.keys(normalizedAnswers).length > 0;
+      if (busy || !ref.trim() || (!trimmedAnswer && !hasAnswers)) return null;
+      if (trimmedAnswer && hasAnswers) {
+        setError('Answer must use either free text or structured selections, not both');
+        return null;
+      }
       setBusy(true);
       setError('');
       try {
-        const body: Record<string, unknown> = { ref: ref.trim(), answer: trimmed };
-        if (options) body.options = options;
+        const body: Record<string, unknown> = { ref: ref.trim() };
+        if (hasAnswers) body.answers = normalizedAnswers;
+        else body.answer = trimmedAnswer;
+        if (input.options) body.options = input.options;
         const res = await fetch(`/api/todos/answer?${todoQuery(dir)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -146,9 +169,6 @@ export function usePlanActions(dir: string) {
   return { busy, error, reset, approve, answer, reject, revise };
 }
 
-// PlanApproveButtons is the review action pair: primary "Approve & Run" (→ the
-// implementing run) and secondary "Approve" (→ pending, run later). Rendered
-// whenever a todo is in `review`.
 export function PlanApproveButtons({
   busy,
   onApprove,
@@ -158,9 +178,6 @@ export function PlanApproveButtons({
 }: {
   busy?: boolean;
   onApprove: (run: boolean, options?: TodoRunOptions) => void;
-  // Optional secondary actions: reject the plan (→ pending) and request changes
-  // (reveal a feedback box that re-plans on the same session). Rendered only when
-  // the caller wires them.
   onReject?: () => void;
   onRequestChanges?: () => void;
   size?: 'sm' | 'default';
@@ -264,10 +281,13 @@ export function PlanApproveButtons({
   );
 }
 
-// QuestionsPanel lists an agent's blocking questions (with any context and
-// suggested options) above the answer box, so a reviewer sees exactly what the
-// agent is stuck on.
-export function QuestionsPanel({ questions }: { questions: TodoQuestion[] }) {
+export function QuestionsPanel({
+  questions,
+  selections,
+  onSelectionChange,
+  disabled,
+}: { questions: TodoQuestion[]; selections: TodoQuestionSelections; onSelectionChange: (questionIndex: number, option: string) => void; disabled?: boolean }) {
+  const groupId = useId();
   if (questions.length === 0) return null;
   return (
     <ul className="flex flex-col gap-2">
@@ -279,11 +299,22 @@ export function QuestionsPanel({ questions }: { questions: TodoQuestion[] }) {
               <div className="font-medium text-foreground">{q.text}</div>
               {q.context && <div className="mt-0.5 text-xs text-muted-foreground">{q.context}</div>}
               {q.options && q.options.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1">
+                <div className="mt-1 flex flex-col gap-1">
                   {q.options.map((opt, j) => (
-                    <span key={j} className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                      {opt}
-                    </span>
+                    <label
+                      key={j}
+                      className={`flex items-center gap-1.5 rounded border border-border bg-muted px-1.5 py-1 text-[11px] text-muted-foreground ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-muted/80'}`}
+                    >
+                      <input
+                        type="radio"
+                        name={`${groupId}-question-${i}`}
+                        value={opt}
+                        checked={selections[i] === opt}
+                        disabled={disabled}
+                        onChange={() => onSelectionChange(i, opt)}
+                      />
+                      <span>{opt}</span>
+                    </label>
                   ))}
                 </div>
               )}
@@ -295,10 +326,6 @@ export function QuestionsPanel({ questions }: { questions: TodoQuestion[] }) {
   );
 }
 
-// TodoReviewBanner surfaces the approve/answer action inline in the detail view,
-// so a `review`/`ask` todo can be acted on without entering Plan Review mode. It
-// is self-contained (owns its answer draft + action state) so callers inject it
-// with a single line; onChanged refreshes the todo after a successful action.
 export function TodoReviewBanner({
   todo,
   dir,
@@ -310,11 +337,13 @@ export function TodoReviewBanner({
 }) {
   const { busy, error, reset, approve, answer, reject, revise } = usePlanActions(dir);
   const [answerText, setAnswerText] = useState('');
+  const [questionSelections, setQuestionSelections] = useState<TodoQuestionSelections>({});
   const [changesText, setChangesText] = useState('');
   const [showChanges, setShowChanges] = useState(false);
 
   useEffect(() => {
     setAnswerText('');
+    setQuestionSelections({});
     setChangesText('');
     setShowChanges(false);
     reset();
@@ -343,12 +372,13 @@ export function TodoReviewBanner({
   }, [revise, todo.ref, changesText, onChanged]);
 
   const onAnswer = useCallback(async () => {
-    const result = await answer(todo.ref, answerText);
+    const result = await answer(todo.ref, buildTodoAnswerInput(todo.questions ?? [], questionSelections, answerText));
     if (result) {
       setAnswerText('');
+      setQuestionSelections({});
       onChanged(result.todo);
     }
-  }, [answer, todo.ref, answerText, onChanged]);
+  }, [answer, todo.ref, todo.questions, questionSelections, answerText, onChanged]);
 
   if (todo.status === 'review') {
     return (
@@ -388,8 +418,23 @@ export function TodoReviewBanner({
           <UiQuestion className="text-xs" />
           The agent needs your input to continue
         </span>
-        {todo.questions && todo.questions.length > 0 && <QuestionsPanel questions={todo.questions} />}
-        <AnswerBox value={answerText} onChange={setAnswerText} onSubmit={() => void onAnswer()} busy={busy} />
+        {todo.questions && todo.questions.length > 0 && (
+          <QuestionsPanel
+            questions={todo.questions}
+            selections={questionSelections}
+            onSelectionChange={(questionIndex, option) => {
+              setQuestionSelections(previous => ({ ...previous, [questionIndex]: option }));
+            }}
+            disabled={busy}
+          />
+        )}
+        <AnswerBox
+          value={answerText}
+          onChange={setAnswerText}
+          onSubmit={() => void onAnswer()}
+          busy={busy}
+          canSubmit={answerText.trim().length > 0 || Object.values(questionSelections).some(value => value.trim().length > 0)}
+        />
         {error && <div className="text-xs text-red-600">{error}</div>}
       </div>
     );
@@ -398,9 +443,6 @@ export function TodoReviewBanner({
   return null;
 }
 
-// AnswerBox is the textarea + submit for answering an `ask` todo. Cmd/Ctrl+Enter
-// submits; the value is controlled by the caller so a queue can reset it per
-// todo. `autoFocus`/`inputRef` let review mode focus it with the `r` key.
 export function AnswerBox({
   value,
   onChange,
@@ -408,6 +450,7 @@ export function AnswerBox({
   busy,
   autoFocus,
   inputRef,
+  canSubmit = value.trim().length > 0,
   label = 'Send & resume',
   placeholder = "Answer the agent's questions… (Cmd/Ctrl+Enter to send)",
 }: {
@@ -417,8 +460,7 @@ export function AnswerBox({
   busy?: boolean;
   autoFocus?: boolean;
   inputRef?: (el: HTMLTextAreaElement | null) => void;
-  // label/placeholder let the same box serve answering an `ask` and requesting
-  // changes on a `review` plan.
+  canSubmit?: boolean;
   label?: string;
   placeholder?: string;
 }) {
@@ -444,7 +486,7 @@ export function AnswerBox({
           type="button"
           size="sm"
           variant="default"
-          disabled={busy || !value.trim()}
+          disabled={busy || !canSubmit}
           onClick={onSubmit}
           className="inline-flex items-center gap-1 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
         >

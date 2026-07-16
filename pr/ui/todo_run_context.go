@@ -115,7 +115,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Provider:     "anthropic",
 			Agent:        "claude",
 			DefaultModel: "claude-sonnet-5",
-			Driver:       drivers.ClaudeCmux,
+			Driver:       drivers.Cmux,
 		},
 		{
 			Backend:      captainai.BackendClaudeAgent,
@@ -123,7 +123,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Provider:     "anthropic",
 			Agent:        "claude",
 			DefaultModel: "claude-sonnet-5",
-			Driver:       drivers.ClaudeHeadless,
+			Driver:       drivers.Cli,
 		},
 		{
 			Backend:      captainai.BackendClaudeCLI,
@@ -131,7 +131,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Provider:     "anthropic",
 			Agent:        "claude",
 			DefaultModel: "claude-sonnet-5",
-			Driver:       drivers.ClaudeHeadless,
+			Driver:       drivers.Cli,
 		},
 		{
 			Backend:      captainai.BackendCodexCmux,
@@ -139,7 +139,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Provider:     "openai",
 			Agent:        "codex",
 			DefaultModel: "gpt-5.5",
-			Driver:       drivers.CodexCmux,
+			Driver:       drivers.Cmux,
 		},
 		{
 			Backend:      captainai.BackendCodexAgent,
@@ -147,7 +147,7 @@ func supportedTodoRunBackends() []runBackendSpec {
 			Provider:     "openai",
 			Agent:        "codex",
 			DefaultModel: "gpt-5.5",
-			Driver:       drivers.CodexHeadless,
+			Driver:       drivers.Cli,
 		},
 	}
 }
@@ -422,27 +422,25 @@ func validTodoRunEffort(effort string) bool {
 func resolveTodoRunBackendModel(kind drivers.Kind, backend, model string) (string, string, error) {
 	backend = strings.TrimSpace(backend)
 	model = strings.TrimSpace(model)
+	// The coding agent is derived from the model (empty → claude); the driver is
+	// mechanism-only. With no explicit backend, pick the (agent, mechanism) backend.
+	agent, _ := claude.ResolveAgent(model)
 	if backend == "" {
-		backend = defaultBackendForDriver(kind)
+		backend = defaultBackendForDriver(kind, agent)
 	}
 	if backend != "" {
 		if err := validateBackendForDriver(kind, backend); err != nil {
 			return "", "", err
 		}
-		if model == "" || model == kind.Agent() {
+		if model == "" || model == agent {
 			model = defaultModelForBackend(backend)
 		}
 		model = normalizeTodoRunModelForBackend(backend, model)
 		if err := validateModelForBackend(backend, model); err != nil {
 			return "", "", err
 		}
-	} else {
-		if model == "" {
-			model = kind.Agent()
-		}
-		if got, _ := claude.ResolveAgent(model); got != kind.Agent() {
-			return "", "", fmt.Errorf("driver %s expects a %s model but %q resolves to %s", kind, kind.Agent(), model, got)
-		}
+	} else if model == "" {
+		model = agent
 	}
 	return backend, model, nil
 }
@@ -451,19 +449,17 @@ func normalizeTodoRunModelForBackend(backend, model string) string {
 	return captainai.NormalizeModelForBackend(captainai.Backend(backend), model)
 }
 
-func defaultBackendForDriver(kind drivers.Kind) string {
-	switch kind {
-	case drivers.ClaudeCmux:
-		return string(captainai.BackendClaudeCmux)
-	case drivers.ClaudeHeadless:
-		return string(captainai.BackendClaudeAgent)
-	case drivers.CodexCmux:
-		return string(captainai.BackendCodexCmux)
-	case drivers.CodexHeadless:
-		return string(captainai.BackendCodexAgent)
-	default:
-		return ""
+// defaultBackendForDriver picks the default captain backend for a (mechanism,
+// agent) pair from the supported-backend catalog. Two claude backends share the
+// cli mechanism (Agent + CLI); the first (Agent) wins, matching the pre-migration
+// default.
+func defaultBackendForDriver(kind drivers.Kind, agent string) string {
+	for _, spec := range supportedTodoRunBackends() {
+		if spec.Driver == kind && spec.Agent == agent {
+			return string(spec.Backend)
+		}
 	}
+	return ""
 }
 
 func defaultModelForBackend(backend string) string {

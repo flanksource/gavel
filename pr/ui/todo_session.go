@@ -43,14 +43,21 @@ type captainSessionStore interface {
 	ListTranscriptMessages(context.Context, captaindb.TranscriptPage) ([]captaindb.TranscriptMessage, error)
 }
 
+type captainThreadSessionStore interface {
+	ListSessionOverviewsByIdentity(context.Context, string) ([]captaindb.SessionOverview, error)
+	ListThreadSessionOverviews(context.Context, uuid.UUID) ([]captaindb.SessionOverview, error)
+	ListThreadTranscriptMessages(context.Context, uuid.UUID) ([]captaindb.TranscriptMessage, error)
+}
+
 type captainSessionProvider interface {
 	Captain() *captaindb.DB
 }
 
 type captainSessionResolution struct {
-	run        *captaindb.Session
-	transcript *captaindb.Session
-	known      bool
+	run         *captaindb.Session
+	transcript  *captaindb.Session
+	known       bool
+	diagnostics []sessionDiagnostic
 }
 
 func todoCaptainSessionStore(ctx context.Context, dir string) (captainSessionStore, bool) {
@@ -81,6 +88,27 @@ func resolveCaptainSession(ctx context.Context, store captainSessionStore, sessi
 	sources := []string{"codex", "claude"}
 	if run != nil && strings.Contains(strings.ToLower(run.Provider), "claude") {
 		sources[0], sources[1] = sources[1], sources[0]
+	}
+	if threadStore, ok := store.(captainThreadSessionStore); ok {
+		candidates, candidateErr := threadStore.ListSessionOverviewsByIdentity(ctx, sessionID)
+		if candidateErr == nil {
+			selected, diagnostics, conflict := selectLegacyThreadCandidate(sessionID, candidates)
+			resolved.diagnostics = diagnostics
+			if conflict {
+				return resolved, fmt.Errorf("%w: provider session ID %q has multiple transcript-bearing sessions", captaindb.ErrSessionConflict, sessionID)
+			}
+			if selected != nil {
+				transcript, getErr := store.GetSessionByIdentity(ctx, selected.ID.String(), "", "", "")
+				if getErr != nil {
+					return resolved, getErr
+				}
+				resolved.transcript = transcript
+				resolved.known = true
+				return resolved, nil
+			}
+		} else if !errors.Is(candidateErr, captaindb.ErrSessionNotFound) {
+			return resolved, candidateErr
+		}
 	}
 	for _, source := range sources {
 		transcript, transcriptErr := store.GetSessionByIdentity(ctx, sessionID, source, "", "")
@@ -169,6 +197,15 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 	if err != nil {
 		return todoSessionStatsResponse{}, err
 	}
+	overviews := []captaindb.SessionOverview{*overview}
+	if threadStore, ok := store.(captainThreadSessionStore); ok {
+		if rows, threadErr := threadStore.ListThreadSessionOverviews(ctx, resolved.transcript.ID); threadErr != nil {
+			return todoSessionStatsResponse{}, threadErr
+		} else if len(rows) > 0 {
+			overviews = rows
+			overview = &overviews[0]
+		}
+	}
 	stats.Found = true
 	stats.Agent = resolved.transcript.AgentType
 	if stats.Agent == "" && resolved.run != nil {
@@ -178,13 +215,17 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 	if overview.StartedAt != nil {
 		stats.StartedAt = *overview.StartedAt
 	}
-	if overview.LastActivityAt != nil {
-		stats.UpdatedAt = *overview.LastActivityAt
+	for _, row := range overviews {
+		if row.LastActivityAt != nil && row.LastActivityAt.After(stats.UpdatedAt) {
+			stats.UpdatedAt = *row.LastActivityAt
+		}
 	}
 	if stats.UpdatedAt.IsZero() {
 		stats.UpdatedAt = stats.StartedAt
 	}
-	stats.InProgress = overview.LifecycleStatus == string(captaindb.SessionLifecycleRunning) || overview.ProcessActive
+	for _, row := range overviews {
+		stats.InProgress = stats.InProgress || row.LifecycleStatus == string(captaindb.SessionLifecycleRunning) || row.ProcessActive
+	}
 	if stats.InProgress {
 		stats.UpdatedAt = time.Now().UTC()
 	}
@@ -202,8 +243,8 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 		stats.State = overview.ActivityState
 	case stats.InProgress:
 		stats.State = "working"
-	case overview.LifecycleStatus == string(captaindb.SessionLifecycleSucceeded):
-		stats.State = "completed"
+	default:
+		stats.State = projectThreadStatus(overviews)
 	}
 	if overview.Model != nil {
 		stats.Model = *overview.Model
@@ -211,15 +252,17 @@ func captainSessionStats(ctx context.Context, store captainSessionStore, session
 	if overview.Effort != nil {
 		stats.Effort = *overview.Effort
 	}
-	stats.InputTokens = int(overview.InputTokens)
-	stats.OutputTokens = int(overview.OutputTokens)
-	stats.CacheReadTokens = int(overview.CacheReadTokens)
-	stats.CacheCreationTokens = int(overview.CacheWriteTokens)
-	stats.TotalTokens = int(overview.TotalTokens)
+	for _, row := range overviews {
+		stats.InputTokens += int(row.InputTokens)
+		stats.OutputTokens += int(row.OutputTokens)
+		stats.CacheReadTokens += int(row.CacheReadTokens)
+		stats.CacheCreationTokens += int(row.CacheWriteTokens)
+		stats.TotalTokens += int(row.TotalTokens)
+		stats.Turns += int(row.TurnCount)
+		stats.CostUSD += row.CostUSD
+	}
 	stats.ContextTokens = intValue(overview.ContextTokens)
 	stats.ContextWindow = intValue(overview.ContextWindowTokens)
-	stats.Turns = int(overview.TurnCount)
-	stats.CostUSD = overview.CostUSD
 	return todoSessionStatsResponse{SessionStats: stats}, nil
 }
 
@@ -350,11 +393,15 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
 	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
 		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			writeTodoError(w, http.StatusInternalServerError, err)
+			writeTodoSessionStreamError(w, flusher, err)
 			return
 		}
 		if resolved.known {
@@ -364,19 +411,26 @@ func (s *Server) handleTodoSessionStream(w http.ResponseWriter, r *http.Request)
 	}
 	path, err := cmuxprov.SessionLogPath(dir, sessionID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		writeTodoError(w, http.StatusInternalServerError, err)
-		return
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		writeTodoSessionStreamError(w, flusher, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	streamSessionLog(w, r, flusher, path)
+}
+
+func writeTodoSessionStreamError(w http.ResponseWriter, flusher http.Flusher, err error) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	payload, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
+	if marshalErr != nil {
+		panic(fmt.Errorf("marshal session stream error: %w", marshalErr))
+	}
+	fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
+	flusher.Flush()
 }
 
 // streamCaptainSession replays and follows the monitor-owned unified message
@@ -399,8 +453,12 @@ func streamCaptainSession(w http.ResponseWriter, r *http.Request, store captainS
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
 		flusher.Flush()
 	}
+	for _, diagnostic := range resolved.diagnostics {
+		emit("warning", diagnostic)
+	}
 	deadline := time.Now().Add(sessionLogAppearTimeout)
 	seen := map[uuid.UUID]string{}
+	owners := map[uuid.UUID]*captaindb.Session{}
 	for {
 		if resolved.transcript == nil {
 			next, err := resolveCaptainSession(r.Context(), store, sessionID)
@@ -415,13 +473,32 @@ func streamCaptainSession(w http.ResponseWriter, r *http.Request, store captainS
 			}
 		}
 		if resolved.transcript != nil {
-			rows, err := store.ListTranscriptMessages(r.Context(), captaindb.TranscriptPage{SessionID: resolved.transcript.ID})
+			var rows []captaindb.TranscriptMessage
+			var err error
+			if threadStore, ok := store.(captainThreadSessionStore); ok {
+				rows, err = threadStore.ListThreadTranscriptMessages(r.Context(), resolved.transcript.ID)
+			} else {
+				rows, err = store.ListTranscriptMessages(r.Context(), captaindb.TranscriptPage{SessionID: resolved.transcript.ID})
+			}
 			if err != nil {
 				emit("error", map[string]string{"error": err.Error()})
 				return
 			}
 			for _, row := range rows {
-				message, fingerprint, err := captainTranscriptMessage(row, resolved.transcript)
+				owner := owners[row.SessionID]
+				if owner == nil && row.SessionID == resolved.transcript.ID {
+					owner = resolved.transcript
+					owners[row.SessionID] = owner
+				}
+				if owner == nil {
+					owner, err = store.GetSessionByIdentity(r.Context(), row.SessionID.String(), "", "", "")
+					if err != nil {
+						emit("error", map[string]string{"error": err.Error()})
+						return
+					}
+					owners[row.SessionID] = owner
+				}
+				message, fingerprint, err := captainTranscriptMessage(row, owner)
 				if err != nil {
 					continue
 				}
@@ -451,7 +528,8 @@ func captainTranscriptMessage(row captaindb.TranscriptMessage, owner *captaindb.
 	}
 	message := session.Message{
 		ID: row.ID.String(), Role: row.Role, Parts: parts,
-		Provenance: &session.Provenance{CWD: owner.CWD, Source: owner.Source, SessionID: owner.ProviderSessionID},
+		Provenance: &session.Provenance{CWD: owner.CWD, Source: owner.Source, SessionID: owner.ProviderSessionID, AgentID: owner.ID.String()},
+		AgentID:    owner.ID.String(),
 	}
 	if row.TurnID != nil {
 		message.TurnID = row.TurnID.String()

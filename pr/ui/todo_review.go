@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -78,7 +79,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
-		req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+		req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 		if err := startTodoRun(req); err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
@@ -202,7 +203,7 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	if err := startTodoAnswer(req, feedback); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -303,7 +304,7 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	req := todoRunRequest{Provider: provider, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	if err := startTodoAnswer(req, answer); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -335,19 +336,29 @@ func zombieAskSession(dir string, todo *types.TODO) bool {
 // background goroutine, mirroring defaultStartTodoRun's lifecycle (timeout,
 // executor construction, commit tail).
 func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
+	if req.Registry == nil {
+		return errors.New("todo run registry is required")
+	}
 	executor, sessionID, err := newTodoRunExecutor(req)
 	if err != nil {
 		return err
 	}
+	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
+	runCtx, stop := context.WithCancelCause(ctx)
+	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), strings.HasPrefix(executor.Name(), "headless-"), stop)
+	if err != nil {
+		timeoutCancel()
+		return err
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), req.Options.timeout())
-		defer cancel()
+		defer timeoutCancel()
+		defer cleanup()
 
-		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
+		execCtx := todos.NewExecutorContext(runCtx, logger.StandardLogger(), nil)
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
 		results, runErr := runner.Resume(execCtx, req.Todos, answer)
-		if runErr != nil {
+		if runErr != nil && (len(results) == 0 || results[0] == nil || !results[0].Cancelled) {
 			logger.Warnf("todo answer %s failed: %v", todoRunLabel(req.Todos), runErr)
 		}
 		var result *todos.ExecutionResult

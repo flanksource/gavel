@@ -7,85 +7,96 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
-func TestKindAgentAndMechanism(t *testing.T) {
+func TestParse(t *testing.T) {
 	cases := []struct {
-		kind      Kind
-		agent     string
-		mechanism string
+		in   string
+		want Kind
 	}{
-		{ClaudeCmux, "claude", "cmux"},
-		{ClaudeHeadless, "claude", "headless"},
-		{ClaudeSDK, "claude", "sdk"},
-		{ClaudeAPI, "claude", "api"},
-		{CodexCmux, "codex", "cmux"},
-		{CodexHeadless, "codex", "headless"},
+		// Canonical mechanisms, case-insensitive with surrounding space.
+		{"  CMUX ", Cmux},
+		{"cli", Cli},
+		{"sdk", Sdk},
+		{"api", Api},
+		// Legacy mechanism names normalize onto the current enum.
+		{"headless", Cli},
+		{"agent", Sdk},
+		// Legacy composite "<agent>-<mechanism>" keeps only the mechanism part so a
+		// TODO persisted with an old driver value still resolves.
+		{"claude-cmux", Cmux},
+		{"codex-headless", Cli},
+		{"claude-sdk", Sdk},
+		{"claude-api", Api},
+		{"Claude-CMUX", Cmux},
 	}
 	for _, tc := range cases {
-		if got := tc.kind.Agent(); got != tc.agent {
-			t.Errorf("%s.Agent() = %q, want %q", tc.kind, got, tc.agent)
+		got, err := Parse(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("Parse(%q) = %q, %v; want %q, nil", tc.in, got, err, tc.want)
 		}
-		if got := tc.kind.Mechanism(); got != tc.mechanism {
-			t.Errorf("%s.Mechanism() = %q, want %q", tc.kind, got, tc.mechanism)
-		}
-	}
-}
-
-func TestParse(t *testing.T) {
-	if k, err := Parse("  Claude-CMUX "); err != nil || k != ClaudeCmux {
-		t.Errorf("Parse normalized input = %q, %v; want claude-cmux, nil", k, err)
 	}
 	if _, err := Parse("claude-tui"); err == nil {
-		t.Fatal("Parse(claude-tui) should fail for an unknown driver")
+		t.Fatal("Parse(claude-tui) should fail for an unknown mechanism")
+	}
+	if _, err := Parse("tui"); err == nil {
+		t.Fatal("Parse(tui) should fail for an unknown mechanism")
 	}
 }
 
-func TestNewCmuxDriversCarryAgentAndNoOrchestratorSession(t *testing.T) {
-	// cmux mints its own --session-id, so the orchestrator session id is empty.
-	exec, sessionID, err := New(ClaudeCmux, Config{WorkDir: "/repo"})
+func TestNewCmuxDerivesAgentFromModel(t *testing.T) {
+	// cmux mints its own --session-id, so the orchestrator session id is empty. An
+	// empty model resolves to the claude agent.
+	exec, sessionID, err := New(Cmux, Config{WorkDir: "/repo"})
 	if err != nil {
-		t.Fatalf("New(claude-cmux): %v", err)
+		t.Fatalf("New(cmux): %v", err)
 	}
 	if sessionID != "" {
 		t.Errorf("cmux orchestrator sessionID = %q, want empty", sessionID)
 	}
 	if got := exec.Name(); got != "cmux-claude" {
-		t.Errorf("claude-cmux Name() = %q, want cmux-claude", got)
+		t.Errorf("cmux Name() = %q, want cmux-claude", got)
 	}
 
-	// codex-cmux with no explicit model must still resolve to the codex agent
-	// (ResolveAgent maps "" to claude, so the driver defaults the model to codex).
-	codexExec, _, err := New(CodexCmux, Config{WorkDir: "/repo"})
+	// The coding agent is derived from the model, not the driver: a codex model
+	// selects the codex agent even though the driver is mechanism-only.
+	codexExec, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "codex"})
 	if err != nil {
-		t.Fatalf("New(codex-cmux): %v", err)
+		t.Fatalf("New(cmux, model=codex): %v", err)
 	}
 	if got := codexExec.Name(); got != "cmux-codex" {
-		t.Errorf("codex-cmux Name() = %q, want cmux-codex", got)
+		t.Errorf("cmux+codex Name() = %q, want cmux-codex", got)
+	}
+	gptExec, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "gpt-5.5"})
+	if err != nil {
+		t.Fatalf("New(cmux, model=gpt-5.5): %v", err)
+	}
+	if got := gptExec.Name(); got != "cmux-codex" {
+		t.Errorf("cmux+gpt Name() = %q, want cmux-codex", got)
 	}
 }
 
-func TestNewSDKDriverRemoved(t *testing.T) {
-	if ClaudeSDK.Implemented() {
-		t.Error("claude-sdk reported Implemented(); the tsx bridge was removed")
+func TestNewCliDerivesAgentFromModel(t *testing.T) {
+	exec, sessionID, err := New(Cli, Config{WorkDir: "/repo"})
+	if err != nil {
+		t.Fatalf("New(cli): %v", err)
 	}
-	_, _, err := New(ClaudeSDK, Config{WorkDir: "/repo"})
-	if err == nil || !strings.Contains(err.Error(), "removed") {
-		t.Fatalf("New(claude-sdk) = %v, want a removal error naming the replacement", err)
+	if sessionID != "" {
+		t.Errorf("cli orchestrator sessionID = %q, want empty", sessionID)
+	}
+	if got := exec.Name(); got != "headless-claude" {
+		t.Errorf("cli Name() = %q, want headless-claude", got)
+	}
+	codexExec, _, err := New(Cli, Config{WorkDir: "/repo", Model: "codex"})
+	if err != nil {
+		t.Fatalf("New(cli, model=codex): %v", err)
+	}
+	if got := codexExec.Name(); got != "headless-codex" {
+		t.Errorf("cli+codex Name() = %q, want headless-codex", got)
 	}
 }
 
 func TestNewRejectsVerifyMode(t *testing.T) {
-	if _, _, err := New(ClaudeHeadless, Config{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
+	if _, _, err := New(Cli, Config{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
 		t.Fatal("New(mode=verify) must error — verify runs through the verify engine")
-	}
-}
-
-func TestNewRejectsModelAgentMismatch(t *testing.T) {
-	_, _, err := New(ClaudeCmux, Config{WorkDir: "/repo", Model: "codex"})
-	if err == nil {
-		t.Fatal("New(claude-cmux, model=codex) should reject the agent mismatch")
-	}
-	if !strings.Contains(err.Error(), "resolves to codex") {
-		t.Errorf("error = %v, want a model/agent mismatch message", err)
 	}
 }
 
@@ -94,41 +105,29 @@ func TestNewRejectsExecutorIdentityAsModel(t *testing.T) {
 	// model. If it round-trips through storage into Config.Model it must fail
 	// loudly, never launch `--model cmux-claude`.
 	for _, model := range []string{"cmux-claude", "headless-claude", "cmux-codex", "headless-codex"} {
-		if _, _, err := New(ClaudeCmux, Config{WorkDir: "/repo", Model: model}); err == nil {
-			t.Errorf("New(claude-cmux, model=%q) should reject the executor identity", model)
+		if _, _, err := New(Cmux, Config{WorkDir: "/repo", Model: model}); err == nil {
+			t.Errorf("New(cmux, model=%q) should reject the executor identity", model)
 		}
 	}
 	// A real hyphenated model must still be accepted.
-	if _, _, err := New(ClaudeCmux, Config{WorkDir: "/repo", Model: "claude-opus-4-8"}); err != nil {
-		t.Errorf("New(claude-cmux, model=claude-opus-4-8): unexpected error %v", err)
-	}
-}
-
-func TestNewHeadlessDrivers(t *testing.T) {
-	exec, sessionID, err := New(ClaudeHeadless, Config{WorkDir: "/repo"})
-	if err != nil {
-		t.Fatalf("New(claude-headless): %v", err)
-	}
-	if sessionID != "" {
-		t.Errorf("headless orchestrator sessionID = %q, want empty", sessionID)
-	}
-	if got := exec.Name(); got != "headless-claude" {
-		t.Errorf("claude-headless Name() = %q, want headless-claude", got)
-	}
-	codexExec, _, err := New(CodexHeadless, Config{WorkDir: "/repo"})
-	if err != nil {
-		t.Fatalf("New(codex-headless): %v", err)
-	}
-	if got := codexExec.Name(); got != "headless-codex" {
-		t.Errorf("codex-headless Name() = %q, want headless-codex", got)
+	if _, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "claude-opus-4-8"}); err != nil {
+		t.Errorf("New(cmux, model=claude-opus-4-8): unexpected error %v", err)
 	}
 }
 
 func TestNewUnimplementedDriversFailClearly(t *testing.T) {
-	if ClaudeAPI.Implemented() {
-		t.Error("claude-api reported Implemented(), expected not yet")
+	if Sdk.Implemented() {
+		t.Error("sdk reported Implemented(), expected not yet")
 	}
-	if _, _, err := New(ClaudeAPI, Config{WorkDir: "/repo"}); err == nil {
-		t.Error("New(claude-api) should return a not-implemented error")
+	if _, _, err := New(Sdk, Config{WorkDir: "/repo"}); err == nil {
+		t.Error("New(sdk) should return a not-implemented error")
+	} else if !strings.Contains(err.Error(), "cli") {
+		t.Errorf("New(sdk) error = %v, want it to name the cli replacement", err)
+	}
+	if Api.Implemented() {
+		t.Error("api reported Implemented(), expected not yet")
+	}
+	if _, _, err := New(Api, Config{WorkDir: "/repo"}); err == nil {
+		t.Error("New(api) should return a not-implemented error")
 	}
 }

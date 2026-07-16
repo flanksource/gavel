@@ -451,7 +451,7 @@ export function TodoDetail({
         refID={todo.ref}
       />
       <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} />
-      <div className="flex shrink-0 gap-1 border-b border-border bg-background px-4 pt-2">
+      <div className="flex shrink-0 flex-nowrap gap-1 overflow-x-auto border-b border-border bg-background px-4 pt-2">
         <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon={UiListFlat} label="Overview" />
         <DetailTab active={tab === 'verification'} onClick={() => setTab('verification')} icon={UiListDashes} label="Verification" count={verificationCount} />
         <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon={UiComment} label="Session" />
@@ -1106,7 +1106,7 @@ function DetailTab({ active, onClick, icon: Icon, label, count }: { active: bool
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`-mb-px h-auto inline-flex items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
+      className={`-mb-px inline-flex h-auto shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
         active
           ? 'border-primary text-foreground'
           : 'border-transparent text-muted-foreground hover:text-foreground'

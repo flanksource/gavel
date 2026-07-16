@@ -18,6 +18,8 @@ import (
 
 const providerPersistenceTimeout = 30 * time.Second
 
+var ErrExecutionCancelled = errors.New("todo run stopped by user")
+
 // Executor represents any AI system that can execute TODOs.
 // Implementations include ClaudeExecutor, and potentially OpenAI, Anthropic API, etc.
 type Executor interface {
@@ -43,6 +45,7 @@ type FeedbackExecutor interface {
 type ExecutionResult struct {
 	Success          bool
 	Skipped          bool
+	Cancelled        bool
 	ExecutorName     string        // Which executor was used
 	TokensUsed       int           // Total tokens consumed
 	CostUSD          float64       // Cost in USD
@@ -83,7 +86,7 @@ type DoDOutcome struct {
 // the user's restored working-tree changes; the cmux executor leaves CommitSHA
 // empty — that is the path auto-commit is meant to cover.
 func ShouldCommitAfter(result *ExecutionResult, enabled bool) bool {
-	return enabled && result != nil && result.Success && result.CommitSHA == ""
+	return enabled && result != nil && result.Success && !result.Cancelled && result.CommitSHA == ""
 }
 
 func (e ExecutionResult) Pretty() api.Text {
@@ -213,6 +216,16 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	// --session-id); persist it now that it is known, regardless of outcome.
 	e.persistSessionID(ctx, todo)
 	if err != nil {
+		if result != nil && result.Cancelled {
+			ctx.Logger.Infof("Execution cancelled: %v", err)
+			todo.Status = types.StatusPending
+			todo.Attempts++
+			if saveErr := e.saveAttempt(ctx, todo, result); saveErr != nil {
+				return result, fmt.Errorf("save cancelled attempt: %w", saveErr)
+			}
+			e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
+			return result, err
+		}
 		ctx.Logger.Errorf("Execution failed: %v", err)
 		todo.Status = types.StatusFailed
 		todo.Attempts++
@@ -307,6 +320,9 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		if err != nil {
 			for _, todo := range needsExecution {
 				todo.Status = types.StatusFailed
+				if groupResult != nil && groupResult.Cancelled {
+					todo.Status = types.StatusPending
+				}
 				todo.Attempts++
 				if groupResult != nil {
 					perTodo := e.splitResult(groupResult, len(needsExecution))
@@ -344,6 +360,7 @@ func (e *TODOExecutor) splitResult(groupResult *ExecutionResult, count int) *Exe
 	}
 	return &ExecutionResult{
 		Success:      groupResult.Success,
+		Cancelled:    groupResult.Cancelled,
 		ExecutorName: groupResult.ExecutorName,
 		TokensUsed:   groupResult.TokensUsed / count,
 		CostUSD:      groupResult.CostUSD / float64(count),
@@ -400,6 +417,9 @@ func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error 
 		ExecutorName: e.executor.Name(),
 		Resume:       e.resume,
 	}
+	if runtimeProvider, ok := e.executor.(RunRuntimeProvider); ok {
+		preparation.Requested = runtimeProvider.RunRuntimeSelection()
+	}
 	if renderer, ok := e.executor.(RunPromptProvider); ok {
 		prompt, err := renderer.RenderRunPrompt(ctx, todo)
 		if err != nil {
@@ -447,6 +467,9 @@ func (e *TODOExecutor) runStartPersister(ctx context.Context, todoList []*types.
 		if strings.TrimSpace(meta.Mode) == "" {
 			meta.Mode = string(e.Mode())
 		}
+		if strings.TrimSpace(meta.Driver) == "" {
+			meta.Driver = e.executor.Name()
+		}
 		persistCtx, cancel := providerPersistenceContext(ctx)
 		defer cancel()
 		if lifecycle, ok := e.activeProvider().(RunLifecycleProvider); ok {
@@ -485,6 +508,9 @@ func renderRunStartComment(meta RunStartMetadata) string {
 	b.WriteString("**Todo run started**\n\n")
 	b.WriteString("- **Session ID:** `" + commentValue(meta.SessionID, "unknown") + "`\n")
 	b.WriteString("- **Mode:** `" + commentValue(meta.Mode, "run") + "`\n")
+	b.WriteString("- **Driver:** `" + commentValue(meta.Driver, "unknown") + "`\n")
+	b.WriteString("- **Provider:** `" + commentValue(meta.Provider, "unknown") + "`\n")
+	b.WriteString("- **Backend:** `" + commentValue(meta.Backend, "default") + "`\n")
 	b.WriteString("- **Resolved Model:** `" + commentValue(meta.ResolvedModel, "default") + "`\n")
 	b.WriteString("- **Effort:** `" + commentValue(meta.Effort, "default") + "`")
 	return b.String()

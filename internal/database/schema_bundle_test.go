@@ -22,7 +22,10 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	}
 	assert.Contains(t, names, "090_prepare_runtime_state.sql")
 	assert.Contains(t, names, "100_todo_captain_constraints.sql")
-	assert.Contains(t, names, "110_todo_captain_projection.sql")
+	assert.Contains(t, names, "105_view_todo_plan_revisions.sql")
+	assert.Contains(t, names, "110_todo_projection_functions.sql")
+	assert.Contains(t, names, "111_todo_projection_triggers.sql")
+	assert.Contains(t, names, "112_view_todo_issue_runtime.sql")
 	assert.Contains(t, names, "115_backfill_todo_activity.sql")
 	assert.Contains(t, names, "120_drop_grite_runtime_cache.sql")
 
@@ -30,32 +33,55 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, prepareSQL, "-- phase: pre")
 	assert.Contains(t, prepareSQL, "DROP VIEW IF EXISTS public.todo_issue_runtime")
 
+	// Hash-gated run-once scripts keep steady-state applies free of DDL; views
+	// are restored via commons-db view-dependency invalidation, so no script may
+	// opt back into re-running on every apply.
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		assert.NotContains(t, readEmbeddedSchemaFile(t, "schema/"+name), "-- runs: always",
+			"%s must be a hash-gated run-once script", name)
+	}
+
 	constraintSQL := readEmbeddedSchemaFile(t, "schema/100_todo_captain_constraints.sql")
 	assert.Contains(t, constraintSQL, "-- phase: post")
-	assert.Contains(t, constraintSQL, "-- runs: always")
 	assert.Contains(t, constraintSQL, "todo_issue_prompt_runs_captain_prompt_run_fkey")
 	assert.Contains(t, constraintSQL, "todo_issue_plans_captain_plan_fkey")
-	assert.Contains(t, constraintSQL, "todo_issue_plan_revision_details")
+	assert.NotContains(t, constraintSQL, "todo_issue_plan_revision_details",
+		"the plan-revisions view moved to its own dependency-scoped file")
 
-	projectionSQL := readEmbeddedSchemaFile(t, "schema/110_todo_captain_projection.sql")
-	assert.Contains(t, projectionSQL, "-- dependsOn: 100_todo_captain_constraints.sql")
-	assert.Contains(t, projectionSQL, "-- runs: always")
-	assert.Contains(t, projectionSQL, "gavel_project_todo_prompt_run")
-	assert.Contains(t, projectionSQL, "gavel_todo_turn_request_projection")
-	assert.Contains(t, projectionSQL, "gavel_todo_prompt_run_iteration_projection")
-	assert.Contains(t, projectionSQL, "gavel_todo_issue_execution_state")
-	assert.Contains(t, projectionSQL, "todo_issue_runtime")
-	assert.Contains(t, projectionSQL, "GREATEST(updated_at, p_activity_at)")
-	assert.Contains(t, projectionSQL, "{workflow,autoVerifyWithoutFixture}")
-	assert.GreaterOrEqual(t, strings.Count(projectionSQL, "SET search_path = pg_catalog, public"), 7)
+	revisionsViewSQL := readEmbeddedSchemaFile(t, "schema/105_view_todo_plan_revisions.sql")
+	assert.Contains(t, revisionsViewSQL, "-- phase: post")
+	assert.Contains(t, revisionsViewSQL, "CREATE OR REPLACE VIEW public.todo_issue_plan_revision_details")
+
+	functionsSQL := readEmbeddedSchemaFile(t, "schema/110_todo_projection_functions.sql")
+	assert.Contains(t, functionsSQL, "-- phase: post")
+	assert.Contains(t, functionsSQL, "gavel_project_todo_prompt_run")
+	assert.Contains(t, functionsSQL, "gavel_todo_issue_execution_state")
+	assert.Contains(t, functionsSQL, "GREATEST(updated_at, p_activity_at)")
+	assert.Contains(t, functionsSQL, "{workflow,autoVerifyWithoutFixture}")
+	assert.GreaterOrEqual(t, strings.Count(functionsSQL, "SET search_path = pg_catalog, public"), 7)
+	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE TRIGGER",
+		"projection triggers moved to their own file")
+	assert.NotContains(t, functionsSQL, "CREATE OR REPLACE VIEW",
+		"the runtime view moved to its own dependency-scoped file")
+
+	triggersSQL := readEmbeddedSchemaFile(t, "schema/111_todo_projection_triggers.sql")
+	assert.Contains(t, triggersSQL, "-- dependsOn: 110_todo_projection_functions.sql")
+	assert.Contains(t, triggersSQL, "gavel_todo_turn_request_projection")
+	assert.Contains(t, triggersSQL, "gavel_todo_prompt_run_iteration_projection")
+
+	runtimeViewSQL := readEmbeddedSchemaFile(t, "schema/112_view_todo_issue_runtime.sql")
+	assert.Contains(t, runtimeViewSQL, "-- dependsOn: 110_todo_projection_functions.sql")
+	assert.Contains(t, runtimeViewSQL, "CREATE OR REPLACE VIEW public.todo_issue_runtime")
 
 	backfillSQL := readEmbeddedSchemaFile(t, "schema/115_backfill_todo_activity.sql")
-	assert.Contains(t, backfillSQL, "-- dependsOn: 110_todo_captain_projection.sql")
+	assert.Contains(t, backfillSQL, "-- dependsOn: 111_todo_projection_triggers.sql")
 	assert.Contains(t, backfillSQL, "GREATEST(issue.updated_at, activity.activity_at)")
 
 	cleanupSQL := readEmbeddedSchemaFile(t, "schema/120_drop_grite_runtime_cache.sql")
 	assert.Contains(t, cleanupSQL, "-- phase: post")
-	assert.NotContains(t, cleanupSQL, "-- runs: always", "the destructive cleanup must run once under migration hash tracking")
 	assert.Contains(t, cleanupSQL, "DROP TABLE IF EXISTS public.grite_sync_cursors, public.grite_issue_caches RESTRICT;")
 	assert.NotContains(t, strings.ToUpper(cleanupSQL), "CASCADE")
 

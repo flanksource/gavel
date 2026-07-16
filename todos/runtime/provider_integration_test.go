@@ -197,11 +197,13 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
+		Requested: todos.RunRuntimeSelection{Provider: "openai", Backend: "codex-agent", Model: "gpt-requested", Effort: "high"},
 	}))
 	assert.Equal(t, types.StatusInProgress, runTodo.Status)
 	assert.Equal(t, string(native.ExecutionRunning), runTodo.ExecutionState)
 	require.NoError(t, provider.RecordRunStart(t.Context(), runTodo, todos.RunStartMetadata{
-		SessionID: "runtime-run-1", Mode: "run", ResolvedModel: "gpt-runtime",
+		SessionID: "runtime-run-1", Mode: "run", Driver: "codex", Provider: "openai",
+		Backend: "codex-agent", ResolvedModel: "gpt-runtime", Effort: "high",
 	}))
 	require.NotNil(t, runTodo.LLM)
 	assert.Equal(t, "runtime-run-1", runTodo.LLM.SessionId)
@@ -214,10 +216,21 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "gavel", admissionSession.Source)
 	assert.Equal(t, captaindb.SessionLifecycleCreated, admissionSession.LifecycleStatus)
-	agentSession, err := provider.Captain().GetSessionByIdentity(t.Context(), "runtime-run-1", "codex", "", "local")
+	agentSession, err := provider.Captain().GetSessionByIdentity(t.Context(), "runtime-run-1", "codex", "", captaindb.LocalHostID())
 	require.NoError(t, err)
 	assert.NotEqual(t, admissionSession.ID, agentSession.ID)
-	assert.Equal(t, captaindb.SessionLifecycleRunning, agentSession.LifecycleStatus)
+	assert.Equal(t, captaindb.SessionLifecycleCreated, agentSession.LifecycleStatus, "Gavel must not project an attempt state onto the provider thread")
+	require.NotNil(t, runningPromptRun.ExecutionSessionID)
+	assert.Equal(t, agentSession.ID, *runningPromptRun.ExecutionSessionID)
+	runtimeSpec, ok := runningPromptRun.RenderedSpec["runtime"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "run", runtimeSpec["mode"])
+	requested, ok := runtimeSpec["requested"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-requested", requested["model"])
+	resolved, ok := runtimeSpec["resolved"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-runtime", resolved["model"])
 	require.NoError(t, provider.SaveAttempt(t.Context(), runTodo, &todos.ExecutionResult{
 		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
 		Summary: "implementation finished without explicit verification",
@@ -234,10 +247,38 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, "finished", string(captainRun.Phase))
 	agentSession, err = provider.Captain().GetSession(t.Context(), agentSession.ID)
 	require.NoError(t, err)
-	assert.Equal(t, captaindb.SessionLifecycleSucceeded, agentSession.LifecycleStatus)
+	assert.Equal(t, captaindb.SessionLifecycleCreated, agentSession.LifecycleStatus, "attempt completion must not complete the provider thread")
 	admissionSession, err = provider.Captain().GetSession(t.Context(), admissionSession.ID)
 	require.NoError(t, err)
 	assert.Equal(t, captaindb.SessionLifecycleCreated, admissionSession.LifecycleStatus)
+
+	cancelledTodo, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title: "Runtime cancelled run", Body: "Stop without recording a failure", Status: types.StatusPending,
+	})
+	require.NoError(t, err)
+	require.NoError(t, provider.PrepareRun(t.Context(), cancelledTodo, todos.RunPreparation{
+		Mode: types.ModeRun, ExecutorName: "headless-codex",
+	}))
+	require.NoError(t, provider.RecordRunStart(t.Context(), cancelledTodo, todos.RunStartMetadata{
+		SessionID: "runtime-cancelled-1", Mode: "run", Driver: "headless-codex", Provider: "openai",
+		Backend: "codex-agent", ResolvedModel: "gpt-runtime", Effort: "high",
+	}))
+	cancelledIssue, err := repository.GetIssue(t.Context(), mustUUID(t, cancelledTodo.ID))
+	require.NoError(t, err)
+	require.NotNil(t, cancelledIssue.ActivePromptRunID)
+	cancelledRunID := *cancelledIssue.ActivePromptRunID
+	require.NoError(t, provider.SaveAttempt(t.Context(), cancelledTodo, &todos.ExecutionResult{
+		Cancelled: true, ExecutorName: "headless-codex", Summary: todos.ErrExecutionCancelled.Error(),
+		ErrorMessage: todos.ErrExecutionCancelled.Error(),
+	}))
+	cancelledIssue, err = repository.GetIssue(t.Context(), mustUUID(t, cancelledTodo.ID))
+	require.NoError(t, err)
+	assert.Equal(t, native.StatusOpen, cancelledIssue.Status)
+	assert.Equal(t, native.ExecutionIdle, cancelledIssue.ExecutionState)
+	cancelledRun, err := provider.Captain().GetPromptRun(t.Context(), cancelledRunID)
+	require.NoError(t, err)
+	assert.Equal(t, captaindb.PromptRunStateCancelled, cancelledRun.State)
+	assert.Equal(t, captaindb.PromptRunPhaseFinished, cancelledRun.Phase)
 
 	tracingTodo, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Runtime exact prompt", Body: "The issue body is not the rendered agent prompt", Status: types.StatusPending,

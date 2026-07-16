@@ -1,4 +1,4 @@
-import type { AISpecRuntimeValue } from '@flanksource/clicky-ui/ai';
+import type { AISpecRuntimeValue, SessionUIMessage } from '@flanksource/clicky-ui/ai';
 
 export interface FailedCheck {
   name: string;
@@ -181,14 +181,6 @@ export interface AcceptanceCriterion {
   done?: boolean;
 }
 
-// CriteriaCatalogItem is one standard verify check offered in the add-criteria
-// combobox (from /api/todos/criteria/catalog).
-export interface CriteriaCatalogItem {
-  id: string;
-  category: string;
-  description: string;
-}
-
 // TodoDiffStat is the aggregated change footprint of a todo's linked commits,
 // mirroring the server's git.DiffStat.
 export interface TodoDiffStat {
@@ -272,6 +264,174 @@ export interface SessionStats {
   approval?: TodoSessionApproval;
 }
 
+export interface SessionRuntimeSelection {
+  provider?: string;
+  backend?: string;
+  model?: string;
+  effort?: string;
+}
+
+export interface TodoSessionAttempt {
+  promptRunId: string;
+  ordinal: number;
+  step: string;
+  mode?: string;
+  driver?: string;
+  requested: SessionRuntimeSelection;
+  resolved: SessionRuntimeSelection;
+  state: string;
+  phase: string;
+  queuedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  error?: string;
+  resultText?: string;
+  resultJson?: Record<string, unknown>;
+  admissionSessionId: string;
+  executionSessionId?: string;
+  providerSessionId?: string;
+  canStop?: boolean;
+  stopping?: boolean;
+  createdAt: string;
+}
+
+export interface TodoSessionDiagnostic {
+  severity: 'warning' | 'error';
+  code: string;
+  message: string;
+  details?: unknown;
+}
+
+export interface TodoSessionOverview {
+  id: string;
+  providerSessionId?: string;
+  source: string;
+  provider?: string;
+  hostId: string;
+  parentSessionId?: string;
+  rootSessionId?: string;
+  path?: string;
+  historyFile?: string;
+  project?: string;
+  cwd?: string;
+  title?: string;
+  agentType?: string;
+  description?: string;
+  lifecycleStatus: string;
+  activityState: string;
+  healthState: string;
+  startedAt?: string;
+  endedAt?: string;
+  lastActivityAt?: string;
+  processActive: boolean;
+  processStatus?: string;
+  pid?: number;
+  model?: string;
+  backend?: string;
+  effort?: string;
+  messageCount: number;
+  turnCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface TodoSessionTurn {
+  id: string;
+  sessionId: string;
+  providerTurnId?: string;
+  turnIndex: number;
+  status: string;
+  stopReason?: string;
+  error?: string;
+  startedAt?: string;
+  endedAt?: string;
+  model?: string;
+  backend?: string;
+  effort?: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  messageCount: number;
+}
+
+export interface TodoSessionAgent {
+  id: string;
+  sessionId: string;
+  parentSessionId?: string;
+  rootSessionId?: string;
+  isRoot: boolean;
+  agentType?: string;
+  description?: string;
+  historyFile?: string;
+  source: string;
+  provider?: string;
+  lifecycleStatus: string;
+  activityState: string;
+  healthState: string;
+  startedAt?: string;
+  endedAt?: string;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface TodoSessionCost {
+  id: string;
+  sessionId: string;
+  model: string;
+  backend: string;
+  effort?: string;
+  currency: string;
+  modelCallCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  firstCallAt?: string;
+  lastCallAt?: string;
+}
+
+export interface TodoProviderThread {
+  id: string;
+  providerSessionId?: string;
+  status: string;
+  root: TodoSessionOverview;
+  sessions: TodoSessionOverview[];
+  turns: TodoSessionTurn[];
+  agents: TodoSessionAgent[];
+  costs: TodoSessionCost[];
+  messages: SessionUIMessage[];
+  startedAt?: string;
+  lastActivityAt?: string;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface TodoSessionDetailResponse {
+  attempts: TodoSessionAttempt[];
+  selectedPromptRunId?: string;
+  selectedExecutionSessionId?: string;
+  thread?: TodoProviderThread;
+  diagnostics: TodoSessionDiagnostic[];
+}
+
 // TodoSessionApproval is a tool-permission request a driver surfaced for human
 // review; the dashboard answers it via POST /api/todos/session/approve.
 export interface TodoSessionApproval {
@@ -284,10 +444,20 @@ export interface TodoSessionApproval {
 export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunMode = 'cmux' | 'inline';
 export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-// TodoRunDriver selects the agent driver: <agent>-<mechanism>. cmux drives the
-// interactive TUI; headless drives `-p --output-format stream-json`; sdk drives
-// the @anthropic-ai/claude-agent-sdk bridge; api drives the direct Anthropic API.
+// TodoRunDriver selects the execution mechanism: cmux drives the interactive TUI;
+// cli drives a headless `-p --output-format stream-json` CLI; sdk drives the
+// vendor Agent SDK bridge; api drives the direct provider API. The driver is
+// mechanism-only — the coding agent (claude/codex) is derived from the model.
+// The legacy composite `<agent>-<mechanism>` values are still accepted by the
+// server (drivers.Parse keeps only the mechanism part) so persisted runs keep
+// working.
 export type TodoRunDriver =
+  // Mechanism-only enum (current):
+  | 'cmux'
+  | 'cli'
+  | 'sdk'
+  | 'api'
+  // Legacy composite values, still parsed by the server:
   | 'claude-cmux'
   | 'claude-headless'
   | 'claude-sdk'

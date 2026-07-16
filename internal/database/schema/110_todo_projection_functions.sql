@@ -1,6 +1,4 @@
 -- phase: post
--- dependsOn: 100_todo_captain_constraints.sql
--- runs: always
 
 -- Derive transient execution state from Captain at read time. The source='gavel'
 -- session remains only the prompt-run admission root; monitored Claude/Codex
@@ -88,14 +86,6 @@ CROSS JOIN signals
 CROSS JOIN latest_iteration
 CROSS JOIN pending
 $$;
-
-CREATE OR REPLACE VIEW public.todo_issue_runtime AS
-SELECT issue.id AS issue_id,
-       public.gavel_todo_issue_execution_state(issue.id) AS execution_state
-FROM public.todo_issues issue;
-
-COMMENT ON VIEW public.todo_issue_runtime IS
-  'Read-time Captain-derived execution state for Gavel issues';
 
 -- Timestamp propagation is intentionally not an issue mutation: it neither
 -- advances optimistic-lock version nor emits an audit event.
@@ -398,31 +388,3 @@ BEGIN
   PERFORM public.gavel_project_todo_prompt_run(NEW.prompt_run_id);
   RETURN NEW;
 END $$;
-
-CREATE OR REPLACE TRIGGER gavel_todo_prompt_run_projection
-AFTER INSERT OR UPDATE OF phase, state, verification_markdown, rendered_spec,
-  session_id, root_session_id, version, updated_at
-ON public.captain_prompt_runs FOR EACH ROW
-EXECUTE FUNCTION public.gavel_todo_prompt_run_projection_trigger();
-
-CREATE OR REPLACE TRIGGER gavel_todo_session_projection
-AFTER INSERT OR UPDATE OF provider_session_id, parent_session_id,
-  root_session_id, lifecycle_status, activity_state, health_state,
-  state_version, state_observed_at, started_at, ended_at, last_activity_at, updated_at
-ON public.captain_sessions FOR EACH ROW
-EXECUTE FUNCTION public.gavel_todo_session_projection_trigger();
-
-CREATE OR REPLACE TRIGGER gavel_todo_session_delete_projection
-BEFORE DELETE ON public.captain_sessions FOR EACH ROW
-EXECUTE FUNCTION public.gavel_todo_session_projection_trigger();
-
-CREATE OR REPLACE TRIGGER gavel_todo_turn_request_projection
-AFTER INSERT OR DELETE OR UPDATE OF prompt_run_id, session_id, kind, state, version, resolved_at
-ON public.captain_turn_requests FOR EACH ROW
-EXECUTE FUNCTION public.gavel_todo_request_projection_trigger();
-
-CREATE OR REPLACE TRIGGER gavel_todo_prompt_run_iteration_projection
-AFTER INSERT OR DELETE OR UPDATE OF prompt_run_id, iteration, state,
-  verification_result, updated_at
-ON public.captain_prompt_run_iterations FOR EACH ROW
-EXECUTE FUNCTION public.gavel_todo_iteration_projection_trigger();

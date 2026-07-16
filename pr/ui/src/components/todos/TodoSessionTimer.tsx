@@ -4,6 +4,7 @@ import { UiChevronDown, UiClock, UiCollapseAll, UiDebugStepOver, UiError, UiEye,
 import type { SessionStats } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
+import { sessionResponseError } from './SessionErrorDetails';
 
 // useSessionStats polls /api/todos/session/stats for one agent session. The
 // server serves live runs from the cmux tailer's in-memory cache and reads
@@ -13,11 +14,13 @@ import { todoQuery } from './format';
 // session the displayed clock ticks locally so the timer advances smoothly.
 export function useSessionStats(dir: string, sessionId: string | undefined, active: boolean) {
   const [stats, setStats] = useState<SessionStats | null>(null);
+  const [error, setError] = useState('');
   const fetchedAtRef = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     setStats(null);
+    setError('');
     if (!active || !sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -29,16 +32,27 @@ export function useSessionStats(dir: string, sessionId: string | undefined, acti
       let nextDelay = 5000;
       try {
         const res = await fetch(url);
+        if (!res.ok) {
+          const detail = await sessionResponseError(res, 'Session stats request failed');
+          if (cancelled) return;
+          setStats(null);
+          setError(detail);
+          timer = setTimeout(poll, nextDelay);
+          return;
+        }
         const data = (await res.json()) as SessionStats;
         if (cancelled) return;
         setStats(data);
+        setError('');
         fetchedAtRef.current = Date.now();
         setNowMs(Date.now());
         if (data.inProgress) nextDelay = 2000;
         else if (!data.found) nextDelay = 4000;
         else return; // finished: totals are final, stop polling
-      } catch {
+      } catch (cause) {
         if (cancelled) return;
+        setStats(null);
+        setError(`Session stats request failed\n${cause instanceof Error ? cause.stack || cause.message : String(cause)}`);
       }
       timer = setTimeout(poll, nextDelay);
     };
@@ -58,7 +72,7 @@ export function useSessionStats(dir: string, sessionId: string | undefined, acti
       : stats.durationMs
     : 0;
 
-  return { stats, elapsedMs };
+  return { stats, elapsedMs, error };
 }
 
 export function formatDuration(ms: number): string {
@@ -265,7 +279,6 @@ export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisab
   return (
     <DropdownMenu
       align="right"
-      className="ml-auto"
       menuLabel="cmux session actions"
       menuClassName="w-64 max-w-[calc(100vw-24px)]"
       onOpenChange={setOpen}
@@ -274,7 +287,7 @@ export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisab
           variant="ghost"
           type="button"
           title={focusError || 'Open this session in cmux'}
-          className={`inline-flex h-auto items-center gap-1 rounded border px-1.5 py-0.5 hover:bg-muted ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
+          className={`inline-flex h-auto min-h-8 items-center gap-1 rounded border px-2 py-1 hover:bg-muted ${focusError ? 'border-red-500/40 text-red-400' : 'border-border'}`}
         >
           {focusBusy ? <Spinner className="text-[12px]" /> : focusError ? <UiError className="text-[12px]" /> : <UiEye className="text-[12px]" />}
           cmux

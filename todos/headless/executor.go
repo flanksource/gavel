@@ -9,6 +9,7 @@ package headless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -41,12 +42,20 @@ type Config struct {
 	Agent   string // "claude" or "codex"
 	// Model / Backend are explicit user overrides; empty defers to the mode's
 	// .prompt frontmatter (captain resolves the provider from the model name).
-	Model    string
-	Backend  string
-	Effort   string
-	MaxTurns int
-	Tools    []string
-	Timeout  time.Duration
+	// Model may be a compact string ("opus:high", "opus, sonnet"); buildRequest
+	// expands it into the request's Name/Backend/Effort/Fallbacks.
+	Model   string
+	Backend string
+	Effort  string
+	// Fallbacks are alternative models captain tries in order after the primary
+	// (captain Model.Candidates); folded into req.Model.Fallbacks by buildRequest.
+	Fallbacks api.ModelList
+	MaxTurns  int
+	// MaxBudgetUsd caps a run's accumulated spend in USD (0 = no ceiling). Carried
+	// through to req.Budget.Cost so captain aborts once spend would exceed it.
+	MaxBudgetUsd float64
+	Tools        []string
+	Timeout      time.Duration
 	// Mode selects the built-in prompt (run or plan); empty means run. The plan
 	// template's frontmatter carries the plan permission posture.
 	Mode types.RunMode
@@ -89,6 +98,7 @@ type Executor struct {
 }
 
 var _ todopkg.RunPromptProvider = (*Executor)(nil)
+var _ todopkg.RunRuntimeProvider = (*Executor)(nil)
 
 func NewExecutor(config Config) *Executor {
 	if config.Agent == "" {
@@ -111,6 +121,15 @@ func (e *Executor) Name() string {
 		return "cmux-" + e.config.Agent
 	}
 	return "headless-" + e.config.Agent
+}
+
+func (e *Executor) RunRuntimeSelection() todopkg.RunRuntimeSelection {
+	return todopkg.RunRuntimeSelection{
+		Provider: todopkg.RuntimeProviderForBackend(e.config.Backend),
+		Backend:  e.config.Backend,
+		Model:    e.config.Model,
+		Effort:   e.config.Effort,
+	}
 }
 
 func (e *Executor) Execute(ctx *todopkg.ExecutorContext, todo *types.TODO) (*todopkg.ExecutionResult, error) {
@@ -137,7 +156,10 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return nil, err
 	}
-	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, rendered, e.config.Resume)
+	req, providerSessionID, canUseTool, err := e.buildRequest(ctx, todosInGroup, rendered, e.config.Resume)
+	if err != nil {
+		return nil, err
+	}
 	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 
@@ -189,7 +211,10 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		SchemaJSON: schema,
 		Source:     "todos.feedback",
 	}}
-	req, providerSessionID, canUseTool := e.buildRequest(ctx, todosInGroup, base, true)
+	req, providerSessionID, canUseTool, err := e.buildRequest(ctx, todosInGroup, base, true)
+	if err != nil {
+		return e.failed(start, err), err
+	}
 	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 
@@ -205,6 +230,9 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	runMeta := todopkg.RunStartMetadata{
 		SessionID:     firstNonEmpty(firstNonEmpty(req.SessionID, providerSessionID), priorSessionID(todosInGroup)),
 		Mode:          string(e.config.Mode),
+		Driver:        e.Name(),
+		Provider:      todopkg.RuntimeProviderForBackend(string(provider.GetBackend())),
+		Backend:       string(provider.GetBackend()),
 		ResolvedModel: provider.GetModel(),
 		Effort:        e.config.Effort,
 	}
@@ -258,7 +286,13 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 
 	rres, runErr := runner.Run(streamCtx)
 	result.Duration = time.Since(start)
-	timedOut := streamCtx.Err() != nil && !sawResult
+	if errors.Is(context.Cause(streamCtx), todopkg.ErrExecutionCancelled) {
+		result.Cancelled = true
+		result.ErrorMessage = todopkg.ErrExecutionCancelled.Error()
+		result.Summary = todopkg.ErrExecutionCancelled.Error()
+		return result, context.Canceled
+	}
+	timedOut := errors.Is(streamCtx.Err(), context.DeadlineExceeded) && !sawResult
 
 	if runErr != nil && !timedOut {
 		result.ErrorMessage = runErr.Error()

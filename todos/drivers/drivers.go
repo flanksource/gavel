@@ -1,11 +1,13 @@
 // Package drivers selects and constructs the agent driver that executes TODOs.
 //
 // A driver is the mechanism that drives an AI coding agent: the cmux terminal
-// automation, a headless stream-json CLI, the Claude Agent SDK bridge, or the
-// direct Anthropic API. It is a user-selectable dimension alongside model and
-// effort. This package is the single registry both the CLI and the dashboard
-// delegate to, so the selection logic lives in one place instead of duplicated
-// `switch mode` blocks.
+// automation (cmux), a headless stream-json CLI (cli), the Claude Agent SDK
+// bridge (sdk), or the direct provider API (api). It is a user-selectable
+// dimension alongside model and effort. The coding agent itself (claude or
+// codex) is NOT part of the driver — it is derived from the model
+// (claude.ResolveAgent). This package is the single registry both the CLI and
+// the dashboard delegate to, so the selection logic lives in one place instead
+// of duplicated `switch mode` blocks.
 //
 // It lives below todos/ (importing todos, todos/cmux, todos/claude) rather than
 // in package todos itself, because the concrete executors already import todos —
@@ -19,83 +21,87 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/headless"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// Kind identifies an agent driver as "<agent>-<mechanism>". The agent is the
-// coding agent (claude or codex); the mechanism is how it is driven.
+// Kind identifies the execution mechanism that drives the coding agent. It is
+// mechanism-only: the agent (claude or codex) is derived from the model, not the
+// driver.
 type Kind string
 
 const (
-	// ClaudeCmux drives claude's interactive TUI inside a cmux surface.
-	ClaudeCmux Kind = "claude-cmux"
-	// ClaudeHeadless drives claude via `claude -p --output-format stream-json`.
-	ClaudeHeadless Kind = "claude-headless"
-	// ClaudeSDK drives claude via the @anthropic-ai/claude-agent-sdk bridge.
-	ClaudeSDK Kind = "claude-sdk"
-	// ClaudeAPI drives claude via the direct Anthropic API with a local tool loop.
-	ClaudeAPI Kind = "claude-api"
-	// CodexCmux drives codex's interactive TUI inside a cmux surface.
-	CodexCmux Kind = "codex-cmux"
-	// CodexHeadless drives codex via the app-server provider.
-	CodexHeadless Kind = "codex-headless"
+	// Cmux drives the agent's interactive TUI inside a cmux surface.
+	Cmux Kind = "cmux"
+	// Cli drives the agent via a headless `-p --output-format stream-json` CLI.
+	Cli Kind = "cli"
+	// Sdk drives the agent via the vendor Agent SDK bridge.
+	Sdk Kind = "sdk"
+	// Api drives the agent via the direct provider API with a local tool loop.
+	Api Kind = "api"
 )
 
-// All returns every known driver kind in display order.
+// All returns every known driver mechanism in display order.
 func All() []Kind {
-	return []Kind{ClaudeCmux, ClaudeHeadless, ClaudeSDK, ClaudeAPI, CodexCmux, CodexHeadless}
+	return []Kind{Cmux, Cli, Sdk, Api}
 }
 
 // Default is the driver used when none is specified.
-const Default = ClaudeCmux
+const Default = Cmux
 
-// Valid reports whether k is a known driver kind.
+// Valid reports whether k is a known driver mechanism.
 func (k Kind) Valid() bool {
-	for _, candidate := range All() {
-		if k == candidate {
-			return true
-		}
+	switch k {
+	case Cmux, Cli, Sdk, Api:
+		return true
 	}
 	return false
 }
 
-// Agent returns the coding agent part of the kind ("claude" or "codex").
-func (k Kind) Agent() string {
-	if i := strings.IndexByte(string(k), '-'); i >= 0 {
-		return string(k)[:i]
-	}
+// Mechanism returns the mechanism string. Kind is mechanism-only, so this is the
+// Kind itself — kept for call sites that compare against a literal ("cmux").
+func (k Kind) Mechanism() string {
 	return string(k)
 }
 
-// Mechanism returns the driving mechanism part ("cmux", "headless", "sdk", "api").
-func (k Kind) Mechanism() string {
-	if i := strings.IndexByte(string(k), '-'); i >= 0 {
-		return string(k)[i+1:]
-	}
-	return ""
-}
-
-// Implemented reports whether New can construct an executor for this kind today.
-// Unimplemented kinds are still offered in pickers so they appear as the work
-// lands, but selecting one returns a clear error rather than silently falling
-// back to another driver.
+// Implemented reports whether New can construct an executor for this mechanism
+// today. Unimplemented mechanisms are still offered in pickers so they appear as
+// the work lands, but selecting one returns a clear error rather than silently
+// falling back to another driver.
 func (k Kind) Implemented() bool {
 	switch k {
-	case ClaudeCmux, ClaudeHeadless, CodexHeadless:
+	case Cmux, Cli:
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
-// Parse validates a driver string (case-insensitive), returning the Kind.
+// Parse validates a driver string (case-insensitive), returning the Kind. It
+// normalizes the legacy names `agent`→sdk and `headless`→cli, and accepts a
+// legacy composite value (`claude-cmux`, `codex-headless`, …) by keeping only the
+// mechanism part — a pragmatic migration so TODOs stored with an old driver value
+// keep working, not a permanent alias.
 func Parse(s string) (Kind, error) {
-	k := Kind(strings.ToLower(strings.TrimSpace(s)))
-	if k.Valid() {
-		return k, nil
+	v := strings.ToLower(strings.TrimSpace(s))
+	// Legacy composite "<agent>-<mechanism>": strip a known agent prefix so a
+	// value persisted before the mechanism-only migration still resolves.
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		if prefix := v[:i]; prefix == "claude" || prefix == "codex" {
+			v = v[i+1:]
+		}
+	}
+	switch v {
+	case "cmux":
+		return Cmux, nil
+	case "cli", "headless":
+		return Cli, nil
+	case "sdk", "agent":
+		return Sdk, nil
+	case "api":
+		return Api, nil
 	}
 	return "", fmt.Errorf("invalid driver %q (valid: %s)", s, joinKinds(All()))
 }
@@ -108,6 +114,12 @@ type Config struct {
 	Model   string
 	Backend string
 	Effort  string
+	// Fallbacks are alternative models captain tries in order (after Model) when
+	// the primary model's provider cannot be constructed or fails transiently
+	// (captain Model.Candidates). The caller resolves them from the compact model
+	// string and/or the .gavel.yaml todos.run fallbacks; drivers.New forwards them
+	// verbatim to the executor.
+	Fallbacks api.ModelList
 	// Mode selects the built-in prompt: run (implement) or plan (read-only
 	// investigation producing a reviewable plan). Verify never constructs a
 	// driver — it routes through the verify engine.
@@ -142,7 +154,9 @@ type Config struct {
 	Approvals bool
 }
 
-// New constructs the executor for a driver kind.
+// New constructs the executor for a driver mechanism. The coding agent is
+// derived from cfg.Model (empty → claude; a codex/gpt model → codex); the driver
+// only selects the mechanism.
 //
 // The returned sessionID is the orchestrator session id to seed TODOExecutor
 // with: empty for cmux (it mints and manages its own `--session-id`, passed in
@@ -150,38 +164,48 @@ type Config struct {
 // session), and Config.SessionID for the sdk path.
 func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 	if !kind.Valid() {
-		return nil, "", fmt.Errorf("invalid driver %q", kind)
+		return nil, "", fmt.Errorf("invalid driver %q (valid: %s)", kind, joinKinds(All()))
 	}
 	if cfg.Mode == types.ModeVerify {
 		return nil, "", fmt.Errorf("verify runs through the verify engine, not an agent driver")
 	}
-	model, err := resolveModel(kind, cfg.Model)
+	// The model defines the agent; the driver defines the mechanism. resolveModel
+	// only guards against a stored executor identity leaking into the model field.
+	model, err := resolveModel(cfg.Model)
 	if err != nil {
 		return nil, "", err
 	}
+	agentName, _ := claude.ResolveAgent(model)
 
 	backend := cfg.Backend
-	switch kind.Mechanism() {
-	case "cmux":
+	switch kind {
+	case Cmux:
 		// cmux drives the captain cmux provider through the same captain-backed
-		// executor as headless, selected by a cmux backend. It returns "" as the
+		// executor as the CLI path, selected by a cmux backend. It returns "" as the
 		// orchestrator session id (it manages its own --session-id via Config.SessionID).
-		backend = string(cmuxBackend(kind.Agent()))
-	case "headless":
-	case "sdk":
-		return nil, "", fmt.Errorf("the claude-sdk driver was removed; use claude-headless (the same agent via captain)")
-	case "api":
+		backend = string(backendFor(agentName, Cmux))
+	case Cli:
+		// The CLI (headless) path leaves the backend as configured: an explicit
+		// backend from the dashboard (claude-agent/claude-cli/codex-agent) wins, and
+		// an empty backend defers to captain, which resolves the concrete claude/codex
+		// backend from the model+agent. See backendFor for the target (agent, cli)
+		// backends once every combination is wired through the headless streamer.
+	case Sdk:
+		return nil, "", fmt.Errorf("the sdk driver is not yet wired; use the cli driver (the same agent via captain)")
+	case Api:
 		return nil, "", fmt.Errorf("driver %q is not yet implemented", kind)
 	default:
-		return nil, "", fmt.Errorf("unhandled driver mechanism %q", kind.Mechanism())
+		return nil, "", fmt.Errorf("unhandled driver %q", kind)
 	}
 	return headless.NewExecutor(headless.Config{
 		WorkDir:        cfg.WorkDir,
-		Agent:          kind.Agent(),
+		Agent:          agentName,
 		Model:          model,
 		Backend:        backend,
 		Effort:         cfg.Effort,
+		Fallbacks:      cfg.Fallbacks,
 		MaxTurns:       cfg.MaxTurns,
+		MaxBudgetUsd:   cfg.MaxBudgetUsd,
 		Tools:          cfg.Tools,
 		Timeout:        cfg.Timeout,
 		Mode:           cfg.Mode,
@@ -202,36 +226,49 @@ func DefaultTools() []string {
 	return []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 }
 
-// cmuxBackend maps a coding agent to its cmux captain backend.
-func cmuxBackend(agent string) captainai.Backend {
-	if agent == "codex" {
-		return captainai.BackendCodexCmux
+// backendFor maps a (coding agent, mechanism) pair to its captain backend. It is
+// the single source of truth for that mapping; cmux consumes it today, and the
+// cli/sdk/api entries document the target backends for when those mechanisms are
+// wired through the headless streamer.
+func backendFor(agentName string, k Kind) captainai.Backend {
+	if agentName == "codex" {
+		switch k {
+		case Cmux:
+			return captainai.BackendCodexCmux
+		case Cli:
+			return captainai.BackendCodexCLI
+		case Sdk:
+			return captainai.BackendCodexAgent
+		case Api:
+			return captainai.BackendOpenAI
+		}
+	}
+	switch k {
+	case Cmux:
+		return captainai.BackendClaudeCmux
+	case Cli:
+		return captainai.BackendClaudeCLI
+	case Sdk:
+		return captainai.BackendClaudeAgent
+	case Api:
+		return captainai.BackendAnthropic
 	}
 	return captainai.BackendClaudeCmux
 }
 
-// resolveModel reconciles the requested model with the driver's agent. An empty
-// codex model is defaulted to "codex" (cmux's ResolveAgent maps "" to claude, so
-// codex drivers must carry an explicit codex model). A model whose agent does
-// not match the driver's is rejected loudly rather than silently re-agented.
-func resolveModel(kind Kind, model string) (string, error) {
+// resolveModel validates the requested model. The agent is derived from the model
+// (claude.ResolveAgent) elsewhere, so there is no agent to reconcile here — the
+// only guard is against a stored executor identity leaking into the model field.
+func resolveModel(model string) (string, error) {
 	model = strings.TrimSpace(model)
-	agent := kind.Agent()
 	if model == "" {
-		if agent == "codex" {
-			return "codex", nil
-		}
 		return "", nil
 	}
 	// A driver/executor identity (e.g. "cmux-claude", "headless-codex") is never a
 	// model. Guard against it round-tripping through storage into the model field,
 	// which would otherwise launch `--model cmux-claude` and fail at the CLI.
 	if isExecutorIdentity(model) {
-		return "", fmt.Errorf("driver %q: %q is a driver/executor identity, not a model", kind, model)
-	}
-	got, _ := claude.ResolveAgent(model)
-	if got != agent {
-		return "", fmt.Errorf("driver %q expects a %s model but %q resolves to %s", kind, agent, model, got)
+		return "", fmt.Errorf("%q is a driver/executor identity, not a model", model)
 	}
 	return model, nil
 }
@@ -240,16 +277,16 @@ func resolveModel(kind Kind, model string) (string, error) {
 // executor Name() (e.g. "cmux-claude") — the reverse of a driver Kind — so such a
 // value can never be mistaken for an LLM model.
 func isExecutorIdentity(s string) bool {
-	mechanism, agent, ok := strings.Cut(s, "-")
+	mechanism, agentName, ok := strings.Cut(s, "-")
 	if !ok {
 		return false
 	}
 	switch mechanism {
-	case "cmux", "headless", "sdk", "api":
+	case "cmux", "headless", "cli", "sdk", "api":
 	default:
 		return false
 	}
-	return agent == "claude" || agent == "codex"
+	return agentName == "claude" || agentName == "codex"
 }
 
 func joinKinds(kinds []Kind) string {

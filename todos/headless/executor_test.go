@@ -267,6 +267,83 @@ func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	}
 }
 
+// TestHeadlessForwardsBudgetCap asserts the run's --max-budget cost ceiling
+// reaches the dispatched request's Budget.Cost (alongside MaxTurns). Regression
+// guard for the drop bug where drivers.Config.MaxBudgetUsd was never plumbed
+// into headless.Config, so the USD cap silently never reached captain.
+func TestHeadlessForwardsBudgetCap(t *testing.T) {
+	var captured captainai.Request
+	var canUseTool captainai.PermissionFunc
+	e := NewExecutor(Config{
+		WorkDir:      t.TempDir(),
+		Agent:        "claude",
+		MaxBudgetUsd: 7.5,
+		MaxTurns:     12,
+		Stream:       captureReq(&captured, &canUseTool),
+	})
+	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if captured.Budget.Cost != 7.5 {
+		t.Errorf("Budget.Cost = %v, want 7.5 (the --max-budget cap must reach the request)", captured.Budget.Cost)
+	}
+	if captured.Budget.MaxTurns != 12 {
+		t.Errorf("Budget.MaxTurns = %d, want 12", captured.Budget.MaxTurns)
+	}
+}
+
+// TestHeadlessForwardsModelFallbacks asserts the run's fallback chain reaches the
+// dispatched request so captain's Candidates() tries them after the primary.
+// Regression guard for the drop bug where only the model NAME flowed end to end
+// (Config.Model → req.Name) and Model.Fallbacks never entered the path.
+func TestHeadlessForwardsModelFallbacks(t *testing.T) {
+	t.Run("explicit Fallbacks field folds into the request", func(t *testing.T) {
+		var captured captainai.Request
+		var canUseTool captainai.PermissionFunc
+		e := NewExecutor(Config{
+			WorkDir:   t.TempDir(),
+			Agent:     "claude",
+			Model:     "claude-opus-4-6",
+			Fallbacks: api.ModelList{{Name: "claude-sonnet-4-6"}},
+			Stream:    captureReq(&captured, &canUseTool),
+		})
+		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if captured.Name != "claude-opus-4-6" {
+			t.Errorf("primary model = %q, want claude-opus-4-6", captured.Name)
+		}
+		if got := captured.Model.Fallbacks; len(got) != 1 || got[0].Name != "claude-sonnet-4-6" {
+			t.Fatalf("Model.Fallbacks = %+v, want [claude-sonnet-4-6]", got)
+		}
+		cands := captured.Candidates()
+		if len(cands) != 2 || cands[0].Name != "claude-opus-4-6" || cands[1].Name != "claude-sonnet-4-6" {
+			t.Fatalf("Candidates() = %+v, want [claude-opus-4-6 claude-sonnet-4-6]", cands)
+		}
+	})
+
+	t.Run("compact model tail expands into fallbacks", func(t *testing.T) {
+		var captured captainai.Request
+		var canUseTool captainai.PermissionFunc
+		e := NewExecutor(Config{
+			WorkDir: t.TempDir(),
+			Agent:   "claude",
+			Model:   "claude-opus-4-6, claude-sonnet-4-6",
+			Stream:  captureReq(&captured, &canUseTool),
+		})
+		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if captured.Name != "claude-opus-4-6" {
+			t.Errorf("primary model = %q, want claude-opus-4-6 (compact tail moved to fallbacks)", captured.Name)
+		}
+		cands := captured.Candidates()
+		if len(cands) != 2 || cands[1].Name != "claude-sonnet-4-6" {
+			t.Fatalf("Candidates() = %+v, want a claude-sonnet-4-6 fallback", cands)
+		}
+	})
+}
+
 func contains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {

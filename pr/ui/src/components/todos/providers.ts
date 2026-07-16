@@ -97,6 +97,7 @@ const CODEX: ProviderCatalog = {
   label: 'OpenAI',
   provider: 'openai',
   icon: providerIcon('openai') ?? UiRobotAi,
+  iconColor: '#10A37F',
   mechanisms: [
     { value: 'cmux', label: 'cmux (TUI)' },
     { value: 'agent', label: 'agent' },
@@ -220,7 +221,7 @@ export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
       id: item.id,
       label: item.configured === false ? `${item.label} (not ready)` : item.label,
       backend: item.id,
-      icon: item.driver === driverFor(provider.id, 'cmux') ? UiColumns : provider.icon,
+      icon: item.driver.endsWith('cmux') ? UiColumns : provider.icon,
       title: item.label,
     }));
     return {
