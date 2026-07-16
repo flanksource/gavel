@@ -44,7 +44,7 @@ type PRStatusOptions struct {
 	Logs     bool            `flag:"logs" help:"Fetch and include failed job logs (uses extra GitHub API quota)"`
 	TailLogs int             `flag:"tail-logs" help:"Number of failed log lines to show per step (only applies with --logs)" default:"100"`
 	Comments []string        `flag:"comments" help:"Filter review comments by MatchItem patterns over comment ID and @author/@bot tokens, e.g. '1,2,!3,*,!@coderabbit'"`
-	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, and workflow name"`
+	Actions  []string        `flag:"actions" help:"Filter workflow actions by MatchItem patterns over run ID, workflow ID, workflow YAML path, workflow name, and job/check name"`
 	Args     []string        `args:"true"`
 	Context  context.Context `json:"-"`
 
@@ -71,7 +71,7 @@ Key flags:
   --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
-  --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, or name
+  --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, workflow name, or job/check name
   --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
 
 Examples:
@@ -83,6 +83,7 @@ Examples:
   gavel pr status 123 --logs                   # include failing-job logs
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
+  gavel pr status --actions 'lint,Install Tests - windows-amd64'   # by job/check name
   gavel pr status --ai-fix                     # feed status into the AI to fix failures`
 }
 

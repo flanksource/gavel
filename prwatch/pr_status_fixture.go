@@ -57,7 +57,12 @@ func BuildPRStatusVerificationBlock(verification PRStatusVerification) string {
 		args = append(args, "--actions", strings.Join(actions, ","))
 	}
 
-	return "### command: Verify selected PR feedback\n\n```exec\n" + shellJoin(args) + "\n```"
+	// A plain "###" heading (not "### command:") keeps this a standalone
+	// ```exec``` fence, which the fixture parser executes. A "### command:"
+	// heading opens a command block whose fences must be in the codeBlocks
+	// allow-list (default ["bash"]), so an ```exec``` fence there is skipped and
+	// no runnable node is produced.
+	return "### Verify selected PR feedback\n\n```exec\n" + shellJoin(args) + "\n```"
 }
 
 func normalizeCommentIDs(ids []int64) []int64 {

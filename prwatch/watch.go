@@ -51,9 +51,26 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 
 		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
 		filters := newResultFilters(opts.Comments, opts.Actions)
+
+		preChecks := len(pr.StatusCheckRollup)
+		preRuns := len(runs)
+		var selectorOptions []string
+		if filters.hasActionFilters() {
+			selectorOptions = actionSelectorOptions(pr, runs)
+		}
+
 		filters.apply(result)
 
 		if !opts.Follow {
+			// Fail loudly when --actions was given but matched nothing, rather
+			// than printing "No checks found" and exiting 0 — a silent empty
+			// masks a mistyped selector (and would false-green a verification
+			// fixture built from it).
+			if filters.noActionMatch(preChecks, preRuns, result) {
+				fmt.Fprintf(os.Stderr, "Error: --actions %s matched no checks or workflows on PR #%d.\nAvailable selectors: %s\n",
+					strings.Join(opts.Actions, ","), opts.PRNumber, strings.Join(selectorOptions, ", "))
+				return nil, 1
+			}
 			return result, statusExitCode(result)
 		}
 
