@@ -243,6 +243,42 @@ func TestLintIgnoreUsesRequestWorkDirForCrossRepoResults(t *testing.T) {
 	}
 }
 
+func TestLintIgnorePrefersNestedRepositoryResultRoot(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	parentRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(parentRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create parent repo .git: %v", err)
+	}
+	nestedRepo := filepath.Join(parentRepo, "nested")
+	if err := os.MkdirAll(filepath.Join(nestedRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create nested repo .git: %v", err)
+	}
+
+	srv.SetGitRoot(parentRepo)
+	srv.SetLintResults([]*linters.LinterResult{{
+		Linter:  "golangci-lint",
+		WorkDir: nestedRepo,
+		Success: false,
+	}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{
+		Source:  "golangci-lint",
+		WorkDir: nestedRepo,
+	})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(nestedRepo, ".gavel.yaml")); err != nil {
+		t.Fatalf("nested .gavel.yaml should be written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(parentRepo, ".gavel.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("parent .gavel.yaml should not be written, stat err=%v", err)
+	}
+}
+
 func TestLintIgnoreRejectsUnknownWorkDir(t *testing.T) {
 	srv, handler := newTestServer(t)
 
