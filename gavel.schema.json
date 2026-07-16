@@ -373,10 +373,7 @@
           "type": "string"
         },
         "fallbacks": {
-          "items": {
-            "$ref": "#/$defs/Model"
-          },
-          "type": "array"
+          "$ref": "#/$defs/ModelList"
         },
         "id": {
           "type": "string"
@@ -395,6 +392,12 @@
         "model"
       ],
       "type": "object"
+    },
+    "ModelList": {
+      "items": {
+        "$ref": "#/$defs/Model"
+      },
+      "type": "array"
     },
     "Permissions": {
       "additionalProperties": false,
@@ -545,10 +548,7 @@
           "type": "string"
         },
         "fallbacks": {
-          "items": {
-            "$ref": "#/$defs/Model"
-          },
-          "type": "array"
+          "$ref": "#/$defs/ModelList"
         },
         "id": {
           "type": "string"
@@ -660,6 +660,73 @@
   "additionalProperties": false,
   "description": "Root configuration for Gavel. Place .gavel.yaml (or .gavel.yml) in ~/, the git root, or the target directory; layers merge in that order with later layers overriding earlier ones. Run `gavel config [path]` to inspect the merged result.",
   "properties": {
+    "ai": {
+      "additionalProperties": false,
+      "description": "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here.",
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "budget": {
+          "$ref": "#/$defs/Budget"
+        },
+        "cliArgs": {
+          "type": "object"
+        },
+        "effort": {
+          "enum": [
+            "",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "type": "string"
+        },
+        "fallbacks": {
+          "$ref": "#/$defs/ModelList"
+        },
+        "id": {
+          "type": "string"
+        },
+        "memory": {
+          "$ref": "#/$defs/Memory"
+        },
+        "model": {
+          "default": "claude-haiku-4-5",
+          "description": "Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5).",
+          "type": "string"
+        },
+        "noCache": {
+          "type": "boolean"
+        },
+        "permissions": {
+          "$ref": "#/$defs/Permissions"
+        },
+        "prompt": {
+          "$ref": "#/$defs/Prompt"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "setup": {
+          "$ref": "#/$defs/Setup"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "workflow": {
+          "$ref": "#/$defs/Workflow"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object",
+      "x-prompt-picker": true
+    },
     "checks": {
       "additionalProperties": false,
       "description": "Post-completion check loop for `gavel todos run --check`: after an agent reports done, run these tests/lint and feed failures back to the agent until they pass. Opt-in — runs only when enabled here, by a TODO's frontmatter `checks`, or by the --check flag. Frontmatter overrides these project defaults.",
@@ -735,87 +802,6 @@
           },
           "type": "array"
         },
-        "compatibility": {
-          "additionalProperties": false,
-          "description": "Gate for the AI warning that surfaces removed functionality and backward-compatibility issues.",
-          "properties": {
-            "mode": {
-              "default": "skip",
-              "description": "Gate behavior. Use false as an alias for skip.",
-              "oneOf": [
-                {
-                  "enum": [
-                    "prompt",
-                    "fail",
-                    "skip"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    false
-                  ],
-                  "type": "boolean"
-                }
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "compatibilityPrompt": {
-          "additionalProperties": false,
-          "description": "Override the built-in prompt that detects backward-compatibility/breaking issues. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Spec"
-                }
-              ]
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "commit.compatibility"
-        },
-        "functionalityRemovedPrompt": {
-          "additionalProperties": false,
-          "description": "Override the built-in prompt that detects user-visible functionality removed by a diff. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Spec"
-                }
-              ]
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "commit.functionalityRemoved"
-        },
         "gitignore": {
           "description": "Extra ignore globs applied when selecting files to commit. Appended and deduped across layers.",
           "items": {
@@ -823,29 +809,71 @@
           },
           "type": "array"
         },
-        "groupModel": {
-          "description": "AI model used for AI commit grouping (`gavel commit -G`). Grouping reasons over the whole change set and benefits from a more capable model than message generation; falls back to model, then a sonnet-class default. Last-write-wins across layers.",
-          "type": "string"
-        },
-        "groupingPrompt": {
+        "grouping": {
           "additionalProperties": false,
-          "description": "Override the built-in AI commit-grouping prompt (`gavel commit -G`) that sorts uncommitted changes into logical commits. The output schema (groups[]+ignore[]) is fixed; the override changes only the instructions. Last-write-wins across layers.",
+          "description": "AI spec for AI commit grouping (`gavel commit -G`) that sorts uncommitted changes into logical commits. The output schema (groups[]+ignore[]) is fixed; the prompt changes only the instructions.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -880,33 +908,6 @@
           },
           "type": "array"
         },
-        "linkedDeps": {
-          "additionalProperties": false,
-          "description": "Deprecated: superseded by commit.precommit. Retained for backward-compatible loading; prefer commit.precommit.mode in new config.",
-          "properties": {
-            "mode": {
-              "default": "prompt",
-              "description": "Gate behavior. Use false as an alias for skip.",
-              "oneOf": [
-                {
-                  "enum": [
-                    "prompt",
-                    "fail",
-                    "skip"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    false
-                  ],
-                  "type": "boolean"
-                }
-              ]
-            }
-          },
-          "type": "object"
-        },
         "lint": {
           "additionalProperties": false,
           "description": "Gates that run linters over the staged file set before the commit is created. CLI flags --lint and --lint-secrets override these per invocation.",
@@ -924,25 +925,75 @@
           },
           "type": "object"
         },
-        "messagePrompt": {
+        "maxCommits": {
+          "description": "Maximum number of commits AI grouping may produce. 0 uses the built-in default.",
+          "type": "integer"
+        },
+        "message": {
           "additionalProperties": false,
-          "description": "Override the built-in commit-message generation prompt (dotprompt template). Last-write-wins across layers.",
+          "description": "AI spec for commit-message generation. Model/prompt/budget/effort override the base ai: spec field-wise.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -950,37 +1001,6 @@
             "object"
           ],
           "x-prompt-id": "commit.message"
-        },
-        "model": {
-          "description": "AI CLI / model used for commit-message generation and compatibility analysis. Last-write-wins across layers.",
-          "type": "string"
-        },
-        "prContentPrompt": {
-          "additionalProperties": false,
-          "description": "Override the built-in prompt that generates PR title, body, and branch name. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Spec"
-                }
-              ]
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "pr.content"
         },
         "precommit": {
           "additionalProperties": false,
@@ -1009,25 +1029,71 @@
           },
           "type": "object"
         },
-        "summaryPrompt": {
+        "summary": {
           "additionalProperties": false,
-          "description": "Override the built-in prompt that names and summarises a group of commits (`gavel git analyze --summary`). Last-write-wins across layers.",
+          "description": "AI spec for naming and summarising a group of commits (`gavel git analyze --summary`).",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -1077,6 +1143,79 @@
       "additionalProperties": false,
       "description": "Settings for `gavel lint`.",
       "properties": {
+        "fix": {
+          "additionalProperties": false,
+          "description": "AI spec for repairing lint violations from `gavel lint --ai-fix` and the `gavel commit` lint gate. This is independent of commit.message because fixing source requires an editing-capable agent.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "lint.fix"
+        },
         "ignore": {
           "description": "Rules that suppress matching lint violations. Each rule matches when every populated field matches; an empty rule never matches. Appended across layers.",
           "items": {
@@ -1136,6 +1275,94 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "pr": {
+      "additionalProperties": false,
+      "description": "Settings for `gavel pr`.",
+      "properties": {
+        "base": {
+          "description": "Base branch for the pull request (e.g. origin/main). Last-write-wins across layers.",
+          "type": "string"
+        },
+        "content": {
+          "additionalProperties": false,
+          "description": "AI spec for generating the PR title, body, and branch name.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "pr.content"
+        },
+        "draft": {
+          "description": "Open the pull request as a draft.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "pre": {
       "description": "Top-level hooks run before the main test/lint pipeline, in declaration order. Appended across layers.",
@@ -1197,10 +1424,6 @@
           "description": "Default resident-memory cap per process (e.g. \"512Mi\", \"2g\"). Empty disables it. A process whose group exceeds it is killed.",
           "type": "string"
         },
-        "path": {
-          "description": "Override Procfile discovery. Relative paths resolve against the .gavel.yaml directory. If omitted, the nearest Procfile up to the git root is used.",
-          "type": "string"
-        },
         "profile": {
           "description": "Default active profile. A Procfile entry with `profiles` auto-starts only when one of them is the active profile; `gavel proc --profile \u003cname\u003e` overrides this.",
           "type": "string"
@@ -1243,25 +1466,71 @@
       "additionalProperties": false,
       "description": "Settings for `gavel status`.",
       "properties": {
-        "summaryPrompt": {
+        "summary": {
           "additionalProperties": false,
-          "description": "Override the built-in per-file AI summary prompt (`gavel status --ai`). Variable: {{details}} (staged/unstaged diff or file contents). The output schema ({summary}) is fixed. Last-write-wins across layers.",
+          "description": "AI spec for the per-file summary prompt (`gavel status --ai`). Variable: {{details}} (staged/unstaged diff or file contents). The output schema ({summary}) is fixed.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -1277,25 +1546,71 @@
       "additionalProperties": false,
       "description": "Settings for `gavel test`.",
       "properties": {
-        "outlineSummaryPrompt": {
+        "outlineSummary": {
           "additionalProperties": false,
-          "description": "Override the built-in per-test AI summary prompt (`gavel test outline --ai-summary`). Variables: {{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed. Last-write-wins across layers.",
+          "description": "AI spec for the per-test summary prompt (`gavel test outline --ai-summary`). Variables: {{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -1311,25 +1626,79 @@
       "additionalProperties": false,
       "description": "Settings for `gavel todos run`.",
       "properties": {
-        "planPrompt": {
+        "driver": {
+          "description": "Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from the model. Last-write-wins across layers.",
+          "type": "string"
+        },
+        "groupBy": {
+          "description": "How todos are grouped into runs. Last-write-wins across layers.",
+          "type": "string"
+        },
+        "plan": {
           "additionalProperties": false,
-          "description": "Override the built-in plan-mode prompt (dotprompt template): the read-only investigation framing that produces a reviewable implementation plan. Last-write-wins across layers.",
+          "description": "AI spec for the plan-mode prompt: the read-only investigation framing that produces a reviewable implementation plan.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -1338,25 +1707,71 @@
           ],
           "x-prompt-id": "todos.plan"
         },
-        "runPrompt": {
+        "run": {
           "additionalProperties": false,
-          "description": "Override the built-in todo run prompt (dotprompt template): the framing, the TODO items injected as {{{body}}}, and the instructions. Last-write-wins across layers.",
+          "description": "AI spec for the todo run prompt: the framing, the TODO items injected as {{{body}}}, and the instructions.",
           "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
               "type": "string"
             },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
                   "type": "string"
                 },
-                {
-                  "$ref": "#/$defs/Spec"
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
                 }
-              ]
+              },
+              "type": "object"
             }
           },
           "type": [
@@ -1364,70 +1779,10 @@
             "object"
           ],
           "x-prompt-id": "todos.run"
-        }
-      },
-      "type": "object"
-    },
-    "verify": {
-      "additionalProperties": false,
-      "description": "Settings for AI verification fixture steps.",
-      "properties": {
-        "checks": {
-          "additionalProperties": false,
-          "description": "Selectively disable checks emitted by the verify engine.",
-          "properties": {
-            "disabled": {
-              "description": "Individual check IDs to disable (e.g. SEC-1, PERF-2). Appended across layers.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "disabledCategories": {
-              "description": "Whole check categories to disable. Known categories: completeness, code-quality, testing, consistency, security, performance. Appended across layers.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "type": "object"
         },
-        "model": {
-          "default": "claude",
-          "description": "AI CLI / model used by AI fixture steps. Common values: claude, gemini, codex, or a fully qualified model name. Last-write-wins across layers.",
+        "timeout": {
+          "description": "Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers.",
           "type": "string"
-        },
-        "prompt": {
-          "description": "Optional repo-specific review policy appended to Gavel's built-in AI fixture prompt. Last-write-wins across layers.",
-          "type": "string"
-        },
-        "promptTemplate": {
-          "additionalProperties": false,
-          "description": "Replace the built-in reviewer prompt entirely (dotprompt template). Unlike prompt, which is appended, this is the whole template. Last-write-wins across layers.",
-          "properties": {
-            "file": {
-              "description": "Path to a .prompt file. Relative paths resolve against the .gavel.yaml directory.",
-              "type": "string"
-            },
-            "inline": {
-              "description": "A complete .prompt template string, or a structured Captain api.Spec object whose prompt.user is the template body.",
-              "oneOf": [
-                {
-                  "description": "Complete inline .prompt template text used verbatim.",
-                  "type": "string"
-                },
-                {
-                  "$ref": "#/$defs/Spec"
-                }
-              ]
-            }
-          },
-          "type": [
-            "string",
-            "object"
-          ],
-          "x-prompt-id": "verify"
         }
       },
       "type": "object"
