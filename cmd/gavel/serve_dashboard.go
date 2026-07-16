@@ -20,7 +20,7 @@ func applyServeDefaults(opts PRListOptions) PRListOptions {
 // PRListOptions + runPRUI (same path as `pr list --ui`) and forces UI mode so
 // the command serves the dashboard rather than printing a PR list.
 func runServeDashboard(opts PRListOptions) (any, error) {
-	return nil, runPRUI(applyServeDefaults(opts))
+	return nil, runPRUI(applyServeDefaults(opts), serveDatabaseWithMigrations)
 }
 
 func init() {

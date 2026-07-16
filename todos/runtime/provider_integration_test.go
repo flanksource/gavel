@@ -76,7 +76,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	opened, err := database.Open(t.Context())
+	opened, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
 
@@ -197,7 +197,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
-		Requested: todos.RunRuntimeSelection{Provider: "openai", Backend: "codex-agent", Model: "gpt-requested", Effort: "high"},
+		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Backend: "codex-agent", Model: "gpt-requested", Effort: "high"},
 	}))
 	assert.Equal(t, types.StatusInProgress, runTodo.Status)
 	assert.Equal(t, string(native.ExecutionRunning), runTodo.ExecutionState)
@@ -222,15 +222,9 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, captaindb.SessionLifecycleCreated, agentSession.LifecycleStatus, "Gavel must not project an attempt state onto the provider thread")
 	require.NotNil(t, runningPromptRun.ExecutionSessionID)
 	assert.Equal(t, agentSession.ID, *runningPromptRun.ExecutionSessionID)
-	runtimeSpec, ok := runningPromptRun.RenderedSpec["runtime"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "run", runtimeSpec["mode"])
-	requested, ok := runtimeSpec["requested"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "gpt-requested", requested["model"])
-	resolved, ok := runtimeSpec["resolved"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "gpt-runtime", resolved["model"])
+	assert.Equal(t, "run", runningPromptRun.Runtime.Mode)
+	assert.Equal(t, "gpt-requested", runningPromptRun.Runtime.Requested.Model)
+	assert.Equal(t, "gpt-runtime", runningPromptRun.Runtime.Resolved.Model)
 	require.NoError(t, provider.SaveAttempt(t.Context(), runTodo, &todos.ExecutionResult{
 		Success: true, ExecutorName: "codex", EndStatus: types.EndCompleted,
 		Summary: "implementation finished without explicit verification",

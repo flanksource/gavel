@@ -20,15 +20,18 @@ var processDB struct {
 // process. Failed opens are not cached, so a transient connection or migration
 // failure can be retried by a later caller. Callers must not own the returned
 // pool; Close is intentionally a no-op on shared handles.
-func Shared(ctx context.Context) (*DB, error) {
+func Shared(ctx context.Context, optionFns ...Option) (*DB, error) {
 	processDB.Lock()
 	defer processDB.Unlock()
 
 	if processDB.db != nil {
+		if resolveOpenOptions(optionFns...).migrate && !processDB.db.migrated {
+			return nil, errors.New("gavel serve cannot migrate after the process database was opened without migrations")
+		}
 		return processDB.db, nil
 	}
 
-	db, err := Open(ctx)
+	db, err := Open(ctx, optionFns...)
 	if err != nil {
 		return nil, err
 	}

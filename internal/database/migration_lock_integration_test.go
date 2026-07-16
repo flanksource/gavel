@@ -66,7 +66,7 @@ func TestConcurrentOpenSerializesMigrationLifecycle(t *testing.T) {
 		go func() {
 			ready.Done()
 			<-start
-			db, err := Open(t.Context())
+			db, err := Open(t.Context(), WithMigrations())
 			results <- openResult{db: db, err: err}
 		}()
 	}

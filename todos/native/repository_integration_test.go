@@ -373,7 +373,7 @@ func openRepository(t *testing.T) (*native.Repository, *gorm.DB) {
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	db, err := database.Open(t.Context())
+	db, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	repo, err := native.NewRepository(db.Gorm())

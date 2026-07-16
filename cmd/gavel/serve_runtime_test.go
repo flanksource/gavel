@@ -44,10 +44,12 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	mon := &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}
 	var monitorPool *gorm.DB
 	var countPool *gorm.DB
+	var openedMode serveDatabaseMode
 	var logs []string
 
 	err := startServeRuntime(ctx, serveRuntimeDependencies{
-		openDatabase: func(context.Context) (serveDatabase, error) {
+		openDatabase: func(_ context.Context, mode serveDatabaseMode) (serveDatabase, error) {
+			openedMode = mode
 			return fakeServeDatabase{gorm: pool, dsn: "postgres://captain:secret@db.internal/gavel", source: "--db-url"}, nil
 		},
 		newMonitor: func(gormDB *gorm.DB) (serveSessionMonitor, error) {
@@ -59,8 +61,9 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 			return 7, nil
 		},
 		logInfo: func(message string) { logs = append(logs, message) },
-	})
+	}, serveDatabaseWithMigrations)
 	require.NoError(t, err)
+	require.Equal(t, serveDatabaseWithMigrations, openedMode)
 	require.Same(t, pool, monitorPool)
 	require.Same(t, pool, countPool)
 	require.Equal(t, []string{`Database Info: source="--db-url" dsn="postgres://captain:REDACTED@db.internal/gavel" live_sessions=7`}, logs)
@@ -84,7 +87,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 	countCalled := false
 	var logs []string
 	err := startServeRuntime(t.Context(), serveRuntimeDependencies{
-		openDatabase: func(context.Context) (serveDatabase, error) {
+		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{disabled: true}, nil
 		},
 		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
@@ -96,7 +99,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 			return 0, nil
 		},
 		logInfo: func(message string) { logs = append(logs, message) },
-	})
+	}, serveDatabaseNoMigrations)
 	require.NoError(t, err)
 	require.False(t, monitorCalled)
 	require.False(t, countCalled)
@@ -106,23 +109,23 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 func TestStartServeRuntimeSurfacesInitializationErrors(t *testing.T) {
 	t.Run("database", func(t *testing.T) {
 		err := startServeRuntime(t.Context(), serveRuntimeDependencies{
-			openDatabase: func(context.Context) (serveDatabase, error) {
+			openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 				return nil, errors.New("database unavailable")
 			},
-		})
+		}, serveDatabaseNoMigrations)
 		require.EqualError(t, err, "initialize Gavel shared database: database unavailable")
 	})
 
 	t.Run("monitor", func(t *testing.T) {
 		err := startServeRuntime(t.Context(), serveRuntimeDependencies{
-			openDatabase: func(context.Context) (serveDatabase, error) {
+			openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 				return fakeServeDatabase{gorm: &gorm.DB{}}, nil
 			},
 			newMonitor: func(*gorm.DB) (serveSessionMonitor, error) {
 				return nil, errors.New("monitor unavailable")
 			},
 			logInfo: func(string) {},
-		})
+		}, serveDatabaseNoMigrations)
 		require.EqualError(t, err, "initialize Captain session monitor: monitor unavailable")
 	})
 }
@@ -133,7 +136,7 @@ func TestStartServeRuntimeSurfacesLiveSessionCountError(t *testing.T) {
 	mon := &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}
 
 	err := startServeRuntime(ctx, serveRuntimeDependencies{
-		openDatabase: func(context.Context) (serveDatabase, error) {
+		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{gorm: &gorm.DB{}, dsn: "postgres://db/gavel", source: "test"}, nil
 		},
 		newMonitor: func(*gorm.DB) (serveSessionMonitor, error) { return mon, nil },
@@ -141,6 +144,6 @@ func TestStartServeRuntimeSurfacesLiveSessionCountError(t *testing.T) {
 			return 0, errors.New("view unavailable")
 		},
 		logInfo: func(string) { t.Fatal("startup info must not be logged after a count error") },
-	})
+	}, serveDatabaseNoMigrations)
 	require.EqualError(t, err, "count live Captain sessions: view unavailable")
 }

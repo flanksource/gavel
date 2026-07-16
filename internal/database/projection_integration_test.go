@@ -22,7 +22,7 @@ func TestCaptainProjectionLifecycleAndMigrationIdempotence(t *testing.T) {
 
 	before := projectionCatalogObjects(t, db)
 	require.NotEmpty(t, before)
-	second, err := database.Open(ctx)
+	second, err := database.Open(ctx, database.WithMigrations())
 	require.NoError(t, err, "reapplying the projection bundle must be idempotent")
 	require.NoError(t, second.Close())
 	after := projectionCatalogObjects(t, db)
@@ -518,7 +518,7 @@ func TestCaptainDatabaseOperatesWithoutGavelSchema(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, stop()) })
 
-	captain, err := captaindb.Open(t.Context(), captaindb.Config{DSN: dsn})
+	captain, err := captaindb.Open(t.Context(), captaindb.WithDSN(dsn), captaindb.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, captain.Close()) })
 	require.NoError(t, captaindb.Migrate(t.Context(), dsn), "Captain-only migration must be repeatable")
@@ -628,7 +628,7 @@ func openProjectionDatabase(t *testing.T) *gorm.DB {
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	opened, err := database.Open(t.Context())
+	opened, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
 	return opened.Gorm()

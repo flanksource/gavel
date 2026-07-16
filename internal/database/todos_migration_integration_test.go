@@ -55,7 +55,7 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
 
-	db, err := database.Open(t.Context())
+	db, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	require.False(t, db.Disabled())
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -192,7 +192,7 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 		INSERT INTO todo_issues (workspace_id, title, priority)
 		VALUES (?, 'Invalid priority', 'urgent')`, workspaceOne).Error)
 
-	second, err := database.Open(t.Context())
+	second, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "reapplying the unchanged HCL bundle should be idempotent")
 	require.NoError(t, second.Close())
 
@@ -211,7 +211,7 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 		todo_issues,
 		todo_workspace_paths,
 		todo_workspaces CASCADE`).Error)
-	fresh, err := database.Open(t.Context())
+	fresh, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "the HCL bundle should create the native TODO schema from scratch")
 	require.NoError(t, fresh.Close())
 	for _, table := range nativeTables {

@@ -54,21 +54,63 @@ type DB struct {
 	gorm          *gorm.DB
 	disabled      bool
 	shared        bool
+	migrated      bool
 	dsn           string
 	dsnSource     string
 	disableSource string
 }
 
-// Open resolves the configured PostgreSQL backend, applies the declarative
-// schema, and opens the application GORM pool. With no configuration it returns
-// a disabled handle so commands can continue without caching.
-func Open(ctx context.Context) (*DB, error) {
-	if source, disabled := disabledByEnvironment(); disabled {
+// Option configures a Gavel database open.
+type Option func(*openOptions)
+
+type openOptions struct {
+	migrate bool
+}
+
+// WithMigrations applies Captain's and Gavel's schemas before opening.
+func WithMigrations() Option {
+	return func(options *openOptions) { options.migrate = true }
+}
+
+func resolveOpenOptions(optionFns ...Option) openOptions {
+	var options openOptions
+	for _, option := range optionFns {
+		if option != nil {
+			option(&options)
+		}
+	}
+	return options
+}
+
+type openDependencies struct {
+	disabled func() (string, bool)
+	resolve  func() (string, string, error)
+	migrate  func(context.Context, string) error
+	open     func(string, *gorm.Config) (*gorm.DB, error)
+}
+
+var defaultOpenDependencies = openDependencies{
+	disabled: disabledByEnvironment,
+	resolve:  resolveDSN,
+	migrate:  migrateDatabase,
+	open:     commonsdb.NewGorm,
+}
+
+// Open resolves and opens the configured PostgreSQL backend. It does not run
+// migrations unless WithMigrations is supplied. With no configuration it
+// returns a disabled handle so commands can continue without caching.
+func Open(ctx context.Context, options ...Option) (*DB, error) {
+	return open(ctx, defaultOpenDependencies, options...)
+}
+
+func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB, error) {
+	options := resolveOpenOptions(optionFns...)
+	if source, disabled := deps.disabled(); disabled {
 		logger.Debugf("gavel database disabled via %s=off", source)
 		return &DB{disabled: true, disableSource: source}, nil
 	}
 
-	dsn, source, err := resolveDSN()
+	dsn, source, err := deps.resolve()
 	if err != nil {
 		return nil, err
 	}
@@ -77,25 +119,29 @@ func Open(ctx context.Context) (*DB, error) {
 		return &DB{disabled: true}, nil
 	}
 
-	if err := withMigrationAdvisoryLock(ctx, dsn, func() error {
-		// Captain owns its schema and must migrate before Gavel installs any
-		// cross-owner constraints or projections. Captain's migration call also
-		// contains the legacy-session preflight, so both are covered by the same
-		// cross-process lock as the subsequent Gavel migration.
-		if err := captaindb.Migrate(ctx, dsn); err != nil {
-			return err
+	if options.migrate {
+		if err := deps.migrate(ctx, dsn); err != nil {
+			return nil, err
 		}
-
-		return applyGavelSchema(ctx, dsn)
-	}); err != nil {
-		return nil, err
 	}
 
-	gormDB, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
+	gormDB, err := deps.open(dsn, commonsdb.DefaultGormConfig())
 	if err != nil {
 		return nil, fmt.Errorf("open gavel database: %w", err)
 	}
-	return &DB{gorm: gormDB, dsn: dsn, dsnSource: source}, nil
+	return &DB{gorm: gormDB, migrated: options.migrate, dsn: dsn, dsnSource: source}, nil
+}
+
+func migrateDatabase(ctx context.Context, dsn string) error {
+	return withMigrationAdvisoryLock(ctx, dsn, func() error {
+		// Captain owns its schema and must migrate before Gavel installs any
+		// cross-owner constraints or projections. Both are covered by the same
+		// cross-process lifecycle lock.
+		if err := captaindb.Migrate(ctx, dsn); err != nil {
+			return err
+		}
+		return applyGavelSchema(ctx, dsn)
+	})
 }
 
 func applyGavelSchema(ctx context.Context, dsn string) error {

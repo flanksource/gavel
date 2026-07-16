@@ -607,7 +607,7 @@ func openExecutionRepository(t *testing.T) (*native.Repository, *gorm.DB, string
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	opened, err := database.Open(t.Context())
+	opened, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
 	repo, err := native.NewRepository(opened.Gorm())

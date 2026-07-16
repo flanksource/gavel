@@ -70,7 +70,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
 
-	db, err := database.Open(t.Context())
+	db, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	require.False(t, db.Disabled())
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -100,7 +100,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	`).Scan(&cleanupRecordedAt).Error)
 	require.False(t, cleanupRecordedAt.IsZero(), "the destructive cleanup must be recorded in the Gavel migration scope")
 
-	second, err := database.Open(t.Context())
+	second, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "migration should be idempotent")
 	require.NoError(t, second.Close())
 	var cleanupRecordedAgain time.Time
@@ -115,7 +115,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 		seen_prs, favicon_caches,
 		commit_stat_caches, commit_stat_cursors, test_run_caches, test_run_cursors,
 		violations, file_scans, linter_executions, debounce_metadata CASCADE`).Error)
-	fresh, err := database.Open(t.Context())
+	fresh, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "migration should create the complete schema from scratch")
 	require.NoError(t, fresh.Close())
 	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
@@ -181,7 +181,7 @@ func TestHCLMigrationFreshDatabaseOmitsRetiredGriteCache(t *testing.T) {
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
 
-	db, err := database.Open(t.Context())
+	db, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	require.False(t, db.Disabled())
 	t.Cleanup(func() { require.NoError(t, db.Close()) })

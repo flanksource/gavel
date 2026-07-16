@@ -190,7 +190,7 @@ func buildPRSearchOpts(opts PRListOptions) (github.Options, github.PRSearchOptio
 
 func runPRList(opts PRListOptions) (any, error) {
 	if opts.UI || opts.MenuBar {
-		return nil, runPRUI(opts)
+		return nil, runPRUI(opts, serveDatabaseNoMigrations)
 	}
 
 	if opts.CI {
@@ -250,7 +250,7 @@ func runOrgBranchStatus(opts PRListOptions) (any, error) {
 	return results, nil
 }
 
-func runPRUI(opts PRListOptions) error {
+func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	ghOpts, searchOpts, err := buildPRSearchOpts(opts)
 	if err != nil {
 		return err
@@ -337,7 +337,7 @@ func runPRUI(opts PRListOptions) error {
 	poller := ui.NewPoller(srv, searchFn, interval)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := startServeRuntime(ctx, defaultServeRuntimeDependencies); err != nil {
+	if err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode); err != nil {
 		return err
 	}
 	poller.Start(ctx)

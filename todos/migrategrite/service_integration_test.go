@@ -796,7 +796,7 @@ func openMigrationService(t *testing.T) (*migrategrite.Service, *native.Reposito
 	t.Setenv(database.LegacyEnvDSN, "")
 	t.Setenv(database.LegacyEnvDisable, "")
 	t.Setenv("HOME", t.TempDir())
-	opened, err := database.Open(t.Context())
+	opened, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, opened.Close()) })
 

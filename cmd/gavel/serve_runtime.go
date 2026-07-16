@@ -24,15 +24,25 @@ type serveSessionMonitor interface {
 	Ready() <-chan struct{}
 }
 
+type serveDatabaseMode uint8
+
+const (
+	serveDatabaseNoMigrations serveDatabaseMode = iota
+	serveDatabaseWithMigrations
+)
+
 type serveRuntimeDependencies struct {
-	openDatabase      func(context.Context) (serveDatabase, error)
+	openDatabase      func(context.Context, serveDatabaseMode) (serveDatabase, error)
 	newMonitor        func(*gorm.DB) (serveSessionMonitor, error)
 	countLiveSessions func(context.Context, *gorm.DB) (int64, error)
 	logInfo           func(string)
 }
 
 var defaultServeRuntimeDependencies = serveRuntimeDependencies{
-	openDatabase: func(ctx context.Context) (serveDatabase, error) {
+	openDatabase: func(ctx context.Context, mode serveDatabaseMode) (serveDatabase, error) {
+		if mode == serveDatabaseWithMigrations {
+			return shared.Shared(ctx, shared.WithMigrations())
+		}
 		return shared.Shared(ctx)
 	},
 	newMonitor: func(gormDB *gorm.DB) (serveSessionMonitor, error) {
@@ -65,8 +75,8 @@ func serveDatabaseStartupMessage(db serveDatabase, liveSessions int64) string {
 // serve goroutine or HTTP listener can initialize Captain independently. When
 // persistence is enabled, it then runs Captain's continuous session monitor on
 // that same pool until the serve context is cancelled.
-func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies) error {
-	db, err := deps.openDatabase(ctx)
+func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode serveDatabaseMode) error {
+	db, err := deps.openDatabase(ctx, mode)
 	if err != nil {
 		return fmt.Errorf("initialize Gavel shared database: %w", err)
 	}
