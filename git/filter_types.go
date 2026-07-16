@@ -94,14 +94,12 @@ type AnalyzeOptions struct {
 	Include       []string      `json:"include,omitempty" flag:"include" help:"Include these filter sets from .gitanalyze.yaml"`
 	Exclude       []string      `json:"exclude,omitempty" flag:"exclude" help:"Exclude these filter sets from .gitanalyze.yaml"`
 	Verbose       bool          `json:"verbose,omitempty" flag:"verbose" help:"Show what was skipped and why"`
-	// MessagePrompt, FunctionalityRemovedPrompt, and CompatibilityPrompt override
-	// the embedded AI prompt templates. Resolved from .gavel.yaml by the commit
-	// package; empty falls back to the built-in template. Not CLI flags.
-	MessagePrompt              string           `json:"-"`
-	FunctionalityRemovedPrompt string           `json:"-"`
-	CompatibilityPrompt        string           `json:"-"`
-	agent                      ai.Agent         `json:"-"`
-	arch                       repomap.ArchConf `json:"-"`
+	// MessagePrompt overrides the embedded AI commit-message prompt template.
+	// Resolved from .gavel.yaml by the commit package; empty falls back to the
+	// built-in template. Not a CLI flag.
+	MessagePrompt string           `json:"-"`
+	agent         ai.Agent         `json:"-"`
+	arch          repomap.ArchConf `json:"-"`
 }
 
 func techToStrings(techs []models.ScopeTechnology) []string {

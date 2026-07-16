@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
@@ -34,10 +35,9 @@ var (
 	ErrFilesWithFixup           = errors.New("file arguments cannot be combined with --fixup")
 	ErrFilesOutsideRepo         = errors.New("file argument is outside the repository")
 
-	newAgentFunc                                    = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return clickyai.NewAgent(cfg) }
-	analyzeCommitMessageWithAIFunc                  = git.AnalyzeWithAI
-	analyzeCompatibilityPromptsWithAIFunc           = git.AnalyzeCompatibilityPromptsWithAI
-	dryRunOutput                          io.Writer = os.Stdout
+	newAgentFunc                             = func(cfg clickyai.AgentConfig) (clickyai.Agent, error) { return clickyai.NewAgent(cfg) }
+	analyzeCommitMessageWithAIFunc           = git.AnalyzeWithAI
+	dryRunOutput                   io.Writer = os.Stdout
 )
 
 const defaultMaxCommits = 7
@@ -87,12 +87,12 @@ type Options struct {
 	MergeType string
 	// Model overrides the LLM for commit-message and PR-content generation
 	// (CLI --model). GroupModel overrides the LLM for AI grouping (CLI
-	// --group-model); both fall back to .gavel.yaml commit.{model,groupModel}.
+	// --group-model). Both fall back to the operation spec's model
+	// (commit.message.model / commit.grouping.model), then the base ai: spec.
 	Model         string
 	GroupModel    string
 	Message       string
 	PrecommitMode string
-	CompatMode    string
 	// AssumeYes auto-answers precommit triage prompts with their default
 	// action: linked-dep violations auto-unstage. Set by `gavel commit -y`.
 	AssumeYes bool
@@ -131,6 +131,13 @@ type Options struct {
 	IssueID   string
 	SessionID string
 	Config    verify.CommitConfig
+	// AI is the base spec (model/budget/effort defaults) every commit AI op
+	// inherits. messageModel/groupModel fall back to AI.Model.Name when the
+	// operation spec pins no model. Populated from GavelConfig.AI.
+	AI captainapi.Spec
+	// PR carries the pr: config (content spec, base branch, draft) for the
+	// push/PR-open flow. Populated from GavelConfig.PR.
+	PR verify.PRConfig
 
 	// lintGates is the resolved on/off state. Populated by Run() before
 	// dispatching into runSingleCommit / runCommitAll so the gate runs with
@@ -140,12 +147,10 @@ type Options struct {
 }
 
 type CommitResult struct {
-	Label                string   `json:"label,omitempty"`
-	Message              string   `json:"message"`
-	Hash                 string   `json:"hash,omitempty"`
-	Files                []string `json:"files,omitempty"`
-	FunctionalityRemoved []string `json:"functionality_removed,omitempty"`
-	CompatibilityIssues  []string `json:"compatibility_issues,omitempty"`
+	Label   string   `json:"label,omitempty"`
+	Message string   `json:"message"`
+	Hash    string   `json:"hash,omitempty"`
+	Files   []string `json:"files,omitempty"`
 }
 
 type Result struct {
@@ -167,9 +172,7 @@ type Result struct {
 }
 
 type commitAIAnalysis struct {
-	Message              string
-	FunctionalityRemoved []string
-	CompatibilityIssues  []string
+	Message string
 }
 
 func Run(ctx context.Context, opts Options) (*Result, error) {
@@ -212,12 +215,6 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	opts.PrecommitMode = precommitMode
-
-	compatMode, err := resolveCompatMode(opts.CompatMode, opts.Config)
-	if err != nil {
-		return nil, err
-	}
-	opts.CompatMode = compatMode
 
 	gates, err := resolveLintGates(opts.LintFlag, opts.LintSecretsFlag, opts.Config.Lint)
 	if err != nil {
@@ -338,19 +335,13 @@ func runSingleCommit(ctx context.Context, opts Options) (*Result, error) {
 	analysis.Message = applyCommitMetadata(opts, analysis.Message)
 	result.Message = analysis.Message
 	result.Commits = []CommitResult{{
-		Message:              analysis.Message,
-		Files:                source.Files,
-		FunctionalityRemoved: analysis.FunctionalityRemoved,
-		CompatibilityIssues:  analysis.CompatibilityIssues,
+		Message: analysis.Message,
+		Files:   source.Files,
 	}}
 
 	if opts.DryRun {
 		printDryRunPreview(result)
 		return result, nil
-	}
-
-	if err := applyCompatibilityCheck(ctx, opts, result.Commits[0]); err != nil {
-		return result, err
 	}
 
 	hash, err := commitWithMessage(opts.WorkDir, analysis.Message)
@@ -564,9 +555,6 @@ func commitGroups(ctx context.Context, opts Options, source stagedSource, result
 		if err != nil {
 			return result, err
 		}
-		if err := applyCompatibilityCheck(ctx, opts, cr); err != nil {
-			return result, err
-		}
 		hash, err := stageAndCommitGroup(opts.WorkDir, group, cr.Message)
 		if err != nil {
 			return result, err
@@ -597,11 +585,9 @@ func analyzeGroup(ctx context.Context, opts Options, group commitGroup) (CommitR
 		return CommitResult{}, fmt.Errorf("generate commit analysis for %s: %w", group.labelOrDefault(), err)
 	}
 	return CommitResult{
-		Label:                group.Label,
-		Message:              applyCommitMetadata(opts, analysis.Message),
-		Files:                group.Files(),
-		FunctionalityRemoved: analysis.FunctionalityRemoved,
-		CompatibilityIssues:  analysis.CompatibilityIssues,
+		Label:   group.Label,
+		Message: applyCommitMetadata(opts, analysis.Message),
+		Files:   group.Files(),
 	}, nil
 }
 
@@ -770,8 +756,7 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 		}
 		return commitAIAnalysis{Message: msg}, nil
 	}
-	explicitMessage := strings.TrimSpace(opts.Message)
-	if explicitMessage != "" && !shouldRunCompatibilityAnalysis(opts.CompatMode) {
+	if explicitMessage := strings.TrimSpace(opts.Message); explicitMessage != "" {
 		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
@@ -779,79 +764,27 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
-	prompts, err := resolveCommitPrompts(opts.Config, opts.WorkDir)
+	messagePrompt, err := opts.Config.Message.TemplateSource(opts.WorkDir, "")
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
-	return generateCommitAnalysisWithAgent(ctx, diff, explicitMessage, opts.CompatMode, agent, prompts)
+	return generateCommitAnalysisWithAgent(ctx, diff, agent, messagePrompt)
 }
 
-// commitPromptOverrides holds the resolved .gavel.yaml prompt-template overrides
-// for the commit AI flow. Empty strings fall back to the embedded defaults.
-type commitPromptOverrides struct {
-	message              string
-	functionalityRemoved string
-	compatibility        string
-}
-
-// resolveCommitPrompts reads the commit-section prompt overrides, resolving file
-// references against workDir. A configured-but-unreadable file is a hard error.
-func resolveCommitPrompts(cfg verify.CommitConfig, workDir string) (commitPromptOverrides, error) {
-	message, err := cfg.MessagePrompt.Resolve(workDir, "")
-	if err != nil {
-		return commitPromptOverrides{}, err
-	}
-	functionalityRemoved, err := cfg.FunctionalityRemovedPrompt.Resolve(workDir, "")
-	if err != nil {
-		return commitPromptOverrides{}, err
-	}
-	compatibility, err := cfg.CompatibilityPrompt.Resolve(workDir, "")
-	if err != nil {
-		return commitPromptOverrides{}, err
-	}
-	return commitPromptOverrides{message: message, functionalityRemoved: functionalityRemoved, compatibility: compatibility}, nil
-}
-
-func generateCommitAnalysisWithAgent(ctx context.Context, diff, explicitMessage, compatMode string, agent clickyai.Agent, prompts commitPromptOverrides) (commitAIAnalysis, error) {
+func generateCommitAnalysisWithAgent(ctx context.Context, diff string, agent clickyai.Agent, messagePrompt string) (commitAIAnalysis, error) {
 	analysis := models.CommitAnalysis{Commit: models.Commit{Patch: diff}}
-	message := explicitMessage
-	if message == "" {
-		maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
-		analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines, MessagePrompt: prompts.message})
-		if err != nil {
-			return commitAIAnalysis{}, err
-		}
-		out := models.AIAnalysisOutput{
-			Type:    analyzed.CommitType,
-			Scope:   analyzed.Scope,
-			Subject: analyzed.Subject,
-			Body:    analyzed.Body,
-		}
-		message = strings.TrimSpace(out.String())
-		analysis = analyzed
-	}
-
-	result := commitAIAnalysis{
-		Message: message,
-	}
-	if !shouldRunCompatibilityAnalysis(compatMode) {
-		return result, nil
-	}
-
-	analyzed, err := analyzeCompatibilityPromptsWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{
-		FunctionalityRemovedPrompt: prompts.functionalityRemoved,
-		CompatibilityPrompt:        prompts.compatibility,
-	})
+	maxBodyLines := maxBodyLinesForDiff(countDiffLines(diff))
+	analyzed, err := analyzeCommitMessageWithAIFunc(ctx, analysis, agent, git.AnalyzeOptions{MaxBodyLines: maxBodyLines, MessagePrompt: messagePrompt})
 	if err != nil {
-		result.CompatibilityIssues = []string{formatCompatibilityAnalysisFailure(err)}
-		return result, nil
+		return commitAIAnalysis{}, err
 	}
-
-	return commitAIAnalysis{
-		Message:              result.Message,
-		FunctionalityRemoved: analyzed.FunctionalityRemoved,
-		CompatibilityIssues:  analyzed.CompatibilityIssues,
-	}, nil
+	out := models.AIAnalysisOutput{
+		Type:    analyzed.CommitType,
+		Scope:   analyzed.Scope,
+		Subject: analyzed.Subject,
+		Body:    analyzed.Body,
+	}
+	return commitAIAnalysis{Message: strings.TrimSpace(out.String())}, nil
 }
 
 // countDiffLines counts changed content lines in a unified diff: lines starting
@@ -892,30 +825,45 @@ func maxBodyLinesForDiff(changedLines int) int {
 // model used for message generation.
 const defaultGroupModel = "claude-sonnet-4-5"
 
-// messageModel resolves the LLM for commit-message and PR-content generation:
-// the CLI --model override, then .gavel.yaml commit.model, else the clicky
-// default (a fast haiku-class model).
+// messageModel resolves the LLM for commit-message generation. Precedence:
+// the CLI --model override, then the commit.message spec model, then the base
+// ai: spec model, else "" (the clicky default, a fast haiku-class model).
 func (opts Options) messageModel() string {
 	if opts.Model != "" {
 		return opts.Model
 	}
-	return opts.Config.Model
+	if opts.Config.Message.Name != "" {
+		return opts.Config.Message.Name
+	}
+	return opts.AI.Model.Name
 }
 
 // groupModel resolves the LLM for AI commit grouping. Precedence: --group-model,
-// then commit.groupModel, then the shared message model (--model / commit.model),
-// else defaultGroupModel.
+// then the commit.grouping spec model, then the base ai: spec model, then the
+// shared message model, else defaultGroupModel.
 func (opts Options) groupModel() string {
 	if opts.GroupModel != "" {
 		return opts.GroupModel
 	}
-	if opts.Config.GroupModel != "" {
-		return opts.Config.GroupModel
+	if opts.Config.Grouping.Model.Name != "" {
+		return opts.Config.Grouping.Model.Name
+	}
+	if opts.AI.Model.Name != "" {
+		return opts.AI.Model.Name
 	}
 	if m := opts.messageModel(); m != "" {
 		return m
 	}
 	return defaultGroupModel
+}
+
+// prContentModel resolves the LLM for PR title/body/branch generation: the
+// pr.content spec model if set, else the shared message model.
+func (opts Options) prContentModel() string {
+	if opts.PR.Content.Model.Name != "" {
+		return opts.PR.Content.Model.Name
+	}
+	return opts.messageModel()
 }
 
 // BuildAgent constructs an LLM agent for opts using model. An empty model falls
@@ -1000,7 +948,6 @@ func (c CommitResult) prettyAt(index, total int, dryRun bool) api.Text {
 			t = t.Append("    ", "").Append(line).NewLine()
 		}
 	}
-	t = appendCompatibilityPreview(t, c.FunctionalityRemoved, c.CompatibilityIssues)
 	return t
 }
 

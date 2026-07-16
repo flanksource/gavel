@@ -38,7 +38,6 @@ type CommitOptions struct {
 	NoAutosquash bool     `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
 	Since        string   `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
 	Precommit    string   `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
-	Compat       string   `flag:"compat" help:"Behavior for AI compatibility analysis and findings (default: skip): prompt|fail|skip|false"`
 	Lint         string   `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
 	LintSecrets  string   `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
 	Tidy         string   `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
@@ -69,11 +68,6 @@ violations relative to HEAD prompt to (1) unstage the manifest so the bad edit
 is dropped from the commit, (2) ignore and keep it in this commit, or
 (3) cancel. --precommit controls this check too, and skip|false disables both
 the gitignore and linked-deps checks entirely.
-
-AI analysis can also check for removed functionality and compatibility issues.
-By default this is skipped. Use --compat=prompt|fail to enable it; skip|false
-disables the compatibility AI checks entirely, and non-TTY runs auto-escalate
-prompt -> fail.
 
 Positional file arguments (gavel commit <files>) commit exactly those paths:
 gavel resets the index and stages only the named files or directories, so
@@ -130,7 +124,7 @@ Examples:
   gavel commit -A                       # LLM-grouped logical commits (up to 7)
   gavel commit -A --max-commits=3       # cap at 3 logical commits (chore commit excluded)
   gavel commit --max-commits=3          # same as above; --max-commits implies -A
-  gavel commit -m "chore: bump dep"     # explicit message, still run compatibility analysis
+  gavel commit -m "chore: bump dep"     # explicit message, skip message-generation LLM call
   gavel commit --stage staged           # commit only what is already git-added (the pre-session default)
   gavel commit --stage all --dry-run    # stage everything, print message
   gavel commit --stage <session-id>     # commit only the files that Claude or Codex session edited
@@ -163,6 +157,14 @@ func init() {
 }
 
 func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConfig, files []string) commitpkg.Options {
+	// --max-commits, when unset, falls back to commit.maxCommits from config — but
+	// only when grouping (-A) is requested, so a config default never forces
+	// grouping onto a plain `gavel commit`. commit.Run applies the hardcoded 7
+	// default when both are unset.
+	maxCommits := opts.MaxCommits
+	if maxCommits == 0 && opts.CommitAll {
+		maxCommits = cfg.Commit.MaxCommits
+	}
 	return commitpkg.Options{
 		WorkDir:         workDir,
 		Stage:           opts.Stage,
@@ -170,7 +172,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		CommitAll:       opts.CommitAll,
 		Interactive:     opts.Interactive || opts.Tree,
 		Summary:         opts.Summary,
-		MaxCommits:      opts.MaxCommits,
+		MaxCommits:      maxCommits,
 		DryRun:          opts.DryRun,
 		Force:           opts.Force,
 		NoCache:         opts.NoCache,
@@ -184,13 +186,14 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Since:           opts.Since,
 		Autosquash:      !opts.NoAutosquash,
 		PrecommitMode:   opts.Precommit,
-		CompatMode:      opts.Compat,
 		LintFlag:        opts.Lint,
 		LintSecretsFlag: opts.LintSecrets,
 		TidyFlag:        opts.Tidy,
 		AssumeYes:       opts.Yes,
 		AddMetadata:     opts.AddMetadata,
 		Config:          cfg.Commit,
+		AI:              cfg.AI,
+		PR:              cfg.PR,
 	}
 }
 
@@ -248,11 +251,6 @@ func runCommit(opts CommitOptions) (any, error) {
 			return nil, nil
 		}
 		if errors.Is(err, commitpkg.ErrLinkedDepsCancelled) {
-			fmt.Fprintln(os.Stderr, err.Error())
-			exitCode = 1
-			return nil, nil
-		}
-		if errors.Is(err, commitpkg.ErrCompatibilityCancelled) {
 			fmt.Fprintln(os.Stderr, err.Error())
 			exitCode = 1
 			return nil, nil

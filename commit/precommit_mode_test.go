@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunSingleCommitPrecommitAndCompatFalseBypassChecks(t *testing.T) {
+func TestRunSingleCommitPrecommitFalseBypassChecks(t *testing.T) {
 	repo := initCommitRepo(t)
 	writeFile(t, repo, ".env", "SECRET=1\n")
 	writeFile(t, repo, "package.json", `{
@@ -24,7 +24,7 @@ func TestRunSingleCommitPrecommitAndCompatFalseBypassChecks(t *testing.T) {
 
 	previousAgent := newAgentFunc
 	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
-		t.Fatal("AI agent should not be created when message is explicit and compat is false")
+		t.Fatal("AI agent should not be created when the message is explicit")
 		return nil, nil
 	}
 	defer func() {
@@ -36,7 +36,6 @@ func TestRunSingleCommitPrecommitAndCompatFalseBypassChecks(t *testing.T) {
 		Message:       "chore: keep staged files",
 		DryRun:        true,
 		PrecommitMode: IgnoreCheckModeFalse,
-		CompatMode:    IgnoreCheckModeFalse,
 		Config: verify.CommitConfig{
 			GitIgnore: []string{"*.env"},
 		},
@@ -47,31 +46,29 @@ func TestRunSingleCommitPrecommitAndCompatFalseBypassChecks(t *testing.T) {
 	assert.ElementsMatch(t, []string{".env", "package.json"}, result.Staged)
 }
 
-func TestResolvePrecommitModeUsesNewConfigBeforeLegacyFallback(t *testing.T) {
+func TestResolvePrecommitModeUsesConfigThenDefault(t *testing.T) {
 	mode, err := resolvePrecommitMode("", verify.CommitConfig{
-		Precommit:  verify.PrecommitConfig{Mode: "fail"},
-		LinkedDeps: verify.LinkedDepsConfig{Mode: "skip"},
+		Precommit: verify.PrecommitConfig{Mode: "fail"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, CheckModeFail, mode)
 
+	// A raw --precommit flag wins over the config value.
+	mode, err = resolvePrecommitMode("skip", verify.CommitConfig{
+		Precommit: verify.PrecommitConfig{Mode: "fail"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, CheckModeSkip, mode)
+
+	// The "false" alias maps to skip.
 	mode, err = resolvePrecommitMode("", verify.CommitConfig{
-		LinkedDeps: verify.LinkedDepsConfig{Mode: "false"},
+		Precommit: verify.PrecommitConfig{Mode: "false"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, CheckModeSkip, mode)
-}
 
-func TestResolveCompatModeDefaultsToSkip(t *testing.T) {
-	mode, err := resolveCompatMode("", verify.CommitConfig{})
+	// Empty flag and empty config default to prompt.
+	mode, err = resolvePrecommitMode("", verify.CommitConfig{})
 	require.NoError(t, err)
-	assert.Equal(t, CheckModeSkip, mode)
-}
-
-func TestResolveCompatModeUsesConfiguredValueWhenPresent(t *testing.T) {
-	mode, err := resolveCompatMode("", verify.CommitConfig{
-		Compatibility: verify.CompatibilityConfig{Mode: "fail"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, CheckModeFail, mode)
+	assert.Equal(t, CheckModePrompt, mode)
 }

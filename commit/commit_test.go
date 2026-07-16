@@ -7,9 +7,28 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	api "github.com/flanksource/captain/pkg/api"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/verify"
 )
+
+// msgSpecCfg builds a CommitConfig whose commit.message spec pins model.
+func msgSpecCfg(model string) verify.CommitConfig {
+	return verify.CommitConfig{Message: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: model}}}}
+}
+
+// msgGroupSpecCfg builds a CommitConfig pinning both the commit.message and
+// commit.grouping spec models.
+func msgGroupSpecCfg(message, group string) verify.CommitConfig {
+	cfg := msgSpecCfg(message)
+	cfg.Grouping = verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: group}}}
+	return cfg
+}
+
+// aiBaseSpec builds a base ai: spec pinning model.
+func aiBaseSpec(model string) api.Spec {
+	return api.Spec{Model: api.Model{Name: model}}
+}
 
 func TestCommit(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -96,41 +115,51 @@ var _ = Describe("verify.MergeCommitConfig", func() {
 		Expect(merged.Hooks[2].Name).To(Equal("repo-b"))
 	})
 
-	It("overrides Model when non-empty, preserves otherwise", func() {
-		base := verify.CommitConfig{Model: "claude-haiku-4.5"}
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Model).To(Equal("claude-haiku-4.5"))
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{Model: "gpt-4o"}).Model).To(Equal("gpt-4o"))
+	It("overrides the Message spec model when set, preserves otherwise", func() {
+		base := msgSpecCfg("claude-haiku-4-5")
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Message.Model.Name).To(Equal("claude-haiku-4-5"))
+		Expect(verify.MergeCommitConfig(base, msgSpecCfg("gpt-4o")).Message.Model.Name).To(Equal("gpt-4o"))
 	})
 
-	It("overrides GroupModel when non-empty, preserves otherwise", func() {
-		base := verify.CommitConfig{GroupModel: "claude-sonnet-4-5"}
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).GroupModel).To(Equal("claude-sonnet-4-5"))
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{GroupModel: "claude-opus-4-1"}).GroupModel).To(Equal("claude-opus-4-1"))
+	It("overrides the Grouping spec model when set, preserves otherwise", func() {
+		base := verify.CommitConfig{Grouping: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-4-5"}}}}
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Grouping.Model.Name).To(Equal("claude-sonnet-4-5"))
+		override := verify.CommitConfig{Grouping: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-opus-4-1"}}}}
+		Expect(verify.MergeCommitConfig(base, override).Grouping.Model.Name).To(Equal("claude-opus-4-1"))
+	})
+
+	It("overrides MaxCommits when non-zero, preserves otherwise", func() {
+		base := verify.CommitConfig{MaxCommits: 7}
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).MaxCommits).To(Equal(7))
+		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{MaxCommits: 3}).MaxCommits).To(Equal(3))
 	})
 })
 
 var _ = Describe("Options model resolution", func() {
-	DescribeTable("messageModel prefers --model over commit.model, else empty",
+	DescribeTable("messageModel prefers --model, then commit.message.model, then ai.model, else empty",
 		func(opts Options, expected string) {
 			Expect(opts.messageModel()).To(Equal(expected))
 		},
-		Entry("flag wins", Options{Model: "haiku-flag", Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-flag"),
-		Entry("config used when no flag", Options{Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-cfg"),
-		Entry("empty when neither set", Options{}, ""),
+		Entry("flag wins", Options{Model: "haiku-flag", Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-flag"),
+		Entry("message spec used when no flag", Options{Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "haiku-cfg"),
+		Entry("ai base used when no flag or op spec", Options{AI: aiBaseSpec("base")}, "base"),
+		Entry("empty when nothing set", Options{}, ""),
 	)
 
-	DescribeTable("groupModel cascades group flag -> group config -> message model -> default",
+	DescribeTable("groupModel cascades group flag -> commit.grouping.model -> ai.model -> message model -> default",
 		func(opts Options, expected string) {
 			Expect(opts.groupModel()).To(Equal(expected))
 		},
 		Entry("--group-model wins over everything",
-			Options{GroupModel: "opus-flag", Config: verify.CommitConfig{GroupModel: "sonnet-cfg", Model: "haiku-cfg"}}, "opus-flag"),
-		Entry("commit.groupModel used when no group flag",
-			Options{Config: verify.CommitConfig{GroupModel: "sonnet-cfg", Model: "haiku-cfg"}}, "sonnet-cfg"),
-		Entry("falls back to --model when no group model",
+			Options{GroupModel: "opus-flag", Config: msgGroupSpecCfg("haiku-cfg", "sonnet-cfg"), AI: aiBaseSpec("base")}, "opus-flag"),
+		Entry("commit.grouping.model used when no group flag",
+			Options{Config: msgGroupSpecCfg("haiku-cfg", "sonnet-cfg")}, "sonnet-cfg"),
+		Entry("ai base used when no group flag or grouping spec",
+			Options{Config: msgSpecCfg("haiku-cfg"), AI: aiBaseSpec("base")}, "base"),
+		Entry("falls back to --model when no group/ai model",
 			Options{Model: "haiku-flag"}, "haiku-flag"),
-		Entry("falls back to commit.model when no group model",
-			Options{Config: verify.CommitConfig{Model: "haiku-cfg"}}, "haiku-cfg"),
+		Entry("falls back to commit.message.model when no group/ai model",
+			Options{Config: msgSpecCfg("haiku-cfg")}, "haiku-cfg"),
 		Entry("defaults to sonnet-class when nothing set",
 			Options{}, defaultGroupModel),
 	)

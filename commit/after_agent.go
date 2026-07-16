@@ -67,6 +67,8 @@ func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetada
 		IssueID:     meta.IssueID,
 		SessionID:   meta.SessionID,
 		Config:      cfg.Commit,
+		AI:          cfg.AI,
+		PR:          cfg.PR,
 	})
 	if err != nil {
 		if errors.Is(err, ErrNothingStaged) {

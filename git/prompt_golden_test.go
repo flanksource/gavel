@@ -60,20 +60,6 @@ func TestPromptCommitMessage_WithoutMaxBodyLines(t *testing.T) {
 	assertGolden(t, "commit-message-without-maxbody.golden", got)
 }
 
-func TestPromptFunctionalityRemoved(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), functionalityRemovedPrompt, nil)
-	require.NoError(t, err)
-	require.Contains(t, got, "a < b && c > d", "raw diff content must be preserved")
-	assertGolden(t, "functionality-removed.golden", got)
-}
-
-func TestPromptCompatibilityIssues(t *testing.T) {
-	got, _, err := renderCommitPrompt(sampleCommit(), compatibilityIssuesPrompt, nil)
-	require.NoError(t, err)
-	require.Contains(t, got, "a < b && c > d", "raw diff content must be preserved")
-	assertGolden(t, "compatibility-issues.golden", got)
-}
-
 func TestPromptSummaryGroup(t *testing.T) {
 	commits := models.CommitAnalyses{
 		{

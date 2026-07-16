@@ -151,9 +151,9 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 		return nil, err
 	}
 
-	template, err := opts.Config.GroupingPrompt.Resolve(opts.WorkDir, groupingPromptTemplate)
+	template, err := opts.Config.Grouping.TemplateSource(opts.WorkDir, groupingPromptTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("resolve commit.groupingPrompt override: %w", err)
+		return nil, fmt.Errorf("resolve commit.grouping prompt override: %w", err)
 	}
 
 	prompting.Prepare()
