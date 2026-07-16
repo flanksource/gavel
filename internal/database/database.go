@@ -202,17 +202,20 @@ func resolveEmbeddedDSN() (string, string, error) {
 		logger.V(1).Infof("probe running embedded postgres: %v", err)
 	} else if running != nil {
 		logger.Debugf("reusing embedded postgres (pid=%d, port=%d)", running.PID, running.Port)
-		return service.EmbeddedDSN(running.Port), "db.json (embedded, reused)", nil
+		dsn := service.EmbeddedDSN(running.Port)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := commonsdb.EnsurePerformanceDiagnostics(ctx, dsn); err != nil {
+			return "", "", fmt.Errorf("validate reused Gavel embedded PostgreSQL: %w", err)
+		}
+		return dsn, "db.json (embedded, reused)", nil
 	}
 
-	dataDir, err := service.EmbeddedDataDir()
+	embeddedConfig, err := service.EmbeddedPostgresConfig()
 	if err != nil {
 		return "", "", err
 	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  dataDir,
-		Database: "gavel",
-	})
+	dsn, stop, err := commonsdb.StartEmbedded(embeddedConfig)
 	if err != nil {
 		return "", "", fmt.Errorf("start embedded postgres: %w", err)
 	}

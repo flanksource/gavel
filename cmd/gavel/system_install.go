@@ -225,15 +225,12 @@ func verifyDBConfig(cfg service.DBConfig) error {
 		logger.Infof("Verified connection to %s", cfg.DSN)
 		return nil
 	case service.DBModeEmbedded:
-		dataDir, err := service.EmbeddedDataDir()
+		embeddedConfig, err := service.EmbeddedPostgresConfig()
 		if err != nil {
 			return err
 		}
-		logger.Infof("Verifying embedded postgres at %s (may download binaries on first run)", dataDir)
-		dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-			DataDir:  dataDir,
-			Database: "gavel",
-		})
+		logger.Infof("Verifying embedded postgres at %s (may download binaries on first run)", embeddedConfig.DataDir)
+		dsn, stop, err := commonsdb.StartEmbedded(embeddedConfig)
 		if err != nil {
 			return fmt.Errorf("embedded postgres smoke test: %w", err)
 		}

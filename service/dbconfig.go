@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	commonsdb "github.com/flanksource/commons-db/db"
 )
 
 // DBMode labels the two supported Gavel database backends.
@@ -47,6 +49,20 @@ func EmbeddedDataDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "embedded-pg"), nil
+}
+
+// EmbeddedPostgresConfig is the single lifecycle configuration for Gavel's
+// locally managed PostgreSQL instance.
+func EmbeddedPostgresConfig() (commonsdb.EmbeddedConfig, error) {
+	dataDir, err := EmbeddedDataDir()
+	if err != nil {
+		return commonsdb.EmbeddedConfig{}, err
+	}
+	return commonsdb.EmbeddedConfig{
+		DataDir:                dataDir,
+		Database:               embeddedPGDatabase,
+		PerformanceDiagnostics: true,
+	}, nil
 }
 
 // LoadDBConfig reads db.json. A missing file yields a zero-value DBConfig
