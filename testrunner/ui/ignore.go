@@ -45,6 +45,10 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 	root := s.resolveGitRootLocked(req.WorkDir)
 	s.mu.Unlock()
 	if root == "" {
+		if req.WorkDir != "" {
+			http.Error(w, "work_dir is not part of the current lint results", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "git root not configured", http.StatusInternalServerError)
 		return
 	}
@@ -74,35 +78,54 @@ func (s *Server) handleLintIgnore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resolveGitRootLocked(workDir string) string {
-	if workDir != "" {
-		root := utils.FindGitRoot(workDir)
-		if root == "" {
-			root = workDir
+	if workDir == "" {
+		if root := cleanExistingRoot(s.gitRoot); root != "" {
+			return root
 		}
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
+		if s.git != nil {
+			if root := cleanExistingRoot(s.git.Root); root != "" {
+				return root
+			}
 		}
-		return root
+		for _, result := range s.lint {
+			if result != nil {
+				if root := cleanExistingRoot(result.WorkDir); root != "" {
+					return root
+				}
+			}
+		}
+		return ""
 	}
 
-	if s.gitRoot != "" {
-		return s.gitRoot
+	requested, err := filepath.Abs(workDir)
+	if err != nil {
+		return ""
+	}
+	requested = filepath.Clean(requested)
+
+	for _, configured := range []string{s.gitRoot, snapshotGitRoot(s.git)} {
+		if root := cleanExistingRoot(configured); root != "" && utils.IsWithin(requested, root) {
+			return root
+		}
 	}
 
 	for _, result := range s.lint {
 		if result == nil || result.WorkDir == "" {
 			continue
 		}
-		root := utils.FindGitRoot(result.WorkDir)
-		if root == "" {
-			root = result.WorkDir
+		trustedWorkDir, err := filepath.Abs(result.WorkDir)
+		if err != nil || requested != filepath.Clean(trustedWorkDir) {
+			continue
 		}
-		if abs, err := filepath.Abs(root); err == nil {
-			root = abs
-		}
-		s.gitRoot = root
-		return root
+		return cleanExistingRoot(result.WorkDir)
 	}
 
 	return ""
+}
+
+func snapshotGitRoot(git *SnapshotGit) string {
+	if git == nil {
+		return ""
+	}
+	return git.Root
 }

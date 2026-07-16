@@ -648,9 +648,9 @@ func (s *Server) handleProcessMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pidStr := r.URL.Query().Get("pid")
-	pid, err := strconv.Atoi(pidStr)
+	pid, err := strconv.ParseInt(pidStr, 10, 32)
 	if err != nil || pid <= 0 {
-		http.Error(w, "pid query param required and must be a positive integer", http.StatusBadRequest)
+		http.Error(w, "pid query param required and must be a positive 32-bit integer", http.StatusBadRequest)
 		return
 	}
 	proc, err := gopsutilProcess.NewProcess(int32(pid))

@@ -44,6 +44,15 @@ func TestDiagnosticsEndpointReturnsProcessTree(t *testing.T) {
 	}
 }
 
+func TestProcessMetricsRejectsPIDOutsideInt32Range(t *testing.T) {
+	_, handler := newTestServer(t)
+
+	resp := doRequest(t, handler, http.MethodGet, "/api/process/metrics?pid=2147483648", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestDiagnosticsEndpointFallsBackToEmbeddedSnapshot(t *testing.T) {
 	srv, handler := newTestServer(t)
 	srv.LoadSnapshot(testui.Snapshot{

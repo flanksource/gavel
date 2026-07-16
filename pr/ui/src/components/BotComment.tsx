@@ -151,10 +151,21 @@ function CodeRabbitComment({ comment }: Props) {
 const gavelSummaryRegex = /(\d+)\s+passed.*?(\d+)\s+failed/i;
 const gavelLintRegex = /(\d+)\s+violation/i;
 
+function stripHTMLComments(text: string): string {
+  let start = text.indexOf('<!--');
+  while (start !== -1) {
+    const end = text.indexOf('-->', start + 4);
+    if (end === -1) {
+      return text.slice(0, start);
+    }
+    text = text.slice(0, start) + text.slice(end + 3);
+    start = text.indexOf('<!--');
+  }
+  return text;
+}
+
 function GavelComment({ comment }: Props) {
-  const body = comment.body
-    .replace(/<!--[^>]*-->/g, '')
-    .trim();
+  const body = stripHTMLComments(comment.body).trim();
 
   const testMatch = body.match(gavelSummaryRegex);
   const lintMatch = body.match(gavelLintRegex);

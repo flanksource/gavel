@@ -137,12 +137,11 @@ func (s *Server) resolveTestEditRootLocked(workDir string) string {
 		return ""
 	}
 	if workDir != "" {
-		if root := cleanExistingRoot(workDir); root != "" {
-			if allowed := s.allowedTestEditRootLocked(root); allowed != "" {
-				return allowed
-			}
+		requested, err := filepath.Abs(workDir)
+		if err != nil {
+			return ""
 		}
-		return ""
+		return s.allowedTestEditRootLocked(filepath.Clean(requested))
 	}
 	if s.gitRoot != "" {
 		if root := cleanExistingRoot(s.gitRoot); root != "" {
@@ -158,21 +157,24 @@ func (s *Server) resolveTestEditRootLocked(workDir string) string {
 	return ""
 }
 
-func (s *Server) allowedTestEditRootLocked(root string) string {
+func (s *Server) allowedTestEditRootLocked(requested string) string {
 	if s.gitRoot != "" {
-		if trusted := cleanExistingRoot(s.gitRoot); trusted != "" && root == trusted {
+		if trusted := cleanExistingRoot(s.gitRoot); trusted != "" && utils.IsWithin(requested, trusted) {
 			return trusted
 		}
 	}
 	if s.git != nil && s.git.Root != "" {
-		if trusted := cleanExistingRoot(s.git.Root); trusted != "" && root == trusted {
+		if trusted := cleanExistingRoot(s.git.Root); trusted != "" && utils.IsWithin(requested, trusted) {
 			return trusted
 		}
 	}
-	return testWorkDirRoot(s.tests, root)
+	return testWorkDirRoot(s.tests, requested)
 }
 
 func cleanExistingRoot(path string) string {
+	if path == "" {
+		return ""
+	}
 	root := utils.FindGitRoot(path)
 	if root == "" {
 		root = path
@@ -196,14 +198,15 @@ func testsHaveWorkDir(tests []parsers.Test) bool {
 	return false
 }
 
-func testWorkDirRoot(tests []parsers.Test, root string) string {
+func testWorkDirRoot(tests []parsers.Test, requested string) string {
 	for _, test := range tests {
 		if test.WorkDir != "" {
-			if trusted := cleanExistingRoot(test.WorkDir); trusted != "" && trusted == root {
-				return trusted
+			trustedWorkDir, err := filepath.Abs(test.WorkDir)
+			if err == nil && requested == filepath.Clean(trustedWorkDir) {
+				return cleanExistingRoot(test.WorkDir)
 			}
 		}
-		if trusted := testWorkDirRoot(test.Children, root); trusted != "" {
+		if trusted := testWorkDirRoot(test.Children, requested); trusted != "" {
 			return trusted
 		}
 	}

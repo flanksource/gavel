@@ -243,6 +243,37 @@ func TestLintIgnoreUsesRequestWorkDirForCrossRepoResults(t *testing.T) {
 	}
 }
 
+func TestLintIgnoreRejectsUnknownWorkDir(t *testing.T) {
+	srv, handler := newTestServer(t)
+
+	trustedRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(trustedRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create trusted repo .git: %v", err)
+	}
+	outsideRepo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outsideRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create outside repo .git: %v", err)
+	}
+
+	srv.SetLintResults([]*linters.LinterResult{{
+		Linter:  "golangci-lint",
+		WorkDir: trustedRepo,
+		Success: false,
+	}})
+
+	body, _ := json.Marshal(testui.IgnoreRequest{
+		Source:  "golangci-lint",
+		WorkDir: outsideRepo,
+	})
+	resp := doRequest(t, handler, http.MethodPost, "/api/lint/ignore", bytes.NewReader(body))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(outsideRepo, ".gavel.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("outside .gavel.yaml should not be written, stat err=%v", err)
+	}
+}
+
 func TestLintIgnoreAllowsFileOnlyFolderRule(t *testing.T) {
 	srv, handler := newTestServer(t)
 

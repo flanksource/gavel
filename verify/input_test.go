@@ -22,6 +22,9 @@ func TestClassifyArg(t *testing.T) {
 		// PR URLs
 		{"https://github.com/org/repo/pull/123", "pr", "123"},
 		{"https://github.com/flanksource/gavel/pull/42", "pr", "42"},
+		{"https://github.com/org/repo/pull/123/files", "pr", "123"},
+		{"https://evil.example/https://github.com/org/repo/pull/123", "file", "https://evil.example/https://github.com/org/repo/pull/123"},
+		{"https://github.com.evil.example/org/repo/pull/123", "file", "https://github.com.evil.example/org/repo/pull/123"},
 		// PR hash refs
 		{"#123", "pr", "123"},
 		{"#1", "pr", "1"},
