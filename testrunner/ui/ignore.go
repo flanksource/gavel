@@ -103,12 +103,6 @@ func (s *Server) resolveGitRootLocked(workDir string) string {
 	}
 	requested = filepath.Clean(requested)
 
-	for _, configured := range []string{s.gitRoot, snapshotGitRoot(s.git)} {
-		if root := cleanExistingRoot(configured); root != "" && utils.IsWithin(requested, root) {
-			return root
-		}
-	}
-
 	for _, result := range s.lint {
 		if result == nil || result.WorkDir == "" {
 			continue
@@ -118,6 +112,12 @@ func (s *Server) resolveGitRootLocked(workDir string) string {
 			continue
 		}
 		return cleanExistingRoot(result.WorkDir)
+	}
+
+	for _, configured := range []string{s.gitRoot, snapshotGitRoot(s.git)} {
+		if root := cleanExistingRoot(configured); root != "" && utils.IsWithin(requested, root) {
+			return root
+		}
 	}
 
 	return ""
