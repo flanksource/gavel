@@ -103,6 +103,8 @@ type Server struct {
 	// `gavel fixtures --schema`, injected by cmd/gavel so pr/ui does not
 	// duplicate the CLI-owned fixture schema builder.
 	fixtureSchemaProvider func() (any, error)
+
+	todoRuns todoRunRegistry
 }
 
 const orgsCacheTTL = 5 * time.Minute
@@ -405,9 +407,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)
-	mux.HandleFunc("GET /api/todos/criteria/catalog", s.handleCriteriaCatalog)
 	mux.HandleFunc("POST /api/todos/criteria", s.handleTodoCriteria)
-	mux.HandleFunc("POST /api/todos/criteria/generate", s.handleTodoCriteriaGenerate)
 	mux.HandleFunc("POST /api/todos/verification/run", s.handleTodoVerificationRun)
 	mux.HandleFunc("POST /api/todos/verification/fixture", s.handleTodoVerificationFixture)
 	mux.HandleFunc("GET /api/todos/verification/schema", s.handleTodoVerificationSchema)
@@ -416,6 +416,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/todos/commits/files", s.handleTodoCommitFiles)
 	mux.HandleFunc("/api/todos/session/stream", s.handleTodoSessionStream)
 	mux.HandleFunc("/api/todos/session/stats", s.handleTodoSessionStats)
+	mux.HandleFunc("GET /api/todos/session/detail", s.handleTodoSessionDetail)
+	mux.HandleFunc("POST /api/todos/session/stop", s.handleTodoRunStop)
 	mux.HandleFunc("POST /api/todos/session/focus", s.handleTodoSessionFocus)
 	mux.HandleFunc("GET /api/todos/session/cmux", s.handleTodoSessionCmux)
 	mux.HandleFunc("POST /api/todos/session/approve", s.handleTodoSessionApprove)

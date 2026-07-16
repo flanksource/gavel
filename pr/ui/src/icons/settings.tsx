@@ -1,5 +1,5 @@
 // Icon set for the settings dialog — one glyph per top-level .gavel.yaml section,
-// shared by the tab strip and the in-form section headers. The AI-review glyph
+// shared by the tab strip and the in-form section headers. The AI-defaults glyph
 // comes from clicky-ui's icon set (`icons/ai`); the rest are Phosphor thin glyphs
 // bundled offline via @iconify/react so nothing is fetched at runtime.
 import { Icon } from '@iconify/react/offline';
@@ -7,6 +7,7 @@ import type { IconifyIcon } from '@iconify/react/offline';
 import type { ComponentType } from 'react';
 import { UiSparkles } from '@flanksource/clicky-ui/icons';
 import gitCommitThin from '@iconify-icons/ph/git-commit-thin';
+import gitPullRequestThin from '@iconify-icons/ph/git-pull-request-thin';
 import warningThin from '@iconify-icons/ph/warning-thin';
 import shieldCheckThin from '@iconify-icons/ph/shield-check-thin';
 import flaskThin from '@iconify-icons/ph/flask-thin';
@@ -31,10 +32,11 @@ function ph(glyph: IconifyIcon): SettingsIcon {
 
 // sectionIcon is keyed by the .gavel.yaml top-level section name.
 export const sectionIcon: Record<string, SettingsIcon> = {
-  verify: UiSparkles,
+  ai: UiSparkles,
   status: ph(chartLineThin),
   test: ph(treeStructureThin),
   commit: ph(gitCommitThin),
+  pr: ph(gitPullRequestThin),
   lint: ph(warningThin),
   secrets: ph(shieldCheckThin),
   fixtures: ph(flaskThin),

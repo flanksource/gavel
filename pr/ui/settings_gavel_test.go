@@ -21,8 +21,11 @@ func TestHandleSettingsSchema(t *testing.T) {
 		t.Fatalf("schema is not valid JSON: %v", err)
 	}
 	props, _ := schema["properties"].(map[string]any)
-	if _, ok := props["verify"]; !ok {
-		t.Errorf("schema is missing the verify section: %v", props)
+	if _, ok := props["ai"]; !ok {
+		t.Errorf("schema is missing the ai base-spec section: %v", props)
+	}
+	if _, ok := props["commit"]; !ok {
+		t.Errorf("schema is missing the commit section: %v", props)
 	}
 }
 
@@ -96,7 +99,7 @@ func TestHandleSettingsGavel_ProjectRoundTrip(t *testing.T) {
 	dir := withProject(t, "gavel", "flanksource/gavel", "")
 
 	// PUT a config into the project's .gavel.yaml.
-	body := `{"verify":{"model":"gemini","promptTemplate":{"inline":"be strict"}}}`
+	body := `{"ai":{"model":"gemini","prompt":{"system":"Be concise.","user":"Summarize the change."}},"commit":{"message":{"prompt":{"user":"be strict"}}}}`
 	rec := httptest.NewRecorder()
 	(&Server{}).handleSettingsGavel(rec, httptest.NewRequest("PUT", "/api/settings/gavel?project=gavel", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -116,11 +119,14 @@ func TestHandleSettingsGavel_ProjectRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !got.Exists || got.Config.Verify.Model != "gemini" {
-		t.Errorf("GET = %+v, want exists with verify.model=gemini", got)
+	if !got.Exists || got.Config.AI.Model.Name != "gemini" {
+		t.Errorf("GET = %+v, want exists with ai.model=gemini", got)
 	}
-	if text, ok := got.Config.Verify.PromptTemplate.InlineText(); !ok || text != "be strict" {
-		t.Errorf("promptTemplate not persisted: %+v", got.Config.Verify.PromptTemplate)
+	if got.Config.AI.Prompt.System != "Be concise." || got.Config.AI.Prompt.User != "Summarize the change." {
+		t.Errorf("ai default prompts not persisted: %+v", got.Config.AI.Prompt)
+	}
+	if got.Config.Commit.Message.Spec.Prompt.User != "be strict" {
+		t.Errorf("commit.message prompt not persisted: %+v", got.Config.Commit.Message)
 	}
 }
 
@@ -144,13 +150,14 @@ func TestHandleSettingsGavel_GlobalMissingReturnsEmpty(t *testing.T) {
 func TestHandleSettingsGavelTrace_LayeredProvenance(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// User layer sets verify.model; project layer sets commit + overrides nothing
-	// in verify, so the two layers own distinct fields for the provenance badges.
-	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("verify:\n  model: gemini\n"), 0o644); err != nil {
+	// User layer sets the base ai.model; project layer sets commit.message.model
+	// and overrides nothing in ai, so the two layers own distinct fields for the
+	// provenance badges.
+	if err := os.WriteFile(filepath.Join(home, ".gavel.yaml"), []byte("ai:\n  model: gemini\n"), 0o644); err != nil {
 		t.Fatalf("write home config: %v", err)
 	}
 	dir := withProject(t, "gavel", "flanksource/gavel", "")
-	if err := os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("commit:\n  model: claude-opus\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte("commit:\n  message:\n    model: claude-opus\n"), 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)
 	}
 
@@ -160,26 +167,21 @@ func TestHandleSettingsGavelTrace_LayeredProvenance(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
 
+	type modelHolder struct {
+		Model string `json:"model"`
+	}
+	type layer struct {
+		AI     modelHolder `json:"ai"`
+		Commit struct {
+			Message modelHolder `json:"message"`
+		} `json:"commit"`
+	}
 	var trace struct {
 		Sources []struct {
 			Origin string `json:"origin"`
-			Config struct {
-				Verify struct {
-					Model string `json:"model"`
-				} `json:"verify"`
-				Commit struct {
-					Model string `json:"model"`
-				} `json:"commit"`
-			} `json:"config"`
+			Config layer  `json:"config"`
 		} `json:"sources"`
-		Merged struct {
-			Verify struct {
-				Model string `json:"model"`
-			} `json:"verify"`
-			Commit struct {
-				Model string `json:"model"`
-			} `json:"commit"`
-		} `json:"merged"`
+		Merged layer `json:"merged"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &trace); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -187,20 +189,20 @@ func TestHandleSettingsGavelTrace_LayeredProvenance(t *testing.T) {
 
 	byOrigin := map[string]string{}
 	for _, s := range trace.Sources {
-		if s.Config.Verify.Model != "" {
-			byOrigin["verify.model"] = s.Origin
+		if s.Config.AI.Model != "" {
+			byOrigin["ai.model"] = s.Origin
 		}
-		if s.Config.Commit.Model != "" {
-			byOrigin["commit.model"] = s.Origin
+		if s.Config.Commit.Message.Model != "" {
+			byOrigin["commit.message.model"] = s.Origin
 		}
 	}
-	if byOrigin["verify.model"] != "user-home" {
-		t.Errorf("verify.model provenance = %q, want user-home", byOrigin["verify.model"])
+	if byOrigin["ai.model"] != "user-home" {
+		t.Errorf("ai.model provenance = %q, want user-home", byOrigin["ai.model"])
 	}
-	if byOrigin["commit.model"] != "target-directory" {
-		t.Errorf("commit.model provenance = %q, want target-directory", byOrigin["commit.model"])
+	if byOrigin["commit.message.model"] != "target-directory" {
+		t.Errorf("commit.message.model provenance = %q, want target-directory", byOrigin["commit.message.model"])
 	}
-	if trace.Merged.Verify.Model != "gemini" || trace.Merged.Commit.Model != "claude-opus" {
+	if trace.Merged.AI.Model != "gemini" || trace.Merged.Commit.Message.Model != "claude-opus" {
 		t.Errorf("merged did not combine both layers: %+v", trace.Merged)
 	}
 }

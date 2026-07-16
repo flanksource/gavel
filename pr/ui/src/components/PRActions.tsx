@@ -1,11 +1,23 @@
 import { useState } from 'react';
-import { Button, SplitButton, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSync } from '@flanksource/clicky-ui/icons';
+import { Button, SplitButton, DropdownMenu, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
+import { UiCheck, UiEllipsis, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSync } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import type { PRItem, PRDetail } from '../types';
 
 type MergeMethod = 'rebase' | 'squash' | 'merge';
+
+// ExtraAction is a caller-supplied button (e.g. "New todo") folded into the PR
+// action cluster so it collapses together with the GitHub actions: an outline
+// button when the bar is expanded, a menu item once it collapses into the
+// overflow dropdown.
+export interface ExtraAction {
+  label: string;
+  icon: ComponentType<IconProps>;
+  onClick: () => void;
+  title?: string;
+  disabled?: boolean;
+}
 
 // Pending is the action awaiting confirmation in the modal. method is unused for
 // approvals; for auto-merge it is the method GitHub applies once checks pass.
@@ -54,10 +66,16 @@ export function PRActions({
   pr,
   detail,
   onChanged,
+  collapsed = false,
+  extras = [],
 }: {
   pr: PRItem;
   detail: PRDetail | null;
   onChanged?: () => void;
+  // collapsed folds every action into an overflow dropdown — set by the detail
+  // panel when its container is too narrow to lay the buttons out inline.
+  collapsed?: boolean;
+  extras?: ExtraAction[];
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [comment, setComment] = useState('');
@@ -71,9 +89,9 @@ export function PRActions({
   const mergeable = (info?.mergeable || pr.mergeable || '').toUpperCase();
   const base = info?.baseRefName || pr.target;
   const behind = pr.behind ?? 0;
-
-  // Only OPEN PRs are actionable; merged/closed ones have nothing to merge or approve.
-  if (state !== 'OPEN') return null;
+  // Only OPEN PRs are actionable; merged/closed ones have nothing to merge or
+  // approve, but callers may still pass extras (e.g. New todo) to render.
+  const isOpen = state === 'OPEN';
 
   // The node ID arrives with the first detail SSE frame; gate actions until then.
   const loading = !nodeId;
@@ -87,7 +105,15 @@ export function PRActions({
         ? 'Resolve merge conflicts before merging'
         : undefined;
 
-  const mergeItems: DropdownMenuItem[] = [
+  // mergeMethods list every merge option; the first (rebase) mirrors the
+  // SplitButton's default click, so it stays reachable once Merge collapses into
+  // a submenu. mergeItems are the SplitButton's dropdown (everything but the
+  // default rebase click).
+  const mergeMethods: DropdownMenuItem[] = [
+    {
+      label: menuLabel(UiGitMerge, 'Rebase and merge'),
+      onSelect: () => open({ type: 'merge', method: 'rebase' }),
+    },
     {
       label: menuLabel(UiGitPr, 'Squash and merge'),
       onSelect: () => open({ type: 'merge', method: 'squash' }),
@@ -106,6 +132,46 @@ export function PRActions({
       title: `Merge ${base} into this PR's branch to bring it up to date`,
       onSelect: () => open({ type: 'update-branch' }),
     },
+  ];
+  const mergeItems = mergeMethods.slice(1);
+
+  const extraItems: DropdownMenuItem[] = extras.map(x => ({
+    label: menuLabel(x.icon, x.label),
+    title: x.title,
+    disabled: x.disabled,
+    onSelect: x.onClick,
+  }));
+
+  // menuItems is the flat overflow list: PR actions (only when OPEN) then extras.
+  const menuItems: DropdownMenuItem[] = [
+    ...(isOpen
+      ? [
+          {
+            label: menuLabel(UiCheck, 'Approve'),
+            title: 'Submit an approving review',
+            disabled: loading,
+            onSelect: () => open({ type: 'approve' as const }),
+          },
+          {
+            label: menuLabel(UiGitMerge, 'Merge'),
+            title: mergeDisabledReason ?? 'Merge options',
+            disabled: mergeDisabled,
+            onSelect: () => {},
+            children: mergeMethods,
+          },
+          ...(behind > 0
+            ? [
+                {
+                  label: menuLabel(UiSync, 'Update branch'),
+                  title: `Branch is ${behind} commit${behind !== 1 ? 's' : ''} behind ${base}`,
+                  disabled: loading,
+                  onSelect: () => open({ type: 'update-branch' as const }),
+                },
+              ]
+            : []),
+        ]
+      : []),
+    ...extraItems,
   ];
 
   function open(p: Pending) {
@@ -150,74 +216,127 @@ export function PRActions({
 
   const copy = modalCopy(pending, pr, base);
 
+  // Nothing to render for a merged/closed PR with no extra actions.
+  if (menuItems.length === 0) return null;
+
+  const modal = pending && (
+    <Modal
+      open
+      onClose={cancel}
+      title={copy.title}
+      size="sm"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={cancel} disabled={busy}>Cancel</Button>
+          <Button onClick={confirm} loading={busy}>{copy.confirmLabel}</Button>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-sm text-foreground">
+        <p>{copy.description}</p>
+        {pending.type === 'approve' && (
+          <textarea
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm h-20 resize-none"
+            value={comment}
+            placeholder="Optional approval comment"
+            onChange={e => setComment(e.currentTarget.value)}
+            autoFocus
+          />
+        )}
+        {error && <div className="text-sm text-destructive">{error}</div>}
+      </div>
+    </Modal>
+  );
+
+  // A lone action reads better as its own button than hidden behind a kebab, so
+  // only collapse once there are at least two.
+  if (collapsed && menuItems.length > 1) {
+    return (
+      <>
+        <DropdownMenu
+          align="right"
+          title="Actions"
+          menuLabel="Pull request actions"
+          trigger={
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 px-2 text-xs"
+              aria-label="Pull request actions"
+            >
+              <UiEllipsis className="text-sm" />
+            </Button>
+          }
+          items={menuItems}
+        />
+        {modal}
+      </>
+    );
+  }
+
   return (
     <>
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-7 shrink-0 gap-1 px-2 text-xs"
-        onClick={() => open({ type: 'approve' })}
-        disabled={loading}
-        title="Submit an approving review"
-      >
-        <UiCheck className="text-xs" />
-        Approve
-      </Button>
+      {isOpen && (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={() => open({ type: 'approve' })}
+            disabled={loading}
+            title="Submit an approving review"
+          >
+            <UiCheck className="text-xs" />
+            Approve
+          </Button>
 
-      <span title={mergeDisabledReason}>
-        <SplitButton
-          variant="outline"
-          size="sm"
-          label={menuLabel(UiGitMerge, 'Merge')}
-          title="Merge options"
-          disabled={mergeDisabled}
-          onClick={() => open({ type: 'merge', method: 'rebase' })}
-          items={mergeItems}
-        />
-      </span>
+          <span title={mergeDisabledReason}>
+            <SplitButton
+              variant="outline"
+              size="sm"
+              label={menuLabel(UiGitMerge, 'Merge')}
+              title="Merge options"
+              disabled={mergeDisabled}
+              onClick={() => open({ type: 'merge', method: 'rebase' })}
+              items={mergeItems}
+            />
+          </span>
 
-      {behind > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 shrink-0 gap-1 px-2 text-xs"
-          onClick={() => open({ type: 'update-branch' })}
-          disabled={loading}
-          title={`Branch is ${behind} commit${behind !== 1 ? 's' : ''} behind ${base} — update to bring it up to date`}
-        >
-          <UiSync className="text-xs" />
-          Update
-        </Button>
+          {behind > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 gap-1 px-2 text-xs"
+              onClick={() => open({ type: 'update-branch' })}
+              disabled={loading}
+              title={`Branch is ${behind} commit${behind !== 1 ? 's' : ''} behind ${base} — update to bring it up to date`}
+            >
+              <UiSync className="text-xs" />
+              Update
+            </Button>
+          )}
+        </>
       )}
 
-      {pending && (
-        <Modal
-          open
-          onClose={cancel}
-          title={copy.title}
-          size="sm"
-          footer={
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={cancel} disabled={busy}>Cancel</Button>
-              <Button onClick={confirm} loading={busy}>{copy.confirmLabel}</Button>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-sm text-foreground">
-            <p>{copy.description}</p>
-            {pending.type === 'approve' && (
-              <textarea
-                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm h-20 resize-none"
-                value={comment}
-                placeholder="Optional approval comment"
-                onChange={e => setComment(e.currentTarget.value)}
-                autoFocus
-              />
-            )}
-            {error && <div className="text-sm text-destructive">{error}</div>}
-          </div>
-        </Modal>
-      )}
+      {extras.map((x, i) => {
+        const Icon = x.icon;
+        return (
+          <Button
+            key={i}
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 gap-1 px-2 text-xs"
+            onClick={x.onClick}
+            disabled={x.disabled}
+            title={x.title}
+          >
+            <Icon className="text-xs" />
+            {x.label}
+          </Button>
+        );
+      })}
+
+      {modal}
     </>
   );
 }
