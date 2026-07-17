@@ -19,6 +19,10 @@ task install     # installs to $GOPATH/bin
 
 Pre-built binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/flanksource/gavel/releases) page.
 
+For embedded and externally managed database observability, top-statement
+queries, and safe session-storage maintenance, see
+[PostgreSQL performance diagnostics](docs/postgres-performance.md).
+
 ## GitHub Action
 
 Run `gavel test --lint` in CI, upload JSON + HTML artifacts, and post a sticky PR comment with the markdown summary.
