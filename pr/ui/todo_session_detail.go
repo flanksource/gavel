@@ -12,7 +12,6 @@ import (
 
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/captain/pkg/session"
-	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/google/uuid"
 )
@@ -39,28 +38,13 @@ type sessionDiagnostic struct {
 }
 
 type todoAttemptDetail struct {
-	PromptRunID       uuid.UUID                 `json:"promptRunId"`
-	Ordinal           int                       `json:"ordinal"`
-	Step              string                    `json:"step"`
-	Mode              string                    `json:"mode,omitempty"`
-	Driver            string                    `json:"driver,omitempty"`
-	Requested         todos.RunRuntimeSelection `json:"requested"`
-	Resolved          todos.RunRuntimeSelection `json:"resolved"`
-	State             captaindb.PromptRunState  `json:"state"`
-	Phase             captaindb.PromptRunPhase  `json:"phase"`
-	QueuedAt          time.Time                 `json:"queuedAt"`
-	StartedAt         *time.Time                `json:"startedAt,omitempty"`
-	FinishedAt        *time.Time                `json:"finishedAt,omitempty"`
-	DurationMS        *int64                    `json:"durationMs,omitempty"`
-	Error             string                    `json:"error,omitempty"`
-	ResultText        string                    `json:"resultText,omitempty"`
-	ResultJSON        map[string]any            `json:"resultJson,omitempty"`
-	AdmissionSession  uuid.UUID                 `json:"admissionSessionId"`
-	ExecutionSession  *uuid.UUID                `json:"executionSessionId,omitempty"`
-	ProviderSessionID string                    `json:"providerSessionId,omitempty"`
-	CanStop           bool                      `json:"canStop,omitempty"`
-	Stopping          bool                      `json:"stopping,omitempty"`
-	CreatedAt         time.Time                 `json:"createdAt"`
+	captaindb.PromptRunOverview
+	PromptRunID      uuid.UUID `json:"promptRunId"`
+	AdmissionSession uuid.UUID `json:"admissionSessionId"`
+	Ordinal          int       `json:"ordinal"`
+	Step             string    `json:"step"`
+	CanStop          bool      `json:"canStop,omitempty"`
+	Stopping         bool      `json:"stopping,omitempty"`
 }
 
 type todoProviderThread struct {
@@ -152,16 +136,24 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	}
 	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.Before(links[j].CreatedAt) })
 	response := todoSessionDetailResponse{Attempts: []todoAttemptDetail{}, Diagnostics: []sessionDiagnostic{}}
+	ids := make([]uuid.UUID, len(links))
+	for index := range links {
+		ids[index] = links[index].PromptRunID
+	}
+	overviews, err := provider.Captain().ListPromptRunOverviews(ctx, captaindb.PromptRunOverviewFilter{IDs: ids})
+	if err != nil {
+		return response, false, err
+	}
+	byID := make(map[uuid.UUID]captaindb.PromptRunOverview, len(overviews))
+	for index := range overviews {
+		byID[overviews[index].ID] = overviews[index]
+	}
 	for index, link := range links {
-		run, runErr := provider.Captain().GetPromptRun(ctx, link.PromptRunID)
-		if runErr != nil {
-			return response, false, runErr
+		overview, ok := byID[link.PromptRunID]
+		if !ok {
+			return response, false, fmt.Errorf("%w: linked prompt run %s", captaindb.ErrPromptRunNotFound, link.PromptRunID)
 		}
-		admission, sessionErr := provider.Captain().GetSession(ctx, run.SessionID)
-		if sessionErr != nil {
-			return response, false, sessionErr
-		}
-		response.Attempts = append(response.Attempts, attemptDetail(index+1, link, run, admission))
+		response.Attempts = append(response.Attempts, attemptDetail(index+1, link, overview))
 	}
 	for left, right := 0, len(response.Attempts)-1; left < right; left, right = left+1, right-1 {
 		response.Attempts[left], response.Attempts[right] = response.Attempts[right], response.Attempts[left]
@@ -172,9 +164,9 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	providerID := requestedSessionID
 	if selected != nil {
 		response.SelectedPromptRunID = &selected.PromptRunID
-		if selected.ExecutionSession != nil {
-			rootID = selected.ExecutionSession
-			response.SelectedExecutionSession = selected.ExecutionSession
+		if selected.ExecutionSessionID != nil {
+			rootID = selected.ExecutionSessionID
+			response.SelectedExecutionSession = selected.ExecutionSessionID
 		}
 		if providerID == "" {
 			providerID = selected.ProviderSessionID
@@ -211,46 +203,17 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	return response, conflict, nil
 }
 
-func attemptDetail(ordinal int, link native.PromptRunLink, run *captaindb.PromptRun, admission *captaindb.Session) todoAttemptDetail {
-	runtimeSpec := mapValue(run.RenderedSpec["runtime"])
-	mode, _ := runtimeSpec["mode"].(string)
-	driver, _ := runtimeSpec["driver"].(string)
-	if mode == "" {
-		mode = run.SpecProfile
-	}
-	if driver == "" {
-		driver = admission.Provider
-	}
-	detail := todoAttemptDetail{
-		PromptRunID: run.ID, Ordinal: ordinal, Step: string(link.StepKind), Mode: mode, Driver: driver,
-		Requested: selectionValue(runtimeSpec["requested"]), Resolved: selectionValue(runtimeSpec["resolved"]),
-		State: run.State, Phase: run.Phase, QueuedAt: run.QueuedAt, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
-		Error: run.Error, ResultText: run.ResultText, ResultJSON: run.ResultJSON, AdmissionSession: run.SessionID,
-		ExecutionSession: run.ExecutionSessionID, ProviderSessionID: admission.ProviderSessionID, CreatedAt: run.CreatedAt,
-	}
-	if run.StartedAt != nil {
-		end := time.Now().UTC()
-		if run.FinishedAt != nil {
-			end = *run.FinishedAt
-		}
-		duration := end.Sub(*run.StartedAt).Milliseconds()
-		detail.DurationMS = &duration
-	}
-	return detail
-}
-
-func selectionValue(value any) todos.RunRuntimeSelection {
-	values := mapValue(value)
-	return todos.RunRuntimeSelection{
-		Provider: stringValue(values["provider"]), Backend: stringValue(values["backend"]),
-		Model: stringValue(values["model"]), Effort: stringValue(values["effort"]),
+func attemptDetail(ordinal int, link native.PromptRunLink, overview captaindb.PromptRunOverview) todoAttemptDetail {
+	return todoAttemptDetail{
+		PromptRunOverview: overview, PromptRunID: overview.ID, AdmissionSession: overview.SessionID,
+		Ordinal: ordinal, Step: string(link.StepKind),
 	}
 }
 
 func selectAttempt(attempts []todoAttemptDetail, sessionID string) *todoAttemptDetail {
 	for index := range attempts {
 		attempt := &attempts[index]
-		if sessionID == "" || attempt.ProviderSessionID == sessionID || (attempt.ExecutionSession != nil && attempt.ExecutionSession.String() == sessionID) {
+		if sessionID == "" || attempt.ProviderSessionID == sessionID || (attempt.ExecutionSessionID != nil && attempt.ExecutionSessionID.String() == sessionID) {
 			return attempt
 		}
 	}
@@ -391,17 +354,4 @@ func projectThreadStatus(sessions []captaindb.SessionOverview) string {
 		}
 	}
 	return "waiting"
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func mapValue(value any) map[string]any {
-	values, _ := value.(map[string]any)
-	if values == nil {
-		return map[string]any{}
-	}
-	return values
 }

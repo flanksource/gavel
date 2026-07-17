@@ -157,13 +157,9 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		Origin:       "gavel.todos",
 		SpecProfile:  string(mode),
 		AdmissionKey: "gavel-todo:" + seed,
-		RenderedSpec: map[string]any{
-			"workflow": verificationWorkflow(issue.Verification),
-			"runtime": map[string]any{
-				"mode":      string(mode),
-				"driver":    executorName,
-				"requested": runtimeSelectionMap(preparation.Requested),
-			},
+		RenderedSpec: map[string]any{"workflow": verificationWorkflow(issue.Verification)},
+		Runtime: captaindb.PromptRunRuntime{
+			Mode: string(mode), Driver: executorName, Requested: preparation.Requested,
 		},
 		PromptMarkdown:       promptMarkdown,
 		VerificationMarkdown: issue.Verification,
@@ -232,18 +228,16 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		phase = captaindb.PromptRunPhaseVerify
 	}
 	if !terminalPromptRun(active.run.State) {
-		renderedSpec := cloneMap(active.run.RenderedSpec)
-		runtimeSpec := mapValue(renderedSpec["runtime"])
-		runtimeSpec["mode"] = strings.TrimSpace(metadata.Mode)
-		runtimeSpec["driver"] = strings.TrimSpace(metadata.Driver)
-		runtimeSpec["resolved"] = runtimeSelectionMap(todos.RunRuntimeSelection{
+		runtime := active.run.Runtime
+		runtime.Mode = strings.TrimSpace(metadata.Mode)
+		runtime.Driver = strings.TrimSpace(metadata.Driver)
+		runtime.Resolved = captaindb.PromptRunRuntimeSelection{
 			Provider: metadata.Provider, Backend: metadata.Backend,
 			Model: metadata.ResolvedModel, Effort: metadata.Effort,
-		})
-		renderedSpec["runtime"] = runtimeSpec
+		}
 		update := captaindb.UpdatePromptRunInput{
 			ID: active.run.ID, ExpectedVersion: active.run.Version,
-			State: &state, Phase: &phase, RenderedSpec: &renderedSpec,
+			State: &state, Phase: &phase, Runtime: &runtime,
 		}
 		if agentSession != nil {
 			update.ExecutionSessionID = &agentSession.ID
@@ -465,38 +459,6 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 		return nil, fmt.Errorf("resolve monitored Captain session: %w", err)
 	}
 	return session, nil
-}
-
-func runtimeSelectionMap(selection todos.RunRuntimeSelection) map[string]any {
-	values := map[string]any{}
-	if value := strings.TrimSpace(selection.Provider); value != "" {
-		values["provider"] = value
-	}
-	if value := strings.TrimSpace(selection.Backend); value != "" {
-		values["backend"] = value
-	}
-	if value := strings.TrimSpace(selection.Model); value != "" {
-		values["model"] = value
-	}
-	if value := strings.TrimSpace(selection.Effort); value != "" {
-		values["effort"] = value
-	}
-	return values
-}
-
-func cloneMap(input map[string]any) map[string]any {
-	output := make(map[string]any, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
-}
-
-func mapValue(value any) map[string]any {
-	if values, ok := value.(map[string]any); ok {
-		return cloneMap(values)
-	}
-	return map[string]any{}
 }
 
 func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, active *activeRun, result *todos.ExecutionResult) error {

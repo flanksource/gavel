@@ -279,6 +279,13 @@ export interface TodoSessionAttempt {
   driver?: string;
   requested: SessionRuntimeSelection;
   resolved: SessionRuntimeSelection;
+  provider?: string;
+  backend?: string;
+  model?: string;
+  effort?: string;
+  status: string;
+  pid?: number;
+  processActive: boolean;
   state: string;
   phase: string;
   queuedAt: string;
@@ -294,6 +301,7 @@ export interface TodoSessionAttempt {
   canStop?: boolean;
   stopping?: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface TodoSessionDiagnostic {

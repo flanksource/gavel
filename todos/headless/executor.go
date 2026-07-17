@@ -18,6 +18,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	gavelai "github.com/flanksource/gavel/ai"
 	todopkg "github.com/flanksource/gavel/todos"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
@@ -123,8 +124,8 @@ func (e *Executor) Name() string {
 	return "headless-" + e.config.Agent
 }
 
-func (e *Executor) RunRuntimeSelection() todopkg.RunRuntimeSelection {
-	return todopkg.RunRuntimeSelection{
+func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
+	return captaindb.PromptRunRuntimeSelection{
 		Provider: todopkg.RuntimeProviderForBackend(e.config.Backend),
 		Backend:  e.config.Backend,
 		Model:    e.config.Model,

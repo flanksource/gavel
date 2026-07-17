@@ -869,7 +869,7 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		payload.Spec.Permissions = api.Permissions{
 			Mode: api.PermissionAcceptEdits,
 			Tools: api.Tools{Modes: map[string]api.ToolMode{
-				"Bash": api.ToolModeAsk, "Write": api.ToolModeDisabled, "Read": api.ToolModeEnabled,
+				"Bash": api.ToolModeAsk, "Write": api.ToolModeOff, "Read": api.ToolModeOn, "Glob": api.ToolModeAuto,
 			}},
 		}
 		opts, err := normalizeTodoRunOptions(payload)
@@ -882,6 +882,9 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		toolModes := toolModesFromPermissions(opts.Permissions.Tools)
 		if toolModes["Bash"] != "ask" || toolModes["Write"] != "disabled" || toolModes["Read"] != "enabled" {
 			t.Fatalf("ToolModes = %v, want Bash=ask Write=disabled Read=enabled", toolModes)
+		}
+		if _, ok := toolModes["Glob"]; ok {
+			t.Fatalf("ToolModes = %v, want Glob=auto omitted", toolModes)
 		}
 	})
 

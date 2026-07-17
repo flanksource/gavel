@@ -163,19 +163,22 @@ export function attemptSessionCollection(detail: TodoSessionDetailResponse, entr
     id: `todo-attempts:${detail.thread.id}`,
     currentSessionId: detail.selectedPromptRunId,
     sessions: detail.attempts.map((attempt) => {
-      const selection = hasSelection(attempt.resolved) ? attempt.resolved : attempt.requested;
+      const status = attempt.stopping ? 'stopping' : attempt.status;
       const item: SessionCollectionItem = {
         id: attempt.promptRunId,
         label: `Attempt #${attempt.ordinal}`,
         mode: attempt.mode || attempt.step,
-        status: attempt.stopping ? 'stopping' : attempt.error && attempt.state !== 'cancelled' ? 'failed' : attempt.state,
+        status,
         summary: {
-          provider: selection.provider,
-          backend: selection.backend,
-          model: selection.model,
-          effort: selection.effort || attempt.requested.effort,
+          provider: attempt.provider,
+          backend: attempt.backend,
+          model: attempt.model,
+          effort: attempt.effort,
           mode: attempt.mode || attempt.step,
-          status: attempt.state,
+          status,
+          pid: attempt.pid,
+          durationMs: attempt.durationMs,
+          updatedAt: attempt.updatedAt,
         },
       };
       if (attempt.promptRunId === detail.selectedPromptRunId) item.session = current;
@@ -361,8 +364,4 @@ function requireUnifiedSession(session: SessionInput): UnifiedSessionInput {
     throw new Error('Provider thread did not produce a unified session');
   }
   return session;
-}
-
-function hasSelection(selection: TodoSessionAttempt['requested']): boolean {
-  return Boolean(selection.provider || selection.backend || selection.model || selection.effort);
 }

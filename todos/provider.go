@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -43,25 +44,15 @@ type RunPreparation struct {
 	Mode         types.RunMode
 	ExecutorName string
 	Resume       bool
-	Requested    RunRuntimeSelection
+	Requested    captaindb.PromptRunRuntimeSelection
 	// PromptMarkdown is the exact user prompt the executor will dispatch. Native
 	// storage persists it on Captain's prompt run before external execution.
 	PromptMarkdown string
 }
 
-// RunRuntimeSelection records one requested or resolved agent configuration.
-// It deliberately keeps driver/provider/backend/model/effort separate because
-// they describe different resolution layers in Captain.
-type RunRuntimeSelection struct {
-	Provider string `json:"provider,omitempty"`
-	Backend  string `json:"backend,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Effort   string `json:"effort,omitempty"`
-}
-
 // RunRuntimeProvider exposes the configuration known before dispatch.
 type RunRuntimeProvider interface {
-	RunRuntimeSelection() RunRuntimeSelection
+	RunRuntimeSelection() captaindb.PromptRunRuntimeSelection
 }
 
 // RuntimeProviderForBackend maps Captain's built-in backend families to their

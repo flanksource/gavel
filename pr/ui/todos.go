@@ -1622,21 +1622,31 @@ func todoPlanMarkdown(ctx context.Context, provider todos.Provider, todoList []*
 // toolModesFromPermissions flattens api.Tools (the Spec's allow/deny/modes
 // policy) into the legacy tool-name→mode map (enabled/ask/disabled) that
 // headless.Config/drivers.Config key their allow/deny/broker logic on.
-// ToolMode's string values ("enabled"/"ask"/"disabled") are identical to that
-// legacy scheme, so the conversion is direct.
 func toolModesFromPermissions(tools api.Tools) map[string]string {
 	if len(tools.Allow) == 0 && len(tools.Deny) == 0 && len(tools.Modes) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(tools.Allow)+len(tools.Deny)+len(tools.Modes))
 	for _, tool := range tools.Allow {
-		out[tool] = string(api.ToolModeEnabled)
+		out[tool] = "enabled"
 	}
 	for _, tool := range tools.Deny {
-		out[tool] = string(api.ToolModeDisabled)
+		out[tool] = "disabled"
 	}
 	for tool, mode := range tools.Modes {
-		out[tool] = string(mode)
+		switch mode {
+		case api.ToolModeOn:
+			out[tool] = "enabled"
+		case api.ToolModeAsk:
+			out[tool] = "ask"
+		case api.ToolModeOff:
+			out[tool] = "disabled"
+		case api.ToolModeAuto:
+			delete(out, tool)
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
