@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/flanksource/captain/pkg/aiflags"
 	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
@@ -85,11 +86,13 @@ type Options struct {
 	AutoMerge bool
 	// MergeType is the merge method used when AutoMerge is set: rebase|squash|merge.
 	MergeType string
-	// Model overrides the LLM for commit-message and PR-content generation
-	// (CLI --model). GroupModel overrides the LLM for AI grouping (CLI
-	// --group-model). Both fall back to the operation spec's model
-	// (commit.message.model / commit.grouping.model), then the base ai: spec.
-	Model         string
+	// Flags is captain's model-selection surface (--model/--mode/--backend/
+	// --effort/--fallback/--temperature/--no-cache). It replaces a bare Model
+	// string: a string cannot carry the backend or effort a compact selector
+	// names, so those were dropped on the way to the provider.
+	Flags aiflags.ModelFlags
+	// GroupModel overrides the LLM for AI grouping alone (CLI --group-model),
+	// on top of Flags.
 	GroupModel    string
 	Message       string
 	PrecommitMode string
@@ -760,7 +763,11 @@ func generateCommitAnalysis(ctx context.Context, opts Options, diff string) (com
 		return commitAIAnalysis{Message: explicitMessage}, nil
 	}
 
-	agent, err := BuildAgent(opts, opts.messageModel())
+	model, err := opts.messageModel()
+	if err != nil {
+		return commitAIAnalysis{}, err
+	}
+	agent, err := BuildAgent(opts, model)
 	if err != nil {
 		return commitAIAnalysis{}, err
 	}
@@ -825,56 +832,85 @@ func maxBodyLinesForDiff(changedLines int) int {
 // model used for message generation.
 const defaultGroupModel = "claude-sonnet-4-5"
 
-// messageModel resolves the LLM for commit-message generation. Precedence:
-// the CLI --model override, then the commit.message spec model, then the base
-// ai: spec model, else "" (the clicky default, a fast haiku-class model).
-func (opts Options) messageModel() string {
-	if opts.Model != "" {
-		return opts.Model
+// defaultMessageModel is the model used for commit-message generation when
+// nothing else selects one. Message writing is a summarisation task, so it
+// defaults to a fast haiku-class tier.
+const defaultMessageModel = "claude-haiku-4-5"
+
+// modelFor is the single model ladder every commit AI operation runs through,
+// highest precedence first:
+//
+//  1. CLI flags (--model/--mode/--backend/--effort)
+//  2. the operation's own spec (commit.message / commit.grouping / pr.content)
+//  3. the base `ai:` spec
+//  4. the built-in default for that operation
+//
+// It exists once because it used to exist three times and disagreed with itself:
+// messageModel read the --model flag first while groupModel read it last, behind
+// the config — so any `ai: model:` in ~/.gavel.yaml silently disabled --model for
+// grouping.
+//
+// Each layer is expanded before it is merged: a compact selector like
+// "agent:sol:high" must set its own backend during the merge, or the base spec's
+// backend survives and the run silently uses a different runtime.
+//
+// It selects but does not resolve — ai.NewProvider resolves the winner against
+// the catalog exactly once, on the way to the provider. Keeping selection and
+// resolution apart is what lets this ladder be about precedence alone.
+func (opts Options) modelFor(op verify.PromptSpec, builtin string) (captainapi.Model, error) {
+	spec := opts.AI.Merge(op.Spec)
+
+	over, err := opts.Flags.ToModel()
+	if err != nil {
+		return captainapi.Model{}, err
 	}
-	if opts.Config.Message.Name != "" {
-		return opts.Config.Message.Name
+	out := spec.Model.Merge(over)
+	if strings.TrimSpace(out.Name) == "" {
+		out.Name = builtin
 	}
-	return opts.AI.Model.Name
+	return out, nil
 }
 
-// groupModel resolves the LLM for AI commit grouping. Precedence: --group-model,
-// then the commit.grouping spec model, then the base ai: spec model, then the
-// shared message model, else defaultGroupModel.
-func (opts Options) groupModel() string {
-	if opts.GroupModel != "" {
-		return opts.GroupModel
-	}
-	if opts.Config.Grouping.Model.Name != "" {
-		return opts.Config.Grouping.Model.Name
-	}
-	if opts.AI.Model.Name != "" {
-		return opts.AI.Model.Name
-	}
-	if m := opts.messageModel(); m != "" {
-		return m
-	}
-	return defaultGroupModel
+// messageModel resolves the LLM for commit-message generation.
+func (opts Options) messageModel() (captainapi.Model, error) {
+	return opts.modelFor(opts.Config.Message, defaultMessageModel)
 }
 
-// prContentModel resolves the LLM for PR title/body/branch generation: the
-// pr.content spec model if set, else the shared message model.
-func (opts Options) prContentModel() string {
-	if opts.PR.Content.Model.Name != "" {
-		return opts.PR.Content.Model.Name
+// groupModel resolves the LLM for AI commit grouping. Grouping reasons over the
+// whole change set, so it defaults to a more capable tier than message writing,
+// and --group-model overrides the shared --model for this operation alone.
+func (opts Options) groupModel() (captainapi.Model, error) {
+	m, err := opts.modelFor(opts.Config.Grouping, defaultGroupModel)
+	if err != nil || strings.TrimSpace(opts.GroupModel) == "" {
+		return m, err
 	}
-	return opts.messageModel()
+	over, err := (captainapi.Model{Name: opts.GroupModel}).Expand()
+	if err != nil {
+		return captainapi.Model{}, fmt.Errorf("invalid --group-model %q: %w", opts.GroupModel, err)
+	}
+	return m.Merge(over), nil
 }
 
-// BuildAgent constructs an LLM agent for opts using model. An empty model falls
-// back to the clicky default. Callers resolve model per task via
-// Options.messageModel / Options.groupModel.
-func BuildAgent(opts Options, model string) (clickyai.Agent, error) {
+// PRContentModel resolves the LLM for PR title/body/branch generation. Exported
+// because `gavel pr create` builds its own Options and needs the same ladder.
+func (opts Options) PRContentModel() (captainapi.Model, error) {
+	return opts.modelFor(opts.PR.Content, defaultMessageModel)
+}
+
+// BuildAgent constructs an LLM agent for opts using an already-resolved model.
+//
+// It takes an api.Model, not a name: a name alone cannot carry the backend, mode
+// or effort the ladder just resolved, and re-deriving them from the string is
+// what made `--model agent:gpt-5.6-luna:medium` run as plain api:gpt-5.6-luna.
+// It also builds on opts.AI.Budget rather than a hardcoded default config, which
+// used to discard the configured budget entirely.
+func BuildAgent(opts Options, model captainapi.Model) (clickyai.Agent, error) {
 	cfg := clickyai.DefaultConfig()
-	if model != "" {
-		cfg.Model = model
+	cfg.Model = model
+	if opts.AI.Budget != (captainapi.Budget{}) {
+		cfg.Budget = opts.AI.Budget
 	}
-	if opts.NoCache {
+	if opts.Flags.NoCache {
 		cfg.NoCache = true
 	}
 

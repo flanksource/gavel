@@ -8,94 +8,62 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// AgentType mirrors clicky/ai.AgentType.
-type AgentType string
-
-// Supported agent types.
-const (
-	AgentTypeClaude AgentType = "claude"
-	AgentTypeAider  AgentType = "aider"
-)
-
-// Model mirrors clicky/ai.Model for the fields gavel and its tests reference.
-type Model struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Provider    string            `json:"provider"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	InputPrice  float64           `json:"input_price_per_token,omitempty"`
-	OutputPrice float64           `json:"output_price_per_token,omitempty"`
-	MaxTokens   int               `json:"max_tokens,omitempty"`
-}
-
-// AgentConfig mirrors clicky/ai.AgentConfig for the fields gavel uses. It is
-// converted to a captain ai.Config when building an agent.
-type AgentConfig struct {
-	Type            AgentType     `json:"type"`
-	Model           string        `json:"model"`
-	Backend         string        `json:"backend,omitempty"`
-	CacheDBPath     string        `json:"cache_db_path,omitempty"`
-	ProjectName     string        `json:"project_name,omitempty"`
-	CacheTTL        time.Duration `json:"cache_ttl,omitempty"`
-	Temperature     float64       `json:"temperature,omitempty"`
-	MaxTokens       int           `json:"max_tokens"`
-	MaxConcurrent   int           `json:"max_concurrent"`
-	Debug           bool          `json:"debug"`
-	Verbose         bool          `json:"verbose"`
-	StrictMCPConfig bool          `json:"strict_mcp_config"`
-	NoCache         bool          `json:"no_cache,omitempty"`
-}
-
-// toCaptain maps the gavel config onto captain's ai.Config. Backend is left
-// empty so captain infers it from the model.
-func (c AgentConfig) toCaptain() captainai.Config {
-	model := api.Model{Name: c.Model, Backend: api.Backend(c.Backend)}
-	if c.Temperature != 0 {
-		t := c.Temperature
-		model.Temperature = &t
-	}
-	return captainai.Config{
-		Model:         model,
-		Budget:        api.Budget{MaxTokens: c.MaxTokens},
-		MaxConcurrent: c.MaxConcurrent,
-		NoCache:       c.NoCache,
-		CacheTTL:      c.CacheTTL,
-		CacheDBPath:   c.CacheDBPath,
-		ProjectName:   c.ProjectName,
-	}
-}
-
-var defaultConfig = AgentConfig{
-	Type:            AgentTypeClaude,
-	Model:           "claude-haiku-4-5",
-	MaxTokens:       10000,
-	MaxConcurrent:   4,
-	StrictMCPConfig: true,
-	CacheTTL:        24 * time.Hour,
-}
+// AgentConfig is captain's run config. It used to be a flat mirror of it —
+// Model/Backend/Temperature as loose strings — which could not express a model's
+// effort or fallbacks at all, so those were silently unrepresentable no matter
+// what the caller passed. Speaking captain's own type end to end is what keeps a
+// model's backend, mode and effort attached to it.
+type AgentConfig = captainai.Config
 
 // DefaultConfig returns the default agent configuration.
+//
+// It returns a value, not a shared package var: BindFlags used to bind pflag
+// pointers straight into a package-level default, so every FlagSet that bound it
+// (status, git analyze, git amend) aliased the same struct and the last one to
+// parse won.
 func DefaultConfig() AgentConfig {
-	return defaultConfig
+	return AgentConfig{
+		Model:         api.Model{Name: "claude-haiku-4-5"},
+		Budget:        api.Budget{MaxTokens: 10000},
+		MaxConcurrent: 4,
+		CacheTTL:      24 * time.Hour,
+	}
 }
 
-// BindFlags adds AI-related flags to the flag set, mutating the package-level
-// default config the same way clicky/ai did.
-func BindFlags(flags *pflag.FlagSet) {
-	agentType := string(defaultConfig.Type)
-	flags.StringVar(&agentType, "agent", agentType, "AI agent type (claude, aider)")
-	flags.BoolVar(&defaultConfig.Debug, "ai-debug", defaultConfig.Debug, "Enable AI debug output")
-	flags.BoolVar(&defaultConfig.Verbose, "ai-verbose", defaultConfig.Verbose, "Enable AI verbose logging")
-	flags.StringVar(&defaultConfig.Model, "ai-model", defaultConfig.Model, "AI model to use")
-	flags.IntVar(&defaultConfig.MaxTokens, "ai-max-tokens", defaultConfig.MaxTokens, "Maximum tokens per request")
-	flags.IntVar(&defaultConfig.MaxConcurrent, "ai-max-concurrent", defaultConfig.MaxConcurrent, "Maximum concurrent AI requests")
-	flags.Float64Var(&defaultConfig.Temperature, "ai-temperature", defaultConfig.Temperature, "AI temperature (0.0-2.0)")
-	flags.BoolVar(&defaultConfig.StrictMCPConfig, "ai-strict-mcp", defaultConfig.StrictMCPConfig, "Use strict MCP configuration (Claude only)")
-	flags.DurationVar(&defaultConfig.CacheTTL, "ai-cache-ttl", defaultConfig.CacheTTL, "AI cache TTL (e.g., 24h, 7d)")
-	flags.BoolVar(&defaultConfig.NoCache, "ai-no-cache", defaultConfig.NoCache, "Disable AI response caching")
-	flags.StringVar(&defaultConfig.CacheDBPath, "ai-cache-db", defaultConfig.CacheDBPath, "Path to AI cache database (default: ~/.cache/clicky-ai.db)")
-	flags.StringVar(&defaultConfig.ProjectName, "ai-project", defaultConfig.ProjectName, "Project name for cache grouping")
-	flags.Bool("aider", false, "Use Aider agent (shorthand for --agent=aider)")
-	flags.Bool("claude", false, "Use Claude agent (shorthand for --agent=claude)")
-	defaultConfig.Type = AgentType(agentType)
+// modelFlag adapts --ai-model onto a structured api.Model. Expanding on Set is
+// what gives the flag captain's compact grammar ("agent:opus:high") rather than a
+// bare name whose backend has to be re-guessed later.
+type modelFlag struct{ cfg *AgentConfig }
+
+func (f modelFlag) String() string {
+	if f.cfg == nil {
+		return ""
+	}
+	return f.cfg.Model.Name
+}
+
+func (f modelFlag) Set(value string) error {
+	m, err := (api.Model{Name: value}).Expand()
+	if err != nil {
+		return err
+	}
+	f.cfg.Model = f.cfg.Model.Merge(m)
+	return nil
+}
+
+func (modelFlag) Type() string { return "string" }
+
+// BindFlags adds the AI flags to a flag set, writing into cfg.
+//
+// The flags keep their --ai-* names: gavel already spends --model on `git
+// analyze`, and flag names are global to a command, so renaming these would
+// collide and panic cobra at init.
+func BindFlags(flags *pflag.FlagSet, cfg *AgentConfig) {
+	flags.Var(modelFlag{cfg: cfg}, "ai-model", "AI model to use, e.g. claude-sonnet-5 or a compact selector like agent:opus:high")
+	flags.IntVar(&cfg.Budget.MaxTokens, "ai-max-tokens", cfg.Budget.MaxTokens, "Maximum tokens per request")
+	flags.IntVar(&cfg.MaxConcurrent, "ai-max-concurrent", cfg.MaxConcurrent, "Maximum concurrent AI requests")
+	flags.DurationVar(&cfg.CacheTTL, "ai-cache-ttl", cfg.CacheTTL, "AI cache TTL (e.g., 24h, 7d)")
+	flags.BoolVar(&cfg.NoCache, "ai-no-cache", cfg.NoCache, "Disable AI response caching")
+	flags.StringVar(&cfg.CacheDBPath, "ai-cache-db", cfg.CacheDBPath, "Path to AI cache database (default: ~/.cache/clicky-ai.db)")
+	flags.StringVar(&cfg.ProjectName, "ai-project", cfg.ProjectName, "Project name for cache grouping")
 }

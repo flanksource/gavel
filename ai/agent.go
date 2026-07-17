@@ -16,7 +16,6 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/middleware"
 	_ "github.com/flanksource/captain/pkg/ai/provider"
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/collections"
 )
 
@@ -56,8 +55,18 @@ var normalizeOnce sync.Once
 // wrapper cannot express. NewAgent is the higher-level surface built on top.
 func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 	NormalizeEnv()
-	provider, err := middleware.NewProvider(cfg.toCaptain())
+	// Resolve once, here, so the provider is built from a model that already
+	// carries its concrete backend rather than one re-derived from a bare name.
+	resolved, err := captainai.ResolveModelSelectors(cfg.Model)
 	if err != nil {
+		return nil, err
+	}
+	runCfg := cfg
+	runCfg.Model = resolved
+	provider, err := middleware.NewProvider(runCfg)
+	if err != nil {
+		// The hint quotes the ORIGINAL cfg: an error should echo the model the
+		// user actually typed ("api:terra"), not the id it resolved to.
 		return nil, withCredentialHint(cfg, err)
 	}
 	return provider, nil
@@ -73,7 +82,7 @@ func NewAgent(cfg AgentConfig) (Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return captainai.NewAgentWithProvider(provider, cfg.toCaptain()), nil
+	return captainai.NewAgentWithProvider(provider, cfg), nil
 }
 
 // GetDefaultAgent returns an agent built from DefaultConfig.
@@ -146,7 +155,7 @@ func withCredentialHint(cfg AgentConfig, err error) error {
 	}
 	return &credentialHintError{
 		cause:   err,
-		model:   cfg.Model,
+		model:   cfg.Model.Name,
 		backend: backend,
 		hint:    hint,
 	}
@@ -165,18 +174,20 @@ func (e *credentialHintError) Error() string {
 
 func (e *credentialHintError) Unwrap() error { return e.cause }
 
+// credentialBackend reports which provider's credentials a config needs.
+//
+// It reads the backend off the model rather than re-deriving it from the name:
+// NewProvider resolves cfg.Model before this can be reached, and re-inferring
+// from a bare name is how a model's backend gets replaced by a guess.
 func credentialBackend(cfg AgentConfig) captainai.Backend {
-	if backend := api.Backend(cfg.Backend); backend.Valid() {
-		return backend
+	if cfg.Model.Backend.Valid() {
+		return cfg.Model.Backend
 	}
-	resolved, resolveErr := captainai.ResolveModelSelectors(api.Model{Name: cfg.Model})
-	if resolveErr == nil && resolved.Backend.Valid() {
-		return resolved.Backend
+	resolved, err := captainai.ResolveModelSelectors(cfg.Model)
+	if err != nil {
+		return ""
 	}
-	if backend, inferErr := captainai.InferBackend(cfg.Model); inferErr == nil {
-		return backend
-	}
-	return ""
+	return resolved.Backend
 }
 
 func appendUnique(values []string, additions ...string) []string {

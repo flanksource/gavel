@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/flanksource/captain/pkg/aiflags"
 	"testing"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -30,8 +31,9 @@ func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	operation := api.Spec{Model: api.Model{Name: "agent:sonnet", Effort: api.EffortHigh}}
 	opts := captaincli.AIRuntimeOptions{
-		AIProviderOptions: captaincli.AIProviderOptions{Model: "agent:opus"},
-		Effort:            "medium",
+		AIProviderOptions: captaincli.AIProviderOptions{
+			ModelFlags: aiflags.ModelFlags{Model: "agent:opus", Effort: "medium"},
+		},
 	}
 
 	cfg, req, err := buildAIFixRequest(opts, operation)

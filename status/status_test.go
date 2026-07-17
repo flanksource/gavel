@@ -725,11 +725,7 @@ func stubFileMap(fn func(path, commit string) (*repomap.FileMap, error)) func() 
 
 type stubStatusAgent struct{}
 
-func (stubStatusAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
-func (stubStatusAgent) GetConfig() clickyai.AgentConfig {
-	return clickyai.AgentConfig{}
-}
-func (stubStatusAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
+func (stubStatusAgent) GetConfig() clickyai.AgentConfig { return clickyai.AgentConfig{} }
 func (stubStatusAgent) ExecutePrompt(context.Context, clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	return nil, nil
 }
@@ -743,11 +739,9 @@ type capturePromptAgent struct {
 	prompt string
 }
 
-func (a *capturePromptAgent) GetType() clickyai.AgentType { return clickyai.AgentTypeClaude }
 func (a *capturePromptAgent) GetConfig() clickyai.AgentConfig {
 	return clickyai.AgentConfig{}
 }
-func (a *capturePromptAgent) ListModels(context.Context) ([]clickyai.Model, error) { return nil, nil }
 func (a *capturePromptAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
 	a.prompt = req.Prompt
 	return &clickyai.PromptResponse{StructuredData: json.RawMessage(`{"summary":"tighten handler flow"}`)}, nil

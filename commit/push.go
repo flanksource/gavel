@@ -243,7 +243,11 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
 	base, _ := deps.defaultBranch(ghOpts)
 
-	agent, err := BuildAgent(opts, opts.prContentModel())
+	model, err := opts.PRContentModel()
+	if err != nil {
+		return fmt.Errorf("build AI agent for PR content: %w", err)
+	}
+	agent, err := BuildAgent(opts, model)
 	if err != nil {
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}

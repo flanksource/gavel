@@ -206,7 +206,11 @@ func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (str
 		logger.V(1).Infof("%s=1, returning stub squash message", testEnvVar)
 		return stubMessage, nil
 	}
-	agent, err := BuildAgent(opts, opts.messageModel())
+	model, err := opts.messageModel()
+	if err != nil {
+		return "", err
+	}
+	agent, err := BuildAgent(opts, model)
 	if err != nil {
 		return "", err
 	}

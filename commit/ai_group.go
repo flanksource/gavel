@@ -146,7 +146,11 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 		return nil, err
 	}
 
-	agent, err := BuildAgent(opts, opts.groupModel())
+	model, err := opts.groupModel()
+	if err != nil {
+		return nil, err
+	}
+	agent, err := BuildAgent(opts, model)
 	if err != nil {
 		return nil, err
 	}

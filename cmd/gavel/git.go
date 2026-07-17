@@ -37,6 +37,11 @@ func init() {
 		return commits, nil
 	})
 
+	// Each command owns its AI config. BindFlags used to write --ai-* straight
+	// into a package-level default that every FlagSet shared, so whichever command
+	// parsed last decided the model for all of them.
+	analyzeAI := ai.DefaultConfig()
+
 	analyze := clicky.AddCommand(gitCmd, git.AnalyzeOptions{}, func(options git.AnalyzeOptions) (any, error) {
 		logger.Tracef("git-analyzer options: %+v", options)
 
@@ -109,7 +114,7 @@ func init() {
 			}
 
 			if options.AI {
-				agent, err := ai.NewAgent(ai.DefaultConfig())
+				agent, err := ai.NewAgent(analyzeAI)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get default AI agent for summary: %w", err)
 				}
@@ -123,7 +128,7 @@ func init() {
 		return analyses, nil
 	})
 
-	ai.BindFlags(analyze.Flags())
+	ai.BindFlags(analyze.Flags(), &analyzeAI)
 
 	amendCommits := clicky.AddCommand(gitCmd, git.AmendCommitsOptions{}, func(options git.AmendCommitsOptions) (any, error) {
 		logger.Tracef("git-amend-commits options: %+v", options)
@@ -147,7 +152,8 @@ func init() {
 		return nil, nil
 	})
 
-	ai.BindFlags(amendCommits.Flags())
+	amendAI := ai.DefaultConfig()
+	ai.BindFlags(amendCommits.Flags(), &amendAI)
 
 	clicky.AddNamedCommand("summary", gitCmd, git.SummaryByTypeOptions{}, func(opts git.SummaryByTypeOptions) (any, error) {
 		repoArgs, otherArgs, err := git.SplitRepoPathArgs(opts.Args)

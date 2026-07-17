@@ -2,6 +2,7 @@ package ai
 
 import (
 	"errors"
+	"github.com/flanksource/captain/pkg/api"
 	"os"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestNewProvider_ReportsBackendKeyAndSimilarEnvName(t *testing.T) {
 	clearAllKnownKeys(t)
 	t.Setenv("OPEN_AI_API_KEY", "must-not-leak")
 
-	_, err := NewProvider(AgentConfig{Model: "api:terra"})
+	_, err := NewProvider(AgentConfig{Model: api.Model{Name: "api:terra"}})
 	if err == nil {
 		t.Fatal("expected missing OpenAI API key error")
 	}
@@ -124,7 +125,7 @@ func TestNewProvider_DoesNotSuggestKeyWhenConfigured(t *testing.T) {
 	clearAllKnownKeys(t)
 	t.Setenv("OPENAI_API_KEY", "configured")
 
-	provider, err := NewProvider(AgentConfig{Model: "api:terra"})
+	provider, err := NewProvider(AgentConfig{Model: api.Model{Name: "api:terra"}})
 	if err != nil {
 		t.Fatalf("NewProvider(api:terra) with OPENAI_API_KEY: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestNewProvider_DoesNotSuggestKeyWhenConfigured(t *testing.T) {
 
 func TestWithCredentialHint_IgnoresNonCredentialErrors(t *testing.T) {
 	cause := errors.New("model unavailable")
-	if got := withCredentialHint(AgentConfig{Model: "api:terra"}, cause); got != cause {
+	if got := withCredentialHint(AgentConfig{Model: api.Model{Name: "api:terra"}}, cause); got != cause {
 		t.Fatalf("non-credential error was decorated: %v", got)
 	}
 }

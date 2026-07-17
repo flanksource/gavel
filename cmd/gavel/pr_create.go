@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/flanksource/captain/pkg/aiflags"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,9 +86,14 @@ func defaultPRCreateDeps() prCreateDeps {
 		createPR:    github.CreatePR,
 		openBrowser: openBrowser,
 		generateContent: func(ctx context.Context, in commitpkg.PRContentInput) (commitpkg.PRContent, error) {
-			agent, err := commitpkg.BuildAgent(commitpkg.Options{
-				NoCache: prCreateNoCache,
-			}, prCreateModel)
+			opts := commitpkg.Options{
+				Flags: aiflags.ModelFlags{Model: prCreateModel, NoCache: prCreateNoCache},
+			}
+			model, err := opts.PRContentModel()
+			if err != nil {
+				return commitpkg.PRContent{}, err
+			}
+			agent, err := commitpkg.BuildAgent(opts, model)
 			if err != nil {
 				return commitpkg.PRContent{}, err
 			}

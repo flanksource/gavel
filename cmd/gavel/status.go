@@ -97,7 +97,8 @@ func init() {
 	statusCmd := clicky.AddNamedCommand("status", rootCmd, StatusOptions{}, runStatus)
 	statusCmd.Use = "status [folder]"
 	statusCmd.Args = cobra.MaximumNArgs(1)
-	clickyai.BindFlags(statusCmd.Flags())
+	statusAI := clickyai.DefaultConfig()
+	clickyai.BindFlags(statusCmd.Flags(), &statusAI)
 }
 
 func runStatus(opts StatusOptions) (any, error) {

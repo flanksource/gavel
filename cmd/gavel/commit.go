@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/flanksource/captain/pkg/aiflags"
 	"os"
 	"path/filepath"
 
@@ -18,32 +19,36 @@ import (
 )
 
 type CommitOptions struct {
-	Args         []string `json:"-" args:"true"`
-	Stage        string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id" default:"session"`
-	CommitAll    bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
-	Interactive  bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
-	Tree         bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
-	Summary      bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
-	MaxCommits   int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
-	Message      string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	Model        string   `flag:"model" help:"Override LLM model for chooser summaries, commit-message, and PR generation from .gavel.yaml commit.model (fast/haiku-class)"`
-	GroupModel   string   `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
-	DryRun       bool     `flag:"dry-run" help:"Print the generated message without committing"`
-	Force        bool     `flag:"force" help:"Skip pre-commit hooks"`
-	NoCache      bool     `flag:"no-cache" help:"Bypass the LLM response cache at ~/.cache/clicky-ai.db"`
-	Push         bool     `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
-	AutoMerge    bool     `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
-	MergeType    string   `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
-	Fixup        string   `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
-	NoAutosquash bool     `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
-	Since        string   `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
-	Precommit    string   `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
-	Lint         string   `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
-	LintSecrets  string   `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
-	Tidy         string   `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
-	WorkDir      string   `flag:"work-dir" help:"Working directory"`
-	Yes          bool     `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
-	AddMetadata  bool     `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
+	Args        []string `json:"-" args:"true"`
+	Stage       string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id or prefix" default:"session"`
+	CommitAll   bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
+	Interactive bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Tree        bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
+	Summary     bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
+	MaxCommits  int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
+	Message     string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
+	// Embedded: contributes --model/-m, --mode, --backend/-b, --effort,
+	// --fallback, --temperature and --no-cache, parsed by captain so a compact
+	// selector ("agent:opus:high") keeps its backend and effort all the way to the
+	// provider. It replaces a bare --model string, which could not.
+	aiflags.ModelFlags
+
+	GroupModel   string `flag:"group-model" help:"Override LLM model for AI commit grouping (-A) from .gavel.yaml commit.groupModel (capable/sonnet-class); falls back to --model"`
+	DryRun       bool   `flag:"dry-run" help:"Print the generated message without committing"`
+	Force        bool   `flag:"force" help:"Skip pre-commit hooks"`
+	Push         bool   `flag:"push" short:"p" help:"Push to a matching open PR or open a new PR. Skips the commit step when nothing is staged so existing local commits can be pushed."`
+	AutoMerge    bool   `flag:"auto-merge" help:"With -p, when a new PR is opened, enable GitHub auto-merge so it merges once required checks pass."`
+	MergeType    string `flag:"merge-type" help:"Merge method for --auto-merge: rebase|squash|merge" default:"rebase"`
+	Fixup        string `flag:"fixup" help:"Squash staged files into existing commits. Pass a hash to target one commit, or use bare --fixup to auto-route each file by last-touched commit on origin/main..HEAD."`
+	NoAutosquash bool   `flag:"no-autosquash" help:"With --fixup, skip the automatic 'git rebase -i --autosquash' that folds fixup commits into their targets."`
+	Since        string `flag:"since" help:"Review <since>..HEAD and merge commits sharing a Gavel-Issue-Id trailer into one commit (history only; ignores staged files). Accepts a ref (origin/main), sha, or ~N / HEAD~N. Prompts before rewriting; -y to skip. Refuses to rewrite commits already on a remote."`
+	Precommit    string `flag:"precommit" help:"Behavior for pre-commit gitignore and linked dependency checks: prompt|fail|skip|false"`
+	Lint         string `flag:"lint" help:"Run all detected linters over staged files before committing: true|false (default: false; overrides .gavel.yaml commit.lint.enabled)"`
+	LintSecrets  string `flag:"lint-secrets" help:"Run the betterleaks/secrets linter over staged files before committing: true|false (default: true; overrides .gavel.yaml commit.lint.secrets)"`
+	Tidy         string `flag:"tidy" help:"Run 'go mod tidy' in every Go module before committing and stage any go.mod/go.sum updates: true|false (default: true; overrides .gavel.yaml commit.tidy.enabled). May stage previously-unstaged go.mod/go.sum edits."`
+	WorkDir      string `flag:"work-dir" help:"Working directory"`
+	Yes          bool   `flag:"yes" short:"y" help:"Assume yes: auto-unstage linked-dep replacements and auto-AI-fix lint findings instead of prompting."`
+	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
 }
 
 func (o CommitOptions) Help() string {
@@ -127,7 +132,7 @@ Examples:
   gavel commit -m "chore: bump dep"     # explicit message, skip message-generation LLM call
   gavel commit --stage staged           # commit only what is already git-added (the pre-session default)
   gavel commit --stage all --dry-run    # stage everything, print message
-  gavel commit --stage <session-id>     # commit only the files that Claude or Codex session edited
+  gavel commit --stage <session-id>     # commit only files edited by a Claude/Codex session (prefix accepted)
   gavel commit --force                  # skip hooks
   gavel commit -y                       # auto-unstage linked-dep replacements, auto-AI-fix lint findings
   gavel commit --precommit=fail         # error on gitignore or linked-deps issues
@@ -176,7 +181,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		DryRun:          opts.DryRun,
 		Force:           opts.Force,
 		NoCache:         opts.NoCache,
-		Model:           opts.Model,
+		Flags:           opts.ModelFlags,
 		GroupModel:      opts.GroupModel,
 		Message:         opts.Message,
 		Push:            opts.Push,

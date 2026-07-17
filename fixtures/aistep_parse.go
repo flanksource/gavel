@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -45,19 +46,28 @@ type FixtureAIConfig struct {
 // ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig, falling back
 // to defaultModel when no model is set. A nil receiver yields the default config
 // (so callers can pass an absent block directly).
+// The model stays a string on the wire — that is the fixture file's format — but
+// it lands in a structured api.Model, so `model: agent:sol:high` now carries its
+// backend and effort through instead of being flattened to a name and re-guessed.
+// The selector is resolved by ai.NewProvider.
 func (c *FixtureAIConfig) ToAgentConfig(defaultModel string) ai.AgentConfig {
-	cfg := ai.AgentConfig{Model: defaultModel, MaxTokens: 10000, MaxConcurrent: 4}
+	cfg := ai.AgentConfig{
+		Model:         api.Model{Name: defaultModel},
+		Budget:        api.Budget{MaxTokens: 10000},
+		MaxConcurrent: 4,
+	}
 	if c == nil {
 		return cfg
 	}
 	if c.Model != "" {
-		cfg.Model = c.Model
+		cfg.Model.Name = c.Model
 	}
 	if c.Temperature != 0 {
-		cfg.Temperature = c.Temperature
+		t := c.Temperature
+		cfg.Model.Temperature = &t
 	}
 	if c.MaxTokens > 0 {
-		cfg.MaxTokens = c.MaxTokens
+		cfg.Budget.MaxTokens = c.MaxTokens
 	}
 	if c.MaxConcurrent > 0 {
 		cfg.MaxConcurrent = c.MaxConcurrent
