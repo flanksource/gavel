@@ -210,7 +210,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
                 {isFallback && (
                   <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground italic">Showing job log tail (step-level logs unavailable)</div>
                 )}
-                <LogViewer logs={logs} bgClass={isFallback ? 'bg-red-50' : 'bg-muted'} borderClass={isFallback ? 'border-red-100' : 'border-border'} />
+                <LogViewer logs={logs} />
               </>
             )}
             {isOpen && loaded && !logs && !error && (
@@ -223,7 +223,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         );
       })}
       {failed && !hasSteps && expandedJobFallback && loaded && jobLogs && (
-        <LogViewer logs={jobLogs} bgClass="bg-red-50" borderClass="border-red-100" />
+        <LogViewer logs={jobLogs} />
       )}
       {failed && !hasSteps && expandedJobFallback && loaded && !jobLogs && !error && (
         <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this job.</div>

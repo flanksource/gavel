@@ -466,17 +466,18 @@ func TestStripANSI(t *testing.T) {
 	}
 }
 
-func TestParseLogSectionsStripsANSI(t *testing.T) {
-	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run tests\n" +
+func TestParseLogSectionsPreservesANSI(t *testing.T) {
+	raw := "2024-01-15T10:00:00.0000000Z \x1b[35m##[group]Run tests\x1b[0m\n" +
 		"2024-01-15T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
-		"2024-01-15T10:00:02.0000000Z ##[error]Process completed with exit code 1\n" +
-		"2024-01-15T10:00:03.0000000Z ##[endgroup]"
+		"2024-01-15T10:00:02.0000000Z \x1b[35m##[endgroup]\x1b[0m\n" +
+		"2024-01-15T10:00:03.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m"
 
 	sections := parseLogSections(raw)
 	require.Contains(t, sections, "Run tests")
-	assert.Contains(t, sections["Run tests"], "FAIL: TestFoo")
-	assert.NotContains(t, sections["Run tests"], "\x1b[")
+	assert.Equal(t, "\x1b[31mFAIL\x1b[0m: TestFoo\n\x1b[1mProcess completed with exit code 1\x1b[0m", sections["Run tests"])
 	assert.NotContains(t, sections["Run tests"], "##[error]")
+	assert.NotContains(t, sections["Run tests"], "##[group]")
+	assert.NotContains(t, sections["Run tests"], "##[endgroup]")
 }
 
 func TestParseLogSections(t *testing.T) {
@@ -549,17 +550,20 @@ func TestAttachLogsToSteps(t *testing.T) {
 		},
 	}
 
-	raw := `2024-01-15T10:00:00.0000000Z ##[group]Set up job
-2024-01-15T10:00:01.0000000Z OK
-2024-01-15T10:00:02.0000000Z ##[endgroup]
-2024-01-15T10:00:03.0000000Z ##[group]Run tests
-2024-01-15T10:00:04.0000000Z FAIL: TestBar
-2024-01-15T10:00:05.0000000Z ##[endgroup]`
+	raw := "2024-01-15T10:00:00.0000000Z ##[group]Set up job\n" +
+		"2024-01-15T10:00:01.0000000Z OK\n" +
+		"2024-01-15T10:00:02.0000000Z ##[endgroup]\n" +
+		"2024-01-15T10:00:03.0000000Z ##[group]Run tests\n" +
+		"2024-01-15T10:00:04.0000000Z \x1b[31mFAIL: oldest\x1b[0m\n" +
+		"2024-01-15T10:00:05.0000000Z \x1b[33mFAIL: penultimate\x1b[0m\n" +
+		"2024-01-15T10:00:06.0000000Z \x1b[32mFAIL: newest\x1b[0m\n" +
+		"2024-01-15T10:00:07.0000000Z ##[endgroup]"
 
-	attachLogsToSteps(job, raw, 100)
+	attachLogsToSteps(job, raw, 2)
 	assert.Empty(t, job.Steps[0].Logs)
-	assert.Contains(t, job.Steps[1].Logs, "FAIL: TestBar")
-	assert.Contains(t, job.Logs, "FAIL: TestBar", "job-level logs always attached")
+	expected := "\x1b[33mFAIL: penultimate\x1b[0m\n\x1b[32mFAIL: newest\x1b[0m"
+	assert.Equal(t, expected, job.Steps[1].Logs)
+	assert.Equal(t, expected, job.Logs, "job-level logs retain the same bounded tail")
 }
 
 func TestAttachLogsToStepsFallback(t *testing.T) {
@@ -577,25 +581,14 @@ func TestAttachLogsToStepsFallback(t *testing.T) {
 }
 
 func TestCleanRawLog(t *testing.T) {
-	raw := "2024-01-15T10:00:00.0000000Z ##[group]Run tests\n" +
-		"2024-01-15T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m: TestFoo\n" +
-		"2024-01-15T10:00:02.0000000Z ##[error]Process completed with exit code 1\n" +
-		"2024-01-15T10:00:03.0000000Z ##[command]/usr/bin/bash script.sh\n" +
-		"2024-01-15T10:00:04.0000000Z ##[endgroup]\n" +
-		"2024-01-15T10:00:05.0000000Z ##[warning]Node.js 16 is deprecated\n" +
-		"plain line no timestamp"
+	raw := "2024-01-15T10:00:00.0000000Z \x1b[35m##[group]Run tests\x1b[0m\n" +
+		"2024-01-15T10:00:01.0000000Z \x1b[2K\x1b[31mFAIL\x1b[0m: TestFoo\n" +
+		"2024-01-15T10:00:02.0000000Z \x1b[1m##[error]Process completed with exit code 1\x1b[0m\n" +
+		"2024-01-15T10:00:03.0000000Z \x1b[35m##[endgroup]\x1b[0m"
 
 	result := cleanRawLog(raw)
-	assert.NotContains(t, result, "2024-01-15T", "timestamps stripped")
-	assert.NotContains(t, result, "\x1b[", "ANSI stripped")
-	assert.NotContains(t, result, "##[error]", "error annotations stripped")
-	assert.NotContains(t, result, "##[command]", "command annotations stripped")
-	assert.NotContains(t, result, "##[warning]", "warning annotations stripped")
-	assert.NotContains(t, result, "##[group]", "group markers removed")
-	assert.NotContains(t, result, "##[endgroup]", "endgroup markers removed")
-	assert.Contains(t, result, "FAIL: TestFoo")
-	assert.Contains(t, result, "Process completed with exit code 1")
-	assert.Contains(t, result, "plain line no timestamp")
+	assert.Equal(t, "\x1b[31mFAIL\x1b[0m: TestFoo\n\x1b[1mProcess completed with exit code 1\x1b[0m", result)
+	assert.NotContains(t, result, "\x1b[2K", "unsupported cursor controls stripped")
 }
 
 func TestAttachLogsToStepsCleansFallback(t *testing.T) {
@@ -620,7 +613,10 @@ func TestTailString(t *testing.T) {
 	}{
 		{"a\nb\nc\nd\ne", 3, "c\nd\ne"},
 		{"a\nb", 5, "a\nb"},
+		{"a\nb\nc", 3, "a\nb\nc"},
 		{"a\nb\nc", 0, "a\nb\nc"},
+		{"a\nb\nc", -1, "a\nb\nc"},
+		{"a\nb\nc\nd", 2, "c\nd"},
 	}
 	for _, tc := range tests {
 		assert.Equal(t, tc.expected, tailString(tc.input, tc.max))
