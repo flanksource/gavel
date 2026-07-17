@@ -1,5 +1,5 @@
 ---
-model: agent:sonnet
+model: agent:gpt-5.6-sol:medium,agent:opus:medium
 effort: high
 prompt:
   system: >-

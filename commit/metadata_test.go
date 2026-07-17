@@ -33,7 +33,13 @@ func TestApplyCommitMetadata(t *testing.T) {
 			wantHas: []string{TrailerIssueID + ": ENV-ISSUE", trailerSessionID + ": env-sess"},
 		},
 		{
-			name:    "claude session id fallback",
+			name:    "claude code session id fallback",
+			opts:    Options{AddMetadata: true},
+			env:     map[string]string{EnvClaudeCodeSessionID: "claude-code-sess"},
+			wantHas: []string{trailerSessionID + ": claude-code-sess"},
+		},
+		{
+			name:    "legacy claude session id fallback",
 			opts:    Options{AddMetadata: true},
 			env:     map[string]string{EnvClaudeSessionID: "claude-sess"},
 			wantHas: []string{trailerSessionID + ": claude-sess"},
@@ -49,7 +55,7 @@ func TestApplyCommitMetadata(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all metadata env vars so tests are isolated from the
 			// real environment (e.g. GAVEL_ISSUE_ID set by a parent process).
-			for _, k := range []string{EnvIssueID, EnvSessionID, EnvClaudeSessionID, EnvCodexSessionID} {
+			for _, k := range []string{EnvIssueID, EnvSessionID, EnvClaudeCodeSessionID, EnvClaudeSessionID, EnvCodexSessionID} {
 				t.Setenv(k, "")
 			}
 			for k, v := range tt.env {

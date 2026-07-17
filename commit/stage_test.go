@@ -217,13 +217,20 @@ func writeSessionLog(t *testing.T, home, sessionID string, absPaths []string) {
 	projects := filepath.Join(home, ".claude", "projects", "repo")
 	require.NoError(t, os.MkdirAll(projects, 0o755))
 
+	tool := "Edit"
+	if len(absPaths) == 0 {
+		tool = "Read"
+		absPaths = []string{filepath.Join(home, "no-edits.txt")}
+	}
 	var b strings.Builder
 	for _, p := range absPaths {
 		line, err := json.Marshal(map[string]any{
-			"type": "assistant",
+			"type":      "assistant",
+			"sessionId": sessionID,
+			"timestamp": "2026-07-16T10:00:00Z",
 			"message": map[string]any{
 				"content": []map[string]any{
-					{"type": "tool_use", "name": "Edit", "input": map[string]any{"file_path": p}},
+					{"type": "tool_use", "name": tool, "input": map[string]any{"file_path": p}},
 				},
 			},
 		})
