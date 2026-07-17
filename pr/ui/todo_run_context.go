@@ -8,6 +8,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos/claude"
@@ -449,17 +450,16 @@ func normalizeTodoRunModelForBackend(backend, model string) string {
 	return captainai.NormalizeModelForBackend(captainai.Backend(backend), model)
 }
 
-// defaultBackendForDriver picks the default captain backend for a (mechanism,
-// agent) pair from the supported-backend catalog. Two claude backends share the
-// cli mechanism (Agent + CLI); the first (Agent) wins, matching the pre-migration
-// default.
+// defaultBackendForDriver is the default captain backend for a (mechanism, agent)
+// pair. The (agent, mechanism) → backend mapping is captain's Provider.BackendFor,
+// reached here through drivers.BackendFor; the driver's cli mechanism resolves to
+// the agent-SDK backend, matching the catalog's "Agent wins" default.
 func defaultBackendForDriver(kind drivers.Kind, agent string) string {
-	for _, spec := range supportedTodoRunBackends() {
-		if spec.Driver == kind && spec.Agent == agent {
-			return string(spec.Backend)
-		}
+	backend, err := drivers.BackendFor(agent, kind)
+	if err != nil {
+		return ""
 	}
-	return ""
+	return string(backend)
 }
 
 func defaultModelForBackend(backend string) string {
@@ -484,37 +484,30 @@ func validateBackendForDriver(kind drivers.Kind, backend string) error {
 	return fmt.Errorf("backend %q is not supported by driver %q", backend, kind)
 }
 
+// validateModelForBackend checks the model belongs to the backend's provider
+// family. The family classification is captain's — a model's provider (its
+// registry descriptor) and the backend's provider must be the same — rather than
+// a local strings.HasPrefix(lower, "gpt-") heuristic that duplicated it.
 func validateModelForBackend(backend, model string) error {
-	normalized := normalizeTodoRunModelForBackend(backend, model)
-	switch captainai.Backend(backend) {
-	case captainai.BackendClaudeAgent, captainai.BackendClaudeCLI, captainai.BackendClaudeCmux:
-		lower := strings.ToLower(strings.TrimSpace(normalized))
-		if lower == "claude" {
-			return nil
-		}
-		if strings.HasPrefix(lower, "claude-") {
-			return nil
-		}
-	case captainai.BackendCodexAgent, captainai.BackendCodexCmux:
-		if model == "" || strings.EqualFold(model, "codex") {
-			return nil
-		}
-		lower := strings.ToLower(strings.TrimSpace(normalized))
-		if strings.HasPrefix(lower, "gpt-") {
-			return nil
-		}
+	b := captainai.Backend(backend)
+	want, _, ok := registry.ProviderFor(b)
+	if !ok {
+		return fmt.Errorf("invalid backend %q (valid: %s)", backend, captainai.BackendList())
+	}
+	// A bare agent sentinel ("claude"/"codex") is valid for its own family.
+	if model == "" || strings.EqualFold(strings.TrimSpace(model), want.AgentName) {
+		return nil
+	}
+	got, _, _, claimed := registry.ProviderForToken(normalizeTodoRunModelForBackend(backend, model))
+	if claimed && got == want {
+		return nil
 	}
 	return fmt.Errorf("model %q is not valid for backend %q", model, backend)
 }
 
 func runtimeModeForTodoBackend(backend captainai.Backend, driver drivers.Kind) string {
-	switch backend {
-	case captainai.BackendClaudeCmux, captainai.BackendCodexCmux:
-		return "cmux"
-	case captainai.BackendClaudeAgent, captainai.BackendCodexAgent:
-		return "agent"
-	case captainai.BackendClaudeCLI:
-		return "cli"
+	if mode := backend.Mode(); mode != "" {
+		return string(mode)
 	}
 	if mechanism := driver.Mechanism(); mechanism != "" {
 		return mechanism

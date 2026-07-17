@@ -22,6 +22,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/headless"
@@ -183,12 +184,16 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 		// cmux drives the captain cmux provider through the same captain-backed
 		// executor as the CLI path, selected by a cmux backend. It returns "" as the
 		// orchestrator session id (it manages its own --session-id via Config.SessionID).
-		backend = string(backendFor(agentName, Cmux))
+		b, err := BackendFor(model, Cmux)
+		if err != nil {
+			return nil, "", err
+		}
+		backend = string(b)
 	case Cli:
 		// The CLI (headless) path leaves the backend as configured: an explicit
 		// backend from the dashboard (claude-agent/claude-cli/codex-agent) wins, and
 		// an empty backend defers to captain, which resolves the concrete claude/codex
-		// backend from the model+agent. See backendFor for the target (agent, cli)
+		// backend from the model+agent. BackendFor gives the target (agent, cli)
 		// backends once every combination is wired through the headless streamer.
 	case Sdk:
 		return nil, "", fmt.Errorf("the sdk driver is not yet wired; use the cli driver (the same agent via captain)")
@@ -226,34 +231,41 @@ func DefaultTools() []string {
 	return []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 }
 
-// backendFor maps a (coding agent, mechanism) pair to its captain backend. It is
-// the single source of truth for that mapping; cmux consumes it today, and the
-// cli/sdk/api entries document the target backends for when those mechanisms are
-// wired through the headless streamer.
-func backendFor(agentName string, k Kind) captainai.Backend {
-	if agentName == "codex" {
-		switch k {
-		case Cmux:
-			return captainai.BackendCodexCmux
-		case Cli:
-			return captainai.BackendCodexCLI
-		case Sdk:
-			return captainai.BackendCodexAgent
-		case Api:
-			return captainai.BackendOpenAI
-		}
-	}
+// RuntimeMode maps a driver mechanism onto captain's runtime mode. A captain
+// Backend is exactly a (provider, mode) pair — which is the same statement as
+// this package's "the model defines the agent; the driver defines the mechanism"
+// — so the (agent, mechanism) → backend table this used to hold is captain's
+// Provider.BackendFor, and BackendFor is now the only copy.
+//
+// Cli maps to the agent SDK, not ModeCLI: the headless path defaults an empty
+// backend to claude-agent, so `--driver cli` has always meant "headless, agent
+// SDK". Mapping it to ModeCLI would silently swap the binary being driven.
+func (k Kind) RuntimeMode() (registry.RuntimeMode, bool) {
 	switch k {
 	case Cmux:
-		return captainai.BackendClaudeCmux
-	case Cli:
-		return captainai.BackendClaudeCLI
-	case Sdk:
-		return captainai.BackendClaudeAgent
+		return registry.ModeCmux, true
+	case Cli, Sdk:
+		return registry.ModeAgent, true
 	case Api:
-		return captainai.BackendAnthropic
+		return registry.ModeAPI, true
 	}
-	return captainai.BackendClaudeCmux
+	return "", false
+}
+
+// BackendFor resolves the captain backend a (model, mechanism) pair runs on,
+// deriving the provider from the model itself.
+func BackendFor(model string, k Kind) (captainai.Backend, error) {
+	mode, ok := k.RuntimeMode()
+	if !ok {
+		return "", fmt.Errorf("invalid driver %q (valid: %s)", k, joinKinds(All()))
+	}
+	p, _, _, claimed := registry.ProviderForToken(model)
+	if !claimed {
+		// An unknown or empty model is claude's by convention here (see
+		// claude.ResolveAgent); captain resolves the exact model later.
+		p = registry.Anthropic
+	}
+	return p.BackendFor(mode)
 }
 
 // resolveModel validates the requested model. The agent is derived from the model
