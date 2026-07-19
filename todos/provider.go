@@ -135,13 +135,20 @@ type PlanRevisionProvider interface {
 }
 
 type CreateRequest struct {
-	Title    string
-	Body     string
-	Priority types.Priority
-	Status   types.Status
-	Path     types.StringOrSlice
-	Labels   []string
-	Metadata map[string]any
+	Title        string
+	Body         string
+	Verification string
+	Plan         *CreatePlanRequest
+	Priority     types.Priority
+	Status       types.Status
+	Path         types.StringOrSlice
+	Labels       []string
+	Metadata     map[string]any
+}
+
+type CreatePlanRequest struct {
+	Markdown string
+	Approved bool
 }
 
 // EditRequest is a partial update to a TODO's title and/or body. A nil field is
