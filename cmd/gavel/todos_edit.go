@@ -12,12 +12,10 @@ import (
 )
 
 var (
-	todoEditTitle    string
-	todoEditBody     string
-	todoEditBodyFile string
+	todoEditTitle string
+	todoEditBody  string
 
-	todoCommentBody     string
-	todoCommentBodyFile string
+	todoCommentBody string
 
 	todoReopenComment     string
 	todoReopenCommentFile string
@@ -28,7 +26,7 @@ var todosEditCmd = &cobra.Command{
 	SilenceUsage: true,
 	Short:        "Edit a TODO's title and/or body",
 	Example: `  gavel todos edit 3f2a1b --title "Fix parser panic"
-  gavel todos edit 3f2a1b --body-file new-body.md`,
+  gavel todos edit 3f2a1b --body @new-body.md`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTodosEdit,
 }
@@ -38,7 +36,7 @@ var todosCommentCmd = &cobra.Command{
 	SilenceUsage: true,
 	Short:        "Add a comment to a TODO",
 	Example: `  gavel todos comment 3f2a1b "blocked on the upstream fix"
-  gavel todos comment 3f2a1b --body-file note.md`,
+  gavel todos comment 3f2a1b --body @note.md`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runTodosComment,
 }
@@ -56,12 +54,10 @@ var todosReopenCmd = &cobra.Command{
 func init() {
 	todosCmd.AddCommand(todosEditCmd)
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
-	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body")
-	todosEditCmd.Flags().StringVar(&todoEditBodyFile, "body-file", "", "Read new body from file")
+	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body or @path")
 
 	todosCmd.AddCommand(todosCommentCmd)
-	todosCommentCmd.Flags().StringVar(&todoCommentBody, "body", "", "Comment body")
-	todosCommentCmd.Flags().StringVar(&todoCommentBodyFile, "body-file", "", "Read comment body from file")
+	todosCommentCmd.Flags().StringVar(&todoCommentBody, "body", "", "Comment body or @path")
 
 	todosCmd.AddCommand(todosReopenCmd)
 	todosReopenCmd.Flags().StringVar(&todoReopenComment, "comment", "", "Comment to add while reopening")
@@ -91,11 +87,11 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 		}
 		edit.Title = &title
 	}
-	body, bodyProvided, err := readOptionalBody(todoEditBody, todoEditBodyFile, cmd.Flags().Changed("body"))
-	if err != nil {
-		return err
-	}
-	if bodyProvided {
+	if cmd.Flags().Changed("body") {
+		body, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: todoEditBody})
+		if err != nil {
+			return err
+		}
 		edit.Body = &body
 	}
 	if edit.IsEmpty() {
@@ -108,7 +104,7 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 	return printTodo(ctx, provider, args[0], todo)
 }
 
-func runTodosComment(_ *cobra.Command, args []string) error {
+func runTodosComment(cmd *cobra.Command, args []string) error {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return fmt.Errorf("failed to get working directory: %w", err)
@@ -124,15 +120,15 @@ func runTodosComment(_ *cobra.Command, args []string) error {
 	}
 
 	body := strings.TrimSpace(strings.Join(args[1:], " "))
-	flagBody, flagProvided, err := readOptionalBody(todoCommentBody, todoCommentBodyFile, todoCommentBody != "")
-	if err != nil {
-		return err
-	}
-	if flagProvided {
+	if cmd.Flags().Changed("body") {
+		flagBody, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: todoCommentBody})
+		if err != nil {
+			return err
+		}
 		body = flagBody
 	}
 	if body == "" {
-		return fmt.Errorf("comment body is required (pass a message, --body, or --body-file)")
+		return fmt.Errorf("comment body is required (pass a message or --body)")
 	}
 
 	if err := provider.Comment(ctx, todo, body); err != nil {
@@ -156,7 +152,7 @@ func runTodosReopen(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	comment, hasComment, err := readOptionalBody(todoReopenComment, todoReopenCommentFile, todoReopenComment != "")
+	comment, hasComment, err := readOptionalComment(todoReopenComment, todoReopenCommentFile, todoReopenComment != "")
 	if err != nil {
 		return err
 	}
@@ -173,17 +169,17 @@ func runTodosReopen(_ *cobra.Command, args []string) error {
 	return printTodo(ctx, provider, args[0], todo)
 }
 
-// readOptionalBody resolves body text from an inline flag or a file. Inline and
+// readOptionalComment resolves comment text from an inline flag or a file. Inline and
 // file are mutually exclusive. provided reports whether either source was set.
-func readOptionalBody(inline, file string, inlineSet bool) (text string, provided bool, err error) {
+func readOptionalComment(inline, file string, inlineSet bool) (text string, provided bool, err error) {
 	file = strings.TrimSpace(file)
 	if inlineSet && file != "" {
-		return "", false, fmt.Errorf("--body and --body-file are mutually exclusive")
+		return "", false, fmt.Errorf("--comment and --comment-file are mutually exclusive")
 	}
 	if file != "" {
 		raw, rerr := os.ReadFile(file)
 		if rerr != nil {
-			return "", false, fmt.Errorf("read body file: %w", rerr)
+			return "", false, fmt.Errorf("read comment file: %w", rerr)
 		}
 		return strings.TrimSpace(string(raw)), true, nil
 	}

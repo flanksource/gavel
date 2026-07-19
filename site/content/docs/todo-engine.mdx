@@ -51,20 +51,36 @@ non-representable priority/status values fail instead of being flattened.
 
 ```bash
 gavel todos create "Fix parser error messages"
-gavel todos new --title "Add fixture docs" --body-file todo.md # [!code focus] [!code note:full body]
+gavel todos new --title "Add fixture docs" --body @todo.md # [!code focus] [!code note:full body]
 gavel todos create --priority high --status pending "Stop leaking stderr"
+gavel todos create "Fix parser" --plan @plan.md --verification @verification.md
+gavel todos create "Fix parser" --plan @plan.md --status approved # [!code highlight] [!code note:ready to run]
 ```
 
-Line 1 is the shortest path: the title comes from positional arguments. Line 2 uses the `new` alias and reads a full markdown body from a file. Line 3 sets priority and initial status explicitly.
+Line 1 is the shortest path: the title comes from positional arguments. Line 2
+uses the `new` alias and reads a full markdown body from a file. Line 3 sets
+priority and initial status explicitly. Line 4 creates a durable Captain plan
+awaiting review plus a persisted definition-of-done fixture. Line 5 records the
+supplied plan as reviewed and approved, leaving the todo pending and ready for
+`todos run`.
+
+`--body`, `--plan`, and `--verification` accept inline text or an `@path` file
+reference. Relative paths resolve from `--cwd`; prefix a literal leading `@`
+with a backslash. `todos edit --body` and `todos comment --body` use the same
+file-reference syntax.
+
+Verification input is fixture markdown without an outer `## Verification`
+heading. It can contain command blocks, Markdown tables, CEL assertions, or
+`yaml test` / `yaml lint` fences. Run `gavel fixtures --help` for the complete
+fixture format and available runner keys.
 
 Create defaults:
 
 - priority: `medium`
 - status: `pending`
 - storage: native PostgreSQL
-- acceptance criteria generation: enabled when a model is available
-
-Use `--criteria=false` to skip AI-drafted acceptance criteria. Use `--model` to choose the model for criteria generation.
+- supplied plan approval: pending review
+- verification: omitted unless `--verification` or a body section supplies it
 
 ## Statuses
 
