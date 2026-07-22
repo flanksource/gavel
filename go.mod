@@ -23,7 +23,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
-	github.com/flanksource/deps v1.0.28
+	github.com/flanksource/deps v1.0.36
 	github.com/ghodss/yaml v1.0.0
 	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
 	github.com/gliderlabs/ssh v0.3.8
