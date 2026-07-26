@@ -35,6 +35,7 @@ type fileSummariesSchema struct {
 // tests can stub it.
 type SummaryAgent interface {
 	ExecutePrompt(ctx context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error)
+	Close() error
 }
 
 // newSummaryAgent is swapped in tests.
@@ -58,6 +59,11 @@ func applyAISummaries(ctx context.Context, report *Report, workDir string) error
 	if err != nil {
 		return fmt.Errorf("create AI agent for --ai-summary: %w", err)
 	}
+	defer func() {
+		if err := agent.Close(); err != nil {
+			logger.Warnf("ai-summary: failed to close AI agent: %v", err)
+		}
+	}()
 
 	template, err := resolveSummaryPrompt(workDir)
 	if err != nil {

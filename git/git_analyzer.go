@@ -135,13 +135,15 @@ func AnalyzeCommitHistory(ctx *AnalyzerContext, commits []models.Commit, options
 	if options.AI {
 
 		agent, err := ai.NewAgent(ai.DefaultConfig())
-		defer func() {
-			logger.Infof("AI Costs: $%.4f", agent.GetCosts().Sum().Total())
-		}()
-		// agent, err := ai.GetDefaultAgent()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get AI agent: %w", err)
 		}
+		defer func() {
+			logger.Infof("AI Costs: $%.4f", agent.GetCosts().Sum().Total())
+			if err := agent.Close(); err != nil {
+				logger.Warnf("failed to close AI agent: %v", err)
+			}
+		}()
 		options.agent = agent
 	}
 

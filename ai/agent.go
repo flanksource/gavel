@@ -16,6 +16,7 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/middleware"
 	_ "github.com/flanksource/captain/pkg/ai/provider"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/collections"
 )
 
@@ -70,6 +71,23 @@ func NewProvider(cfg AgentConfig) (captainai.Provider, error) {
 		return nil, withCredentialHint(cfg, err)
 	}
 	return provider, nil
+}
+
+// CloseProvider releases a provider built by NewProvider. Process-backed
+// backends (claude-agent, cmux, codex-appserver) run their agent as a
+// clicky-supervised child process that only Close stops; leaving it running
+// keeps its task incomplete and blocks process exit indefinitely, which is
+// exactly how `gavel pr status --ai-fix` ended up spinning on
+// "Still waiting after 8m0s for: .../claude-agent/node_modules/.bin/tsx".
+//
+// The lookup goes through captain's ProviderAs so it still finds Close through
+// the middleware wrapper NewProvider returns. Backends with nothing to release
+// are a no-op.
+func CloseProvider(provider captainai.Provider) error {
+	if closer, ok := api.ProviderAs[api.CloseableProvider](provider); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // NewAgent builds a captain-backed agent from cfg after normalizing env keys.

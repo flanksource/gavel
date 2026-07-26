@@ -12,6 +12,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons/logger"
 	gavelai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
@@ -92,6 +93,11 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err := gavelai.CloseProvider(p); err != nil {
+			logger.Warnf("aifix: failed to close AI provider: %v", err)
+		}
+	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
 		return nil, fmt.Errorf("aifix: backend %q is not streaming; choose a streaming agent backend", req.AIConfig.Model.Backend)

@@ -9,10 +9,6 @@ import (
 	"github.com/flanksource/gavel/models"
 )
 
-// maxCommitDiffBytes caps the size of a single commit's rendered diff so an
-// enormous commit cannot flood the dashboard; the remainder is truncated.
-const maxCommitDiffBytes = 256 * 1024
-
 const (
 	// TrailerIssueID is the git trailer key that ties a commit to the gavel todo
 	// issue it implements; consumers read it to link commits back to their issue.
@@ -102,24 +98,12 @@ func CommitDiff(path, hash, file string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("git show %s: %w\nOutput: %s", hash, err, string(out))
 	}
-	if len(out) > maxCommitDiffBytes {
-		return truncateAtLine(string(out), maxCommitDiffBytes) +
+	diff, truncated := TruncateDiff(string(out))
+	if truncated {
+		return diff +
 			"\n\n… diff truncated (showing first 256 KB) …\n", true, nil
 	}
-	return string(out), false, nil
-}
-
-// truncateAtLine trims s to at most max bytes, backing up to the last newline so
-// it never cuts a line (and rarely an ANSI escape) mid-sequence.
-func truncateAtLine(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	cut := s[:max]
-	if nl := strings.LastIndexByte(cut, '\n'); nl > 0 {
-		return cut[:nl]
-	}
-	return cut
+	return diff, false, nil
 }
 
 // RemoteWebURL returns the https web base for the repository's origin remote

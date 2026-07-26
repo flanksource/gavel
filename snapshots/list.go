@@ -44,6 +44,29 @@ type RunInfo struct {
 	LintLinters    int `json:"lintLinters"`
 }
 
+// LastRun returns the summary of the snapshot referenced by
+// .gavel/last.json. A missing pointer is the normal "never run" state and
+// returns nil without an error.
+func LastRun(workDir string) (*RunInfo, error) {
+	if workDir == "" {
+		return nil, errors.New("snapshots.LastRun: workDir is required")
+	}
+	pointer, err := LoadPointer(workDir, PointerLast)
+	if err != nil || pointer == nil {
+		return nil, err
+	}
+	snap, err := LoadByPointer(workDir, pointer)
+	if err != nil {
+		return nil, err
+	}
+	path := pointer.Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	info := runInfo(*snap, PointerLast+".json", path, runStartTime(*snap, PointerLast+".json", path, nil))
+	return &info, nil
+}
+
 // ListRuns enumerates the per-run snapshots in workDir/.gavel (run-*.json),
 // returning one RunInfo per run sorted newest-first. When since is non-zero,
 // runs whose start time is at or before since are skipped — run-*.json files
@@ -166,8 +189,10 @@ func runStartTime(snap testui.Snapshot, name, path string, entry os.DirEntry) ti
 	if ts, err := time.Parse(PerRunTimestampLayout, stem); err == nil {
 		return ts.UTC()
 	}
-	if info, err := entry.Info(); err == nil {
-		return info.ModTime().UTC()
+	if entry != nil {
+		if info, err := entry.Info(); err == nil {
+			return info.ModTime().UTC()
+		}
 	}
 	if info, err := os.Stat(path); err == nil {
 		return info.ModTime().UTC()

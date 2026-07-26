@@ -20,6 +20,7 @@ func ExampleSummarize() {
 
 	// Option 2: Use AI-powered descriptions
 	agent, _ := ai.GetDefaultAgent() // or your custom agent
+	defer agent.Close()              //nolint:errcheck // process-backed backends only release their child on Close
 	summariesWithAI, _ := Summarize(commits, SummaryOptions{
 		Window:        GroupByMonth,
 		MaxCategories: 6,

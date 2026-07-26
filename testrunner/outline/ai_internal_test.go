@@ -17,6 +17,12 @@ import (
 type stubSummaryAgent struct {
 	requests []clickyai.PromptRequest
 	fail     bool
+	closed   bool
+}
+
+func (s *stubSummaryAgent) Close() error {
+	s.closed = true
+	return nil
 }
 
 func (s *stubSummaryAgent) ExecutePrompt(_ context.Context, req clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
@@ -48,6 +54,7 @@ var _ = Describe("applyAISummaries", func() {
 		Expect(report.Entries[0].AISummary).To(Equal("verifies add returns the arithmetic sum"))
 		Expect(report.Entries[1].AISummary).To(BeEmpty())
 		Expect(report.Entries[1].Description).To(Equal("table"))
+		Expect(stub.closed).To(BeTrue(), "agent must be closed so process-backed backends release their child process")
 	})
 
 	It("keeps the outline alive when the agent fails for a file", func() {
