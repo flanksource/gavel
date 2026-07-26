@@ -104,6 +104,17 @@ type Issue struct {
 	UpdatedAt         time.Time      `json:"updatedAt"`
 }
 
+// IssueStatusCount is one group of CountIssuesByStatus: the durable status, the
+// projected execution state and the selected plan's approval state — the three
+// inputs the derived TODO status is computed from — plus how many issues share
+// them. ApprovalState is empty when the issue has no selected plan.
+type IssueStatusCount struct {
+	Status         IssueStatus    `json:"status"`
+	ExecutionState ExecutionState `json:"executionState"`
+	ApprovalState  string         `json:"approvalState"`
+	Count          int            `json:"count"`
+}
+
 // Alias is a normalized workspace-scoped reference to an issue.
 type Alias struct {
 	WorkspaceID uuid.UUID `json:"workspaceId"`

@@ -25,6 +25,10 @@ var (
 // Provider is the persistence boundary for TODO storage.
 type Provider interface {
 	List(ctx context.Context, filters DiscoveryFilters) (types.TODOS, error)
+	// CountByStatus reports how many TODOs resolve to each status without
+	// materializing them. Callers that only need counts must use this rather
+	// than bucketing List, which decodes every body to read one field.
+	CountByStatus(ctx context.Context) (map[types.Status]int, error)
 	Get(ctx context.Context, ref string) (*types.TODO, error)
 	Create(ctx context.Context, req CreateRequest) (*types.TODO, error)
 	Delete(ctx context.Context, todo *types.TODO) error

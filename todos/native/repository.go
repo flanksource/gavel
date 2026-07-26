@@ -404,6 +404,28 @@ func (r *Repository) GetIssue(ctx context.Context, id uuid.UUID) (*Issue, error)
 	return getIssue(r.db.WithContext(ctx), `id = ?`, id)
 }
 
+// CountIssuesByStatus groups a workspace's issues by the three columns the
+// derived TODO status is a function of. Callers fold the groups through the
+// same derivation List uses, so counting never has to materialize issue bodies.
+func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceID uuid.UUID) ([]IssueStatusCount, error) {
+	var counts []IssueStatusCount
+	result := r.db.WithContext(ctx).Raw(`
+		SELECT issue.status,
+		       COALESCE(runtime.execution_state, 'idle') AS execution_state,
+		       COALESCE(plan.approval_state::text, '')   AS approval_state,
+		       COUNT(*)                                  AS count
+		FROM `+issueFrom+`
+		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
+		WHERE issue.workspace_id = ?
+		GROUP BY 1, 2, 3`,
+		workspaceID,
+	).Scan(&counts)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return counts, nil
+}
+
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
 	var records []issueRecord
 	result := r.db.WithContext(ctx).Raw(
@@ -1224,16 +1246,6 @@ func (p Priority) valid() bool {
 func (s IssueStatus) valid() bool {
 	switch s {
 	case StatusDraft, StatusOpen, StatusVerified, StatusClosed, StatusCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s ExecutionState) valid() bool {
-	switch s {
-	case ExecutionIdle, ExecutionPlanning, ExecutionRunning, ExecutionWaiting,
-		ExecutionStalled, ExecutionFailed, ExecutionVerifying, ExecutionVerificationFailed:
 		return true
 	default:
 		return false

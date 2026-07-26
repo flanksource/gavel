@@ -228,6 +228,11 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if err != nil {
 		return e.failed(start, err), err
 	}
+	defer func() {
+		if err := gavelai.CloseProvider(provider); err != nil {
+			ctx.Logger.Warnf("%s: failed to close AI provider: %v", e.Name(), err)
+		}
+	}()
 	runMeta := todopkg.RunStartMetadata{
 		SessionID:     firstNonEmpty(firstNonEmpty(req.SessionID, providerSessionID), priorSessionID(todosInGroup)),
 		Mode:          string(e.config.Mode),

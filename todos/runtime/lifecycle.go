@@ -652,18 +652,29 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 			todo.PlanStatus = types.PlanUpdated
 		}
 	}
-	// Plan paths are source metadata only in native storage. An open, idle issue
-	// with a pending/revision-requested plan is awaiting human review.
+	// Plan paths are source metadata only in native storage.
 	todo.PlanPath = ""
-	if issue.Status == native.StatusOpen && issue.ExecutionState == native.ExecutionIdle {
-		switch plan.ApprovalState {
-		case captaindb.PlanApprovalPending, captaindb.PlanApprovalRevisionRequested:
-			todo.Status = types.StatusReview
-		case captaindb.PlanApprovalRejected, captaindb.PlanApprovalApproved:
-			todo.Status = types.StatusPending
-		}
-	}
+	todo.Status = todoStatusWithPlan(issue.Status, issue.ExecutionState, plan.ApprovalState)
 	return nil
+}
+
+func todoStatusWithPlan(
+	status native.IssueStatus,
+	execution native.ExecutionState,
+	approval captaindb.PlanApprovalState,
+) types.Status {
+	projected := todoStatus(status, execution)
+	if (status != native.StatusOpen && status != native.StatusDraft) || execution != native.ExecutionIdle {
+		return projected
+	}
+	switch approval {
+	case captaindb.PlanApprovalPending, captaindb.PlanApprovalRevisionRequested:
+		return types.StatusReview
+	case captaindb.PlanApprovalRejected, captaindb.PlanApprovalApproved:
+		return types.StatusPending
+	default:
+		return projected
+	}
 }
 
 func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*activeRun, error) {

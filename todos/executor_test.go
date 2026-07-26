@@ -253,6 +253,10 @@ func (p *recordingProvider) List(context.Context, DiscoveryFilters) (types.TODOS
 	return nil, nil
 }
 
+func (p *recordingProvider) CountByStatus(context.Context) (map[types.Status]int, error) {
+	return map[types.Status]int{}, nil
+}
+
 func (p *recordingProvider) Get(context.Context, string) (*types.TODO, error) {
 	return nil, nil
 }

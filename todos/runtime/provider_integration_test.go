@@ -105,9 +105,13 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	provider, err := New(t.Context(), oldRoot, opened.Gorm())
+	provider, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
+		Name: "Runtime source", RootPath: oldRoot, Repositories: []string{"example/runtime-source"},
+	})
 	require.NoError(t, err, "retained workspace paths must resolve")
-	targetProvider, err := New(t.Context(), targetRoot, opened.Gorm())
+	targetProvider, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
+		Name: "Runtime target", RootPath: targetRoot, Repositories: []string{"example/runtime-target"},
+	})
 	require.NoError(t, err)
 	assert.Equal(t, workspace.ID, provider.Workspace().ID)
 	assert.Equal(t, targetWorkspace.ID, targetProvider.Workspace().ID)
@@ -116,7 +120,9 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.NotNil(t, provider.Coordinator())
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
-	repoFallbackProvider, err := New(t.Context(), repoRoot, opened.Gorm())
+	repoFallbackProvider, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
+		Name: "Repo fallback", RootPath: repoRoot, Repositories: []string{"flanksource/gavel"},
+	})
 	require.NoError(t, err, "GitHub repository identity must resolve after path lookup misses")
 	assert.Equal(t, repoFallbackWorkspace.ID, repoFallbackProvider.Workspace().ID)
 
@@ -124,13 +130,14 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, os.MkdirAll(missingRoot, 0o755))
 	var workspaceCountBefore int64
 	require.NoError(t, opened.Gorm().Table("todo_workspaces").Count(&workspaceCountBefore).Error)
-	_, err = New(t.Context(), missingRoot, opened.Gorm())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "gavel todos import-grite")
-	assert.Contains(t, err.Error(), "workspace setup")
+	initialized, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
+		Name: "Initialized", RootPath: missingRoot, Repositories: []string{"example/initialized"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, missingRoot, initialized.Workspace().RootPath)
 	var workspaceCountAfter int64
 	require.NoError(t, opened.Gorm().Table("todo_workspaces").Count(&workspaceCountAfter).Error)
-	assert.Equal(t, workspaceCountBefore, workspaceCountAfter, "opening a missing workspace must not create one")
+	assert.Equal(t, workspaceCountBefore+1, workspaceCountAfter, "opening a configured project must initialize one workspace")
 
 	body := "Description\n\n## Verification\n\n```bash\ntrue\n```\n"
 	created, err := provider.Create(t.Context(), todos.CreateRequest{
@@ -293,7 +300,9 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	raceA, err := provider.Get(t.Context(), raceTodo.ID)
 	require.NoError(t, err)
-	contenderProvider, err := New(t.Context(), oldRoot, opened.Gorm())
+	contenderProvider, err := New(t.Context(), opened.Gorm(), WorkspaceOptions{
+		Name: "Runtime source", RootPath: oldRoot, Repositories: []string{"example/runtime-source"},
+	})
 	require.NoError(t, err)
 	raceB, err := contenderProvider.Get(t.Context(), raceTodo.ID)
 	require.NoError(t, err)

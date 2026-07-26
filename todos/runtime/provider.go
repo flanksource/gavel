@@ -1,21 +1,19 @@
 // Package runtime provides the PostgreSQL-only TODO runtime.
 //
 // The package adapts the native repository to the shared TODO lifecycle
-// interface used by CLI, API, and UI callers. It never falls back to Grite or
-// .todos files and never creates workspaces as a side effect of opening it.
+// interface used by CLI, API, and UI callers. It never falls back to filesystem
+// providers; configured projects initialize their native workspace on first use.
 package runtime
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
-	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
@@ -40,15 +38,23 @@ type Provider struct {
 
 var _ todos.Provider = (*Provider)(nil)
 
-// Open opens the process-owned PostgreSQL pool and resolves workDir to an
-// existing native workspace. It never creates a workspace or selects a legacy
-// provider when PostgreSQL is unavailable.
-func Open(ctx context.Context, workDir string) (*Provider, error) {
+// WorkspaceOptions identifies one project from the canonical Gavel project
+// catalog. RootPath is required; the first repository is the primary durable
+// repository identity.
+type WorkspaceOptions struct {
+	Name         string
+	RootPath     string
+	Repositories []string
+}
+
+// Open opens the process-owned PostgreSQL pool and initializes the configured
+// project's native workspace when it does not already exist.
+func Open(ctx context.Context, options WorkspaceOptions) (*Provider, error) {
 	db, err := database.Require(ctx, "native TODO storage")
 	if err != nil {
 		return nil, err
 	}
-	return New(ctx, workDir, db)
+	return New(ctx, db, options)
 }
 
 // OpenGlobal opens the native repository without requiring a caller workspace.
@@ -80,11 +86,11 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 
 // New constructs a provider over an already migrated GORM pool. It is useful
 // to hosts and tests that own the database lifecycle.
-func New(ctx context.Context, workDir string, db *gorm.DB) (*Provider, error) {
+func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	normalizedDir, err := normalizeWorkDir(workDir)
+	options, err := normalizeWorkspaceOptions(options)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +98,7 @@ func New(ctx context.Context, workDir string, db *gorm.DB) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspace, err := resolveExistingWorkspace(ctx, repository, normalizedDir)
+	workspace, err := initializeWorkspace(ctx, repository, options)
 	if err != nil {
 		return nil, err
 	}
@@ -105,59 +111,120 @@ func New(ctx context.Context, workDir string, db *gorm.DB) (*Provider, error) {
 		return nil, err
 	}
 	return &Provider{
-		workDir: normalizedDir, db: db, repository: repository,
+		workDir: options.RootPath, db: db, repository: repository,
 		captain: captain, coordinator: coordinator, workspace: workspace,
 		prepared: map[uuid.UUID]uuid.UUID{},
 	}, nil
 }
 
-func normalizeWorkDir(workDir string) (string, error) {
-	workDir = strings.TrimSpace(workDir)
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("resolve native TODO working directory: %w", err)
+func normalizeWorkspaceOptions(options WorkspaceOptions) (WorkspaceOptions, error) {
+	options.Name = strings.TrimSpace(options.Name)
+	if options.Name == "" {
+		return WorkspaceOptions{}, fmt.Errorf("%w: project name is required", native.ErrInvalidInput)
+	}
+	rootPath := strings.TrimSpace(options.RootPath)
+	if rootPath == "" {
+		return WorkspaceOptions{}, fmt.Errorf("%w: project %q root path is required", native.ErrInvalidInput, options.Name)
+	}
+	absolute, err := filepath.Abs(rootPath)
+	if err != nil {
+		return WorkspaceOptions{}, fmt.Errorf("resolve project %q root path %q: %w", options.Name, rootPath, err)
+	}
+	options.RootPath = filepath.Clean(absolute)
+	repositories := make([]string, 0, len(options.Repositories))
+	seen := map[string]bool{}
+	for _, repository := range options.Repositories {
+		repository = strings.ToLower(strings.Trim(strings.TrimSpace(repository), "/"))
+		repository = strings.TrimPrefix(repository, "github.com/")
+		if repository == "" {
+			continue
+		}
+		repository = "github.com/" + repository
+		if !seen[repository] {
+			repositories = append(repositories, repository)
+			seen[repository] = true
 		}
 	}
-	absolute, err := filepath.Abs(workDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve native TODO working directory %q: %w", workDir, err)
-	}
-	return native.NormalizeImportWorkspace(native.ImportWorkspace{RootPath: absolute}).RootPath, nil
+	options.Repositories = repositories
+	return options, nil
 }
 
-func resolveExistingWorkspace(ctx context.Context, repository *native.Repository, workDir string) (*native.Workspace, error) {
-	workspace, pathErr := repository.GetWorkspaceByPath(ctx, workDir)
-	if pathErr == nil {
+func initializeWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, error) {
+	workspace, err := resolveWorkspace(ctx, repository, options)
+	if err == nil {
+		return reconcileWorkspace(ctx, repository, workspace, options)
+	}
+	if !errors.Is(err, native.ErrNotFound) {
+		return nil, err
+	}
+
+	input := native.CreateWorkspaceInput{RootPath: options.RootPath, DisplayName: options.Name}
+	if len(options.Repositories) > 0 {
+		input.RepoKey = options.Repositories[0]
+	}
+	workspace, err = repository.CreateWorkspace(ctx, input)
+	if err == nil {
 		return workspace, nil
 	}
-	if !errors.Is(pathErr, native.ErrNotFound) {
-		return nil, fmt.Errorf("resolve native TODO workspace by path %q: %w", workDir, pathErr)
+	if !errors.Is(err, native.ErrWorkspaceConflict) {
+		return nil, fmt.Errorf("initialize native TODO workspace for project %q: %w", options.Name, err)
 	}
+	workspace, resolveErr := resolveWorkspace(ctx, repository, options)
+	if resolveErr != nil {
+		return nil, fmt.Errorf("resolve concurrently initialized native TODO workspace for project %q after %v: %w", options.Name, err, resolveErr)
+	}
+	return reconcileWorkspace(ctx, repository, workspace, options)
+}
 
-	repoKey := ""
-	if repo, err := github.ResolveRepoFromDir(workDir); err == nil && strings.TrimSpace(repo) != "" {
-		repoKey = native.NormalizeImportWorkspace(native.ImportWorkspace{
-			RepoKey: "github.com/" + strings.TrimSpace(repo),
-		}).RepoKey
-		workspace, repoErr := repository.GetWorkspaceByRepoKey(ctx, repoKey)
-		if repoErr == nil {
-			return workspace, nil
-		}
-		if !errors.Is(repoErr, native.ErrNotFound) {
-			return nil, fmt.Errorf("resolve native TODO workspace by repository %q: %w", repoKey, repoErr)
+func resolveWorkspace(ctx context.Context, repository *native.Repository, options WorkspaceOptions) (*native.Workspace, error) {
+	var matched *native.Workspace
+	byPath, err := repository.GetWorkspaceByPath(ctx, options.RootPath)
+	switch {
+	case err == nil:
+		matched = byPath
+	case !errors.Is(err, native.ErrNotFound):
+		return nil, fmt.Errorf("resolve native TODO workspace by project %q path %q: %w", options.Name, options.RootPath, err)
+	}
+	for _, repoKey := range options.Repositories {
+		byRepo, err := repository.GetWorkspaceByRepoKey(ctx, repoKey)
+		switch {
+		case err == nil:
+			if matched != nil && matched.ID != byRepo.ID {
+				return nil, fmt.Errorf(
+					"%w: project %q path %q resolves to workspace %s while repository %q resolves to workspace %s",
+					native.ErrWorkspaceConflict, options.Name, options.RootPath, matched.ID, repoKey, byRepo.ID,
+				)
+			}
+			matched = byRepo
+		case !errors.Is(err, native.ErrNotFound):
+			return nil, fmt.Errorf("resolve native TODO workspace by project %q repository %q: %w", options.Name, repoKey, err)
 		}
 	}
+	if matched == nil {
+		return nil, fmt.Errorf("%w: native TODO workspace for configured project %q", native.ErrNotFound, options.Name)
+	}
+	return matched, nil
+}
 
-	identity := fmt.Sprintf("path %q", workDir)
-	if repoKey != "" {
-		identity += fmt.Sprintf(" or repository %q", repoKey)
+func reconcileWorkspace(ctx context.Context, repository *native.Repository, workspace *native.Workspace, options WorkspaceOptions) (*native.Workspace, error) {
+	update := native.UpdateWorkspaceInput{}
+	if workspace.RootPath != options.RootPath {
+		update.RootPath = &options.RootPath
 	}
-	return nil, fmt.Errorf(
-		"native TODO workspace not found for %s; run `gavel todos import-grite` for an existing Grite workspace or complete native TODO workspace setup before retrying (no Grite or .todos fallback is available)",
-		identity,
-	)
+	if workspace.DisplayName != options.Name {
+		update.DisplayName = &options.Name
+	}
+	if len(options.Repositories) > 0 && workspace.RepoKey != options.Repositories[0] {
+		update.RepoKey = &options.Repositories[0]
+	}
+	if update.RootPath == nil && update.DisplayName == nil && update.RepoKey == nil {
+		return workspace, nil
+	}
+	updated, err := repository.UpdateWorkspace(ctx, workspace.ID, update)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile native TODO workspace for project %q: %w", options.Name, err)
+	}
+	return updated, nil
 }
 
 // Repository returns the native Gavel repository used by this provider.

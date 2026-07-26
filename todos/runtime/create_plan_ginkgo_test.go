@@ -52,7 +52,9 @@ var _ = Describe("creating TODOs with durable plans", Ordered, func() {
 			RootPath: workDir,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		provider, err = New(ctx, workDir, opened.Gorm())
+		provider, err = New(ctx, opened.Gorm(), WorkspaceOptions{
+			Name: "create-plan", RootPath: workDir, Repositories: []string{"acme/create-plan"},
+		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -77,6 +79,34 @@ var _ = Describe("creating TODOs with durable plans", Ordered, func() {
 		Expect(plan).To(Equal("# Parser plan\n\n1. Preserve parse context."))
 		_, err = provider.PlanMarkdown(ctx, created, types.ModeRun)
 		Expect(err).To(MatchError(ContainSubstring("approve an immutable revision")))
+	})
+
+	It("routes a planned draft through review before implementation", func() {
+		const planMarkdown = "# Draft plan\n\n1. Implement the parser fix."
+		created, err := provider.Create(ctx, todos.CreateRequest{
+			Title:  "Plan a draft parser fix",
+			Status: types.StatusDraft,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(provider.PrepareRun(ctx, created, todos.RunPreparation{
+			Mode: types.ModePlan, ExecutorName: "claude",
+		})).To(Succeed())
+		Expect(provider.SaveAttempt(ctx, created, &todos.ExecutionResult{
+			Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
+			Plan: &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},
+		})).To(Succeed())
+		Expect(created.Status).To(Equal(types.StatusReview))
+
+		_, err = provider.PlanMarkdown(ctx, created, types.ModeRun)
+		Expect(err).To(MatchError(ContainSubstring("approve an immutable revision")))
+
+		created, err = provider.ApprovePlan(ctx, created, "reviewer", "ready to implement")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.Status).To(Equal(types.StatusPending))
+		runnablePlan, err := provider.PlanMarkdown(ctx, created, types.ModeRun)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runnablePlan).To(Equal(planMarkdown))
 	})
 
 	It("creates a reviewed and approved plan ready for run", func() {

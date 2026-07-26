@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/portable"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,10 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	require.NoError(t, os.MkdirAll(inputDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(inputDir, "portable.md"), []byte(content), 0o644))
 
-	first, err := portable.Import(t.Context(), opened.Gorm(), workDir, inputDir, nil)
+	workspaceOptions := todoruntime.WorkspaceOptions{
+		Name: "portable", RootPath: workDir, Repositories: []string{"acme/portable"},
+	}
+	first, err := portable.Import(t.Context(), opened.Gorm(), workspaceOptions, inputDir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Created)
 	issue, err := repository.GetIssue(t.Context(), id)
@@ -69,7 +73,7 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	assert.ElementsMatch(t, []string{"database", "portable"}, issue.Labels)
 
 	outputDir := filepath.Join(workDir, "exported")
-	exported, err := portable.Export(t.Context(), opened.Gorm(), workDir, outputDir, []string{id.String()}, false)
+	exported, err := portable.Export(t.Context(), opened.Gorm(), workspaceOptions, outputDir, []string{id.String()}, false)
 	require.NoError(t, err)
 	require.Len(t, exported.Files, 1)
 	exportedTODO, err := todos.ParseTODO(exported.Files[0])
@@ -79,7 +83,7 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	assert.Equal(t, types.StatusPending, exportedTODO.Status)
 	assert.Equal(t, body, strings.TrimSpace(exportedTODO.MarkdownBody))
 
-	replayed, err := portable.Import(t.Context(), opened.Gorm(), workDir, outputDir, nil)
+	replayed, err := portable.Import(t.Context(), opened.Gorm(), workspaceOptions, outputDir, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, replayed.Created)
 	assert.Equal(t, 0, replayed.Updated)

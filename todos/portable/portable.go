@@ -65,25 +65,26 @@ type exportFile struct {
 }
 
 // Import reads .todos Markdown only from the explicitly supplied files or
-// directory and applies the supported portable fields to the native workspace
-// for workDir. It never selects a runtime file provider or falls back from DB.
-func Import(ctx context.Context, db *gorm.DB, workDir, directory string, files []string) (*ImportResult, error) {
+// directory and applies the supported portable fields to the configured native
+// workspace. It never selects a runtime file provider or falls back from DB.
+func Import(ctx context.Context, db *gorm.DB, options todoruntime.WorkspaceOptions, directory string, files []string) (*ImportResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if db == nil {
 		return nil, fmt.Errorf("portable TODO import requires PostgreSQL: %w", native.ErrInvalidInput)
 	}
-	workDir, err := absolutePath("working directory", workDir, "")
+	workDir, err := absolutePath("working directory", options.RootPath, "")
 	if err != nil {
 		return nil, err
 	}
+	options.RootPath = workDir
 	directory, err = portableDirectory("import directory", workDir, directory)
 	if err != nil {
 		return nil, err
 	}
 
-	provider, err := todoruntime.New(ctx, workDir, db)
+	provider, err := todoruntime.New(ctx, db, options)
 	if err != nil {
 		return nil, err
 	}
@@ -153,25 +154,26 @@ func Import(ctx context.Context, db *gorm.DB, workDir, directory string, files [
 	return result, nil
 }
 
-// Export writes supported durable issue fields from the native workspace for
-// workDir into an explicitly selected .todos directory. Existing files for the
-// same native ID are updated; unrelated collisions require force.
-func Export(ctx context.Context, db *gorm.DB, workDir, directory string, refs []string, force bool) (*ExportResult, error) {
+// Export writes supported durable issue fields from the configured native
+// workspace into an explicitly selected .todos directory. Existing files for
+// the same native ID are updated; unrelated collisions require force.
+func Export(ctx context.Context, db *gorm.DB, options todoruntime.WorkspaceOptions, directory string, refs []string, force bool) (*ExportResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if db == nil {
 		return nil, fmt.Errorf("portable TODO export requires PostgreSQL: %w", native.ErrInvalidInput)
 	}
-	workDir, err := absolutePath("working directory", workDir, "")
+	workDir, err := absolutePath("working directory", options.RootPath, "")
 	if err != nil {
 		return nil, err
 	}
+	options.RootPath = workDir
 	directory, err = portableDirectory("export directory", workDir, directory)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := todoruntime.New(ctx, workDir, db)
+	provider, err := todoruntime.New(ctx, db, options)
 	if err != nil {
 		return nil, err
 	}

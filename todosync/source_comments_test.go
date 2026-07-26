@@ -176,6 +176,14 @@ func (p *sourceSyncProvider) List(_ context.Context, filters todos.DiscoveryFilt
 	return types.TODOS{p.todo}, nil
 }
 
+func (p *sourceSyncProvider) CountByStatus(_ context.Context) (map[types.Status]int, error) {
+	counts := map[types.Status]int{}
+	if p.todo != nil {
+		counts[p.todo.Status]++
+	}
+	return counts, nil
+}
+
 func (p *sourceSyncProvider) Get(_ context.Context, _ string) (*types.TODO, error) {
 	return p.todo, nil
 }
