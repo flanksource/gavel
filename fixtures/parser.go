@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/goccy/go-yaml"
 )
 
@@ -353,6 +352,9 @@ func ParseMarkdownFixturesWithTree(filePath string) (*FixtureNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := expandFixtureTreeForFiles(fileTree, frontMatter, sourceDir); err != nil {
+		return nil, fmt.Errorf("failed to expand fixtures for files: %w", err)
+	}
 	setOriginFile(fileTree, filePath)
 	if fileTree.Origin != nil {
 		fileTree.Origin.File = filePath
@@ -414,92 +416,24 @@ func expandFixturesForFiles(fixtures []FixtureNode, frontMatter *FrontMatter, so
 		return fixtures, nil
 	}
 
-	var expandedFixtures []FixtureNode
-
-	// Find files matching the glob pattern
-	// Start search from the source directory (where the fixture file is located)
-	pattern := frontMatter.Files
-
-	// If pattern is absolute, use it directly
-	if !filepath.IsAbs(pattern) {
-		// Make pattern relative to search path
-		pattern = filepath.Join(sourceDir, pattern)
-	}
-
-	// Use doublestar to find matching files
-	matches, err := doublestar.FilepathGlob(pattern)
+	matches, err := matchFixtureFiles(frontMatter.Files, sourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("invalid glob pattern '%s': %w", frontMatter.Files, err)
+		return nil, err
 	}
-
-	// If no matches found, return original fixtures
 	if len(matches) == 0 {
 		return fixtures, nil
 	}
+	expandedFixtures := make([]FixtureNode, 0, len(fixtures)*len(matches))
 
 	// For each matched file, create a copy of each fixture with template variables
 	for _, matchedFile := range matches {
-		// Get file info
-		absFile, err := filepath.Abs(matchedFile)
-		if err != nil {
-			continue
-		}
-
-		fileInfo, err := os.Stat(absFile)
-		if err != nil || fileInfo.IsDir() {
-			continue // Skip directories
-		}
-
-		// Calculate template variables
-		fileDir := filepath.Dir(absFile)
-		fileName := filepath.Base(absFile)
-		fileNameNoExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-
-		// Make paths relative to source directory if possible
-		relFile, _ := filepath.Rel(sourceDir, absFile)
-		relDir, _ := filepath.Rel(sourceDir, fileDir)
-
-		// Create template variables map
-		templateVars := map[string]string{
-			"file":     relFile,                // Relative path to file
-			"filename": fileNameNoExt,          // Filename without extension
-			"dir":      relDir,                 // Directory containing the file
-			"absfile":  absFile,                // Absolute path to file
-			"absdir":   fileDir,                // Absolute directory
-			"basename": fileName,               // Full filename with extension
-			"ext":      filepath.Ext(fileName), // File extension
-		}
-
-		// Create a copy of each fixture with the template variables
 		for _, fixture := range fixtures {
-			// Deep copy the fixture
 			expandedFixture := fixture
 			if expandedFixture.Test != nil {
-				// Create a new test copy
-				testCopy := *expandedFixture.Test
-
-				// Update the test name to include the file
-				if testCopy.Name != "" {
-					testCopy.Name = fmt.Sprintf("%s [%s]", testCopy.Name, relFile)
-				}
-
-				// Set template variables
-				testCopy.TemplateVars = make(map[string]any)
-				for k, v := range templateVars {
-					testCopy.TemplateVars[k] = v
-				}
-
-				expandedFixture.Test = &testCopy
+				expandedFixture.Test = expandFixtureTestForFile(expandedFixture.Test, matchedFile, sourceDir)
 			}
-
 			expandedFixtures = append(expandedFixtures, expandedFixture)
 		}
 	}
-
-	// If we expanded fixtures, return the expanded list; otherwise return original
-	if len(expandedFixtures) > 0 {
-		return expandedFixtures, nil
-	}
-
-	return fixtures, nil
+	return expandedFixtures, nil
 }
