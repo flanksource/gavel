@@ -256,6 +256,35 @@
     });
   }
 
+  function normalizeOpenFilePath(filePath) {
+    if (!filePath || !filePath.startsWith("/@fs/")) return filePath;
+    return filePath.slice(4);
+  }
+
+  function openFileFallback(filePath, lineNumber) {
+    var line = lineNumber ? "&line=" + lineNumber : "";
+    var url = "https://react-grab.com/open-file?url=" + encodeURIComponent(filePath) + line;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  // Vite exposes absolute files to browser tooling as /@fs/<absolute path>.
+  // React Grab treats that transport URL as the actual source path, so its
+  // built-in Open request targets a nonexistent /@fs directory. Intercept only
+  // those paths and preserve React Grab's local-editor then web fallback flow.
+  function onOpenFile(filePath, lineNumber) {
+    var normalized = normalizeOpenFilePath(filePath);
+    if (normalized === filePath) return false;
+    var params = new URLSearchParams({ file: normalized, column: "1" });
+    if (lineNumber) params.set("line", String(lineNumber));
+    fetch("/__open-in-editor?" + params).then(
+      function (res) {
+        if (!res.ok) openFileFallback(normalized, lineNumber);
+      },
+      function () { openFileFallback(normalized, lineNumber); },
+    );
+    return true;
+  }
+
   function absoluteGavelURL(pathOrURL) {
     if (!pathOrURL) return "";
     try {
@@ -470,6 +499,7 @@
     name: PLUGIN_NAME,
     hooks: {
       transformCopyContent: onCopyContent,
+      onOpenFile: onOpenFile,
     },
     actions: [
       { id: "gavel-todo", label: "Add to gavel todo", shortcut: "T", onAction: onAction },

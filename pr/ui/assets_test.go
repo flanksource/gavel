@@ -86,6 +86,29 @@ func TestReactGrabPluginCopyUsesTodoBodyFormatter(t *testing.T) {
 	}
 }
 
+// Vite exposes absolute source files to the browser as /@fs/... URLs. React
+// Grab's Open action must remove that transport prefix before asking the dev
+// server to open the source file, including through the Cmd/Ctrl+O shortcut.
+func TestReactGrabPluginNormalizesViteOpenPath(t *testing.T) {
+	s := NewServer(0, github.Options{}, SearchConfig{})
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/react-grab-plugin.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`startsWith("/@fs/")`,
+		"slice(4)",
+		"onOpenFile",
+		`/__open-in-editor`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plugin JS missing %q", want)
+		}
+	}
+}
+
 // Screenshot-copy actions upload a captured PNG first, then write either the
 // normal todo Markdown plus image URL or just the screenshot URL to the clipboard.
 func TestReactGrabPluginCopyScreenshotActions(t *testing.T) {
