@@ -753,7 +753,7 @@ gavel system uninstall
 
 Command intent:
 
-- `install`: create the user-level service and persist daemon config such as database mode and GitHub token
+- `install`: create the user-level service, launch it through the user's login and interactive shell so `.zshrc` PATH changes apply, and persist daemon config such as database mode and GitHub token
 - `start`: launch the detached daemon immediately
 - `status`: inspect service state, DB mode, live daemon health, and recent logs
 - `stop`: terminate the daemon process
