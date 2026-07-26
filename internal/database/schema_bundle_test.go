@@ -28,6 +28,7 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, names, "112_view_todo_issue_runtime.sql")
 	assert.Contains(t, names, "115_backfill_todo_activity.sql")
 	assert.Contains(t, names, "120_drop_grite_runtime_cache.sql")
+	assert.Contains(t, names, "130_task_history_storage_params.sql")
 
 	prepareSQL := readEmbeddedSchemaFile(t, "schema/090_prepare_runtime_state.sql")
 	assert.Contains(t, prepareSQL, "-- phase: pre")
@@ -88,6 +89,19 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	githubSchema := readEmbeddedSchemaFile(t, "schema/github_cache.hcl")
 	assert.NotContains(t, githubSchema, `table "grite_issue_caches"`)
 	assert.NotContains(t, githubSchema, `table "grite_sync_cursors"`)
+
+	taskHistorySchema := readEmbeddedSchemaFile(t, "schema/task_history.hcl")
+	assert.Contains(t, taskHistorySchema, `table "task_run_history"`)
+	assert.Contains(t, taskHistorySchema, `type = jsonb`)
+	assert.Contains(t, taskHistorySchema, `index "idx_task_run_history_expires_at"`)
+
+	// Atlas OSS cannot express storage parameters, so the update-in-place churn
+	// settings for task_run_history live in post-phase SQL rather than the HCL.
+	storageParamsSQL := readEmbeddedSchemaFile(t, "schema/130_task_history_storage_params.sql")
+	assert.Contains(t, storageParamsSQL, "-- phase: post")
+	assert.Contains(t, storageParamsSQL, "ALTER TABLE public.task_run_history SET (")
+	assert.Contains(t, storageParamsSQL, "fillfactor = 70")
+	assert.NotContains(t, taskHistorySchema, "fillfactor")
 }
 
 func readEmbeddedSchemaFile(t *testing.T, name string) string {

@@ -80,6 +80,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 		"http_cache_entries", "workflow_run_caches", "job_log_caches", "workflow_def_caches",
 		"seen_prs", "favicon_caches",
 		"commit_stat_caches", "commit_stat_cursors", "test_run_caches", "test_run_cursors",
+		"task_run_history",
 		"file_scans", "violations", "linter_executions", "debounce_metadata", "migration_unmanaged",
 	} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist", table)
@@ -118,7 +119,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	fresh, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "migration should create the complete schema from scratch")
 	require.NoError(t, fresh.Close())
-	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
+	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "task_run_history", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist after a fresh migration", table)
 	}
 	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"))
@@ -189,6 +190,7 @@ func TestHCLMigrationFreshDatabaseOmitsRetiredGriteCache(t *testing.T) {
 	for _, table := range []string{
 		"captain_sessions", "todo_workspaces", "todo_issues",
 		"http_cache_entries", "commit_stat_caches", "test_run_caches",
+		"task_run_history",
 		"file_scans", "violations", "linter_executions", "debounce_metadata",
 	} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist on a fresh database", table)
