@@ -1,3 +1,5 @@
+// React 19 dropped the global JSX namespace; it now lives on the react module.
+import type { JSX } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { TodoCounts, TodoStatus } from '../../types';
 import {

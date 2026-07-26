@@ -1,11 +1,10 @@
-import { useState, useEffect, useMemo, type ComponentProps, type ComponentType } from "react";
-import { Button, Modal, Select } from "@flanksource/clicky-ui/components";
-import { AnsiHtml, TimeseriesCoreBars } from "@flanksource/clicky-ui/data";
+import { useState, useEffect, type ComponentProps, type ComponentType } from "react";
+import { Button, Select } from "@flanksource/clicky-ui/components";
+import { TimeseriesCoreBars } from "@flanksource/clicky-ui/data";
 import type { IconProps } from "@flanksource/clicky-ui/icons";
 import {
   UiActivity,
   UiDatabase,
-  UiFullscreen,
   UiChevronDown,
   UiChevronRight,
   UiPlay,
@@ -14,10 +13,10 @@ import {
   UiLayers,
 } from "@flanksource/clicky-ui/icons";
 import type { FlatProc } from "../utils";
-import { humanizeBytes, statusDotClass, aggregateDotClass, statusLabel } from "../utils";
-import type { ProcNode, ProcProcess, Project, ProcStatus } from "../types";
+import { statusDotClass, aggregateDotClass, statusLabel } from "../utils";
+import type { ProcProcess, Project, ProcStatus } from "../types";
 import { TodoBadge } from "./TodoBadge";
-import { useNow } from "../useNow";
+import { filesLabel, ProcExpanded } from "./ProcessDetails";
 
 // MetricIcon is the gauge's own icon prop type, derived from the component so it
 // matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
@@ -28,41 +27,8 @@ type MetricIcon = ComponentProps<typeof TimeseriesCoreBars>["icon"];
 const GIB = 1024 ** 3;
 const MEMORY_UNIT = { perBar: GIB, label: "GB", barLabel: "GB" };
 
-function cpuLabel(p: { cpuPercent?: number }): string {
-  return p.cpuPercent && p.cpuPercent > 0 ? `${p.cpuPercent.toFixed(0)}%` : "—";
-}
-
-function uptimeLabel(p: { started?: string; status: string }): string {
-  if (!p.started || !isActiveStatus(p.status)) return "—";
-  const started = new Date(p.started).getTime();
-  if (!Number.isFinite(started)) return "—";
-  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  if (hours < 24) return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
-}
-
-// Uptime is a leaf that re-renders itself each second via the shared useNow()
-// clock, so a ticking uptime doesn't reconcile its parent process row.
-function Uptime({ proc }: { proc: { started?: string; status: string } }) {
-  useNow();
-  return <>{uptimeLabel(proc)}</>;
-}
-
 function isActiveStatus(status: string): boolean {
   return status === "running" || status === "starting" || status === "restarting";
-}
-
-// filesLabel renders the open-file count; -1 means the platform can't report it.
-function filesLabel(p: { openFiles?: number }): string {
-  if (p.openFiles === undefined || p.openFiles < 0) return "—";
-  return String(p.openFiles);
 }
 
 // Process gauges poll their recorded series from the backend; the cell only
@@ -96,40 +62,38 @@ function firstPort(proc: ProcProcess): number | undefined {
 // the query cache; icon labels the reading in the workspace headers, where no
 // column header names it (table rows are labelled by their column header).
 function CpuBars({ metricKey, icon }: { metricKey: string; icon?: MetricIcon }) {
-  return null;
-  // return (
-  //   <div className="flex justify-end">
-  //     <TimeseriesCoreBars
-  //       variant="cell"
-  //       showLabel={false}
-  //       {...(icon ? { icon } : {})}
-  //       title="CPU"
-  //       value={{ id: metricId(metricKey, 'cpu'), transform: v => v * 10 }}
-  //       range={PROC_RANGE}
-  //       refreshMs={PROC_REFRESH_MS}
-  //     />
-  //   </div>
-  // );
+  return (
+    <div className="flex justify-end">
+      <TimeseriesCoreBars
+        variant="cell"
+        showLabel={false}
+        {...(icon ? { icon } : {})}
+        title="CPU"
+        value={{ id: metricId(metricKey, "cpu"), transform: (value) => value * 10 }}
+        range={PROC_RANGE}
+        refreshMs={PROC_REFRESH_MS}
+      />
+    </div>
+  );
 }
 
 // MemoryBars mirrors CpuBars for RSS: live cell bars at one bar per gigabyte
 // (MEMORY_UNIT), self-sizing from the reading, with an optional header icon.
 function MemoryBars({ metricKey, icon }: { metricKey: string; icon?: MetricIcon }) {
-  return null;
-  // return (
-  //   <div className="flex justify-end">
-  //     <TimeseriesCoreBars
-  //       variant="cell"
-  //       showLabel={false}
-  //       {...(icon ? { icon } : {})}
-  //       title="Mem"
-  //       value={{ id: metricId(metricKey, 'memory') }}
-  //       unit={MEMORY_UNIT}
-  //       range={PROC_RANGE}
-  //       refreshMs={PROC_REFRESH_MS}
-  //     />
-  //   </div>
-  // );
+  return (
+    <div className="flex justify-end">
+      <TimeseriesCoreBars
+        variant="cell"
+        showLabel={false}
+        {...(icon ? { icon } : {})}
+        title="Mem"
+        value={{ id: metricId(metricKey, "memory") }}
+        unit={MEMORY_UNIT}
+        range={PROC_RANGE}
+        refreshMs={PROC_REFRESH_MS}
+      />
+    </div>
+  );
 }
 
 function ProcessFavicon({ project, port }: { project: string; port?: number }) {
@@ -159,185 +123,6 @@ async function control(project: string, name: string, action: "start" | "stop" |
   } catch {
     /* surfaced on the next status poll */
   }
-}
-
-// ProcLogPreview tails the last few lines of one process, refreshing on its own
-// cadence while the row is expanded (it unmounts when the row collapses). Each
-// fetch is abortable so an unmount or a superseding poll never leaks a pending
-// request (which would otherwise pile up against the browser's connection cap).
-function ProcLogPreview({ project, name }: { project: string; name: string }) {
-  const [text, setText] = useState("loading…");
-  useEffect(() => {
-    let alive = true;
-    let inflight: AbortController | null = null;
-    const load = () => {
-      inflight?.abort();
-      inflight = new AbortController();
-      fetch(`/api/proc/logs?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}&lines=5`, { signal: inflight.signal })
-        .then((r) => r.text())
-        .then((t) => {
-          if (alive) setText(t.trimEnd() || "(no output)");
-        })
-        .catch((e) => {
-          if (alive && e?.name !== "AbortError") setText("failed to load logs");
-        });
-    };
-    load();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 3000);
-    return () => {
-      alive = false;
-      inflight?.abort();
-      clearInterval(id);
-    };
-  }, [project, name]);
-
-  return <AnsiHtml as="pre" text={text} className="text-[10px] leading-snug bg-black text-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-32" />;
-}
-
-// useProcTree fetches one process's live process-group breakdown while its row
-// is expanded. The SSE status stream omits the per-process tree (its per-node
-// cpu/mem churn would defeat the stream's change-detection), so the expanded
-// view pulls the full single-project status on its own cadence — abortably and
-// visibility-gated, mirroring ProcLogPreview — and the row unmounts the poll on
-// collapse.
-function useProcTree(project: string, name: string): ProcNode[] {
-  const [tree, setTree] = useState<ProcNode[]>([]);
-  useEffect(() => {
-    let alive = true;
-    let inflight: AbortController | null = null;
-    const load = () => {
-      inflight?.abort();
-      inflight = new AbortController();
-      fetch(`/api/proc/status?project=${encodeURIComponent(project)}`, { signal: inflight.signal })
-        .then((r) => r.json())
-        .then((st: ProcStatus) => {
-          if (!alive) return;
-          setTree((st.processes ?? []).find((p) => p.name === name)?.tree ?? []);
-        })
-        .catch(() => {
-          /* keep the last tree on a failed poll */
-        });
-    };
-    load();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 3000);
-    return () => {
-      alive = false;
-      inflight?.abort();
-      clearInterval(id);
-    };
-  }, [project, name]);
-  return tree;
-}
-
-// flattenTree returns the group's processes in depth-first order with a depth
-// for indentation. Roots are nodes whose parent isn't in the group (the group
-// leader); a visited set guards against a malformed parent cycle.
-function flattenTree(nodes: ProcNode[]): { node: ProcNode; depth: number }[] {
-  const pids = new Set(nodes.map((n) => n.pid));
-  const children = new Map<number, ProcNode[]>();
-  for (const n of nodes) {
-    const arr = children.get(n.ppid) ?? [];
-    arr.push(n);
-    children.set(n.ppid, arr);
-  }
-  const byCpu = (a: ProcNode, b: ProcNode) => (b.cpuPercent ?? 0) - (a.cpuPercent ?? 0);
-  const out: { node: ProcNode; depth: number }[] = [];
-  const seen = new Set<number>();
-  const visit = (n: ProcNode, depth: number) => {
-    if (seen.has(n.pid)) return;
-    seen.add(n.pid);
-    out.push({ node: n, depth });
-    for (const c of (children.get(n.pid) ?? []).sort(byCpu)) visit(c, depth + 1);
-  };
-  for (const r of nodes.filter((n) => !pids.has(n.ppid)).sort(byCpu)) visit(r, 0);
-  // Any node not reached (orphaned parent reference) still gets listed flat.
-  for (const n of nodes) if (!seen.has(n.pid)) visit(n, 0);
-  return out;
-}
-
-// ProcTree renders the per-process breakdown of a group as an indented table
-// with each process's own CPU / memory / open-file metrics.
-function ProcTree({ nodes }: { nodes: ProcNode[] }) {
-  const rows = useMemo(() => flattenTree(nodes), [nodes]);
-  return (
-    <table className="w-full text-[10px] tabular-nums">
-      <tbody>
-        {rows.map(({ node, depth }) => (
-          <tr key={node.pid} className="text-gray-600">
-            <td className="py-0.5 pr-2 truncate" style={{ paddingLeft: `${depth * 14}px` }}>
-              {depth > 0 && <span className="text-gray-300">└ </span>}
-              <span className="text-gray-700">{node.command || "?"}</span>
-              <span className="text-gray-400 ml-1">{node.pid}</span>
-            </td>
-            <td className="px-2 text-right w-12">{cpuLabel(node)}</td>
-            <td className="px-2 text-right w-16">{humanizeBytes(node.memoryRss)}</td>
-            <td className="px-2 text-right w-10">{filesLabel(node)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-// ProcLogsDialog opens the process's full logs in a large AnsiHtml terminal.
-function ProcLogsDialog({ project, name, onClose }: { project: string; name: string; onClose: () => void }) {
-  const [text, setText] = useState("loading…");
-  useEffect(() => {
-    let alive = true;
-    const ac = new AbortController();
-    fetch(`/api/proc/logs?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}&lines=500`, { signal: ac.signal })
-      .then((r) => r.text())
-      .then((t) => {
-        if (alive) setText(t.trimEnd() || "(no output)");
-      })
-      .catch((e) => {
-        if (alive && e?.name !== "AbortError") setText("failed to load logs");
-      });
-    return () => {
-      alive = false;
-      ac.abort();
-    };
-  }, [project, name]);
-
-  return (
-    <Modal open onClose={onClose} title={`${project} · ${name} · logs`} size="xl">
-      <AnsiHtml as="pre" text={text} className="text-xs leading-snug bg-black text-gray-100 rounded p-3 overflow-auto max-h-[70vh] whitespace-pre-wrap" />
-    </Modal>
-  );
-}
-
-// ProcExpanded is the body shown when a process row is expanded: its process
-// tree with per-process metrics, plus a log preview that can pop out to a dialog.
-function ProcExpanded({ project, proc }: { project: string; proc: ProcProcess }) {
-  const [logsOpen, setLogsOpen] = useState(false);
-  const tree = useProcTree(project, proc.name);
-  return (
-    <div className="space-y-2 py-1">
-      {tree.length > 0 && (
-        <div>
-          <div className="mb-0.5 flex items-center justify-between gap-2">
-            <div className="text-[10px] uppercase tracking-wide text-gray-400">Process tree</div>
-            <div className="text-[10px] tabular-nums text-gray-400">
-              up <Uptime proc={proc} /> · pid {proc.pid || "—"}
-            </div>
-          </div>
-          <ProcTree nodes={tree} />
-        </div>
-      )}
-      <div>
-        <div className="flex items-center justify-between mb-0.5">
-          <span className="text-[10px] uppercase tracking-wide text-gray-400">Logs</span>
-          <IconBtn icon={UiFullscreen} title="Open logs in dialog" onClick={() => setLogsOpen(true)} />
-        </div>
-        <ProcLogPreview project={project} name={proc.name} />
-      </div>
-      {logsOpen && <ProcLogsDialog project={project} name={proc.name} onClose={() => setLogsOpen(false)} />}
-    </div>
-  );
 }
 
 function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChanged: () => void; showWorkspace: boolean }) {

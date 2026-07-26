@@ -110,18 +110,32 @@ export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
 // todos, grouped and independently scrollable beside the detail pane. The
 // group-by preference picks the grouping: workspace (the default) or
 // severity/age buckets that span workspaces.
-export function TodoWorkspaceList({ todos }: { todos: WorkspaceTodos }) {
+//
+// The workspaces are derived from /api/projects, so an empty sidebar means one of
+// three things and must not conflate them: projectsLoaded is false while the
+// first fetch is in flight, projectError holds the reason it failed, and only
+// with neither set is "no workspaces configured" the truth.
+export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
+  todos: WorkspaceTodos;
+  projectsLoaded: boolean;
+  projectError?: string;
+}) {
   const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList, error } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
-  const EmptyIcon = loadingList ? Spinner : UiCheck;
+  // Waiting on either fetch is "loading": the workspaces come from
+  // /api/projects and the todos from the per-workspace lists.
+  const pending = loadingList || !projectsLoaded;
+  const EmptyIcon = pending ? Spinner : UiCheck;
   let content: ReactNode;
   if (workspaces.length === 0) {
-    content = (
+    content = projectError ? (
+      <div role="alert" className="p-6 text-center text-sm text-destructive">{projectError}</div>
+    ) : (
       <div className="p-6 text-center text-sm text-muted-foreground">
         <EmptyIcon className="mb-2 text-3xl" />
-        <p>{loadingList ? 'Loading' : 'No workspaces configured'}</p>
+        <p>{pending ? 'Loading' : 'No workspaces configured'}</p>
       </div>
     );
   } else if (groupBy === 'workspace') {

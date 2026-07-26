@@ -20,7 +20,15 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 // the dashboard (folded into dropdowns to fit the narrow popover) plus a New
 // control, so todos can be regrouped, filtered, and created without leaving the
 // menubar.
-export function MenubarTodos({ projects }: { projects: Project[] }) {
+// The workspace list is derived from /api/projects, so an empty `projects` means
+// one of three things and this view must not conflate them: projectsLoaded is
+// false while the first fetch is in flight, projectError holds the reason it
+// failed, and only with neither set is "no workspaces configured" the truth.
+export function MenubarTodos({ projects, projectsLoaded, projectError }: {
+  projects: Project[];
+  projectsLoaded: boolean;
+  projectError?: string;
+}) {
   const {
     workspaces, byDir, loadingList, aggregate,
     selected, select, detail, loadingDetail, detailError, error,
@@ -48,7 +56,10 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
   // default 'workspace' grouping keeps the per-workspace sections (the only mode
   // that supports batch runs on the dashboard).
   const buckets = groupBy === 'workspace' ? null : bucketTodos(flattenTodos(workspaces, byDir), groupBy, Date.now());
-  const StatusIcon = loadingList ? Spinner : UiCheck;
+  // Waiting on either fetch is "loading": the workspaces come from /api/projects
+  // and the todos from the per-workspace lists.
+  const pending = loadingList || !projectsLoaded;
+  const StatusIcon = pending ? Spinner : UiCheck;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -80,10 +91,14 @@ export function MenubarTodos({ projects }: { projects: Project[] }) {
           </div>
         )}
         {workspaces.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            <StatusIcon className="mb-2 text-2xl" />
-            <p>{loadingList ? 'Loading' : 'No workspaces configured'}</p>
-          </div>
+          projectError ? (
+            <div role="alert" className="px-3 py-6 text-center text-xs text-destructive">{projectError}</div>
+          ) : (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              <StatusIcon className="mb-2 text-2xl" />
+              <p>{pending ? 'Loading' : 'No workspaces configured'}</p>
+            </div>
+          )
         ) : buckets ? (
           buckets.length > 0 ? (
             <ListMenu>

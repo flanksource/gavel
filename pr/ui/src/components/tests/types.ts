@@ -36,8 +36,9 @@ export interface LintViolation {
   column?: number;
   message?: string;
   code?: string;
-  rule?: { pattern?: string } | null;
-  severity?: string;
+  source?: string;
+  rule?: { pattern?: string; package?: string; method?: string } | null;
+  Severity?: string;
 }
 
 export interface LinterResult {
@@ -54,6 +55,9 @@ export interface LinterResult {
 
 // RunSnapshot is the clicky test-runner Snapshot plus gavel's lint section,
 // which the clicky type omits.
-export interface RunSnapshot extends Snapshot {
+export interface RunSnapshot extends Omit<Snapshot, 'status' | 'tests'> {
+  status: Snapshot['status'] & { lint_run?: boolean };
+  // Go marshals a nil tests slice as null for lint-only runs.
+  tests: Snapshot['tests'] | null;
   lint?: LinterResult[];
 }
