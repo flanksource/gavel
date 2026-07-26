@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@flanksource/clicky-ui": "^0.3.5",
+    "@flanksource/gavel": "^0.1.2",
     "@iconify-icons/ph": "^1.2.5",
+    "@iconify-icons/vscode-icons": "catalog:",
     "@iconify/react": "^6.0.2",
     "@mdxeditor/editor": "catalog:",
     "@tanstack/react-query": "catalog:",

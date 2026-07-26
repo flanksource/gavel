@@ -173,11 +173,6 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status))
 		return
 	}
-	if todo.LLM == nil || todo.LLM.SessionId == "" {
-		writeTodoError(w, http.StatusConflict, fmt.Errorf("todo has no recorded plan session to revise"))
-		return
-	}
-
 	reviewer, err := requirePlanReviewProvider(provider)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
@@ -195,7 +190,11 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 	if payload.Options != nil {
 		runPayload = *payload.Options
 	}
-	runPayload.Resume = true
+	sessionID := ""
+	if todo.LLM != nil {
+		sessionID = todo.LLM.SessionId
+	}
+	runPayload.Resume = sessionID != ""
 	runPayload.RunMode = string(types.ModePlan) // revise re-enters plan mode on the same session
 	runPayload.Plan = true
 	opts, err := normalizeTodoRunOptions(runPayload)
@@ -204,13 +203,19 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
-	if err := startTodoAnswer(req, feedback); err != nil {
+	if runPayload.Resume {
+		err = startTodoAnswer(req, feedback)
+	} else {
+		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
+		err = startTodoRun(req)
+	}
+	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	json.NewEncoder(w).Encode(todoAnswerResponse{ //nolint:errcheck
 		Todo:      summarizeTodo(todo, true),
-		SessionID: todo.LLM.SessionId,
+		SessionID: sessionID,
 		Status:    "revising",
 	})
 }

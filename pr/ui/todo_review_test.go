@@ -148,14 +148,23 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 	}
 
 	oldStart := startTodoAnswer
+	oldStartRun := startTodoRun
 	var gotReq todoRunRequest
 	var gotFeedback string
+	var gotFreshReq todoRunRequest
 	startTodoAnswer = func(req todoRunRequest, feedback string) error {
 		gotReq = req
 		gotFeedback = feedback
 		return nil
 	}
-	t.Cleanup(func() { startTodoAnswer = oldStart })
+	startTodoRun = func(req todoRunRequest) error {
+		gotFreshReq = req
+		return nil
+	}
+	t.Cleanup(func() {
+		startTodoAnswer = oldStart
+		startTodoRun = oldStartRun
+	})
 
 	body, _ := json.Marshal(todoRevisePayload{
 		Ref:      todos.TODOReference(created),
@@ -184,13 +193,22 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 		t.Errorf("response = %+v", resp)
 	}
 
-	// A revise without a recorded session is a 409 (nothing to resume).
+	// A persisted plan without an agent session starts a fresh plan run.
 	noSession := seedReviewTodo(t, workDir, types.StatusReview)
 	body2, _ := json.Marshal(todoRevisePayload{Ref: todos.TODOReference(noSession), Feedback: "x"})
 	rec = httptest.NewRecorder()
 	s.handleTodoPlanRevise(rec, httptest.NewRequest(http.MethodPost, "/api/todos/plan/revise", strings.NewReader(string(body2))))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("no-session revise status = %d, want 409", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no-session revise status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if gotFreshReq.Options.Resume {
+		t.Error("fresh plan revision unexpectedly requested resume")
+	}
+	if gotFreshReq.Options.RunMode != types.ModePlan {
+		t.Errorf("fresh plan revision mode = %q, want plan", gotFreshReq.Options.RunMode)
+	}
+	if gotFreshReq.Todos[0].Prompt != "Revise the existing plan using this reviewer feedback:\n\nx" {
+		t.Errorf("fresh plan revision prompt = %q", gotFreshReq.Todos[0].Prompt)
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 // TestRunSyncer scans each registered workspace's .gavel/run-*.json files on an
 // interval (and on demand via Notify) and upserts a per-run summary + the file
 // path into the DB cache. The run-*.json files are the source of truth; this is
-// a read cache the Tests tab is served from. Modeled on DetailSyncer: a buffered
+// a historical read cache. Modeled on DetailSyncer: a buffered
 // notify channel coalesces bursts, and a ticker keeps the cache warm without a
 // request. The source is local files (cheap, no rate limit) so the loop just
 // rescans every workspace each tick — ListRuns' `since` watermark keeps each
@@ -67,7 +67,12 @@ func (trs *TestRunSyncer) syncAll(ctx context.Context) {
 		return
 	}
 	changed := false
-	for _, p := range LoadProjects() {
+	projects, err := LoadProjects()
+	if err != nil {
+		logger.Errorf("sync test runs: %v", err)
+		return
+	}
+	for _, p := range projects {
 		dir := p.ResolvedDir()
 		if dir == "" {
 			continue

@@ -29,7 +29,7 @@ func newProjectDir(name, repo string) string {
 	orig := projectsPath
 	projectsPath = filepath.Join(t.TempDir(), "projects.json")
 	DeferCleanup(func() { projectsPath = orig })
-	SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}})
+	Expect(SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}})).To(Succeed())
 	return dir
 }
 

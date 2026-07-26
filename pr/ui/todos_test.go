@@ -582,7 +582,7 @@ func TestTodoAPINativeProviderListsWorkspace(t *testing.T) {
 func TestHandleProjectsIncludesTodoCounts(t *testing.T) {
 	withProject(t, "gavel", "flanksource/gavel", "")
 	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, string) (todoCounts, error) {
+	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
 		return todoCounts{Total: 1, Open: 1, InProgress: 1}, nil
 	}
 	t.Cleanup(func() { projectTodoCounts = original })

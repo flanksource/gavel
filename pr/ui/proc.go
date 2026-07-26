@@ -19,13 +19,17 @@ import (
 // projectInfo is the wire shape for GET /api/projects. Dir is resolved (~
 // expanded) and hasProcfile reports whether the directory currently contains a
 // Procfile, so the frontend knows which repo headers can show process controls.
+// projectInfo is the wire shape of one configured project. TodoCounts is a
+// pointer so an unreachable TODO store is reported as absent counts plus Error,
+// never as a zero-filled "0 todos" that reads like an empty workspace.
 type projectInfo struct {
-	Name        string     `json:"name"`
-	Dir         string     `json:"dir"`
-	Repos       []string   `json:"repos"`
-	HasProcfile bool       `json:"hasProcfile"`
-	TodoBackend string     `json:"todoBackend"`
-	TodoCounts  todoCounts `json:"todoCounts"`
+	Name        string      `json:"name"`
+	Dir         string      `json:"dir"`
+	Repos       []string    `json:"repos"`
+	HasProcfile bool        `json:"hasProcfile"`
+	TodoBackend string      `json:"todoBackend"`
+	TodoCounts  *todoCounts `json:"todoCounts,omitempty"`
+	Error       string      `json:"error,omitempty"`
 }
 
 // procStatus is the wire shape for /api/proc/status. hasProcfile=false is the
@@ -60,7 +64,11 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.lastProcPoll = time.Now()
 	s.mu.Unlock()
-	ps := LoadProjects()
+	ps, err := LoadProjects()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	if name := r.URL.Query().Get("project"); name != "" {
 		p, ok := projectByName(ps, name)
@@ -73,7 +81,7 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No project param: return every project's status (see procStatusByKey).
-	json.NewEncoder(w).Encode(procStatusByKey()) //nolint:errcheck
+	json.NewEncoder(w).Encode(procStatusByKey(ps)) //nolint:errcheck
 }
 
 // procStatusByKey returns every project's status keyed by both project name (so
@@ -81,9 +89,9 @@ func (s *Server) handleProcStatus(w http.ResponseWriter, r *http.Request) {
 // the sidebar repo headers light up). Project names are bare and repos contain a
 // slash, so the keyspaces don't collide. Shared by handleProcStatus so the
 // single-shot poll carries the full wire shape (live cpu/mem + process tree).
-func procStatusByKey() map[string]procStatus {
+func procStatusByKey(projects []Project) map[string]procStatus {
 	byKey := make(map[string]procStatus)
-	for _, p := range LoadProjects() {
+	for _, p := range projects {
 		st := projectStatus(p)
 		byKey[p.Name] = st
 		for _, repo := range p.Repos {
@@ -95,8 +103,12 @@ func procStatusByKey() map[string]procStatus {
 
 // streamProcStatusByKey is procStatusByKey projected for the SSE stream — see
 // leanProcStatus for why the resource fields are dropped.
-func streamProcStatusByKey() map[string]procStatus {
-	return leanProcStatus(procStatusByKey())
+func streamProcStatusByKey() (map[string]procStatus, error) {
+	projects, err := LoadProjects()
+	if err != nil {
+		return nil, err
+	}
+	return leanProcStatus(procStatusByKey(projects)), nil
 }
 
 // leanProcStatus clears the continuously-fluctuating resource fields from every
@@ -155,7 +167,13 @@ func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) 
 		s.lastProcPoll = time.Now()
 		s.mu.Unlock()
 
-		byKey := streamProcStatusByKey()
+		byKey, err := streamProcStatusByKey()
+		if err != nil {
+			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
+			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
+			flusher.Flush()
+			return
+		}
 		if b, err := json.Marshal(byKey); err == nil && !bytes.Equal(b, last) {
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			last = b
@@ -209,9 +227,9 @@ func (s *Server) handleProcFavicon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
-	p, ok := projectByName(LoadProjects(), project)
-	if !ok {
-		http.Error(w, "unknown project", http.StatusNotFound)
+	p, err := GetProject(project)
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
 	st := projectStatus(p)
@@ -270,9 +288,9 @@ func (s *Server) handleProcControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
-	p, ok := projectByName(LoadProjects(), body.Project)
-	if !ok {
-		http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
+	p, err := GetProject(body.Project)
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
 	dir := p.ResolvedDir()
@@ -311,9 +329,9 @@ func (s *Server) handleProcLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	p, ok := projectByName(LoadProjects(), r.URL.Query().Get("project"))
-	if !ok {
-		http.Error(w, "unknown project", http.StatusNotFound)
+	p, err := GetProject(r.URL.Query().Get("project"))
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
 	dir := p.ResolvedDir()

@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,11 +10,10 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/snapshots"
 )
 
-// testRunView is the per-run row the Tests tab renders. It mirrors
+// testRunView is the per-run row the Projects tree renders. It mirrors
 // snapshots.RunInfo minus the on-disk Path (the detail endpoint resolves the
 // file server-side from project+runId, so the path never reaches the client).
 type testRunView struct {
@@ -47,13 +45,16 @@ type testRunsResponse struct {
 	Projects []projectRuns `json:"projects"`
 }
 
-// handleTestRuns serves the run list grouped by registered project. It reads
-// from the DB cache (populated by TestRunSyncer) and nudges the syncer so a
-// stale-ish first paint refreshes behind the user.
+// handleTestRuns serves the .gavel/last.json snapshot grouped by registered
+// project.
 func (s *Server) handleTestRuns(w http.ResponseWriter, r *http.Request) {
-	s.notifyTestRunSyncer()
 	w.Header().Set("Content-Type", "application/json")
-	resp := testRunsResponse{Projects: collectTestRuns(r.Context())}
+	projects, err := collectTestRuns()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp := testRunsResponse{Projects: projects}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
@@ -69,16 +70,26 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	s.notifyTestRunSyncer()
-	writeSnap := func() {
-		resp := testRunsResponse{Projects: collectTestRuns(r.Context())}
-		if b, err := json.Marshal(resp); err == nil {
-			fmt.Fprintf(w, "data: %s\n\n", b)
+	writeSnap := func() bool {
+		projects, err := collectTestRuns()
+		if err != nil {
+			payload, _ := json.Marshal(map[string]string{"error": err.Error()})
+			fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
 			flusher.Flush()
+			return false
 		}
+		payload, err := json.Marshal(testRunsResponse{Projects: projects})
+		if err != nil {
+			return false
+		}
+		fmt.Fprintf(w, "data: %s\n\n", payload)
+		flusher.Flush()
+		return true
 	}
 
-	writeSnap()
+	if !writeSnap() {
+		return
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -88,7 +99,9 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 		case <-s.updated:
 		case <-ticker.C:
 		}
-		writeSnap()
+		if !writeSnap() {
+			return
+		}
 	}
 }
 
@@ -98,9 +111,9 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	runID := r.URL.Query().Get("runId")
-	p, ok := GetProject(project)
-	if !ok {
-		http.Error(w, `{"error":"unknown project"}`, http.StatusNotFound)
+	p, err := GetProject(project)
+	if err != nil {
+		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
 	path, err := resolveRunPath(p.ResolvedDir(), runID)
@@ -122,36 +135,29 @@ func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// collectTestRuns groups cached runs under the live project list (so renames /
-// removals reflect immediately). Falls back to a direct .gavel scan when no DB
-// is configured so test-history browsing remains available without caching.
-func collectTestRuns(ctx context.Context) []projectRuns {
-	projects := LoadProjects()
-	store := cache.Shared()
-
+// collectTestRuns groups each project's .gavel/last.json snapshot under the
+// live project list so the tree shows only the current run.
+func collectTestRuns() ([]projectRuns, error) {
+	projects, err := LoadProjects()
+	if err != nil {
+		return nil, err
+	}
 	byDir := map[string][]testRunView{}
-	if store.Disabled() {
-		for _, p := range projects {
-			dir := p.ResolvedDir()
-			infos, err := snapshots.ListRuns(dir, time.Time{})
-			if err != nil {
-				logger.Warnf("scan test runs %s: %v", dir, err)
-			}
-			byDir[dir] = viewsFromInfos(infos)
-		}
-	} else {
-		rows, err := store.ListTestRuns(ctx)
+	for _, project := range projects {
+		dir := project.ResolvedDir()
+		run, err := snapshots.LastRun(dir)
 		if err != nil {
-			logger.Warnf("list test runs: %v", err)
+			logger.Warnf("load last test run %s: %v", dir, err)
+			continue
 		}
-		for _, row := range rows {
-			byDir[row.WorkspaceDir] = append(byDir[row.WorkspaceDir], viewFromRow(row))
+		if run != nil {
+			byDir[dir] = []testRunView{viewFromInfo(*run)}
 		}
 	}
-	return groupRuns(projects, byDir)
+	return groupRuns(projects, byDir), nil
 }
 
-// groupRuns projects the cached runs onto the live project list. Every project
+// groupRuns projects the current runs onto the live project list. Every project
 // gets a non-nil Runs slice: a nil slice marshals to JSON null, which breaks the
 // client's ProjectRuns.runs (typed TestRunView[], non-null) on `.runs.length`.
 func groupRuns(projects []Project, byDir map[string][]testRunView) []projectRuns {
@@ -167,16 +173,22 @@ func groupRuns(projects []Project, byDir map[string][]testRunView) []projectRuns
 	return out
 }
 
-// resolveRunPath maps (workspace dir, runId) to the run-*.json on disk. runId
-// must be a bare per-run file stem (no separators, no traversal) so the result
-// always lands inside <dir>/.gavel. Returns "" when the file is absent, an
-// error when runId is malformed.
+// resolveRunPath maps (workspace dir, runId) to .gavel/last.json or a
+// run-*.json snapshot. Timestamped run IDs must be bare file stems so the
+// result always lands inside <dir>/.gavel.
 func resolveRunPath(dir, runID string) (string, error) {
 	if dir == "" {
 		return "", fmt.Errorf("workspace has no directory")
 	}
 	if runID == "" {
 		return "", fmt.Errorf("runId required")
+	}
+	if runID == snapshots.PointerLast {
+		run, err := snapshots.LastRun(dir)
+		if err != nil || run == nil {
+			return "", err
+		}
+		return run.Path, nil
 	}
 	if strings.ContainsAny(runID, `/\`) || strings.Contains(runID, "..") || !strings.HasPrefix(runID, snapshots.PerRunPrefix) {
 		return "", fmt.Errorf("invalid runId")
@@ -192,53 +204,21 @@ func resolveRunPath(dir, runID string) (string, error) {
 	return path, nil
 }
 
-func viewFromRow(row cache.TestRunCache) testRunView {
-	var frameworks []string
-	if len(row.Frameworks) > 0 {
-		_ = json.Unmarshal(row.Frameworks, &frameworks)
+func viewFromInfo(run snapshots.RunInfo) testRunView {
+	return testRunView{
+		RunID:          run.RunID,
+		Kind:           run.Kind,
+		Started:        run.Started,
+		Ended:          run.Ended,
+		Repo:           run.Repo,
+		SHA:            run.SHA,
+		Frameworks:     run.Frameworks,
+		Passed:         run.Passed,
+		Failed:         run.Failed,
+		Skipped:        run.Skipped,
+		Warned:         run.Warned,
+		Total:          run.Total,
+		LintViolations: run.LintViolations,
+		LintLinters:    run.LintLinters,
 	}
-	v := testRunView{
-		RunID:          row.RunID,
-		Kind:           row.Kind,
-		Repo:           row.Repo,
-		SHA:            row.SHA,
-		Frameworks:     frameworks,
-		Passed:         row.Passed,
-		Failed:         row.Failed,
-		Skipped:        row.Skipped,
-		Warned:         row.Warned,
-		Total:          row.Total,
-		LintViolations: row.LintViolations,
-		LintLinters:    row.LintLinters,
-	}
-	if row.StartedTS > 0 {
-		v.Started = time.Unix(0, row.StartedTS).UTC()
-	}
-	if row.EndedTS > 0 {
-		v.Ended = time.Unix(0, row.EndedTS).UTC()
-	}
-	return v
-}
-
-func viewsFromInfos(infos []snapshots.RunInfo) []testRunView {
-	out := make([]testRunView, 0, len(infos))
-	for _, r := range infos {
-		out = append(out, testRunView{
-			RunID:          r.RunID,
-			Kind:           r.Kind,
-			Started:        r.Started,
-			Ended:          r.Ended,
-			Repo:           r.Repo,
-			SHA:            r.SHA,
-			Frameworks:     r.Frameworks,
-			Passed:         r.Passed,
-			Failed:         r.Failed,
-			Skipped:        r.Skipped,
-			Warned:         r.Warned,
-			Total:          r.Total,
-			LintViolations: r.LintViolations,
-			LintLinters:    r.LintLinters,
-		})
-	}
-	return out
 }

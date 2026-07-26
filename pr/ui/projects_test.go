@@ -13,7 +13,11 @@ func TestProjectsRoundTrip(t *testing.T) {
 	defer func() { projectsPath = orig }()
 
 	// A missing file is the empty state, not an error.
-	if got := LoadProjects(); got != nil {
+	got, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects() on missing file = %v", err)
+	}
+	if got != nil {
 		t.Errorf("LoadProjects() on missing file = %v, want nil", got)
 	}
 
@@ -21,9 +25,14 @@ func TestProjectsRoundTrip(t *testing.T) {
 		{Name: "gavel", Dir: "~/go/src/gavel", Repos: []string{"flanksource/gavel"}},
 		{Name: "infra", Dir: "/srv/infra", Repos: []string{"acme/infra", "acme/charts"}},
 	}
-	SaveProjects(want)
+	if err := SaveProjects(want); err != nil {
+		t.Fatalf("SaveProjects() = %v", err)
+	}
 
-	got := LoadProjects()
+	got, err = LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects() = %v", err)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("LoadProjects() returned %d projects, want %d", len(got), len(want))
 	}
@@ -104,9 +113,9 @@ func TestProjectServiceCRUD(t *testing.T) {
 	if err := UpdateProject("alpha", Project{Name: "renamed", Dir: "/srv/new"}); err != nil {
 		t.Fatalf("UpdateProject = %v, want nil", err)
 	}
-	got, ok := GetProject("alpha")
-	if !ok || got.Dir != "/srv/new" || got.Name != "alpha" {
-		t.Errorf("after update GetProject = %+v, %v; want alpha dir=/srv/new", got, ok)
+	got, err := GetProject("alpha")
+	if err != nil || got.Dir != "/srv/new" || got.Name != "alpha" {
+		t.Errorf("after update GetProject = %+v, %v; want alpha dir=/srv/new", got, err)
 	}
 	if err := UpdateProject("ghost", Project{Dir: "/x"}); !errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("UpdateProject missing err = %v, want ErrProjectNotFound", err)
@@ -118,8 +127,8 @@ func TestProjectServiceCRUD(t *testing.T) {
 	if err := DeleteProject("alpha"); err != nil {
 		t.Fatalf("DeleteProject = %v, want nil", err)
 	}
-	if _, ok := GetProject("alpha"); ok {
-		t.Error("GetProject after delete returned a project, want miss")
+	if _, err := GetProject("alpha"); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("GetProject after delete err = %v, want ErrProjectNotFound", err)
 	}
 	if err := DeleteProject("alpha"); !errors.Is(err, ErrProjectNotFound) {
 		t.Errorf("DeleteProject missing err = %v, want ErrProjectNotFound", err)

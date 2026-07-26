@@ -85,7 +85,6 @@ func TestResolveRunPath(t *testing.T) {
 		"sub/run-x",
 		`run-x\..\secret`,
 		"sha-abc123", // not a per-run file
-		"last",       // pointer file, not a run
 		"run-x/../secret",
 	} {
 		t.Run("rejects "+bad, func(t *testing.T) {

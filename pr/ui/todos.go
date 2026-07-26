@@ -970,7 +970,10 @@ func (s *Server) todoProviderContext(ctx context.Context, source todoSource) (to
 
 // ProviderForProject resolves a stored project to the PostgreSQL runtime.
 func ProviderForProject(ctx context.Context, p Project) (todos.Provider, error) {
-	return openTodoProvider(ctx, p.ResolvedDir())
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return todoruntime.Open(ctx, p.WorkspaceOptions())
 }
 
 // openTodoProvider is the single API/UI native runtime seam. It is a variable so
@@ -979,7 +982,11 @@ var openTodoProvider = func(ctx context.Context, dir string) (todos.Provider, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return todoruntime.Open(ctx, dir)
+	project, err := ProjectForDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return todoruntime.Open(ctx, project.WorkspaceOptions())
 }
 
 var openGlobalTodoProvider = func(ctx context.Context) (todos.GlobalReferenceProvider, error) {
@@ -1066,37 +1073,45 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 func summarizeTodos(items types.TODOS) todoCounts {
 	var counts todoCounts
 	for _, item := range items {
-		counts.Total++
-		switch item.Status {
-		case types.StatusCompleted:
-			counts.Completed++
-		case types.StatusDraft:
-			counts.Open++
-			counts.Draft++
-		case types.StatusInProgress:
-			counts.Open++
-			counts.InProgress++
-		case types.StatusReview:
-			counts.Open++
-			counts.Review++
-		case types.StatusAsk:
-			counts.Open++
-			counts.Ask++
-		case types.StatusFailed:
-			counts.Open++
-			counts.Failed++
-		case types.StatusVerified:
-			counts.Open++
-			counts.Verified++
-		case types.StatusSkipped:
-			counts.Open++
-			counts.Skipped++
-		default:
-			counts.Open++
-			counts.Pending++
-		}
+		addTodoStatus(&counts, item.Status, 1)
 	}
 	return counts
+}
+
+// addTodoStatus folds n todos of one status into counts. It is the single
+// status→bucket mapping: summarizeTodos walks materialized todos one at a time,
+// countProjectTodos folds the provider's SQL aggregate, and neither owns a
+// private copy of the switch.
+func addTodoStatus(counts *todoCounts, status types.Status, n int) {
+	counts.Total += n
+	switch status {
+	case types.StatusCompleted:
+		counts.Completed += n
+	case types.StatusDraft:
+		counts.Open += n
+		counts.Draft += n
+	case types.StatusInProgress:
+		counts.Open += n
+		counts.InProgress += n
+	case types.StatusReview:
+		counts.Open += n
+		counts.Review += n
+	case types.StatusAsk:
+		counts.Open += n
+		counts.Ask += n
+	case types.StatusFailed:
+		counts.Open += n
+		counts.Failed += n
+	case types.StatusVerified:
+		counts.Open += n
+		counts.Verified += n
+	case types.StatusSkipped:
+		counts.Open += n
+		counts.Skipped += n
+	default:
+		counts.Open += n
+		counts.Pending += n
+	}
 }
 
 func validTodoStatus(status types.Status) bool {
@@ -1114,6 +1129,8 @@ func validTodoPriority(priority types.Priority) bool {
 
 func writeTodoError(w http.ResponseWriter, status int, err error) {
 	switch {
+	case errors.Is(err, ErrProjectNotFound):
+		status = http.StatusNotFound
 	case errors.Is(err, database.ErrUnavailable):
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, native.ErrAmbiguousReference), errors.Is(err, native.ErrVersionConflict), errors.Is(err, native.ErrAliasConflict):
@@ -1682,17 +1699,21 @@ func firstTodoSessionID(todoList []*types.TODO) string {
 	return ""
 }
 
-func countProjectTodos(ctx context.Context, dir string) (todoCounts, error) {
-	if dir == "" {
+func countProjectTodos(ctx context.Context, project Project) (todoCounts, error) {
+	if project.ResolvedDir() == "" {
 		return todoCounts{}, nil
 	}
-	nativeProvider, err := openTodoProvider(ctx, dir)
+	nativeProvider, err := ProviderForProject(ctx, project)
 	if err != nil {
 		return todoCounts{}, err
 	}
-	items, err := nativeProvider.List(ctx, todos.DiscoveryFilters{})
+	byStatus, err := nativeProvider.CountByStatus(ctx)
 	if err != nil {
 		return todoCounts{}, err
 	}
-	return summarizeTodos(items), nil
+	var counts todoCounts
+	for status, n := range byStatus {
+		addTodoStatus(&counts, status, n)
+	}
+	return counts, nil
 }

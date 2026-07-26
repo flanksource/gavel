@@ -3,15 +3,15 @@ import { emptyFilters, type Filters, type FilterMode } from './components/Filter
 
 export type ExportFormat = 'json' | 'md';
 
-// Tab is the top-level view, encoded as the first path segment (/prs, /todos,
-// /activity, /tests). The prs, todos, and tests tabs carry a selection in the
-// path (/prs/{repo}/{number}, /todos/{guid}, /tests/{project}/{runId}); filters
-// only apply to the prs tab.
-export type Tab = 'prs' | 'todos' | 'activity' | 'tests';
+// Tab is the top-level view, encoded as the first path segment. PRs, projects,
+// todos, and tasks carry their selection in the path; filters only apply to PRs.
+export type Tab = 'prs' | 'projects' | 'todos' | 'activity' | 'tasks';
 
 export interface RouteState {
   tab: Tab;
   selectedPath: string;
+  projectDiffPath: string;
+  projectRunId: string;
   filters: Filters;
 }
 
@@ -41,11 +41,15 @@ export function parseRoute(location: Location): RouteState {
   const trimmed = location.pathname.replace(/^\/+|\/+$/g, '');
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
   const tab: Tab =
-    segments[0] === 'todos' || segments[0] === 'activity' || segments[0] === 'tests'
+    segments[0] === 'projects' || segments[0] === 'todos' || segments[0] === 'activity' || segments[0] === 'tasks'
       ? segments[0]
       : 'prs';
   let selectedPath = '';
-  if ((tab === 'prs' || tab === 'todos' || tab === 'tests') && segments.length > 1) {
+  let projectRunId = '';
+  if (tab === 'projects' && segments.length > 1) {
+    selectedPath = segments[1];
+    if (segments.length === 4 && segments[2] === 'runs') projectRunId = segments[3];
+  } else if ((tab === 'prs' || tab === 'todos' || tab === 'tasks') && segments.length > 1) {
     selectedPath = segments.slice(1).join('/');
   }
 
@@ -53,6 +57,8 @@ export function parseRoute(location: Location): RouteState {
   return {
     tab,
     selectedPath,
+    projectDiffPath: tab === 'projects' && !projectRunId ? params.get('diff') ?? '' : '',
+    projectRunId,
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -64,7 +70,10 @@ export function parseRoute(location: Location): RouteState {
 
 export function buildRoute(state: RouteState): string {
   const segments: string[] = [state.tab];
-  if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'tests') && state.selectedPath) {
+  if (state.tab === 'projects' && state.selectedPath) {
+    segments.push(encodeURIComponent(state.selectedPath));
+    if (state.projectRunId) segments.push('runs', encodeURIComponent(state.projectRunId));
+  } else if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'tasks') && state.selectedPath) {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 
@@ -77,6 +86,8 @@ export function buildRoute(state: RouteState): string {
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
     if (Object.keys(repos).length) params.set('repos', buildFacet(repos));
     if (Object.keys(authors).length) params.set('authors', buildFacet(authors));
+  } else if (state.tab === 'projects' && !state.projectRunId && state.projectDiffPath) {
+    params.set('diff', state.projectDiffPath);
   }
 
   const query = params.toString();
@@ -102,5 +113,5 @@ export function findPRByRoutePath(prs: PRItem[], target: string): PRItem | null 
 }
 
 export function emptyRouteState(): RouteState {
-  return { tab: 'prs', selectedPath: '', filters: emptyFilters() };
+  return { tab: 'prs', selectedPath: '', projectDiffPath: '', projectRunId: '', filters: emptyFilters() };
 }

@@ -57,7 +57,11 @@ export interface Project {
   dir: string;
   repos: string[];
   hasProcfile?: boolean;
+  // Absent when this workspace's todo store could not be reached — see error.
+  // A project is still listed (and its processes still managed) in that case, so
+  // never read a missing todoCounts as "zero todos".
   todoCounts?: TodoCounts;
+  error?: string;
 }
 
 export type TodoStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'ask' | 'completed' | 'failed' | 'unverified' | 'verified' | 'skipped';
@@ -592,12 +596,18 @@ export interface ProcProcess {
   restarts: number;
   exitCode?: number;
   logFile: string;
+  taskRunId?: string;
   ports?: number[];
   // Live resource sample of the process group. openFiles is -1 where the
   // platform cannot report it. All omitted/zero for a stopped process.
   cpuPercent?: number;
   memoryRss?: number;
+  memoryVms?: number;
   openFiles?: number;
+  peakCpuPercent?: number;
+  peakMemoryRss?: number;
+  peakMemoryVms?: number;
+  peakOpenFiles?: number;
   // Per-process breakdown of the process group (leader + descendants).
   tree?: ProcNode[];
 }
@@ -607,8 +617,11 @@ export interface ProcNode {
   pid: number;
   ppid: number;
   command: string;
+  status?: string;
+  root?: boolean;
   cpuPercent?: number;
   memoryRss?: number;
+  memoryVms?: number;
   openFiles?: number;
 }
 

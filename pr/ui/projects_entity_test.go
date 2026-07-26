@@ -14,7 +14,7 @@ import (
 func stubProjectTodoCounts(t *testing.T) {
 	t.Helper()
 	original := projectTodoCounts
-	projectTodoCounts = func(context.Context, string) (todoCounts, error) {
+	projectTodoCounts = func(context.Context, Project) (todoCounts, error) {
 		return todoCounts{}, nil
 	}
 	t.Cleanup(func() { projectTodoCounts = original })
@@ -52,8 +52,8 @@ func TestHandleProjectsIgnoresLegacyTodoProvider(t *testing.T) {
 
 	originalCounts := projectTodoCounts
 	var countedDir string
-	projectTodoCounts = func(_ context.Context, dir string) (todoCounts, error) {
-		countedDir = dir
+	projectTodoCounts = func(_ context.Context, project Project) (todoCounts, error) {
+		countedDir = project.ResolvedDir()
 		return todoCounts{Total: 14, Open: 12}, nil
 	}
 	t.Cleanup(func() { projectTodoCounts = originalCounts })
@@ -114,7 +114,11 @@ func TestHandleProjectUpdate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	p, ok := projectByName(LoadProjects(), "gavel")
+	projects, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects = %v", err)
+	}
+	p, ok := projectByName(projects, "gavel")
 	if !ok || p.Dir != "/new" {
 		t.Errorf("after PUT, project = %+v, want dir=/new", p)
 	}
@@ -140,7 +144,11 @@ func TestHandleProjectDelete(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204; body = %q", rec.Code, rec.Body.String())
 	}
-	if _, ok := projectByName(LoadProjects(), "gavel"); ok {
+	projects, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects = %v", err)
+	}
+	if _, ok := projectByName(projects, "gavel"); ok {
 		t.Error("DELETE did not remove the project")
 	}
 

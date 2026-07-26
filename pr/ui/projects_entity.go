@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -31,18 +33,53 @@ func statusForProjectErr(err error) int {
 // directory's current contents, and todo counts are scoped to the workspace.
 func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
 	dir := p.ResolvedDir()
-	counts, err := projectTodoCounts(ctx, dir)
-	if err != nil {
-		return projectInfo{}, err
-	}
-	return projectInfo{
+	info := projectInfo{
 		Name:        p.Name,
 		Dir:         dir,
 		Repos:       p.Repos,
 		HasProcfile: dir != "" && procfile.Find(dir, "") != "",
 		TodoBackend: "db",
-		TodoCounts:  counts,
-	}, nil
+	}
+	counts, err := projectTodoCounts(ctx, p)
+	if err != nil {
+		return info, err
+	}
+	info.TodoCounts = &counts
+	return info, nil
+}
+
+// projectInfoConcurrency bounds the parallel per-project TODO count lookups.
+// Each one is a single grouped query, so a small fan-out hides the round-trip
+// latency without opening a connection per configured project.
+const projectInfoConcurrency = 4
+
+// listProjectInfos resolves every project's wire shape concurrently while
+// preserving projects.json order.
+//
+// A project whose TODO counts cannot be loaded reports the failure on its own
+// entry instead of failing the list: the projects payload also drives Processes
+// and PRs, so one unreachable workspace must not blank the whole dashboard. The
+// failure stays loud — logged, and visible in the response.
+func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
+	out := make([]projectInfo, len(ps))
+	slots := make(chan struct{}, projectInfoConcurrency)
+	var wg sync.WaitGroup
+	for i, p := range ps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			info, err := newProjectInfo(ctx, p)
+			if err != nil {
+				logger.Errorf("load project %q native TODOs: %v", p.Name, err)
+				info.Error = err.Error()
+			}
+			out[i] = info
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 // handleProjects is the collection endpoint of the projects entity:
@@ -54,16 +91,12 @@ func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		ps := LoadProjects()
-		out := make([]projectInfo, 0, len(ps))
-		for _, p := range ps {
-			info, err := newProjectInfo(r.Context(), p)
-			if err != nil {
-				writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("load project %q native TODOs: %w", p.Name, err))
-				return
-			}
-			out = append(out, info)
+		ps, err := LoadProjects()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
+		out := listProjectInfos(r.Context(), ps)
 		if wantsClicky(r) {
 			writeProjectsClicky(w, out)
 			return
@@ -95,9 +128,9 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	switch r.Method {
 	case http.MethodGet:
-		p, ok := GetProject(name)
-		if !ok {
-			respondError(w, http.StatusNotFound, fmt.Sprintf("unknown project %q", name))
+		p, err := GetProject(name)
+		if err != nil {
+			respondError(w, statusForProjectErr(err), err.Error())
 			return
 		}
 		info, err := newProjectInfo(r.Context(), p)

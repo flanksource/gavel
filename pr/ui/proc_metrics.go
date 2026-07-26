@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/metrics"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -37,7 +38,12 @@ func procRunKey(project string, ps procfile.ProcState) string {
 // workspace header gauges read. Recording is best-effort instrumentation.
 func (s *Server) sampleProcMetrics() {
 	now := time.Now()
-	for _, p := range LoadProjects() {
+	projects, err := LoadProjects()
+	if err != nil {
+		logger.Errorf("sample process metrics: %v", err)
+		return
+	}
+	for _, p := range projects {
 		st := projectStatus(p)
 		if !st.Running {
 			continue

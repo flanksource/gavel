@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flanksource/commons/logger"
+	todoruntime "github.com/flanksource/gavel/todos/runtime"
 )
 
 // Project CRUD errors. Callers map these to a transport status (HTTP code / CLI
@@ -32,36 +32,36 @@ type Project struct {
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
 
 // LoadProjects reads ~/.config/gavel/projects.json. A missing file is the
-// normal "no projects configured yet" state and returns nil with no error,
-// mirroring LoadSettings. A present-but-unparseable file is logged and treated
-// as empty so a corrupt file never wedges the UI.
-func LoadProjects() []Project {
+// normal "no projects configured yet" state. Read and parse failures name the
+// exact catalog file instead of being mistaken for an empty configuration.
+func LoadProjects() ([]Project, error) {
 	data, err := os.ReadFile(projectsPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read gavel projects file %s: %w", projectsPath, err)
 	}
 	var ps []Project
 	if err := json.Unmarshal(data, &ps); err != nil {
-		logger.Warnf("failed to parse %s: %v", projectsPath, err)
-		return nil
+		return nil, fmt.Errorf("parse gavel projects file %s: %w", projectsPath, err)
 	}
-	return ps
+	return ps, nil
 }
 
 // SaveProjects writes the project list back to ~/.config/gavel/projects.json.
-func SaveProjects(ps []Project) {
+func SaveProjects(ps []Project) error {
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
-		logger.Warnf("failed to create config dir: %v", err)
-		return
+		return fmt.Errorf("create gavel projects directory for %s: %w", projectsPath, err)
 	}
 	data, err := json.MarshalIndent(ps, "", "  ")
 	if err != nil {
-		logger.Warnf("failed to marshal projects: %v", err)
-		return
+		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}
 	if err := os.WriteFile(projectsPath, data, 0o644); err != nil {
-		logger.Warnf("failed to write %s: %v", projectsPath, err)
+		return fmt.Errorf("write gavel projects file %s: %w", projectsPath, err)
 	}
+	return nil
 }
 
 // ResolvedDir expands a leading "~" in Dir to the user's home directory so the
@@ -74,6 +74,16 @@ func (p Project) ResolvedDir() string {
 		}
 	}
 	return dir
+}
+
+// WorkspaceOptions projects the catalog record into the native TODO runtime
+// without giving the runtime a second configuration source.
+func (p Project) WorkspaceOptions() todoruntime.WorkspaceOptions {
+	return todoruntime.WorkspaceOptions{
+		Name:         p.Name,
+		RootPath:     p.ResolvedDir(),
+		Repositories: append([]string(nil), p.Repos...),
+	}
 }
 
 // ProjectForRepo returns the first project whose Repos list contains repo.
@@ -123,8 +133,50 @@ func deleteProject(ps []Project, name string) ([]Project, bool) {
 }
 
 // GetProject returns the stored project with the given name.
-func GetProject(name string) (Project, bool) {
-	return projectByName(LoadProjects(), name)
+func GetProject(name string) (Project, error) {
+	projects, err := LoadProjects()
+	if err != nil {
+		return Project{}, err
+	}
+	if project, ok := projectByName(projects, name); ok {
+		return project, nil
+	}
+	return Project{}, fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
+}
+
+// ProjectForDir resolves dir to the most-specific configured project root.
+func ProjectForDir(dir string) (Project, error) {
+	absolute, err := filepath.Abs(strings.TrimSpace(dir))
+	if err != nil {
+		return Project{}, fmt.Errorf("resolve project directory %q using %s: %w", dir, projectsPath, err)
+	}
+	projects, err := LoadProjects()
+	if err != nil {
+		return Project{}, err
+	}
+	var match Project
+	matchLength := -1
+	for _, project := range projects {
+		root, err := filepath.Abs(project.ResolvedDir())
+		if err != nil {
+			return Project{}, fmt.Errorf("resolve project %q directory %q from %s: %w", project.Name, project.Dir, projectsPath, err)
+		}
+		relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(absolute))
+		if err != nil {
+			return Project{}, fmt.Errorf("compare project %q directory %q using %s: %w", project.Name, root, projectsPath, err)
+		}
+		if relative != "." && (relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+			continue
+		}
+		if len(root) > matchLength {
+			match = project
+			matchLength = len(root)
+		}
+	}
+	if matchLength >= 0 {
+		return match, nil
+	}
+	return Project{}, fmt.Errorf("%w: project for directory %q was not found in %s", ErrProjectNotFound, filepath.Clean(absolute), projectsPath)
 }
 
 // CreateProject persists a new project, failing if required fields are missing
@@ -133,38 +185,44 @@ func CreateProject(p Project) error {
 	if p.Name == "" || p.Dir == "" {
 		return ErrProjectInvalid
 	}
-	ps := LoadProjects()
+	ps, err := LoadProjects()
+	if err != nil {
+		return err
+	}
 	if _, ok := projectByName(ps, p.Name); ok {
 		return fmt.Errorf("%w: %q", ErrProjectExists, p.Name)
 	}
-	SaveProjects(append(ps, p))
-	return nil
+	return SaveProjects(append(ps, p))
 }
 
 // UpdateProject replaces the named project. The name is the entity id, so the
 // path/argument is authoritative and the body cannot rename it. Missing project
 // → ErrProjectNotFound; empty dir → ErrProjectInvalid.
 func UpdateProject(name string, p Project) error {
-	ps := LoadProjects()
+	ps, err := LoadProjects()
+	if err != nil {
+		return err
+	}
 	if _, ok := projectByName(ps, name); !ok {
-		return fmt.Errorf("%w: %q", ErrProjectNotFound, name)
+		return fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
 	}
 	p.Name = name
 	if p.Dir == "" {
 		return ErrProjectInvalid
 	}
-	SaveProjects(upsertProject(ps, p))
-	return nil
+	return SaveProjects(upsertProject(ps, p))
 }
 
 // DeleteProject removes the named project, returning ErrProjectNotFound if it
 // does not exist.
 func DeleteProject(name string) error {
-	ps := LoadProjects()
+	ps, err := LoadProjects()
+	if err != nil {
+		return err
+	}
 	next, ok := deleteProject(ps, name)
 	if !ok {
-		return fmt.Errorf("%w: %q", ErrProjectNotFound, name)
+		return fmt.Errorf("%w: %q was not found in %s", ErrProjectNotFound, name, projectsPath)
 	}
-	SaveProjects(next)
-	return nil
+	return SaveProjects(next)
 }

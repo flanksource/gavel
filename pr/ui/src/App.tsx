@@ -4,8 +4,8 @@ import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { SplitPane, AppShell, Button } from '@flanksource/clicky-ui/components';
+import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ActivityView } from './components/ActivityView';
-import { TestsView } from './components/TestsView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
@@ -16,8 +16,9 @@ import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
-import { ProjectsBar } from './components/ProjectsBar';
+import { ProjectsView } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
+import { ProjectsPlaceholder } from './components/ProjectsPlaceholder';
 import { ThemeToggle } from './components/ThemeToggle';
 import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
@@ -38,7 +39,7 @@ import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useIsMobile } from './useIsMobile';
-import { UiActivity, UiArrowLeft, UiBeaker, UiCheck, UiClose, UiCog, UiCopy, UiGitPr, UiJson, UiLink, UiMarkdown } from '@flanksource/clicky-ui/icons';
+import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import { Spinner } from './icons/Spinner';
@@ -169,7 +170,7 @@ function mergePRItemFromDetail(pr: PRItem, info: PRInfo): PRItem {
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
-    : { tab: 'prs', selectedPath: '', filters: emptyFilters() };
+    : { tab: 'prs', selectedPath: '', projectDiffPath: '', projectRunId: '', filters: emptyFilters() };
 
   // Hydrate org/search config and filters from localStorage. URL query params
   // (if present) win for filters so deep links still work.
@@ -195,6 +196,8 @@ export function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [filters, setFilters] = useState<Filters>(initialFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
+  const [projectDiffPath, setProjectDiffPath] = useState(initialRoute.projectDiffPath);
+  const [projectRunId, setProjectRunId] = useState(initialRoute.projectRunId);
   const [config, setConfig] = useState<SearchConfig>(initialConfig);
   const [paused, setPaused] = useState(false);
   const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
@@ -205,6 +208,10 @@ export function App() {
   const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectError, setProjectError] = useState('');
+  // False until /api/projects has resolved once, success or failure. Every
+  // "no projects/workspaces configured" empty state is gated on it: before the
+  // first response an empty list means "not loaded yet", not "nothing here".
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
@@ -249,13 +256,15 @@ export function App() {
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, filters }),
-    [activeTab, selectedPath, filters],
+    () => ({ tab: activeTab, selectedPath, projectDiffPath, projectRunId, filters }),
+    [activeTab, selectedPath, projectDiffPath, projectRunId, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
     setActiveTab(next.tab);
     setSelectedPath(next.selectedPath);
+    setProjectDiffPath(next.projectDiffPath);
+    setProjectRunId(next.projectRunId);
     setFilters(next.filters);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -268,21 +277,31 @@ export function App() {
   // Switching the top-level tab navigates (so /todos, /activity are linkable and
   // back/forward works); the PR selection is dropped when leaving the prs tab.
   const changeTab = useCallback((next: Tab) => {
-    commitRoute({ tab: next, selectedPath: '', filters });
+    commitRoute({ tab: next, selectedPath: '', projectDiffPath: '', projectRunId: '', filters });
   }, [commitRoute, filters]);
 
   // Selecting a todo encodes its ref in the path (/todos/{guid}) so a todo is
   // deep-linkable and back/forward works, mirroring PR selection. An empty id
   // clears the selection back to /todos.
   const navigateTodo = useCallback((id: string) => {
-    commitRoute({ tab: 'todos', selectedPath: id, filters });
+    commitRoute({ tab: 'todos', selectedPath: id, projectDiffPath: '', projectRunId: '', filters });
   }, [commitRoute, filters]);
 
-  // Selecting a test run encodes "{project}/{runId}" in the path
-  // (/tests/{project}/{runId}) so a run is deep-linkable; empty clears to /tests.
-  const navigateTestRun = useCallback((path: string) => {
-    commitRoute({ tab: 'tests', selectedPath: path, filters });
+  const navigateTask = useCallback((id: string | null) => {
+    commitRoute({ tab: 'tasks', selectedPath: id ?? '', projectDiffPath: '', projectRunId: '', filters });
   }, [commitRoute, filters]);
+
+  const navigateProject = useCallback((name: string) => {
+    commitRoute({ tab: 'projects', selectedPath: name, projectDiffPath: '', projectRunId: '', filters });
+  }, [commitRoute, filters]);
+
+  const navigateProjectRun = useCallback((project: string, runId: string) => {
+    commitRoute({ tab: 'projects', selectedPath: project, projectDiffPath: '', projectRunId: runId, filters });
+  }, [commitRoute, filters]);
+
+  const navigateProjectDiff = useCallback((path: string) => {
+    commitRoute({ tab: 'projects', selectedPath, projectDiffPath: path, projectRunId: '', filters });
+  }, [commitRoute, filters, selectedPath]);
 
   // The Todos data layer is mounted permanently so its chrome can live in the
   // AppShell's body slots, but only fetches while the Todos tab is active — or
@@ -310,6 +329,8 @@ export function App() {
       const next = parseRoute(window.location);
       setActiveTab(next.tab);
       setSelectedPath(next.selectedPath);
+      setProjectDiffPath(next.projectDiffPath);
+      setProjectRunId(next.projectRunId);
       setFilters(next.filters);
     };
     window.addEventListener('popstate', onPopState);
@@ -370,7 +391,7 @@ export function App() {
     // The menubar layout (native webview or mobile) drives PR selection through
     // its own local state, not the route, so skip route→selection reconciliation
     // there and let onSelect/onBack own it.
-    if (useMenubarLayout || isProcessesPage) return;
+    if (useMenubarLayout || isProcessesPage || activeTab !== 'prs') return;
     if (!selectedPath) {
       if (selected) { setSelected(null); setDetail(null); }
       return;
@@ -385,7 +406,7 @@ export function App() {
     if (direct) {
       loadPR(direct);
     }
-  }, [selectedPath, prs]);
+  }, [activeTab, selectedPath, prs]);
 
   // Resolves true once the list has been applied, false on failure, so the mount
   // loader below can retry. A failed refetch keeps the last good list rather than
@@ -411,7 +432,8 @@ export function App() {
       .catch(err => {
         setProjectError(err instanceof Error ? err.message : 'Load projects failed');
         return false;
-      });
+      })
+      .finally(() => setProjectsLoaded(true));
   }, []);
 
   const fetchProcStatus = useCallback(() => {
@@ -444,16 +466,19 @@ export function App() {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [fetchProjects]);
 
-  // Stream process status over SSE while projects are configured and the streams
-  // are active (always in the menu-bar; only while visible on the desktop — see
-  // streamsActive) — this is the sole driver of the sidebar's per-repo proc
-  // badges and is intentionally decoupled from the GitHub PR poller. The server
-  // pushes a fresh frame on connect and then drives the cadence (faster while a
-  // process is starting/restarting), replacing the old client-side poll. On the
-  // desktop, closing on hide lets the backend stop sampling; reopening on show
-  // pushes an immediate frame.
+  // Stream process status over SSE while the streams are active (always in the
+  // menu-bar; only while visible on the desktop — see streamsActive) — this is
+  // the sole driver of the sidebar's per-repo proc badges and is intentionally
+  // decoupled from the GitHub PR poller. The server pushes a fresh frame on
+  // connect and then drives the cadence (faster while a process is
+  // starting/restarting), replacing the old client-side poll. On the desktop,
+  // closing on hide lets the backend stop sampling; reopening on show pushes an
+  // immediate frame.
+  //
+  // Deliberately NOT gated on projects.length: the stream resolves the project
+  // list server-side and is cheap, so Processes populates on its own rather than
+  // waiting behind /api/projects' per-workspace todo counts.
   useEffect(() => {
-    if (projects.length === 0) { setProcStatus({}); return; }
     if (!streamsActive) return;
     const es = new EventSource('/api/proc/status/stream');
     es.addEventListener('message', (e: MessageEvent) => {
@@ -461,7 +486,7 @@ export function App() {
     });
     // EventSource auto-reconnects; proc status is best-effort, so swallow errors.
     return () => { es.close(); };
-  }, [projects.length, streamsActive]);
+  }, [streamsActive]);
 
   const projectsByRepo = useMemo(() => {
     const m: Record<string, Project> = {};
@@ -661,17 +686,17 @@ export function App() {
   // the chosen item — switching tabs as needed.
   const todoEntries = useMemo(() => flattenTodos(todos.workspaces, todos.byDir), [todos.workspaces, todos.byDir]);
   function selectPRFromPalette(pr: PRItem) {
-    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, filters });
+    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, projectDiffPath: '', projectRunId: '', filters });
     loadPR(pr);
   }
   function selectTodoFromPalette(entry: TodoEntry) {
-    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, filters });
+    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, projectDiffPath: '', projectRunId: '', filters });
   }
   function openUUIDFromPalette(uuid: string) {
     // Keep the pasted identity in the URL. The global detail endpoint resolves
     // Todo UUIDs directly and Captain/provider session UUIDs through durable
     // prompt-run links, so reload/back navigation preserves the same lookup.
-    commitRoute({ tab: 'todos', selectedPath: uuid, filters });
+    commitRoute({ tab: 'todos', selectedPath: uuid, projectDiffPath: '', projectRunId: '', filters });
   }
 
   if (useMenubarLayout) {
@@ -683,6 +708,8 @@ export function App() {
         detailLoading={detailLoading}
         unread={unread}
         projects={projects}
+        projectsLoaded={projectsLoaded}
+        projectError={projectError}
         projectsByRepo={projectsByRepo}
         procStatus={procStatus}
         syncStatus={syncStatus}
@@ -700,6 +727,8 @@ export function App() {
     return (
       <ProcessesPage
         projects={projects}
+        projectsLoaded={projectsLoaded}
+        projectError={projectError}
         procStatus={procStatus}
         onProcChanged={onProcChanged}
       />
@@ -722,6 +751,7 @@ export function App() {
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
+            <TaskManagerButton basePath="/api/v1" />
             <ProcessManager projects={projects} procStatus={procStatus} onProcChanged={onProcChanged} />
             <OrgChooser config={config} onChange={updateConfig} />
             <StatusIndicator
@@ -771,17 +801,14 @@ export function App() {
             />
           ) : undefined
         }
-        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} /> : undefined}
+        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} /> : undefined}
         bodySplit={38}
         contentClassName="overflow-hidden"
       >
         {activeTab === 'prs' ? (
           <SplitPane
             left={
-              <>
-                <ProjectsBar projects={projects} procStatus={procStatus} onChanged={onProcChanged} onAdd={openAdd} onSettings={openProjectSettings} />
-                <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
-              </>
+              <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
             }
             right={
               selected ? (
@@ -796,6 +823,20 @@ export function App() {
               )
             }
           />
+        ) : activeTab === 'projects' ? (
+          <ProjectsView
+            projects={projects}
+            procStatus={procStatus}
+            selectedName={selectedPath}
+            selectedRunId={projectRunId}
+            diffPath={projectDiffPath}
+            onSelect={navigateProject}
+            onSelectRun={navigateProjectRun}
+            onDiffPathChange={navigateProjectDiff}
+            onChanged={onProcChanged}
+            onAdd={openAdd}
+            onSettings={openProjectSettings}
+          />
         ) : activeTab === 'todos' ? (
           <div className="flex h-full min-h-0 flex-col">
             {projectError && (
@@ -808,8 +849,10 @@ export function App() {
               <TodoDetailPane todos={todos} />
             </div>
           </div>
-        ) : activeTab === 'tests' ? (
-          <TestsView selectedPath={selectedPath} onSelect={navigateTestRun} />
+        ) : activeTab === 'tasks' ? (
+          <div className="h-full overflow-y-auto p-4">
+            <TaskManager basePath="/api/v1" selectedId={selectedPath || undefined} onSelectRun={navigateTask} />
+          </div>
         ) : (
           <ActivityView />
         )}
@@ -842,10 +885,14 @@ export function App() {
 
 function ProcessesPage({
   projects,
+  projectsLoaded,
+  projectError,
   procStatus,
   onProcChanged,
 }: {
   projects: Project[];
+  projectsLoaded: boolean;
+  projectError?: string;
   procStatus: Record<string, ProcStatus>;
   onProcChanged: () => void;
 }) {
@@ -888,7 +935,12 @@ function ProcessesPage({
             ))}
           </div>
         ) : (
-          <div className="py-10 text-center text-sm text-muted-foreground">No projects configured</div>
+          <ProjectsPlaceholder
+            loaded={projectsLoaded}
+            error={projectError}
+            emptyText="No projects configured"
+            className="py-10 text-center text-sm text-muted-foreground"
+          />
         )}
       </main>
     </div>
@@ -935,6 +987,8 @@ function MenubarView({
   detailLoading,
   unread,
   projects,
+  projectsLoaded,
+  projectError,
   projectsByRepo,
   procStatus,
   syncStatus,
@@ -951,6 +1005,8 @@ function MenubarView({
   detailLoading: boolean;
   unread: Record<string, boolean>;
   projects: Project[];
+  projectsLoaded: boolean;
+  projectError?: string;
   projectsByRepo: Record<string, Project>;
   procStatus: Record<string, ProcStatus>;
   syncStatus: Record<string, PRSyncStatus>;
@@ -1034,7 +1090,13 @@ function MenubarView({
             </div>
           </div>
         </div>
-        <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+        {/* A failed project load is otherwise invisible in the menubar: every tab
+            just renders empty. Surface it here, ahead of the PR poll's clock. */}
+        {projectError ? (
+          <div role="alert" className="truncate text-[11px] text-destructive">{projectError}</div>
+        ) : (
+          <div className="text-[11px] text-muted-foreground tabular-nums">{error || fetched}</div>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
@@ -1072,10 +1134,15 @@ function MenubarView({
               ))}
             </div>
           ) : (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">No projects configured</div>
+            <ProjectsPlaceholder
+              loaded={projectsLoaded}
+              error={projectError}
+              emptyText="No projects configured"
+              className="px-3 py-6 text-center text-xs text-muted-foreground"
+            />
           )
         ) : menubarTab === 'todos' ? (
-          <MenubarTodos projects={projects} />
+          <MenubarTodos projects={projects} projectsLoaded={projectsLoaded} projectError={projectError} />
         ) : (
           <PRList
             prs={prs}
@@ -1130,8 +1197,9 @@ function MenubarTab({ label, icon: Icon, dot, count, badge, active, onClick }: {
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string; icon: ComponentType<IconProps> }[] = [
     { id: 'prs', label: 'PRs', icon: UiGitPr },
+    { id: 'projects', label: 'Projects', icon: UiFolderGit },
     { id: 'todos', label: 'Todos', icon: UiCheck },
-    { id: 'tests', label: 'Tests', icon: UiBeaker },
+    { id: 'tasks', label: 'Tasks', icon: UiListChecks },
     { id: 'activity', label: 'Activity', icon: UiActivity },
   ];
   return (

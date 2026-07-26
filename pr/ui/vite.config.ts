@@ -31,6 +31,7 @@ const uiDate = new Date().toISOString();
 // linked symlink otherwise serves stale built output. Only the JS entry points
 // are redirected; `styles.css` keeps resolving to the package's generated CSS.
 const clickySrc = resolve(here, '../../../clicky-ui/packages/ui/src');
+const gavelTestRunnerHooks = resolve(here, '../../testrunner/ui/src/hooks.ts');
 const clickySubpaths = ['components', 'data', 'icons', 'hooks', 'ai', 'chat'];
 
 export default defineConfig(({ command }) => {
@@ -54,6 +55,7 @@ export default defineConfig(({ command }) => {
       dedupe: ['react', 'react-dom', '@tanstack/react-query'],
       alias: [
         ...clickyAliases,
+        { find: '@flanksource/gavel/testrunner/hooks', replacement: gavelTestRunnerHooks },
         { find: /^react$/, replacement: require.resolve('react') },
         { find: /^react-dom$/, replacement: require.resolve('react-dom') },
         { find: /^react-dom\/client$/, replacement: require.resolve('react-dom/client') },

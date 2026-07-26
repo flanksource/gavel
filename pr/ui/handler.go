@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/metrics"
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/github/cache"
 	"github.com/flanksource/gavel/prwatch"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
 type SearchConfig struct {
@@ -49,9 +51,12 @@ type Server struct {
 	detailSyncer *DetailSyncer
 
 	// testRunSyncer scans registered workspaces' .gavel/run-*.json files into
-	// the DB cache that the Tests tab is served from. nil until wired by the
+	// the DB cache that the Projects tree is served from. nil until wired by the
 	// CLI; the read endpoints degrade to a direct filesystem scan without it.
-	testRunSyncer *TestRunSyncer
+	testRunSyncer  *TestRunSyncer
+	projectActions *projectActionRegistry
+	projectRuns    *testui.MultiServer
+	taskSource     *supervisorTaskSource
 
 	// gavelCache stores the last computed GavelResultsSummary per PR
 	// (keyed by "repo#number"). Populated as a side-effect of detail
@@ -102,7 +107,13 @@ type Server struct {
 	// fixtureSchemaProvider returns the same schema document printed by
 	// `gavel fixtures --schema`, injected by cmd/gavel so pr/ui does not
 	// duplicate the CLI-owned fixture schema builder.
-	fixtureSchemaProvider func() (any, error)
+	fixtureSchemaProvider        func() (any, error)
+	projectActionOptionsProvider ProjectActionOptionsProvider
+
+	// commitQueues holds one serialized commit queue per project so several
+	// selections can be committed back-to-back without overlapping git index
+	// writes. See project_commit_queue.go.
+	commitQueues *commitQueueRegistry
 
 	todoRuns todoRunRegistry
 }
@@ -197,6 +208,19 @@ func (s *Server) DetailCache() *DetailCache {
 
 func (s *Server) SetFixtureSchemaProvider(provider func() (any, error)) {
 	s.fixtureSchemaProvider = provider
+}
+
+func (s *Server) SetProjectActionOptionsProvider(provider ProjectActionOptionsProvider) {
+	s.projectActionOptionsProvider = provider
+}
+
+func (s *Server) projectRunServer() *testui.MultiServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.projectRuns == nil {
+		s.projectRuns = testui.NewMultiServer()
+	}
+	return s.projectRuns
 }
 
 func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
@@ -449,6 +473,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("PUT /api/projects/{name}", s.handleProjectByName)
 	mux.HandleFunc("DELETE /api/projects/{name}", s.handleProjectByName)
+	mux.HandleFunc("GET /api/projects/{name}/status", s.handleProjectStatus)
+	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
+	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
+	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
+	mux.HandleFunc("DELETE /api/projects/{name}/commit-queue/{id}", s.handleCommitQueueEntry)
+	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
+	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
+	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
 	mux.HandleFunc("/api/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/proc/status", s.handleProcStatus)
 	mux.HandleFunc("/api/proc/status/stream", s.handleProcStatusStream)
@@ -460,6 +492,11 @@ func (s *Server) Handler() http.Handler {
 	// Serves GET /api/proc/metrics/{id}?since= as a timeseries the process
 	// dashboard gauges poll; {id} is one URL-encoded segment (see procRunKey).
 	metrics.RegisterRoutes(mux, s.procMetrics, "/api/proc")
+	taskSource := s.taskSource
+	if taskSource == nil {
+		taskSource = newSupervisorTaskSource()
+	}
+	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
 	registerPromptRoutes(mux)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux

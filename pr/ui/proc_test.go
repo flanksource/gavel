@@ -32,7 +32,9 @@ func withProject(t *testing.T, name, repo, procfileBody string) string {
 	orig := projectsPath
 	projectsPath = filepath.Join(t.TempDir(), "projects.json")
 	t.Cleanup(func() { projectsPath = orig })
-	SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}})
+	if err := SaveProjects([]Project{{Name: name, Dir: dir, Repos: []string{repo}}}); err != nil {
+		t.Fatalf("SaveProjects: %v", err)
+	}
 	return dir
 }
 
@@ -63,7 +65,11 @@ func TestHandleProjectsCreate(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST status = %d, want 201; body = %q", rec.Code, rec.Body.String())
 	}
-	if _, ok := projectByName(LoadProjects(), "infra"); !ok {
+	projects, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+	if _, ok := projectByName(projects, "infra"); !ok {
 		t.Error("POST /api/projects did not persist the new project")
 	}
 }
@@ -77,7 +83,11 @@ func TestHandleProjectsCreateConflict(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST duplicate name status = %d, want 409; body = %q", rec.Code, rec.Body.String())
 	}
-	if p, _ := projectByName(LoadProjects(), "gavel"); p.Dir == "/elsewhere" {
+	projects, err := LoadProjects()
+	if err != nil {
+		t.Fatalf("LoadProjects: %v", err)
+	}
+	if p, _ := projectByName(projects, "gavel"); p.Dir == "/elsewhere" {
 		t.Error("conflicting create overwrote the existing project")
 	}
 }

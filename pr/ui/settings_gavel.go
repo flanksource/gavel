@@ -74,9 +74,9 @@ func resolveSettingsDir(r *http.Request) (scope, dir string, err error) {
 	if name == "" {
 		return "", "", errors.New("scope=global or project=<name> is required")
 	}
-	p, ok := GetProject(name)
-	if !ok {
-		return "", "", errors.New("unknown project " + name)
+	p, err := GetProject(name)
+	if err != nil {
+		return "", "", err
 	}
 	return name, p.ResolvedDir(), nil
 }
