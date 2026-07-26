@@ -6,11 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/clicky/metrics"
+	clickytask "github.com/flanksource/clicky/task"
+	"github.com/flanksource/gavel/internal/taskhistory"
 	pf "github.com/flanksource/gavel/procfile"
 	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
@@ -84,6 +88,36 @@ func containsInt(xs []int, x int) bool {
 }
 
 var _ = Describe("Supervisor", func() {
+	It("rejects a second supervisor for the same project root", func() {
+		first, _ := newSupervisor("worker: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
+		defer first.Shutdown()
+		state := first.State()
+
+		second, err := pf.NewSupervisor(pf.Options{Root: state.Root, Procfile: state.Procfile})
+		Expect(err).NotTo(HaveOccurred())
+		defer second.Shutdown()
+
+		Expect(second.Start()).To(MatchError(ContainSubstring("already running")))
+		conn, err := net.DialTimeout("unix", pf.ControlSocketPath(state.Root), time.Second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(conn.Close()).To(Succeed())
+	})
+
+	It("does not remove a replacement control socket during teardown", func() {
+		sup, _ := newSupervisor("worker: sh -c 'sleep 30'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+		sock := pf.ControlSocketPath(sup.State().Root)
+		Expect(os.Remove(sock)).To(Succeed())
+		replacement, err := net.Listen("unix", sock)
+		Expect(err).NotTo(HaveOccurred())
+		defer replacement.Close()
+		DeferCleanup(func() { _ = os.Remove(sock) })
+
+		sup.Shutdown()
+
+		Expect(sock).To(BeAnExistingFile())
+	})
+
 	It("starts processes, records pids and captures their output", func() {
 		sup, dir := newSupervisor("ticker: sh -c 'echo hello-from-ticker; sleep 30'\n", verify.ProcfileConfig{})
 		defer sup.Shutdown()
@@ -111,6 +145,49 @@ var _ = Describe("Supervisor", func() {
 
 		sup.Shutdown()
 		waitFor(3*time.Second, func() bool { return !utils.ProcessAlive(pid) })
+	})
+
+	It("exposes each supervised generation through the task control socket", func() {
+		sup, _ := newSupervisor("worker: sh -c 'echo ready; sleep 30'\n", verify.ProcfileConfig{})
+		defer sup.Shutdown()
+		root := sup.State().Root
+
+		var first string
+		waitFor(3*time.Second, func() bool {
+			process, ok := liveProc(sup, "worker")
+			first = process.TaskRunID
+			return ok && first != ""
+		})
+		runs, err := pf.TaskRuns(root, clickytask.RunFilter{Kind: "supervised-process"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(runs).To(ContainElement(SatisfyAll(
+			WithTransform(func(run clickytask.RunMeta) string { return run.ID }, Equal(first)),
+			WithTransform(func(run clickytask.RunMeta) string { return run.Labels["process"] }, Equal("worker")),
+		)))
+		metricID := clickytask.MetricID(first, "cpu")
+		Expect(clickytask.RecordMetric(first, "cpu", 42, time.Now().UTC())).To(Succeed())
+		points, err := pf.TaskMetrics(root, metrics.QueryRequest{ID: metricID})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(points).To(ContainElement(WithTransform(func(point metrics.Point) float64 { return point.Value }, Equal(42.0))))
+		var snapshots []clickytask.TaskSnapshot
+		waitFor(3*time.Second, func() bool {
+			var err error
+			snapshots, err = pf.TaskSnapshot(root, first)
+			return err == nil && len(snapshots) == 2 && strings.Contains(snapshots[1].Stdout, "ready")
+		})
+
+		Expect(pf.TaskControl(root, first, clickytask.ControlRestart)).To(Succeed())
+		waitFor(4*time.Second, func() bool {
+			process, _ := liveProc(sup, "worker")
+			return process.TaskRunID != "" && process.TaskRunID != first
+		})
+		terminal, err := pf.TaskSnapshot(root, first)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(terminal[0].Status).To(Equal(string(clickytask.StatusCancelled)))
+		Expect(terminal[0].Controls).To(BeEmpty())
+		history, err := taskhistory.LoadRoots([]string{root}, time.Now().UTC())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(history).To(ContainElement(WithTransform(func(record taskhistory.Record) string { return record.Run.ID }, Equal(first))))
 	})
 
 	It("injects env vars and leaves shell-internal expansion to the process", func() {

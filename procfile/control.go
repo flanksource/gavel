@@ -1,6 +1,7 @@
 package procfile
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -9,25 +10,39 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/flanksource/clicky/metrics"
+	clickytask "github.com/flanksource/clicky/task"
 )
 
 // Control actions exchanged over the supervisor's unix control socket.
 const (
-	actionStatus  = "status"
-	actionStart   = "start"
-	actionStop    = "stop"
-	actionRestart = "restart"
+	actionStatus     = "status"
+	actionStart      = "start"
+	actionStop       = "stop"
+	actionRestart    = "restart"
+	actionTaskRuns   = "task-runs"
+	actionTaskGet    = "task-get"
+	actionTaskCtrl   = "task-control"
+	actionTaskMetric = "task-metric"
 )
 
 type ctrlRequest struct {
-	Action string   `json:"action"`
-	Names  []string `json:"names,omitempty"`
+	Action     string                   `json:"action"`
+	Names      []string                 `json:"names,omitempty"`
+	TaskID     string                   `json:"taskId,omitempty"`
+	TaskAction clickytask.ControlAction `json:"taskAction,omitempty"`
+	TaskFilter clickytask.RunFilter     `json:"taskFilter,omitempty"`
+	Metric     metrics.QueryRequest     `json:"metric,omitempty"`
 }
 
 type ctrlResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	State State  `json:"state"`
+	OK        bool                      `json:"ok"`
+	Error     string                    `json:"error,omitempty"`
+	State     State                     `json:"state"`
+	TaskRuns  []clickytask.RunMeta      `json:"taskRuns,omitempty"`
+	Snapshots []clickytask.TaskSnapshot `json:"snapshots,omitempty"`
+	Points    []metrics.Point           `json:"points,omitempty"`
 }
 
 // ControlSocketPath returns the unix socket path for the supervisor rooted at
@@ -44,6 +59,7 @@ func (s *Supervisor) State() State {
 		Root:          s.root,
 		Procfile:      s.procfile,
 		SupervisorPID: os.Getpid(),
+		InstanceID:    s.instanceID,
 		Socket:        s.socket,
 		Profile:       s.profile,
 		Started:       s.started,
@@ -56,17 +72,41 @@ func (s *Supervisor) State() State {
 
 func (s *Supervisor) serveControl() error {
 	sock := ControlSocketPath(s.root)
-	_ = os.Remove(sock)
+	if _, err := os.Stat(sock); err == nil {
+		if conn, dialErr := net.DialTimeout("unix", sock, 500*time.Millisecond); dialErr == nil {
+			_ = conn.Close()
+			return fmt.Errorf("gavel proc is already running for %s", s.root)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect control socket %s: %w", sock, err)
+	}
+	if err := os.Remove(sock); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale control socket %s: %w", sock, err)
+	}
 	l, err := net.Listen("unix", sock)
 	if err != nil {
 		return fmt.Errorf("listen on control socket %s: %w", sock, err)
 	}
+	unixListener, ok := l.(*net.UnixListener)
+	if !ok {
+		_ = l.Close()
+		return fmt.Errorf("control socket %s is not a unix listener", sock)
+	}
+	unixListener.SetUnlinkOnClose(false)
 	s.socket = sock
 	s.mu.Lock()
 	s.listener = l
 	s.mu.Unlock()
 	go s.acceptLoop(l)
 	return nil
+}
+
+func controlSocketOwnedBy(path, instanceID string) bool {
+	if path == "" || instanceID == "" {
+		return false
+	}
+	resp, err := sendControlAt(path, ctrlRequest{Action: actionStatus}, 500*time.Millisecond)
+	return err == nil && resp.State.InstanceID == instanceID
 }
 
 func (s *Supervisor) acceptLoop(l net.Listener) {
@@ -111,6 +151,21 @@ func (s *Supervisor) handle(req ctrlRequest) ctrlResponse {
 		}
 		s.persist()
 		return ctrlResponse{OK: true, State: s.State()}
+	case actionTaskRuns:
+		return ctrlResponse{OK: true, TaskRuns: clickytask.Runs(req.TaskFilter)}
+	case actionTaskGet:
+		return ctrlResponse{OK: true, Snapshots: clickytask.SnapshotByID(req.TaskID)}
+	case actionTaskCtrl:
+		if err := clickytask.ControlRun(context.Background(), req.TaskID, req.TaskAction); err != nil {
+			return ctrlResponse{Error: err.Error()}
+		}
+		return ctrlResponse{OK: true}
+	case actionTaskMetric:
+		points, err := clickytask.Metrics().Query(req.Metric)
+		if err != nil {
+			return ctrlResponse{Error: err.Error()}
+		}
+		return ctrlResponse{OK: true, Points: points}
 	default:
 		return ctrlResponse{Error: fmt.Sprintf("unknown action %q", req.Action)}
 	}
@@ -134,12 +189,16 @@ func (s *Supervisor) targets(names []string) ([]*managed, error) {
 // sendControl dials the supervisor's control socket for root and performs req.
 // A failure to connect means no supervisor is running for that root.
 func sendControl(root string, req ctrlRequest) (ctrlResponse, error) {
-	conn, err := net.DialTimeout("unix", ControlSocketPath(root), 2*time.Second)
+	return sendControlAt(ControlSocketPath(root), req, 10*time.Second)
+}
+
+func sendControlAt(path string, req ctrlRequest, timeout time.Duration) (ctrlResponse, error) {
+	conn, err := net.DialTimeout("unix", path, timeout)
 	if err != nil {
 		return ctrlResponse{}, fmt.Errorf("connect to supervisor: %w", err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return ctrlResponse{}, fmt.Errorf("send request: %w", err)
 	}
@@ -151,4 +210,28 @@ func sendControl(root string, req ctrlRequest) (ctrlResponse, error) {
 		return resp, fmt.Errorf("%s", resp.Error)
 	}
 	return resp, nil
+}
+
+// TaskRuns returns the task runs owned by the detached supervisor for root.
+func TaskRuns(root string, filter clickytask.RunFilter) ([]clickytask.RunMeta, error) {
+	response, err := sendControl(root, ctrlRequest{Action: actionTaskRuns, TaskFilter: filter})
+	return response.TaskRuns, err
+}
+
+// TaskSnapshot returns one detached supervisor task generation.
+func TaskSnapshot(root, id string) ([]clickytask.TaskSnapshot, error) {
+	response, err := sendControl(root, ctrlRequest{Action: actionTaskGet, TaskID: id})
+	return response.Snapshots, err
+}
+
+// TaskControl performs a lifecycle action on a detached supervisor task.
+func TaskControl(root, id string, action clickytask.ControlAction) error {
+	_, err := sendControl(root, ctrlRequest{Action: actionTaskCtrl, TaskID: id, TaskAction: action})
+	return err
+}
+
+// TaskMetrics queries one live metric series from the detached supervisor.
+func TaskMetrics(root string, request metrics.QueryRequest) ([]metrics.Point, error) {
+	response, err := sendControl(root, ctrlRequest{Action: actionTaskMetric, Metric: request})
+	return response.Points, err
 }

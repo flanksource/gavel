@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/template"
 
 	"github.com/flanksource/commons/logger"
 )
@@ -60,36 +59,6 @@ func cleanupLegacyService() {
 	_ = systemctlUser("daemon-reload")
 }
 
-type unitData struct {
-	BinaryPath string
-}
-
-const userUnitTemplate = `[Unit]
-Description=Gavel PR UI (pr list --all --ui)
-After=default.target
-
-[Service]
-Type=simple
-ExecStart={{.BinaryPath}} pr list --all --ui --menu-bar --port=0 --persist-port
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=default.target
-`
-
-func renderUserUnit(bin string) (string, error) {
-	t, err := template.New("unit").Parse(userUnitTemplate)
-	if err != nil {
-		return "", fmt.Errorf("parse unit template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, unitData{BinaryPath: bin}); err != nil {
-		return "", fmt.Errorf("render unit template: %w", err)
-	}
-	return buf.String(), nil
-}
-
 // Install writes the user-level systemd unit, reloads the user daemon, and
 // enables + starts the service.
 func Install(opts InstallOptions) error {
@@ -101,7 +70,15 @@ func Install(opts InstallOptions) error {
 		}
 		bin = b
 	}
-	unit, err := renderUserUnit(bin)
+	shell, err := userShellPath()
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+	unit, err := renderUserUnit(shell, bin, home)
 	if err != nil {
 		return err
 	}

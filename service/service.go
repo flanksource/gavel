@@ -82,8 +82,8 @@ func TailLog(n int) ([]string, error) {
 }
 
 // BinaryPath returns the absolute path to the current gavel binary. Service
-// files and detached Start() both need an absolute path so they don't depend
-// on $PATH at service-activation time.
+// files and detached Start() both use the exact binary selected at install
+// time, while the user shell supplies PATH for commands the daemon launches.
 func BinaryPath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {

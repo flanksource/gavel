@@ -1,6 +1,7 @@
 package procfile
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,9 @@ import (
 // before escalating to SIGKILL.
 const stopTimeout = 10 * time.Second
 
+// ErrProcfileNotFound reports that process supervision is not configured for a directory.
+var ErrProcfileNotFound = errors.New("no Procfile found")
+
 // resolveTarget discovers the Procfile from workDir (defaulting to the current
 // directory) and anchors the project root at the Procfile's directory, so
 // `proc stop`/`status` from any subdirectory address the same state.
@@ -30,7 +34,7 @@ func resolveTarget(workDir, pfOverride string) (root, procfile string, err error
 	workDir, _ = filepath.Abs(workDir)
 	procfile = Find(workDir, pfOverride)
 	if procfile == "" {
-		return "", "", fmt.Errorf("no Procfile found at or above %s (use --procfile to point at one)", workDir)
+		return "", "", fmt.Errorf("%w at or above %s (use --procfile to point at one)", ErrProcfileNotFound, workDir)
 	}
 	return filepath.Dir(procfile), procfile, nil
 }
@@ -92,11 +96,21 @@ func Start(workDir, pfOverride string, names []string, profile string) (*StatusR
 	return startFor(root, pf, names, profile)
 }
 
-func startFor(root, pf string, names []string, profile string) (*StatusReport, error) {
+func startFor(root, pf string, names []string, profile string) (report *StatusReport, err error) {
 	dir, err := StateDir(root)
 	if err != nil {
 		return nil, err
 	}
+	launchLock, err := acquireFileLock(launchLockPath(dir), false)
+	if err != nil {
+		return nil, fmt.Errorf("acquire proc launch lock: %w", err)
+	}
+	defer func() {
+		if unlockErr := releaseFileLock(launchLock); unlockErr != nil {
+			report = nil
+			err = errors.Join(err, fmt.Errorf("release proc launch lock: %w", unlockErr))
+		}
+	}()
 	if st, err := ReadState(dir); err != nil {
 		return nil, err
 	} else if st.Running() {

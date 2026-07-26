@@ -1,6 +1,7 @@
 package procfile
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +16,9 @@ import (
 	"github.com/flanksource/clicky"
 	cexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/taskhistory"
 	"github.com/flanksource/gavel/verify"
+	"github.com/google/uuid"
 )
 
 // Options configures a Supervisor.
@@ -62,6 +65,7 @@ type Supervisor struct {
 	root       string
 	dir        string
 	procfile   string
+	instanceID string
 	socket     string
 	profile    string
 	foreground bool
@@ -76,6 +80,7 @@ type Supervisor struct {
 	stopping     bool
 	fullyStarted bool
 	listener     net.Listener
+	lockFD       *os.File
 
 	done         chan struct{} // closed when shutting down (signal or all-exited)
 	persistMu    sync.Mutex    // serialises state.json writes
@@ -120,7 +125,7 @@ func NewSupervisor(opts Options) (*Supervisor, error) {
 	}
 
 	profile := resolveProfile(opts)
-	s := &Supervisor{root: root, dir: dir, procfile: opts.Procfile, profile: profile, foreground: opts.Foreground, byName: map[string]*managed{}, done: make(chan struct{})}
+	s := &Supervisor{root: root, dir: dir, procfile: opts.Procfile, instanceID: uuid.NewString(), profile: profile, foreground: opts.Foreground, byName: map[string]*managed{}, done: make(chan struct{})}
 	for i, e := range entries {
 		policy, maxR := resolvePolicy(opts.Config, e)
 		limits, err := resolveLimits(opts.Config, e)
@@ -132,11 +137,26 @@ func NewSupervisor(opts Options) (*Supervisor, error) {
 		inProfile := len(e.Profiles) == 0 || contains(e.Profiles, profile)
 		autostart := len(opts.Names) > 0 || (inProfile && (e.Default == nil || *e.Default))
 		m := &managed{
-			entry:     e,
-			logPath:   LogPath(dir, e.Name),
-			colorIdx:  i,
-			overlay:   MergeEnv(userEnv, dotenv, opts.Config.Env, e.Env),
-			opts:      cexec.SuperviseOptions{Limits: limits, RestartPolicy: policy, MaxRestarts: maxR},
+			entry:    e,
+			logPath:  LogPath(dir, e.Name),
+			colorIdx: i,
+			overlay:  MergeEnv(userEnv, dotenv, opts.Config.Env, e.Env),
+			opts: cexec.SuperviseOptions{
+				Limits: limits, RestartPolicy: policy, MaxRestarts: maxR,
+				Task: cexec.SupervisedTaskOptions{
+					Name: filepath.Base(root) + ": " + e.Name,
+					Kind: "supervised-process",
+					Labels: map[string]string{
+						"process":   e.Name,
+						"workspace": filepath.Base(root),
+						"root":      root,
+					},
+					Href: "/tasks/{id}",
+					OnFinish: func(runID string) error {
+						return taskhistory.Archive(root, runID)
+					},
+				},
+			},
 			autostart: autostart,
 		}
 		if len(e.Name) > s.width {
@@ -163,7 +183,22 @@ func (s *Supervisor) Run() error {
 // process's supervised unit, and launches the auto-start ones. Non-autostart
 // units stay registered (stopped) so they can be started on demand. Returns once
 // everything is launched (non-blocking).
-func (s *Supervisor) Start() error {
+func (s *Supervisor) Start() (err error) {
+	lockFD, err := acquireFileLock(supervisorLockPath(s.dir), true)
+	if err != nil {
+		if errors.Is(err, errLockHeld) {
+			return fmt.Errorf("gavel proc is already running for %s", s.root)
+		}
+		return fmt.Errorf("acquire supervisor lock: %w", err)
+	}
+	s.mu.Lock()
+	s.lockFD = lockFD
+	s.mu.Unlock()
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, s.releaseSupervisorLock())
+		}
+	}()
 	if err := WritePid(SupervisorPidPath(s.dir), os.Getpid()); err != nil {
 		return err
 	}
@@ -322,13 +357,19 @@ func (s *Supervisor) teardown(persistTerminal bool) {
 	}
 	s.stopping = true
 	l := s.listener
+	socket := s.socket
 	s.mu.Unlock()
 
 	s.beginShutdown() // wake any process in restart backoff
+	ownsSocket := controlSocketOwnedBy(socket, s.instanceID)
 	if l != nil {
 		_ = l.Close()
 	}
-	_ = os.Remove(ControlSocketPath(s.root))
+	if ownsSocket {
+		if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
+			logger.Warnf("remove control socket: %v", err)
+		}
+	}
 
 	var wg sync.WaitGroup
 	for _, m := range s.procs {
@@ -364,6 +405,12 @@ func (s *Supervisor) teardown(persistTerminal bool) {
 		}
 	}
 
+	if !s.ownsPersistedState() {
+		if err := s.releaseSupervisorLock(); err != nil {
+			logger.Warnf("release supervisor lock: %v", err)
+		}
+		return
+	}
 	if persistTerminal {
 		if err := WriteState(s.dir, terminal); err != nil {
 			logger.Warnf("persist terminal proc state: %v", err)
@@ -372,6 +419,25 @@ func (s *Supervisor) teardown(persistTerminal bool) {
 	} else {
 		_ = Clean(s.dir)
 	}
+	if err := s.releaseSupervisorLock(); err != nil {
+		logger.Warnf("release supervisor lock: %v", err)
+	}
+}
+
+func (s *Supervisor) ownsPersistedState() bool {
+	state, err := ReadState(s.dir)
+	if err != nil {
+		return false
+	}
+	return state.InstanceID == s.instanceID
+}
+
+func (s *Supervisor) releaseSupervisorLock() error {
+	s.mu.Lock()
+	fd := s.lockFD
+	s.lockFD = nil
+	s.mu.Unlock()
+	return releaseFileLock(fd)
 }
 
 func (s *Supervisor) decActive() {
@@ -432,10 +498,17 @@ func (m *managed) snapshot() ProcState {
 	st.Started = p.Started()
 	st.Restarts = p.Restarts()
 	st.ExitCode = p.ExitCode()
+	st.TaskRunID = p.TaskRunID()
 	st.Ports = p.Ports()
 	st.CPUPercent = res.CPUPercent
 	st.MemoryRSS = res.RSSBytes
+	st.MemoryVMS = res.VMSBytes
 	st.OpenFiles = res.OpenFiles
+	peak := p.Peak()
+	st.PeakCPU = peak.CPUPercent
+	st.PeakRSS = peak.RSSBytes
+	st.PeakVMS = peak.VMSBytes
+	st.PeakFiles = peak.OpenFiles
 	st.Tree = procTree(p.Tree())
 	return st
 }
@@ -451,8 +524,11 @@ func procTree(samples []cexec.ProcessSample) []ProcNode {
 			PID:        int(s.PID),
 			PPID:       int(s.PPID),
 			Command:    s.Command,
+			Status:     s.Status,
+			Root:       s.IsRoot,
 			CPUPercent: s.CPUPercent,
 			MemoryRSS:  s.RSSBytes,
+			MemoryVMS:  s.VMSBytes,
 			OpenFiles:  s.OpenFiles,
 		}
 	}

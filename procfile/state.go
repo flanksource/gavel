@@ -30,14 +30,15 @@ const (
 
 // ProcState is the live state of a single supervised process.
 type ProcState struct {
-	Name     string     `json:"name"`
-	Command  string     `json:"command"`
-	PID      int        `json:"pid,omitempty"`
-	Status   string     `json:"status"`
-	Started  *time.Time `json:"started,omitempty"`
-	Restarts int        `json:"restarts"`
-	ExitCode *int       `json:"exitCode,omitempty"`
-	LogFile  string     `json:"logFile"`
+	Name      string     `json:"name"`
+	Command   string     `json:"command"`
+	PID       int        `json:"pid,omitempty"`
+	Status    string     `json:"status"`
+	Started   *time.Time `json:"started,omitempty"`
+	Restarts  int        `json:"restarts"`
+	ExitCode  *int       `json:"exitCode,omitempty"`
+	LogFile   string     `json:"logFile"`
+	TaskRunID string     `json:"taskRunId,omitempty"`
 	// Ports are the TCP ports the process (and its process group) is listening
 	// on, detected after start. Empty for processes that bind no port.
 	Ports []int `json:"ports,omitempty"`
@@ -46,7 +47,12 @@ type ProcState struct {
 	// that cannot report it. All zero for a stopped process.
 	CPUPercent float64 `json:"cpuPercent,omitempty"`
 	MemoryRSS  uint64  `json:"memoryRss,omitempty"`
+	MemoryVMS  uint64  `json:"memoryVms,omitempty"`
 	OpenFiles  int     `json:"openFiles,omitempty"`
+	PeakCPU    float64 `json:"peakCpuPercent,omitempty"`
+	PeakRSS    uint64  `json:"peakMemoryRss,omitempty"`
+	PeakVMS    uint64  `json:"peakMemoryVms,omitempty"`
+	PeakFiles  int     `json:"peakOpenFiles,omitempty"`
 	// Tree is the per-process breakdown of the process group behind the
 	// aggregate fields above (the leader and its descendants). Empty for a
 	// stopped process or a supervisor that predates resource sampling.
@@ -59,8 +65,11 @@ type ProcNode struct {
 	PID        int     `json:"pid"`
 	PPID       int     `json:"ppid"`
 	Command    string  `json:"command"`
+	Status     string  `json:"status,omitempty"`
+	Root       bool    `json:"root,omitempty"`
 	CPUPercent float64 `json:"cpuPercent,omitempty"`
 	MemoryRSS  uint64  `json:"memoryRss,omitempty"`
+	MemoryVMS  uint64  `json:"memoryVms,omitempty"`
 	OpenFiles  int     `json:"openFiles,omitempty"`
 }
 
@@ -70,6 +79,7 @@ type State struct {
 	Root          string      `json:"root"`
 	Procfile      string      `json:"procfile"`
 	SupervisorPID int         `json:"supervisorPid"`
+	InstanceID    string      `json:"instanceId,omitempty"`
 	Socket        string      `json:"socket,omitempty"`
 	Profile       string      `json:"profile,omitempty"`
 	Started       *time.Time  `json:"started,omitempty"`
