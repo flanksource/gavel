@@ -240,7 +240,7 @@ func executeExistingPRPush(opts Options, deps pushDeps, pr *github.PRListItem, r
 	return nil
 }
 
-func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) error {
+func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, deps pushDeps, branch string, result *Result) (err error) {
 	base, _ := deps.defaultBranch(ghOpts)
 
 	model, err := opts.PRContentModel()
@@ -251,6 +251,7 @@ func executeNewPRPush(ctx context.Context, opts Options, ghOpts github.Options, 
 	if err != nil {
 		return fmt.Errorf("build AI agent for PR content: %w", err)
 	}
+	defer closeAgent(agent, &err)
 
 	prContentPrompt, err := opts.PR.Content.TemplateSource(opts.WorkDir, prContentPromptTemplate)
 	if err != nil {

@@ -39,6 +39,9 @@ type candidateSummarySession struct {
 }
 
 func validateInteractiveOptions(opts Options) error {
+	if opts.Batch && !opts.Interactive {
+		return ErrBatchRequiresInteractive
+	}
 	if !opts.Interactive {
 		if opts.Summary {
 			logger.Warnf("--summary has no effect without --interactive; ignoring")
@@ -50,6 +53,9 @@ func validateInteractiveOptions(opts Options) error {
 	}
 	if strings.TrimSpace(opts.Message) != "" {
 		return ErrInteractiveWithMessage
+	}
+	if opts.Batch && opts.Summary {
+		return ErrBatchWithSummary
 	}
 	if !stdinIsTerminal() {
 		return ErrInteractiveNonTTY
@@ -63,42 +69,9 @@ func validateInteractiveOptions(opts Options) error {
 // selected (now staged) file paths so the caller can verify and proceed with
 // the standard commit pipeline.
 func runInteractiveStaging(ctx context.Context, opts Options) ([]string, error) {
-	statusResult, err := gatherStatusFunc(opts.WorkDir)
-	if err != nil {
-		return nil, fmt.Errorf("gather candidate files: %w", err)
-	}
-
-	candidates, skipped := filterCandidates(statusResult.Files)
-	for _, c := range skipped {
-		logger.Warnf("skipping %s (conflict — resolve manually before committing)", c.Path)
-	}
-	if len(candidates) == 0 {
-		return nil, ErrNothingStaged
-	}
-
-	var summaryUpdates <-chan status.AISummaryUpdate
-	if opts.Summary {
-		summaries, err := startCandidateSummariesFunc(ctx, opts, candidates)
-		if err != nil {
-			return nil, fmt.Errorf("start candidate summaries: %w", err)
-		}
-		defer summaries.Stop()
-		candidates = summaries.Files
-		summaryUpdates = summaries.Updates
-	}
-
-	picked, err := runTreePickerFunc(candidates, opts.WorkDir, summaryUpdates)
+	picked, candidateCount, err := selectInteractiveFiles(ctx, opts, nil)
 	if err != nil {
 		return nil, err
-	}
-	if len(picked.Selected) == 0 {
-		return nil, ErrInteractiveEmpty
-	}
-
-	if len(picked.RmCached) > 0 {
-		if err := gitRmCachedFunc(opts.WorkDir, picked.RmCached); err != nil {
-			return nil, fmt.Errorf("git rm --cached for newly-ignored files: %w", err)
-		}
 	}
 	if err := resetAllStagedFn(opts.WorkDir); err != nil {
 		return nil, fmt.Errorf("reset index before staging selection: %w", err)
@@ -108,8 +81,66 @@ func runInteractiveStaging(ctx context.Context, opts Options) ([]string, error) 
 	}
 
 	fmt.Fprintf(interactiveStdout, "selected %d of %d files; continuing with normal commit pipeline\n",
-		len(picked.Selected), len(candidates))
+		len(picked.Selected), candidateCount)
 	return picked.Selected, nil
+}
+
+// selectInteractiveFiles reuses the interactive commit candidate gatherer and
+// tree picker without staging the selection. Existing ignore actions may still
+// update the index. excluded contains files assigned to earlier batches.
+func selectInteractiveFiles(ctx context.Context, opts Options, excluded map[string]struct{}) (treePickerResult, int, error) {
+	statusResult, err := gatherStatusFunc(opts.WorkDir)
+	if err != nil {
+		return treePickerResult{}, 0, fmt.Errorf("gather candidate files: %w", err)
+	}
+
+	candidates, skipped := filterCandidates(statusResult.Files)
+	candidates = excludeCandidates(candidates, excluded)
+	for _, c := range skipped {
+		logger.Warnf("skipping %s (conflict — resolve manually before committing)", c.Path)
+	}
+	if len(candidates) == 0 {
+		return treePickerResult{}, 0, ErrNothingStaged
+	}
+
+	var summaryUpdates <-chan status.AISummaryUpdate
+	if opts.Summary {
+		summaries, err := startCandidateSummariesFunc(ctx, opts, candidates)
+		if err != nil {
+			return treePickerResult{}, 0, fmt.Errorf("start candidate summaries: %w", err)
+		}
+		defer summaries.Stop()
+		candidates = summaries.Files
+		summaryUpdates = summaries.Updates
+	}
+
+	picked, err := runTreePickerFunc(candidates, opts.WorkDir, summaryUpdates)
+	if err != nil {
+		return treePickerResult{}, len(candidates), err
+	}
+	if len(picked.Selected) == 0 {
+		return treePickerResult{}, len(candidates), ErrInteractiveEmpty
+	}
+
+	if len(picked.RmCached) > 0 {
+		if err := gitRmCachedFunc(opts.WorkDir, picked.RmCached); err != nil {
+			return treePickerResult{}, len(candidates), fmt.Errorf("git rm --cached for newly-ignored files: %w", err)
+		}
+	}
+	return picked, len(candidates), nil
+}
+
+func excludeCandidates(candidates []status.FileStatus, excluded map[string]struct{}) []status.FileStatus {
+	if len(excluded) == 0 {
+		return candidates
+	}
+	remaining := make([]status.FileStatus, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, found := excluded[candidate.Path]; !found {
+			remaining = append(remaining, candidate)
+		}
+	}
+	return remaining
 }
 
 // filterCandidates drops conflict files and returns the remainder along with

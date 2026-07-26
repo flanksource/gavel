@@ -241,7 +241,7 @@ var _ = Describe("dry-run new-PR push generates title/body and reports without p
 		// output, so the agent value here is never invoked.
 		previousAgent := newAgentFunc
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
-			return nil, nil
+			return &agentLifecycleProbe{}, nil
 		}
 		defer func() { newAgentFunc = previousAgent }()
 

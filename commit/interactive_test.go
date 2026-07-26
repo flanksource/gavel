@@ -33,7 +33,8 @@ func timeMinus(d time.Duration) time.Time {
 }
 
 type candidateSummaryAgent struct {
-	closed atomic.Bool
+	closed     atomic.Bool
+	closeCalls atomic.Int32
 }
 
 func (a *candidateSummaryAgent) ExecutePrompt(context.Context, clickyai.PromptRequest) (*clickyai.PromptResponse, error) {
@@ -47,6 +48,7 @@ func (a *candidateSummaryAgent) ExecuteBatch(context.Context, []clickyai.PromptR
 func (a *candidateSummaryAgent) GetCosts() clickyai.Costs { return nil }
 func (a *candidateSummaryAgent) Close() error {
 	a.closed.Store(true)
+	a.closeCalls.Add(1)
 	return nil
 }
 
@@ -115,6 +117,7 @@ var _ = Describe("startCandidateSummaries", func() {
 			updates = append(updates, update)
 		}
 		session.Stop()
+		session.Stop()
 
 		Expect(updates).To(ContainElement(status.AISummaryUpdate{
 			Index:   0,
@@ -122,6 +125,7 @@ var _ = Describe("startCandidateSummaries", func() {
 			Summary: "describe streamed chooser change",
 		}))
 		Expect(agent.closed.Load()).To(BeTrue())
+		Expect(agent.closeCalls.Load()).To(Equal(int32(1)))
 		Expect(clickytask.IsNoRender()).To(Equal(previousNoRender))
 	})
 })

@@ -140,7 +140,7 @@ func sortGroupingRows(rows []groupingRow) {
 // enforced by captain's schemaStrictness=retry policy (bounded fix-up re-asks,
 // then a hard error). It builds its own agent (like generateCommitAnalysis) so the
 // grouping seam can be stubbed in tests without an LLM.
-func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([]commitGroup, error) {
+func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) (groups []commitGroup, err error) {
 	table, err := buildStatusTable(opts.WorkDir, source.Changes)
 	if err != nil {
 		return nil, err
@@ -154,6 +154,7 @@ func groupChangesByAI(ctx context.Context, opts Options, source stagedSource) ([
 	if err != nil {
 		return nil, err
 	}
+	defer closeAgent(agent, &err)
 
 	template, err := opts.Config.Grouping.TemplateSource(opts.WorkDir, groupingPromptTemplate)
 	if err != nil {

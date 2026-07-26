@@ -2,9 +2,10 @@ package commit
 
 import (
 	"errors"
-	"github.com/flanksource/captain/pkg/aiflags"
+	"os"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/aiflags"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -12,6 +13,14 @@ import (
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/verify"
 )
+
+func TestMain(m *testing.M) {
+	_ = os.Unsetenv(EnvSessionID)
+	for _, marker := range sessionEnvironmentMarkers {
+		_ = os.Unsetenv(marker)
+	}
+	os.Exit(m.Run())
+}
 
 // msgSpecCfg builds a CommitConfig whose commit.message spec pins model.
 func msgSpecCfg(model string) verify.CommitConfig {

@@ -14,16 +14,6 @@ const (
 	EnvIssueID = "GAVEL_ISSUE_ID"
 	// EnvSessionID carries the agent (claude) session id the same way.
 	EnvSessionID = "GAVEL_SESSION_ID"
-	// EnvClaudeCodeSessionID is the session id Claude Code exports into every
-	// command it runs. It is the primary fallback when GAVEL_SESSION_ID is unset.
-	EnvClaudeCodeSessionID = "CLAUDE_CODE_SESSION_ID"
-	// EnvClaudeSessionID is a legacy fallback kept for older Claude tooling that
-	// exported the un-prefixed name.
-	EnvClaudeSessionID = "CLAUDE_SESSION_ID"
-	// EnvCodexSessionID is the fallback session-id source used when no Claude
-	// session id is set but Codex exported its own. Resolved by --stage=session
-	// via resolveEnvSessionID.
-	EnvCodexSessionID = "CODEX_SESSION_ID"
 
 	// TrailerIssueID / trailerSessionID re-export the canonical git trailer keys
 	// so commit-package consumers keep their existing reference.
@@ -44,7 +34,7 @@ func applyCommitMetadata(opts Options, msg string) string {
 	}
 
 	issueID := firstNonEmpty(opts.IssueID, os.Getenv(EnvIssueID))
-	sessionID := firstNonEmpty(opts.SessionID, os.Getenv(EnvSessionID), os.Getenv(EnvClaudeCodeSessionID), os.Getenv(EnvClaudeSessionID))
+	sessionID := firstNonEmpty(opts.SessionID, resolveEnvSessionID())
 
 	var trailers []string
 	if issueID != "" && !hasTrailer(msg, TrailerIssueID) {

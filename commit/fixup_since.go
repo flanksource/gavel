@@ -201,7 +201,7 @@ func buildRebaseTodo(ordered []models.Commit, dups []issueGroup, msgFiles map[st
 // simplifyGroupMessage asks the LLM to fold several commit messages that all
 // belong to the same Gavel-Issue-Id into one conventional commit message.
 // Under the test stub it returns a deterministic message instead of calling AI.
-func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (string, error) {
+func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (message string, err error) {
 	if os.Getenv(testEnvVar) == "1" {
 		logger.V(1).Infof("%s=1, returning stub squash message", testEnvVar)
 		return stubMessage, nil
@@ -214,6 +214,7 @@ func simplifyGroupMessage(ctx context.Context, opts Options, msgs []string) (str
 	if err != nil {
 		return "", err
 	}
+	defer closeAgent(agent, &err)
 	prompt := "The following git commit messages all belong to the same logical change " +
 		"and will be merged into a single commit. Write ONE clean Conventional Commits " +
 		"message (a `type(scope): subject` line, optionally followed by a blank line and a " +

@@ -12,19 +12,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var sessionEnvironmentMarkers = []string{
+	"CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_SANDBOX",
+	"CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDECODE",
+	"GEMINI_SESSION_ID", "GEMINI_CLI", "CAPTAIN_SESSION_ID",
+}
+
 // clearSessionEnv blanks every session-id env var so a test inheriting a real
 // agent session (e.g. running inside Claude/Codex) starts from a clean slate.
 func clearSessionEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv(EnvSessionID, "")
-	t.Setenv(EnvClaudeCodeSessionID, "")
-	t.Setenv(EnvClaudeSessionID, "")
-	t.Setenv(EnvCodexSessionID, "")
+	for _, marker := range sessionEnvironmentMarkers {
+		t.Setenv(marker, "")
+	}
 }
 
-// TestResolveEnvSessionIDPrecedence pins the env lookup order that backs
-// --stage=session: GAVEL_SESSION_ID over CLAUDE_CODE_SESSION_ID over the legacy
-// CLAUDE_SESSION_ID over CODEX_SESSION_ID.
+func TestResolveEnvSessionIDUsesCaptainMarkers(t *testing.T) {
+	clearSessionEnv(t)
+	t.Setenv("CODEX_THREAD_ID", "codex-thread")
+
+	assert.Equal(t, "codex-thread", resolveEnvSessionID())
+}
+
+// TestResolveEnvSessionIDPrecedence pins GAVEL_SESSION_ID as the override before
+// Captain's provider-marker precedence.
 func TestResolveEnvSessionIDPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -35,17 +47,18 @@ func TestResolveEnvSessionIDPrecedence(t *testing.T) {
 		want       string
 	}{
 		{"gavel wins", "gav-1", "cc-1", "cla-1", "cod-1", "gav-1"},
-		{"claude code when gavel unset", "", "cc-1", "cla-1", "cod-1", "cc-1"},
-		{"legacy claude when claude-code unset", "", "", "cla-1", "cod-1", "cla-1"},
-		{"codex when others unset", "", "", "", "cod-1", "cod-1"},
+		{"codex when gavel unset", "", "cc-1", "cla-1", "cod-1", "cod-1"},
+		{"claude code when codex unset", "", "cc-1", "cla-1", "", "cc-1"},
+		{"legacy claude when claude-code unset", "", "", "cla-1", "", "cla-1"},
 		{"empty when none set", "", "", "", "", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			clearSessionEnv(t)
 			t.Setenv(EnvSessionID, tc.gavel)
-			t.Setenv(EnvClaudeCodeSessionID, tc.claudeCode)
-			t.Setenv(EnvClaudeSessionID, tc.claude)
-			t.Setenv(EnvCodexSessionID, tc.codex)
+			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.claudeCode)
+			t.Setenv("CLAUDE_SESSION_ID", tc.claude)
+			t.Setenv("CODEX_SESSION_ID", tc.codex)
 			assert.Equal(t, tc.want, resolveEnvSessionID())
 		})
 	}
@@ -64,7 +77,7 @@ func TestStageSessionModeResolvesClaudeEnvID(t *testing.T) {
 
 	sessionID := "claude-sess-1"
 	writeSessionLog(t, home, sessionID, []string{filepath.Join(dir, "app.go")})
-	t.Setenv(EnvClaudeSessionID, sessionID)
+	t.Setenv("CLAUDE_SESSION_ID", sessionID)
 
 	err := stageFiles(dir, StageSession, verify.CommitConfig{})
 	require.NoError(t, err)
@@ -89,7 +102,7 @@ func TestStageSessionModeFallsBackToStagedWithoutEnv(t *testing.T) {
 }
 
 // TestStageSessionModeResolvesCodexRollout confirms --stage=session resolves a
-// Codex session id from CODEX_SESSION_ID, locates the rollout, and stages exactly
+// Codex session id from CODEX_THREAD_ID, locates the rollout, and stages exactly
 // the files its apply_patch touched.
 func TestStageSessionModeResolvesCodexRollout(t *testing.T) {
 	home := t.TempDir()
@@ -102,7 +115,7 @@ func TestStageSessionModeResolvesCodexRollout(t *testing.T) {
 
 	sessionID := "019eedeb-7bda-75b1-abdd-86a2c48cd1d5"
 	writeCodexRollout(t, home, sessionID, dir, []string{"app.go"})
-	t.Setenv(EnvCodexSessionID, sessionID)
+	t.Setenv("CODEX_THREAD_ID", sessionID)
 
 	err := stageFiles(dir, StageSession, verify.CommitConfig{})
 	require.NoError(t, err)

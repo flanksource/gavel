@@ -29,7 +29,7 @@ var _ = Describe("commit -p --auto-merge", func() {
 		opts = Options{WorkDir: workDir, Push: true, AutoMerge: true, MergeType: "rebase"}
 
 		previousAgent := newAgentFunc
-		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return nil, nil }
+		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return &agentLifecycleProbe{}, nil }
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 	})
 

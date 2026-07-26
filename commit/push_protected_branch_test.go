@@ -65,7 +65,7 @@ var _ = Describe("executeNewPRPush on a protected current branch", func() {
 		// Stub the LLM constructor so generatePRContent isn't actually called.
 		previousAgent := newAgentFunc
 		newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) {
-			return nil, nil
+			return &agentLifecycleProbe{}, nil
 		}
 		DeferCleanup(func() { newAgentFunc = previousAgent })
 	})

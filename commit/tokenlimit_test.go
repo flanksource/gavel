@@ -41,7 +41,7 @@ func TestRunSingleCommitChunksOnTokenLimit(t *testing.T) {
 	stubGroupPerFile(t)
 
 	prevAgent := newAgentFunc
-	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return nil, nil }
+	newAgentFunc = func(clickyai.AgentConfig) (clickyai.Agent, error) { return &agentLifecycleProbe{}, nil }
 	defer func() { newAgentFunc = prevAgent }()
 
 	// The whole-tree diff spans both files and "overflows" the context; each

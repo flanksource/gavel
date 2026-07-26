@@ -12,12 +12,18 @@ import (
 )
 
 // resolveEnvSessionID returns the agent session id exported into the commit
-// process, preferring gavel's own GAVEL_SESSION_ID, then Claude Code's
-// CLAUDE_CODE_SESSION_ID (with the legacy CLAUDE_SESSION_ID as a further
-// fallback), then Codex's CODEX_SESSION_ID. Empty when none is set —
-// `--stage=session` then falls back to committing the already-staged set.
+// process, preferring gavel's own GAVEL_SESSION_ID before Captain's provider
+// marker detection. Empty when no marker supplies an ID — `--stage=session`
+// then falls back to committing the already-staged set.
 func resolveEnvSessionID() string {
-	return firstNonEmpty(os.Getenv(EnvSessionID), os.Getenv(EnvClaudeCodeSessionID), os.Getenv(EnvClaudeSessionID), os.Getenv(EnvCodexSessionID))
+	if sessionID := strings.TrimSpace(os.Getenv(EnvSessionID)); sessionID != "" {
+		return sessionID
+	}
+	current := captaincli.CurrentEnvironmentSession()
+	if current == nil {
+		return ""
+	}
+	return current.SessionID
 }
 
 // stageSessionFiles stages exactly the files an agent wrote to during the

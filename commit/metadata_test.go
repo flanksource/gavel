@@ -35,14 +35,20 @@ func TestApplyCommitMetadata(t *testing.T) {
 		{
 			name:    "claude code session id fallback",
 			opts:    Options{AddMetadata: true},
-			env:     map[string]string{EnvClaudeCodeSessionID: "claude-code-sess"},
+			env:     map[string]string{"CLAUDE_CODE_SESSION_ID": "claude-code-sess"},
 			wantHas: []string{trailerSessionID + ": claude-code-sess"},
 		},
 		{
 			name:    "legacy claude session id fallback",
 			opts:    Options{AddMetadata: true},
-			env:     map[string]string{EnvClaudeSessionID: "claude-sess"},
+			env:     map[string]string{"CLAUDE_SESSION_ID": "claude-sess"},
 			wantHas: []string{trailerSessionID + ": claude-sess"},
+		},
+		{
+			name:    "codex thread id fallback",
+			opts:    Options{AddMetadata: true},
+			env:     map[string]string{"CODEX_THREAD_ID": "codex-thread"},
+			wantHas: []string{trailerSessionID + ": codex-thread"},
 		},
 		{
 			name:      "no values appends nothing",
@@ -55,7 +61,7 @@ func TestApplyCommitMetadata(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all metadata env vars so tests are isolated from the
 			// real environment (e.g. GAVEL_ISSUE_ID set by a parent process).
-			for _, k := range []string{EnvIssueID, EnvSessionID, EnvClaudeCodeSessionID, EnvClaudeSessionID, EnvCodexSessionID} {
+			for _, k := range append([]string{EnvIssueID, EnvSessionID}, sessionEnvironmentMarkers...) {
 				t.Setenv(k, "")
 			}
 			for k, v := range tt.env {
