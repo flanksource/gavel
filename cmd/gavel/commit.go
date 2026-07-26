@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/flanksource/captain/pkg/aiflags"
 	"os"
 	"path/filepath"
 
+	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
@@ -23,11 +23,12 @@ type CommitOptions struct {
 	Stage       string   `flag:"stage" help:"Which changes to commit: session (default; resolves GAVEL_SESSION_ID/CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/CODEX_SESSION_ID and commits only that session's edited files, falling back to staged when none is set), staged|unstaged|all, or an explicit Claude/Codex session id or prefix" default:"session"`
 	CommitAll   bool     `flag:"commit-all" short:"A" help:"Split the change set into logical commits via the LLM (a separate chore commit collects lock/generated files). Implied by --max-commits."`
 	Interactive bool     `flag:"interactive" short:"i" help:"Open an interactive tree picker over all changed files (staged, unstaged, untracked); selecting confirms which files to commit"`
+	Batch       bool     `flag:"batch" short:"b" help:"With -i, queue multiple selected file batches before generating messages and committing them"`
 	Tree        bool     `flag:"tree" short:"t" help:"Alias for --interactive"`
 	Summary     bool     `flag:"summary" short:"s" help:"With -i, stream a one-line AI summary into each candidate file row in the picker"`
 	MaxCommits  int      `flag:"max-commits" help:"Max number of logical commits to produce (excluding the chore commit for lock/generated files). Setting this implies -A. Defaults to 7 when grouping." default:"0"`
 	Message     string   `flag:"message" short:"m" help:"Explicit commit message (skips only the message-generation LLM call)"`
-	// Embedded: contributes --model/-m, --mode, --backend/-b, --effort,
+	// Embedded: contributes --model, --mode, --backend, --effort,
 	// --fallback, --temperature and --no-cache, parsed by captain so a compact
 	// selector ("agent:opus:high") keeps its backend and effort all the way to the
 	// provider. It replaces a bare --model string, which could not.
@@ -99,6 +100,12 @@ exclusive with -A and -m. Pair with -s to stream a one-line AI summary
 into each candidate file row while the picker remains interactive.
 Combine with --dry-run to preview a single commit without looping.
 
+Add -b / --batch to queue every interactive selection before any commit-message
+AI or commit runs. Each confirmed selection is one commit boundary. After
+queuing at least one batch, esc or ctrl+c finishes selection and processes the
+queued batches in order; cancelling the first picker aborts. Batch mode cannot
+be combined with -s because summaries invoke AI while the picker is open.
+
 The -A flag stages all changes and asks the LLM to split them into logical
 commits — one feature/fix/refactor each — capped at --max-commits (default 7,
 excluding the chore commit that collects lock/generated files). Passing
@@ -125,6 +132,7 @@ Examples:
   gavel commit -i                       # tree picker over all changed files; no git add needed
   gavel commit -t                       # alias for the tree picker
   gavel commit -i -s                    # stream one-line AI summaries into the picker rows
+  gavel commit -i -b                    # queue several picker selections, then commit them in order
   gavel commit -i --dry-run             # preview message for the picked subset
   gavel commit -A                       # LLM-grouped logical commits (up to 7)
   gavel commit -A --max-commits=3       # cap at 3 logical commits (chore commit excluded)
@@ -176,6 +184,7 @@ func buildCommitOptions(opts CommitOptions, workDir string, cfg verify.GavelConf
 		Files:           files,
 		CommitAll:       opts.CommitAll,
 		Interactive:     opts.Interactive || opts.Tree,
+		Batch:           opts.Batch,
 		Summary:         opts.Summary,
 		MaxCommits:      maxCommits,
 		DryRun:          opts.DryRun,
@@ -267,6 +276,8 @@ func runCommit(opts CommitOptions) (any, error) {
 		}
 		if errors.Is(err, commitpkg.ErrInteractiveWithCommitAll) ||
 			errors.Is(err, commitpkg.ErrInteractiveWithMessage) ||
+			errors.Is(err, commitpkg.ErrBatchRequiresInteractive) ||
+			errors.Is(err, commitpkg.ErrBatchWithSummary) ||
 			errors.Is(err, commitpkg.ErrInteractiveNonTTY) ||
 			errors.Is(err, commitpkg.ErrInteractiveCancelled) ||
 			errors.Is(err, commitpkg.ErrInteractiveEmpty) {

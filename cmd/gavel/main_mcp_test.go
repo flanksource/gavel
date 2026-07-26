@@ -59,6 +59,7 @@ func TestGavelMCPProfileIgnoresTestRunnerParams(t *testing.T) {
 func TestGavelMCPProfileIgnoresCommitWorkflowParams(t *testing.T) {
 	ignored := gavelMCPCommitIgnoredParams()
 	for _, want := range []string{
+		"batch",
 		"force",
 		"interactive",
 		"lint",

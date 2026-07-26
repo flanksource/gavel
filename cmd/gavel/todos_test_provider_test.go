@@ -43,6 +43,14 @@ func (p *testTODOProvider) List(_ context.Context, filters todos.DiscoveryFilter
 	return result, nil
 }
 
+func (p *testTODOProvider) CountByStatus(_ context.Context) (map[types.Status]int, error) {
+	counts := map[types.Status]int{}
+	for _, todo := range p.items {
+		counts[todo.Status]++
+	}
+	return counts, nil
+}
+
 func (p *testTODOProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
 	for _, todo := range p.items {
 		if todo.ID == ref || todo.FilePath == ref || strings.EqualFold(todo.Title, ref) {

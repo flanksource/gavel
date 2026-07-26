@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/internal/database"
+	"github.com/flanksource/gavel/pr/ui"
 	"github.com/flanksource/gavel/todos/portable"
 	"github.com/spf13/cobra"
 )
@@ -60,11 +61,15 @@ func runTodosImport(command *cobra.Command, files []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO import workspace: %w", err)
 	}
+	project, err := ui.ProjectForDir(workDir)
+	if err != nil {
+		return err
+	}
 	db, err := database.Require(ctx, "gavel todos import")
 	if err != nil {
 		return err
 	}
-	result, err := portable.Import(ctx, db, workDir, todosImportDirectory, files)
+	result, err := portable.Import(ctx, db, project.WorkspaceOptions(), todosImportDirectory, files)
 	if err != nil {
 		return err
 	}
@@ -82,11 +87,15 @@ func runTodosExport(command *cobra.Command, refs []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve portable TODO export workspace: %w", err)
 	}
+	project, err := ui.ProjectForDir(workDir)
+	if err != nil {
+		return err
+	}
 	db, err := database.Require(ctx, "gavel todos export")
 	if err != nil {
 		return err
 	}
-	result, err := portable.Export(ctx, db, workDir, todosExportDirectory, refs, todosExportForce)
+	result, err := portable.Export(ctx, db, project.WorkspaceOptions(), todosExportDirectory, refs, todosExportForce)
 	if err != nil {
 		return err
 	}

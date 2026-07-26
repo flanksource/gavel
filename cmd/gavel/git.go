@@ -118,6 +118,11 @@ func init() {
 				if err != nil {
 					return nil, fmt.Errorf("failed to get default AI agent for summary: %w", err)
 				}
+				defer func() {
+					if err := agent.Close(); err != nil {
+						logger.Warnf("failed to close AI agent: %v", err)
+					}
+				}()
 				clicky.Infof("Summarizing using AI %s", agent)
 				opts.Agent = agent
 				opts.Context = context.Background()

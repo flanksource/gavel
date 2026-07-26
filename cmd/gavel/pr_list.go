@@ -282,6 +282,7 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	srv.SetFixtureSchemaProvider(func() (any, error) {
 		return fixturesSchemaDocument()
 	})
+	srv.SetProjectActionOptionsProvider(projectActionCommandProvider{})
 
 	// Surface the backend build metadata to the dashboard (window.__GAVEL__).
 	ui.Build = ui.BuildInfo{Version: version, Commit: commit, Date: date}

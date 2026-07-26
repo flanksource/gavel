@@ -39,9 +39,11 @@ Gavel database backend (defaults to --embedded when no flag is given):
                         so bad configs fail here instead of at runtime.
 
 GitHub authentication:
-  A token is required for the daemon to poll pull requests. launchd / systemd
-  --user services do NOT inherit your shell env, so this command persists a
-  token to ~/.config/gavel/auth.json (0600 perms). Discovery order:
+  The service runs as the current user through their login and interactive
+  shell. For zsh users this loads .zprofile and .zshrc, including the user's
+  PATH. This command still persists the GitHub token to
+  ~/.config/gavel/auth.json (0600 perms) so authentication does not depend on
+  shell startup files. Discovery order:
     1. --token=... (explicit)
     2. GITHUB_TOKEN env var
     3. GH_TOKEN env var
@@ -54,9 +56,9 @@ GitHub authentication:
   daemon is launched. Use --skip-verify-token for GHE or unusual scopes.
   If no token is found the install still proceeds with a warning.
 
-On macOS this writes ~/Library/LaunchAgents/com.flanksource.gavel-pr-ui.plist
+On macOS this writes ~/Library/LaunchAgents/com.flanksource.gavel.plist
 and loads it via launchctl. On Linux it writes
-~/.config/systemd/user/gavel-pr-ui.service and starts it via systemctl --user;
+~/.config/systemd/user/gavel.service and starts it via systemctl --user;
 run 'loginctl enable-linger $USER' if you want it to survive logout.
 
 No root required. Use --dry-run to preview.`

@@ -42,7 +42,7 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked
 	}
-	aiCfg, aiProto, err := buildAIFixRequest(defaultAIRuntimeOptions(), operation)
+	aiCfg, aiProto, err := buildAIFixRequest(defaultAIRuntimeOptions(), operation, workDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
 		return lintFindingsBlocked

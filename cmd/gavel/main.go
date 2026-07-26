@@ -160,6 +160,7 @@ func gavelMCPTestIgnoredParams() []string {
 
 func gavelMCPCommitIgnoredParams() []string {
 	return []string{
+		"batch",
 		"force",
 		"interactive",
 		"lint",

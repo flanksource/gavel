@@ -1,14 +1,29 @@
 package main
 
 import (
-	"github.com/flanksource/captain/pkg/aiflags"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/captain/pkg/api"
 	captaincli "github.com/flanksource/captain/pkg/cli"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var _ = Describe("AI fix request", func() {
+	It("uses the requested working directory", func() {
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+		workDir := GinkgoT().TempDir()
+		operation := api.Spec{Model: api.Model{Name: "agent:sonnet"}}
+
+		_, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, workDir)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(req.Cwd()).To(Equal(workDir))
+	})
+})
 
 func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -17,7 +32,7 @@ func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 		Budget: api.Budget{Cost: 2, MaxTokens: 8192, MaxTurns: 20},
 	}
 
-	cfg, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation)
+	cfg, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, "claude-sonnet-5", cfg.Model.Name)
 	assert.Equal(t, api.BackendClaudeAgent, cfg.Model.Backend)
@@ -36,7 +51,7 @@ func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 		},
 	}
 
-	cfg, req, err := buildAIFixRequest(opts, operation)
+	cfg, req, err := buildAIFixRequest(opts, operation, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, "claude-opus-4-8", cfg.Model.Name)
 	assert.Equal(t, api.EffortMedium, req.Model.Effort)

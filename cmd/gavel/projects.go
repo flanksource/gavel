@@ -29,7 +29,10 @@ type projectListRow struct {
 }
 
 func runProjectsList(_ ProjectsListOptions) ([]projectListRow, error) {
-	ps := ui.LoadProjects()
+	ps, err := ui.LoadProjects()
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]projectListRow, 0, len(ps))
 	for _, p := range ps {
 		rows = append(rows, projectListRow{
@@ -50,9 +53,9 @@ func runProjectsGet(opts ProjectsGetOptions) (ui.Project, error) {
 	if len(opts.Args) < 1 {
 		return ui.Project{}, fmt.Errorf("usage: gavel projects get <name>")
 	}
-	p, ok := ui.GetProject(opts.Args[0])
-	if !ok {
-		return ui.Project{}, fmt.Errorf("%w: %q", ui.ErrProjectNotFound, opts.Args[0])
+	p, err := ui.GetProject(opts.Args[0])
+	if err != nil {
+		return ui.Project{}, err
 	}
 	return p, nil
 }
@@ -83,9 +86,9 @@ func runProjectsUpdate(opts ProjectsUpdateOptions) (ui.Project, error) {
 		return ui.Project{}, fmt.Errorf("usage: gavel projects update <name> [dir] [--repo owner/repo]")
 	}
 	name := opts.Args[0]
-	p, ok := ui.GetProject(name)
-	if !ok {
-		return ui.Project{}, fmt.Errorf("%w: %q", ui.ErrProjectNotFound, name)
+	p, err := ui.GetProject(name)
+	if err != nil {
+		return ui.Project{}, err
 	}
 	// Only the fields the caller supplied are changed; everything else keeps its
 	// stored value (dir is kept unless a second positional is given).

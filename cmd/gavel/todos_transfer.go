@@ -33,9 +33,9 @@ func runTodosTransfer(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	target, ok := ui.GetProject(transferToProject)
-	if !ok {
-		return fmt.Errorf("%w: %q", ui.ErrProjectNotFound, transferToProject)
+	target, err := ui.GetProject(transferToProject)
+	if err != nil {
+		return err
 	}
 	targetDir, err := filepath.Abs(target.ResolvedDir())
 	if err != nil {

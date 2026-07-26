@@ -26,11 +26,13 @@ func defaultAIRuntimeOptions() captaincli.AIRuntimeOptions {
 // then ~/.captain.yaml defaults. It also forces the per-feature toggles aifix
 // requires regardless of caller preferences:
 //
+//   - Cwd: Captain launches the provider from the target repository even when
+//     Gavel was invoked elsewhere with --cwd.
 //   - Edit: ai-fix must edit files in place. Without it codex-cli runs
 //     read-only ("workspace is mounted read-only") and claude-cli refuses
 //     the apply_patch tool. Captain's ToRequest converts opts.Edit into the
 //     PresetEdit permission preset, so it is set before building the request.
-func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec) (captainai.Config, captainai.Request, error) {
+func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, workDir string) (captainai.Config, captainai.Request, error) {
 	if opts.Model == "" {
 		opts.Model = operation.Name
 	}
@@ -58,6 +60,7 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec) (ca
 	if err != nil {
 		return captainai.Config{}, captainai.Request{}, err
 	}
+	req.SetCwd(workDir)
 	if len(opts.Fallback) == 0 && len(operation.Model.Fallbacks) > 0 {
 		cfg.Model.Fallbacks = operation.Model.Fallbacks
 		cfg.Model, err = captainai.ResolveModelSelectors(cfg.Model)

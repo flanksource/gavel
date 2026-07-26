@@ -35,7 +35,7 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 	if err != nil {
 		return initial, err
 	}
-	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, operation)
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, operation, opts.WorkDir)
 	if err != nil {
 		return initial, err
 	}

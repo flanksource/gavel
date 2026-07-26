@@ -97,6 +97,11 @@ func defaultPRCreateDeps() prCreateDeps {
 			if err != nil {
 				return commitpkg.PRContent{}, err
 			}
+			defer func() {
+				if err := agent.Close(); err != nil {
+					logger.Warnf("pr create: failed to close AI agent: %v", err)
+				}
+			}()
 			return commitpkg.GeneratePRContent(ctx, agent, in)
 		},
 	}

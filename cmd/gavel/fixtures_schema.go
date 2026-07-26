@@ -516,6 +516,8 @@ func helpSection(title, body string, examples []string) map[string]any {
 
 func commandSchemaDescription(name string) string {
 	switch name {
+	case "commit":
+		return "Commit selected project files with schema-driven `gavel commit` options."
 	case "test":
 		return "Fixture test step. YAML body maps to `gavel test` options; each test becomes a child node."
 	case "lint":
@@ -527,6 +529,12 @@ func commandSchemaDescription(name string) string {
 
 func commandSchemaHelp(name string) map[string]any {
 	switch name {
+	case "commit":
+		return fixtureHelpBlock(
+			"Commit options",
+			"Runs `gavel commit` over the selected project files. Interactive, push, fixup, and history-rewrite options are excluded from the dashboard action.",
+			"commit --help",
+		)
 	case "test":
 		return fixtureHelpBlock(
 			"Test / lint steps",

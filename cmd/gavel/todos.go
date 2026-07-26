@@ -123,7 +123,7 @@ and gavel verifies with their persisted definition-of-done fixture.
 
 A TODO is a PostgreSQL-backed issue with a title, body, status, priority,
 acceptance criteria, verification fixtures, and execution history. Todos come
-from source TODO/FIXME comments ('todos sync'), explicit portable/Grite imports,
+from source TODO/FIXME comments ('todos sync'), explicit portable imports,
 or by hand ('todos create').
 
 Subcommands:

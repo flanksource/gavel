@@ -23,7 +23,11 @@ var loadTodoProjects = ui.LoadProjects
 // TODO commands. It is a variable solely so command tests can exercise routing
 // without requiring a process-owned PostgreSQL instance.
 var openRuntimeTodosProvider = func(ctx context.Context, workDir string) (todos.Provider, error) {
-	return todoruntime.Open(ctx, workDir)
+	project, err := ui.ProjectForDir(workDir)
+	if err != nil {
+		return nil, err
+	}
+	return todoruntime.Open(ctx, project.WorkspaceOptions())
 }
 
 func runTodosList(opts TodosListOptions) (any, error) {
@@ -49,7 +53,11 @@ func runTodosList(opts TodosListOptions) (any, error) {
 	ctx := context.Background()
 	var todoList types.TODOS
 	if opts.All {
-		todoList, err = listAllProjectTodos(ctx, loadTodoProjects(), filters)
+		projects, loadErr := loadTodoProjects()
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		todoList, err = listAllProjectTodos(ctx, projects, filters)
 		if err != nil {
 			return nil, err
 		}

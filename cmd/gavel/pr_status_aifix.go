@@ -11,6 +11,7 @@ import (
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
 )
@@ -33,7 +34,11 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		return fmt.Errorf("rendered status was empty")
 	}
 
-	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, api.Spec{})
+	workDir, err := getWorkingDir()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	aiCfg, aiProto, err := buildAIFixRequest(opts.AIRuntimeOptions, api.Spec{}, workDir)
 	if err != nil {
 		return err
 	}
@@ -48,6 +53,11 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := ai.CloseProvider(p); err != nil {
+			logger.Warnf("pr ai-fix: failed to close AI provider: %v", err)
+		}
+	}()
 	streamer, ok := p.(captainai.StreamingProvider)
 	if !ok {
 		return fmt.Errorf("backend %q is not streaming; choose a streaming backend (claude-cli, codex-cli, gemini-cli)", aiCfg.Model.Backend)
@@ -85,27 +95,59 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	logger.Infof("pr ai-fix: stop=%s iterations=%d cost=$%.4f",
 		loopRes.StopReason, len(loopRes.Iterations), loopRes.TotalCost)
 
-	if err := renderCaptainHistory(runStart); err != nil {
+	if err := renderCaptainHistory(runStart, loopSessionID(loopRes)); err != nil {
 		logger.Warnf("pr ai-fix: failed to render captain history: %v", err)
 	}
 	return nil
 }
 
+// loopSessionID returns the session the run actually used — the last iteration
+// that reported one. Iterations before the provider emits its session-init
+// event carry an empty id, so the last non-empty wins rather than the last.
+func loopSessionID(res *captainai.LoopResult) string {
+	if res == nil {
+		return ""
+	}
+	sessionID := ""
+	for _, iter := range res.Iterations {
+		if iter.SessionID != "" {
+			sessionID = iter.SessionID
+		}
+	}
+	return sessionID
+}
+
+// historyOptionsForRun builds the captain history query for a finished ai-fix
+// run. Identifying the run by its own session id is the whole point: --last
+// resolves via a trailing-run-of-tools heuristic, which happily selects an
+// unrelated session another agent wrote to more recently (the reported case
+// rendered session 929f3d1b for a run whose session was 24eec7df). SessionID
+// already narrows to exactly one session, so Last would only add clipping on
+// model/effort changes within it.
+//
+// A backend that reports no session id falls back to the old --last behaviour;
+// history rendering is best-effort trailing output, not part of the fix.
+func historyOptionsForRun(runStart time.Time, sessionID string) captaincli.HistoryOptions {
+	opts := captaincli.HistoryOptions{
+		Since: runStart.Add(-2 * time.Second),
+		Limit: 0,
+	}
+	if sessionID == "" {
+		opts.Last = true
+		return opts
+	}
+	opts.SessionID = sessionID
+	return opts
+}
+
 // renderCaptainHistory invokes captain's RunHistory and writes the result to
 // stdout the same way `captain history --last` does — captain prints
 // line-by-line when stdout is a TTY and emits a structured table otherwise.
-// We restrict to sessions newer than the ai-fix start (with a small skew
-// allowance) so the user only sees the run they just triggered.
-func renderCaptainHistory(runStart time.Time) error {
+func renderCaptainHistory(runStart time.Time, sessionID string) error {
 	if _, err := database.Shared(context.Background()); err != nil {
 		return fmt.Errorf("prepare Captain database: %w", err)
 	}
-	since := runStart.Add(-2 * time.Second)
-	result, err := captaincli.RunHistory(captaincli.HistoryOptions{
-		Last:  true,
-		Since: since,
-		Limit: 0,
-	})
+	result, err := captaincli.RunHistory(historyOptionsForRun(runStart, sessionID))
 	if err != nil {
 		return err
 	}
