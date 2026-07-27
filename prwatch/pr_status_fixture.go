@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
 )
 
@@ -97,33 +96,6 @@ func normalizeSelectors(selectors []string) []string {
 		}
 	}
 	return out
-}
-
-func prRepo(pr *github.PRInfo) string {
-	if pr == nil || pr.URL == "" {
-		return ""
-	}
-	repo, _, err := github.ParsePRURL(pr.URL)
-	if err != nil {
-		return ""
-	}
-	return repo
-}
-
-func workflowActionSelector(run *github.WorkflowRun) string {
-	if run == nil {
-		return ""
-	}
-	if run.WorkflowPath != "" {
-		return run.WorkflowPath
-	}
-	if run.Name != "" {
-		return run.Name
-	}
-	if run.DatabaseID != 0 {
-		return strconv.FormatInt(run.DatabaseID, 10)
-	}
-	return ""
 }
 
 func shellJoin(args []string) string {

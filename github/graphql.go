@@ -346,12 +346,7 @@ func (pr graphQLPR) toPRInfo() *PRInfo {
 
 	// Populate changed files list.
 	for _, f := range pr.Files.Nodes {
-		info.PRFiles = append(info.PRFiles, PRFileInfo{
-			Path:       f.Path,
-			Additions:  f.Additions,
-			Deletions:  f.Deletions,
-			ChangeType: f.ChangeType,
-		})
+		info.PRFiles = append(info.PRFiles, PRFileInfo(f))
 	}
 
 	// Flatten issue-level comments and top-level review bodies into Comments.

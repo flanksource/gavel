@@ -11,168 +11,31 @@ import {
   useListMenuSelection,
 } from '@flanksource/clicky-ui/components';
 import type { AcceptanceCriterion, PRDetail, PRItem, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
-import { extractCommentTitle, isDeploymentComment } from '../../utils';
 import { ansiToHtml } from '../../ansi';
 import { Markdown } from '../Markdown';
 import { Avatar } from '../Avatar';
 import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
-
-// SourceGroup is the kind of PR signal a candidate criterion came from.
-type SourceGroup = 'tests' | 'lint' | 'checks' | 'comments';
-
-// CandidateDetail is the full content shown in the right-hand pane when a row is
-// focused: a heading + optional location/meta, a short message, a markdown body
-// (comments), and a preformatted log (test stack traces, check logs).
-interface CandidateDetail {
-  heading: string;
-  // headingMarkdown renders the heading as inline markdown (used for comment
-  // titles, which may carry bold/code/link formatting).
-  headingMarkdown?: boolean;
-  location?: string;
-  meta?: string;
-  message?: string;
-  markdown?: string;
-  log?: string;
-  url?: string;
-}
-
-// Candidate is one selectable PR signal. Tests/lint become acceptance criteria;
-// PR checks/comments become executable verification gates.
-interface Candidate {
-  key: string;
-  group: SourceGroup;
-  text: string;
-  primary: string;
-  secondary?: string;
-  actionPattern?: string;
-  commentId?: number;
-  // author/avatarUrl are set for review comments so they can be sub-grouped by
-  // author in the list.
-  author?: string;
-  avatarUrl?: string;
-  detail: CandidateDetail;
-}
-
-interface PRVerificationPayload {
-  prNumber: number;
-  repo?: string;
-  commentIds?: number[];
-  actions?: string[];
-}
+import {
+  buildPRTodoBody,
+  buildPRTodoCandidates,
+  buildPRTodoVerification,
+  isPRTodoCriterion,
+  type PRTodoCandidate,
+  type PRTodoCandidateDetail,
+  type PRTodoSourceGroup,
+  type PRTodoVerificationPayload,
+} from './PRTodoContent';
 
 // GROUPS drives both the grouped checkbox lists and the one-click presets: each
 // preset titles the todo and narrows the selection to that group ("Fix failing
 // tests in repo#7", etc.).
-const GROUPS: { id: SourceGroup; label: string; icon: ComponentType<IconProps>; preset: string }[] = [
+const GROUPS: { id: PRTodoSourceGroup; label: string; icon: ComponentType<IconProps>; preset: string }[] = [
   { id: 'tests', label: 'Failing tests', icon: UiBeaker, preset: 'Fix failing tests' },
   { id: 'lint', label: 'Lint violations', icon: UiWarningTriangle, preset: 'Fix lint violations' },
   { id: 'checks', label: 'Failing checks', icon: UiError, preset: 'Fix failing checks' },
   { id: 'comments', label: 'Review comments', icon: UiComment, preset: 'Resolve review comments' },
 ];
-
-function location(file?: string, line?: number): string {
-  if (!file) return '';
-  return line ? `${file}:${line}` : file;
-}
-
-// buildCandidates turns a PR's failing tests, lint violations, failed CI checks,
-// and unresolved review comments into selectable signals.
-function buildCandidates(pr: PRItem, detail: PRDetail | null): Candidate[] {
-  const out: Candidate[] = [];
-  const shards = detail?.gavelResults ?? [];
-
-  shards.forEach((s, si) => {
-    (s.topFailures ?? []).forEach((f, i) => {
-      const name = f.suite ? `${f.suite} › ${f.name}` : f.name;
-      const loc = location(f.file, f.line);
-      out.push({
-        key: `test:${si}:${i}:${f.name}`,
-        group: 'tests',
-        text: `Test \`${name}\` passes`,
-        primary: f.name,
-        secondary: loc || f.suite,
-        detail: { heading: name, location: loc, message: f.message, log: f.details },
-      });
-    });
-  });
-
-  shards.forEach((s, si) => {
-    (s.topLintViolations ?? []).forEach((v, i) => {
-      const loc = location(v.file, v.line);
-      const rule = v.rule ? ` (${v.rule})` : '';
-      out.push({
-        key: `lint:${si}:${i}:${v.file ?? ''}:${v.line ?? ''}:${v.rule ?? ''}`,
-        group: 'lint',
-        text: `Resolve ${v.linter}${rule} violation${loc ? ` at ${loc}` : ''}`,
-        primary: `${v.linter}${rule}`,
-        secondary: loc || v.message,
-        detail: { heading: `${v.linter}${rule}`, location: loc, message: v.message },
-      });
-    });
-  });
-
-  (pr.checkStatus?.failures ?? []).forEach((c, i) => {
-    const steps = (c.failedSteps ?? []).join(', ');
-    out.push({
-      key: `check:${i}:${c.name}`,
-      group: 'checks',
-      text: `CI check "${c.name}" passes`,
-      primary: c.name,
-      secondary: steps || undefined,
-      actionPattern: c.name,
-      detail: { heading: c.name, meta: steps ? `Failed steps: ${steps}` : undefined, log: c.logTail, url: c.detailsUrl },
-    });
-  });
-
-  (detail?.comments ?? [])
-    .filter(c => !isDeploymentComment(c) && !c.isResolved && !c.isOutdated)
-    .forEach((c, i) => {
-      const title = extractCommentTitle(c.body);
-      const loc = location(c.path, c.line);
-      out.push({
-        key: `comment:${c.id}:${i}`,
-        group: 'comments',
-        text: `Address @${c.author}'s comment${loc ? ` on ${loc}` : ''}: ${title}`,
-        primary: title || `Comment by @${c.author}`,
-        secondary: loc || undefined,
-        commentId: c.id,
-        author: c.author,
-        avatarUrl: c.avatarUrl,
-        detail: { heading: title || `Comment by @${c.author}`, headingMarkdown: true, meta: `@${c.author}`, location: loc, markdown: c.body, url: c.url },
-      });
-    });
-
-  return out;
-}
-
-function isAcceptanceCriterionCandidate(c: Candidate): boolean {
-  return c.group === 'tests' || c.group === 'lint';
-}
-
-function uniqueValues<T>(values: T[]): T[] {
-  return Array.from(new Set(values));
-}
-
-function buildPRVerification(pr: PRItem, candidates: Candidate[], selected: Candidate[]): PRVerificationPayload | undefined {
-  const commentIds = uniqueValues(selected.map(c => c.commentId).filter((id): id is number => typeof id === 'number' && id > 0));
-  const allActionCandidates = candidates.filter(c => c.actionPattern);
-  const selectedActionCandidates = selected.filter(c => c.actionPattern);
-  let actions = uniqueValues(selectedActionCandidates.map(c => c.actionPattern).filter((action): action is string => Boolean(action)));
-
-  if (selectedActionCandidates.length > 0 && selectedActionCandidates.length === allActionCandidates.length) {
-    const selectedActionKeys = new Set(selectedActionCandidates.map(c => c.key));
-    if (allActionCandidates.every(c => selectedActionKeys.has(c.key))) actions = ['*'];
-  }
-
-  if (commentIds.length === 0 && actions.length === 0) return undefined;
-  return {
-    prNumber: pr.number,
-    repo: pr.repo,
-    ...(commentIds.length > 0 ? { commentIds } : {}),
-    ...(actions.length > 0 ? { actions } : {}),
-  };
-}
 
 // Section is one rendered group in the left list: tests/lint/checks each map to a
 // single section; review comments are sub-grouped into one section per author.
@@ -182,13 +45,13 @@ interface Section {
   icon: ComponentType<IconProps>;
   avatarUrl?: string;
   isAuthor?: boolean;
-  items: Candidate[];
+  items: PRTodoCandidate[];
 }
 
 // buildSections orders the left list (tests, lint, checks, then comments) and
 // splits the comments group into one section per author, preserving first-seen
 // order so the list is stable as detail streams in.
-function buildSections(candidates: Candidate[]): Section[] {
+function buildSections(candidates: PRTodoCandidate[]): Section[] {
   const out: Section[] = [];
   for (const g of GROUPS) {
     const items = candidates.filter(c => c.group === g.id);
@@ -197,7 +60,7 @@ function buildSections(candidates: Candidate[]): Section[] {
       out.push({ id: g.id, label: g.label, icon: g.icon, items });
       continue;
     }
-    const byAuthor = new Map<string, Candidate[]>();
+    const byAuthor = new Map<string, PRTodoCandidate[]>();
     for (const c of items) {
       const author = c.author || 'unknown';
       const list = byAuthor.get(author);
@@ -227,7 +90,7 @@ function todoHref(todo: TodoItem): string {
 // DetailPane renders the focused candidate's full content in the right column:
 // a markdown body for comments, an ANSI-rendered message/log for tests and
 // checks, and a link back to the source on GitHub when available.
-function DetailPane({ detail }: { detail?: CandidateDetail }) {
+function DetailPane({ detail }: { detail?: PRTodoCandidateDetail }) {
   if (!detail) {
     return (
       <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">
@@ -273,8 +136,8 @@ function DetailPane({ detail }: { detail?: CandidateDetail }) {
 }
 
 // CreateTodoFromPRDialog turns a PR's failing tests, lint violations, failed CI
-// checks, and review comments into a new todo. Tests/lint are acceptance
-// criteria; PR checks/comments are executable verification gates.
+// checks, and review comments into a new todo. Tests/lint contribute body
+// details and acceptance criteria; PR checks/comments are verification gates.
 export function CreateTodoFromPRDialog({
   open,
   onClose,
@@ -291,7 +154,7 @@ export function CreateTodoFromPRDialog({
   // onCreated lets the host refresh todo counts after a todo is added.
   onCreated?: () => void;
 }) {
-  const candidates = useMemo(() => buildCandidates(pr, detail), [pr, detail]);
+  const candidates = useMemo(() => buildPRTodoCandidates(pr, detail), [pr, detail]);
   // Prefer the workspace whose repos include this PR's repo, else the first.
   const defaultDir = useMemo(() => {
     const match = workspaces.find(w => (w.repos ?? []).includes(pr.repo));
@@ -392,20 +255,17 @@ export function CreateTodoFromPRDialog({
       const sel = new Set(selectedKeys);
       const selected = candidates.filter(c => sel.has(c.key));
       const criteria: AcceptanceCriterion[] = selected
-        .filter(isAcceptanceCriterionCandidate)
+        .filter(isPRTodoCriterion)
         .map(c => ({ text: c.text }));
-      const prVerification = buildPRVerification(pr, candidates, selected);
-      const bodyParts: string[] = [];
-      if (notes.trim()) bodyParts.push(notes.trim());
-      bodyParts.push(`_From [${pr.repo}#${pr.number}](${pr.url})._`);
+      const prVerification = buildPRTodoVerification(pr, candidates, selected);
       const payload: {
         title: string;
         body: string;
         priority: TodoPriority;
         status: TodoStatus;
         criteria: AcceptanceCriterion[];
-        prVerification?: PRVerificationPayload;
-      } = { title: title.trim(), body: bodyParts.join('\n\n'), priority, status, criteria };
+        prVerification?: PRTodoVerificationPayload;
+      } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria };
       if (prVerification) payload.prVerification = prVerification;
       const res = await fetch(`/api/todos/new?${todoQuery(dir)}`, {
         method: 'POST',
@@ -424,7 +284,7 @@ export function CreateTodoFromPRDialog({
   }
 
   const selectedCandidates = candidates.filter(c => selectedKeys.includes(c.key));
-  const selectedCriteriaCount = selectedCandidates.filter(isAcceptanceCriterionCandidate).length;
+  const selectedCriteriaCount = selectedCandidates.filter(isPRTodoCriterion).length;
   const selectedGateCount = selectedCandidates.filter(c => c.actionPattern || c.commentId).length;
   const presets = GROUPS.filter(g => candidates.some(c => c.group === g.id));
   const activeDetail = candidates.find(c => c.key === activeKey)?.detail;
