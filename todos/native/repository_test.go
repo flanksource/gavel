@@ -17,18 +17,18 @@ func TestNormalizeStrings(t *testing.T) {
 
 func TestNormalizeAliases(t *testing.T) {
 	aliases, err := normalizeAliases([]AliasInput{
-		{Alias: " E2A3B8C2 ", Kind: " GRITE "},
+		{Alias: " E2A3B8C2 ", Kind: " EXTERNAL "},
 		{Alias: "external-42", Kind: "External"},
-		{Alias: "e2a3b8c2", Kind: "grite"},
+		{Alias: "e2a3b8c2", Kind: "external"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []AliasInput{
-		{Alias: "e2a3b8c2", Kind: "grite"},
+		{Alias: "e2a3b8c2", Kind: "external"},
 		{Alias: "external-42", Kind: "external"},
 	}, aliases)
 
 	_, err = normalizeAliases([]AliasInput{
-		{Alias: "same", Kind: "grite"},
+		{Alias: "same", Kind: "source-a"},
 		{Alias: "same", Kind: "external"},
 	})
 	require.ErrorIs(t, err, ErrInvalidInput)

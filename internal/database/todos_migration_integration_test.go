@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
+func TestNativeTodoHCLMigrationAndRepeatedApply(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
 		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
 	}
@@ -21,33 +21,6 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, stop()) })
-
-	// Model the pre-native database without using AutoMigrate: Grite cache data
-	// already exists, while no native TODO tables have been created yet.
-	legacy, err := commonsdb.NewGorm(dsn, commonsdb.DefaultGormConfig())
-	require.NoError(t, err)
-	require.NoError(t, legacy.Exec(`
-		CREATE TABLE grite_issue_caches (
-			repo text NOT NULL,
-			issue_id text NOT NULL,
-			title text,
-			PRIMARY KEY (repo, issue_id)
-		)`).Error)
-	require.NoError(t, legacy.Exec(`
-		INSERT INTO grite_issue_caches (repo, issue_id, title)
-		VALUES ('flanksource/gavel', 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', 'legacy issue')`).Error)
-	require.NoError(t, legacy.Exec(`
-		CREATE TABLE grite_sync_cursors (
-			repo text PRIMARY KEY,
-			last_event_ts bigint,
-			synced_at timestamptz
-		)`).Error)
-	require.NoError(t, legacy.Exec(`
-		INSERT INTO grite_sync_cursors (repo, last_event_ts)
-		VALUES ('flanksource/gavel', 1234)`).Error)
-	legacySQL, err := legacy.DB()
-	require.NoError(t, err)
-	require.NoError(t, legacySQL.Close())
 
 	t.Setenv(database.EnvDSN, dsn)
 	t.Setenv(database.EnvDisable, "")
@@ -75,9 +48,6 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	}
 	assert.True(t, db.Gorm().Migrator().HasTable("captain_prompt_runs"), "Captain migrations must run before the Gavel bundle")
 	assert.True(t, db.Gorm().Migrator().HasTable("captain_plans"), "Captain migrations must share the Gavel database")
-
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"), "retired Grite issue cache must be removed after native migration")
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"), "retired Grite sync cursor must be removed after native migration")
 
 	const (
 		workspaceOne   = "10000000-0000-0000-0000-000000000001"
@@ -128,16 +98,16 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	// the composite foreign key prevents cross-workspace aliases.
 	require.NoError(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_aliases (workspace_id, alias, issue_id, kind)
-		VALUES (?, 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', ?, 'grite')`, workspaceOne, issueOne).Error)
+		VALUES (?, 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', ?, 'external')`, workspaceOne, issueOne).Error)
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_aliases (workspace_id, alias, issue_id, kind)
-		VALUES (?, 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', ?, 'grite')`, workspaceOne, issueTwo).Error)
+		VALUES (?, 'e2a3b8c2d0f7c9a98b400dc78e8a94a5', ?, 'external')`, workspaceOne, issueTwo).Error)
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_aliases (workspace_id, alias, issue_id, kind)
 		VALUES (?, 'cross-workspace', ?, 'legacy')`, workspaceTwo, issueOne).Error)
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_aliases (workspace_id, alias, issue_id, kind)
-		VALUES (?, 'NOT-NORMALIZED', ?, 'GRITE')`, workspaceOne, issueTwo).Error)
+		VALUES (?, 'NOT-NORMALIZED', ?, 'EXTERNAL')`, workspaceOne, issueTwo).Error)
 
 	// Active pointers are valid only after the corresponding same-issue link
 	// exists, and link rows must reference authoritative Captain records.
@@ -180,13 +150,13 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 
 	require.NoError(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_events (issue_id, sequence, kind, source, source_id)
-		VALUES (?, 1, 'created', 'grite-import', 'legacy-event-1')`, issueOne).Error)
+		VALUES (?, 1, 'created', 'portable-import', 'legacy-event-1')`, issueOne).Error)
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_events (issue_id, sequence, kind, source, source_id)
-		VALUES (?, 1, 'created', 'grite-import', 'legacy-event-1')`, issueTwo).Error)
+		VALUES (?, 1, 'created', 'portable-import', 'legacy-event-1')`, issueTwo).Error)
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issue_events (issue_id, sequence, kind, source)
-		VALUES (?, 2, 'Not-Normalized', 'GRITE-IMPORT')`, issueOne).Error)
+		VALUES (?, 2, 'Not-Normalized', 'PORTABLE-IMPORT')`, issueOne).Error)
 
 	assert.Error(t, db.Gorm().Exec(`
 		INSERT INTO todo_issues (workspace_id, title, priority)
@@ -200,8 +170,7 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	require.NoError(t, db.Gorm().Table("todo_issues").Count(&issueCount).Error)
 	assert.EqualValues(t, 3, issueCount, "repeated apply must preserve native issue data")
 
-	// Remove only the native surface and prove the declarative bundle recreates
-	// it without resurrecting the retired Grite cache tables.
+	// Remove only the native surface and prove the declarative bundle recreates it.
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		todo_issue_events,
 		todo_issue_aliases,
@@ -217,6 +186,4 @@ func TestNativeTodoHCLMigrationFromLegacyAndRepeatedApply(t *testing.T) {
 	for _, table := range nativeTables {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should be recreated", table)
 	}
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"))
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"))
 }

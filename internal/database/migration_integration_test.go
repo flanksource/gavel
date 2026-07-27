@@ -42,21 +42,6 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	))
 	require.NoError(t, legacy.Create(&githubcache.HTTPCacheEntry{URL: "https://example.test", Method: "GET", StatusCode: 200}).Error)
 	require.NoError(t, legacy.Exec(`
-		CREATE TABLE grite_issue_caches (
-			repo text NOT NULL,
-			issue_id text NOT NULL,
-			title text,
-			PRIMARY KEY (repo, issue_id)
-		);
-		CREATE TABLE grite_sync_cursors (
-			repo text PRIMARY KEY,
-			last_event_ts bigint,
-			synced_at timestamptz
-		);
-		INSERT INTO grite_issue_caches (repo, issue_id, title)
-		VALUES ('flanksource/gavel', 'legacy-grite-issue', 'retired cache row');
-		INSERT INTO grite_sync_cursors (repo, last_event_ts)
-		VALUES ('flanksource/gavel', 1234);
 		CREATE TABLE migration_unmanaged (id integer PRIMARY KEY, value text NOT NULL);
 		INSERT INTO migration_unmanaged (id, value) VALUES (1, 'preserve me')
 	`).Error)
@@ -85,31 +70,16 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist", table)
 	}
-	for _, table := range []string{"grite_issue_caches", "grite_sync_cursors"} {
-		assert.False(t, db.Gorm().Migrator().HasTable(table), "%s should be removed by the narrow cleanup migration", table)
-	}
 	var cached githubcache.HTTPCacheEntry
 	require.NoError(t, db.Gorm().First(&cached, "url = ? AND method = ?", "https://example.test", "GET").Error)
 	require.Equal(t, 200, cached.StatusCode)
 	var unmanagedValue string
 	require.NoError(t, db.Gorm().Raw(`SELECT value FROM migration_unmanaged WHERE id = 1`).Scan(&unmanagedValue).Error)
 	assert.Equal(t, "preserve me", unmanagedValue)
-	var cleanupRecordedAt time.Time
-	require.NoError(t, db.Gorm().Raw(`
-		SELECT updated_at FROM schema_migration_scripts
-		WHERE scope = 'gavel' AND path = '120_drop_grite_runtime_cache.sql'
-	`).Scan(&cleanupRecordedAt).Error)
-	require.False(t, cleanupRecordedAt.IsZero(), "the destructive cleanup must be recorded in the Gavel migration scope")
 
 	second, err := database.Open(t.Context(), database.WithMigrations())
 	require.NoError(t, err, "migration should be idempotent")
 	require.NoError(t, second.Close())
-	var cleanupRecordedAgain time.Time
-	require.NoError(t, db.Gorm().Raw(`
-		SELECT updated_at FROM schema_migration_scripts
-		WHERE scope = 'gavel' AND path = '120_drop_grite_runtime_cache.sql'
-	`).Scan(&cleanupRecordedAgain).Error)
-	assert.Equal(t, cleanupRecordedAt, cleanupRecordedAgain, "the destructive SQL is a one-time hash-tracked migration")
 
 	require.NoError(t, db.Gorm().Exec(`DROP TABLE
 		http_cache_entries, workflow_run_caches, job_log_caches, workflow_def_caches,
@@ -122,8 +92,6 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	for _, table := range []string{"captain_sessions", "captain_prompt_runs", "captain_plans", "http_cache_entries", "task_run_history", "violations", "file_scans", "linter_executions", "debounce_metadata", "migration_unmanaged"} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist after a fresh migration", table)
 	}
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"))
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"))
 
 	violationCache, err := analysiscache.NewViolationCache(db.Gorm())
 	require.NoError(t, err)
@@ -165,7 +133,7 @@ func TestHCLMigrationFromExistingGitHubSchema(t *testing.T) {
 	assert.EqualValues(t, 1, executionStats.ViolationCount)
 }
 
-func TestHCLMigrationFreshDatabaseOmitsRetiredGriteCache(t *testing.T) {
+func TestHCLMigrationFreshDatabaseCreatesCurrentSchema(t *testing.T) {
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
 		t.Skip("set GAVEL_DB_EMBEDDED_TEST=1 to run embedded-postgres migration tests")
 	}
@@ -195,12 +163,4 @@ func TestHCLMigrationFreshDatabaseOmitsRetiredGriteCache(t *testing.T) {
 	} {
 		require.True(t, db.Gorm().Migrator().HasTable(table), "%s should exist on a fresh database", table)
 	}
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_issue_caches"))
-	assert.False(t, db.Gorm().Migrator().HasTable("grite_sync_cursors"))
-
-	var cleanupRecords int64
-	require.NoError(t, db.Gorm().Table("schema_migration_scripts").
-		Where("scope = ? AND path = ?", "gavel", "120_drop_grite_runtime_cache.sql").
-		Count(&cleanupRecords).Error)
-	assert.EqualValues(t, 1, cleanupRecords)
 }

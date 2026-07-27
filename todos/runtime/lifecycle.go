@@ -250,7 +250,7 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 }
 
 // PlanMarkdown returns Captain-owned immutable plan content. Runtime callers
-// never read a .todos/Grite plan pointer or silently execute an unapproved
+// never read a portable-file plan pointer or silently execute an unapproved
 // revision.
 func (p *Provider) PlanMarkdown(ctx context.Context, todo *types.TODO, mode types.RunMode) (string, error) {
 	issueID, err := p.todoID(todo)

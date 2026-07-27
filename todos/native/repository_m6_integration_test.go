@@ -55,7 +55,7 @@ func TestRepositoryGlobalReferenceResolution(t *testing.T) {
 	legacyAlias := "e2a3b8c2d0f7c9a98b400dc78e8a94a5"
 	legacyIssue, err := repo.CreateIssue(ctx, native.CreateIssueInput{
 		WorkspaceID: firstWorkspace.ID,
-		Aliases:     []native.AliasInput{{Alias: legacyAlias, Kind: "grite"}},
+		Aliases:     []native.AliasInput{{Alias: legacyAlias, Kind: "external"}},
 		Title:       "Legacy alias",
 	})
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestRepositoryMoveIssueWorkspace(t *testing.T) {
 	issue, err := repo.CreateIssue(ctx, native.CreateIssueInput{
 		WorkspaceID: sourceWorkspace.ID,
 		Aliases: []native.AliasInput{
-			{Alias: "legacy-move-ref", Kind: "grite"},
+			{Alias: "legacy-move-ref", Kind: "legacy"},
 			{Alias: "jira-move-42", Kind: "external"},
 		},
 		Title: "Move with durable state",
@@ -264,7 +264,7 @@ func TestRepositoryMoveIssueWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	collisionMover, err := repo.CreateIssue(ctx, native.CreateIssueInput{
 		WorkspaceID: sourceWorkspace.ID,
-		Aliases:     []native.AliasInput{{Alias: "collision-ref", Kind: "grite"}},
+		Aliases:     []native.AliasInput{{Alias: "collision-ref", Kind: "external"}},
 		Title:       "Collision mover",
 	})
 	require.NoError(t, err)

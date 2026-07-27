@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrDatabasePoolMismatch = errors.New("Captain and native TODO repositories use different database pools")
+var ErrDatabasePoolMismatch = errors.New("captain and native TODO repositories use different database pools")
 
 // PromptRunLaunchAttachment contains only Gavel-owned attachment metadata. The
 // authoritative prompt-run UUID is obtained from Captain inside the launch

@@ -81,7 +81,7 @@ func TestRepositoryLifecycle(t *testing.T) {
 	legacyRef := "E2A3B8C2D0F7C9A98B400DC78E8A94A5"
 	issue, err := repo.CreateIssue(ctx, native.CreateIssueInput{
 		WorkspaceID:  workspace.ID,
-		Aliases:      []native.AliasInput{{Alias: legacyRef, Kind: "GRITE"}},
+		Aliases:      []native.AliasInput{{Alias: legacyRef, Kind: "EXTERNAL"}},
 		Title:        " Native issue ",
 		Body:         "## Acceptance Criteria\n- [ ] works",
 		Verification: "## Verification\n```bash\ntrue\n```",
@@ -132,7 +132,7 @@ func TestRepositoryLifecycle(t *testing.T) {
 	assert.Equal(t, int64(3), issue.Version)
 
 	issue, err = repo.SetAliases(ctx, issue.ID, issue.Version, []native.AliasInput{
-		{Alias: legacyRef, Kind: "grite"},
+		{Alias: legacyRef, Kind: "external"},
 		{Alias: "JIRA-42", Kind: "external"},
 	}, "integration-test")
 	require.NoError(t, err)
@@ -284,17 +284,17 @@ func TestRepositoryLifecycle(t *testing.T) {
 
 	importEvent, err := repo.AppendEvent(ctx, target.ID, target.Version, native.EventInput{
 		Kind:     " MIGRATION_WARNING ",
-		Source:   " GRITE-IMPORT ",
+		Source:   " PORTABLE-IMPORT ",
 		SourceID: "legacy-event-1",
 		Payload:  map[string]any{"warning": "missing run link"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "grite-import", importEvent.Source)
+	assert.Equal(t, "portable-import", importEvent.Source)
 	target, err = repo.GetIssue(ctx, target.ID)
 	require.NoError(t, err)
 	_, err = repo.AppendEvent(ctx, target.ID, target.Version, native.EventInput{
 		Kind:     "migration_warning",
-		Source:   "grite-import",
+		Source:   "portable-import",
 		SourceID: "legacy-event-1",
 	})
 	require.ErrorIs(t, err, native.ErrEventConflict)

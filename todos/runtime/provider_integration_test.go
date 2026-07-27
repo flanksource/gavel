@@ -155,7 +155,7 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 
 	alias := "e2a3b8c2d0f7c9a98b400dc78e8a94a5"
 	stored, err = repository.SetAliases(t.Context(), stored.ID, stored.Version, []native.AliasInput{{
-		Alias: alias, Kind: "grite",
+		Alias: alias, Kind: "external",
 	}}, "integration-test")
 	require.NoError(t, err)
 	created, err = provider.Get(t.Context(), alias[:8])

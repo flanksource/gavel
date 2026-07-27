@@ -349,7 +349,7 @@ func TestNewTodosProviderOpensNativeRuntime(t *testing.T) {
 	}
 }
 
-func TestResolveRequestedTODOsUsesDirectGetForLegacyAlias(t *testing.T) {
+func TestResolveRequestedTODOsUsesDirectGetForImportedAlias(t *testing.T) {
 	want := &types.TODO{
 		ID:       "962e67fe-4556-b837-0666-f0304281d554",
 		Provider: todos.ProviderDB,
@@ -359,15 +359,15 @@ func TestResolveRequestedTODOsUsesDirectGetForLegacyAlias(t *testing.T) {
 		},
 	}
 	provider := &referenceSpyProvider{todo: want}
-	got, err := resolveRequestedTODOs(context.Background(), provider, []string{"legacy-grite-alias"}, todos.DiscoveryFilters{})
+	got, err := resolveRequestedTODOs(context.Background(), provider, []string{"imported-alias"}, todos.DiscoveryFilters{})
 	if err != nil {
 		t.Fatalf("resolveRequestedTODOs: %v", err)
 	}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("resolved TODOs = %#v, want direct alias target", got)
 	}
-	if len(provider.getRefs) != 1 || provider.getRefs[0] != "legacy-grite-alias" {
-		t.Fatalf("Get refs = %#v, want legacy alias", provider.getRefs)
+	if len(provider.getRefs) != 1 || provider.getRefs[0] != "imported-alias" {
+		t.Fatalf("Get refs = %#v, want imported alias", provider.getRefs)
 	}
 	if provider.listCalls != 0 {
 		t.Fatalf("List calls = %d, want 0 for a directly resolvable alias", provider.listCalls)
@@ -427,7 +427,7 @@ func (p *singleIssueRuntimeStub) SupportsGroupedExecution() bool { return false 
 
 func (p *referenceSpyProvider) Get(_ context.Context, ref string) (*types.TODO, error) {
 	p.getRefs = append(p.getRefs, ref)
-	if ref != "legacy-grite-alias" {
+	if ref != "imported-alias" {
 		return nil, os.ErrNotExist
 	}
 	return p.todo, nil

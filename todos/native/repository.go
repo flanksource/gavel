@@ -443,8 +443,8 @@ func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]I
 }
 
 // GetIssueByRef resolves exact workspace aliases before UUIDs so imported
-// 32-character Grite aliases remain authoritative. It then accepts native UUID
-// and unambiguous UUID/alias prefixes of at least MinShortReferenceLength.
+// UUID-shaped aliases remain authoritative. It then accepts native UUID and
+// unambiguous UUID/alias prefixes of at least MinShortReferenceLength.
 func (r *Repository) GetIssueByRef(ctx context.Context, workspaceID uuid.UUID, ref string) (*Issue, error) {
 	ref = normalizeToken(ref)
 	if ref == "" {

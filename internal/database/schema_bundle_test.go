@@ -27,7 +27,6 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	assert.Contains(t, names, "111_todo_projection_triggers.sql")
 	assert.Contains(t, names, "112_view_todo_issue_runtime.sql")
 	assert.Contains(t, names, "115_backfill_todo_activity.sql")
-	assert.Contains(t, names, "120_drop_grite_runtime_cache.sql")
 	assert.Contains(t, names, "130_task_history_storage_params.sql")
 
 	prepareSQL := readEmbeddedSchemaFile(t, "schema/090_prepare_runtime_state.sql")
@@ -80,15 +79,6 @@ func TestSchemaBundleIncludesOrderedCaptainProjectionSQL(t *testing.T) {
 	backfillSQL := readEmbeddedSchemaFile(t, "schema/115_backfill_todo_activity.sql")
 	assert.Contains(t, backfillSQL, "-- dependsOn: 111_todo_projection_triggers.sql")
 	assert.Contains(t, backfillSQL, "GREATEST(issue.updated_at, activity.activity_at)")
-
-	cleanupSQL := readEmbeddedSchemaFile(t, "schema/120_drop_grite_runtime_cache.sql")
-	assert.Contains(t, cleanupSQL, "-- phase: post")
-	assert.Contains(t, cleanupSQL, "DROP TABLE IF EXISTS public.grite_sync_cursors, public.grite_issue_caches RESTRICT;")
-	assert.NotContains(t, strings.ToUpper(cleanupSQL), "CASCADE")
-
-	githubSchema := readEmbeddedSchemaFile(t, "schema/github_cache.hcl")
-	assert.NotContains(t, githubSchema, `table "grite_issue_caches"`)
-	assert.NotContains(t, githubSchema, `table "grite_sync_cursors"`)
 
 	taskHistorySchema := readEmbeddedSchemaFile(t, "schema/task_history.hcl")
 	assert.Contains(t, taskHistorySchema, `table "task_run_history"`)

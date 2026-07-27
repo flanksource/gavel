@@ -441,7 +441,6 @@ export default function SessionDataModel() {
             size="5.8 MB"
             sample={[
               'kind: comment 1,435 · label_added 894 · label_removed 773 · issue_created 718 · +14 more',
-              'source: grite-import 5,357 · gavel 748 · captain-projection 50',
               'sequence: 1..62 (avg 6)',
             ]}
             note="append-only; (source, source_id) is the import and projection idempotency key"
@@ -462,7 +461,6 @@ export default function SessionDataModel() {
             width="210px"
             rows="718"
             size="264 kB"
-            sample={['kind: grite 718 — every alias came from the grite import']}
           >
             <Field name="workspace_id" type="uuid" keyKind="PK" to="workspaces" />
             <Field name="alias" type="text" keyKind="PK" />
