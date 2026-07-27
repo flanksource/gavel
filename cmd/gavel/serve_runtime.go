@@ -22,6 +22,7 @@ type serveDatabase interface {
 type serveSessionMonitor interface {
 	Run(context.Context) error
 	Ready() <-chan struct{}
+	IngestStats() monitor.IngestStats
 }
 
 type serveDatabaseMode uint8
@@ -74,20 +75,21 @@ func serveDatabaseStartupMessage(db serveDatabase, liveSessions int64) string {
 // startServeRuntime synchronously opens Gavel's process database before any
 // serve goroutine or HTTP listener can initialize Captain independently. When
 // persistence is enabled, it then runs Captain's continuous session monitor on
-// that same pool until the serve context is cancelled.
-func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode serveDatabaseMode) error {
+// that same pool until the serve context is cancelled. It returns the monitor's
+// counter reader, or nil when persistence is off and no monitor exists.
+func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode serveDatabaseMode) (func() monitor.IngestStats, error) {
 	db, err := deps.openDatabase(ctx, mode)
 	if err != nil {
-		return fmt.Errorf("initialize Gavel shared database: %w", err)
+		return nil, fmt.Errorf("initialize Gavel shared database: %w", err)
 	}
 	if db.Disabled() {
 		deps.logInfo(serveDatabaseStartupMessage(db, 0))
-		return nil
+		return nil, nil
 	}
 
 	mon, err := deps.newMonitor(db.Gorm())
 	if err != nil {
-		return fmt.Errorf("initialize Captain session monitor: %w", err)
+		return nil, fmt.Errorf("initialize Captain session monitor: %w", err)
 	}
 	go func() {
 		if err := mon.Run(ctx); err != nil && ctx.Err() == nil {
@@ -97,12 +99,12 @@ func startServeRuntime(ctx context.Context, deps serveRuntimeDependencies, mode 
 	select {
 	case <-mon.Ready():
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 	liveSessions, err := deps.countLiveSessions(ctx, db.Gorm())
 	if err != nil {
-		return fmt.Errorf("count live Captain sessions: %w", err)
+		return nil, fmt.Errorf("count live Captain sessions: %w", err)
 	}
 	deps.logInfo(serveDatabaseStartupMessage(db, liveSessions))
-	return nil
+	return mon.IngestStats, nil
 }

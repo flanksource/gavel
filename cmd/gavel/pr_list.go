@@ -338,8 +338,12 @@ func runPRUI(opts PRListOptions, databaseMode serveDatabaseMode) error {
 	poller := ui.NewPoller(srv, searchFn, interval)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode); err != nil {
+	ingestStats, err := startServeRuntime(ctx, defaultServeRuntimeDependencies, databaseMode)
+	if err != nil {
 		return err
+	}
+	if ingestStats != nil {
+		srv.SetIngestStats(ingestStats)
 	}
 	poller.Start(ctx)
 

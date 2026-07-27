@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -26,6 +27,7 @@ type fakeServeMonitor struct {
 	started chan context.Context
 	stopped chan struct{}
 	ready   chan struct{}
+	stats   monitor.IngestStats
 }
 
 func (m *fakeServeMonitor) Run(ctx context.Context) error {
@@ -38,16 +40,21 @@ func (m *fakeServeMonitor) Run(ctx context.Context) error {
 
 func (m *fakeServeMonitor) Ready() <-chan struct{} { return m.ready }
 
+func (m *fakeServeMonitor) IngestStats() monitor.IngestStats { return m.stats }
+
 func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	pool := &gorm.DB{}
-	mon := &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}
+	mon := &fakeServeMonitor{
+		started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{}),
+		stats: monitor.IngestStats{FilesIngested: 3, MessagesParsed: 900, MessagesOffered: 9},
+	}
 	var monitorPool *gorm.DB
 	var countPool *gorm.DB
 	var openedMode serveDatabaseMode
 	var logs []string
 
-	err := startServeRuntime(ctx, serveRuntimeDependencies{
+	ingestStats, err := startServeRuntime(ctx, serveRuntimeDependencies{
 		openDatabase: func(_ context.Context, mode serveDatabaseMode) (serveDatabase, error) {
 			openedMode = mode
 			return fakeServeDatabase{gorm: pool, dsn: "postgres://captain:secret@db.internal/gavel", source: "--db-url"}, nil
@@ -67,6 +74,10 @@ func TestStartServeRuntimeStartsMonitorOnSharedPool(t *testing.T) {
 	require.Same(t, pool, monitorPool)
 	require.Same(t, pool, countPool)
 	require.Equal(t, []string{`Database Info: source="--db-url" dsn="postgres://captain:REDACTED@db.internal/gavel" live_sessions=7`}, logs)
+	// The dashboard's own profiler is useless for the monitor it embeds unless
+	// the monitor's counters come back out with it.
+	require.NotNil(t, ingestStats)
+	require.Equal(t, mon.stats, ingestStats())
 	select {
 	case startedCtx := <-mon.started:
 		require.Same(t, ctx, startedCtx)
@@ -86,7 +97,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 	monitorCalled := false
 	countCalled := false
 	var logs []string
-	err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+	ingestStats, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
 		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{disabled: true}, nil
 		},
@@ -101,6 +112,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 		logInfo: func(message string) { logs = append(logs, message) },
 	}, serveDatabaseNoMigrations)
 	require.NoError(t, err)
+	require.Nil(t, ingestStats, "there are no ingest counters without a monitor to keep them")
 	require.False(t, monitorCalled)
 	require.False(t, countCalled)
 	require.Equal(t, []string{`Database Info: source="disabled" dsn="" live_sessions=0`}, logs)
@@ -108,7 +120,7 @@ func TestStartServeRuntimeSkipsMonitorWhenDatabaseDisabled(t *testing.T) {
 
 func TestStartServeRuntimeSurfacesInitializationErrors(t *testing.T) {
 	t.Run("database", func(t *testing.T) {
-		err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+		_, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
 			openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 				return nil, errors.New("database unavailable")
 			},
@@ -117,7 +129,7 @@ func TestStartServeRuntimeSurfacesInitializationErrors(t *testing.T) {
 	})
 
 	t.Run("monitor", func(t *testing.T) {
-		err := startServeRuntime(t.Context(), serveRuntimeDependencies{
+		_, err := startServeRuntime(t.Context(), serveRuntimeDependencies{
 			openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 				return fakeServeDatabase{gorm: &gorm.DB{}}, nil
 			},
@@ -135,7 +147,7 @@ func TestStartServeRuntimeSurfacesLiveSessionCountError(t *testing.T) {
 	defer cancel()
 	mon := &fakeServeMonitor{started: make(chan context.Context, 1), stopped: make(chan struct{}), ready: make(chan struct{})}
 
-	err := startServeRuntime(ctx, serveRuntimeDependencies{
+	_, err := startServeRuntime(ctx, serveRuntimeDependencies{
 		openDatabase: func(context.Context, serveDatabaseMode) (serveDatabase, error) {
 			return fakeServeDatabase{gorm: &gorm.DB{}, dsn: "postgres://db/gavel", source: "test"}, nil
 		},

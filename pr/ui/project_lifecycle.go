@@ -265,6 +265,7 @@ func (s *Server) startProjectAction(project Project, action projectAction, args 
 		if archiveErr := taskhistory.Archive(project.ResolvedDir(), current.RunID); archiveErr != nil {
 			logger.Errorf("archive project task %s: %v", current.RunID, archiveErr)
 		}
+		s.nudgeTaskHistoryImport()
 	}()
 
 	return current, nil

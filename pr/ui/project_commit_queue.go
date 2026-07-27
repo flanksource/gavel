@@ -75,7 +75,6 @@ type commitQueue struct {
 }
 
 type commitQueueRegistry struct {
-	mu     sync.Mutex
 	queues map[string]*commitQueue
 }
 
@@ -257,6 +256,7 @@ func (q *commitQueue) settle(s *Server, project Project) {
 	}
 	q.mu.Unlock()
 
+	s.nudgeTaskHistoryImport()
 	s.notify()
 }
 

@@ -54,6 +54,10 @@ func importRecord(db *gorm.DB, record Record) error {
 	if err != nil {
 		return fmt.Errorf("marshal task snapshots %q: %w", record.Run.ID, err)
 	}
+	// The DO UPDATE is guarded because archived runs are immutable and the spool
+	// sweep re-offers every retained record on each pass. Without the guard an
+	// unchanged re-import still writes a new tuple, so a 40-row table accumulates
+	// dead tuples (and WAL) in proportion to sweep frequency rather than content.
 	result := db.Exec(`
 		INSERT INTO task_run_history (id, started_at, run, snapshots, archived_at, expires_at)
 		VALUES (?, ?, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?)
@@ -62,7 +66,12 @@ func importRecord(db *gorm.DB, record Record) error {
 			run = EXCLUDED.run,
 			snapshots = EXCLUDED.snapshots,
 			archived_at = EXCLUDED.archived_at,
-			expires_at = EXCLUDED.expires_at`,
+			expires_at = EXCLUDED.expires_at
+		WHERE task_run_history.started_at IS DISTINCT FROM EXCLUDED.started_at
+			OR task_run_history.archived_at IS DISTINCT FROM EXCLUDED.archived_at
+			OR task_run_history.expires_at IS DISTINCT FROM EXCLUDED.expires_at
+			OR task_run_history.run IS DISTINCT FROM EXCLUDED.run
+			OR task_run_history.snapshots IS DISTINCT FROM EXCLUDED.snapshots`,
 		record.Run.ID, startedAt, string(run), string(snapshots), record.ArchivedAt, record.ArchivedAt.Add(Retention))
 	if result.Error != nil {
 		return fmt.Errorf("import task history %q: %w", record.Run.ID, result.Error)

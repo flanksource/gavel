@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
@@ -57,6 +58,15 @@ type Server struct {
 	projectActions *projectActionRegistry
 	projectRuns    *testui.MultiServer
 	taskSource     *supervisorTaskSource
+
+	// taskHistoryImport nudges the archive sweep after this process writes a
+	// spool record, so a finished run reaches the database without waiting out
+	// taskHistorySweepInterval.
+	taskHistoryImport chan struct{}
+
+	// ingestStats reads the embedded session monitor's counters. nil when serve
+	// runs without persistence, in which case there is no monitor to report on.
+	ingestStats func() monitor.IngestStats
 
 	// gavelCache stores the last computed GavelResultsSummary per PR
 	// (keyed by "repo#number"). Populated as a side-effect of detail
@@ -160,15 +170,16 @@ type snapshot struct {
 
 func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfig) *Server {
 	s := &Server{
-		interval:    interval,
-		ghOpts:      ghOpts,
-		config:      config,
-		updated:     make(chan struct{}, 1),
-		refreshCh:   make(chan struct{}, 1),
-		detailCache: NewDetailCache(),
-		gavelCache:  make(map[string]*GavelResultsSummary),
-		knownBots:   make(map[string]struct{}),
-		procMetrics: metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
+		interval:          interval,
+		ghOpts:            ghOpts,
+		config:            config,
+		updated:           make(chan struct{}, 1),
+		refreshCh:         make(chan struct{}, 1),
+		detailCache:       NewDetailCache(),
+		gavelCache:        make(map[string]*GavelResultsSummary),
+		knownBots:         make(map[string]struct{}),
+		procMetrics:       metrics.NewMemory(metrics.MemoryConfig{Retention: 15 * time.Minute, MaxPoints: 512}),
+		taskHistoryImport: make(chan struct{}, 1),
 	}
 	// Probe runs in the background so NewServer stays fast. First /api/status
 	// hit before the probe completes returns State="" which handleStatus
@@ -176,6 +187,7 @@ func NewServer(interval time.Duration, ghOpts github.Options, config SearchConfi
 	go s.refreshAuthProbe()
 	go s.authProbeLoop()
 	go s.procMetricsLoop()
+	go s.taskHistoryImportLoop()
 	return s
 }
 
@@ -225,6 +237,22 @@ func (s *Server) projectRunServer() *testui.MultiServer {
 
 func (s *Server) SetDetailSyncer(ds *DetailSyncer) {
 	s.detailSyncer = ds
+}
+
+// SetIngestStats wires the embedded session monitor's counters to
+// /debug/ingest. Serve's CPU is mostly transcript ingest, so a profile alone
+// says which functions are hot without saying whether the work was necessary.
+func (s *Server) SetIngestStats(read func() monitor.IngestStats) {
+	s.ingestStats = read
+}
+
+// readIngestStats is resolved per request, not at mux-build time: the monitor
+// is wired after the routes are registered.
+func (s *Server) readIngestStats() (monitor.IngestStats, bool) {
+	if s.ingestStats == nil {
+		return monitor.IngestStats{}, false
+	}
+	return s.ingestStats(), true
 }
 
 func (s *Server) notifyDetailSyncer() {
@@ -498,6 +526,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	clickytask.RegisterHandlersWithSource(mux, "/api/v1", taskSource)
 	registerPromptRoutes(mux)
+	registerPprof(mux)
+	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
 	return mux
 }

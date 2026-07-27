@@ -58,5 +58,24 @@ var _ = Describe("Task history database store", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(records).To(Equal([]taskhistory.Record{fresh}))
+
+		// Archived runs are immutable, and the periodic spool sweep re-offers
+		// every one of them. Re-importing identical content must not touch the
+		// row: an unchanged upsert that still writes turns a 40-row table into
+		// millions of dead tuples.
+		rowVersion := func() string {
+			var xmin string
+			Expect(db.Gorm().Raw(
+				"SELECT xmin::text FROM task_run_history WHERE id = ?", fresh.Run.ID,
+			).Scan(&xmin).Error).To(Succeed())
+			return xmin
+		}
+		before := rowVersion()
+		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
+		Expect(rowVersion()).To(Equal(before), "re-importing an unchanged record must not rewrite the row")
+
+		fresh.ArchivedAt = now.Add(-30 * time.Minute)
+		Expect(store.Import(GinkgoT().Context(), []taskhistory.Record{fresh})).To(Succeed())
+		Expect(rowVersion()).NotTo(Equal(before), "a genuinely changed record must still be written")
 	})
 })
