@@ -42,8 +42,8 @@ type PromptSpec struct {
 
 // IsZero reports whether no spec is configured (no model, prompt, budget, or file).
 func (s PromptSpec) IsZero() bool {
-	return s.File == "" && s.Spec.Model.Name == "" && s.Spec.Prompt.User == "" &&
-		s.Spec.Prompt.System == "" && s.Spec.Budget == (api.Budget{}) && s.Spec.Model.Effort == ""
+	return s.File == "" && s.Name == "" && s.Prompt.User == "" &&
+		s.Prompt.System == "" && s.Budget == (api.Budget{}) && s.Effort == ""
 }
 
 // UnmarshalJSON accepts three forms and sniffs a string's content conservatively:
@@ -126,8 +126,8 @@ func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string
 			return api.Spec{}, fmt.Errorf("render prompt override file: %w", err)
 		}
 		opSpec = fileSpec.Merge(s.Spec) // inline spec fields win over the file
-	case strings.TrimSpace(s.Spec.Prompt.User) != "":
-		rendered, err := renderTemplate(s.Spec.Prompt.User, data)
+	case strings.TrimSpace(s.Prompt.User) != "":
+		rendered, err := renderTemplate(s.Prompt.User, data)
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render inline prompt: %w", err)
 		}
@@ -155,8 +155,8 @@ func (s PromptSpec) TemplateSource(dir, fallback string) (string, error) {
 		}
 		return string(data), nil
 	}
-	if strings.TrimSpace(s.Spec.Prompt.User) != "" {
-		return s.Spec.Prompt.User, nil
+	if strings.TrimSpace(s.Prompt.User) != "" {
+		return s.Prompt.User, nil
 	}
 	return fallback, nil
 }
@@ -221,7 +221,7 @@ func renderTemplate(source string, data map[string]any) (api.Spec, error) {
 		return api.Spec{}, err
 	}
 	spec := api.Spec(req)
-	if spec.Model.Name == "" {
+	if spec.Name == "" {
 		spec.Model = cfg.Model
 	}
 	return spec, nil

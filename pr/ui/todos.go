@@ -842,7 +842,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the run's session id once, up front, so it is stable across the
 	// validation and start calls below and can be returned to the client to
 	// follow the session log live (see handleTodoSessionStream).
-	opts.Spec.SessionID = resolveRunSessionID(opts, todoList)
+	opts.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
 		Registry: &s.todoRuns,
@@ -864,13 +864,13 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Agent:     opts.Agent,
 		Mode:      opts.Mode,
 		Driver:    opts.Driver,
-		Backend:   string(opts.Spec.Backend),
-		Model:     opts.Spec.Name,
-		Effort:    string(opts.Spec.Effort),
+		Backend:   string(opts.Backend),
+		Model:     opts.Name,
+		Effort:    string(opts.Effort),
 		RunMode:   string(opts.RunMode),
 		Plan:      opts.RunMode == types.ModePlan,
 		Resume:    opts.Resume,
-		SessionID: opts.Spec.SessionID,
+		SessionID: opts.SessionID,
 		Timeout:   opts.timeout().String(),
 		MaxBudget: opts.Budget.Cost,
 		MaxTurns:  opts.Budget.MaxTurns,
@@ -910,8 +910,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		Prompt:  previewPrompt,
 		Mode:    opts.Mode,
 		Agent:   opts.Agent,
-		Backend: string(opts.Spec.Backend),
-		Effort:  string(opts.Spec.Effort),
+		Backend: string(opts.Backend),
+		Effort:  string(opts.Effort),
 		RunMode: string(opts.RunMode),
 		Plan:    opts.RunMode == types.ModePlan,
 		Count:   len(todoList),
@@ -938,7 +938,7 @@ func buildTodoRunPromptPreview(ctx context.Context, provider todos.Provider, dir
 		return "", err
 	}
 	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
-		WorkDir: dir, Mode: mode, Effort: string(opts.Spec.Effort), Template: tmpl, ExistingPlan: existingPlan,
+		WorkDir: dir, Mode: mode, Effort: string(opts.Effort), Template: tmpl, ExistingPlan: existingPlan,
 	})
 	if err != nil {
 		return "", err
@@ -1602,16 +1602,16 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 	}
 	return drivers.New(kind, drivers.Config{
 		WorkDir:        req.Source.Dir,
-		Model:          req.Options.Spec.Name,
-		Backend:        string(req.Options.Spec.Backend),
-		Fallbacks:      req.Options.Spec.Model.Fallbacks,
-		Effort:         string(req.Options.Spec.Effort),
+		Model:          req.Options.Name,
+		Backend:        string(req.Options.Backend),
+		Fallbacks:      req.Options.Fallbacks,
+		Effort:         string(req.Options.Effort),
 		Mode:           mode,
 		ExistingPlan:   existingPlan,
 		Verifiers:      verifiers,
 		MaxIterations:  maxIterations,
 		Resume:         req.Options.Resume,
-		SessionID:      req.Options.Spec.SessionID,
+		SessionID:      req.Options.SessionID,
 		Timeout:        req.Options.timeout(),
 		MaxBudgetUsd:   req.Options.Budget.Cost,
 		MaxTurns:       req.Options.Budget.MaxTurns,

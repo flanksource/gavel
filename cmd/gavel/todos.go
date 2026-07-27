@@ -63,7 +63,7 @@ func loadTodosDefaults(workDir string) error {
 	todosDef = todosDefaults{
 		Driver:    tc.Driver,
 		Model:     tc.Run.Name,
-		Fallbacks: tc.Run.Model.Fallbacks,
+		Fallbacks: tc.Run.Fallbacks,
 		Effort:    string(tc.Run.Effort),
 		MaxCost:   tc.Run.Budget.Cost,
 		MaxTurns:  tc.Run.Budget.MaxTurns,

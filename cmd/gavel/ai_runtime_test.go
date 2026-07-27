@@ -53,6 +53,6 @@ func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 
 	cfg, req, err := buildAIFixRequest(opts, operation, t.TempDir())
 	require.NoError(t, err)
-	assert.Equal(t, "claude-opus-4-8", cfg.Model.Name)
+	assert.Equal(t, "claude-opus-5", cfg.Model.Name)
 	assert.Equal(t, api.EffortMedium, req.Model.Effort)
 }

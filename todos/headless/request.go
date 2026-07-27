@@ -55,7 +55,7 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		req.Backend = captainai.Backend(b)
 	}
 	if len(expanded.Fallbacks) > 0 {
-		req.Model.Fallbacks = expanded.Fallbacks
+		req.Fallbacks = expanded.Fallbacks
 	}
 
 	templateMode := base.Permissions.Mode

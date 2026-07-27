@@ -61,18 +61,18 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, wor
 		return captainai.Config{}, captainai.Request{}, err
 	}
 	req.SetCwd(workDir)
-	if len(opts.Fallback) == 0 && len(operation.Model.Fallbacks) > 0 {
-		cfg.Model.Fallbacks = operation.Model.Fallbacks
+	if len(opts.Fallback) == 0 && len(operation.Fallbacks) > 0 {
+		cfg.Model.Fallbacks = operation.Fallbacks
 		cfg.Model, err = captainai.ResolveModelSelectors(cfg.Model)
 		if err != nil {
 			return captainai.Config{}, captainai.Request{}, err
 		}
 	}
-	req.Model.Name = cfg.Model.Name
-	req.Model.Backend = cfg.Model.Backend
-	req.Model.Fallbacks = cfg.Model.Fallbacks
-	if operation.Model.NoCache {
-		req.Model.NoCache = true
+	req.Name = cfg.Model.Name
+	req.Backend = cfg.Model.Backend
+	req.Fallbacks = cfg.Model.Fallbacks
+	if operation.NoCache {
+		req.NoCache = true
 	}
 	if operation.Budget.Timeout != "" {
 		req.Budget.Timeout = operation.Budget.Timeout

@@ -1186,13 +1186,16 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude-headless driver: %v", err)
 	}
-	if opts.Driver != "claude-headless" || opts.Agent != "claude" || opts.Mode != "inline" {
+	if opts.Driver != "cli" || opts.Agent != "claude" || opts.Mode != "inline" {
 		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.Agent, opts.Mode)
 	}
 
-	// codex-cmux with no model resolves the codex agent and defaults to the
-	// captain whoami-backed cmux model.
-	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-cmux"})
+	// The legacy codex-cmux driver contributes only the cmux mechanism; the
+	// model selects the codex agent and resolves its cmux backend.
+	opts, err = normalizeTodoRunOptions(todoRunPayload{
+		Driver: "codex-cmux",
+		Spec:   api.Spec{Model: api.Model{Name: "codex"}},
+	})
 	if err != nil {
 		t.Fatalf("codex-cmux driver: %v", err)
 	}
@@ -1346,8 +1349,12 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 		t.Fatalf("unexpected normalized opus model options: %+v", opts)
 	}
 
-	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5"}}}); err == nil {
-		t.Fatal("mismatched backend and driver should be rejected")
+	opts, err = normalizeTodoRunOptions(todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5"}}})
+	if err != nil {
+		t.Fatalf("legacy composite driver should preserve only the cli mechanism: %v", err)
+	}
+	if opts.Driver != "cli" || opts.Agent != "claude" || opts.Backend != "claude-agent" {
+		t.Fatalf("unexpected mechanism-only driver options: %+v", opts)
 	}
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "gpt-5-codex"}}}); err == nil {
 		t.Fatal("mismatched backend and model should be rejected")
