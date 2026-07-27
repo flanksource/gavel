@@ -116,6 +116,23 @@ func TestTODOExecutorPersistsSessionBeforeExecutorReturns(t *testing.T) {
 	}
 }
 
+func TestExecutorContextRecordsResolvedRuntimeBeforeSessionID(t *testing.T) {
+	execCtx := NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
+	var recorded RunStartMetadata
+	execCtx.SetRunStartHook(func(meta RunStartMetadata) {
+		recorded = meta
+	})
+
+	execCtx.RecordRunStart(RunStartMetadata{
+		Mode: "run", Driver: "cli", Agent: "claude", Provider: "anthropic",
+		Backend: "claude-agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
+	})
+
+	if recorded.ResolvedModel != "claude-sonnet-5" || recorded.Backend != "claude-agent" {
+		t.Fatalf("run metadata was not recorded before a provider session ID existed: %+v", recorded)
+	}
+}
+
 func TestTODOExecutorCommentsRunMetadataWhenSessionKnown(t *testing.T) {
 	execCtx := NewExecutorContext(context.Background(), logger.StandardLogger(), nil)
 	provider := &recordingProvider{}

@@ -11,8 +11,10 @@ import (
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
 	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -281,6 +283,184 @@ func TestTodoAPIAnswerRejectsWrongState(t *testing.T) {
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("no-session answer status = %d, want 409; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+// seedAskTodoWithRun seeds an ask todo whose asking turn left the given prompt
+// run behind — the shape every dashboard answer starts from.
+func seedAskTodoWithRun(t *testing.T, workDir, sessionID string, mode types.RunMode, run *captaindb.PromptRun) *types.TODO {
+	t.Helper()
+	created := seedReviewTodo(t, workDir, types.StatusAsk)
+	provider := uiTestProviderFor(workDir)
+	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{SessionID: &sessionID, RunMode: &mode}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	provider.activeRun = run
+	provider.comments = nil
+	return created
+}
+
+func stubTodoAnswer(t *testing.T) (*todoRunRequest, *bool) {
+	t.Helper()
+	var got todoRunRequest
+	called := false
+	old := startTodoAnswer
+	startTodoAnswer = func(req todoRunRequest, _ string) error {
+		got, called = req, true
+		return nil
+	}
+	t.Cleanup(func() { startTodoAnswer = old })
+	return &got, &called
+}
+
+// A codex rollout answered by the dashboard must resume on codex. The answer box
+// sends no run options, so without inheriting the asking run's recorded runtime
+// the payload defaults would hand the session to a cmux/claude driver.
+func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	const sid = "019fa17d-622a-7ef3-b8ad-d8b1d7cd3836"
+	const codexModel = "gpt-5.6-sol"
+	created := seedAskTodoWithRun(t, workDir, sid, types.ModeRun, &captaindb.PromptRun{
+		State: captaindb.PromptRunStateWaiting,
+		Runtime: captaindb.PromptRunRuntime{
+			Mode:   "run",
+			Driver: "headless-codex",
+			Resolved: captaindb.PromptRunRuntimeSelection{
+				Provider: "openai", Backend: "codex-agent", Model: codexModel, Effort: "high",
+			},
+		},
+	})
+	gotReq, called := stubTodoAnswer(t)
+
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if !*called {
+		t.Fatal("resume was never dispatched")
+	}
+	if gotReq.Options.Driver != string(drivers.Cli) {
+		t.Errorf("driver = %q, want %q (the asking run's headless mechanism)", gotReq.Options.Driver, drivers.Cli)
+	}
+	if gotReq.Options.Agent != "codex" {
+		t.Errorf("agent = %q, want codex — a codex session must not resume under claude", gotReq.Options.Agent)
+	}
+	if string(gotReq.Options.Backend) != "codex-agent" {
+		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Backend)
+	}
+	if gotReq.Options.Name != codexModel {
+		t.Errorf("model = %q, want %q", gotReq.Options.Name, codexModel)
+	}
+	if string(gotReq.Options.Effort) != "high" {
+		t.Errorf("effort = %q, want high", gotReq.Options.Effort)
+	}
+	if gotReq.Options.SessionID != sid {
+		t.Errorf("session id = %q, want the todo's recorded session %q", gotReq.Options.SessionID, sid)
+	}
+}
+
+// Explicit dashboard options still win over the asking run's runtime.
+func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-override", types.ModeRun, &captaindb.PromptRun{
+		State: captaindb.PromptRunStateWaiting,
+		Runtime: captaindb.PromptRunRuntime{
+			Driver:   "headless-codex",
+			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
+		},
+	})
+	gotReq, _ := stubTodoAnswer(t)
+
+	// Sent as wire JSON, not a marshaled todoRunPayload: api.Spec's promoted
+	// MarshalJSON emits only the spec fields, so marshaling the struct would drop
+	// the very driver override under test.
+	body := `{"ref":"` + todos.TODOReference(created) + `","answer":"use postgres",` +
+		`"options":{"driver":"cmux","model":"claude-sonnet-5","backend":"claude-cmux","effort":"medium"}}`
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	if gotReq.Options.Driver != string(drivers.Cmux) {
+		t.Errorf("driver = %q, want the explicitly requested cmux", gotReq.Options.Driver)
+	}
+	if gotReq.Options.Name != "claude-sonnet-5" || string(gotReq.Options.Effort) != "medium" {
+		t.Errorf("model/effort = %q/%q, want the explicitly requested claude-sonnet-5/medium", gotReq.Options.Name, gotReq.Options.Effort)
+	}
+}
+
+// A running prompt run means a live agent still owns the session; answering it
+// would spawn a second agent against that session. Reject it, and record nothing.
+func TestTodoAPIAnswerRejectsLiveRun(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-live", types.ModeRun, &captaindb.PromptRun{
+		State:   captaindb.PromptRunStateRunning,
+		Runtime: captaindb.PromptRunRuntime{Driver: "headless-codex"},
+	})
+	_, called := stubTodoAnswer(t)
+
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("answer status = %d, want 409; body = %q", rec.Code, rec.Body.String())
+	}
+	if *called {
+		t.Error("a second agent was dispatched against a session a live run still owns")
+	}
+	if comments := uiTestProviderFor(workDir).comments; len(comments) != 0 {
+		t.Errorf("rejected answer still recorded comments: %q", comments)
+	}
+}
+
+// A resume that cannot start must fail as a 4xx the answer box renders — not a
+// 200 that records the answer and leaves the todo parked forever.
+func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	created := seedAskTodoWithRun(t, workDir, "sess-answer-preflight", types.ModeRun, &captaindb.PromptRun{
+		State: captaindb.PromptRunStateWaiting,
+		Runtime: captaindb.PromptRunRuntime{
+			Driver:   "headless-codex",
+			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
+		},
+	})
+	// An unreadable plan fails executor construction: the recorded plan is an
+	// input to every run and plan mode, so the resume cannot be built.
+	planPath := t.TempDir()
+	if err := uiTestProviderFor(workDir).UpdateState(t.Context(), created, todos.StateUpdate{PlanPath: &planPath}); err != nil {
+		t.Fatalf("seed plan: %v", err)
+	}
+	_, called := stubTodoAnswer(t)
+
+	body, _ := json.Marshal(todoAnswerPayload{Ref: todos.TODOReference(created), Answer: "use postgres"})
+	rec := httptest.NewRecorder()
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("answer status = %d, want 400; body = %q", rec.Code, rec.Body.String())
+	}
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error body: %v", err)
+	}
+	if strings.TrimSpace(errResp.Error) == "" {
+		t.Errorf("no error reported to the answer box; body = %q", rec.Body.String())
+	}
+	if *called {
+		t.Error("resume dispatched despite a failed pre-flight")
+	}
+	if comments := uiTestProviderFor(workDir).comments; len(comments) != 0 {
+		t.Errorf("failed answer still recorded comments: %q", comments)
+	}
+	if created.Status != types.StatusAsk {
+		t.Errorf("status = %s, want the todo left in ask so the answer can be retried", created.Status)
 	}
 }
 

@@ -2,11 +2,17 @@ import { useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { FixtureEditor } from '@flanksource/clicky-ui/data';
 import type { FixtureFenceOption, FixtureFenceSchemas } from '@flanksource/clicky-ui/data';
-import { UiBeaker, UiCopy, UiError, UiPass, UiPlay } from '@flanksource/clicky-ui/icons';
-import type { TodoFixtureResult, TodoItem, TodoVerificationRunResponse } from '../../types';
+import { UiBeaker, UiCopy, UiError, UiPass } from '@flanksource/clicky-ui/icons';
+import type { TodoFixtureResult, TodoItem, TodoRunOptions, TodoVerificationRunResponse } from '../../types';
 import { todoQuery } from './format';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
 import { fixtureFenceSchemasFromDocument } from './fixtureSchema';
+import {
+  PromptRunAdvancedDialog,
+  PromptRunButton,
+  verificationSpecFromOptions,
+} from './PromptRunButton';
+import { defaultRunOptions } from './run';
 
 const GAVEL_FIXTURE_FENCES = [
   { info: 'yaml test', label: 'test', description: 'Gavel test options' },
@@ -35,6 +41,8 @@ export function TodoVerification({
   const [schemas, setSchemas] = useState<FixtureFenceSchemas>({});
   const [busy, setBusy] = useState(false);
   const [runBusy, setRunBusy] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
   const [error, setError] = useState('');
   const [verification, setVerification] = useState<TodoVerificationRunResponse['verification'] | null>(null);
 
@@ -85,7 +93,7 @@ export function TodoVerification({
     }
   }
 
-  async function runVerification() {
+  async function runVerification(options: TodoRunOptions) {
     if (busy || runBusy) return;
     setRunBusy(true);
     setError('');
@@ -95,7 +103,7 @@ export function TodoVerification({
       const res = await fetch(`/api/todos/verification/run?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: current.ref }),
+        body: JSON.stringify({ ref: current.ref, spec: verificationSpecFromOptions(options) }),
       });
       const data = await res.json() as TodoVerificationRunResponse & { error?: string };
       if (!res.ok) throw new Error(data.error || 'Verification failed');
@@ -146,19 +154,30 @@ export function TodoVerification({
           >
             Save
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={runVerification}
-            loading={runBusy}
-            disabled={busy || runBusy}
+          <PromptRunButton
+            scope="verification"
+            label="Run verification"
             title="Run the persisted verification fixture"
-            className="h-7 gap-1 px-2 text-xs"
-          >
-            <UiPlay className="text-xs" />
-            Run verification
-          </Button>
+            disabled={busy || runBusy}
+            loading={runBusy}
+            onRun={options => void runVerification(options)}
+            onAdvanced={options => {
+              setAdvancedOptions(options);
+              setAdvancedOpen(true);
+            }}
+          />
         </div>
+        <PromptRunAdvancedDialog
+          scope="verification"
+          open={advancedOpen}
+          initial={advancedOptions}
+          loading={runBusy}
+          onClose={() => setAdvancedOpen(false)}
+          onRun={options => {
+            setAdvancedOpen(false);
+            void runVerification(options);
+          }}
+        />
         <div className="px-3 py-3">
           <FixtureEditor
             value={fixture}

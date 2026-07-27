@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -78,6 +79,14 @@ func uiTestProviderFor(dir string) *uiTestTODOProvider {
 type uiTestTODOProvider struct {
 	dir   string
 	items types.TODOS
+	// activeRun is the Captain prompt run backing the current attempt, as the
+	// native PostgreSQL runtime would report it. nil means no run history.
+	activeRun *captaindb.PromptRun
+	comments  []string
+}
+
+func (p *uiTestTODOProvider) ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error) {
+	return p.activeRun, nil
 }
 
 func (p *uiTestTODOProvider) List(_ context.Context, filters todos.DiscoveryFilters) (types.TODOS, error) {
@@ -160,6 +169,7 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 }
 
 func (p *uiTestTODOProvider) Comment(_ context.Context, todo *types.TODO, body string) error {
+	p.comments = append(p.comments, body)
 	updated := strings.TrimSpace(todo.MarkdownBody) + "\n\n## Comments\n\n" + strings.TrimSpace(body) + "\n"
 	return p.Edit(context.Background(), todo, todos.EditRequest{Body: &updated})
 }

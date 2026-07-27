@@ -82,15 +82,15 @@ func TestNewCliDerivesAgentFromModel(t *testing.T) {
 	if sessionID != "" {
 		t.Errorf("cli orchestrator sessionID = %q, want empty", sessionID)
 	}
-	if got := exec.Name(); got != "headless-claude" {
-		t.Errorf("cli Name() = %q, want headless-claude", got)
+	if got := exec.Name(); got != "cli-claude" {
+		t.Errorf("cli Name() = %q, want cli-claude", got)
 	}
 	codexExec, _, err := New(Cli, Config{WorkDir: "/repo", Model: "codex"})
 	if err != nil {
 		t.Fatalf("New(cli, model=codex): %v", err)
 	}
-	if got := codexExec.Name(); got != "headless-codex" {
-		t.Errorf("cli+codex Name() = %q, want headless-codex", got)
+	if got := codexExec.Name(); got != "cli-codex" {
+		t.Errorf("cli+codex Name() = %q, want cli-codex", got)
 	}
 }
 

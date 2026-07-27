@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useId, useState, type KeyboardEvent } from 'react';
-import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
-import { UiCancel, UiCheck, UiChevronDown, UiEdit, UiEye, UiPlay, UiQuestion } from '@flanksource/clicky-ui/icons';
+import { Button } from '@flanksource/clicky-ui/components';
+import { UiCancel, UiCheck, UiEdit, UiEye, UiQuestion } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoQuestion, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
-import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, runButtonQualifierForOptions, TodoRunDropdownContent, useTodoRunContext } from './run';
+import { defaultRunOptions, loadLastTodoRunOptions } from './run';
+import { PromptRunAdvancedDialog, PromptRunButton } from './PromptRunButton';
 
 export interface PlanApproveResult {
   todo: TodoItem;
@@ -182,61 +183,34 @@ export function PlanApproveButtons({
   onRequestChanges?: () => void;
   size?: 'sm' | 'default';
 }) {
-  const Icon = busy ? Spinner : UiPlay;
-  const context = useTodoRunContext(!busy);
-  const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
-  const runOptions = selectedOptions ?? loadLastTodoRunOptions('run', context);
-  const runLabel = `Approve & Run ${runButtonQualifierForOptions(runOptions, context)}`;
-
-  function approveRun(options: TodoRunOptions, advanced = false) {
-    const remembered = rememberTodoRunOptions('run', options, advanced);
-    setSelectedOptions(remembered);
-    onApprove(true, remembered);
-  }
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
 
   return (
     <div className="inline-flex flex-wrap items-center gap-1.5">
-      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
-        <Button
-          variant="ghost"
-          type="button"
-          disabled={busy}
-          onClick={() => approveRun(runOptions)}
-          className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-          title="Approve the plan and start the implementing run"
-        >
-          <Icon className="text-xs" />
-          <span>{runLabel}</span>
-        </Button>
-        <DropdownMenu
-          align="right"
-          menuLabel="Approve and run options"
-          menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-          trigger={
-            <Button
-              variant="ghost"
-              size="icon"
-              type="button"
-              disabled={busy}
-              title="Approve & Run options"
-              aria-label="Approve & Run options"
-              className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-            >
-              <UiChevronDown className="text-xs" />
-            </Button>
-          }
-        >
-          {close => (
-            <TodoRunDropdownContent
-              context={context}
-              initialAction="run"
-              closeParent={close}
-              onSelect={(_selectedAction, options, advanced) => approveRun(options, advanced)}
-              showAdvanced={false}
-            />
-          )}
-        </DropdownMenu>
-      </div>
+      <PromptRunButton
+        scope="approval"
+        label="Approve & Run"
+        title="Approve the plan and start the implementing run"
+        disabled={busy}
+        loading={busy}
+        onRun={options => onApprove(true, options)}
+        onAdvanced={options => {
+          setAdvancedOptions(options);
+          setAdvancedOpen(true);
+        }}
+      />
+      <PromptRunAdvancedDialog
+        scope="approval"
+        open={advancedOpen}
+        initial={advancedOptions}
+        onClose={() => setAdvancedOpen(false)}
+        onRun={options => {
+          onApprove(true, options);
+          setAdvancedOpen(false);
+        }}
+        loading={busy}
+      />
       <Button
         type="button"
         size={size}

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -830,21 +831,18 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 
 func TestNormalizeTodoRunOptionsCommitFromWorkflow(t *testing.T) {
 	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
-	commitWorkflow := func(commit bool) *api.Workflow {
-		return &api.Workflow{PostRun: &api.PostRun{Commit: commit}}
-	}
 
-	// Auto-commit is sourced from Workflow.PostRun.Commit — no server-side default.
-	// The run dialog seeds postRun.commit=true so a default dashboard run commits;
-	// an absent workflow (or an explicit false) means no commit.
+	// Auto-commit is sourced from Workflow.Commits — no server-side default. The
+	// run dialog seeds one `{on: run}` stanza so a default dashboard run commits;
+	// an absent workflow (or an empty list) means no commit.
 	cases := []struct {
 		name     string
 		workflow *api.Workflow
 		want     bool
 	}{
 		{"no workflow means no auto-commit", nil, false},
-		{"postRun.commit true auto-commits", commitWorkflow(true), true},
-		{"postRun.commit false skips commit", commitWorkflow(false), false},
+		{"a commit policy auto-commits", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}, true},
+		{"an empty commit list skips commit", &api.Workflow{Commits: []api.Commit{}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -915,13 +913,44 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 	})
 }
 
+// api.Spec declares a value-receiver MarshalJSON, and embedding it promotes that
+// method onto todoRunPayload — so without a shadow the payload marshals as a bare
+// spec and every sibling field vanishes. That silently emptied the review API's
+// `options` object and stripped the ref off every request body a test builds.
+func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
+	payload := todoRunPayload{
+		Dir:     "/repos/gavel",
+		Ref:     "todo-1",
+		Refs:    []string{"todo-1", "todo-2"},
+		Agent:   "claude",
+		Mode:    "cmux",
+		Driver:  "claude-headless",
+		RunMode: string(types.ModePlan),
+		Plan:    true,
+		Resume:  true,
+		Spec:    api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}, SessionID: "sess-1"},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var got todoRunPayload
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if !reflect.DeepEqual(payload, got) {
+		t.Fatalf("payload did not round-trip\n got: %+v\nwant: %+v\nwire: %s", got, payload, body)
+	}
+}
+
 func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 	cases := []struct {
 		name     string
 		workflow *api.Workflow
 		want     bool
 	}{
-		{"postRun commit auto-commits", &api.Workflow{PostRun: &api.PostRun{Commit: true}}, true},
+		{"a commit policy auto-commits", &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun}}}, true},
 		{"absent workflow skips commit", nil, false},
 	}
 	for _, tc := range cases {
@@ -971,8 +1000,9 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 	}
 }
 
-// A dry run (Workflow.PostRun.DryRun) still executes the agent — it only skips the
-// post-run auto-commit — so handleTodoRun starts it and reports Commit:false.
+// A dry run (every Workflow.Commits stanza marked dryRun) still executes the
+// agent — it only reports what it would commit — so handleTodoRun starts it and
+// reports Commit:false.
 func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
@@ -995,8 +1025,9 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 		Mode:  "cmux",
 		Spec:  specPayload("claude", "medium"),
 	}
-	// commit=true but dryRun=true: the run executes, the commit is suppressed.
-	payload.Workflow = &api.Workflow{PostRun: &api.PostRun{Commit: true, DryRun: true}}
+	// A commit policy is declared but marked dryRun: the run executes, the commit
+	// is reported rather than cut.
+	payload.Workflow = &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, DryRun: true}}}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1277,7 +1308,9 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 	if backends["codex-cli"].ID != "" {
 		t.Fatalf("unexpected codex-cli backend in %+v", resp.Backends)
 	}
-	if backends["claude-cmux"].Driver != "claude-cmux" || backends["claude-agent"].Driver != "claude-headless" || backends["codex-agent"].Driver != "codex-headless" {
+	// Driver is a drivers.Kind — the bare mechanism (cmux|cli|sdk|api), not the
+	// agent-prefixed alias the payload's `driver` field also accepts.
+	if backends["claude-cmux"].Driver != "cmux" || backends["claude-agent"].Driver != "cli" || backends["codex-agent"].Driver != "cli" {
 		t.Fatalf("unexpected backend drivers: claude-cmux=%q claude-agent=%q codex-agent=%q", backends["claude-cmux"].Driver, backends["claude-agent"].Driver, backends["codex-agent"].Driver)
 	}
 	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-sonnet-5") {
@@ -1394,7 +1427,9 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Driver != "claude-headless" || resp.Backend != "claude-agent" || resp.Model != "claude-sonnet-5" {
+	// The request names the driver by its agent-prefixed alias; the response
+	// reports the resolved drivers.Kind it parsed to.
+	if resp.Driver != "cli" || resp.Backend != "claude-agent" || resp.Model != "claude-sonnet-5" {
 		t.Fatalf("response did not thread backend/model: %+v", resp)
 	}
 	if got.Options.Backend != "claude-agent" || got.Options.Name != "claude-sonnet-5" {

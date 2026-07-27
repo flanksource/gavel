@@ -211,8 +211,51 @@ type todoRunPayload struct {
 	Resume bool `json:"resume,omitempty"`
 	// Dirty/DryRun/Commit/Check are no longer sibling flags — the run's dirty-tree
 	// stash, dry-run, auto-commit, and checks all come from the embedded api.Spec
-	// (Setup.Checkout.Dirty and Workflow.Verify/PostRun), surfaced by clicky's
+	// (Setup.Checkout.Dirty and Workflow.Verify/Commits), surfaced by clicky's
 	// Workspace/Verify/Commit sections.
+}
+
+// todoRunFlags mirrors todoRunPayload's non-spec fields so MarshalJSON can emit
+// them next to the spec. The mirror is unavoidable: `type x todoRunPayload` sheds
+// only methods declared on the type, never one promoted from an embedded field,
+// so there is no way to reach these fields through the payload type itself.
+type todoRunFlags struct {
+	Dir     string   `json:"dir,omitempty"`
+	Ref     string   `json:"ref,omitempty"`
+	Refs    []string `json:"refs,omitempty"`
+	Agent   string   `json:"agent,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Driver  string   `json:"driver,omitempty"`
+	RunMode string   `json:"runMode,omitempty"`
+	Plan    bool     `json:"plan,omitempty"`
+	Resume  bool     `json:"resume,omitempty"`
+}
+
+// MarshalJSON shadows the marshaler api.Spec promotes onto the payload. api.Spec
+// declares a value-receiver MarshalJSON to omit its empty sections; embedding it
+// hands that method to todoRunPayload, so marshaling a payload emitted a bare
+// spec and silently dropped ref/agent/mode/driver/runMode/plan/resume — including
+// in the review API's `options` object.
+//
+// The flags are merged last because the wire shape is flat and api.Model
+// contributes "mode" and "resume" of its own. Decoding already resolves that
+// collision in favour of the shallower payload field, and encoding has to agree
+// or a payload would not survive its own round trip.
+func (p todoRunPayload) MarshalJSON() ([]byte, error) {
+	flat := map[string]json.RawMessage{}
+	for _, part := range []any{p.Spec, todoRunFlags{
+		Dir: p.Dir, Ref: p.Ref, Refs: p.Refs, Agent: p.Agent, Mode: p.Mode,
+		Driver: p.Driver, RunMode: p.RunMode, Plan: p.Plan, Resume: p.Resume,
+	}} {
+		raw, err := json.Marshal(part)
+		if err != nil {
+			return nil, fmt.Errorf("marshal todo run payload: %w", err)
+		}
+		if err := json.Unmarshal(raw, &flat); err != nil {
+			return nil, fmt.Errorf("merge todo run payload: %w", err)
+		}
+	}
+	return json.Marshal(flat)
 }
 
 type todoRunResponse struct {
@@ -262,7 +305,7 @@ type todoRunRequest struct {
 
 type todoRunOptions struct {
 	// Spec carries the model/backend/effort/budget/prompt/permissions/session knobs
-	// plus the run's Setup (dirty/checkout) and Workflow (verify/postRun), resolved
+	// plus the run's Setup (dirty/checkout) and Workflow (verify/commits), resolved
 	// and validated by normalizeTodoRunOptions. dirty/checks/commit/dryRun are read
 	// from Spec.Setup/Spec.Workflow (see specDirty/specVerify/specCommit/specDryRun),
 	// not sibling flags.
@@ -274,26 +317,35 @@ type todoRunOptions struct {
 	Resume  bool
 }
 
-// specCommit reports whether the run's Workflow.PostRun asks for an auto-commit.
-// Absent Workflow/PostRun means no commit; the run dialog seeds postRun.commit=true
-// on the Commit section so a default dashboard run still auto-commits.
-func specCommit(spec api.Spec) bool {
-	return spec.Workflow != nil && spec.Workflow.PostRun != nil && spec.Workflow.PostRun.Commit
-}
-
-// specDryRun reports whether the run is a dry run (Workflow.PostRun.DryRun): the
-// agent runs normally but the post-run auto-commit is suppressed.
-func specDryRun(spec api.Spec) bool {
-	return spec.Workflow != nil && spec.Workflow.PostRun != nil && spec.Workflow.PostRun.DryRun
-}
-
-// specVerify returns the run's Workflow.Verify (nil when unset). Its presence
-// force-enables the checks suite and its MaxIterations caps the verify loop.
-func specVerify(spec api.Spec) *api.Verify {
+// specCommits returns the run's commit policies (nil when the spec asks for
+// none). Each entry names the lifecycle phase it fires at, so a run can commit
+// per turn, once the agent loop ends, or once at the end.
+func specCommits(spec api.Spec) []api.Commit {
 	if spec.Workflow == nil {
 		return nil
 	}
-	return spec.Workflow.Verify
+	return spec.Workflow.Commits
+}
+
+// specCommit reports whether the run auto-commits at all. The run dialog seeds
+// one `{on: run}` stanza on the Commit section so a default dashboard run still
+// auto-commits.
+func specCommit(spec api.Spec) bool {
+	return len(specCommits(spec)) > 0
+}
+
+// specDryRun reports whether the run is a dry run: the agent runs normally but
+// every commit is reported rather than cut. A spec that mixes dry and live
+// stanzas is not a dry run — only the stanzas marked so are suppressed, and this
+// reports the whole-run view the dashboard badge shows.
+func specDryRun(spec api.Spec) bool {
+	commits := specCommits(spec)
+	for _, c := range commits {
+		if !c.DryRun {
+			return false
+		}
+	}
+	return len(commits) > 0
 }
 
 // specDirty reports whether the run's Setup.Checkout carries a dirty-tree stash
@@ -877,7 +929,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
-	// A dry run (Workflow.PostRun.DryRun) still executes the agent — it only skips
+	// A dry run (every Workflow.Commits stanza marked dryRun) still executes the agent — it only skips
 	// the post-run commit (see maybeCommitAfterRun). "Show what would run without
 	// running" is covered by the live prompt preview (handleTodoRunPreview).
 	if err := startTodoRun(req); err != nil {
@@ -1473,7 +1525,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 	}
 	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
 	runCtx, stop := context.WithCancelCause(ctx)
-	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), strings.HasPrefix(executor.Name(), "headless-"), stop)
+	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
 	if err != nil {
 		timeoutCancel()
 		return err
@@ -1521,14 +1573,15 @@ func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
 	// An ask outcome has half-done work by design: committing it is a decision
 	// for the answer turn, not the run tail.
 	askEnded := result != nil && result.EndStatus == types.EndAsk
-	// A dry run executes but suppresses the auto-commit (api.PostRun.DryRun).
+	// A dry run executes but suppresses the auto-commit (api.Commit.DryRun).
 	commitEnabled := specCommit(req.Options.Spec) && !specDryRun(req.Options.Spec)
 	if enabled := commitEnabled && req.Options.RunMode != types.ModePlan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
 		meta := commit.AgentRunMetadata{IssueID: todo.ID}
 		if todo.LLM != nil {
 			meta.SessionID = todo.LLM.SessionId
 		}
-		if _, err := commit.RunAfterAgent(context.Background(), req.Source.Dir, todo.CWD, meta); err != nil {
+		run := commit.AgentRun{WorkDir: req.Source.Dir, Cwd: todo.CWD, Meta: meta}
+		if _, err := commit.RunAfterAgent(context.Background(), run); err != nil {
 			logger.Errorf("commit after todo run failed: %v", err)
 		}
 	}
@@ -1560,7 +1613,10 @@ func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
 		if agent == "codex" {
 			return "", fmt.Errorf("codex runs require a cmux driver")
 		}
-		return drivers.Sdk, nil
+		// Cli, not Sdk: every agent-mode entry in supportedTodoRunBackends maps to
+		// Cli, so validateBackendForDriver rejects Sdk for all of them and an inline
+		// run could never start.
+		return drivers.Cli, nil
 	default:
 		return "", fmt.Errorf("invalid mode %q", p.Mode)
 	}
@@ -1588,7 +1644,7 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 	var maxIterations int
 	if mode == types.ModeRun {
 		var err error
-		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, specVerify(req.Options.Spec))
+		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, &req.Options.Spec)
 		if err != nil {
 			return nil, "", err
 		}

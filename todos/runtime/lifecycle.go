@@ -217,9 +217,18 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		}
 		active.session = root
 	}
-	agentSession, err := p.ensureAgentSession(ctx, active.session, metadata)
-	if err != nil {
-		return err
+	metadata.Provider = runStartProvider(active.run.Runtime, metadata)
+
+	// A prompt run binds its execution thread once. Re-resolving the agent
+	// identity on a resumed turn would fork a second session — provider is part
+	// of Captain's session identity key — and the new id then loses the update
+	// to the execution-session guard.
+	var agentSession *captaindb.Session
+	if active.run.ExecutionSessionID == nil {
+		agentSession, err = p.ensureAgentSession(ctx, active.session, metadata)
+		if err != nil {
+			return err
+		}
 	}
 
 	state := captaindb.PromptRunStateRunning
@@ -228,13 +237,7 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		phase = captaindb.PromptRunPhaseVerify
 	}
 	if !terminalPromptRun(active.run.State) {
-		runtime := active.run.Runtime
-		runtime.Mode = strings.TrimSpace(metadata.Mode)
-		runtime.Driver = strings.TrimSpace(metadata.Driver)
-		runtime.Resolved = captaindb.PromptRunRuntimeSelection{
-			Provider: metadata.Provider, Backend: metadata.Backend,
-			Model: metadata.ResolvedModel, Effort: metadata.Effort,
-		}
+		runtime := mergeRunStartRuntime(active.run.Runtime, metadata)
 		update := captaindb.UpdatePromptRunInput{
 			ID: active.run.ID, ExpectedVersion: active.run.Version,
 			State: &state, Phase: &phase, Runtime: &runtime,
@@ -429,6 +432,45 @@ func agentSessionSource(executor string) string {
 	default:
 		return ""
 	}
+}
+
+// runStartProvider recovers the LLM provider a turn does not report. A resumed
+// turn knows only its session and mode, and a blank provider resolves to a
+// different Captain session because provider is part of the session identity
+// key — so fall back to what the run already resolved.
+func runStartProvider(runtime captaindb.PromptRunRuntime, metadata todos.RunStartMetadata) string {
+	return firstNonBlank(
+		metadata.Provider,
+		runtime.Resolved.Provider,
+		runtime.Requested.Provider,
+		todos.RuntimeProviderForBackend(metadata.Backend),
+		todos.RuntimeProviderForBackend(runtime.Resolved.Backend),
+	)
+}
+
+// mergeRunStartRuntime layers a turn's reported runtime over what the prompt run
+// already recorded, so a resumed turn that cannot name its driver or model keeps
+// the original run's provenance instead of erasing it.
+func mergeRunStartRuntime(current captaindb.PromptRunRuntime, metadata todos.RunStartMetadata) captaindb.PromptRunRuntime {
+	merged := current
+	merged.Mode = firstNonBlank(metadata.Mode, current.Mode)
+	merged.Driver = firstNonBlank(metadata.Driver, current.Driver)
+	merged.Resolved = captaindb.PromptRunRuntimeSelection{
+		Provider: firstNonBlank(metadata.Provider, current.Resolved.Provider),
+		Backend:  firstNonBlank(metadata.Backend, current.Resolved.Backend),
+		Model:    firstNonBlank(metadata.ResolvedModel, current.Resolved.Model),
+		Effort:   firstNonBlank(metadata.Effort, current.Resolved.Effort),
+	}
+	return merged
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // ensureAgentSession resolves or creates the monitor-owned session identity.
@@ -675,6 +717,21 @@ func todoStatusWithPlan(
 	default:
 		return projected
 	}
+}
+
+// ActivePromptRun returns the Captain prompt run backing the todo's current
+// attempt, or nil when it has none. Callers deciding how to continue a run — the
+// runtime it resolved, whether an agent is still live — read it rather than
+// re-deriving those facts from the projected status.
+func (p *Provider) ActivePromptRun(ctx context.Context, todo *types.TODO) (*captaindb.PromptRun, error) {
+	active, err := p.loadActiveRun(ctx, todo)
+	if err != nil {
+		if errors.Is(err, native.ErrNotFound) || errors.Is(err, captaindb.ErrPromptRunNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return active.run, nil
 }
 
 func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*activeRun, error) {

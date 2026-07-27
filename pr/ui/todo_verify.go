@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
@@ -73,9 +75,14 @@ func (s *Server) handleTodoCriteria(w http.ResponseWriter, r *http.Request) {
 // score-oriented AI verdict.
 func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	var payload todoCriteriaPayload
+	var payload todoVerificationRunPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
+		return
+	}
+	timeout, err := validateTodoVerificationSpec(payload.Spec)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	provider, source, todo, status, err := s.loadTodoForWrite(r, payload.Dir, payload.Ref)
@@ -83,13 +90,14 @@ func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Reques
 		writeTodoError(w, status, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	result := todos.CheckTODO(ctx, todo, todos.CheckOptions{
 		WorkDir:  todoVerifyWorkDir(source.Dir, todo),
-		Timeout:  10 * time.Minute,
+		Timeout:  timeout,
 		Logger:   logger.StandardLogger(),
 		Provider: provider,
+		Spec:     payload.Spec,
 	})
 	refreshed := todo
 	if rt, gerr := provider.Get(r.Context(), todos.TODOReference(todo)); gerr == nil {
@@ -99,6 +107,50 @@ func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Reques
 		"verification": result,
 		"todo":         summarizeTodo(refreshed, true),
 	})
+}
+
+type todoVerificationRunPayload struct {
+	Dir  string    `json:"dir,omitempty"`
+	Ref  string    `json:"ref,omitempty"`
+	Spec *api.Spec `json:"spec,omitempty"`
+}
+
+func validateTodoVerificationSpec(spec *api.Spec) (time.Duration, error) {
+	const defaultTimeout = 10 * time.Minute
+	if spec == nil {
+		return defaultTimeout, nil
+	}
+	if !reflect.ValueOf(spec.Model).IsZero() {
+		if err := spec.Model.Validate(); err != nil {
+			return 0, fmt.Errorf("model: %w", err)
+		}
+	}
+	if err := spec.Budget.Validate(); err != nil {
+		return 0, fmt.Errorf("budget: %w", err)
+	}
+	if err := spec.Permissions.Validate(); err != nil {
+		return 0, fmt.Errorf("permissions: %w", err)
+	}
+	if err := spec.ToolPreferences.Validate(); err != nil {
+		return 0, err
+	}
+	if err := spec.Workflow.Validate(); err != nil {
+		return 0, fmt.Errorf("workflow: %w", err)
+	}
+	if spec.Workflow != nil && len(spec.Workflow.Commits) > 0 {
+		return 0, fmt.Errorf("verification runs cannot commit")
+	}
+	if strings.TrimSpace(spec.Budget.Timeout) == "" {
+		return defaultTimeout, nil
+	}
+	timeout, err := time.ParseDuration(spec.Budget.Timeout)
+	if err != nil {
+		return 0, fmt.Errorf("budget.timeout: %w", err)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("budget.timeout must be greater than zero")
+	}
+	return timeout, nil
 }
 
 // handleTodoVerificationSchema exposes the CLI-owned `gavel fixtures --schema`

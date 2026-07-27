@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	captainapi "github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
@@ -54,6 +55,7 @@ type ExecutionResult struct {
 	ActionsPerformed []string      // List of actions taken (tool uses, etc.)
 	ErrorMessage     string
 	CommitSHA        string
+	Runtime          RunStartMetadata
 	Transcript       *ExecutionTranscript
 	// Envelope fields — the agent's structured final result. EndStatus is empty
 	// when no envelope was captured (the executor logged the degradation and the
@@ -83,8 +85,10 @@ type DoDOutcome struct {
 // TODO's agent completes: only when enabled, the run succeeded, and the executor
 // did not already commit. The inline claude executor sets CommitSHA after its own
 // commit, so committing again would either duplicate that change set or sweep up
-// the user's restored working-tree changes; the cmux executor leaves CommitSHA
-// empty — that is the path auto-commit is meant to cover.
+// the user's restored working-tree changes; so does the headless executor when
+// the spec declared commit policies, whose hooks committed during the run. A run
+// with no commit policy leaves CommitSHA empty — that is the path this tail
+// auto-commit exists to cover.
 func ShouldCommitAfter(result *ExecutionResult, enabled bool) bool {
 	return enabled && result != nil && result.Success && !result.Cancelled && result.CommitSHA == ""
 }
@@ -161,7 +165,7 @@ func NewTODOExecutor(workDir string, executor Executor, sessionID string, provid
 // Execute runs a TODO using the configured executor with interactive context.
 // It performs pre-checks, delegates to the executor, runs verification, and updates metadata.
 func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*ExecutionResult, error) {
-	ctx.Logger.Infof("Starting TODO execution: %s", todo.FilePath)
+	ctx.Logger.Infof("Starting TODO execution: title=%q id=%s mode=%s", todo.Title, todo.ID, e.Mode())
 
 	// Update status to in_progress and record start time
 	todo.Status = types.StatusInProgress
@@ -198,8 +202,8 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		}
 	}
 
-	// Execute with configured executor (Claude, OpenAI, etc.)
-	ctx.Logger.Infof("Executing with %s", e.executor.Name())
+	// Execute with the configured driver. The driver logs its resolved agent,
+	// backend, model, and effort after Captain constructs the provider.
 	if err := e.prepareRun(ctx, todo); err != nil {
 		if errors.Is(err, ErrRunDispatchAlreadyClaimed) || errors.Is(err, ErrRunResumeModeMismatch) {
 			return nil, fmt.Errorf("prepare native TODO run: %w", err)
@@ -367,6 +371,7 @@ func (e *TODOExecutor) splitResult(groupResult *ExecutionResult, count int) *Exe
 		Duration:     groupResult.Duration,
 		NumTurns:     groupResult.NumTurns,
 		CommitSHA:    groupResult.CommitSHA,
+		Runtime:      groupResult.Runtime,
 		Transcript:   groupResult.Transcript,
 		Summary:      groupResult.Summary,
 		EndStatus:    groupResult.EndStatus,
@@ -509,6 +514,7 @@ func renderRunStartComment(meta RunStartMetadata) string {
 	b.WriteString("- **Session ID:** `" + commentValue(meta.SessionID, "unknown") + "`\n")
 	b.WriteString("- **Mode:** `" + commentValue(meta.Mode, "run") + "`\n")
 	b.WriteString("- **Driver:** `" + commentValue(meta.Driver, "unknown") + "`\n")
+	b.WriteString("- **Agent:** `" + commentValue(meta.Agent, "unknown") + "`\n")
 	b.WriteString("- **Provider:** `" + commentValue(meta.Provider, "unknown") + "`\n")
 	b.WriteString("- **Backend:** `" + commentValue(meta.Backend, "default") + "`\n")
 	b.WriteString("- **Resolved Model:** `" + commentValue(meta.ResolvedModel, "default") + "`\n")
@@ -555,13 +561,13 @@ func (e *TODOExecutor) stepsAlreadyPass(ctx *ExecutorContext, steps []*fixtures.
 // ExecuteSection runs all fixture nodes in a section.
 // Returns the results of executing each node using the fixtures runner infrastructure.
 func (e *TODOExecutor) ExecuteSection(ctx context.Context, nodes []*fixtures.FixtureNode) []fixtures.FixtureResult {
-	return runFixtureSection(ctx, nodes, e.workDir)
+	return runFixtureSection(ctx, nodes, e.workDir, nil)
 }
 
 // runFixtureSection runs a list of fixture nodes in workDir via the fixtures
 // runner infrastructure, returning one result per test node. Shared by the
 // reproduction/verification section runners and the in-loop DoD verifier.
-func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workDir string) []fixtures.FixtureResult {
+func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workDir string, spec *captainapi.Spec) []fixtures.FixtureResult {
 	evaluator, err := fixtures.NewCELEvaluator()
 	if err != nil {
 		return []fixtures.FixtureResult{{
@@ -569,7 +575,7 @@ func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workD
 			Error:  fmt.Sprintf("failed to create CEL evaluator: %v", err),
 		}}
 	}
-	opts := fixtures.RunOptions{WorkDir: workDir, Evaluator: evaluator}
+	opts := fixtures.RunOptions{Context: ctx, WorkDir: workDir, Evaluator: evaluator, Spec: spec}
 
 	var results []fixtures.FixtureResult
 	var walk func(*fixtures.FixtureNode)

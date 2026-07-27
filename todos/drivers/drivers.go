@@ -82,16 +82,17 @@ func (k Kind) Implemented() bool {
 
 // Parse validates a driver string (case-insensitive), returning the Kind. It
 // normalizes the legacy names `agent`→sdk and `headless`→cli, and accepts a
-// legacy composite value (`claude-cmux`, `codex-headless`, …) by keeping only the
-// mechanism part — a pragmatic migration so TODOs stored with an old driver value
-// keep working, not a permanent alias.
+// composite agent+mechanism value in either order (`claude-cmux`, `codex-headless`,
+// `cmux-claude`, `headless-codex`, …) by keeping only the mechanism part — both
+// orders are persisted in prompt-run runtimes and produced by executor names, so
+// this is a pragmatic migration, not a permanent alias.
 func Parse(s string) (Kind, error) {
 	v := strings.ToLower(strings.TrimSpace(s))
-	// Legacy composite "<agent>-<mechanism>": strip a known agent prefix so a
-	// value persisted before the mechanism-only migration still resolves.
 	if i := strings.IndexByte(v, '-'); i >= 0 {
-		if prefix := v[:i]; prefix == "claude" || prefix == "codex" {
+		if isAgentName(v[:i]) {
 			v = v[i+1:]
+		} else if isAgentName(v[i+1:]) {
+			v = v[:i]
 		}
 	}
 	switch v {
@@ -105,6 +106,10 @@ func Parse(s string) (Kind, error) {
 		return Api, nil
 	}
 	return "", fmt.Errorf("invalid driver %q (valid: %s)", s, joinKinds(All()))
+}
+
+func isAgentName(s string) bool {
+	return s == "claude" || s == "codex"
 }
 
 // Config carries the per-run knobs shared by every driver. Each executor uses

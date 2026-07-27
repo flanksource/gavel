@@ -115,11 +115,19 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 	result := &ExecutionResult{
 		Success:      true,
 		ExecutorName: "claude-code",
-		TokensUsed:   12345,
-		CostUSD:      0.05,
-		Duration:     150 * time.Second,
-		CommitSHA:    "abc1234",
-		Transcript:   NewExecutionTranscript(),
+		Runtime: RunStartMetadata{
+			Driver:        "cli",
+			Agent:         "claude",
+			Provider:      "anthropic",
+			Backend:       "claude-agent",
+			ResolvedModel: "claude-sonnet-5",
+			Effort:        "high",
+		},
+		TokensUsed: 12345,
+		CostUSD:    0.05,
+		Duration:   150 * time.Second,
+		CommitSHA:  "abc1234",
+		Transcript: NewExecutionTranscript(),
 	}
 
 	err := saveAttempt(todo, result)
@@ -133,12 +141,22 @@ func TestSaveAttempt_WritesTranscriptAndTable(t *testing.T) {
 	transcriptContent, err := os.ReadFile(transcriptPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(transcriptContent), "# Attempt 1")
-	assert.Contains(t, string(transcriptContent), "claude-code")
+	for _, field := range []string{
+		"**Driver:** cli",
+		"**Agent:** claude",
+		"**Provider:** anthropic",
+		"**Backend:** claude-agent",
+		"**Model:** claude-sonnet-5",
+		"**Effort:** high",
+	} {
+		assert.Contains(t, string(transcriptContent), field)
+	}
 
 	// Check the TODO file has the attempts table
 	todoContent, err := os.ReadFile(todoPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(todoContent), "## Attempts")
 	assert.Contains(t, string(todoContent), "| 1 |")
+	assert.Contains(t, string(todoContent), "claude-sonnet-5")
 	assert.Contains(t, string(todoContent), "[transcript](my-todo.attempts/attempt-1.md)")
 }

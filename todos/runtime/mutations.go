@@ -156,7 +156,12 @@ func (p *Provider) SaveAttempt(ctx context.Context, todo *types.TODO, result *to
 		Payload: map[string]any{
 			"attempt":        todo.Attempts,
 			"status":         attemptStatus(result),
-			"model":          result.ExecutorName,
+			"driver":         result.Runtime.Driver,
+			"agent":          result.Runtime.Agent,
+			"provider":       result.Runtime.Provider,
+			"backend":        result.Runtime.Backend,
+			"model":          result.Runtime.ResolvedModel,
+			"effort":         result.Runtime.Effort,
 			"durationMillis": result.Duration.Milliseconds(),
 			"costUsd":        result.CostUSD,
 			"tokens":         result.TokensUsed,
@@ -308,8 +313,17 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 	fmt.Fprintf(&body, "## Attempt %d\n\n", todo.Attempts)
 	fmt.Fprintf(&body, "- **Status:** %s\n", attemptStatus(result))
 	fmt.Fprintf(&body, "- **Date:** %s\n", time.Now().Format("2006-01-02 15:04"))
-	if result.ExecutorName != "" {
-		fmt.Fprintf(&body, "- **Model:** %s\n", result.ExecutorName)
+	for _, field := range []struct{ label, value string }{
+		{"Driver", result.Runtime.Driver},
+		{"Agent", result.Runtime.Agent},
+		{"Provider", result.Runtime.Provider},
+		{"Backend", result.Runtime.Backend},
+		{"Model", result.Runtime.ResolvedModel},
+		{"Effort", result.Runtime.Effort},
+	} {
+		if strings.TrimSpace(field.value) != "" {
+			fmt.Fprintf(&body, "- **%s:** %s\n", field.label, field.value)
+		}
 	}
 	if result.Duration > 0 {
 		fmt.Fprintf(&body, "- **Duration:** %s\n", result.Duration.Round(time.Second))
@@ -324,7 +338,7 @@ func renderAttempt(todo *types.TODO, result *todos.ExecutionResult) string {
 		fmt.Fprintf(&body, "- **Commit:** `%s`\n", result.CommitSHA)
 	}
 	if result.ErrorMessage != "" {
-		fmt.Fprintf(&body, "- **Error:** %s\n", result.ErrorMessage)
+		fmt.Fprintf(&body, "- **Error:**\n\n```text\n%s\n```\n", strings.TrimSpace(result.ErrorMessage))
 	}
 	if todo.LLM != nil && strings.TrimSpace(todo.LLM.SessionId) != "" {
 		fmt.Fprintf(&body, "- **Session:** `%s`\n", todo.LLM.SessionId)

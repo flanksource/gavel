@@ -16,7 +16,7 @@ func saveAttempt(todo *types.TODO, result *ExecutionResult) error {
 		Duration:  result.Duration,
 		Cost:      result.CostUSD,
 		Tokens:    result.TokensUsed,
-		Model:     result.ExecutorName,
+		Model:     result.Runtime.ResolvedModel,
 		Commit:    result.CommitSHA,
 	}
 	if result.Success {
@@ -48,7 +48,18 @@ func writeTranscript(todo *types.TODO, result *ExecutionResult) (string, error) 
 	fmt.Fprintf(&sb, "# Attempt %d\n\n", todo.Attempts)
 	fmt.Fprintf(&sb, "- **Status:** %s\n", result.statusString())
 	fmt.Fprintf(&sb, "- **Date:** %s\n", time.Now().Format("2006-01-02 15:04"))
-	fmt.Fprintf(&sb, "- **Model:** %s\n", result.ExecutorName)
+	for _, field := range []struct{ label, value string }{
+		{"Driver", result.Runtime.Driver},
+		{"Agent", result.Runtime.Agent},
+		{"Provider", result.Runtime.Provider},
+		{"Backend", result.Runtime.Backend},
+		{"Model", result.Runtime.ResolvedModel},
+		{"Effort", result.Runtime.Effort},
+	} {
+		if strings.TrimSpace(field.value) != "" {
+			fmt.Fprintf(&sb, "- **%s:** %s\n", field.label, field.value)
+		}
+	}
 	fmt.Fprintf(&sb, "- **Duration:** %s\n", result.Duration.Round(time.Second))
 	fmt.Fprintf(&sb, "- **Cost:** $%.4f\n", result.CostUSD)
 	fmt.Fprintf(&sb, "- **Tokens:** %d\n", result.TokensUsed)

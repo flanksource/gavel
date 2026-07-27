@@ -118,10 +118,14 @@ func NewExecutor(config Config) *Executor {
 }
 
 func (e *Executor) Name() string {
+	return e.driver() + "-" + e.config.Agent
+}
+
+func (e *Executor) driver() string {
 	if e.isCmuxBackend() {
-		return "cmux-" + e.config.Agent
+		return "cmux"
 	}
-	return "headless-" + e.config.Agent
+	return "cli"
 }
 
 func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
@@ -207,11 +211,16 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return e.failed(start, err), err
 	}
-	base := captainai.Request{Prompt: api.Prompt{
-		User:       feedback,
-		SchemaJSON: schema,
-		Source:     "todos.feedback",
-	}}
+	// A resumed turn keeps the mode template's spec — workflow (commit hooks),
+	// permissions, model and effort — and swaps only the user message, so an
+	// answered run can still auto-commit exactly like the turn it continues.
+	base, err := e.renderInitialRequest(todosInGroup)
+	if err != nil {
+		return e.failed(start, err), err
+	}
+	base.Prompt.User = feedback
+	base.Prompt.SchemaJSON = schema
+	base.Prompt.Source = "todos.feedback"
 	req, providerSessionID, canUseTool, err := e.buildRequest(ctx, todosInGroup, base, true)
 	if err != nil {
 		return e.failed(start, err), err
@@ -236,21 +245,34 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	runMeta := todopkg.RunStartMetadata{
 		SessionID:     firstNonEmpty(firstNonEmpty(req.SessionID, providerSessionID), priorSessionID(todosInGroup)),
 		Mode:          string(e.config.Mode),
-		Driver:        e.Name(),
+		Driver:        e.driver(),
+		Agent:         e.config.Agent,
 		Provider:      todopkg.RuntimeProviderForBackend(string(provider.GetBackend())),
 		Backend:       string(provider.GetBackend()),
 		ResolvedModel: provider.GetModel(),
-		Effort:        e.config.Effort,
+		Effort:        firstNonEmpty(e.config.Effort, string(req.Effort)),
 	}
 	ctx.RecordRunStart(runMeta)
 
-	ctx.Logger.Infof("%s: dispatching %d TODO(s) in %s", e.Name(), len(todosInGroup), req.Cwd())
+	modelSource := "backend-default"
+	if strings.TrimSpace(req.Name) != "" {
+		modelSource = "todos." + string(e.config.Mode) + "-prompt"
+	}
+	if strings.TrimSpace(e.config.Model) != "" {
+		modelSource = "run-option"
+	}
+	ctx.Logger.Infof(
+		"Resolved TODO runtime: driver=%s agent=%s provider=%s backend=%s model=%s effort=%s model_source=%s; dispatching %d TODO(s) cwd=%s",
+		runMeta.Driver, runMeta.Agent, firstNonEmpty(runMeta.Provider, "unknown"),
+		firstNonEmpty(runMeta.Backend, "default"), firstNonEmpty(runMeta.ResolvedModel, "default"),
+		firstNonEmpty(runMeta.Effort, "default"), modelSource, len(todosInGroup), req.Cwd(),
+	)
 	gavelai.NormalizeEnv()
 
 	streamCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
 	defer cancel()
 
-	result := &todopkg.ExecutionResult{ExecutorName: e.Name(), Transcript: ctx.GetTranscript()}
+	result := &todopkg.ExecutionResult{ExecutorName: e.Name(), Runtime: runMeta, Transcript: ctx.GetTranscript()}
 	var sawResult bool
 
 	plugins := e.config.Verifiers
@@ -272,9 +294,15 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if len(plugins) > 0 {
 		scope = agent.ScopeChanged
 	}
-	hooks := make([]any, len(plugins))
-	for i, p := range plugins {
-		hooks[i] = p
+	// Commit hooks lead the list: at PhaseRun they collapse the run's fixup
+	// chain before any teardown hook can act on the result. A plan run declares
+	// no commits — it is read-only by construction.
+	var hooks []any
+	if e.config.Mode == types.ModeRun {
+		hooks = append(hooks, commitHooks(req, todosInGroup, runMeta.SessionID)...)
+	}
+	for _, p := range plugins {
+		hooks = append(hooks, p)
 	}
 
 	runner := &agent.Runner[string]{
@@ -299,6 +327,11 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		return result, context.Canceled
 	}
 	timedOut := errors.Is(streamCtx.Err(), context.DeadlineExceeded) && !sawResult
+
+	// Report what the commit hooks cut before the error paths return: the work
+	// is on the branch either way, and CommitSHA is what stops the dashboard's
+	// tail auto-commit from committing the same change set a second time.
+	result.CommitSHA = lastCommitSHA(rres.Response)
 
 	if runErr != nil && !timedOut {
 		result.ErrorMessage = runErr.Error()
@@ -389,6 +422,7 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 			recordSessionID(todosInGroup, ev.SessionID)
 			ctx.RecordSessionID(ev.SessionID)
 			runMeta.SessionID = ev.SessionID
+			result.Runtime.SessionID = ev.SessionID
 			ctx.RecordRunStart(runMeta)
 		}
 	case captainai.EventResult:

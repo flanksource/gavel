@@ -30,6 +30,33 @@
       },
       "type": "object"
     },
+    "AttachmentRef": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "AzureConnection": {
       "additionalProperties": false,
       "properties": {
@@ -111,6 +138,66 @@
         },
         "worktree": {
           "$ref": "#/$defs/Worktree"
+        }
+      },
+      "type": "object"
+    },
+    "Commit": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "gates": {
+          "enum": [
+            "none",
+            "cheap",
+            "full"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "commit",
+            "fixup",
+            "amend"
+          ],
+          "type": "string"
+        },
+        "on": {
+          "enum": [
+            "turn",
+            "agent",
+            "run"
+          ],
+          "type": "string"
+        },
+        "squash": {
+          "type": "boolean"
+        },
+        "stage": {
+          "enum": [
+            "worktree",
+            "changed"
+          ],
+          "type": "string"
+        },
+        "when": {
+          "enum": [
+            "always",
+            "onSuccess",
+            "onVerify"
+          ],
+          "type": "string"
         }
       },
       "type": "object"
@@ -354,6 +441,21 @@
       },
       "type": "object"
     },
+    "Message": {
+      "additionalProperties": false,
+      "properties": {
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/Part"
+          },
+          "type": "array"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Model": {
       "additionalProperties": false,
       "properties": {
@@ -378,10 +480,37 @@
         "id": {
           "type": "string"
         },
+        "interrupt": {
+          "type": "boolean"
+        },
+        "mediaTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "api",
+            "cli",
+            "agent",
+            "cmux"
+          ],
+          "type": "string"
+        },
         "model": {
           "type": "string"
         },
         "noCache": {
+          "type": "boolean"
+        },
+        "resume": {
+          "type": "boolean"
+        },
+        "steer": {
+          "type": "boolean"
+        },
+        "streaming": {
           "type": "boolean"
         },
         "temperature": {
@@ -398,6 +527,27 @@
         "$ref": "#/$defs/Model"
       },
       "type": "array"
+    },
+    "Part": {
+      "additionalProperties": false,
+      "properties": {
+        "attachment": {
+          "$ref": "#/$defs/AttachmentRef"
+        },
+        "text": {
+          "type": "string"
+        },
+        "toolRequest": {
+          "$ref": "#/$defs/ToolRequest"
+        },
+        "toolResult": {
+          "$ref": "#/$defs/ToolResult"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "Permissions": {
       "additionalProperties": false,
@@ -426,29 +576,17 @@
       },
       "type": "object"
     },
-    "PostRun": {
-      "additionalProperties": false,
-      "properties": {
-        "commit": {
-          "type": "boolean"
-        },
-        "commitMessage": {
-          "type": "string"
-        },
-        "dryRun": {
-          "type": "boolean"
-        },
-        "keepWorktree": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "Prompt": {
       "additionalProperties": false,
       "properties": {
         "appendSystem": {
           "type": "string"
+        },
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/AttachmentRef"
+          },
+          "type": "array"
         },
         "metadata": {
           "additionalProperties": {
@@ -553,8 +691,32 @@
         "id": {
           "type": "string"
         },
+        "interrupt": {
+          "type": "boolean"
+        },
+        "mediaTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "memory": {
           "$ref": "#/$defs/Memory"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "api",
+            "cli",
+            "agent",
+            "cmux"
+          ],
+          "type": "string"
         },
         "model": {
           "type": "string"
@@ -568,14 +730,29 @@
         "prompt": {
           "$ref": "#/$defs/Prompt"
         },
+        "resume": {
+          "type": "boolean"
+        },
         "sessionId": {
           "type": "string"
         },
         "setup": {
           "$ref": "#/$defs/Setup"
         },
+        "steer": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
         "temperature": {
           "type": "number"
+        },
+        "toolApproval": {
+          "$ref": "#/$defs/ToolApprovalResume"
+        },
+        "toolPreferences": {
+          "$ref": "#/$defs/ToolPreferences"
         },
         "workflow": {
           "$ref": "#/$defs/Workflow"
@@ -584,6 +761,118 @@
       "required": [
         "model"
       ],
+      "type": "object"
+    },
+    "ToolApprovalCall": {
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/ToolApprovalRequest"
+        },
+        "result": {
+          "$ref": "#/$defs/ToolResult"
+        }
+      },
+      "type": "object"
+    },
+    "ToolApprovalDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "input": true,
+        "message": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/ToolResult"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolApprovalRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input": true,
+        "tool": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolApprovalResume": {
+      "additionalProperties": false,
+      "properties": {
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/ToolApprovalDecision"
+          },
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/ToolApprovalState"
+        }
+      },
+      "type": "object"
+    },
+    "ToolApprovalState": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "items": {
+            "$ref": "#/$defs/ToolApprovalCall"
+          },
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ToolPreferences": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "ToolRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "input": true,
+        "name": {
+          "type": "string"
+        },
+        "toolCallId": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ToolResult": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "output": true,
+        "toolCallId": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "Tools": {
@@ -624,8 +913,11 @@
         "autoVerifyWithoutFixture": {
           "type": "boolean"
         },
-        "postRun": {
-          "$ref": "#/$defs/PostRun"
+        "commits": {
+          "items": {
+            "$ref": "#/$defs/Commit"
+          },
+          "type": "array"
         },
         "verify": {
           "$ref": "#/$defs/Verify"
@@ -691,8 +983,32 @@
         "id": {
           "type": "string"
         },
+        "interrupt": {
+          "type": "boolean"
+        },
+        "mediaTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "memory": {
           "$ref": "#/$defs/Memory"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "api",
+            "cli",
+            "agent",
+            "cmux"
+          ],
+          "type": "string"
         },
         "model": {
           "default": "claude-haiku-4-5",
@@ -708,14 +1024,29 @@
         "prompt": {
           "$ref": "#/$defs/Prompt"
         },
+        "resume": {
+          "type": "boolean"
+        },
         "sessionId": {
           "type": "string"
         },
         "setup": {
           "$ref": "#/$defs/Setup"
         },
+        "steer": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
         "temperature": {
           "type": "number"
+        },
+        "toolApproval": {
+          "$ref": "#/$defs/ToolApprovalResume"
+        },
+        "toolPreferences": {
+          "$ref": "#/$defs/ToolPreferences"
         },
         "workflow": {
           "$ref": "#/$defs/Workflow"

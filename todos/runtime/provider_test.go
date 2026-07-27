@@ -88,6 +88,29 @@ func TestTransientStatusesAreNotDurableIssueWrites(t *testing.T) {
 	}
 }
 
+func TestRenderAttemptReportsResolvedRuntimeAndMultilineError(t *testing.T) {
+	body := renderAttempt(&types.TODO{TODOFrontmatter: types.TODOFrontmatter{Attempts: 1}}, &todos.ExecutionResult{
+		Runtime: todos.RunStartMetadata{
+			Driver: "cli", Agent: "claude", Provider: "anthropic",
+			Backend: "claude-agent", ResolvedModel: "claude-sonnet-5", Effort: "high",
+		},
+		ErrorMessage: "Claude Code process exited with code 1\nstderr:\nauthentication failed",
+	})
+
+	for _, expected := range []string{
+		"- **Driver:** cli",
+		"- **Agent:** claude",
+		"- **Provider:** anthropic",
+		"- **Backend:** claude-agent",
+		"- **Model:** claude-sonnet-5",
+		"- **Effort:** high",
+		"- **Error:**\n\n```text\nClaude Code process exited with code 1\nstderr:\nauthentication failed\n```",
+	} {
+		assert.Contains(t, body, expected)
+	}
+	assert.NotContains(t, body, "- **Model:** headless-claude")
+}
+
 func TestTodoFromIssueUsesDatabaseIdentityAndVerification(t *testing.T) {
 	workspaceID := uuid.MustParse("10000000-0000-0000-0000-000000000001")
 	issueID := uuid.MustParse("20000000-0000-0000-0000-000000000001")

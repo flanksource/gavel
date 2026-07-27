@@ -39,7 +39,9 @@ func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, resul
 	if todo.LLM == nil {
 		todo.LLM = &types.LLM{}
 	}
-	todo.LLM.Model = result.ExecutorName
+	if strings.TrimSpace(result.Runtime.ResolvedModel) != "" {
+		todo.LLM.Model = result.Runtime.ResolvedModel
+	}
 	todo.LLM.TokensUsed = result.TokensUsed
 	todo.LLM.CostIncurred = result.CostUSD
 
@@ -142,17 +144,12 @@ func (e *TODOExecutor) Resume(ctx *ExecutorContext, todosInGroup []*types.TODO, 
 			}); err != nil {
 				return nil, fmt.Errorf("prepare resumed native TODO run: %w", err)
 			}
-			sessionID := ""
-			if todo.LLM != nil {
-				sessionID = todo.LLM.SessionId
-			}
-			if err := lifecycle.RecordRunStart(ctx, todo, RunStartMetadata{
-				SessionID: sessionID, Mode: string(e.Mode()), ResolvedModel: e.executor.Name(),
-			}); err != nil {
-				return nil, fmt.Errorf("resume native TODO run: %w", err)
-			}
 		}
 	}
+	// A resumed turn records its run start the same way a fresh one does: from
+	// the executor, once it has resolved the runtime it is actually using.
+	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, todosInGroup))
+	ctx.SetRunStartHook(e.runStartPersister(ctx, todosInGroup))
 	now := time.Now()
 	for _, todo := range todosInGroup {
 		todo.Status = types.StatusInProgress

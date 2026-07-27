@@ -50,7 +50,8 @@ func commitAfterAgent(workDir string, todo *types.TODO) ([]string, error) {
 			meta.SessionID = todo.LLM.SessionId
 		}
 	}
-	result, err := commitpkg.RunAfterAgent(context.Background(), workDir, cwd, meta)
+	run := commitpkg.AgentRun{WorkDir: workDir, Cwd: cwd, Meta: meta}
+	result, err := commitpkg.RunAfterAgent(context.Background(), run)
 	if err != nil {
 		return nil, err
 	}

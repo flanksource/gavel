@@ -38,10 +38,13 @@ export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 // replace the old loose checkboxes now that those options live on the api.Spec.
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
 
-// Runs auto-commit by default — the old commit=true default, now expressed as the
-// spec's Workflow.PostRun.commit. The advanced dialog's Commit section can turn it
-// off; a plan-only run never commits (the server suppresses commit in plan mode).
-const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { postRun: { commit: true } } };
+// Runs auto-commit by default — the old commit=true default, now expressed as a
+// single commit policy on the spec's Workflow.Commits. `on: "run"` keeps the
+// dashboard's existing shape (one commit once the run finishes) rather than the
+// per-turn fixup chain, which stays opt-in while a todo run executes in the
+// user's live working tree. The advanced dialog's Commit section can turn it off;
+// a plan-only run never commits (the server suppresses commit in plan mode).
+const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { commits: [{ on: "run" }] } };
 
 // MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
 // markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
@@ -1151,7 +1154,7 @@ export function TodoRunAdvancedDialog({
 
   function submit() {
     // spec carries the model/effort/permissions plus the run's setup (dirty),
-    // workflow.verify (checks) and workflow.postRun (auto-commit / dry-run) — all
+    // workflow.verify (checks) and workflow.commits (auto-commit / dry-run) — all
     // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
     // never commit or verify; the server suppresses both for run mode plan.
     const { spec } = promptRuntimeValueToPayload(runtimeValue);

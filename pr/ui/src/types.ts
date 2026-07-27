@@ -481,7 +481,7 @@ export type TodoRunDriver =
 // (model/backend/effort flat; prompt/budget/permissions/setup/workflow/sessionId
 // nested, mirroring clicky's AISpecRuntimeValue) plus the run-orchestration extras
 // below. Dirty worktree, auto-commit, dry-run, and checks all live in the spec now
-// (setup.checkout.dirty, workflow.postRun.commit/dryRun, workflow.verify); only the
+// (setup.checkout.dirty, workflow.commits[].on/dryRun, workflow.verify); only the
 // prompt/driver selection and the resume decision sit alongside it.
 export interface TodoRunOptions extends AISpecRuntimeValue {
   // Driver is the authoritative selection; agent/mode are the legacy pair the

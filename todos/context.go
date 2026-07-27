@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -32,6 +31,7 @@ type RunStartMetadata struct {
 	SessionID     string
 	Mode          string
 	Driver        string
+	Agent         string
 	Provider      string
 	Backend       string
 	ResolvedModel string
@@ -240,18 +240,17 @@ func (ctx *ExecutorContext) RecordSessionID(sessionID string) {
 	ctx.onSessionID(sessionID)
 }
 
-// SetRunStartHook registers a callback an executor invokes once it knows the
-// session id and resolved model used for the run.
+// SetRunStartHook registers a callback an executor invokes with the resolved
+// runtime before dispatch and again if the provider later supplies a session ID.
 func (ctx *ExecutorContext) SetRunStartHook(fn func(RunStartMetadata)) {
 	ctx.onRunStart = fn
 }
 
-// RecordRunStart reports the run metadata to the registered hook (if any). A
-// blank provider session ID is ignored; native execution was already created
-// and attached by PrepareRun before dispatch, and the later callback binds the
-// external identity plus resolved model.
+// RecordRunStart reports the run metadata to the registered hook (if any).
+// Executors call it once before dispatch with the resolved runtime, then again
+// when the provider supplies a session ID.
 func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
-	if strings.TrimSpace(meta.SessionID) == "" || ctx.onRunStart == nil {
+	if ctx.onRunStart == nil {
 		return
 	}
 	ctx.onRunStart(meta)

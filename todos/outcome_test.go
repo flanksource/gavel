@@ -297,6 +297,117 @@ func TestResumeAppliesOutcome(t *testing.T) {
 	}
 }
 
+// runtimeFeedbackExec mirrors the headless executor: the runtime it actually
+// resolved is reported through the run-start hook once the resumed turn starts,
+// never before.
+type runtimeFeedbackExec struct {
+	meta RunStartMetadata
+	sent int
+}
+
+func (f *runtimeFeedbackExec) Name() string { return "headless-codex" }
+func (f *runtimeFeedbackExec) Execute(*ExecutorContext, *types.TODO) (*ExecutionResult, error) {
+	return &ExecutionResult{Success: true, ExecutorName: f.Name()}, nil
+}
+
+func (f *runtimeFeedbackExec) SendFeedback(ctx *ExecutorContext, _ []*types.TODO, _ string) (*ExecutionResult, error) {
+	f.sent++
+	ctx.RecordRunStart(f.meta)
+	return &ExecutionResult{
+		Success: true, ExecutorName: f.Name(), Summary: "answered", EndStatus: types.EndCompleted,
+	}, nil
+}
+
+// lifecycleRecorder is a Provider that records the run-lifecycle calls Resume
+// makes, in order relative to the executor's feedback turn.
+type lifecycleRecorder struct {
+	exec     *runtimeFeedbackExec
+	prepared []RunPreparation
+	starts   []RunStartMetadata
+	// sentAtStart is the executor's feedback count when each run start arrived;
+	// an eager pre-dispatch record shows up as 0.
+	sentAtStart []int
+	comments    []string
+}
+
+func (r *lifecycleRecorder) PrepareRun(_ context.Context, _ *types.TODO, prep RunPreparation) error {
+	r.prepared = append(r.prepared, prep)
+	return nil
+}
+
+func (r *lifecycleRecorder) RecordRunStart(_ context.Context, _ *types.TODO, meta RunStartMetadata) error {
+	r.starts = append(r.starts, meta)
+	r.sentAtStart = append(r.sentAtStart, r.exec.sent)
+	return nil
+}
+
+func (r *lifecycleRecorder) Comment(_ context.Context, _ *types.TODO, body string) error {
+	r.comments = append(r.comments, body)
+	return nil
+}
+
+func (r *lifecycleRecorder) List(context.Context, DiscoveryFilters) (types.TODOS, error) {
+	return nil, nil
+}
+func (r *lifecycleRecorder) CountByStatus(context.Context) (map[types.Status]int, error) {
+	return nil, nil
+}
+func (r *lifecycleRecorder) Get(context.Context, string) (*types.TODO, error) { return nil, nil }
+func (r *lifecycleRecorder) Create(context.Context, CreateRequest) (*types.TODO, error) {
+	return nil, nil
+}
+func (r *lifecycleRecorder) Delete(context.Context, *types.TODO) error                   { return nil }
+func (r *lifecycleRecorder) Edit(context.Context, *types.TODO, EditRequest) error        { return nil }
+func (r *lifecycleRecorder) UpdateState(context.Context, *types.TODO, StateUpdate) error { return nil }
+func (r *lifecycleRecorder) UpdateLatestFailure(context.Context, *types.TODO, *types.TestResultInfo) error {
+	return nil
+}
+func (r *lifecycleRecorder) SaveAttempt(context.Context, *types.TODO, *ExecutionResult) error {
+	return nil
+}
+
+// A resumed turn must record the runtime the executor actually resolved. Naming
+// it up front from the orchestrator instead reports blanks for provider/backend,
+// which forks a second Captain session and loses the prompt run's binding.
+func TestResumeRecordsRunStartFromExecutor(t *testing.T) {
+	dir := t.TempDir()
+	todo := writeOutcomeTodo(t, dir)
+	todo.Status = types.StatusAsk
+	exec := &runtimeFeedbackExec{meta: RunStartMetadata{
+		SessionID: "019fa17d-622a-7ef3-b8ad-d8b1d7cd3836",
+		Mode:      "run",
+		Driver:    "headless-codex",
+		Agent:     "codex",
+		Provider:  "openai",
+		Backend:   "codex-agent",
+
+		ResolvedModel: "gpt-5.6-sol",
+		Effort:        "high",
+	}}
+	provider := &lifecycleRecorder{exec: exec}
+
+	e := NewTODOExecutor(dir, exec, "", provider)
+	if _, err := e.Resume(newOutcomeCtx(), []*types.TODO{todo}, "use postgres"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if len(provider.prepared) != 1 || !provider.prepared[0].Resume {
+		t.Fatalf("prepared = %+v, want one resumed preparation", provider.prepared)
+	}
+	if len(provider.starts) != 1 {
+		t.Fatalf("run starts = %d, want exactly 1 (the executor's)", len(provider.starts))
+	}
+	if provider.sentAtStart[0] != 1 {
+		t.Error("run start recorded before the executor dispatched, so it cannot name the resolved runtime")
+	}
+	if got := provider.starts[0]; got != exec.meta {
+		t.Errorf("run start = %+v, want the executor's resolved runtime %+v", got, exec.meta)
+	}
+	if len(provider.comments) == 0 || !strings.Contains(provider.comments[0], "**Todo run started**") {
+		t.Errorf("comments = %q, want the run-start comment on the resumed turn", provider.comments)
+	}
+}
+
 func TestResumeRequiresFeedbackExecutor(t *testing.T) {
 	dir := t.TempDir()
 	todo := writeOutcomeTodo(t, dir)

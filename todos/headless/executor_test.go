@@ -38,14 +38,17 @@ func newTestCtx() *todopkg.ExecutorContext {
 }
 
 func TestHeadlessCompletesOnResult(t *testing.T) {
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Model: "claude-agent-sonnet", Effort: "high", Stream: fakeStream(
-		captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-1"},
-		captainai.Event{Kind: captainai.EventText, Text: "working on it"},
-		captainai.Event{Kind: captainai.EventToolUse, Tool: "Edit", Input: map[string]any{"file_path": "/repo/x.go"}},
-		captainai.Event{Kind: captainai.EventResult, Success: true, CostUSD: 0.12, Usage: &captainai.Usage{InputTokens: 100, OutputTokens: 50}},
-	)})
+	log := logger.NewBufferedLogger(20)
+	e := NewExecutor(Config{
+		WorkDir: t.TempDir(), Agent: "claude", Model: "claude-agent-sonnet",
+		Backend: string(captainai.BackendClaudeAgent), Effort: "high", Stream: fakeStream(
+			captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-1"},
+			captainai.Event{Kind: captainai.EventText, Text: "working on it"},
+			captainai.Event{Kind: captainai.EventToolUse, Tool: "Edit", Input: map[string]any{"file_path": "/repo/x.go"}},
+			captainai.Event{Kind: captainai.EventResult, Success: true, CostUSD: 0.12, Usage: &captainai.Usage{InputTokens: 100, OutputTokens: 50}},
+		)})
 	todo := &types.TODO{}
-	ctx := newTestCtx()
+	ctx := todopkg.NewExecutorContext(context.Background(), log, nil)
 	var starts []todopkg.RunStartMetadata
 	ctx.SetRunStartHook(func(meta todopkg.RunStartMetadata) {
 		starts = append(starts, meta)
@@ -66,11 +69,43 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	if todo.LLM == nil || todo.LLM.SessionId != "sess-1" {
 		t.Errorf("session id not recorded on todo: %+v", todo.LLM)
 	}
-	if len(starts) != 1 {
-		t.Fatalf("run starts = %d, want 1: %#v", len(starts), starts)
+	if len(starts) != 2 {
+		t.Fatalf("run starts = %d, want pre-dispatch and session-bound metadata: %#v", len(starts), starts)
 	}
-	if starts[0].SessionID != "sess-1" || starts[0].Mode != "run" || starts[0].ResolvedModel != "claude-agent-sonnet" || starts[0].Effort != "high" {
-		t.Fatalf("run metadata = %+v", starts[0])
+	if starts[0].SessionID != "" || starts[0].Driver != "cli" || starts[0].Agent != "claude" || starts[0].ResolvedModel != "claude-agent-sonnet" {
+		t.Fatalf("pre-dispatch run metadata = %+v", starts[0])
+	}
+	if starts[1].SessionID != "sess-1" || starts[1].Mode != "run" || starts[1].ResolvedModel != "claude-agent-sonnet" || starts[1].Effort != "high" {
+		t.Fatalf("session-bound run metadata = %+v", starts[1])
+	}
+	var messages []string
+	for _, entry := range log.GetLogs() {
+		messages = append(messages, entry.Message)
+	}
+	if got := strings.Join(messages, "\n"); !strings.Contains(got,
+		"Resolved TODO runtime: driver=cli agent=claude provider=anthropic backend=claude-agent model=claude-agent-sonnet effort=high model_source=run-option") {
+		t.Fatalf("resolved runtime log missing selection details:\n%s", got)
+	}
+}
+
+func TestHeadlessLogsPromptDefaultModelSource(t *testing.T) {
+	log := logger.NewBufferedLogger(20)
+	e := NewExecutor(Config{
+		WorkDir: t.TempDir(), Agent: "claude",
+		Stream: fakeStream(captainai.Event{Kind: captainai.EventResult, Success: true}),
+	})
+
+	if _, err := e.Execute(todopkg.NewExecutorContext(t.Context(), log, nil), &types.TODO{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var messages []string
+	for _, entry := range log.GetLogs() {
+		messages = append(messages, entry.Message)
+	}
+	if got := strings.Join(messages, "\n"); !strings.Contains(got,
+		"driver=cli agent=claude provider=unknown backend=default model=claude effort=default model_source=todos.run-prompt") {
+		t.Fatalf("prompt-default runtime log missing selection source:\n%s", got)
 	}
 }
 

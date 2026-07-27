@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
+	"github.com/flanksource/captain/pkg/api"
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -287,6 +291,42 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	activeRun, err := activeTodoPromptRun(r.Context(), provider, todo)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if status, err := answerLivenessError(activeRun, todo.LLM.SessionId); err != nil {
+		writeTodoError(w, status, err)
+		return
+	}
+
+	// A resumed turn continues the runtime the asking turn resolved: the prompt
+	// run's stored runtime is the record of what actually ran, and without it the
+	// payload defaults would hand a codex session to claude --resume.
+	runPayload := todoRunPayload{}
+	if payload.Options != nil {
+		runPayload = *payload.Options
+	}
+	inheritRunRuntime(&runPayload, activeRun)
+	runPayload.Resume = true
+	runPayload.RunMode = string(todo.RunMode) // continue in the mode that asked
+	runPayload.Plan = false
+	opts, err := normalizeTodoRunOptions(runPayload)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	opts.SessionID = resolveRunSessionID(opts, []*types.TODO{todo})
+	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
+	// Pre-flight the executor before recording the answer, so a resume that
+	// cannot start fails as a 4xx the answer box renders instead of leaving the
+	// user with a recorded answer and a todo that never moves.
+	if _, _, err := newTodoRunExecutorContext(r.Context(), req); err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	// Record the answer on the todo so the resumed prompt and the timeline see it.
 	commentLabel := "**Answer:** "
 	if payload.Rejected {
@@ -297,28 +337,79 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runPayload := todoRunPayload{}
-	if payload.Options != nil {
-		runPayload = *payload.Options
+	// Snapshot before dispatch: the run goroutine owns the todo from here, and
+	// the answered todo is leaving ask whatever the agent reports next.
+	todo.Status = types.StatusInProgress
+	resp := todoAnswerResponse{
+		Todo:      summarizeTodo(todo, true),
+		SessionID: todo.LLM.SessionId,
+		Status:    "resumed",
 	}
-	runPayload.Resume = true
-	runPayload.RunMode = string(todo.RunMode) // continue in the mode that asked
-	runPayload.Plan = false
-	opts, err := normalizeTodoRunOptions(runPayload)
-	if err != nil {
-		writeTodoError(w, http.StatusBadRequest, err)
-		return
-	}
-	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	if err := startTodoAnswer(req, answer); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	json.NewEncoder(w).Encode(todoAnswerResponse{ //nolint:errcheck
-		Todo:      summarizeTodo(todo, true),
-		SessionID: todo.LLM.SessionId,
-		Status:    "resumed",
-	})
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// activePromptRunProvider exposes the prompt run backing a todo's current
+// attempt. The native PostgreSQL runtime implements it; a provider that keeps no
+// run history simply has none to report.
+type activePromptRunProvider interface {
+	ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error)
+}
+
+// activeTodoPromptRun returns the prompt run currently attached to the todo, or
+// nil when there is none; every other failure is real.
+func activeTodoPromptRun(ctx context.Context, provider todos.Provider, todo *types.TODO) (*captaindb.PromptRun, error) {
+	runs, ok := provider.(activePromptRunProvider)
+	if !ok {
+		return nil, nil
+	}
+	return runs.ActivePromptRun(ctx, todo)
+}
+
+// answerLivenessError rejects an answer that would spawn a second agent against
+// a session a live process still owns. An ask outcome is a finished turn — the
+// agent exited and only the prompt run parks at waiting — so resuming it means
+// dispatching a fresh turn. A running prompt run is the opposite: the agent is
+// alive, and if it is blocked on a tool permission the answer belongs to the
+// approval endpoint, not to a new run.
+func answerLivenessError(run *captaindb.PromptRun, sessionID string) (int, error) {
+	if run == nil || run.State != captaindb.PromptRunStateRunning {
+		return http.StatusOK, nil
+	}
+	if pending, ok := todos.GlobalApprovals().Pending(sessionID); ok {
+		return http.StatusConflict, fmt.Errorf(
+			"agent is live and waiting on approval for %s; answer it via /api/todos/session/approve", pending.Tool)
+	}
+	return http.StatusConflict, errors.New("todo run is still active; stop it before answering")
+}
+
+// inheritRunRuntime seeds a resumed turn's run options from what the asking turn
+// actually resolved. Explicit options from the dashboard still win.
+func inheritRunRuntime(payload *todoRunPayload, run *captaindb.PromptRun) {
+	if run == nil {
+		return
+	}
+	resolved := run.Runtime.Resolved
+	if strings.TrimSpace(payload.Driver) == "" && strings.TrimSpace(payload.Mode) == "" {
+		// A run's driver is only inherited when it names a coding driver: the same
+		// field also carries non-driver runner labels (a verify step's
+		// "gavel-fixtures"), which must fall through to the model-derived default.
+		if kind, err := drivers.Parse(run.Runtime.Driver); err == nil {
+			payload.Driver = string(kind)
+		}
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		payload.Name = strings.TrimSpace(resolved.Model)
+	}
+	if strings.TrimSpace(string(payload.Backend)) == "" {
+		payload.Backend = api.Backend(strings.TrimSpace(resolved.Backend))
+	}
+	if strings.TrimSpace(string(payload.Effort)) == "" {
+		payload.Effort = api.Effort(strings.TrimSpace(resolved.Effort))
+	}
 }
 
 // zombieAskSession permits resuming a todo whose worker died after Claude wrote
@@ -350,7 +441,7 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 	}
 	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
 	runCtx, stop := context.WithCancelCause(ctx)
-	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), strings.HasPrefix(executor.Name(), "headless-"), stop)
+	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
 	if err != nil {
 		timeoutCancel()
 		return err
@@ -363,14 +454,47 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
 		results, runErr := runner.Resume(execCtx, req.Todos, answer)
-		if runErr != nil && (len(results) == 0 || results[0] == nil || !results[0].Cancelled) {
-			logger.Warnf("todo answer %s failed: %v", todoRunLabel(req.Todos), runErr)
-		}
 		var result *todos.ExecutionResult
 		if len(results) > 0 {
 			result = results[0]
 		}
+		if runErr != nil && (result == nil || !result.Cancelled) {
+			logger.Warnf("todo answer %s failed: %v", todoRunLabel(req.Todos), runErr)
+			// The HTTP response is long gone: persist the failure so the timeline
+			// shows why the answered todo stopped moving instead of leaving it
+			// parked with an answer nobody acted on.
+			recordAnswerFailure(req, runErr)
+		}
 		maybeCommitAfterRun(req, result)
 	}()
 	return nil
+}
+
+// runIsStoppable reports whether a run's driver can be cancelled mid-flight.
+// Headless drivers own the agent process and honour context cancellation; a cmux
+// run is driven through a detached surface that outlives the request.
+func runIsStoppable(opts todoRunOptions) bool {
+	kind, err := drivers.Parse(opts.Driver)
+	return err == nil && kind != drivers.Cmux
+}
+
+// recordAnswerFailure marks an asynchronously-failed resume on the todo. Resume
+// already persists a failed attempt once the agent has started; this covers the
+// earlier failures (prepare, dispatch) that leave no attempt behind.
+func recordAnswerFailure(req todoRunRequest, runErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	failed := types.StatusFailed
+	for _, todo := range req.Todos {
+		if todo == nil || todo.Status == failed {
+			continue
+		}
+		if err := req.Provider.UpdateState(ctx, todo, todos.StateUpdate{Status: &failed}); err != nil {
+			logger.Warnf("failed to record todo answer failure for %s: %v", todos.TODOReference(todo), err)
+			continue
+		}
+		if err := req.Provider.Comment(ctx, todo, "**Resume failed:** "+runErr.Error()); err != nil {
+			logger.Warnf("failed to comment todo answer failure for %s: %v", todos.TODOReference(todo), err)
+		}
+	}
 }

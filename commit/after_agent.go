@@ -21,14 +21,39 @@ type AgentRunMetadata struct {
 	SessionID string
 }
 
-// RunAfterAgent stages and commits everything an agent changed after a TODO run,
-// driving the same pipeline as `gavel commit` (Stage=all) in the git root of the
-// agent's working directory (workDir joined with the TODO's cwd). It is shared by
-// the CLI (`todos run --commit`) and the dashboard's auto-commit. A run that
-// staged nothing is a no-op (nil result), not an error. The returned Result
-// carries the commit hashes so callers can hand them to issue verification.
-func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetadata) (*Result, error) {
-	commitDir := resolveAgentCommitDir(workDir, cwd)
+// AgentRun describes one commit an agent run wants cut through gavel's pipeline.
+// The zero value beyond WorkDir/Cwd/Meta is the plain end-of-run auto-commit;
+// captain's phase hooks fill in the rest to cut a fixup chain instead.
+type AgentRun struct {
+	// WorkDir is the run's source directory and Cwd the TODO's, joined and
+	// resolved to a git root before anything is staged.
+	WorkDir string
+	Cwd     string
+	Meta    AgentRunMetadata
+
+	// Fixup, when set, commits against that hash with `fixup!` rather than
+	// generating a message — so a per-turn commit costs no LLM call.
+	Fixup string
+	// Message overrides the generated subject. Empty leaves message generation
+	// to the pipeline, which is the reason to route through it at all.
+	Message string
+	// DryRun reports what would be committed without writing.
+	DryRun bool
+	// SkipGates bypasses the pre-commit pipeline (hooks, lint, gitignore,
+	// file-size, linked-deps, tidy). Callers that run their own cheap gates set
+	// it; `gates: full` is precisely the caller that does not.
+	SkipGates bool
+}
+
+// RunAfterAgent stages and commits what an agent changed, driving the same
+// pipeline as `gavel commit` (Stage=all) in the git root of the agent's working
+// directory. It is shared by the CLI (`todos run --commit`), the dashboard's
+// auto-commit, and captain's commit hook via its Do callback. A run that staged
+// nothing is a no-op (nil result), not an error. The returned Result carries the
+// commit hashes so callers can hand them to issue verification.
+func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
+	meta := run.Meta
+	commitDir := resolveAgentCommitDir(run.WorkDir, run.Cwd)
 	if root := repomap.FindGitRoot(commitDir); root != "" {
 		commitDir = root
 	}
@@ -69,6 +94,14 @@ func RunAfterAgent(ctx context.Context, workDir, cwd string, meta AgentRunMetada
 		Config:      cfg.Commit,
 		AI:          cfg.AI,
 		PR:          cfg.PR,
+		Fixup:       run.Fixup,
+		Message:     run.Message,
+		DryRun:      run.DryRun,
+		Force:       run.SkipGates,
+		// Autosquash stays off here even for fixups: the caller cutting a chain
+		// collapses it once, at the end of the run, rather than rebasing after
+		// every turn.
+		Autosquash: false,
 	})
 	if err != nil {
 		if errors.Is(err, ErrNothingStaged) {

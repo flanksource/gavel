@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky/exec"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/ai"
@@ -45,13 +46,7 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 		Metadata: map[string]interface{}{},
 	}
 
-	repoPath := repomap.FindGitRoot(fixture.SourceDir)
-	if repoPath == "" {
-		repoPath = fixture.SourceDir
-	}
-	if repoPath == "" {
-		repoPath = opts.WorkDir
-	}
+	repoPath := fixtureRepoPath(fixture, opts)
 	result.CWD = repoPath
 
 	items := checklistItems(fixture)
@@ -62,30 +57,83 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 		return result
 	}
 
-	agent, err := ai.NewAgent(fixture.AI.ToAgentConfig(defaultAIStepModel))
-	if err != nil {
-		return result.Errorf(err, "build ai agent")
-	}
-	defer agent.Close() //nolint:errcheck
-
 	var schema checklistResponse
-	resp, err := agent.ExecutePrompt(context.Background(), ai.PromptRequest{
-		Name:             "acceptance-criteria: " + fixture.Name,
-		Source:           "fixtures.ai-step",
-		Prompt:           buildChecklistPrompt(fixture, repoPath, items),
-		StructuredOutput: &schema,
-	})
+	spec := resolveAIStepSpec(fixture, opts, &schema)
+	config := fixture.AI.ToAgentConfig(defaultAIStepModel)
+	config.Model = spec.Model
+	config.Budget = spec.Budget
+	config.SessionID = spec.SessionID
+	provider, err := ai.NewProvider(config)
+	if err != nil {
+		return result.Errorf(err, "build ai provider")
+	}
+	defer ai.CloseProvider(provider) //nolint:errcheck
+
+	runContext := opts.Context
+	if runContext == nil {
+		runContext = context.Background()
+	}
+	resp, err := provider.Execute(runContext, spec)
 	if err != nil {
 		return result.Errorf(err, "checklist prompt")
 	}
-	if resp.Error != "" {
-		return result.Failf("checklist prompt returned error: %s", resp.Error)
-	}
-	if derr := ai.DecodeStructured(resp, &schema); derr != nil && len(schema.Items) == 0 {
+	if derr := decodeChecklistResponse(resp, &schema); derr != nil && len(schema.Items) == 0 {
 		return result.Errorf(derr, "decode checklist response")
 	}
 
 	return scoreChecklist(fixture, result, items, schema.Items, now)
+}
+
+func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) api.Spec {
+	config := fixture.AI.ToAgentConfig(defaultAIStepModel)
+	spec := api.Spec{Model: config.Model, Budget: config.Budget}
+	if opts.Spec != nil {
+		spec = spec.Merge(*opts.Spec)
+	}
+	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture))
+	spec.Prompt.Source = "fixtures.ai-step"
+	spec.Prompt.Schema = schema
+	spec.Prompt.SchemaJSON = nil
+	return spec
+}
+
+func decodeChecklistResponse(resp *api.Response, target *checklistResponse) error {
+	if len(target.Items) > 0 {
+		return nil
+	}
+	if resp == nil {
+		return fmt.Errorf("checklist prompt returned no response")
+	}
+	if resp.StructuredData != nil {
+		var raw []byte
+		switch value := resp.StructuredData.(type) {
+		case json.RawMessage:
+			raw = value
+		default:
+			var err error
+			raw, err = json.Marshal(value)
+			if err != nil {
+				return err
+			}
+		}
+		if err := json.Unmarshal(raw, target); err == nil {
+			return nil
+		}
+	}
+	if strings.TrimSpace(resp.Text) == "" {
+		return fmt.Errorf("checklist prompt returned no structured output")
+	}
+	return json.Unmarshal([]byte(resp.Text), target)
+}
+
+func fixtureRepoPath(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
+	if repoPath := repomap.FindGitRoot(fixture.SourceDir); repoPath != "" {
+		return repoPath
+	}
+	if fixture.SourceDir != "" {
+		return fixture.SourceDir
+	}
+	return opts.WorkDir
 }
 
 // checklistItems returns the fixture's acceptance-criteria checklist.
