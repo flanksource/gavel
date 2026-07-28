@@ -247,6 +247,12 @@ func (t Test) Pretty() api.Text {
 	case t.Failed:
 		s = s.Append(icons.Fail, "text-red-500")
 		textStyle = "text-red-500"
+	// A warned node completed with a non-blocking problem. Without this branch it
+	// falls through to the pass icon and renders a green check next to its warning
+	// message — the summary line counts it amber, so the tree must agree.
+	case t.Warned:
+		s = s.Append(icons.Warning, "text-amber-500")
+		textStyle = "text-amber-500"
 	default:
 		s = s.Add(icons.Pass)
 	}
