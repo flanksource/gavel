@@ -17,8 +17,7 @@ import (
 // commit itself through gavel's pipeline, so the generated message, pre-commit
 // gates and Gavel-Issue-Id / session trailers are identical to `gavel commit`.
 //
-// A spec with no commit policies returns no hooks, and the run falls back to
-// maybeCommitAfterRun's single end-of-run commit.
+// A spec with no commit policies returns no hooks and makes no commit.
 func commitHooks(req captainai.Request, todosInGroup []*types.TODO, sessionID string) []any {
 	if req.Workflow == nil || len(req.Workflow.Commits) == 0 {
 		return nil
@@ -72,7 +71,7 @@ func gavelCommitter(meta commitpkg.AgentRunMetadata, keepSubject bool) func(*age
 
 // lastCommitSHA returns the final commit a run's hooks recorded, which is the
 // squashed one when the chain collapsed. Empty when the run declared no commit
-// policy, which is what routes the dashboard to its tail auto-commit instead.
+// policy or no stageable changes were produced.
 func lastCommitSHA(resp *captainai.Response) string {
 	if resp == nil || resp.Workspace == nil || len(resp.Workspace.Commits) == 0 {
 		return ""

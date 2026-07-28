@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"testing"
 
-	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/todos/drivers"
+	"github.com/flanksource/gavel/todos/types"
 )
 
 func TestTodosRunCommitFlagRegistered(t *testing.T) {
@@ -16,29 +19,32 @@ func TestTodosRunCommitFlagRegistered(t *testing.T) {
 	}
 }
 
-func TestShouldCommitAfter(t *testing.T) {
-	old := commitAfter
-	t.Cleanup(func() { commitAfter = old })
+func TestNewAgentRunConfigCommitPolicy(t *testing.T) {
+	oldCommit, oldMode, oldDefaults := commitAfter, todosRunMode, todosDef
+	t.Cleanup(func() {
+		commitAfter, todosRunMode, todosDef = oldCommit, oldMode, oldDefaults
+	})
+	todosRunMode = types.ModeRun
 
-	cases := []struct {
-		name    string
-		enabled bool
-		result  *todos.ExecutionResult
-		want    bool
-	}{
-		{"flag disabled", false, &todos.ExecutionResult{Success: true}, false},
-		{"nil result", true, nil, false},
-		{"failed run", true, &todos.ExecutionResult{Success: false}, false},
-		{"already committed", true, &todos.ExecutionResult{Success: true, CommitSHA: "abc1234"}, false},
-		{"success uncommitted", true, &todos.ExecutionResult{Success: true}, true},
+	commitAfter = true
+	cfg, err := newAgentRunConfig(context.Background(), drivers.Cli, t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("newAgentRunConfig: %v", err)
+	}
+	if cfg.Workflow == nil || len(cfg.Workflow.Commits) != 1 {
+		t.Fatalf("workflow commits = %+v, want one run policy", cfg.Workflow)
+	}
+	commit := cfg.Workflow.Commits[0]
+	if commit.On != api.CommitOnRun || commit.Gates != api.CommitGatesFull {
+		t.Fatalf("commit policy = %+v, want on=run gates=full", commit)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			commitAfter = tc.enabled
-			if got := shouldCommitAfter(tc.result); got != tc.want {
-				t.Fatalf("shouldCommitAfter(%+v) = %v, want %v", tc.result, got, tc.want)
-			}
-		})
+	commitAfter = false
+	cfg, err = newAgentRunConfig(context.Background(), drivers.Cli, t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatalf("newAgentRunConfig without commit: %v", err)
+	}
+	if cfg.Workflow != nil && len(cfg.Workflow.Commits) > 0 {
+		t.Fatalf("workflow commits = %+v, want none", cfg.Workflow.Commits)
 	}
 }

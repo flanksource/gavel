@@ -345,8 +345,8 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	if gotReq.Options.Driver != string(drivers.Cli) {
 		t.Errorf("driver = %q, want %q (the asking run's headless mechanism)", gotReq.Options.Driver, drivers.Cli)
 	}
-	if gotReq.Options.Agent != "codex" {
-		t.Errorf("agent = %q, want codex — a codex session must not resume under claude", gotReq.Options.Agent)
+	if gotReq.Options.agent() != "codex" {
+		t.Errorf("agent = %q, want codex — a codex session must not resume under claude", gotReq.Options.agent())
 	}
 	if string(gotReq.Options.Backend) != "codex-agent" {
 		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Backend)

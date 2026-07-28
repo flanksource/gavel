@@ -255,26 +255,26 @@ func TestCleanupTODOStatusKeepsReviewAndAsk(t *testing.T) {
 	}
 }
 
-// TestNewDriverConfigModelOverride pins the CLI --model flag beating the
-// todo's recorded model (the sdk-specific config builder it replaced is gone).
-func TestNewDriverConfigModelOverride(t *testing.T) {
+// TestNewAgentRunConfigModelOverride pins the CLI --model flag beating the
+// todo's recorded model in the canonical Spec.
+func TestNewAgentRunConfigModelOverride(t *testing.T) {
 	oldModel := todoModel
 	defer func() { todoModel = oldModel }()
 
 	todoModel = "opus"
 	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
 
-	cfg, err := newDriverConfig(context.Background(), drivers.Cli, "/repo", todo, nil)
+	cfg, err := newAgentRunConfig(context.Background(), drivers.Cli, "/repo", todo, nil)
 	if err != nil {
-		t.Fatalf("newDriverConfig: %v", err)
+		t.Fatalf("newAgentRunConfig: %v", err)
 	}
 
-	if cfg.Model != "opus" {
-		t.Fatalf("expected CLI model override, got %q", cfg.Model)
+	if cfg.Name != "opus" {
+		t.Fatalf("expected CLI model override, got %q", cfg.Name)
 	}
 }
 
-func TestNewDriverConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
+func TestNewAgentRunConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
 	oldMode := todosRunMode
 	todosRunMode = types.ModeRun
 	t.Cleanup(func() { todosRunMode = oldMode })
@@ -286,9 +286,9 @@ func TestNewDriverConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
 			PlanPath: "/definitely/not/a/runtime/plan.md",
 		},
 	}
-	cfg, err := newDriverConfig(context.Background(), drivers.Cli, "/repo", todo, provider)
+	cfg, err := newAgentRunConfig(context.Background(), drivers.Cli, "/repo", todo, provider)
 	if err != nil {
-		t.Fatalf("newDriverConfig: %v", err)
+		t.Fatalf("newAgentRunConfig: %v", err)
 	}
 	if cfg.ExistingPlan != provider.content {
 		t.Fatalf("ExistingPlan = %q, want durable provider content", cfg.ExistingPlan)

@@ -16,7 +16,7 @@ func TestExecutorCancellation(t *testing.T) {
 }
 
 var _ = Describe("cancelled execution", func() {
-	It("persists the attempt without marking the todo failed or committing", func() {
+	It("persists the attempt without marking the todo failed", func() {
 		provider := &recordingProvider{}
 		runner := NewTODOExecutor(".", stoppedExecutor{}, "", provider)
 		todo := &types.TODO{ID: "todo-1", FilePath: "todo-1", TODOFrontmatter: types.TODOFrontmatter{Title: "Stop this run"}}
@@ -28,7 +28,6 @@ var _ = Describe("cancelled execution", func() {
 		Expect(provider.saveCalls).To(Equal(1))
 		Expect(todo.Status).To(Equal(types.StatusPending))
 		Expect(todo.Attempts).To(Equal(1))
-		Expect(ShouldCommitAfter(&ExecutionResult{Success: true, Cancelled: true}, true)).To(BeFalse())
 	})
 })
 

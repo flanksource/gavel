@@ -17,14 +17,10 @@ package drivers
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
-	"github.com/flanksource/captain/pkg/ai/agent"
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/headless"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -112,63 +108,15 @@ func isAgentName(s string) bool {
 	return s == "claude" || s == "codex"
 }
 
-// Config carries the per-run knobs shared by every driver. Each executor uses
-// the subset relevant to it (cmux ignores MaxBudgetUsd; the sdk path ignores
-// Effort, etc.).
-type Config struct {
-	WorkDir string
-	Model   string
-	Backend string
-	Effort  string
-	// Fallbacks are alternative models captain tries in order (after Model) when
-	// the primary model's provider cannot be constructed or fails transiently
-	// (captain Model.Candidates). The caller resolves them from the compact model
-	// string and/or the .gavel.yaml todos.run fallbacks; drivers.New forwards them
-	// verbatim to the executor.
-	Fallbacks api.ModelList
-	// Mode selects the built-in prompt: run (implement) or plan (read-only
-	// investigation producing a reviewable plan). Verify never constructs a
-	// driver — it routes through the verify engine.
-	Mode types.RunMode
-	// ExistingPlan is the current content of the todo's recorded plan file
-	// (plan mode); empty means no prior plan.
-	ExistingPlan string
-	// Verifiers gate each run-mode iteration (captain agent.Runner Verify hooks);
-	// a failing verdict's feedback drives another attempt in the same session.
-	Verifiers     []agent.Verify
-	MaxIterations int
-	Resume        bool
-	SessionID     string
-	Timeout       time.Duration
-	MaxBudgetUsd  float64
-	MaxTurns      int
-	Tools         []string
-	Dirty         bool
-	// ToolModes is the per-tool exposure (tool name → enabled/ask/disabled) and
-	// PermissionMode the base permission posture (a clicky ClaudePermissionMode),
-	// both honoured by the captain-backed executor (cmux and headless).
-	ToolModes      map[string]string
-	PermissionMode string
-	// PromptOverride, when non-empty, is used verbatim as the agent prompt body
-	// instead of the auto-built prompt — the dashboard's editable prompt. The
-	// implement/plan scaffolding is still applied per the run mode.
-	PromptOverride string
-	// Approvals brokers tool permissions to the shared approval registry. Set it
-	// only when a resolver (the dashboard) is present; the headless/sdk drivers
-	// otherwise block on the first tool needing approval. cmux ignores it (it
-	// detects approval prompts on the terminal surface itself).
-	Approvals bool
-}
-
 // New constructs the executor for a driver mechanism. The coding agent is
-// derived from cfg.Model (empty → claude; a codex/gpt model → codex); the driver
+// derived from cfg.Name (empty → claude; a codex/gpt model → codex); the driver
 // only selects the mechanism.
 //
 // The returned sessionID is the orchestrator session id to seed TODOExecutor
 // with: empty for cmux (it mints and manages its own `--session-id`, passed in
 // via Config.SessionID, so the orchestrator must not overwrite the todo's prior
 // session), and Config.SessionID for the sdk path.
-func New(kind Kind, cfg Config) (todos.Executor, string, error) {
+func New(kind Kind, cfg todos.AgentRunConfig) (todos.Executor, string, error) {
 	if !kind.Valid() {
 		return nil, "", fmt.Errorf("invalid driver %q (valid: %s)", kind, joinKinds(All()))
 	}
@@ -177,13 +125,12 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 	}
 	// The model defines the agent; the driver defines the mechanism. resolveModel
 	// only guards against a stored executor identity leaking into the model field.
-	model, err := resolveModel(cfg.Model)
+	model, err := resolveModel(cfg.Name)
 	if err != nil {
 		return nil, "", err
 	}
-	agentName, _ := claude.ResolveAgent(model)
+	cfg.Name = model
 
-	backend := cfg.Backend
 	switch kind {
 	case Cmux:
 		// cmux drives the captain cmux provider through the same captain-backed
@@ -193,7 +140,7 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		backend = string(b)
+		cfg.Backend = b
 	case Cli:
 		// The CLI (headless) path leaves the backend as configured: an explicit
 		// backend from the dashboard (claude-agent/claude-cli/codex-agent) wins, and
@@ -207,33 +154,12 @@ func New(kind Kind, cfg Config) (todos.Executor, string, error) {
 	default:
 		return nil, "", fmt.Errorf("unhandled driver %q", kind)
 	}
-	return headless.NewExecutor(headless.Config{
-		WorkDir:        cfg.WorkDir,
-		Agent:          agentName,
-		Model:          model,
-		Backend:        backend,
-		Effort:         cfg.Effort,
-		Fallbacks:      cfg.Fallbacks,
-		MaxTurns:       cfg.MaxTurns,
-		MaxBudgetUsd:   cfg.MaxBudgetUsd,
-		Tools:          cfg.Tools,
-		Timeout:        cfg.Timeout,
-		Mode:           cfg.Mode,
-		ExistingPlan:   cfg.ExistingPlan,
-		Verifiers:      cfg.Verifiers,
-		MaxIterations:  cfg.MaxIterations,
-		PromptOverride: cfg.PromptOverride,
-		Approvals:      cfg.Approvals,
-		Resume:         cfg.Resume,
-		SessionID:      cfg.SessionID,
-		ToolModes:      cfg.ToolModes,
-		PermissionMode: cfg.PermissionMode,
-	}), "", nil
+	return headless.NewExecutor(cfg), "", nil
 }
 
-// DefaultTools is the standard tool allowlist for the sdk/api drivers.
+// DefaultTools returns the canonical Gavel edit-capable tool set.
 func DefaultTools() []string {
-	return []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+	return todos.DefaultAgentTools()
 }
 
 // RuntimeMode maps a driver mechanism onto captain's runtime mode. A captain
