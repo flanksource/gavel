@@ -490,7 +490,9 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// budget (initial run + N feedback rounds).
 		todo := &types.TODO{}
 		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, &api.Verify{MaxIterations: 5})
+		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, &api.Spec{
+			Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 5}},
+		})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}

@@ -57,6 +57,7 @@ type celVerifier struct {
 	// `results.checklist.all(i, i.passed)`).
 	aiStep  *stepFixture
 	workDir string
+	spec    *api.Spec
 }
 
 // stepFixture is one synthetic step fixture (checks:test / checks:lint / ai) plus
@@ -100,10 +101,10 @@ func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) 
 func (v *celVerifier) runDeterministic(hc *agent.HookContext) []fixtures.FixtureResult {
 	var results []fixtures.FixtureResult
 	for _, s := range v.steps {
-		results = append(results, s.runner(s.fixture, fixtures.RunOptions{WorkDir: v.workDir}))
+		results = append(results, s.runner(s.fixture, fixtures.RunOptions{Context: hc, WorkDir: v.workDir, Spec: v.spec}))
 	}
 	if len(v.nodes) > 0 {
-		results = append(results, runFixtureSection(hc, v.nodes, v.workDir)...)
+		results = append(results, runFixtureSection(hc, v.nodes, v.workDir, v.spec)...)
 	}
 	return results
 }
@@ -115,7 +116,7 @@ func (v *celVerifier) runChecklist(hc *agent.HookContext) []map[string]any {
 	if v.aiStep == nil {
 		return nil
 	}
-	res := v.aiStep.runner(v.aiStep.fixture, fixtures.RunOptions{WorkDir: v.workDir})
+	res := v.aiStep.runner(v.aiStep.fixture, fixtures.RunOptions{Context: hc, WorkDir: v.workDir, Spec: v.spec})
 	return checklistFromResult(res)
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/task"
 	flanksourceContext "github.com/flanksource/commons/context"
@@ -34,6 +35,7 @@ type RunnerOptions struct {
 	OnParsed       func(*FixtureNode)  // Called after fixture files are parsed, before execution
 	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
 	Display        *DisplayOptions     // Optional result visibility controls for CLI rendering
+	Spec           *api.Spec           // Runtime options for embedded AI prompts
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -387,8 +389,10 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			r.options.WorkDir, _ = os.Getwd()
 		}
 		return AIStepRunner(fixture, RunOptions{
+			Context:        ctx,
 			WorkDir:        r.options.WorkDir,
 			ExecutablePath: r.options.ExecutablePath,
+			Spec:           r.options.Spec,
 		}), nil
 	}
 
@@ -412,8 +416,10 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			r.options.WorkDir, _ = os.Getwd()
 		}
 		return runner(fixture, RunOptions{
+			Context:        ctx,
 			WorkDir:        r.options.WorkDir,
 			ExecutablePath: r.options.ExecutablePath,
+			Spec:           r.options.Spec,
 		}), nil
 	}
 
@@ -442,9 +448,11 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 
 	// Prepare run options with flanksource context
 	opts := RunOptions{
+		Context:        ctx,
 		WorkDir:        r.options.WorkDir,
 		Verbose:        ctx.Logger.IsLevelEnabled(logger.Debug),
 		NoCache:        false,
+		Spec:           r.options.Spec,
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,

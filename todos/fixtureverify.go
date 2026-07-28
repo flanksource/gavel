@@ -64,13 +64,17 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 // It returns no plugins (and a zero budget) only when the todo has no definition
 // of done at all — such a run ends `completed`.
 //
-// verifySpec is the run's api.Spec Workflow.Verify (nil = no verify): its presence
-// force-enables the checks suite and its MaxIterations overrides the loop cap.
-func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, verifySpec *api.Verify) ([]agent.Verify, int, error) {
+// spec is the run's api.Spec. Workflow.Verify force-enables the checks suite and
+// overrides its loop cap; the same spec configures embedded AI fixture prompts.
+func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, spec *api.Spec) ([]agent.Verify, int, error) {
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
 	if err != nil {
 		return nil, 0, fmt.Errorf("checks: load .gavel.yaml: %w", err)
+	}
+	var verifySpec *api.Verify
+	if spec != nil && spec.Workflow != nil {
+		verifySpec = spec.Workflow.Verify
 	}
 	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), verifySpec != nil)
 
@@ -132,6 +136,7 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, verifySpec 
 		nodes:     verNodes,
 		aiStep:    aiStep,
 		workDir:   gitRoot,
+		spec:      spec,
 	}
 	return []agent.Verify{verifier}, maxIter + 1, nil
 }

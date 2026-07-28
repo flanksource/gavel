@@ -18,7 +18,7 @@ type verificationExecutor struct {
 	verifiers []agent.Verify
 }
 
-func newVerificationExecutor(workDir string, todoList []*types.TODO, spec *api.Verify) (*verificationExecutor, error) {
+func newVerificationExecutor(workDir string, todoList []*types.TODO, spec *api.Spec) (*verificationExecutor, error) {
 	verifiers, _, err := BuildCheckVerifiers(workDir, todoList, spec)
 	if err != nil {
 		return nil, err

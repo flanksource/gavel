@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem, TodoQuestion } from '../../types';
 import type { RunContext } from './providers';
@@ -71,6 +71,7 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 vi.mock('@flanksource/clicky-ui/ai', () => ({
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
+  SpecRuntimeEditor: () => <div>Advanced runtime editor</div>,
   promptRuntimeValueToPayload: (value: unknown) => value,
   reconcileModelCapabilities: (value: unknown) => value,
 }));
@@ -253,12 +254,37 @@ describe('PlanApproveButtons', () => {
         runMode: 'run',
       })),
     );
-    expect(JSON.parse(localStorage.getItem('gavel.pr-ui.todoRunChoices.v1') || '{}').last.run).toMatchObject({
+    expect(JSON.parse(localStorage.getItem('gavel.pr-ui.promptRunChoices.v1') || '{}').approval.last).toMatchObject({
       backend: 'claude-agent',
       model: 'claude-opus-4-8',
       effort: 'high',
       runMode: 'run',
     });
+  });
+
+  it('offers approval-scoped recent configs and an advanced editor', async () => {
+    mockRunContext();
+    localStorage.setItem(
+      'gavel.pr-ui.promptRunChoices.v1',
+      JSON.stringify({
+        approval: {
+          last: { backend: 'codex-agent', model: 'gpt-5.5', effort: 'medium' },
+          recent: [
+            { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
+          ],
+        },
+      }),
+    );
+    const onApprove = vi.fn();
+
+    render(<PlanApproveButtons onApprove={onApprove} />);
+
+    expect(await screen.findByText('Recent configs')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Agent:opus-4\.8/ })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
+    });
+    expect(screen.getByText('Advanced runtime editor')).toBeTruthy();
   });
 });
 

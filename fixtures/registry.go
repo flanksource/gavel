@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/flanksource/captain/pkg/api"
 )
 
 // FixtureType defines the interface for different types of fixture tests.
@@ -29,9 +31,11 @@ type FixtureType interface {
 // RunOptions provides configuration options for executing fixture tests.
 // It controls execution behavior including working directory, verbosity, and caching.
 type RunOptions struct {
+	Context        context.Context
 	WorkDir        string
 	Verbose        bool
 	NoCache        bool
+	Spec           *api.Spec
 	Evaluator      *CELEvaluator
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
