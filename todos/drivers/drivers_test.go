@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -45,7 +47,7 @@ func TestParse(t *testing.T) {
 func TestNewCmuxDerivesAgentFromModel(t *testing.T) {
 	// cmux mints its own --session-id, so the orchestrator session id is empty. An
 	// empty model resolves to the claude agent.
-	exec, sessionID, err := New(Cmux, Config{WorkDir: "/repo"})
+	exec, sessionID, err := New(Cmux, todos.AgentRunConfig{WorkDir: "/repo"})
 	if err != nil {
 		t.Fatalf("New(cmux): %v", err)
 	}
@@ -58,14 +60,14 @@ func TestNewCmuxDerivesAgentFromModel(t *testing.T) {
 
 	// The coding agent is derived from the model, not the driver: a codex model
 	// selects the codex agent even though the driver is mechanism-only.
-	codexExec, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "codex"})
+	codexExec, _, err := New(Cmux, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: api.Model{Name: "codex"}}})
 	if err != nil {
 		t.Fatalf("New(cmux, model=codex): %v", err)
 	}
 	if got := codexExec.Name(); got != "cmux-codex" {
 		t.Errorf("cmux+codex Name() = %q, want cmux-codex", got)
 	}
-	gptExec, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "gpt-5.5"})
+	gptExec, _, err := New(Cmux, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: api.Model{Name: "gpt-5.5"}}})
 	if err != nil {
 		t.Fatalf("New(cmux, model=gpt-5.5): %v", err)
 	}
@@ -75,7 +77,7 @@ func TestNewCmuxDerivesAgentFromModel(t *testing.T) {
 }
 
 func TestNewCliDerivesAgentFromModel(t *testing.T) {
-	exec, sessionID, err := New(Cli, Config{WorkDir: "/repo"})
+	exec, sessionID, err := New(Cli, todos.AgentRunConfig{WorkDir: "/repo"})
 	if err != nil {
 		t.Fatalf("New(cli): %v", err)
 	}
@@ -85,7 +87,7 @@ func TestNewCliDerivesAgentFromModel(t *testing.T) {
 	if got := exec.Name(); got != "cli-claude" {
 		t.Errorf("cli Name() = %q, want cli-claude", got)
 	}
-	codexExec, _, err := New(Cli, Config{WorkDir: "/repo", Model: "codex"})
+	codexExec, _, err := New(Cli, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: api.Model{Name: "codex"}}})
 	if err != nil {
 		t.Fatalf("New(cli, model=codex): %v", err)
 	}
@@ -95,7 +97,7 @@ func TestNewCliDerivesAgentFromModel(t *testing.T) {
 }
 
 func TestNewRejectsVerifyMode(t *testing.T) {
-	if _, _, err := New(Cli, Config{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
+	if _, _, err := New(Cli, todos.AgentRunConfig{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
 		t.Fatal("New(mode=verify) must error — verify runs through the verify engine")
 	}
 }
@@ -105,12 +107,12 @@ func TestNewRejectsExecutorIdentityAsModel(t *testing.T) {
 	// model. If it round-trips through storage into Config.Model it must fail
 	// loudly, never launch `--model cmux-claude`.
 	for _, model := range []string{"cmux-claude", "headless-claude", "cmux-codex", "headless-codex"} {
-		if _, _, err := New(Cmux, Config{WorkDir: "/repo", Model: model}); err == nil {
+		if _, _, err := New(Cmux, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: api.Model{Name: model}}}); err == nil {
 			t.Errorf("New(cmux, model=%q) should reject the executor identity", model)
 		}
 	}
 	// A real hyphenated model must still be accepted.
-	if _, _, err := New(Cmux, Config{WorkDir: "/repo", Model: "claude-opus-4-8"}); err != nil {
+	if _, _, err := New(Cmux, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: api.Model{Name: "claude-opus-4-8"}}}); err != nil {
 		t.Errorf("New(cmux, model=claude-opus-4-8): unexpected error %v", err)
 	}
 }
@@ -119,7 +121,7 @@ func TestNewUnimplementedDriversFailClearly(t *testing.T) {
 	if Sdk.Implemented() {
 		t.Error("sdk reported Implemented(), expected not yet")
 	}
-	if _, _, err := New(Sdk, Config{WorkDir: "/repo"}); err == nil {
+	if _, _, err := New(Sdk, todos.AgentRunConfig{WorkDir: "/repo"}); err == nil {
 		t.Error("New(sdk) should return a not-implemented error")
 	} else if !strings.Contains(err.Error(), "cli") {
 		t.Errorf("New(sdk) error = %v, want it to name the cli replacement", err)
@@ -127,7 +129,7 @@ func TestNewUnimplementedDriversFailClearly(t *testing.T) {
 	if Api.Implemented() {
 		t.Error("api reported Implemented(), expected not yet")
 	}
-	if _, _, err := New(Api, Config{WorkDir: "/repo"}); err == nil {
+	if _, _, err := New(Api, todos.AgentRunConfig{WorkDir: "/repo"}); err == nil {
 		t.Error("New(api) should return a not-implemented error")
 	}
 }

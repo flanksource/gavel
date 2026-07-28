@@ -43,8 +43,8 @@ const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verif
 // dashboard's existing shape (one commit once the run finishes) rather than the
 // per-turn fixup chain, which stays opt-in while a todo run executes in the
 // user's live working tree. The advanced dialog's Commit section can turn it off;
-// a plan-only run never commits (the server suppresses commit in plan mode).
-const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { commits: [{ on: "run" }] } };
+// a plan-only run never commits because the plan action omits this workflow.
+const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
 
 // MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
 // markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is

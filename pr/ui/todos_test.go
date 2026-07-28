@@ -877,12 +877,12 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		if opts.Permissions.Mode != api.PermissionAcceptEdits {
 			t.Fatalf("PermissionMode = %q, want acceptEdits", opts.Permissions.Mode)
 		}
-		toolModes := toolModesFromPermissions(opts.Permissions.Tools)
-		if toolModes["Bash"] != "ask" || toolModes["Write"] != "disabled" || toolModes["Read"] != "enabled" {
-			t.Fatalf("ToolModes = %v, want Bash=ask Write=disabled Read=enabled", toolModes)
+		policies := opts.Permissions.Tools.Policies()
+		if policies["Bash"] != api.ToolPolicyAsk || policies["Write"] != api.ToolPolicyDeny || policies["Read"] != api.ToolPolicyAuto {
+			t.Fatalf("tool policies = %v, want Bash=ask Write=deny Read=auto", policies)
 		}
-		if _, ok := toolModes["Glob"]; ok {
-			t.Fatalf("ToolModes = %v, want Glob=auto omitted", toolModes)
+		if _, ok := policies["Glob"]; ok {
+			t.Fatalf("tool policies = %v, want Glob omitted", policies)
 		}
 	})
 
@@ -891,8 +891,8 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		if err != nil {
 			t.Fatalf("normalize: %v", err)
 		}
-		if toolModesFromPermissions(opts.Permissions.Tools) != nil || opts.Permissions.Mode != "" {
-			t.Fatalf("want nil ToolModes and empty PermissionMode, got %v / %q", opts.Permissions.Tools, opts.Permissions.Mode)
+		if len(opts.Permissions.Tools.Policies()) != 0 || opts.Permissions.Mode != "" {
+			t.Fatalf("want no tool policies and empty permission mode, got %v / %q", opts.Permissions.Tools, opts.Permissions.Mode)
 		}
 	})
 
@@ -928,7 +928,23 @@ func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 		RunMode: string(types.ModePlan),
 		Plan:    true,
 		Resume:  true,
-		Spec:    api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}, SessionID: "sess-1"},
+		Spec: api.Spec{
+			Model:  api.Model{Name: "claude", Backend: "claude-agent", Effort: "medium", Fallbacks: api.ModelList{{Name: "claude-sonnet-5"}}},
+			Prompt: api.Prompt{User: "Implement the reviewed plan.", System: "Keep the patch narrow."},
+			Budget: api.Budget{Cost: 2.5, MaxTurns: 8, Timeout: "20m"},
+			Memory: api.Memory{Skills: []string{"gavel-todos"}},
+			Permissions: api.Permissions{
+				Mode:    api.PermissionAcceptEdits,
+				Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk}},
+				MCP:     api.MCP{Servers: []string{"postgres"}},
+				Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
+				Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},
+			},
+			Setup:     &shell.Setup{Cwd: "workspace", Checkout: &shell.Checkout{Mode: shell.CheckoutLocal, Path: ".", Worktree: &shell.Worktree{Mode: shell.WorktreeNew, Prefix: "todo"}}},
+			Workflow:  &api.Workflow{Verify: &api.Verify{Commands: []string{"go test ./todos"}, Scope: api.VerifyScopeChanged, MaxIterations: 3}, Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesFull}}},
+			SessionID: "sess-1",
+			CLIArgs:   map[string]any{"fullAuto": true},
+		},
 	}
 
 	body, err := json.Marshal(payload)
@@ -1217,8 +1233,8 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude-headless driver: %v", err)
 	}
-	if opts.Driver != "cli" || opts.Agent != "claude" || opts.Mode != "inline" {
-		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.Agent, opts.Mode)
+	if opts.Driver != "cli" || opts.agent() != "claude" || opts.legacyMode() != "inline" {
+		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.agent(), opts.legacyMode())
 	}
 
 	// The legacy codex-cmux driver contributes only the cmux mechanism; the
@@ -1230,8 +1246,8 @@ func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("codex-cmux driver: %v", err)
 	}
-	if opts.Agent != "codex" || opts.Backend != "codex-cmux" || opts.Name != "gpt-5.5" || opts.Mode != "cmux" {
-		t.Fatalf("got agent=%q backend=%q model=%q mode=%q", opts.Agent, opts.Backend, opts.Name, opts.Mode)
+	if opts.agent() != "codex" || opts.Backend != "codex-cmux" || opts.Name != "gpt-5.5" || opts.legacyMode() != "cmux" {
+		t.Fatalf("got agent=%q backend=%q model=%q mode=%q", opts.agent(), opts.Backend, opts.Name, opts.legacyMode())
 	}
 
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-tui"}); err == nil {
@@ -1386,7 +1402,7 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy composite driver should preserve only the cli mechanism: %v", err)
 	}
-	if opts.Driver != "cli" || opts.Agent != "claude" || opts.Backend != "claude-agent" {
+	if opts.Driver != "cli" || opts.agent() != "claude" || opts.Backend != "claude-agent" {
 		t.Fatalf("unexpected mechanism-only driver options: %+v", opts)
 	}
 	if _, err := normalizeTodoRunOptions(todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "gpt-5-codex"}}}); err == nil {

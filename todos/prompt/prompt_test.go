@@ -2,11 +2,13 @@ package prompt
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -152,7 +154,11 @@ func TestRenderRunApprovedPlan(t *testing.T) {
 func TestRenderOverridesKeepSchema(t *testing.T) {
 	todoList := []*types.TODO{newTestTODO("solo", "Single task")}
 
-	tmplReq, _, err := Render(todoList, Options{Mode: types.ModeRun, Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END"})
+	tmplReq, _, err := Render(todoList, Options{
+		Mode:     types.ModeRun,
+		Template: "CUSTOM FRAMING for {{count}} item(s)\n\n{{{body}}}END",
+		Spec:     api.Spec{Model: api.Model{Name: "test-model"}},
+	})
 	if err != nil {
 		t.Fatalf("Render(template override): %v", err)
 	}
@@ -170,7 +176,7 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 		t.Error("template override must not affect the native envelope schema")
 	}
 
-	bodyReq, _, err := Render(todoList, Options{Mode: types.ModeRun, BodyOverride: "Just do the thing."})
+	bodyReq, _, err := Render(todoList, Options{Mode: types.ModeRun, Spec: api.Spec{Prompt: api.Prompt{User: "Just do the thing."}}})
 	if err != nil {
 		t.Fatalf("Render(body override): %v", err)
 	}
@@ -187,9 +193,55 @@ func TestRenderOverridesKeepSchema(t *testing.T) {
 }
 
 func TestRenderEffortDirective(t *testing.T) {
-	got := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Effort: "high"})
+	got := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Spec: api.Spec{Model: api.Model{Effort: api.EffortHigh}}})
 	if !strings.HasPrefix(got, EffortDirective("high")) {
 		t.Errorf("prompt should lead with the effort directive, got %q…", got[:60])
+	}
+}
+
+func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
+	spec := api.Spec{
+		Model:  api.Model{Name: "gpt-5.6-sol", Backend: "codex-agent", Effort: api.EffortHigh},
+		Prompt: api.Prompt{User: "Use the reviewed implementation instructions.", System: "Keep changes surgical."},
+		Budget: api.Budget{Cost: 2.5, MaxTurns: 8, Timeout: "12m"},
+		Memory: api.Memory{Skills: []string{"gavel-todos"}},
+		Permissions: api.Permissions{
+			Mode:    api.PermissionAcceptEdits,
+			Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk}},
+			MCP:     api.MCP{Servers: []string{"postgres"}},
+			Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
+			Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},
+		},
+		Setup:     &shell.Setup{Cwd: "workspace"},
+		Workflow:  &api.Workflow{Verify: &api.Verify{Commands: []string{"go test ./todos"}, MaxIterations: 4}},
+		SessionID: "session-123",
+		CLIArgs:   map[string]any{"fullAuto": true},
+	}
+
+	req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{
+		Mode: types.ModeRun,
+		Spec: spec,
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	if !strings.Contains(req.Prompt.User, spec.Prompt.User) || strings.Contains(req.Prompt.User, "## solo") {
+		t.Fatalf("rendered body did not use Spec.Prompt.User: %q", req.Prompt.User)
+	}
+	if !strings.HasPrefix(req.Prompt.User, EffortDirective("high")) {
+		t.Fatalf("rendered body omitted the resolved effort directive: %q", req.Prompt.User)
+	}
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"endStatus"`) {
+		t.Fatalf("rendered request lost the TODO envelope schema: %s", req.Prompt.SchemaJSON)
+	}
+
+	want := spec
+	want.Prompt.User = req.Prompt.User
+	want.Prompt.Source = "todos.run"
+	want.Prompt.SchemaJSON = req.Prompt.SchemaJSON
+	if !reflect.DeepEqual(req, want) {
+		t.Fatalf("rendered request dropped or changed Spec fields:\n got: %#v\nwant: %#v", req, want)
 	}
 }
 

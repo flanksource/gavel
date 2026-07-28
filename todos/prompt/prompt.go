@@ -34,17 +34,16 @@ var planTemplate string
 type Options struct {
 	WorkDir string
 	Mode    types.RunMode // ModeRun or ModePlan
-	Effort  string
+	// Spec is the canonical Captain run configuration. Render consumes
+	// Prompt.User as the TODO body override and merges every other field over the
+	// template request without projecting it through a Gavel-specific adapter.
+	Spec api.Spec
 	// Template is the resolved .gavel.yaml override source (see ResolveTemplate);
 	// empty renders the embedded default for Mode.
 	Template string
 	// ExistingPlan is the current content of the todo's recorded plan file (plan
 	// mode only); empty means the todo has no prior plan.
 	ExistingPlan string
-	// BodyOverride, when set, replaces the rendered prompt body verbatim — the
-	// dashboard's editable prompt. The envelope schema rides on a separate
-	// SchemaJSON field, so an override cannot break the structured-output contract.
-	BodyOverride string
 }
 
 // ResolveTemplate reads the mode's .gavel.yaml prompt override for dir
@@ -108,10 +107,19 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	}
 
 	user := req.Prompt.User
-	if opts.BodyOverride != "" {
-		user = opts.BodyOverride
+	if opts.Spec.Prompt.User != "" {
+		user = opts.Spec.Prompt.User
 	}
-	if directive := EffortDirective(opts.Effort); directive != "" {
+	renderedPrompt := req.Prompt
+	override := opts.Spec
+	override.Prompt.User = ""
+	override.Prompt.Source = ""
+	override.Prompt.Schema = nil
+	override.Prompt.SchemaJSON = nil
+	req = req.Merge(override)
+
+	effort := string(req.Effort)
+	if directive := EffortDirective(effort); directive != "" {
 		user = directive + "\n\n" + user
 	}
 	schema, err := EnvelopeSchemaJSON(opts.Mode)
@@ -124,8 +132,12 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	// on every turn of the run session (see the executor), which is what the
 	// claude-agent per-turn byte-equality guard requires.
 	req.Prompt.User = user
+	req.Prompt.Schema = renderedPrompt.Schema
 	req.Prompt.SchemaJSON = schema
 	req.Prompt.Source = "todos." + string(opts.Mode)
+	if err := req.Validate(); err != nil {
+		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.Mode, err)
+	}
 	return req, cfg, nil
 }
 

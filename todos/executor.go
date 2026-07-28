@@ -81,18 +81,6 @@ type DoDOutcome struct {
 	Output *types.VerificationOutput `json:"output,omitempty"`
 }
 
-// ShouldCommitAfter reports whether a post-run `gavel commit` should run after a
-// TODO's agent completes: only when enabled, the run succeeded, and the executor
-// did not already commit. The inline claude executor sets CommitSHA after its own
-// commit, so committing again would either duplicate that change set or sweep up
-// the user's restored working-tree changes; so does the headless executor when
-// the spec declared commit policies, whose hooks committed during the run. A run
-// with no commit policy leaves CommitSHA empty — that is the path this tail
-// auto-commit exists to cover.
-func ShouldCommitAfter(result *ExecutionResult, enabled bool) bool {
-	return enabled && result != nil && result.Success && !result.Cancelled && result.CommitSHA == ""
-}
-
 func (e ExecutionResult) Pretty() api.Text {
 	result := clicky.Text(" Executed with ", "text-gray-500").Append(e.ExecutorName, "text-blue-600 font-bold")
 
@@ -137,7 +125,7 @@ type TODOExecutor struct {
 	resume    bool
 	// mode drives the envelope→status mapping (see applyOutcome). Post-run
 	// checks live in the run loop itself now: fixture-backed verify plugins
-	// built by BuildCheckVerifiers and threaded through drivers.Config.
+	// built by BuildCheckVerifiers and threaded through AgentRunConfig.
 	mode types.RunMode
 }
 

@@ -3,6 +3,10 @@ package headless
 import (
 	"context"
 	"encoding/json"
+	"os"
+	osExec "os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,10 +14,109 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
+
+type Config struct {
+	WorkDir        string
+	Agent          string
+	Model          string
+	Backend        string
+	Effort         string
+	Fallbacks      api.ModelList
+	MaxTurns       int
+	MaxBudgetUsd   float64
+	Tools          []string
+	Timeout        time.Duration
+	Mode           types.RunMode
+	ExistingPlan   string
+	PromptOverride string
+	Verifiers      []agent.Verify
+	MaxIterations  int
+	Resume         bool
+	SessionID      string
+	ToolModes      map[string]string
+	PermissionMode string
+	Approvals      bool
+	Stream         streamFunc
+}
+
+func newTestExecutor(config Config) *Executor {
+	model, err := (api.Model{Name: config.Model, Fallbacks: config.Fallbacks}).Expand()
+	if err != nil {
+		panic(err)
+	}
+	if model.Name == "" && config.Agent == "codex" {
+		model.Name = "codex"
+	}
+	if config.Backend != "" {
+		model.Backend = captainai.Backend(config.Backend)
+	}
+	if config.Effort != "" {
+		model.Effort = api.Effort(config.Effort)
+	}
+	permissions := api.Permissions{Mode: testPermissionMode(config.PermissionMode)}
+	if len(config.Tools) > 0 {
+		permissions.Tools.Allow = config.Tools
+	}
+	for tool, mode := range config.ToolModes {
+		switch mode {
+		case "enabled":
+			permissions.Tools.Allow = append(permissions.Tools.Allow, tool)
+		case "disabled":
+			permissions.Tools.Deny = append(permissions.Tools.Deny, tool)
+		case "ask":
+			if permissions.Tools.Modes == nil {
+				permissions.Tools.Modes = map[string]api.ToolMode{}
+			}
+			permissions.Tools.Modes[tool] = api.ToolModeAsk
+		}
+	}
+	budget := api.Budget{Cost: config.MaxBudgetUsd, MaxTurns: config.MaxTurns}
+	if config.Timeout > 0 {
+		budget.Timeout = config.Timeout.String()
+	}
+	runConfig := todopkg.AgentRunConfig{
+		Spec: api.Spec{
+			Model:       model,
+			Prompt:      api.Prompt{User: config.PromptOverride},
+			Budget:      budget,
+			Permissions: permissions,
+			SessionID:   config.SessionID,
+		},
+		WorkDir:       config.WorkDir,
+		Mode:          config.Mode,
+		ExistingPlan:  config.ExistingPlan,
+		Verifiers:     config.Verifiers,
+		MaxIterations: config.MaxIterations,
+		Resume:        config.Resume,
+		Approvals:     config.Approvals,
+	}
+	if config.Stream != nil {
+		return NewExecutor(runConfig, withStream(config.Stream))
+	}
+	return NewExecutor(runConfig)
+}
+
+func testPermissionMode(mode string) api.PermissionMode {
+	switch mode {
+	case "plan":
+		return api.PermissionPlan
+	case "acceptEdits":
+		return api.PermissionAcceptEdits
+	case "auto":
+		return api.PermissionAuto
+	case "bypassPermissions":
+		return api.PermissionBypass
+	case "default", "dontAsk":
+		return api.PermissionDefault
+	default:
+		return ""
+	}
+}
 
 func fakeStream(events ...captainai.Event) streamFunc {
 	return func(_ context.Context, _ captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
@@ -39,7 +142,7 @@ func newTestCtx() *todopkg.ExecutorContext {
 
 func TestHeadlessCompletesOnResult(t *testing.T) {
 	log := logger.NewBufferedLogger(20)
-	e := NewExecutor(Config{
+	e := newTestExecutor(Config{
 		WorkDir: t.TempDir(), Agent: "claude", Model: "claude-agent-sonnet",
 		Backend: string(captainai.BackendClaudeAgent), Effort: "high", Stream: fakeStream(
 			captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-1"},
@@ -90,7 +193,7 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 
 func TestHeadlessLogsPromptDefaultModelSource(t *testing.T) {
 	log := logger.NewBufferedLogger(20)
-	e := NewExecutor(Config{
+	e := newTestExecutor(Config{
 		WorkDir: t.TempDir(), Agent: "claude",
 		Stream: fakeStream(captainai.Event{Kind: captainai.EventResult, Success: true}),
 	})
@@ -110,7 +213,7 @@ func TestHeadlessLogsPromptDefaultModelSource(t *testing.T) {
 }
 
 func TestHeadlessParksOnAskUserQuestionWithoutRequestingEnvelope(t *testing.T) {
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
 		captainai.Event{Kind: captainai.EventSystem, SessionID: "sess-ask"},
 		captainai.Event{Kind: captainai.EventToolUse, Tool: "AskUserQuestion", Input: map[string]any{
 			"questions": []any{map[string]any{
@@ -148,7 +251,7 @@ func TestHeadlessPromptOverrideReplacesBody(t *testing.T) {
 		close(ch)
 		return ch, nil
 	}
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", PromptOverride: "EDITED PROMPT BODY", Stream: capture})
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", PromptOverride: "EDITED PROMPT BODY", Stream: capture})
 	if _, err := e.Execute(newTestCtx(), &types.TODO{TODOFrontmatter: types.TODOFrontmatter{Title: "auto section"}}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -175,7 +278,7 @@ func TestHeadlessPreparedPromptMatchesDispatchWithApprovedPlan(t *testing.T) {
 		close(ch)
 		return ch, nil
 	}
-	e := NewExecutor(Config{
+	e := newTestExecutor(Config{
 		WorkDir: t.TempDir(), Agent: "claude", Effort: "high",
 		ExistingPlan: "# Approved plan\n\n1. Keep the database authoritative.",
 		Stream:       capture,
@@ -200,8 +303,134 @@ func TestHeadlessPreparedPromptMatchesDispatchWithApprovedPlan(t *testing.T) {
 	}
 }
 
+func TestHeadlessPreservesCanonicalSpecAndRunsNativeWorkflow(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "ready"), []byte("yes"), 0644); err != nil {
+		t.Fatalf("write verifier fixture: %v", err)
+	}
+	spec := api.Spec{
+		Model:  api.Model{Name: "claude-sonnet-5", Backend: captainai.BackendClaudeAgent, Effort: api.EffortHigh},
+		Prompt: api.Prompt{User: "Implement the reviewed change.", System: "Keep the patch narrow."},
+		Budget: api.Budget{Cost: 3, MaxTurns: 9, Timeout: "2m"},
+		Memory: api.Memory{Skills: []string{"gavel-todos"}},
+		Permissions: api.Permissions{
+			Mode:    api.PermissionAcceptEdits,
+			Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk, "Read": api.ToolModeOn}},
+			MCP:     api.MCP{Servers: []string{"postgres"}},
+			Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
+			Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},
+		},
+		Setup:     &shell.Setup{Cwd: "."},
+		Workflow:  &api.Workflow{Verify: &api.Verify{Commands: []string{"test -f ready"}, Scope: api.VerifyScopeChanged, MaxIterations: 2}},
+		SessionID: "session-123",
+		CLIArgs:   map[string]any{"fullAuto": true},
+	}
+	var captured captainai.Request
+	var canUseTool captainai.PermissionFunc
+	executor := NewExecutor(todopkg.AgentRunConfig{
+		Spec:      spec,
+		WorkDir:   workDir,
+		Mode:      types.ModeRun,
+		Approvals: true,
+	}, withStream(captureReq(&captured, &canUseTool)))
+
+	result, err := executor.Execute(newTestCtx(), &types.TODO{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.DoD == nil || !result.DoD.Passed {
+		t.Fatalf("native workflow verification did not gate the run: %+v", result.DoD)
+	}
+	if canUseTool == nil {
+		t.Fatal("dashboard approval callback was not constructed")
+	}
+	if captured.Cwd() != workDir {
+		t.Fatalf("prepared cwd = %q, want %q", captured.Cwd(), workDir)
+	}
+	if captured.Prompt.System != spec.Prompt.System {
+		t.Fatalf("system prompt = %q, want %q", captured.Prompt.System, spec.Prompt.System)
+	}
+	if !reflect.DeepEqual(captured.Memory, spec.Memory) ||
+		!reflect.DeepEqual(captured.Permissions, spec.Permissions) ||
+		!reflect.DeepEqual(captured.Workflow, spec.Workflow) ||
+		!reflect.DeepEqual(captured.CLIArgs, spec.CLIArgs) {
+		t.Fatalf("canonical Spec fields changed during dispatch:\n got: %#v\nwant: %#v", captured, spec)
+	}
+}
+
+func TestHeadlessPreparesAndCleansCanonicalWorktree(t *testing.T) {
+	repo := initHeadlessGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("local change\n"), 0644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+	var preparedDir string
+	stream := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+		preparedDir = req.Cwd()
+		if preparedDir == repo {
+			t.Fatalf("request stayed in source repository instead of prepared worktree: %q", preparedDir)
+		}
+		if _, err := os.Stat(filepath.Join(preparedDir, "untracked.txt")); err != nil {
+			t.Fatalf("prepared worktree omitted dirty file: %v", err)
+		}
+		return fakeStream(captainai.Event{Kind: captainai.EventResult, Success: true})(context.Background(), req, nil)
+	}
+	executor := NewExecutor(todopkg.AgentRunConfig{
+		Spec: api.Spec{
+			Model: api.Model{Name: "claude"},
+			Setup: &shell.Setup{
+				Cwd:     ".",
+				BaseDir: ".runtime",
+				Checkout: &shell.Checkout{
+					Mode:  shell.CheckoutLocal,
+					Path:  ".",
+					Dirty: &shell.Dirty{Stash: shell.StashAll},
+					Worktree: &shell.Worktree{
+						Mode: shell.WorktreeNew,
+					},
+				},
+			},
+		},
+		WorkDir: repo,
+		Mode:    types.ModeRun,
+	}, withStream(stream))
+
+	if _, err := executor.Execute(newTestCtx(), &types.TODO{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if preparedDir == "" {
+		t.Fatal("stream did not observe the prepared worktree")
+	}
+	if _, err := os.Stat(preparedDir); !os.IsNotExist(err) {
+		t.Fatalf("prepared worktree was not cleaned up: %q, stat error %v", preparedDir, err)
+	}
+}
+
+func initHeadlessGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runHeadlessGit(t, repo, "init", "-q", "-b", "main")
+	runHeadlessGit(t, repo, "config", "user.email", "test@example.com")
+	runHeadlessGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "seed.txt"), []byte("seed\n"), 0644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	runHeadlessGit(t, repo, "add", "seed.txt")
+	runHeadlessGit(t, repo, "commit", "-q", "-m", "seed")
+	return repo
+}
+
+func runHeadlessGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := osExec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
 func TestHeadlessFailsWhenResultUnsuccessful(t *testing.T) {
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
 		captainai.Event{Kind: captainai.EventError, Error: "boom"},
 		captainai.Event{Kind: captainai.EventResult, Success: false, Error: "boom"},
 	)})
@@ -212,7 +441,7 @@ func TestHeadlessFailsWhenResultUnsuccessful(t *testing.T) {
 }
 
 func TestHeadlessErrorsWithoutResult(t *testing.T) {
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(
 		captainai.Event{Kind: captainai.EventText, Text: "hi"},
 	)})
 	_, err := e.Execute(newTestCtx(), &types.TODO{})
@@ -238,7 +467,7 @@ func captureReq(into *captainai.Request, canUseTool *captainai.PermissionFunc) s
 func TestHeadlessNoApprovalCallbackByDefault(t *testing.T) {
 	var captured captainai.Request
 	var canUseTool captainai.PermissionFunc
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: captureReq(&captured, &canUseTool)})
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: captureReq(&captured, &canUseTool)})
 	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -257,7 +486,7 @@ func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	const sessionID = "headless-approval-sess"
 	var captured captainai.Request
 	var canUseTool captainai.PermissionFunc
-	e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Approvals: true, Stream: captureReq(&captured, &canUseTool)})
+	e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Approvals: true, Stream: captureReq(&captured, &canUseTool)})
 	if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -302,14 +531,44 @@ func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	}
 }
 
+func TestHeadlessApprovalUsesCanonicalToolPolicies(t *testing.T) {
+	var captured captainai.Request
+	var canUseTool captainai.PermissionFunc
+	executor := NewExecutor(todopkg.AgentRunConfig{
+		Spec: api.Spec{
+			Model: api.Model{Name: "claude"},
+			Permissions: api.Permissions{Tools: api.Tools{Modes: map[string]api.ToolMode{
+				"Read":  api.ToolModeOn,
+				"Write": api.ToolModeOff,
+			}}},
+		},
+		WorkDir:   t.TempDir(),
+		Approvals: true,
+	}, withStream(captureReq(&captured, &canUseTool)))
+	if _, err := executor.Execute(newTestCtx(), &types.TODO{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if canUseTool == nil {
+		t.Fatal("expected approval callback")
+	}
+
+	allowed, err := canUseTool(t.Context(), captainai.PermissionRequest{Tool: "Read"})
+	if err != nil || !allowed.Allow {
+		t.Fatalf("Read decision = %+v, %v; want immediate allow", allowed, err)
+	}
+	denied, err := canUseTool(t.Context(), captainai.PermissionRequest{Tool: "Write"})
+	if err != nil || denied.Allow || !strings.Contains(denied.Message, "disabled") {
+		t.Fatalf("Write decision = %+v, %v; want immediate deny", denied, err)
+	}
+}
+
 // TestHeadlessForwardsBudgetCap asserts the run's --max-budget cost ceiling
 // reaches the dispatched request's Budget.Cost (alongside MaxTurns). Regression
-// guard for the drop bug where drivers.Config.MaxBudgetUsd was never plumbed
-// into headless.Config, so the USD cap silently never reached captain.
+// guard for the drop bug where the USD cap silently never reached Captain.
 func TestHeadlessForwardsBudgetCap(t *testing.T) {
 	var captured captainai.Request
 	var canUseTool captainai.PermissionFunc
-	e := NewExecutor(Config{
+	e := newTestExecutor(Config{
 		WorkDir:      t.TempDir(),
 		Agent:        "claude",
 		MaxBudgetUsd: 7.5,
@@ -335,7 +594,7 @@ func TestHeadlessForwardsModelFallbacks(t *testing.T) {
 	t.Run("explicit Fallbacks field folds into the request", func(t *testing.T) {
 		var captured captainai.Request
 		var canUseTool captainai.PermissionFunc
-		e := NewExecutor(Config{
+		e := newTestExecutor(Config{
 			WorkDir:   t.TempDir(),
 			Agent:     "claude",
 			Model:     "claude-opus-4-6",
@@ -360,7 +619,7 @@ func TestHeadlessForwardsModelFallbacks(t *testing.T) {
 	t.Run("compact model tail expands into fallbacks", func(t *testing.T) {
 		var captured captainai.Request
 		var canUseTool captainai.PermissionFunc
-		e := NewExecutor(Config{
+		e := newTestExecutor(Config{
 			WorkDir: t.TempDir(),
 			Agent:   "claude",
 			Model:   "claude-opus-4-6, claude-sonnet-4-6",
@@ -413,7 +672,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 
 	t.Run("sdk backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
 		var req captainai.Request
-		e := NewExecutor(Config{
+		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),
 			Agent:          "claude",
 			Backend:        string(captainai.BackendClaudeAgent),
@@ -442,7 +701,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 	// Plan flag: the rendered request carries permissions.mode: plan.
 	t.Run("cmux plan run forces plan mode via the template", func(t *testing.T) {
 		var req captainai.Request
-		e := NewExecutor(Config{
+		e := newTestExecutor(Config{
 			WorkDir: t.TempDir(),
 			Agent:   "claude",
 			Backend: string(captainai.BackendClaudeCmux),
@@ -450,7 +709,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 			Stream:  capture(&req),
 		})
 		// A plan run demands an envelope; serve one via the capture stream.
-		e.config.Stream = func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+		e.stream = func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 			req = r
 			ch := make(chan captainai.Event, 2)
 			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/tmp/plan.md"}}`}
@@ -468,7 +727,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 
 	t.Run("explicit user permission mode beats the template", func(t *testing.T) {
 		var req captainai.Request
-		e := NewExecutor(Config{
+		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),
 			Agent:          "claude",
 			Backend:        string(captainai.BackendClaudeAgent),
@@ -493,28 +752,28 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 }
 
 func TestHeadlessModelDefaults(t *testing.T) {
-	claudeP, err := (&Executor{config: Config{Agent: "claude"}}).newStreamer(nil, "", "claude", "")
+	claudeP, err := newTestExecutor(Config{Agent: "claude"}).newStreamer(captainai.Request{Model: api.Model{Name: "claude"}}, nil, "")
 	if err != nil {
 		t.Fatalf("claude streamer: %v", err)
 	}
 	if claudeP.GetBackend() != captainai.BackendClaudeAgent {
 		t.Errorf("claude backend = %v, want claude-agent", claudeP.GetBackend())
 	}
-	codexP, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "codex", "")
+	codexP, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "codex"}}, nil, "")
 	if err != nil {
 		t.Fatalf("codex streamer: %v", err)
 	}
 	if codexP.GetBackend() != captainai.BackendCodexAgent {
 		t.Errorf("codex backend = %v, want codex-agent", codexP.GetBackend())
 	}
-	codexAgentP, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "gpt-5.5", string(captainai.BackendCodexAgent))
+	codexAgentP, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Backend: captainai.BackendCodexAgent}}, nil, "")
 	if err != nil {
 		t.Fatalf("codex-agent streamer: %v", err)
 	}
 	if codexAgentP.GetBackend() != captainai.BackendCodexAgent {
 		t.Errorf("codex explicit backend = %v, want codex-agent", codexAgentP.GetBackend())
 	}
-	if _, err := (&Executor{config: Config{Agent: "codex"}}).newStreamer(nil, "", "gpt-5.5", string(captainai.BackendCodexCLI)); err == nil {
+	if _, err := newTestExecutor(Config{Agent: "codex"}).newStreamer(captainai.Request{Model: api.Model{Name: "gpt-5.5", Backend: captainai.BackendCodexCLI}}, nil, ""); err == nil {
 		t.Fatal("codex-cli backend should be rejected")
 	}
 }
@@ -542,7 +801,7 @@ func TestHeadlessDoDVerdict(t *testing.T) {
 	}
 
 	t.Run("verifier passes → DoD passed", func(t *testing.T) {
-		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 3,
+		e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 3,
 			Verifiers: []agent.Verify{fakeVerifier{ok: true}}, Stream: fakeStream(events...)})
 		result, err := e.Execute(newTestCtx(), &types.TODO{})
 		if err != nil {
@@ -554,7 +813,7 @@ func TestHeadlessDoDVerdict(t *testing.T) {
 	})
 
 	t.Run("verifier keeps failing → DoD not passed", func(t *testing.T) {
-		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 2,
+		e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", MaxIterations: 2,
 			Verifiers: []agent.Verify{fakeVerifier{ok: false}}, Stream: fakeStream(events...)})
 		result, err := e.Execute(newTestCtx(), &types.TODO{})
 		if err != nil {
@@ -566,7 +825,7 @@ func TestHeadlessDoDVerdict(t *testing.T) {
 	})
 
 	t.Run("no verifiers → no DoD", func(t *testing.T) {
-		e := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(events...)})
+		e := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: fakeStream(events...)})
 		result, err := e.Execute(newTestCtx(), &types.TODO{})
 		if err != nil {
 			t.Fatalf("Execute: %v", err)

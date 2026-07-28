@@ -17,18 +17,18 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
-	"github.com/flanksource/captain/pkg/api"
+	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	gavelai "github.com/flanksource/gavel/ai"
 	todopkg "github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
 )
 
 const (
-	defaultTimeout        = 30 * time.Minute
-	defaultCheckIters     = 3
-	defaultToolsAllowlist = "Read,Edit,Write,Bash,Glob,Grep"
+	defaultTimeout    = 30 * time.Minute
+	defaultCheckIters = 3
 )
 
 // streamFunc opens a captain event stream for a request. It is the seam tests
@@ -38,87 +38,37 @@ const (
 // passed here so tests that bypass provider construction can still observe it.
 type streamFunc func(ctx context.Context, req captainai.Request, canUseTool captainai.PermissionFunc) (<-chan captainai.Event, error)
 
-type Config struct {
-	WorkDir string
-	Agent   string // "claude" or "codex"
-	// Model / Backend are explicit user overrides; empty defers to the mode's
-	// .prompt frontmatter (captain resolves the provider from the model name).
-	// Model may be a compact string ("opus:high", "opus, sonnet"); buildRequest
-	// expands it into the request's Name/Backend/Effort/Fallbacks.
-	Model   string
-	Backend string
-	Effort  string
-	// Fallbacks are alternative models captain tries in order after the primary
-	// (captain Model.Candidates); folded into req.Model.Fallbacks by buildRequest.
-	Fallbacks api.ModelList
-	MaxTurns  int
-	// MaxBudgetUsd caps a run's accumulated spend in USD (0 = no ceiling). Carried
-	// through to req.Budget.Cost so captain aborts once spend would exceed it.
-	MaxBudgetUsd float64
-	Tools        []string
-	Timeout      time.Duration
-	// Mode selects the built-in prompt (run or plan); empty means run. The plan
-	// template's frontmatter carries the plan permission posture.
-	Mode types.RunMode
-	// ExistingPlan is the current content of the todo's recorded plan file
-	// (plan mode); empty means no prior plan.
-	ExistingPlan string
-	// PromptOverride, when set, replaces the rendered prompt body — the
-	// dashboard's editable prompt. The envelope schema instruction is still
-	// appended so the structured-output contract holds.
-	PromptOverride string
-	// Verifiers gate each run-mode iteration: a failing verdict's feedback is
-	// sent back to the same session for another attempt (captain agent.Runner
-	// drives the loop via Verify hooks). Plan runs register none.
-	Verifiers []agent.Verify
-	// MaxIterations bounds the verify-feedback loop (only meaningful with
-	// Verifiers); 0 defaults to 3.
-	MaxIterations int
-	// Resume / SessionID: Resume continues the todo's prior session; SessionID is
-	// the pre-generated claude session id for a fresh cmux run (the dashboard
-	// knows it up front to follow the session log live).
-	Resume    bool
-	SessionID string
-	// ToolModes is the per-tool exposure (tool name → enabled/ask/disabled) and
-	// PermissionMode the base permission posture (a clicky ClaudePermissionMode).
-	// Together they shape the request's api.Permissions: enabled tools are
-	// allow-listed, disabled ones denied, and ask ones brokered via CanUseTool.
-	ToolModes      map[string]string
-	PermissionMode string
-	// Approvals brokers tool permissions over the can_use_tool control protocol:
-	// each tool the agent wants to run that is not auto-approved is surfaced to the
-	// process-wide approval registry (the dashboard resolves it). Off by default so
-	// CLI runs with no resolver keep the auto-approve behaviour instead of blocking.
-	Approvals bool
-	// Stream overrides the captain provider; nil uses the real claude/codex CLI.
-	Stream streamFunc
-}
-
 type Executor struct {
-	config Config
+	config todopkg.AgentRunConfig
+	agent  string
+	stream streamFunc
 }
 
 var _ todopkg.RunPromptProvider = (*Executor)(nil)
 var _ todopkg.RunRuntimeProvider = (*Executor)(nil)
 
-func NewExecutor(config Config) *Executor {
-	if config.Agent == "" {
-		config.Agent = "claude"
+type option func(*Executor)
+
+func withStream(stream streamFunc) option {
+	return func(executor *Executor) {
+		executor.stream = stream
 	}
-	if len(config.Tools) == 0 {
-		config.Tools = strings.Split(defaultToolsAllowlist, ",")
-	}
-	if config.Timeout == 0 {
-		config.Timeout = defaultTimeout
-	}
+}
+
+func NewExecutor(config todopkg.AgentRunConfig, options ...option) *Executor {
 	if config.Mode == "" {
 		config.Mode = types.ModeRun
 	}
-	return &Executor{config: config}
+	agentName, _ := claude.ResolveAgent(config.Name)
+	executor := &Executor{config: config, agent: agentName}
+	for _, option := range options {
+		option(executor)
+	}
+	return executor
 }
 
 func (e *Executor) Name() string {
-	return e.driver() + "-" + e.config.Agent
+	return e.driver() + "-" + e.agent
 }
 
 func (e *Executor) driver() string {
@@ -130,10 +80,10 @@ func (e *Executor) driver() string {
 
 func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
 	return captaindb.PromptRunRuntimeSelection{
-		Provider: todopkg.RuntimeProviderForBackend(e.config.Backend),
-		Backend:  e.config.Backend,
-		Model:    e.config.Model,
-		Effort:   e.config.Effort,
+		Provider: todopkg.RuntimeProviderForBackend(string(e.config.Backend)),
+		Backend:  string(e.config.Backend),
+		Model:    e.config.Name,
+		Effort:   string(e.config.Effort),
 	}
 }
 
@@ -165,7 +115,19 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return nil, err
 	}
-	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+	req, cleanup, err := e.prepareRequest(ctx, todosInGroup, req)
+	if err != nil {
+		return nil, err
+	}
+	result, runErr := e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+	if cleanupErr := cleanup(); cleanupErr != nil {
+		cleanupErr = fmt.Errorf("%s: clean up workspace: %w", e.Name(), cleanupErr)
+		if runErr != nil {
+			return result, errors.Join(runErr, cleanupErr)
+		}
+		return result, cleanupErr
+	}
+	return result, runErr
 }
 
 func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.Request, error) {
@@ -180,10 +142,9 @@ func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.R
 	rendered, _, err := todoprompt.Render(todosInGroup, todoprompt.Options{
 		WorkDir:      workDir,
 		Mode:         e.config.Mode,
-		Effort:       e.config.Effort,
+		Spec:         e.config.Spec,
 		Template:     tmpl,
 		ExistingPlan: e.config.ExistingPlan,
-		BodyOverride: e.config.PromptOverride,
 	})
 	if err != nil {
 		return captainai.Request{}, err
@@ -225,7 +186,19 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return e.failed(start, err), err
 	}
-	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+	req, cleanup, err := e.prepareRequest(ctx, todosInGroup, req)
+	if err != nil {
+		return e.failed(start, err), err
+	}
+	result, runErr := e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
+	if cleanupErr := cleanup(); cleanupErr != nil {
+		cleanupErr = fmt.Errorf("%s: clean up workspace: %w", e.Name(), cleanupErr)
+		if runErr != nil {
+			return result, errors.Join(runErr, cleanupErr)
+		}
+		return result, cleanupErr
+	}
+	return result, runErr
 }
 
 // run drives the request through captain's agent.Runner (Verify hooks gate
@@ -246,11 +219,11 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		SessionID:     firstNonEmpty(firstNonEmpty(req.SessionID, providerSessionID), priorSessionID(todosInGroup)),
 		Mode:          string(e.config.Mode),
 		Driver:        e.driver(),
-		Agent:         e.config.Agent,
+		Agent:         e.agent,
 		Provider:      todopkg.RuntimeProviderForBackend(string(provider.GetBackend())),
 		Backend:       string(provider.GetBackend()),
 		ResolvedModel: provider.GetModel(),
-		Effort:        firstNonEmpty(e.config.Effort, string(req.Effort)),
+		Effort:        string(req.Effort),
 	}
 	ctx.RecordRunStart(runMeta)
 
@@ -258,7 +231,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if strings.TrimSpace(req.Name) != "" {
 		modelSource = "todos." + string(e.config.Mode) + "-prompt"
 	}
-	if strings.TrimSpace(e.config.Model) != "" {
+	if strings.TrimSpace(e.config.Name) != "" {
 		modelSource = "run-option"
 	}
 	ctx.Logger.Infof(
@@ -269,29 +242,37 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	)
 	gavelai.NormalizeEnv()
 
-	streamCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
+	timeout, err := e.timeout()
+	if err != nil {
+		return e.failed(start, err), err
+	}
+	streamCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	result := &todopkg.ExecutionResult{ExecutorName: e.Name(), Runtime: runMeta, Transcript: ctx.GetTranscript()}
 	var sawResult bool
 
-	plugins := e.config.Verifiers
+	fixtureVerifiers := e.config.Verifiers
 	if e.config.Mode != types.ModeRun {
-		plugins = nil // plan runs are read-only; nothing to verify
+		fixtureVerifiers = nil // plan runs are read-only; nothing to verify
 	}
-	maxIter := 1
-	if len(plugins) > 0 {
+	var verifyHooks []any
+	if e.config.Mode == types.ModeRun {
+		verifyHooks = append(verifyHooks, capverify.HooksForWorkflow(req.Workflow)...)
+		for _, verifier := range fixtureVerifiers {
+			verifyHooks = append(verifyHooks, verifier)
+		}
+	}
+	maxIter := capverify.MaxIterationsForWorkflow(req.Workflow)
+	if len(fixtureVerifiers) > 0 {
 		maxIter = e.config.MaxIterations
 		if maxIter <= 0 {
 			maxIter = defaultCheckIters
 		}
 	}
 
-	// Scope tells the verify hooks how much they should act on: a check run
-	// (verifiers present) restricts them to the files the agent changed this
-	// run; a plain run (no verifiers) lets them act on the whole tree.
-	scope := agent.ScopeAll
-	if len(plugins) > 0 {
+	scope := capverify.ScopeForWorkflow(req.Workflow)
+	if len(fixtureVerifiers) > 0 && (req.Workflow == nil || req.Workflow.Verify == nil || req.Workflow.Verify.Scope == "") {
 		scope = agent.ScopeChanged
 	}
 	// Commit hooks lead the list: at PhaseRun they collapse the run's fixup
@@ -301,9 +282,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if e.config.Mode == types.ModeRun {
 		hooks = append(hooks, commitHooks(req, todosInGroup, runMeta.SessionID)...)
 	}
-	for _, p := range plugins {
-		hooks = append(hooks, p)
-	}
+	hooks = append(hooks, verifyHooks...)
 
 	runner := &agent.Runner[string]{
 		Provider:      provider,
@@ -342,7 +321,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	// "condition-met" only if every verifier passed; any other stop reason
 	// (budget/cost exhausted, timeout) means a check is still red. This drives
 	// the verified/unverified terminal status in applyOutcome.
-	if len(plugins) > 0 {
+	if len(verifyHooks) > 0 {
 		passed := rres.Loop != nil && rres.Loop.StopReason == "condition-met"
 		var output *types.VerificationOutput
 		for _, verdict := range rres.Verdicts {
@@ -357,13 +336,13 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		result.DoD = &todopkg.DoDOutcome{Ran: true, Passed: passed, Output: output}
 	}
 	envErr := e.captureEnvelope(result, rres.Response)
-	return e.classify(result, sawResult, timedOut, envErr)
+	return e.classify(result, sawResult, timedOut, timeout, envErr)
 }
 
 // classify folds the transport outcome and the envelope into the final verdict.
 // The envelope's endStatus drives it when present; otherwise the transport
 // result decides as before. A missing response contract is always an error.
-func (e *Executor) classify(result *todopkg.ExecutionResult, sawResult, timedOut bool, envErr error) (*todopkg.ExecutionResult, error) {
+func (e *Executor) classify(result *todopkg.ExecutionResult, sawResult, timedOut bool, timeout time.Duration, envErr error) (*todopkg.ExecutionResult, error) {
 	if envErr != nil {
 		result.ErrorMessage = envErr.Error()
 		return result, fmt.Errorf("%s: %w", e.Name(), envErr)
@@ -380,7 +359,7 @@ func (e *Executor) classify(result *todopkg.ExecutionResult, sawResult, timedOut
 		result.Success = true
 		return result, nil
 	case timedOut:
-		err := fmt.Errorf("%s run did not complete within %s", e.Name(), e.config.Timeout)
+		err := fmt.Errorf("%s run did not complete within %s", e.Name(), timeout)
 		result.ErrorMessage = err.Error()
 		return result, err
 	case !sawResult:
@@ -453,12 +432,26 @@ func (e *Executor) failed(start time.Time, err error) *todopkg.ExecutionResult {
 // isCmuxBackend reports whether this executor drives the interactive cmux TUI
 // provider (vs the headless SDK backends).
 func (e *Executor) isCmuxBackend() bool {
-	switch captainai.Backend(strings.TrimSpace(e.config.Backend)) {
+	switch captainai.Backend(strings.TrimSpace(string(e.config.Backend))) {
 	case captainai.BackendClaudeCmux, captainai.BackendCodexCmux:
 		return true
 	default:
 		return false
 	}
+}
+
+func (e *Executor) timeout() (time.Duration, error) {
+	if strings.TrimSpace(e.config.Budget.Timeout) == "" {
+		return defaultTimeout, nil
+	}
+	timeout, err := time.ParseDuration(e.config.Budget.Timeout)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid timeout %q: %w", e.Name(), e.config.Budget.Timeout, err)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("%s: timeout must be greater than zero", e.Name())
+	}
+	return timeout, nil
 }
 
 func groupWorkDir(fallback string, todoList []*types.TODO) string {

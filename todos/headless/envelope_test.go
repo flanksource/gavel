@@ -42,7 +42,7 @@ func TestEnvelopePrefersStructuredResult(t *testing.T) {
 		{Kind: captainai.EventText, Text: `{"summary":"interim","endStatus":"failed"}`},
 		{Kind: captainai.EventResult, Success: true, StructuredData: json.RawMessage(runEnvelopeJSON)},
 	}}}
-	executor := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "codex", Stream: stream.fn})
+	executor := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "codex", Stream: stream.fn})
 
 	result, err := executor.Execute(newTestCtx(), &types.TODO{})
 
@@ -59,7 +59,7 @@ func TestEnvelopeFallsBackToResponseText(t *testing.T) {
 		{Kind: captainai.EventText, Text: runEnvelopeJSON},
 		{Kind: captainai.EventResult, Success: true},
 	}}}
-	executor := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
+	executor := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
 
 	result, err := executor.Execute(newTestCtx(), &types.TODO{})
 
@@ -82,7 +82,7 @@ func TestEnvelopeNativeQuestions(t *testing.T) {
 		}}},
 		{Kind: captainai.EventResult, Success: true},
 	}}}
-	executor := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
+	executor := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
 
 	result, err := executor.Execute(newTestCtx(), &types.TODO{})
 
@@ -112,7 +112,7 @@ func TestEnvelopeNativePlanDerivesStatus(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			executor := NewExecutor(Config{Mode: types.ModePlan, ExistingPlan: test.existingPlan})
+			executor := newTestExecutor(Config{Mode: types.ModePlan, ExistingPlan: test.existingPlan})
 			response := &captainai.Response{TerminalOutcome: &captainai.TerminalOutcome{
 				Kind: captainai.TerminalOutcomePlan,
 				Plan: &captainai.TerminalPlan{Content: test.content, Path: "/repo/.claude/plans/example.md"},
@@ -131,7 +131,7 @@ func TestEnvelopeNativePlanDerivesStatus(t *testing.T) {
 }
 
 func TestEnvelopeNativeOutcomePrecedesStructuredData(t *testing.T) {
-	executor := NewExecutor(Config{Mode: types.ModePlan})
+	executor := newTestExecutor(Config{Mode: types.ModePlan})
 	response := &captainai.Response{
 		TerminalOutcome: &captainai.TerminalOutcome{
 			Kind: captainai.TerminalOutcomePlan,
@@ -151,7 +151,7 @@ func TestEnvelopeNativeOutcomePrecedesStructuredData(t *testing.T) {
 }
 
 func TestEnvelopeStructuredPlanFallback(t *testing.T) {
-	executor := NewExecutor(Config{Mode: types.ModePlan})
+	executor := newTestExecutor(Config{Mode: types.ModePlan})
 	response := &captainai.Response{StructuredData: json.RawMessage(planEnvelopeJSON)}
 
 	env, err := executor.envelopeFromResponse(response)
@@ -165,7 +165,7 @@ func TestEnvelopeStructuredPlanFallback(t *testing.T) {
 }
 
 func TestEnvelopeInvalidStructuredDataDoesNotFallBackToText(t *testing.T) {
-	executor := NewExecutor(Config{})
+	executor := newTestExecutor(Config{})
 	response := &captainai.Response{
 		StructuredData: json.RawMessage(`{"summary":"missing status"}`),
 		Text:           runEnvelopeJSON,
@@ -184,7 +184,7 @@ func TestRunWithoutEnvelopeFailsWithoutResume(t *testing.T) {
 		{Kind: captainai.EventText, Text: "done, but no result envelope"},
 		{Kind: captainai.EventResult, Success: true},
 	}}}
-	executor := NewExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
+	executor := newTestExecutor(Config{WorkDir: t.TempDir(), Agent: "claude", Stream: stream.fn})
 
 	_, err := executor.Execute(newTestCtx(), &types.TODO{})
 

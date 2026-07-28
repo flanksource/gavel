@@ -3,7 +3,6 @@ package headless
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -11,75 +10,47 @@ import (
 	captainai "github.com/flanksource/captain/pkg/ai"
 	captainprovider "github.com/flanksource/captain/pkg/ai/provider"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/commit"
 	todopkg "github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
 )
 
-// buildRequest augments the rendered template request with the run's
-// budget/permissions/session plumbing. The template frontmatter's model and
-// permission mode are the defaults; explicit user config overrides them. It
-// returns the request, the fresh provider session id (cmux only), and the
-// tool-permission broker.
+// buildRequest adds only Gavel's runtime session, permission defaults, and
+// metadata environment to the already-rendered canonical Spec.
 func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO, base captainai.Request, resume bool) (captainai.Request, string, captainai.PermissionFunc, error) {
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	req := base
-	req.Budget = api.Budget{MaxTurns: e.config.MaxTurns, Cost: e.config.MaxBudgetUsd}
-	req.SetCwd(workDir)
-	// Expand a compact model string ("opus:high", "agent:opus, sonnet:medium")
-	// into a plain Name plus Backend/Effort and a Fallbacks chain; a plain name is
-	// returned unchanged. Config.Fallbacks (the resolved .gavel.yaml/CLI fallbacks)
-	// are folded in so captain's Candidates() tries them after the primary.
-	expanded, err := (api.Model{Name: strings.TrimSpace(e.config.Model), Fallbacks: e.config.Fallbacks}).Expand()
-	if err != nil {
-		return captainai.Request{}, "", nil, fmt.Errorf("%s: invalid model %q: %w", e.Name(), e.config.Model, err)
+	if req.Setup == nil {
+		req.Setup = &shell.Setup{}
 	}
-	// claude conveys effort through the prompt directive (rendered by
-	// todos/prompt); codex takes a real reasoning-effort flag. The explicit
-	// Config.Effort wins; a compact model's effort applies only when none is set.
-	effort := e.config.Effort
-	if effort == "" {
-		effort = string(expanded.Effort)
-	}
-	if e.config.Agent == "codex" {
-		req.Effort = api.Effort(effort)
-	}
-	// Explicit user model/backend overrides win over the template frontmatter.
-	if expanded.Name != "" {
-		req.Name = expanded.Name
-	}
-	if expanded.Backend != "" {
-		req.Backend = expanded.Backend
-	}
-	if b := strings.TrimSpace(e.config.Backend); b != "" {
-		req.Backend = captainai.Backend(b)
-	}
-	if len(expanded.Fallbacks) > 0 {
-		req.Fallbacks = expanded.Fallbacks
+	if req.Setup.Cwd == "" {
+		req.Setup.Cwd = workDir
 	}
 
-	templateMode := base.Permissions.Mode
 	isCmux := e.isCmuxBackend()
-	modes := e.config.ToolModes
-	hasModes := len(modes) > 0
+	explicitPolicies := req.Permissions.Tools.Policies()
+	req.Permissions = permissionDefaults(req.Permissions, isCmux)
+	if e.config.Approvals && !isCmux && len(explicitPolicies) == 0 {
+		req.Permissions.Tools = api.Tools{
+			Allow: withoutBash(todopkg.DefaultAgentTools()),
+			Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk},
+		}
+	}
+
 	// providerSessionID is the fresh claude session id handed to the cmux provider
 	// (via Config.SessionID) so it launches `--session-id <id>` and the host can
 	// follow the session log live. Empty for a resume (the provider takes the prior
 	// id from req.SessionID) and for the non-cmux SDK backends.
 	var providerSessionID string
+	requestedSessionID := req.SessionID
+	req.SessionID = ""
+	if resume {
+		req.SessionID = firstNonEmpty(priorSessionID(todosInGroup), requestedSessionID)
+	}
 	if isCmux {
-		// cmux brokers tools through the terminal/approval round-trip. With no
-		// per-tool preferences it carries no allowlist (every tool prompts); with
-		// preferences, enabled→--allowedTools and disabled→--disallowedTools.
-		req.Permissions.Mode = e.resolveMode(templateMode, api.PermissionDefault)
-		if hasModes {
-			allow, deny := splitToolModes(modes)
-			req.Permissions.Tools = api.Tools{Allow: allow, Deny: deny}
-		}
-		if prior := priorSessionID(todosInGroup); resume && prior != "" {
-			req.SessionID = prior // provider resumes with --resume
-		} else if e.config.Agent == "claude" {
-			providerSessionID = e.config.SessionID
+		if !resume && e.agent == "claude" {
+			providerSessionID = requestedSessionID
 			if providerSessionID == "" {
 				providerSessionID = uuid.NewString()
 			}
@@ -89,104 +60,43 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 		// Stamp GAVEL_ISSUE_ID / GAVEL_SESSION_ID so a `gavel commit` the agent runs
 		// itself writes the matching commit trailers.
 		if envMap := cmuxRunEnv(todosInGroup, firstNonEmpty(req.SessionID, providerSessionID)); len(envMap) > 0 {
-			env := make([]string, 0, len(envMap))
+			env := append([]string(nil), req.Setup.Env...)
 			for k, v := range envMap {
 				env = append(env, k+"="+v)
 			}
 			req.Setup.Env = env
 		}
-	} else {
-		req.Permissions = api.Permissions{
-			Mode:    e.resolveMode(templateMode, api.PermissionAcceptEdits), // acceptEdits so file edits are not blocked
-			Presets: []api.Preset{api.PresetEdit},
-			Tools:   api.Tools{Allow: e.config.Tools},
-		}
-		if hasModes {
-			// Explicit per-tool preferences replace the edit preset's curated
-			// allowlist: enabled→allow, disabled→deny, ask→brokered via CanUseTool.
-			allow, deny := splitToolModes(modes)
-			req.Permissions.Tools = api.Tools{Allow: allow, Deny: deny}
-			req.Permissions.Presets = nil
-		}
-		// The headless SDK backends resume via req.SessionID (the claude-agent SDK
-		// continues that session); used by the feedback/answer turns.
-		if prior := priorSessionID(todosInGroup); resume && prior != "" {
-			req.SessionID = prior
-		}
 	}
 
 	var canUseTool captainai.PermissionFunc
 	if e.config.Approvals {
-		canUseTool = e.buildCanUseTool(ctx, modes)
-		// Allow-listed tools skip the can_use_tool callback, so for the SDK backends
-		// with no explicit preferences drop Bash from the allowlist to route command
-		// execution through approval. With explicit modes the allowlist already
-		// reflects the user's enabled set; cmux carries no preset allowlist.
-		if !isCmux && !hasModes {
-			req.Permissions.Tools.Allow = withoutBash(e.config.Tools)
-		}
+		canUseTool = e.buildCanUseTool(ctx, req.Permissions.Tools.Policies())
 	}
 	return req, providerSessionID, canUseTool, nil
 }
 
-// resolveMode picks the request's base permission posture: an explicit user
-// PermissionMode wins; then the template frontmatter's mode (the plan template
-// declares plan); then the backend's default.
-func (e *Executor) resolveMode(fromTemplate, def api.PermissionMode) api.PermissionMode {
-	if m := captainPermissionMode(e.config.PermissionMode); m != "" {
-		return m
-	}
-	if fromTemplate != "" {
-		return fromTemplate
-	}
-	return def
-}
-
-// captainPermissionMode maps a clicky ClaudePermissionMode to captain's
-// api.PermissionMode. captain has no "dontAsk"; it folds to the default posture
-// (deny-by-default is then enforced per tool via the disabled modes). "" means no
-// explicit mode was chosen.
-func captainPermissionMode(s string) api.PermissionMode {
-	switch s {
-	case "plan":
-		return api.PermissionPlan
-	case "acceptEdits":
-		return api.PermissionAcceptEdits
-	case "auto":
-		return api.PermissionAuto
-	case "bypassPermissions":
-		return api.PermissionBypass
-	case "default", "dontAsk":
-		return api.PermissionDefault
-	default:
-		return ""
-	}
-}
-
-// splitToolModes partitions a tool-name→mode map into the allow list (enabled)
-// and deny list (disabled); ask/unknown tools appear in neither and are brokered
-// through CanUseTool.
-func splitToolModes(modes map[string]string) (allow, deny []string) {
-	for tool, mode := range modes {
-		switch mode {
-		case "enabled":
-			allow = append(allow, tool)
-		case "disabled":
-			deny = append(deny, tool)
+func permissionDefaults(permissions api.Permissions, cmux bool) api.Permissions {
+	if permissions.Mode == "" {
+		if cmux {
+			permissions.Mode = api.PermissionDefault
+		} else {
+			permissions.Mode = api.PermissionAcceptEdits
 		}
 	}
-	sort.Strings(allow)
-	sort.Strings(deny)
-	return allow, deny
+	if !cmux && len(permissions.Presets) == 0 && len(permissions.Tools.Policies()) == 0 {
+		permissions.Presets = []api.Preset{api.PresetEdit}
+		permissions.Tools = api.Tools{Allow: todopkg.DefaultAgentTools()}
+	}
+	return permissions
 }
 
 // provider returns the streaming provider for a run: the test seam when set,
 // otherwise a captain provider built from the request's resolved model/backend.
 func (e *Executor) provider(req captainai.Request, canUseTool captainai.PermissionFunc, providerSessionID string) (captainai.StreamingProvider, error) {
-	if e.config.Stream != nil {
-		return seamProvider{fn: e.config.Stream, canUseTool: canUseTool, model: req.Name, backend: req.Backend}, nil
+	if e.stream != nil {
+		return seamProvider{fn: e.stream, canUseTool: canUseTool, model: req.Name, backend: req.Backend}, nil
 	}
-	return e.newStreamer(canUseTool, providerSessionID, req.Name, string(req.Backend))
+	return e.newStreamer(req, canUseTool, providerSessionID)
 }
 
 // seamProvider adapts the streamFunc test seam to captain's StreamingProvider.
@@ -221,7 +131,9 @@ func (p seamProvider) GetBackend() captainai.Backend { return p.backend }
 // newStreamer constructs the real captain provider for the resolved
 // model/backend. cmux backends route to the interactive-TUI provider; headless
 // claude/codex use the SDK backends.
-func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, model, backend string) (captainai.StreamingProvider, error) {
+func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.PermissionFunc, sessionID string) (captainai.StreamingProvider, error) {
+	model := req.Name
+	backend := string(req.Backend)
 	model = strings.TrimSpace(model)
 	backend = strings.TrimSpace(backend)
 	// cmux backends route to the interactive-TUI provider regardless of agent; the
@@ -233,10 +145,15 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 		// modelFlag strips that sentinel back to "" (launch with no --model).
 		name := model
 		if name == "" {
-			name = e.config.Agent
+			name = e.agent
 		}
+		runtimeModel := req.Model
+		runtimeModel.Name = name
+		runtimeModel.Backend = b
 		provider, err := captainai.NewProvider(captainai.Config{
-			Model:      api.Model{Name: name, Backend: b},
+			Model:      runtimeModel,
+			Budget:     req.Budget,
+			NoCache:    req.NoCache,
 			SessionID:  sessionID,
 			CanUseTool: canUseTool,
 		})
@@ -249,7 +166,7 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 		}
 		return streamer, nil
 	}
-	switch e.config.Agent {
+	switch e.agent {
 	case "codex":
 		if backend != "" && captainai.Backend(backend) != captainai.BackendCodexAgent {
 			return nil, fmt.Errorf("headless codex does not support backend %q", backend)
@@ -270,8 +187,13 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 		if model == "" || model == "claude" {
 			model = "claude-agent-sonnet"
 		}
+		runtimeModel := req.Model
+		runtimeModel.Name = model
+		runtimeModel.Backend = captainai.Backend(backend)
 		provider, err := captainai.NewProvider(captainai.Config{
-			Model:      api.Model{Name: model, Backend: captainai.Backend(backend)},
+			Model:      runtimeModel,
+			Budget:     req.Budget,
+			NoCache:    req.NoCache,
 			CanUseTool: canUseTool,
 		})
 		if err != nil {
@@ -283,7 +205,7 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 		}
 		return streamer, nil
 	default:
-		return nil, fmt.Errorf("headless: unsupported agent %q", e.config.Agent)
+		return nil, fmt.Errorf("headless: unsupported agent %q", e.agent)
 	}
 }
 
@@ -292,16 +214,13 @@ func (e *Executor) newStreamer(canUseTool captainai.PermissionFunc, sessionID, m
 // approval registry — the same one the dashboard shares — and maps the human's
 // decision back onto the captain decision shape. It blocks until the dashboard
 // resolves the request or the run's context is cancelled.
-func (e *Executor) buildCanUseTool(ctx *todopkg.ExecutorContext, toolModes map[string]string) captainai.PermissionFunc {
+func (e *Executor) buildCanUseTool(ctx *todopkg.ExecutorContext, policies map[string]api.ToolPolicy) captainai.PermissionFunc {
 	return func(callCtx context.Context, preq captainai.PermissionRequest) (captainai.PermissionDecision, error) {
-		// A per-tool preference short-circuits the human round-trip: a disabled tool
-		// is denied outright, an enabled one is auto-approved. Everything else
-		// ("ask", or a tool with no recorded preference) is surfaced for approval.
-		switch toolModes[preq.Tool] {
-		case "disabled":
+		switch policies[preq.Tool] {
+		case api.ToolPolicyDeny:
 			ctx.Logger.Infof("%s: session %s denying disabled tool %s", e.Name(), preq.SessionID, preq.Tool)
 			return captainai.PermissionDecision{Allow: false, Message: fmt.Sprintf("tool %s is disabled for this run", preq.Tool)}, nil
-		case "enabled":
+		case api.ToolPolicyAllow, api.ToolPolicyAuto:
 			return captainai.PermissionDecision{Allow: true}, nil
 		}
 		ctx.Logger.Infof("%s: session %s awaiting tool-permission approval: %s",

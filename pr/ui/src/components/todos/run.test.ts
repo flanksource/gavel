@@ -76,6 +76,7 @@ describe('todo run model choices', () => {
     expect(runChoicesForAction(context, 'run', 'high')[0]?.options).toMatchObject({
       effort: 'high',
       runMode: 'run',
+      workflow: { commits: [{ on: 'run', gates: 'full' }] },
     });
 
     expect(runChoicesForRuntimeMode(context, 'run', 'cmux').map(choice => choice.backend.id)).toEqual([

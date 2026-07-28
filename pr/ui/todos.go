@@ -15,7 +15,6 @@ import (
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
@@ -310,11 +309,22 @@ type todoRunOptions struct {
 	// from Spec.Setup/Spec.Workflow (see specDirty/specVerify/specCommit/specDryRun),
 	// not sibling flags.
 	api.Spec
-	Agent   string
-	Mode    string
 	Driver  string
 	RunMode types.RunMode
 	Resume  bool
+}
+
+func (o todoRunOptions) agent() string {
+	agent, _ := claude.ResolveAgent(o.Name)
+	return agent
+}
+
+func (o todoRunOptions) legacyMode() string {
+	kind, err := drivers.Parse(o.Driver)
+	if err == nil && kind == drivers.Cmux {
+		return "cmux"
+	}
+	return "inline"
 }
 
 // specCommits returns the run's commit policies (nil when the spec asks for
@@ -913,8 +923,8 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Refs:      todoRunRefs(todoList),
 		Count:     len(todoList),
 		Dir:       source.Dir,
-		Agent:     opts.Agent,
-		Mode:      opts.Mode,
+		Agent:     opts.agent(),
+		Mode:      opts.legacyMode(),
 		Driver:    opts.Driver,
 		Backend:   string(opts.Backend),
 		Model:     opts.Name,
@@ -929,9 +939,8 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
-	// A dry run (every Workflow.Commits stanza marked dryRun) still executes the agent — it only skips
-	// the post-run commit (see maybeCommitAfterRun). "Show what would run without
-	// running" is covered by the live prompt preview (handleTodoRunPreview).
+	// A dry run still executes the agent; Captain's commit hook reports rather
+	// than cuts the declared commit. Prompt-only inspection uses the preview API.
 	if err := startTodoRun(req); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -960,8 +969,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := todoRunPreviewResponse{
 		Prompt:  previewPrompt,
-		Mode:    opts.Mode,
-		Agent:   opts.Agent,
+		Mode:    opts.legacyMode(),
+		Agent:   opts.agent(),
 		Backend: string(opts.Backend),
 		Effort:  string(opts.Effort),
 		RunMode: string(opts.RunMode),
@@ -990,7 +999,7 @@ func buildTodoRunPromptPreview(ctx context.Context, provider todos.Provider, dir
 		return "", err
 	}
 	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
-		WorkDir: dir, Mode: mode, Effort: string(opts.Effort), Template: tmpl, ExistingPlan: existingPlan,
+		WorkDir: dir, Mode: mode, Spec: opts.Spec, Template: tmpl, ExistingPlan: existingPlan,
 	})
 	if err != nil {
 		return "", err
@@ -1434,16 +1443,6 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	if err != nil {
 		return todoRunOptions{}, err
 	}
-	// The coding agent is derived from the resolved model, not the driver.
-	agent, _ := claude.ResolveAgent(model)
-
-	// Mode is the legacy mechanism label (cmux vs inline) some response/preview
-	// paths still read; the authoritative selection is Driver.
-	mode := "inline"
-	if kind == drivers.Cmux {
-		mode = "cmux"
-	}
-
 	// RunMode selects the built-in prompt; the legacy plan bool maps to plan
 	// until the dashboard sends runMode. Plan works on every driver now (the
 	// plan template's frontmatter carries the plan permission posture).
@@ -1507,8 +1506,6 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 
 	return todoRunOptions{
 		Spec:    spec,
-		Agent:   agent,
-		Mode:    mode,
 		Driver:  string(kind),
 		RunMode: runMode,
 		Resume:  payload.Resume,
@@ -1554,40 +1551,8 @@ func defaultStartTodoRun(req todoRunRequest) error {
 		if runErr != nil && (result == nil || !result.Cancelled) {
 			logger.Warnf("todo run %s failed: %v", todoRunLabel(req.Todos), runErr)
 		}
-		maybeCommitAfterRun(req, result)
 	}()
 	return nil
-}
-
-// maybeCommitAfterRun runs the `gavel commit` pipeline over the agent's changes
-// once a dashboard run finishes, mirroring the CLI's `todos run --commit`, then
-// runs issue verification over the resulting commits when enabled. Auto-commit
-// is skipped for plan-only runs (which make no changes) and whenever the
-// executor already committed its own changes (see todos.ShouldCommitAfter).
-func maybeCommitAfterRun(req todoRunRequest, result *todos.ExecutionResult) {
-	if len(req.Todos) == 0 || req.Todos[0] == nil {
-		return
-	}
-	todo := req.Todos[0]
-
-	// An ask outcome has half-done work by design: committing it is a decision
-	// for the answer turn, not the run tail.
-	askEnded := result != nil && result.EndStatus == types.EndAsk
-	// A dry run executes but suppresses the auto-commit (api.Commit.DryRun).
-	commitEnabled := specCommit(req.Options.Spec) && !specDryRun(req.Options.Spec)
-	if enabled := commitEnabled && req.Options.RunMode != types.ModePlan && !askEnded; todos.ShouldCommitAfter(result, enabled) {
-		meta := commit.AgentRunMetadata{IssueID: todo.ID}
-		if todo.LLM != nil {
-			meta.SessionID = todo.LLM.SessionId
-		}
-		run := commit.AgentRun{WorkDir: req.Source.Dir, Cwd: todo.CWD, Meta: meta}
-		if _, err := commit.RunAfterAgent(context.Background(), run); err != nil {
-			logger.Errorf("commit after todo run failed: %v", err)
-		}
-	}
-	// Verification is the run loop's definition of done (the fixture/CEL verdict),
-	// not a separate post-commit scoring pass. The Verification tab and
-	// `gavel todos check` re-run it manually.
 }
 
 // resolveDriverFromPayload selects the driver mechanism: the explicit Driver
@@ -1656,28 +1621,15 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 	if err != nil {
 		return nil, "", err
 	}
-	return drivers.New(kind, drivers.Config{
-		WorkDir:        req.Source.Dir,
-		Model:          req.Options.Name,
-		Backend:        string(req.Options.Backend),
-		Fallbacks:      req.Options.Fallbacks,
-		Effort:         string(req.Options.Effort),
-		Mode:           mode,
-		ExistingPlan:   existingPlan,
-		Verifiers:      verifiers,
-		MaxIterations:  maxIterations,
-		Resume:         req.Options.Resume,
-		SessionID:      req.Options.SessionID,
-		Timeout:        req.Options.timeout(),
-		MaxBudgetUsd:   req.Options.Budget.Cost,
-		MaxTurns:       req.Options.Budget.MaxTurns,
-		Dirty:          specDirty(req.Options.Spec),
-		PromptOverride: req.Options.Prompt.User,
-		ToolModes:      toolModesFromPermissions(req.Options.Permissions.Tools),
-		PermissionMode: string(req.Options.Permissions.Mode),
-		// The dashboard is the approval resolver (handleTodoSessionApprove), so
-		// brokered tool permissions can be surfaced and answered here.
-		Approvals: true,
+	return drivers.New(kind, todos.AgentRunConfig{
+		Spec:          req.Options.Spec,
+		WorkDir:       req.Source.Dir,
+		Mode:          mode,
+		ExistingPlan:  existingPlan,
+		Verifiers:     verifiers,
+		MaxIterations: maxIterations,
+		Resume:        req.Options.Resume,
+		Approvals:     true,
 	})
 }
 
@@ -1692,38 +1644,6 @@ func todoPlanMarkdown(ctx context.Context, provider todos.Provider, todoList []*
 	return content.PlanMarkdown(ctx, todoList[0], mode)
 }
 
-// toolModesFromPermissions flattens api.Tools (the Spec's allow/deny/modes
-// policy) into the legacy tool-name→mode map (enabled/ask/disabled) that
-// headless.Config/drivers.Config key their allow/deny/broker logic on.
-func toolModesFromPermissions(tools api.Tools) map[string]string {
-	if len(tools.Allow) == 0 && len(tools.Deny) == 0 && len(tools.Modes) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(tools.Allow)+len(tools.Deny)+len(tools.Modes))
-	for _, tool := range tools.Allow {
-		out[tool] = "enabled"
-	}
-	for _, tool := range tools.Deny {
-		out[tool] = "disabled"
-	}
-	for tool, mode := range tools.Modes {
-		switch mode {
-		case api.ToolModeOn:
-			out[tool] = "enabled"
-		case api.ToolModeAsk:
-			out[tool] = "ask"
-		case api.ToolModeOff:
-			out[tool] = "disabled"
-		case api.ToolModeAuto:
-			delete(out, tool)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 // resolveRunSessionID determines the claude session id a run will use, so the
 // caller knows it up front. A resume run reuses the todo's prior session; a
 // fresh cmux run mints a new id (claude is launched with it, so the dashboard
@@ -1735,7 +1655,7 @@ func resolveRunSessionID(opts todoRunOptions, todoList []*types.TODO) string {
 			return sid
 		}
 	}
-	switch opts.Mode {
+	switch opts.legacyMode() {
 	case "cmux":
 		return uuid.NewString()
 	case "inline":

@@ -93,8 +93,8 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Ref:       todos.TODOReference(todo),
 			Count:     1,
 			Dir:       source.Dir,
-			Agent:     opts.Agent,
-			Mode:      opts.Mode,
+			Agent:     opts.agent(),
+			Mode:      opts.legacyMode(),
 			Driver:    opts.Driver,
 			Backend:   string(opts.Backend),
 			Model:     opts.Name,
@@ -465,7 +465,6 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 			// parked with an answer nobody acted on.
 			recordAnswerFailure(req, runErr)
 		}
-		maybeCommitAfterRun(req, result)
 	}()
 	return nil
 }
