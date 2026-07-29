@@ -14,7 +14,24 @@ const SelectionContext = createContext<Selection | null>(null);
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({ children, loading: _loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { loading?: boolean }) => <button {...props}>{children}</button>,
-  Field: ({ label, children }: { label: string; children: React.ReactNode }) => <label>{label}{children}</label>,
+  Combobox: ({
+    options,
+    value,
+    onChange,
+  }: {
+    options: Array<{ value: string; label: string }>;
+    value: string[];
+    onChange: (value: string[]) => void;
+  }) => (
+    <select
+      multiple
+      value={value}
+      onChange={event => onChange(Array.from(event.currentTarget.selectedOptions, option => option.value))}
+    >
+      {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+  ),
+  Field: ({ label, children }: { label: string; helper?: React.ReactNode; children: React.ReactNode }) => <label>{label}{children}</label>,
   ListMenu: ({ children, selection }: { children: React.ReactNode; selection: Selection }) => (
     <SelectionContext.Provider value={selection}>{children}</SelectionContext.Provider>
   ),
@@ -159,6 +176,183 @@ function createdResponse() {
 }
 
 describe('CreateTodoFromPRDialog', () => {
+  it('creates and selects a project without losing the todo draft', async () => {
+    const onProjectsChanged = vi.fn();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (input === '/api/projects') {
+        return { ok: true, text: async () => '' } as Response;
+      }
+      return createdResponse();
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[]}
+        onProjectsChanged={onProjectsChanged}
+      />,
+    );
+
+    const addTodo = screen.getByRole('button', { name: 'Add todo' });
+    expect((addTodo as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'New project' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('');
+    expect(screen.getByRole('option', { name: 'No workspace selected' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Keep the draft title' } });
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Keep the public API stable.' } });
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'high' } });
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'review' } });
+    fireEvent.click(screen.getByLabelText('Include lint:0:0:pkg/store/save.go:23:errcheck'));
+    fireEvent.click(screen.getByRole('button', { name: /^saves records/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('widget');
+    expect((screen.getByLabelText('Directory') as HTMLInputElement).value).toBe('');
+    expect(Array.from((screen.getByLabelText('Repos') as HTMLSelectElement).selectedOptions, option => option.value)).toEqual(['acme/widget']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Name and directory are required')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Directory'), { target: { value: ' /work/widget ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/projects');
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      name: 'widget',
+      dir: '/work/widget',
+      repos: ['acme/widget'],
+    });
+    expect(onProjectsChanged).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText('Add local directory')).toBeNull();
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('/work/widget');
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Keep the draft title');
+    expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('Keep the public API stable.');
+    expect((screen.getByLabelText('Priority') as HTMLSelectElement).value).toBe('high');
+    expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('review');
+    expect((screen.getByLabelText('Include lint:0:0:pkg/store/save.go:23:errcheck') as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText('expected record to persist')).toBeTruthy();
+    expect((addTodo as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(addTodo);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/todos/new?dir=%2Fwork%2Fwidget');
+    const payload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(payload).toMatchObject({
+      title: 'Keep the draft title',
+      priority: 'high',
+      status: 'review',
+      criteria: [{ text: 'Test `storage › saves records` passes' }],
+      prVerification: {
+        prNumber: 17,
+        repo: 'acme/widget',
+        actions: ['*'],
+      },
+    });
+    expect(payload.body).toContain('Keep the public API stable.');
+    expect(payload.body).toContain('expected record to persist');
+    expect(payload.body).not.toContain('golangci-lint');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create another' }));
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('/work/widget');
+    expect(screen.getByRole('option', { name: 'widget' })).toBeTruthy();
+  });
+
+  it('keeps a failed project form open without selecting a workspace', async () => {
+    const onProjectsChanged = vi.fn();
+    const fetchMock = vi.fn(async () => (
+      { ok: false, status: 409, text: async () => 'project already exists' }
+    ) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[]}
+        onProjectsChanged={onProjectsChanged}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.change(screen.getByLabelText('Directory'), { target: { value: '/work/widget' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('project already exists')).toBeTruthy();
+    expect(screen.getByLabelText('Add local directory')).toBeTruthy();
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('');
+    expect((screen.getByRole('button', { name: 'Add todo' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onProjectsChanged).not.toHaveBeenCalled();
+  });
+
+  it('prefers a matching workspace and does not duplicate a locally added project after refresh', async () => {
+    const fetchMock = vi.fn(async () => (
+      { ok: true, text: async () => '' }
+    ) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const other = { name: 'other', dir: '/work/other', repos: ['acme/other'] };
+    const matching = { name: 'gavel', dir: '/work/gavel', repos: ['acme/widget'] };
+    const added = { name: 'widget-local', dir: '/work/widget', repos: ['acme/widget'] };
+    const { rerender } = render(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[other, matching]}
+      />,
+    );
+
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('/work/gavel');
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: added.name } });
+    fireEvent.change(screen.getByLabelText('Directory'), { target: { value: added.dir } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe(added.dir));
+
+    rerender(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[other, matching, added]}
+      />,
+    );
+
+    expect(screen.getAllByRole('option', { name: added.name })).toHaveLength(1);
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe(added.dir);
+
+    rerender(
+      <CreateTodoFromPRDialog
+        open={false}
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[other, matching]}
+      />,
+    );
+    rerender(
+      <CreateTodoFromPRDialog
+        open
+        onClose={vi.fn()}
+        pr={pr}
+        detail={detail}
+        workspaces={[other, matching]}
+      />,
+    );
+
+    expect(screen.queryByRole('option', { name: added.name })).toBeNull();
+    expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe(matching.dir);
+  });
+
   it('submits selected test and lint details with criteria and PR verification', async () => {
     const onCreated = vi.fn();
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => createdResponse());

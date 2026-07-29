@@ -216,10 +216,10 @@ describe('TodoVerification', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     localStorage.setItem(
-      'gavel.pr-ui.promptRunChoices.v1',
+      'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         verification: {
-          last: { backend: 'codex-agent', model: 'gpt-5.6-sol', effort: 'high' },
+          last: { spec: { backend: 'codex-agent', model: 'gpt-5.6-sol', effort: 'high' } },
           recent: [],
         },
       }),

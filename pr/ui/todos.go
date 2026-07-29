@@ -14,6 +14,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/ai/agent"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/commons/logger"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/internal/database"
@@ -24,6 +25,7 @@ import (
 	"github.com/flanksource/gavel/todos/native"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
+	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
 )
@@ -192,11 +194,18 @@ type todoRunPayload struct {
 	// legacy agent+mode pair for backward compatibility.
 	Driver string `json:"driver,omitempty"`
 
-	// Spec inlines the model/backend/effort/prompt/budget/permissions/session
+	// Spec carries the model/backend/effort/prompt/budget/permissions/session
 	// knobs — the same request shape captain's prompt run editor produces
 	// (model, backend, effort, prompt.user, budget.{cost,maxTurns,timeout},
 	// permissions.{mode,tools}, sessionId, ...).
-	api.Spec
+	//
+	// It is a named field under its own `spec` key, not embedded. api.Spec
+	// declares value-receiver MarshalJSON/MarshalYAML to omit its empty sections;
+	// embedding promoted them onto the payload, so marshaling emitted a bare spec
+	// and silently dropped ref/agent/mode/driver/runMode/plan/resume — including
+	// in the review API's `options` object. Nesting also dissolves the wire
+	// collision between this payload's `mode`/`resume` and api.Model's own.
+	Spec api.Spec `json:"spec,omitempty"`
 
 	// RunMode selects the built-in prompt: run (implement) or plan (read-only
 	// investigation producing a reviewable plan). It supersedes the legacy Plan
@@ -209,52 +218,9 @@ type todoRunPayload struct {
 	// resume cannot be inferred from Spec.SessionID.
 	Resume bool `json:"resume,omitempty"`
 	// Dirty/DryRun/Commit/Check are no longer sibling flags — the run's dirty-tree
-	// stash, dry-run, auto-commit, and checks all come from the embedded api.Spec
+	// stash, dry-run, auto-commit, and checks all come from Spec
 	// (Setup.Checkout.Dirty and Workflow.Verify/Commits), surfaced by clicky's
 	// Workspace/Verify/Commit sections.
-}
-
-// todoRunFlags mirrors todoRunPayload's non-spec fields so MarshalJSON can emit
-// them next to the spec. The mirror is unavoidable: `type x todoRunPayload` sheds
-// only methods declared on the type, never one promoted from an embedded field,
-// so there is no way to reach these fields through the payload type itself.
-type todoRunFlags struct {
-	Dir     string   `json:"dir,omitempty"`
-	Ref     string   `json:"ref,omitempty"`
-	Refs    []string `json:"refs,omitempty"`
-	Agent   string   `json:"agent,omitempty"`
-	Mode    string   `json:"mode,omitempty"`
-	Driver  string   `json:"driver,omitempty"`
-	RunMode string   `json:"runMode,omitempty"`
-	Plan    bool     `json:"plan,omitempty"`
-	Resume  bool     `json:"resume,omitempty"`
-}
-
-// MarshalJSON shadows the marshaler api.Spec promotes onto the payload. api.Spec
-// declares a value-receiver MarshalJSON to omit its empty sections; embedding it
-// hands that method to todoRunPayload, so marshaling a payload emitted a bare
-// spec and silently dropped ref/agent/mode/driver/runMode/plan/resume — including
-// in the review API's `options` object.
-//
-// The flags are merged last because the wire shape is flat and api.Model
-// contributes "mode" and "resume" of its own. Decoding already resolves that
-// collision in favour of the shallower payload field, and encoding has to agree
-// or a payload would not survive its own round trip.
-func (p todoRunPayload) MarshalJSON() ([]byte, error) {
-	flat := map[string]json.RawMessage{}
-	for _, part := range []any{p.Spec, todoRunFlags{
-		Dir: p.Dir, Ref: p.Ref, Refs: p.Refs, Agent: p.Agent, Mode: p.Mode,
-		Driver: p.Driver, RunMode: p.RunMode, Plan: p.Plan, Resume: p.Resume,
-	}} {
-		raw, err := json.Marshal(part)
-		if err != nil {
-			return nil, fmt.Errorf("marshal todo run payload: %w", err)
-		}
-		if err := json.Unmarshal(raw, &flat); err != nil {
-			return nil, fmt.Errorf("merge todo run payload: %w", err)
-		}
-	}
-	return json.Marshal(flat)
 }
 
 type todoRunResponse struct {
@@ -308,14 +274,28 @@ type todoRunOptions struct {
 	// and validated by normalizeTodoRunOptions. dirty/checks/commit/dryRun are read
 	// from Spec.Setup/Spec.Workflow (see specDirty/specVerify/specCommit/specDryRun),
 	// not sibling flags.
-	api.Spec
+	//
+	// Named, not embedded: api.Spec's promoted MarshalJSON/MarshalYAML would emit
+	// only the spec and drop Driver/RunMode/Resume.
+	Spec    api.Spec
 	Driver  string
 	RunMode types.RunMode
 	Resume  bool
+	// Template is the .gavel.yaml prompt override source resolved alongside Spec;
+	// empty renders the mode's embedded default. It travels with the options so
+	// the preview and the executor cannot resolve different overrides.
+	Template string
+	// Approvals gates Bash behind human approval. The dashboard drains the
+	// approval queue, so it is answerable here; whether it is *enabled* is a
+	// .gavel.yaml decision (todos.approvals), not an entrypoint constant.
+	Approvals bool
+	// Timeout is Spec.Budget.Timeout already parsed by the resolution seam, so no
+	// consumer re-parses a string it cannot fail on.
+	Timeout time.Duration
 }
 
 func (o todoRunOptions) agent() string {
-	agent, _ := claude.ResolveAgent(o.Name)
+	agent, _ := claude.ResolveAgent(o.Spec.Name)
 	return agent
 }
 
@@ -358,25 +338,20 @@ func specDryRun(spec api.Spec) bool {
 	return len(commits) > 0
 }
 
-// specDirty reports whether the run's Setup.Checkout carries a dirty-tree stash
-// config (surfaced by the Workspace section).
+// specDirty reports whether the run's checkout carries the working tree's
+// uncommitted changes across (surfaced by the Workspace section). It reads the
+// stash mode rather than the pointer: an explicit `{stash: none}` is dirty
+// handling configured off, and shell.Dirty projects to nothing in that case.
 func specDirty(spec api.Spec) bool {
-	return spec.Setup != nil && spec.Setup.Checkout != nil && spec.Setup.Checkout.Dirty != nil
-}
-
-// timeout parses the run's budget timeout, defaulting to 30 minutes when
-// unset. normalizeTodoRunOptions always writes a canonical time.Duration
-// string here, so a parse failure indicates a construction bug rather than
-// bad user input.
-func (o todoRunOptions) timeout() time.Duration {
-	if o.Budget.Timeout == "" {
-		return 30 * time.Minute
+	if spec.Setup == nil || spec.Setup.Checkout == nil || spec.Setup.Checkout.Dirty == nil {
+		return false
 	}
-	d, err := time.ParseDuration(o.Budget.Timeout)
-	if err != nil {
-		panic(fmt.Sprintf("todoRunOptions: invalid budget timeout %q (should have been validated by normalizeTodoRunOptions): %v", o.Budget.Timeout, err))
+	switch spec.Setup.Checkout.Dirty.Stash {
+	case "", shell.StashNone:
+		return false
+	default:
+		return true
 	}
-	return d
 }
 
 var startTodoRun = defaultStartTodoRun
@@ -844,8 +819,11 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	if len(refs) == 0 {
 		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, fmt.Errorf("ref is required")
 	}
-	opts, err := normalizeTodoRunOptions(payload)
-	if err != nil {
+	// Wire validation runs before anything is looked up, so a malformed payload
+	// still fails as a 400 without opening a workspace. Resolution itself needs
+	// the workspace and the todos — it folds .gavel.yaml and each todo's `llm:`
+	// frontmatter — so it happens last.
+	if _, err := validateTodoRunPayload(payload); err != nil {
 		return nil, todoSource{}, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
 	source := todoSourceFromRequest(r)
@@ -854,30 +832,40 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 	}
 	globalLookup := strings.TrimSpace(source.Dir) == ""
 	if err := validateTodoRunCardinality(len(refs)); err != nil {
-		return nil, source, nil, opts, http.StatusBadRequest, err
+		return nil, source, nil, todoRunOptions{}, http.StatusBadRequest, err
 	}
 	origin := requestOrigin(r)
+
+	var provider todos.Provider
+	var todoList []*types.TODO
 	if globalLookup {
-		provider, owningSource, todo, err := s.resolveTodoReference(r.Context(), source, refs[0])
+		p, owningSource, todo, err := s.resolveTodoReference(r.Context(), source, refs[0])
 		if err != nil {
-			return provider, owningSource, nil, opts, http.StatusNotFound, err
+			return p, owningSource, nil, todoRunOptions{}, http.StatusNotFound, err
 		}
+		provider, source, todoList = p, owningSource, []*types.TODO{todo}
+	} else {
+		p, resolvedSource, err := s.todoProviderContext(r.Context(), source)
+		if err != nil {
+			return nil, resolvedSource, nil, todoRunOptions{}, http.StatusBadRequest, err
+		}
+		provider, source = p, resolvedSource
+		todoList = make([]*types.TODO, 0, len(refs))
+		for _, ref := range refs {
+			todo, err := provider.Get(r.Context(), ref)
+			if err != nil {
+				return provider, source, nil, todoRunOptions{}, http.StatusNotFound, err
+			}
+			todoList = append(todoList, todo)
+		}
+	}
+	for _, todo := range todoList {
 		todo.MarkdownBody = absolutizeAttachmentURLs(todo.MarkdownBody, origin)
-		return provider, owningSource, []*types.TODO{todo}, opts, http.StatusOK, nil
 	}
 
-	provider, source, err := s.todoProviderContext(r.Context(), source)
+	opts, err := normalizeTodoRunOptions(source.Dir, todoList, payload)
 	if err != nil {
-		return nil, source, nil, opts, http.StatusBadRequest, err
-	}
-	todoList := make([]*types.TODO, 0, len(refs))
-	for _, ref := range refs {
-		todo, err := provider.Get(r.Context(), ref)
-		if err != nil {
-			return provider, source, nil, opts, http.StatusNotFound, err
-		}
-		todo.MarkdownBody = absolutizeAttachmentURLs(todo.MarkdownBody, origin)
-		todoList = append(todoList, todo)
+		return provider, source, todoList, todoRunOptions{}, http.StatusBadRequest, err
 	}
 	return provider, source, todoList, opts, http.StatusOK, nil
 }
@@ -904,7 +892,7 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the run's session id once, up front, so it is stable across the
 	// validation and start calls below and can be returned to the client to
 	// follow the session log live (see handleTodoSessionStream).
-	opts.SessionID = resolveRunSessionID(opts, todoList)
+	opts.Spec.SessionID = resolveRunSessionID(opts, todoList)
 	req := todoRunRequest{
 		Provider: provider,
 		Registry: &s.todoRuns,
@@ -926,16 +914,16 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Agent:     opts.agent(),
 		Mode:      opts.legacyMode(),
 		Driver:    opts.Driver,
-		Backend:   string(opts.Backend),
-		Model:     opts.Name,
-		Effort:    string(opts.Effort),
+		Backend:   string(opts.Spec.Backend),
+		Model:     opts.Spec.Name,
+		Effort:    string(opts.Spec.Effort),
 		RunMode:   string(opts.RunMode),
 		Plan:      opts.RunMode == types.ModePlan,
 		Resume:    opts.Resume,
-		SessionID: opts.SessionID,
-		Timeout:   opts.timeout().String(),
-		MaxBudget: opts.Budget.Cost,
-		MaxTurns:  opts.Budget.MaxTurns,
+		SessionID: opts.Spec.SessionID,
+		Timeout:   opts.Timeout.String(),
+		MaxBudget: opts.Spec.Budget.Cost,
+		MaxTurns:  opts.Spec.Budget.MaxTurns,
 		Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 		Message:   todoRunStartedMessage(len(todoList)),
 	}
@@ -971,8 +959,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		Prompt:  previewPrompt,
 		Mode:    opts.legacyMode(),
 		Agent:   opts.agent(),
-		Backend: string(opts.Backend),
-		Effort:  string(opts.Effort),
+		Backend: string(opts.Spec.Backend),
+		Effort:  string(opts.Spec.Effort),
 		RunMode: string(opts.RunMode),
 		Plan:    opts.RunMode == types.ModePlan,
 		Count:   len(todoList),
@@ -986,20 +974,14 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 // schema instruction is always re-appended, so the preview shows the full
 // contract the agent receives.
 func buildTodoRunPromptPreview(ctx context.Context, provider todos.Provider, dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
-	mode := opts.RunMode
-	if mode == "" {
-		mode = types.ModeRun
-	}
-	tmpl, err := todoprompt.ResolveTemplate(dir, mode)
+	existingPlan, err := todoPlanMarkdown(ctx, provider, todoList, opts.RunMode)
 	if err != nil {
 		return "", err
 	}
-	existingPlan, err := todoPlanMarkdown(ctx, provider, todoList, mode)
-	if err != nil {
-		return "", err
-	}
+	// opts.Template is the override the spec was resolved from; re-reading
+	// .gavel.yaml here could preview a different prompt than the run dispatches.
 	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
-		WorkDir: dir, Mode: mode, Spec: opts.Spec, Template: tmpl, ExistingPlan: existingPlan,
+		WorkDir: dir, Mode: opts.RunMode, Spec: opts.Spec, Template: opts.Template, ExistingPlan: existingPlan,
 	})
 	if err != nil {
 		return "", err
@@ -1434,14 +1416,32 @@ func todoRunLabel(todoList []*types.TODO) string {
 	return fmt.Sprintf("%d todos", len(todoList))
 }
 
-func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
-	kind, err := resolveDriverFromPayload(payload)
+// todoRunWire is a run payload after wire validation: the request layer of the
+// resolution fold, plus the sibling flags that are deliberately not spec fields.
+type todoRunWire struct {
+	// Override is the payload's spec as the HIGHEST resolution layer — a knob the
+	// dashboard did not send must stay zero here so .gavel.yaml and the mode's
+	// .prompt frontmatter can supply it.
+	Override api.Spec
+	// Driver is the requested mechanism, empty when the payload named none and
+	// .gavel.yaml todos.driver should decide.
+	Driver  string
+	RunMode types.RunMode
+	Resume  bool
+}
+
+// validateTodoRunPayload rejects a malformed payload at the wire boundary,
+// before anything touches the database. It validates only what the client sent;
+// the resolved spec — which also carries the .gavel.yaml layers — is validated
+// again by todos/spec.Resolve.
+//
+// Nothing is defaulted here. Defaults belong to the resolution seam, and a
+// default applied at this layer would outrank the configuration it claims to
+// defer to.
+func validateTodoRunPayload(payload todoRunPayload) (todoRunWire, error) {
+	driver, err := payloadDriver(payload)
 	if err != nil {
-		return todoRunOptions{}, err
-	}
-	backend, model, err := resolveTodoRunBackendModel(kind, string(payload.Backend), payload.Name)
-	if err != nil {
-		return todoRunOptions{}, err
+		return todoRunWire{}, err
 	}
 	// RunMode selects the built-in prompt; the legacy plan bool maps to plan
 	// until the dashboard sends runMode. Plan works on every driver now (the
@@ -1452,63 +1452,87 @@ func normalizeTodoRunOptions(payload todoRunPayload) (todoRunOptions, error) {
 	}
 	runMode, err := types.ParseRunMode(runModeValue)
 	if err != nil {
-		return todoRunOptions{}, err
-	}
-	effort := api.Effort(strings.ToLower(strings.TrimSpace(string(payload.Effort))))
-	if effort == "" {
-		effort = "medium"
-	}
-	if !validTodoRunEffort(string(effort)) {
-		return todoRunOptions{}, fmt.Errorf("invalid effort %q", payload.Effort)
+		return todoRunWire{}, err
 	}
 
-	timeout := 30 * time.Minute
-	if raw := strings.TrimSpace(payload.Budget.Timeout); raw != "" {
+	spec := payload.Spec
+	if effort := strings.ToLower(strings.TrimSpace(string(spec.Effort))); effort != "" {
+		if !validTodoRunEffort(effort) {
+			return todoRunWire{}, fmt.Errorf("invalid effort %q", payload.Spec.Effort)
+		}
+		spec.Effort = api.Effort(effort)
+	}
+	if raw := strings.TrimSpace(spec.Budget.Timeout); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil {
-			return todoRunOptions{}, fmt.Errorf("invalid timeout %q", payload.Budget.Timeout)
+			return todoRunWire{}, fmt.Errorf("invalid timeout %q", payload.Spec.Budget.Timeout)
 		}
 		if parsed <= 0 {
-			return todoRunOptions{}, fmt.Errorf("timeout must be greater than zero")
+			return todoRunWire{}, fmt.Errorf("timeout must be greater than zero")
 		}
-		timeout = parsed
+		spec.Budget.Timeout = parsed.String()
 	}
-
-	// The rendered .prompt template's request is not built here — normalize only
-	// resolves and validates the run's Spec overlay (model/backend/effort/budget
-	// plus any prompt/permissions overrides the dashboard sent); newTodoRunExecutor
-	// and buildRequest overlay it onto the template frontmatter's defaults.
-	spec := payload.Spec
-	spec.Name = model
-	spec.Backend = api.Backend(backend)
-	spec.Effort = effort
-	spec.Budget.Timeout = timeout.String()
 	if err := spec.Budget.Validate(); err != nil {
-		return todoRunOptions{}, err
+		return todoRunWire{}, err
 	}
 	if err := spec.Permissions.Validate(); err != nil {
-		return todoRunOptions{}, err
-	}
-	// Permissions.Validate reaches Tools.Modes only via Tools.Policies(), whose
-	// enabled/ask/disabled switch has no default case — an unrecognized mode is
-	// silently dropped from the map rather than surfaced as invalid. Check the
-	// raw modes directly so a mistyped value fails loud at this wire boundary
-	// instead of being dropped.
-	for tool, mode := range spec.Permissions.Tools.Modes {
-		if !mode.Valid() {
-			return todoRunOptions{}, fmt.Errorf("invalid tool mode %q for tool %q", mode, tool)
-		}
+		return todoRunWire{}, err
 	}
 	// Validate the run's Workflow (verify scope/maxIterations); nil is allowed.
 	if err := spec.Workflow.Validate(); err != nil {
-		return todoRunOptions{}, fmt.Errorf("workflow: %w", err)
+		return todoRunWire{}, fmt.Errorf("workflow: %w", err)
 	}
 
+	return todoRunWire{Override: spec, Driver: driver, RunMode: runMode, Resume: payload.Resume}, nil
+}
+
+// normalizeTodoRunOptions resolves the run a payload asks for. The payload is
+// the top layer of todos/spec.Resolve, not the base: a dashboard run therefore
+// picks up `.gavel.yaml` ai:/todos: exactly as `gavel todos run` does, instead
+// of silently ignoring project configuration.
+//
+// dir is the workspace the .gavel.yaml layers are read from, and todoList
+// contributes each todo's `llm:` frontmatter — so both must be resolved before
+// this is called.
+func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRunPayload) (todoRunOptions, error) {
+	wire, err := validateTodoRunPayload(payload)
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+	resolved, err := todospec.Resolve(todospec.Input{
+		WorkDir:  dir,
+		Mode:     wire.RunMode,
+		Todos:    todoList,
+		Override: wire.Override,
+		Driver:   wire.Driver,
+		// The dashboard serves /api/todos/session/approve, so a run that asks for
+		// a Bash approval has something to answer it.
+		CanApprove: true,
+	})
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+
+	// Backend selection is the dashboard's own concern: it offers a (driver,
+	// backend) catalog the CLI has no equivalent of, and it runs against the
+	// resolved model rather than the payload's, so a model that arrived from
+	// .gavel.yaml gets the same treatment as one the dialog picked.
+	spec := resolved.Spec
+	backend, model, err := resolveTodoRunBackendModel(resolved.Driver, string(spec.Backend), spec.Name)
+	if err != nil {
+		return todoRunOptions{}, err
+	}
+	spec.Name = model
+	spec.Backend = api.Backend(backend)
+
 	return todoRunOptions{
-		Spec:    spec,
-		Driver:  string(kind),
-		RunMode: runMode,
-		Resume:  payload.Resume,
+		Spec:      spec,
+		Driver:    string(resolved.Driver),
+		RunMode:   resolved.Mode,
+		Resume:    wire.Resume,
+		Template:  resolved.Template,
+		Approvals: resolved.Approvals,
+		Timeout:   resolved.Timeout,
 	}, nil
 }
 
@@ -1520,7 +1544,7 @@ func defaultStartTodoRun(req todoRunRequest) error {
 	if err != nil {
 		return err
 	}
-	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
+	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
 	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
 	if err != nil {
@@ -1555,33 +1579,40 @@ func defaultStartTodoRun(req todoRunRequest) error {
 	return nil
 }
 
-// resolveDriverFromPayload selects the driver mechanism: the explicit Driver
-// field when set, otherwise the legacy agent+mode pair (mode cmux → cmux, mode
-// inline → sdk; codex was never an inline agent). The driver is mechanism-only;
-// the coding agent is derived from the model downstream.
-func resolveDriverFromPayload(p todoRunPayload) (drivers.Kind, error) {
+// payloadDriver reads the driver mechanism the payload names: the explicit
+// Driver field when set, otherwise the legacy agent+mode pair (mode cmux →
+// cmux, mode inline → cli; codex was never an inline agent). The driver is
+// mechanism-only; the coding agent is derived from the model downstream.
+//
+// A payload naming neither returns "" rather than a hardcoded default, so
+// `.gavel.yaml` todos.driver reaches the dashboard. Only todos/spec.Resolve
+// falls back to drivers.Default.
+func payloadDriver(p todoRunPayload) (string, error) {
 	if s := strings.TrimSpace(p.Driver); s != "" {
-		return drivers.Parse(s)
-	}
-	agent := strings.ToLower(strings.TrimSpace(p.Agent))
-	if agent == "" {
-		agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Name))
+		kind, err := drivers.Parse(s)
+		if err != nil {
+			return "", err
+		}
+		return string(kind), nil
 	}
 	mode := strings.ToLower(strings.TrimSpace(p.Mode))
-	if mode == "" {
-		mode = "cmux"
-	}
 	switch mode {
+	case "":
+		return "", nil
 	case "cmux":
-		return drivers.Cmux, nil
+		return string(drivers.Cmux), nil
 	case "inline":
+		agent := strings.ToLower(strings.TrimSpace(p.Agent))
+		if agent == "" {
+			agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Spec.Name))
+		}
 		if agent == "codex" {
 			return "", fmt.Errorf("codex runs require a cmux driver")
 		}
 		// Cli, not Sdk: every agent-mode entry in supportedTodoRunBackends maps to
 		// Cli, so validateBackendForDriver rejects Sdk for all of them and an inline
 		// run could never start.
-		return drivers.Cli, nil
+		return string(drivers.Cli), nil
 	default:
 		return "", fmt.Errorf("invalid mode %q", p.Mode)
 	}
@@ -1600,9 +1631,6 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 	// --session-id, passed via SessionID) so TODOExecutor does not overwrite the
 	// todo's recorded prior session.
 	mode := req.Options.RunMode
-	if mode == "" {
-		mode = types.ModeRun
-	}
 	// Post-run checks run inside the agent loop as fixture-backed verify
 	// plugins; a failing round's feedback re-runs the same session.
 	var verifiers []agent.Verify
@@ -1625,11 +1653,12 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 		Spec:          req.Options.Spec,
 		WorkDir:       req.Source.Dir,
 		Mode:          mode,
+		Template:      req.Options.Template,
 		ExistingPlan:  existingPlan,
 		Verifiers:     verifiers,
 		MaxIterations: maxIterations,
 		Resume:        req.Options.Resume,
-		Approvals:     true,
+		Approvals:     req.Options.Approvals,
 	})
 }
 

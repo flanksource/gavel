@@ -10,9 +10,9 @@ import { fixtureFenceSchemasFromDocument } from './fixtureSchema';
 import {
   PromptRunAdvancedDialog,
   PromptRunButton,
-  verificationSpecFromOptions,
+  verificationSpec,
 } from './PromptRunButton';
-import { defaultRunOptions } from './run';
+import { defaultRunOptions, runSpec } from './run';
 
 const GAVEL_FIXTURE_FENCES = [
   { info: 'yaml test', label: 'test', description: 'Gavel test options' },
@@ -103,7 +103,9 @@ export function TodoVerification({
       const res = await fetch(`/api/todos/verification/run?${todoQuery(dir)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: current.ref, spec: verificationSpecFromOptions(options) }),
+        // The verification endpoint takes a bare api.Spec under `spec`, not a run
+        // payload, so the spec half travels alone.
+        body: JSON.stringify({ ref: current.ref, spec: verificationSpec(runSpec(options)) }),
       });
       const data = await res.json() as TodoVerificationRunResponse & { error?: string };
       if (!res.ok) throw new Error(data.error || 'Verification failed');

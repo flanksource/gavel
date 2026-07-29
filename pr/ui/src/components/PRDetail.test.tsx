@@ -39,7 +39,16 @@ function makePR(overrides: Partial<PRItem> = {}): PRItem {
   };
 }
 
-describe('PRDetailPanel close button', () => {
+describe('PRDetailPanel', () => {
+  it.each([
+    ['absent', undefined],
+    ['empty', []],
+  ])('renders New todo when projects are %s', (_label, projects) => {
+    render(<PRDetailPanel pr={makePR()} detail={null} loading={false} projects={projects} />);
+
+    expect(screen.getByRole('button', { name: 'New todo' })).toBeTruthy();
+  });
+
   it('renders a close button and fires onClose when clicked', () => {
     const onClose = vi.fn();
     render(<PRDetailPanel pr={makePR()} detail={null} loading={false} onClose={onClose} />);

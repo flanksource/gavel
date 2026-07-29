@@ -109,7 +109,7 @@ func isAgentName(s string) bool {
 }
 
 // New constructs the executor for a driver mechanism. The coding agent is
-// derived from cfg.Name (empty → claude; a codex/gpt model → codex); the driver
+// derived from cfg.Spec.Name (empty → claude; a codex/gpt model → codex); the driver
 // only selects the mechanism.
 //
 // The returned sessionID is the orchestrator session id to seed TODOExecutor
@@ -125,11 +125,11 @@ func New(kind Kind, cfg todos.AgentRunConfig) (todos.Executor, string, error) {
 	}
 	// The model defines the agent; the driver defines the mechanism. resolveModel
 	// only guards against a stored executor identity leaking into the model field.
-	model, err := resolveModel(cfg.Name)
+	model, err := resolveModel(cfg.Spec.Name)
 	if err != nil {
 		return nil, "", err
 	}
-	cfg.Name = model
+	cfg.Spec.Name = model
 
 	switch kind {
 	case Cmux:
@@ -140,7 +140,7 @@ func New(kind Kind, cfg todos.AgentRunConfig) (todos.Executor, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		cfg.Backend = b
+		cfg.Spec.Backend = b
 	case Cli:
 		// The CLI (headless) path leaves the backend as configured: an explicit
 		// backend from the dashboard (claude-agent/claude-cli/codex-agent) wins, and
@@ -197,6 +197,24 @@ func BackendFor(model string, k Kind) (captainai.Backend, error) {
 		p = registry.Anthropic
 	}
 	return p.BackendFor(mode)
+}
+
+// ForBackend is the inverse of BackendFor on its mechanism half: a captain
+// backend is a (provider, mode) pair, so a configured backend already names the
+// mechanism it runs on. It exists so a stated `ai.backend` outranks an unstated
+// driver — picking Default there would reject a coherent config for disagreeing
+// with a value nobody supplied.
+func ForBackend(b captainai.Backend) (Kind, error) {
+	_, mode, ok := registry.ProviderFor(b)
+	if !ok {
+		return "", fmt.Errorf("no driver for backend %q", b)
+	}
+	for _, k := range All() {
+		if m, ok := k.RuntimeMode(); ok && m == mode {
+			return k, nil
+		}
+	}
+	return "", fmt.Errorf("no driver for backend %q (mode %q)", b, mode)
 }
 
 // resolveModel validates the requested model. The agent is derived from the model

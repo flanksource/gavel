@@ -21,7 +21,6 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 )
 
 //go:embed todos-run.prompt
@@ -38,7 +37,7 @@ type Options struct {
 	// Prompt.User as the TODO body override and merges every other field over the
 	// template request without projecting it through a Gavel-specific adapter.
 	Spec api.Spec
-	// Template is the resolved .gavel.yaml override source (see ResolveTemplate);
+	// Template is the resolved .gavel.yaml override source (spec.Resolved.Template);
 	// empty renders the embedded default for Mode.
 	Template string
 	// ExistingPlan is the current content of the todo's recorded plan file (plan
@@ -46,30 +45,18 @@ type Options struct {
 	ExistingPlan string
 }
 
-// ResolveTemplate reads the mode's .gavel.yaml prompt override for dir
-// (todos.runPrompt / todos.planPrompt), returning the inline/file template
-// source or "" when unset (the embedded default is then used). A
-// configured-but-missing file is a hard error.
-func ResolveTemplate(dir string, mode types.RunMode) (string, error) {
-	cfg, err := verify.LoadGavelConfig(dir)
-	if err != nil {
-		return "", fmt.Errorf("load .gavel.yaml for todos prompts: %w", err)
-	}
-	var override verify.PromptSpec
-	var key string
+// Default returns the embedded .prompt source for mode. It is the lowest
+// template layer: todos/spec renders its frontmatter to seed the run spec, and
+// Render falls back to it when no .gavel.yaml override supplies a template.
+func Default(mode types.RunMode) (string, error) {
 	switch mode {
 	case types.ModeRun:
-		override, key = cfg.Todos.Run, "todos.run"
+		return runTemplate, nil
 	case types.ModePlan:
-		override, key = cfg.Todos.Plan, "todos.plan"
+		return planTemplate, nil
 	default:
-		return "", fmt.Errorf("mode %q has no todo prompt template", mode)
+		return "", fmt.Errorf("mode %q has no todo prompt template (verify runs through the verify engine)", mode)
 	}
-	tmpl, err := override.TemplateSource(dir, "")
-	if err != nil {
-		return "", fmt.Errorf("resolve %s override: %w", key, err)
-	}
-	return tmpl, nil
 }
 
 // Render renders the mode's prompt for a group of todos and returns the full
@@ -145,14 +132,7 @@ func templateSource(opts Options) (string, error) {
 	if strings.TrimSpace(opts.Template) != "" {
 		return opts.Template, nil
 	}
-	switch opts.Mode {
-	case types.ModeRun:
-		return runTemplate, nil
-	case types.ModePlan:
-		return planTemplate, nil
-	default:
-		return "", fmt.Errorf("mode %q has no todo prompt template (verify runs through the verify engine)", opts.Mode)
-	}
+	return Default(opts.Mode)
 }
 
 // EnvelopeSchemaJSON is the JSON schema of the mode's structured final result.

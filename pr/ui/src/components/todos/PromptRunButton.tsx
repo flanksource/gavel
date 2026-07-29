@@ -5,12 +5,14 @@ import { UiChevronDown, UiCog, UiHistory, UiPlay, type IconProps } from '@flanks
 import type { TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import {
+  TodoRunContextError,
   TodoRunDropdownContent,
   defaultRunOptionsForAction,
   loadLastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,
   reconcileTodoRunOptions,
   runButtonQualifierForOptions,
+  runSpec,
   useTodoRunContext,
 } from './run';
 import { agentForBackend, buildRunFamilies, driverForSelection, type RunContext } from './providers';
@@ -24,11 +26,13 @@ type PromptRunHistory = {
 
 type PromptRunHistoryState = Partial<Record<PromptRunScope, PromptRunHistory>>;
 
-const PROMPT_RUN_STORAGE_KEY = 'gavel.pr-ui.promptRunChoices.v1';
-const LEGACY_RUN_STORAGE_KEY = 'gavel.pr-ui.todoRunChoices.v1';
+// v2 for the same reason as RUN_CHOICE_STORAGE_KEY in run.tsx: the persisted
+// TodoRunOptions now nests the spec.
+const PROMPT_RUN_STORAGE_KEY = 'gavel.pr-ui.promptRunChoices.v2';
+const LEGACY_RUN_STORAGE_KEY = 'gavel.pr-ui.todoRunChoices.v2';
 
-function cloneOptions(options: TodoRunOptions): TodoRunOptions {
-  return JSON.parse(JSON.stringify(options)) as TodoRunOptions;
+function cloneSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
+  return JSON.parse(JSON.stringify(spec)) as AISpecRuntimeValue;
 }
 
 function readPromptRunHistory(): PromptRunHistoryState {
@@ -48,29 +52,32 @@ function writePromptRunHistory(state: PromptRunHistoryState) {
   localStorage.setItem(PROMPT_RUN_STORAGE_KEY, JSON.stringify(state));
 }
 
-export function verificationSpecFromOptions(options: TodoRunOptions): TodoRunOptions {
-  const workflow = options.workflow?.verify
-    ? { verify: cloneOptions({ workflow: { verify: options.workflow.verify } }).workflow?.verify }
-    : undefined;
+// verificationSpec keeps only what a verification run may carry: the model and
+// budget knobs, the permission posture and workflow.verify. Setup, prompt,
+// sessionId and workflow.commits are dropped — the persisted fixture supplies the
+// prompt and the server rejects a verification spec that would commit.
+export function verificationSpec(spec: AISpecRuntimeValue): AISpecRuntimeValue {
   return {
-    model: options.model,
-    id: options.id,
-    backend: options.backend,
-    temperature: options.temperature,
-    effort: options.effort,
-    noCache: options.noCache,
-    fallbacks: options.fallbacks,
-    budget: options.budget,
-    memory: options.memory,
-    permissions: options.permissions,
-    workflow,
-    cliArgs: options.cliArgs,
+    model: spec.model,
+    id: spec.id,
+    backend: spec.backend,
+    temperature: spec.temperature,
+    effort: spec.effort,
+    noCache: spec.noCache,
+    fallbacks: spec.fallbacks,
+    budget: spec.budget,
+    memory: spec.memory,
+    permissions: spec.permissions,
+    workflow: spec.workflow?.verify ? { verify: cloneSpec({ workflow: { verify: spec.workflow.verify } }).workflow?.verify } : undefined,
+    cliArgs: spec.cliArgs,
   };
 }
 
 function normalizePromptRunOptions(scope: PromptRunScope, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const reconciled = reconcileTodoRunOptions('run', options, context);
-  return scope === 'verification' ? verificationSpecFromOptions(reconciled) : reconciled;
+  // A verification run has no driver or run mode of its own — it posts a bare
+  // spec to /api/todos/verification/run — so only the spec half survives.
+  return scope === 'verification' ? { spec: verificationSpec(runSpec(reconciled)) } : reconciled;
 }
 
 function optionsKey(options: TodoRunOptions): string {
@@ -145,13 +152,15 @@ export function PromptRunButton({
   onRun: (options: TodoRunOptions) => void;
   onAdvanced: (options: TodoRunOptions) => void;
 }) {
-  const context = useTodoRunContext(!disabled);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
   const [revision, setRevision] = useState(0);
-  const options = loadPromptRunOptions(scope, context);
-  const recent = loadRecentPromptRunOptions(scope, context);
+  const options = context ? loadPromptRunOptions(scope, context) : defaultRunOptionsForAction('run');
+  const recent = context ? loadRecentPromptRunOptions(scope, context) : [];
+  const unavailable = contextLoading || !context || !!contextError;
   const PrimaryIcon = loading ? Spinner : icon;
 
   function run(optionsToRemember: TodoRunOptions, close?: () => void) {
+    if (!context) return;
     close?.();
     const remembered = rememberPromptRunOptions(scope, optionsToRemember, context);
     setRevision(value => value + 1);
@@ -159,86 +168,95 @@ export function PromptRunButton({
   }
 
   return (
-    <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background" data-history-revision={revision}>
-      <Button
-        variant="ghost"
-        type="button"
-        disabled={disabled}
-        onClick={() => run(options)}
-        className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-        title={title}
-      >
-        <PrimaryIcon className="text-xs" />
-        <span>{label} {runButtonQualifierForOptions(options, context)}</span>
-      </Button>
-      <DropdownMenu
-        align="right"
-        menuLabel={`${label} options`}
-        menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-        trigger={
-          <Button
-            variant="ghost"
-            size="icon"
-            type="button"
-            disabled={disabled}
-            title={`${label} options`}
-            aria-label={`${label} options`}
-            className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            <UiChevronDown className="text-xs" />
-          </Button>
-        }
-      >
-        {close => (
-          <div>
-            <TodoRunDropdownContent
-              context={context}
-              initialAction="run"
-              closeParent={close}
-              onSelect={(_action, selected) => run(selected)}
-              showAdvanced={false}
-            />
-            {recent.length > 0 && (
-              <div className="border-t border-border p-1 text-xs">
-                <div className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <UiHistory className="text-xs" />
-                  Recent configs
-                </div>
-                {recent.map((item, index) => (
-                  <Button
-                    key={optionsKey(item)}
-                    variant="ghost"
-                    type="button"
-                    onClick={() => run(item, close)}
-                    className="flex h-8 w-full items-center justify-start rounded px-2 text-left text-xs hover:bg-muted"
-                  >
-                    {index + 1}. {runButtonQualifierForOptions(item, context)}
-                    {item.effort ? ` · ${item.effort}` : ''}
-                  </Button>
-                ))}
-              </div>
-            )}
-            <div className="border-t border-border p-1">
+    <div className="flex flex-col items-start gap-1" data-history-revision={revision}>
+      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+        <Button
+          variant="ghost"
+          type="button"
+          disabled={disabled || unavailable}
+          onClick={() => run(options)}
+          className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+          title={title}
+        >
+          <PrimaryIcon className="text-xs" />
+          <span>{label}{context ? ` ${runButtonQualifierForOptions(options, context)}` : ''}</span>
+        </Button>
+        {context && !contextError ? (
+          <DropdownMenu
+            align="right"
+            menuLabel={`${label} options`}
+            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
+            trigger={
               <Button
                 variant="ghost"
+                size="icon"
                 type="button"
-                aria-label="Advanced"
-                onClick={() => {
-                  close();
-                  onAdvanced(options);
-                }}
-                className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                disabled={disabled || unavailable}
+                title={`${label} options`}
+                aria-label={`${label} options`}
+                className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
               >
-                <UiCog className="text-sm text-muted-foreground" />
-                <span>
-                  <span className="block text-xs font-medium text-foreground">Advanced</span>
-                  <span className="block text-[11px] text-muted-foreground">model, effort, timeout, permissions</span>
-                </span>
+                <UiChevronDown className="text-xs" />
               </Button>
-            </div>
-          </div>
+            }
+          >
+            {close => (
+              <div>
+                <TodoRunDropdownContent
+                  context={context}
+                  initialAction="run"
+                  closeParent={close}
+                  onSelect={(_action, selected) => run(selected)}
+                  showAdvanced={false}
+                />
+                {recent.length > 0 && (
+                  <div className="border-t border-border p-1 text-xs">
+                    <div className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <UiHistory className="text-xs" />
+                      Recent configs
+                    </div>
+                    {recent.map((item, index) => (
+                      <Button
+                        key={optionsKey(item)}
+                        variant="ghost"
+                        type="button"
+                        onClick={() => run(item, close)}
+                        className="flex h-8 w-full items-center justify-start rounded px-2 text-left text-xs hover:bg-muted"
+                      >
+                        {index + 1}. {runButtonQualifierForOptions(item, context)}
+                        {runSpec(item).effort ? ` · ${runSpec(item).effort}` : ''}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                <div className="border-t border-border p-1">
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    aria-label="Advanced"
+                    onClick={() => {
+                      close();
+                      onAdvanced(options);
+                    }}
+                    className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                  >
+                    <UiCog className="text-sm text-muted-foreground" />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">Advanced</span>
+                      <span className="block text-[11px] text-muted-foreground">model, effort, timeout, permissions</span>
+                    </span>
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DropdownMenu>
+        ) : (
+          <Button variant="ghost" size="icon" type="button" disabled title={`${label} options`} aria-label={`${label} options`} className="h-8 w-7 rounded-none">
+            <UiChevronDown className="text-xs" />
+          </Button>
         )}
-      </DropdownMenu>
+      </div>
+      <TodoRunContextError error={contextError} />
     </div>
   );
 }
@@ -261,21 +279,26 @@ export function PromptRunAdvancedDialog({
   onClose: () => void;
   onRun: (options: TodoRunOptions) => void;
 }) {
-  const context = useTodoRunContext(open);
-  const initialValue = scope === 'verification' ? verificationSpecFromOptions(initial) : cloneOptions(initial);
-  const [value, setValue] = useState<AISpecRuntimeValue>(() => initialValue);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
+  // The editor edits the spec half only; the driver/runMode siblings are decided
+  // on save from the spec's backend.
+  const initialSpec = (options: TodoRunOptions) =>
+    scope === 'verification' ? verificationSpec(runSpec(options)) : cloneSpec(runSpec(options));
+  const [value, setValue] = useState<AISpecRuntimeValue>(() => initialSpec(initial));
 
   useEffect(() => {
-    if (open) setValue(scope === 'verification' ? verificationSpecFromOptions(initial) : cloneOptions(initial));
+    if (open) setValue(initialSpec(initial));
   }, [open, initial, scope]);
 
   if (!open) return null;
-  const models = context.backends.flatMap(backend => backend.models);
+  const models = context?.backends.flatMap(backend => backend.models) ?? [];
   const verification = scope === 'verification';
 
   return (
     <Modal open onClose={onClose} title={verification ? 'Verification run options' : 'Approve and run options'} size="2xl">
-      <SpecRuntimeEditor
+      <TodoRunContextError error={contextError} />
+      {contextLoading && <div className="text-xs text-muted-foreground">Loading Captain run providers…</div>}
+      {context && !contextError && <SpecRuntimeEditor
         value={value}
         onChange={setValue}
         models={models}
@@ -289,21 +312,20 @@ export function PromptRunAdvancedDialog({
           const { spec } = promptRuntimeValueToPayload(value);
           const runtimeSpec = spec ?? {};
           if (verification) {
-            onRun(rememberPromptRunOptions(scope, verificationSpecFromOptions(runtimeSpec), context));
+            onRun(rememberPromptRunOptions(scope, { spec: verificationSpec(runtimeSpec) }, context));
             return;
           }
           const agent = agentForBackend(context, runtimeSpec.backend);
           const selection = driverForSelection(context, agent, runtimeSpec.backend);
           onRun(rememberPromptRunOptions(scope, {
-            ...runtimeSpec,
             driver: selection.driver,
-            backend: selection.runBackend,
             runMode: 'run',
+            spec: { ...runtimeSpec, backend: selection.runBackend },
           }, context));
         }}
         saveLabel={loading ? 'Running…' : verification ? 'Run verification' : 'Approve & run'}
         footerStatus={verification ? 'The persisted fixture supplies the prompt.' : 'Ready to implement the approved plan.'}
-      />
+      />}
     </Modal>
   );
 }

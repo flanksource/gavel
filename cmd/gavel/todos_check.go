@@ -193,11 +193,20 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 
 	logger.Infof("Found %d TODOs to check", len(todoList))
 
+	// Verification is a run configuration like any other, so it resolves through
+	// the same seam: `.gavel.yaml` ai:/todos: reaches `todos check` exactly as it
+	// reaches the dashboard's verify handler, instead of the command being pinned
+	// to an unconfigurable flag default.
+	resolved, err := todosSpecForMode(workDir, types.ModeVerify, todoList, checkTimeout)
+	if err != nil {
+		return err
+	}
 	checkOpts := todos.CheckOptions{
 		WorkDir:  workDir,
-		Timeout:  checkTimeout,
+		Timeout:  resolved.Timeout,
 		Logger:   logger.StandardLogger(),
 		Provider: provider,
+		Spec:     &resolved.Spec,
 	}
 
 	ctx := context.Background()
@@ -251,15 +260,18 @@ func init() {
 	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Todo operation: run (implement) or plan (propose a reviewable plan)")
 	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Execution mechanism: cmux, cli, sdk, or api (default: cmux). The coding agent is derived from --model")
 	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution (empty: the mode's .prompt frontmatter default)")
-	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "medium", "Reasoning effort directive: low, medium, high, or xhigh")
+	// Empty, not "medium": the flag is the highest resolution layer, so a non-zero
+	// default would beat the .prompt frontmatter it claims to defer to. todos/spec
+	// applies medium once nothing else has spoken.
+	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "", "Reasoning effort directive: low, medium, high, or xhigh (empty: the mode's .prompt frontmatter, else medium)")
 	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
-	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Skip git stash/checkout, run on dirty working tree")
+	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Carry the working tree's uncommitted changes into the configured checkout (no-op without one: the run already happens in the dirty tree)")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")
 
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
-	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 2*time.Minute, "Test execution timeout")
+	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
 }
 
 func newTodosProvider(workDir string) (todos.Provider, error) {

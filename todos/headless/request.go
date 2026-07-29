@@ -75,7 +75,21 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	return req, providerSessionID, canUseTool, nil
 }
 
+// permissionDefaults supplies a posture for a request that states none.
+//
+// Capability is all-or-nothing. Filling the fields in one at a time treats
+// silence on presets and tools as "nothing was asked for", when a request that
+// named a mode has already described how it wants to run — which is how a plan
+// run, declaring `mode: plan` and nothing else, ended up carrying the edit
+// preset and the full edit toolset. A request that states any part of its
+// posture owns the capability half of it.
+//
+// The mode is the exception and is always filled in, because downstream an
+// unset mode is not neutral: claudeagent reads "" as bypassPermissions whenever
+// no approval broker is attached. Leaving it to the provider would trade a
+// too-permissive toolset for a too-permissive mode.
 func permissionDefaults(permissions api.Permissions, cmux bool) api.Permissions {
+	stated := permissions.Mode != "" || len(permissions.Presets) > 0 || len(permissions.Tools.Policies()) > 0
 	if permissions.Mode == "" {
 		if cmux {
 			permissions.Mode = api.PermissionDefault
@@ -83,10 +97,13 @@ func permissionDefaults(permissions api.Permissions, cmux bool) api.Permissions 
 			permissions.Mode = api.PermissionAcceptEdits
 		}
 	}
-	if !cmux && len(permissions.Presets) == 0 && len(permissions.Tools.Policies()) == 0 {
-		permissions.Presets = []api.Preset{api.PresetEdit}
-		permissions.Tools = api.Tools{Allow: todopkg.DefaultAgentTools()}
+	// cmux drives the agent's own TUI, which owns its tool posture; only the
+	// permission mode crosses over.
+	if stated || cmux {
+		return permissions
 	}
+	permissions.Presets = []api.Preset{api.PresetEdit}
+	permissions.Tools = api.Tools{Allow: todopkg.DefaultAgentTools()}
 	return permissions
 }
 

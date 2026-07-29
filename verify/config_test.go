@@ -151,6 +151,35 @@ lint:
 	assert.Equal(t, "pkg/foo.go", cfg.Lint.Ignore[1].File)
 }
 
+// TestLoadGavelConfig_SurfacesUnreadableLayer pins the load seam as fail-loud. A
+// broken .gavel.yaml used to be discarded layer-by-layer, so a single typo ran
+// the whole project on built-in defaults — the settings were declared, ignored,
+// and nothing said so. A missing file stays the ordinary case.
+func TestLoadGavelConfig_SurfacesUnreadableLayer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"malformed yaml", "ai:\n model: [unclosed\n", "parse"},
+		{"invalid tool policy", "todos:\n  run:\n    permissions:\n      tools:\n        Bash: sometimes\n", `invalid tool policy "sometimes"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".gavel.yaml"), []byte(tc.yaml), 0o644))
+
+			_, err := LoadGavelConfig(dir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	_, err := LoadGavelConfig(t.TempDir())
+	require.NoError(t, err, "a directory with no .gavel.yaml is not an error")
+}
+
 func TestSaveGavelConfig_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 
@@ -219,7 +248,7 @@ func TestLoadGavelConfig_WithChecks(t *testing.T) {
 	assert.True(t, cfg.Checks.Lint.Changed)
 }
 
-func TestMergeChecksConfig_RepoOverridesHome(t *testing.T) {
+func TestLoadGavelConfig_RepoChecksOverrideHome(t *testing.T) {
 	home := t.TempDir()
 	repo := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
@@ -246,26 +275,26 @@ func TestFixturesConfig_ResolvedFiles_Default(t *testing.T) {
 	assert.Equal(t, []string{"a.md", "b.md"}, custom.ResolvedFiles())
 }
 
-func TestMergeFixturesConfig(t *testing.T) {
+func TestMerge_FixturesConfig(t *testing.T) {
 	t.Run("override enables", func(t *testing.T) {
-		merged := MergeFixturesConfig(FixturesConfig{}, FixturesConfig{Enabled: true})
+		merged := Merge(FixturesConfig{}, FixturesConfig{Enabled: true})
 		assert.True(t, merged.Enabled)
 	})
 	t.Run("override files replace base", func(t *testing.T) {
 		base := FixturesConfig{Files: []string{"old.md"}}
 		override := FixturesConfig{Files: []string{"new.md"}}
-		merged := MergeFixturesConfig(base, override)
+		merged := Merge(base, override)
 		assert.Equal(t, []string{"new.md"}, merged.Files)
 	})
 	t.Run("override empty keeps base files", func(t *testing.T) {
 		base := FixturesConfig{Enabled: true, Files: []string{"base.md"}}
-		merged := MergeFixturesConfig(base, FixturesConfig{})
+		merged := Merge(base, FixturesConfig{})
 		assert.Equal(t, []string{"base.md"}, merged.Files)
 		assert.True(t, merged.Enabled)
 	})
 }
 
-func TestMergeLintConfig(t *testing.T) {
+func TestMerge_LintConfig(t *testing.T) {
 	enabledFalse := false
 	enabledTrue := true
 	base := LintConfig{
@@ -282,8 +311,8 @@ func TestMergeLintConfig(t *testing.T) {
 			"jscpd": {Enabled: &enabledTrue},
 		},
 	}
-	merged := MergeLintConfig(base, override)
-	assert.Equal(t, "agent:opus", merged.Fix.Model.Name)
+	merged := Merge(base, override)
+	assert.Equal(t, "agent:opus", merged.Fix.Spec.Model.Name)
 	assert.Len(t, merged.Ignore, 2)
 	assert.Equal(t, "errcheck", merged.Ignore[0].Rule)
 	assert.Equal(t, "unused", merged.Ignore[1].Rule)
@@ -291,6 +320,88 @@ func TestMergeLintConfig(t *testing.T) {
 		assert.NotNil(t, merged.Linters["jscpd"].Enabled)
 		assert.True(t, *merged.Linters["jscpd"].Enabled)
 	}
+}
+
+// A prompt spec is layered configuration like everything else in .gavel.yaml: a
+// repo layer that speaks about one field must leave the home layer's siblings
+// alone. Whole-struct replacement made `todos: {run: {model: opus}}` silently
+// discard the home budget.
+func TestMergeGavelConfig_PromptSpecKeepsUnmentionedFields(t *testing.T) {
+	home := GavelConfig{Todos: TodosConfig{Run: PromptSpec{Spec: api.Spec{
+		Model:  api.Model{Name: "claude-sonnet-4-5"},
+		Budget: api.Budget{MaxTokens: 200, Timeout: "30m"},
+	}}}}
+	repo := GavelConfig{Todos: TodosConfig{Run: PromptSpec{Spec: api.Spec{
+		Model: api.Model{Name: "claude-opus-4-1"},
+	}}}}
+
+	merged := MergeGavelConfig(home, repo)
+
+	assert.Equal(t, "claude-opus-4-1", merged.Todos.Run.Spec.Model.Name)
+	assert.Equal(t, 200, merged.Todos.Run.Spec.Budget.MaxTokens)
+	assert.Equal(t, "30m", merged.Todos.Run.Spec.Budget.Timeout)
+}
+
+// Whether an override is "configured" is a question about every field, not the
+// six a hand-written IsZero happened to list. permissions.mode was invisible to
+// it, so a repo layer setting only that was dropped outright rather than merged.
+func TestMergeGavelConfig_PromptSpecAppliesEveryField(t *testing.T) {
+	home := GavelConfig{Todos: TodosConfig{Run: PromptSpec{Spec: api.Spec{
+		Model: api.Model{Name: "claude-sonnet-4-5"},
+	}}}}
+	repo := GavelConfig{Todos: TodosConfig{Run: PromptSpec{Spec: api.Spec{
+		Permissions: api.Permissions{Mode: api.PermissionPlan},
+	}}}}
+
+	merged := MergeGavelConfig(home, repo)
+
+	assert.Equal(t, api.PermissionPlan, merged.Todos.Run.Spec.Permissions.Mode)
+	assert.Equal(t, "claude-sonnet-4-5", merged.Todos.Run.Spec.Model.Name)
+}
+
+// File and baseDir are one fact — which prompt, and the directory its relative
+// path resolves against. A layer that names its own file brings its own
+// directory; a layer silent about the file leaves both alone, because the config
+// loader stamps baseDir on every spec it decodes, set or not.
+func TestMergeGavelConfig_PromptSpecFileTravelsWithItsDirectory(t *testing.T) {
+	home := GavelConfig{Todos: TodosConfig{Run: PromptSpec{File: "run.prompt", baseDir: "/home/user"}}}
+	repo := GavelConfig{Todos: TodosConfig{Run: PromptSpec{File: "prompts/run.prompt", baseDir: "/repo"}}}
+
+	overridden := MergeGavelConfig(home, repo)
+	assert.Equal(t, "/repo/prompts/run.prompt", overridden.Todos.Run.ResolvedFilePath(""))
+
+	silent := MergeGavelConfig(home, GavelConfig{Todos: TodosConfig{Run: PromptSpec{
+		Spec:    api.Spec{Model: api.Model{Name: "claude-opus-4-1"}},
+		baseDir: "/repo",
+	}}})
+	assert.Equal(t, "/home/user/run.prompt", silent.Todos.Run.ResolvedFilePath(""))
+}
+
+// Accumulating lists are the exception structural merging cannot infer, so each
+// says so on its field with a merge:"append" tag: hooks, ignore rules and path
+// allowlists compose across layers instead of the repo erasing the home's. Paths
+// dedupe; ordered command lists do not.
+func TestMergeGavelConfig_ListsAccumulateAcrossLayers(t *testing.T) {
+	home := GavelConfig{
+		Pre:     []HookStep{{Run: "make deps"}},
+		Commit:  CommitConfig{Hooks: []CommitHook{{Name: "fmt", Run: "gofmt -l ."}}, GitIgnore: []string{"*.env"}},
+		Lint:    LintConfig{Ignore: []LintIgnoreRule{{Rule: "errcheck"}}},
+		Secrets: SecretsConfig{Configs: []string{"~/.betterleaks.toml"}},
+	}
+	repo := GavelConfig{
+		Pre:     []HookStep{{Run: "make generate"}},
+		Commit:  CommitConfig{Hooks: []CommitHook{{Name: "vet", Run: "go vet ./..."}}, GitIgnore: []string{"*.env", "dist/"}},
+		Lint:    LintConfig{Ignore: []LintIgnoreRule{{Rule: "unused"}}},
+		Secrets: SecretsConfig{Configs: []string{".betterleaks.toml"}},
+	}
+
+	merged := MergeGavelConfig(home, repo)
+
+	assert.Equal(t, []HookStep{{Run: "make deps"}, {Run: "make generate"}}, merged.Pre)
+	assert.Equal(t, []string{"fmt", "vet"}, []string{merged.Commit.Hooks[0].Name, merged.Commit.Hooks[1].Name})
+	assert.Equal(t, []string{"*.env", "dist/"}, merged.Commit.GitIgnore)
+	assert.Equal(t, []string{"errcheck", "unused"}, []string{merged.Lint.Ignore[0].Rule, merged.Lint.Ignore[1].Rule})
+	assert.Equal(t, []string{"~/.betterleaks.toml", ".betterleaks.toml"}, merged.Secrets.Configs)
 }
 
 func TestLoadGavelConfig_WithLintLinterEnablement(t *testing.T) {
@@ -341,13 +452,13 @@ ssh:
 	assert.Equal(t, "make ci", cfg.SSH.Cmd)
 }
 
-func TestMergeSSHConfig(t *testing.T) {
+func TestMerge_SSHConfig(t *testing.T) {
 	t.Run("override replaces cmd", func(t *testing.T) {
-		merged := MergeSSHConfig(SSHConfig{Cmd: "make old"}, SSHConfig{Cmd: "make new"})
+		merged := Merge(SSHConfig{Cmd: "make old"}, SSHConfig{Cmd: "make new"})
 		assert.Equal(t, "make new", merged.Cmd)
 	})
 	t.Run("empty override keeps base", func(t *testing.T) {
-		merged := MergeSSHConfig(SSHConfig{Cmd: "make old"}, SSHConfig{})
+		merged := Merge(SSHConfig{Cmd: "make old"}, SSHConfig{})
 		assert.Equal(t, "make old", merged.Cmd)
 	})
 }
@@ -498,83 +609,83 @@ commit:
 	assert.Contains(t, body, "maxCommits: 7")
 }
 
-func TestMergeSecretsConfig(t *testing.T) {
+func TestMerge_SecretsConfig(t *testing.T) {
 	t.Run("zero + zero", func(t *testing.T) {
-		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{})
+		out := Merge(SecretsConfig{}, SecretsConfig{})
 		assert.False(t, out.Disabled)
 		assert.Empty(t, out.Configs)
 	})
 
 	t.Run("disabled propagates", func(t *testing.T) {
-		out := MergeSecretsConfig(SecretsConfig{}, SecretsConfig{Disabled: true})
+		out := Merge(SecretsConfig{}, SecretsConfig{Disabled: true})
 		assert.True(t, out.Disabled)
 	})
 
 	t.Run("configs append and dedupe", func(t *testing.T) {
 		base := SecretsConfig{Configs: []string{"/a.toml", "/b.toml"}}
 		override := SecretsConfig{Configs: []string{"/b.toml", "/c.toml"}}
-		out := MergeSecretsConfig(base, override)
+		out := Merge(base, override)
 		assert.Equal(t, []string{"/a.toml", "/b.toml", "/c.toml"}, out.Configs)
 	})
 }
 
-func TestMergeCommitConfig_GitIgnoreAndAllow(t *testing.T) {
+func TestMerge_CommitGitIgnoreAndAllow(t *testing.T) {
 	t.Run("gitignore concatenates across layers with dedup", func(t *testing.T) {
 		base := CommitConfig{GitIgnore: []string{"*.log", ".env"}}
 		override := CommitConfig{GitIgnore: []string{".env", "**/secrets/**"}}
-		out := MergeCommitConfig(base, override)
+		out := Merge(base, override)
 		assert.Equal(t, []string{"*.log", ".env", "**/secrets/**"}, out.GitIgnore)
 	})
 
 	t.Run("allow concatenates with dedup", func(t *testing.T) {
 		base := CommitConfig{Allow: []string{"a.log"}}
 		override := CommitConfig{Allow: []string{"b.log", "a.log"}}
-		out := MergeCommitConfig(base, override)
+		out := Merge(base, override)
 		assert.Equal(t, []string{"a.log", "b.log"}, out.Allow)
 	})
 
 	t.Run("empty override leaves base untouched", func(t *testing.T) {
 		base := CommitConfig{GitIgnore: []string{"*.log"}, Allow: []string{"ok.log"}}
-		out := MergeCommitConfig(base, CommitConfig{})
+		out := Merge(base, CommitConfig{})
 		assert.Equal(t, []string{"*.log"}, out.GitIgnore)
 		assert.Equal(t, []string{"ok.log"}, out.Allow)
 	})
 
 	t.Run("precommit mode override wins when non-empty", func(t *testing.T) {
 		base := CommitConfig{Precommit: PrecommitConfig{Mode: "prompt"}}
-		out := MergeCommitConfig(base, CommitConfig{Precommit: PrecommitConfig{Mode: "fail"}})
+		out := Merge(base, CommitConfig{Precommit: PrecommitConfig{Mode: "fail"}})
 		assert.Equal(t, CheckMode("fail"), out.Precommit.Mode)
 	})
 
 	t.Run("precommit empty override preserves base mode", func(t *testing.T) {
 		base := CommitConfig{Precommit: PrecommitConfig{Mode: "skip"}}
-		out := MergeCommitConfig(base, CommitConfig{})
+		out := Merge(base, CommitConfig{})
 		assert.Equal(t, CheckMode("skip"), out.Precommit.Mode)
 	})
 
 	t.Run("maxCommits override wins when non-zero", func(t *testing.T) {
 		base := CommitConfig{MaxCommits: 3}
-		out := MergeCommitConfig(base, CommitConfig{MaxCommits: 9})
+		out := Merge(base, CommitConfig{MaxCommits: 9})
 		assert.Equal(t, 9, out.MaxCommits)
 	})
 
 	t.Run("maxCommits zero override preserves base", func(t *testing.T) {
 		base := CommitConfig{MaxCommits: 5}
-		out := MergeCommitConfig(base, CommitConfig{})
+		out := Merge(base, CommitConfig{})
 		assert.Equal(t, 5, out.MaxCommits)
 	})
 
 	t.Run("message spec override wins when set", func(t *testing.T) {
 		base := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "base-m"}}}}
 		override := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "over-m"}}}}
-		out := MergeCommitConfig(base, override)
-		assert.Equal(t, "over-m", out.Message.Model.Name)
+		out := Merge(base, override)
+		assert.Equal(t, "over-m", out.Message.Spec.Model.Name)
 	})
 
 	t.Run("message empty override preserves base spec", func(t *testing.T) {
 		base := CommitConfig{Message: PromptSpec{Spec: api.Spec{Model: api.Model{Name: "base-m"}}}}
-		out := MergeCommitConfig(base, CommitConfig{})
-		assert.Equal(t, "base-m", out.Message.Model.Name)
+		out := Merge(base, CommitConfig{})
+		assert.Equal(t, "base-m", out.Message.Spec.Model.Name)
 	})
 }
 
@@ -609,10 +720,10 @@ func TestRestartPolicyUnmarshal(t *testing.T) {
 	}
 }
 
-func TestMergeProcfileConfig(t *testing.T) {
+func TestMerge_ProcfileConfig(t *testing.T) {
 	t.Run("scalar overrides win when set, omitted keep base", func(t *testing.T) {
 		base := ProcfileConfig{AutoRestart: RestartNo, MaxRestarts: 3, Profile: "dev"}
-		out := MergeProcfileConfig(base, ProcfileConfig{AutoRestart: RestartAlways, MaxRestarts: 9})
+		out := Merge(base, ProcfileConfig{AutoRestart: RestartAlways, MaxRestarts: 9})
 		assert.Equal(t, RestartAlways, out.AutoRestart)
 		assert.Equal(t, 9, out.MaxRestarts)
 		assert.Equal(t, "dev", out.Profile, "omitted profile override keeps base")
@@ -620,7 +731,7 @@ func TestMergeProcfileConfig(t *testing.T) {
 
 	t.Run("empty override preserves base scalars", func(t *testing.T) {
 		base := ProcfileConfig{AutoRestart: RestartOnFailure, MaxRestarts: 2, Profile: "prod"}
-		out := MergeProcfileConfig(base, ProcfileConfig{})
+		out := Merge(base, ProcfileConfig{})
 		assert.Equal(t, RestartOnFailure, out.AutoRestart)
 		assert.Equal(t, 2, out.MaxRestarts)
 		assert.Equal(t, "prod", out.Profile)
@@ -629,18 +740,18 @@ func TestMergeProcfileConfig(t *testing.T) {
 	t.Run("env merges key-by-key with override winning", func(t *testing.T) {
 		base := ProcfileConfig{Env: map[string]string{"A": "1", "B": "2"}}
 		override := ProcfileConfig{Env: map[string]string{"B": "20", "C": "3"}}
-		out := MergeProcfileConfig(base, override)
+		out := Merge(base, override)
 		assert.Equal(t, map[string]string{"A": "1", "B": "20", "C": "3"}, out.Env)
 	})
 
 	t.Run("resource limits + profile override when set and persist when omitted", func(t *testing.T) {
 		base := ProcfileConfig{Mem: "256Mi", CPU: 50, Profile: "dev"}
-		out := MergeProcfileConfig(base, ProcfileConfig{Mem: "1Gi", Profile: "prod"})
+		out := Merge(base, ProcfileConfig{Mem: "1Gi", Profile: "prod"})
 		assert.Equal(t, "1Gi", out.Mem, "non-empty override wins")
 		assert.Equal(t, 50.0, out.CPU, "omitted override keeps base")
 		assert.Equal(t, "prod", out.Profile)
 
-		kept := MergeProcfileConfig(base, ProcfileConfig{})
+		kept := Merge(base, ProcfileConfig{})
 		assert.Equal(t, "256Mi", kept.Mem)
 		assert.Equal(t, 50.0, kept.CPU)
 		assert.Equal(t, "dev", kept.Profile)

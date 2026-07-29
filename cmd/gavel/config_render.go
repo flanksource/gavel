@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -357,12 +358,11 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 				continue
 			}
 
-			// Anonymous embeds with no explicit tag name (plain embed or
-			// `yaml:",inline"`) are promoted into the parent mapping, matching how
-			// encoding/json and ghodss serialize them — otherwise the embedded
-			// api.Spec/api.Model surface as capitalized Go field names ("Spec",
-			// "Model") instead of their inline keys ("model", "prompt", …).
-			if isInlineEmbed(field) {
+			// Inline fields are promoted into the parent mapping, matching how
+			// encoding/json and ghodss serialize them — otherwise api.Spec/api.Model
+			// surface as capitalized Go field names ("Spec", "Model") instead of
+			// their inline keys ("model", "prompt", …).
+			if isInlineField(field) {
 				if childNode, ok := buildYAMLNode(v.Field(i), meta, parent); ok && childNode.Kind == yamlv3.MappingNode {
 					node.Content = append(node.Content, childNode.Content...)
 				}
@@ -475,18 +475,21 @@ func buildYAMLNode(v reflect.Value, meta *configProvenanceNode, parent *configSo
 // yamlFieldName returns the YAML key for a struct field. Emptiness is handled
 // uniformly by buildYAMLNode/isEmptyConfigValue, so the omitempty tag option is
 // not consulted here.
-// isInlineEmbed reports whether an anonymous embedded field is promoted into its
-// parent mapping — a plain embed with no yaml tag, or one tagged `,inline`.
-func isInlineEmbed(field reflect.StructField) bool {
-	if !field.Anonymous {
-		return false
-	}
+// isInlineField reports whether a field's contents are promoted into the parent
+// mapping instead of nesting under a key. Two forms qualify: an anonymous embed
+// with no explicit tag name, and any field — named or embedded — whose yaml/json
+// tag carries the `inline` option. verify.PromptSpec.Spec is the named case: it
+// holds an api.Spec whose keys sit flat beside `file` on disk.
+func isInlineField(field reflect.StructField) bool {
 	tag := field.Tag.Get("yaml")
 	if tag == "" {
 		tag = field.Tag.Get("json")
 	}
-	name, _, _ := strings.Cut(tag, ",")
-	return name == ""
+	name, opts, _ := strings.Cut(tag, ",")
+	if slices.Contains(strings.Split(opts, ","), "inline") {
+		return true
+	}
+	return field.Anonymous && name == ""
 }
 
 func yamlFieldName(field reflect.StructField) string {

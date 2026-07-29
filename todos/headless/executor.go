@@ -17,6 +17,7 @@ import (
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/ai/agent"
+	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
 	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	gavelai "github.com/flanksource/gavel/ai"
@@ -59,7 +60,7 @@ func NewExecutor(config todopkg.AgentRunConfig, options ...option) *Executor {
 	if config.Mode == "" {
 		config.Mode = types.ModeRun
 	}
-	agentName, _ := claude.ResolveAgent(config.Name)
+	agentName, _ := claude.ResolveAgent(config.Spec.Name)
 	executor := &Executor{config: config, agent: agentName}
 	for _, option := range options {
 		option(executor)
@@ -80,10 +81,10 @@ func (e *Executor) driver() string {
 
 func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
 	return captaindb.PromptRunRuntimeSelection{
-		Provider: todopkg.RuntimeProviderForBackend(string(e.config.Backend)),
-		Backend:  string(e.config.Backend),
-		Model:    e.config.Name,
-		Effort:   string(e.config.Effort),
+		Provider: todopkg.RuntimeProviderForBackend(string(e.config.Spec.Backend)),
+		Backend:  string(e.config.Spec.Backend),
+		Model:    e.config.Spec.Name,
+		Effort:   string(e.config.Spec.Effort),
 	}
 }
 
@@ -115,19 +116,7 @@ func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return nil, err
 	}
-	req, cleanup, err := e.prepareRequest(ctx, todosInGroup, req)
-	if err != nil {
-		return nil, err
-	}
-	result, runErr := e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
-	if cleanupErr := cleanup(); cleanupErr != nil {
-		cleanupErr = fmt.Errorf("%s: clean up workspace: %w", e.Name(), cleanupErr)
-		if runErr != nil {
-			return result, errors.Join(runErr, cleanupErr)
-		}
-		return result, cleanupErr
-	}
-	return result, runErr
+	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 
 func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.Request, error) {
@@ -135,15 +124,11 @@ func (e *Executor) renderInitialRequest(todosInGroup []*types.TODO) (captainai.R
 		return captainai.Request{}, fmt.Errorf("no todos supplied")
 	}
 	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
-	tmpl, err := todoprompt.ResolveTemplate(workDir, e.config.Mode)
-	if err != nil {
-		return captainai.Request{}, err
-	}
 	rendered, _, err := todoprompt.Render(todosInGroup, todoprompt.Options{
 		WorkDir:      workDir,
 		Mode:         e.config.Mode,
 		Spec:         e.config.Spec,
-		Template:     tmpl,
+		Template:     e.config.Template,
 		ExistingPlan: e.config.ExistingPlan,
 	})
 	if err != nil {
@@ -186,19 +171,7 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	if err != nil {
 		return e.failed(start, err), err
 	}
-	req, cleanup, err := e.prepareRequest(ctx, todosInGroup, req)
-	if err != nil {
-		return e.failed(start, err), err
-	}
-	result, runErr := e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
-	if cleanupErr := cleanup(); cleanupErr != nil {
-		cleanupErr = fmt.Errorf("%s: clean up workspace: %w", e.Name(), cleanupErr)
-		if runErr != nil {
-			return result, errors.Join(runErr, cleanupErr)
-		}
-		return result, cleanupErr
-	}
-	return result, runErr
+	return e.run(ctx, start, req, canUseTool, providerSessionID, todosInGroup)
 }
 
 // run drives the request through captain's agent.Runner (Verify hooks gate
@@ -206,6 +179,7 @@ func (e *Executor) SendFeedback(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 // id forward explicitly), then resolves the response contract in precedence
 // order: native terminal outcome, structured data, response text.
 func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captainai.Request, canUseTool captainai.PermissionFunc, providerSessionID string, todosInGroup []*types.TODO) (*todopkg.ExecutionResult, error) {
+	workDir := groupWorkDir(e.config.WorkDir, todosInGroup)
 	provider, err := e.provider(req, canUseTool, providerSessionID)
 	if err != nil {
 		return e.failed(start, err), err
@@ -231,14 +205,14 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	if strings.TrimSpace(req.Name) != "" {
 		modelSource = "todos." + string(e.config.Mode) + "-prompt"
 	}
-	if strings.TrimSpace(e.config.Name) != "" {
+	if strings.TrimSpace(e.config.Spec.Name) != "" {
 		modelSource = "run-option"
 	}
 	ctx.Logger.Infof(
 		"Resolved TODO runtime: driver=%s agent=%s provider=%s backend=%s model=%s effort=%s model_source=%s; dispatching %d TODO(s) cwd=%s",
 		runMeta.Driver, runMeta.Agent, firstNonEmpty(runMeta.Provider, "unknown"),
 		firstNonEmpty(runMeta.Backend, "default"), firstNonEmpty(runMeta.ResolvedModel, "default"),
-		firstNonEmpty(runMeta.Effort, "default"), modelSource, len(todosInGroup), req.Cwd(),
+		firstNonEmpty(runMeta.Effort, "default"), modelSource, len(todosInGroup), workDir,
 	)
 	gavelai.NormalizeEnv()
 
@@ -283,14 +257,22 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		hooks = append(hooks, commitHooks(req, todosInGroup, runMeta.SessionID)...)
 	}
 	hooks = append(hooks, verifyHooks...)
+	// Setup trails the list because the runner dispatches Post in hook order:
+	// its teardown at PhaseRun must come after the commit hooks above have cut
+	// their commits, or it would remove the worktree they commit from. PreRun
+	// order does not matter — no other hook here declares one. The plugin
+	// materialises the checkout and rewrites the spec to describe where the work
+	// landed; the group's work dir is what relative setup paths anchor to, and
+	// it seeds the workspace the plugin then repoints at the prepared tree.
+	hooks = append(hooks, &capsetup.Plugin{BaseDir: workDir})
 
 	runner := &agent.Runner[string]{
 		Provider:      provider,
 		Request:       req,
 		Hooks:         hooks,
 		MaxIterations: maxIter,
-		Repo:          req.Cwd(),
-		Cwd:           req.Cwd(),
+		Repo:          workDir,
+		Cwd:           workDir,
 		Scope:         scope,
 		OnEvent: func(_ int, ev captainai.Event) {
 			e.handleEvent(ctx, ev, result, todosInGroup, &sawResult, runMeta)
@@ -432,7 +414,7 @@ func (e *Executor) failed(start time.Time, err error) *todopkg.ExecutionResult {
 // isCmuxBackend reports whether this executor drives the interactive cmux TUI
 // provider (vs the headless SDK backends).
 func (e *Executor) isCmuxBackend() bool {
-	switch captainai.Backend(strings.TrimSpace(string(e.config.Backend))) {
+	switch captainai.Backend(strings.TrimSpace(string(e.config.Spec.Backend))) {
 	case captainai.BackendClaudeCmux, captainai.BackendCodexCmux:
 		return true
 	default:
@@ -441,12 +423,12 @@ func (e *Executor) isCmuxBackend() bool {
 }
 
 func (e *Executor) timeout() (time.Duration, error) {
-	if strings.TrimSpace(e.config.Budget.Timeout) == "" {
+	if strings.TrimSpace(e.config.Spec.Budget.Timeout) == "" {
 		return defaultTimeout, nil
 	}
-	timeout, err := time.ParseDuration(e.config.Budget.Timeout)
+	timeout, err := time.ParseDuration(e.config.Spec.Budget.Timeout)
 	if err != nil {
-		return 0, fmt.Errorf("%s: invalid timeout %q: %w", e.Name(), e.config.Budget.Timeout, err)
+		return 0, fmt.Errorf("%s: invalid timeout %q: %w", e.Name(), e.config.Spec.Budget.Timeout, err)
 	}
 	if timeout <= 0 {
 		return 0, fmt.Errorf("%s: timeout must be greater than zero", e.Name())

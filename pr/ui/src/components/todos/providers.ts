@@ -4,11 +4,9 @@ import type { SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
 import { UiColumns, UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
 import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
 
-// A run's driver is `<provider>-<mechanism>`. The advanced dialog selects the
-// provider first (segmented control) and the mechanism + model second (pickers),
-// then composes them into a TodoRunDriver. This module is the single catalog of
-// what each provider offers, so the pickers show real per-provider choices
-// instead of a free-text model field and a static effort list.
+// Captain's run context owns every selectable backend and model. This module
+// only supplies presentation metadata and projects the returned catalog into
+// clicky-ui's runtime controls.
 
 // RunProvider is the coding agent / vendor a run targets — the same axis as the
 // driver's agent half (claude or codex).
@@ -27,8 +25,6 @@ export interface ProviderCatalog {
   // Brand/provider glyph shown on provider segments and run dropdown headers.
   icon: StaticIconComponent;
   iconColor?: string;
-  mechanisms: Array<{ value: RunMechanism; label: string }>;
-  efforts: TodoRunEffort[];
 }
 
 export interface RunBackendMechanism {
@@ -64,32 +60,12 @@ export interface RunContext {
   tools: ToolMeta[];
 }
 
-const EFFORTS: TodoRunEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-
-// FALLBACK_TOOLS mirrors gavel's drivers.DefaultTools so the picker still renders
-// when the run-context fetch fails. Keep in sync with todoRunToolCatalog (Go).
-const FALLBACK_TOOLS: ToolMeta[] = [
-  { name: 'Read', label: 'Read', group: 'Files', defaultPermission: 'on' },
-  { name: 'Edit', label: 'Edit', group: 'Files', defaultPermission: 'on' },
-  { name: 'Write', label: 'Write', group: 'Files', defaultPermission: 'on' },
-  { name: 'Bash', label: 'Bash', group: 'Shell', defaultPermission: 'ask' },
-  { name: 'Glob', label: 'Glob', group: 'Search', defaultPermission: 'on' },
-  { name: 'Grep', label: 'Grep', group: 'Search', defaultPermission: 'on' },
-];
-
 const CLAUDE: ProviderCatalog = {
   id: 'claude',
   label: 'Claude',
   provider: 'anthropic',
   icon: providerIcon('anthropic') ?? UiSparkles,
   iconColor: '#D97757',
-  mechanisms: [
-    { value: 'cmux', label: 'cmux (TUI)' },
-    { value: 'agent', label: 'agent' },
-    { value: 'cli', label: 'cli' },
-    { value: 'api', label: 'API' },
-  ],
-  efforts: EFFORTS,
 };
 
 const CODEX: ProviderCatalog = {
@@ -98,101 +74,25 @@ const CODEX: ProviderCatalog = {
   provider: 'openai',
   icon: providerIcon('openai') ?? UiRobotAi,
   iconColor: '#10A37F',
-  mechanisms: [
-    { value: 'cmux', label: 'cmux (TUI)' },
-    { value: 'agent', label: 'agent' },
-  ],
-  efforts: EFFORTS,
 };
 
 export const PROVIDERS: ProviderCatalog[] = [CLAUDE, CODEX];
-
-export const FALLBACK_RUN_CONTEXT: RunContext = {
-  defaultBackend: 'claude-agent',
-  efforts: EFFORTS,
-  tools: FALLBACK_TOOLS,
-  backends: [
-    {
-      id: 'claude-cmux',
-      label: 'Claude cmux',
-      provider: 'anthropic',
-      agent: 'claude',
-      defaultModel: 'claude-sonnet-5',
-      driver: 'claude-cmux',
-      mechanisms: [{ value: 'cmux', label: 'cmux (TUI)', driver: 'claude-cmux' }],
-      models: [],
-      configured: false,
-    },
-    {
-      id: 'claude-agent',
-      label: 'Claude Agent',
-      provider: 'anthropic',
-      agent: 'claude',
-      defaultModel: 'claude-sonnet-5',
-      driver: 'claude-headless',
-      mechanisms: [{ value: 'agent', label: 'agent', driver: 'claude-headless' }],
-      models: [],
-      configured: false,
-    },
-    {
-      id: 'claude-cli',
-      label: 'Claude CLI',
-      provider: 'anthropic',
-      agent: 'claude',
-      defaultModel: 'claude-sonnet-5',
-      driver: 'claude-headless',
-      mechanisms: [{ value: 'cli', label: 'cli', driver: 'claude-headless' }],
-      models: [],
-      configured: false,
-    },
-    {
-      id: 'codex-cmux',
-      label: 'Codex cmux',
-      provider: 'openai',
-      agent: 'codex',
-      defaultModel: 'gpt-5.5',
-      driver: 'codex-cmux',
-      mechanisms: [{ value: 'cmux', label: 'cmux (TUI)', driver: 'codex-cmux' }],
-      models: [],
-      configured: false,
-    },
-    {
-      id: 'codex-agent',
-      label: 'Codex Agent',
-      provider: 'openai',
-      agent: 'codex',
-      defaultModel: 'gpt-5.5',
-      driver: 'codex-headless',
-      mechanisms: [{ value: 'agent', label: 'agent', driver: 'codex-headless' }],
-      models: [],
-      configured: false,
-    },
-  ],
-};
-
-export function runContextWithFallback(context?: RunContext | null): RunContext {
-  if (!context || context.backends.length === 0) return FALLBACK_RUN_CONTEXT;
-  return {
-    defaultBackend: context.defaultBackend || FALLBACK_RUN_CONTEXT.defaultBackend,
-    efforts: context.efforts.length > 0 ? context.efforts : FALLBACK_RUN_CONTEXT.efforts,
-    backends: context.backends.length > 0 ? context.backends : FALLBACK_RUN_CONTEXT.backends,
-    tools: context.tools && context.tools.length > 0 ? context.tools : FALLBACK_TOOLS,
-  };
-}
 
 export function backendsForAgent(context: RunContext, agent: RunProvider): RunBackendCatalog[] {
   return context.backends.filter(backend => backend.agent === agent);
 }
 
 export function backendCatalog(context: RunContext, id: string, agent: RunProvider): RunBackendCatalog {
-  const byID = context.backends.find(backend => backend.id === id && backend.agent === agent);
+  const byID = context.backends.find(backend => backend.id === id && backend.agent === agent && backend.models.length > 0);
   if (byID) return byID;
-  return backendsForAgent(context, agent)[0] ?? FALLBACK_RUN_CONTEXT.backends.find(backend => backend.agent === agent)!;
+  const first = backendsForAgent(context, agent).find(backend => backend.models.length > 0);
+  if (first) return first;
+  throw new Error(`Captain returned no models for ${agent}`);
 }
 
 export function defaultBackendForAgent(context: RunContext, agent: RunProvider): RunBackendCatalog {
   const preferred = context.defaultBackend
-    ? context.backends.find(backend => backend.id === context.defaultBackend && backend.agent === agent)
+    ? context.backends.find(backend => backend.id === context.defaultBackend && backend.agent === agent && backend.models.length > 0)
     : undefined;
   return preferred ?? backendCatalog(context, '', agent);
 }
@@ -202,7 +102,7 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
 // lands on that provider's headless Agent backend.
 export function agentBackendForAgent(context: RunContext, agent: RunProvider): RunBackendCatalog {
   const agentBackend = backendsForAgent(context, agent).find(
-    backend => backend.mechanisms.some(mechanism => mechanism.value === 'agent') || backend.id.endsWith('-agent'),
+    backend => backend.models.length > 0 && (backend.mechanisms.some(mechanism => mechanism.value === 'agent') || backend.id.endsWith('-agent')),
   );
   return agentBackend ?? defaultBackendForAgent(context, agent);
 }
@@ -216,8 +116,9 @@ export function driverFor(provider: RunProvider, mechanism: RunMechanism): TodoR
 // Family -> Mode picker: one family per provider, with every mode coming from a
 // backend row served by /api/todos/run/context.
 export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
-  return PROVIDERS.map((provider) => {
-    const backendModes = backendsForAgent(context, provider.id).map((item) => ({
+  const agents = new Set(context.backends.map(backend => backend.agent));
+  return PROVIDERS.filter(provider => agents.has(provider.id)).map((provider) => {
+    const backendModes = backendsForAgent(context, provider.id).filter(item => item.models.length > 0).map((item) => ({
       id: item.id,
       label: item.configured === false ? `${item.label} (not ready)` : item.label,
       backend: item.id,
@@ -247,7 +148,11 @@ export function agentForBackend(context: RunContext, backend: string | undefined
   for (const provider of PROVIDERS) {
     if (value === driverFor(provider.id, 'cmux')) return provider.id;
   }
-  return context.backends.find((item) => item.id === value)?.agent ?? 'claude';
+  return context.backends.find((item) => item.id === value && item.models.length > 0)?.agent
+    ?? context.backends.find(item => item.id === context.defaultBackend && item.models.length > 0)?.agent
+    ?? context.backends.find(item => item.models.length > 0)?.agent
+    ?? context.backends[0]?.agent
+    ?? (() => { throw new Error('Captain returned no run providers'); })();
 }
 
 // modelsForSelection/defaultModelForSelection return the model list and

@@ -178,15 +178,15 @@ var _ = Describe("applyLintGate", func() {
 	})
 })
 
-var _ = Describe("verify.MergeCommitConfig (lint)", func() {
+var _ = Describe("verify.Merge of CommitConfig (lint)", func() {
 	It("override commit.lint.enabled wins when set, base preserved otherwise", func() {
 		base := verify.CommitConfig{Lint: verify.CommitLintConfig{Enabled: boolPtr(true)}}
 		override := verify.CommitConfig{Lint: verify.CommitLintConfig{Enabled: boolPtr(false)}}
-		merged := verify.MergeCommitConfig(base, override)
+		merged := verify.Merge(base, override)
 		Expect(merged.Lint.Enabled).ToNot(BeNil())
 		Expect(*merged.Lint.Enabled).To(BeFalse())
 
-		merged = verify.MergeCommitConfig(base, verify.CommitConfig{})
+		merged = verify.Merge(base, verify.CommitConfig{})
 		Expect(merged.Lint.Enabled).ToNot(BeNil())
 		Expect(*merged.Lint.Enabled).To(BeTrue(), "empty override must not clobber base")
 	})
@@ -194,10 +194,10 @@ var _ = Describe("verify.MergeCommitConfig (lint)", func() {
 	It("override commit.lint.secrets wins when set, base preserved otherwise", func() {
 		base := verify.CommitConfig{Lint: verify.CommitLintConfig{Secrets: boolPtr(true)}}
 		override := verify.CommitConfig{Lint: verify.CommitLintConfig{Secrets: boolPtr(false)}}
-		merged := verify.MergeCommitConfig(base, override)
+		merged := verify.Merge(base, override)
 		Expect(*merged.Lint.Secrets).To(BeFalse())
 
-		merged = verify.MergeCommitConfig(base, verify.CommitConfig{})
+		merged = verify.Merge(base, verify.CommitConfig{})
 		Expect(*merged.Lint.Secrets).To(BeTrue())
 	})
 })

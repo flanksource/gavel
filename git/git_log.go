@@ -141,7 +141,7 @@ func GetCommitHistory(filter HistoryOptions) (models.Commits, error) {
 	}
 
 	if logger.V(3).Enabled() {
-		logger.Tracef(clicky.MustFormat(allCommits, clicky.FormatOptions{Pretty: true}))
+		logger.Tracef("%s", clicky.MustFormat(allCommits, clicky.FormatOptions{Pretty: true}))
 	}
 
 	// Apply additional filters that aren't handled by git CLI

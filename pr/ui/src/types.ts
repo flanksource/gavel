@@ -477,13 +477,22 @@ export type TodoRunDriver =
   | 'codex-cmux'
   | 'codex-headless';
 
-// TodoRunOptions is the run POST body's options: api.Spec's inlined fields
-// (model/backend/effort flat; prompt/budget/permissions/setup/workflow/sessionId
-// nested, mirroring clicky's AISpecRuntimeValue) plus the run-orchestration extras
-// below. Dirty worktree, auto-commit, dry-run, and checks all live in the spec now
+// TodoRunOptions is the run POST body's options: the api.Spec under its own
+// `spec` key plus the run-orchestration extras below. Dirty worktree,
+// auto-commit, dry-run, and checks all live in the spec now
 // (setup.checkout.dirty, workflow.commits[].on/dryRun, workflow.verify); only the
 // prompt/driver selection and the resume decision sit alongside it.
-export interface TodoRunOptions extends AISpecRuntimeValue {
+//
+// The spec is nested rather than inlined because the Go payload stopped
+// embedding api.Spec: api.Spec declares a value-receiver MarshalJSON, so an
+// embedding struct inherited it and marshalled to a bare spec, silently dropping
+// driver/runMode/resume. Nesting also dissolves the wire collision between this
+// payload's `mode`/`resume` and api.Model's own.
+export interface TodoRunOptions {
+  // Spec is the captain api.Spec: model/backend/effort flat inside it;
+  // prompt/budget/permissions/setup/workflow/sessionId nested, mirroring
+  // clicky's AISpecRuntimeValue.
+  spec?: AISpecRuntimeValue;
   // Driver is the authoritative selection; agent/mode are the legacy pair the
   // server still accepts and derives a driver from when driver is absent.
   driver?: TodoRunDriver;

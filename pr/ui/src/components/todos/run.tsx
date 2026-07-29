@@ -20,7 +20,6 @@ import {
   driverForSelection,
   isCmuxBackend,
   modelsForSelection,
-  runContextWithFallback,
   type RunBackendCatalog,
   type RunContext,
 } from "./providers";
@@ -44,44 +43,25 @@ const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verif
 // per-turn fixup chain, which stays opt-in while a todo run executes in the
 // user's live working tree. The advanced dialog's Commit section can turn it off;
 // a plan-only run never commits because the plan action omits this workflow.
-const AUTO_COMMIT: Pick<TodoRunOptions, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
+const AUTO_COMMIT: Pick<AISpecRuntimeValue, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
 
 // MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
 // markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
 // code-split and rendered under Suspense with a plain-textarea fallback.
 const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((m) => ({ default: m.MdxEditorField })));
 
-export const defaultRunOptions: TodoRunOptions = { driver: "cli", backend: "claude-agent", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT };
+export const defaultRunOptions: TodoRunOptions = { driver: "cli", spec: { effort: "medium", ...AUTO_COMMIT } };
 
-type RunPreset = { label: string; icon: ComponentType<IconProps>; options: TodoRunOptions };
 type RunChoiceState = {
   last: Partial<Record<TodoRunAction, TodoRunOptions>>;
   recentAdvanced: Partial<Record<TodoRunAction, TodoRunOptions[]>>;
 };
 
-// The split-button menu offers two actions — Run (implement) and Plan (propose
-// a plan without changing code) — each with a Claude and a Codex option, plus
-// Advanced for the full dialog.
-export const runActionGroups: Array<{ action: "Run" | "Plan"; detail: string; presets: RunPreset[] }> = [
-  {
-    action: "Run",
-    detail: "implement",
-    presets: [
-      { label: "Claude", icon: UiSparkles, options: { driver: "cli", backend: "claude-agent", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT } },
-      { label: "Codex", icon: UiTerminal, options: { driver: "cli", backend: "codex-agent", model: "gpt-5.5", effort: "medium", ...AUTO_COMMIT } },
-    ],
-  },
-  {
-    action: "Plan",
-    detail: "plan only · no changes",
-    presets: [
-      { label: "Claude", icon: UiSparkles, options: { driver: "cli", backend: "claude-agent", model: "claude-sonnet-5", effort: "medium", runMode: "plan", plan: true } },
-      { label: "Codex", icon: UiTerminal, options: { driver: "cli", backend: "codex-agent", model: "gpt-5.5", effort: "medium", runMode: "plan", plan: true } },
-    ],
-  },
-];
-
-const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v1";
+// v2: TodoRunOptions moved model/backend/effort/budget under a nested `spec`.
+// A v1 entry would still parse, but every spec field would read as unset and the
+// remembered model would silently revert to the backend default, so the version
+// is bumped to discard it instead.
+const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v2";
 
 const RUN_ACTION_CONFIG: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
@@ -108,17 +88,19 @@ export type TodoRunModelChoice = {
   options: TodoRunOptions;
 };
 
-const RUN_PRESETS: Record<TodoRunAction, RunPreset[]> = {
-  run: runActionGroups[0]?.presets ?? [],
-  plan: runActionGroups[1]?.presets ?? [],
-};
-
 function emptyRunChoiceState(): RunChoiceState {
   return { last: {}, recentAdvanced: {} };
 }
 
 function cloneRunOptions(options: TodoRunOptions): TodoRunOptions {
   return JSON.parse(JSON.stringify(options)) as TodoRunOptions;
+}
+
+// runSpec is the api.Spec half of a run's options. The spec is nested under its
+// own key rather than inlined (see TodoRunOptions), so the many helpers that only
+// care about model/backend/effort read it through here.
+export function runSpec(options: TodoRunOptions): AISpecRuntimeValue {
+  return options.spec ?? {};
 }
 
 function normalizeRunOptions(action: TodoRunAction, options: TodoRunOptions): TodoRunOptions {
@@ -191,39 +173,80 @@ function actionFromRunOptions(options: TodoRunOptions): TodoRunAction {
   return options.plan || options.runMode === "plan" ? "plan" : "run";
 }
 
-export function useTodoRunContext(enabled = true): RunContext {
+export interface TodoRunContextState {
+  context: RunContext | null;
+  loading: boolean;
+  error: string;
+}
+
+function unavailableRunContextError(context: RunContext): string {
+  if (context.backends.some(backend => backend.models.length > 0)) return "";
+  const details = context.backends.map(backend => backend.modelError?.trim()).filter(Boolean);
+  return details[0] || "Captain returned no run models";
+}
+
+export function useTodoRunContext(enabled = true): TodoRunContextState {
   const [runContext, setRunContext] = useState<RunContext | null>(null);
+  const [loading, setLoading] = useState(enabled);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
+    setLoading(true);
+    setError("");
     fetch("/api/todos/run/context")
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load run context");
-        if (!cancelled) setRunContext(data as RunContext);
+        if (!cancelled) {
+          const context = data as RunContext;
+          if (!Array.isArray(context.backends) || !Array.isArray(context.efforts) || !Array.isArray(context.tools)) {
+            throw new Error("Captain returned an invalid run context");
+          }
+          const unavailable = unavailableRunContextError(context);
+          setRunContext(context);
+          setError(unavailable);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setRunContext(null);
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setRunContext(null);
+          setError(err instanceof Error ? err.message : "Failed to load run context");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [enabled]);
 
-  return runContextWithFallback(runContext);
+  return { context: runContext, loading, error };
+}
+
+export function TodoRunContextError({ error }: { error: string }) {
+  if (!error) return null;
+  return <div role="alert" className="max-w-sm text-xs text-red-600">{error}</div>;
 }
 
 function primaryBackendForAction(context: RunContext): RunBackendCatalog {
-  return context.backends.find(backend => backend.id === context.defaultBackend) ?? context.backends[0];
+  return context.backends.find(backend => backend.id === context.defaultBackend && backend.models.length > 0)
+    ?? context.backends.find(backend => backend.models.length > 0)
+    ?? (() => { throw new Error("Captain returned no run models"); })();
 }
 
 function backendForOptions(context: RunContext, options: TodoRunOptions): RunBackendCatalog {
-  const requested = options.backend || options.driver || options.mode || "";
+  const requested = runSpec(options).backend || options.driver || options.mode || "";
   return (
-    context.backends.find(backend => backend.id === requested || backend.driver === requested) ??
-    (context.defaultBackend ? context.backends.find(backend => backend.id === context.defaultBackend) : undefined) ??
-    context.backends[0]
+    context.backends.find(backend => backend.models.length > 0 && (backend.id === requested || backend.driver === requested)) ??
+    (context.defaultBackend ? context.backends.find(backend => backend.models.length > 0 && backend.id === context.defaultBackend) : undefined) ??
+    context.backends.find(backend => backend.models.length > 0) ??
+    (() => { throw new Error("Captain returned no run models"); })()
   );
 }
 
@@ -263,24 +286,18 @@ function runtimeModeLabel(mode: TodoRunRuntimeMode): string {
   return RUNTIME_MODE_CONFIG[mode].label;
 }
 
-function fallbackModelForBackend(backend: RunBackendCatalog): RunBackendCatalog["models"][number] {
-  return {
-    id: backend.defaultModel,
-    provider: backend.provider,
-    label: backend.defaultModel,
-    reasoning: true,
-    configured: backend.configured ?? false,
-  };
-}
-
 function modelsForRunBackend(backend: RunBackendCatalog): RunBackendCatalog["models"] {
-  return backend.models.length > 0 ? backend.models : [fallbackModelForBackend(backend)];
+  return backend.models;
 }
 
 const ALL_EFFORTS: TodoRunEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 function modelForRunBackend(backend: RunBackendCatalog, modelID: string | undefined): ChatModel {
-  return modelsForRunBackend(backend).find(model => model.id === modelID) ?? fallbackModelForBackend(backend);
+  const model = modelsForRunBackend(backend).find(item => item.id === modelID)
+    ?? modelsForRunBackend(backend).find(item => item.id === backend.defaultModel)
+    ?? modelsForRunBackend(backend)[0];
+  if (!model) throw new Error(backend.modelError || `Captain returned no models for ${backend.label}`);
+  return model;
 }
 
 function contextEfforts(context: RunContext): TodoRunEffort[] {
@@ -350,14 +367,13 @@ function labelForRunModel(backend: RunBackendCatalog, modelID: string): string {
 }
 
 function runOptionsForBackendModel(action: TodoRunAction, backend: RunBackendCatalog, modelID: string, effort: TodoRunEffort = "medium"): TodoRunOptions {
-  const options = reconcileModelCapabilities({
-    driver: backend.driver,
+  const spec = reconcileModelCapabilities({
     backend: backend.id,
     model: modelID || backend.defaultModel,
     effort,
     ...(action === "run" ? AUTO_COMMIT : {}),
-  } satisfies TodoRunOptions, modelForRunBackend(backend, modelID), ALL_EFFORTS) as TodoRunOptions;
-  return normalizeRunOptions(action, options);
+  } satisfies AISpecRuntimeValue, modelForRunBackend(backend, modelID), ALL_EFFORTS);
+  return normalizeRunOptions(action, { driver: backend.driver, spec });
 }
 
 export function runChoicesForAction(context: RunContext, action: TodoRunAction, effort: TodoRunEffort = "medium"): TodoRunModelChoice[] {
@@ -390,7 +406,7 @@ export function runChoicesForRuntimeMode(context: RunContext, action: TodoRunAct
 
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
   const backend = backendForOptions(context, options);
-  const model = options.model || backend.defaultModel;
+  const model = runSpec(options).model || backend.defaultModel;
   return `(${runtimeModeLabel(runtimeModeForBackend(backend))}:${shortTodoRunModelName(labelForRunModel(backend, model))})`;
 }
 
@@ -407,12 +423,13 @@ export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRun
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
   const backend = backendForOptions(context, options);
-  const modelID = options.model || backend.defaultModel;
+  const spec = runSpec(options);
+  const modelID = spec.model || backend.defaultModel;
   const model = modelForRunBackend(backend, modelID);
   const provider = PROVIDERS.find(item => item.id === backend.agent);
   const supportedEfforts = effortOptionsForModel(model, contextEfforts(context));
-  const effort = options.effort && supportedEfforts.includes(options.effort)
-    ? options.effort as TodoRunEffort
+  const effort = spec.effort && supportedEfforts.includes(spec.effort)
+    ? spec.effort as TodoRunEffort
     : undefined;
 
   return {
@@ -423,25 +440,24 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
 }
 
 export function defaultRunOptionsForAction(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
-  const resolved = runContextWithFallback(context);
-  const backend = primaryBackendForAction(resolved);
-  if (backend) {
+  if (context) {
+    const backend = primaryBackendForAction(context);
     return runOptionsForBackendModel(action, backend, backend.defaultModel);
   }
-	return normalizeRunOptions(action, RUN_PRESETS[action][0]?.options ?? defaultRunOptions);
+  return normalizeRunOptions(action, defaultRunOptions);
 }
 
 export function reconcileTodoRunOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): TodoRunOptions {
   const normalized = normalizeRunOptions(action, options);
   const backend = backendForOptions(context, normalized);
-  const modelIsCurrent = !!normalized.model && backend.models.some(model => model.id === normalized.model);
-  const model = modelIsCurrent ? normalized.model! : backend.defaultModel;
-  return normalizeRunOptions(action, reconcileModelCapabilities({
+  const spec = runSpec(normalized);
+  const modelIsCurrent = !!spec.model && backend.models.some(model => model.id === spec.model);
+  const model = modelIsCurrent ? spec.model! : backend.defaultModel;
+  return normalizeRunOptions(action, {
     ...normalized,
     driver: backend.driver,
-    backend: backend.id,
-    model,
-  }, modelForRunBackend(backend, model), contextEfforts(context)) as TodoRunOptions);
+    spec: reconcileModelCapabilities({ ...spec, backend: backend.id, model }, modelForRunBackend(backend, model), contextEfforts(context)),
+  });
 }
 
 export function loadLastTodoRunOptions(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
@@ -543,22 +559,23 @@ export function TodoRunDropdownContent({
   const initialOptions = loadLastTodoRunOptions(initialAction, context);
   const initialBackend = backendForOptions(context, initialOptions);
   const [selectedAgent, setSelectedAgent] = useState<TodoRunAgent>(initialBackend.agent);
-  const [effort, setEffort] = useState<TodoRunEffort>((initialOptions.effort as TodoRunEffort | undefined) ?? "medium");
+  const [effort, setEffort] = useState<TodoRunEffort>((runSpec(initialOptions).effort as TodoRunEffort | undefined) ?? "medium");
   const backend = agentBackendForAgent(context, selectedAgent);
-  const rememberedModel = initialBackend.id === backend.id ? initialOptions.model : undefined;
+  const rememberedModel = initialBackend.id === backend.id ? runSpec(initialOptions).model : undefined;
   const effortModel = modelForRunBackend(backend, rememberedModel || backend.defaultModel);
   const choices = runChoicesForAction(context, initialAction, effort).filter(choice => choice.backend.id === backend.id);
 
   useEffect(() => {
     const nextOptions = loadLastTodoRunOptions(initialAction, context);
     setSelectedAgent(backendForOptions(context, nextOptions).agent);
-    setEffort((nextOptions.effort as TodoRunEffort | undefined) ?? "medium");
+    setEffort((runSpec(nextOptions).effort as TodoRunEffort | undefined) ?? "medium");
   }, [initialAction, context.backends, context.defaultBackend]);
 
   return (
     <div className="p-1 text-xs">
       <div className="space-y-2 border-b border-border px-2 pb-3 pt-2">
         <TodoRunProviderSegments
+          context={context}
           value={selectedAgent}
           onChange={(nextAgent) => {
             const nextBackend = agentBackendForAgent(context, nextAgent);
@@ -622,12 +639,17 @@ export function TodoRunDropdownContent({
 }
 
 function TodoRunProviderSegments({
+  context,
   value,
   onChange,
 }: {
+  context: RunContext;
   value: TodoRunAgent;
   onChange: (value: TodoRunAgent) => void;
 }) {
+  const availableAgents = new Set(
+    context.backends.filter(backend => backend.models.length > 0).map(backend => backend.agent),
+  );
   return (
     <SegmentedControl<TodoRunAgent>
       aria-label="Provider"
@@ -635,7 +657,7 @@ function TodoRunProviderSegments({
       value={value}
       onChange={onChange}
       className="w-full"
-      options={PROVIDERS.map(provider => {
+      options={PROVIDERS.filter(provider => availableAgents.has(provider.id)).map(provider => {
         const ProviderIcon = provider.icon;
         return {
           id: provider.id,
@@ -727,43 +749,53 @@ export function TodoRunSplitButton({
   onRun: (options?: TodoRunOptions) => void;
   onAdvanced: () => void;
 }) {
-  const context = useTodoRunContext(!disabled);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
   const primaryOptions = loadLastTodoRunOptions("run", context);
+  const unavailable = contextLoading || !context || !!contextError;
   const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
   const PrimaryIcon = loading ? Spinner : icon;
   return (
-    <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={() => onRun(primaryOptions)}
-        disabled={disabled}
-        title={title}
-        className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
-      >
-        <PrimaryIcon className="text-xs" />
-        <span>{label}</span>
-      </Button>
-      <DropdownMenu
-        align="right"
-        menuLabel="Run todo"
-        menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-        trigger={
-          <Button variant="ghost" size="icon" type="button" disabled={disabled} title="Run options" aria-label="Run options" className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+    <div className="flex flex-col items-start gap-1">
+      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={() => onRun(primaryOptions)}
+          disabled={disabled || unavailable}
+          title={title}
+          className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
+        >
+          <PrimaryIcon className="text-xs" />
+          <span>{label}</span>
+        </Button>
+        {context && !contextError ? (
+          <DropdownMenu
+            align="right"
+            menuLabel="Run todo"
+            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
+            trigger={
+              <Button variant="ghost" size="icon" type="button" disabled={disabled || unavailable} title="Run options" aria-label="Run options" className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+                <UiChevronDown className="text-xs" />
+              </Button>
+            }
+          >
+            {close => (
+              <TodoRunDropdownContent
+                context={context}
+                initialAction="run"
+                closeParent={close}
+                onSelect={(selectedAction, options) => onRun(rememberTodoRunOptions(selectedAction, options))}
+                onAdvanced={() => onAdvanced()}
+              />
+            )}
+          </DropdownMenu>
+        ) : (
+          <Button variant="ghost" size="icon" type="button" disabled title="Run options" aria-label="Run options" className="h-8 w-7 rounded-none">
             <UiChevronDown className="text-xs" />
           </Button>
-        }
-      >
-        {close => (
-          <TodoRunDropdownContent
-            context={context}
-            initialAction="run"
-            closeParent={close}
-            onSelect={(selectedAction, options) => onRun(rememberTodoRunOptions(selectedAction, options))}
-            onAdvanced={() => onAdvanced()}
-          />
         )}
-      </DropdownMenu>
+      </div>
+      <TodoRunContextError error={contextError} />
     </div>
   );
 }
@@ -790,17 +822,19 @@ export function TodoRunActionButton({
   onAdvanced: (action: TodoRunAction) => void;
 }) {
   const config = RUN_ACTION_CONFIG[action];
-  const context = useTodoRunContext(!disabled);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
   const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
   useEffect(() => {
     setSelectedOptions(null);
   }, [action]);
+  const unavailable = contextLoading || !context || !!contextError;
   const lastOptions = selectedOptions ?? loadLastTodoRunOptions(action, context);
   const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
   const PrimaryIcon = loading ? Spinner : icon ?? config.icon;
-  const presentation = todoRunButtonPresentation(lastOptions, context);
-  const ProviderIcon = presentation.provider?.icon ?? iconForRunBackend(backendForOptions(context, lastOptions));
-  const effortPresentation = presentation.effort ? todoRunEffortPresentation(presentation.effort) : null;
+  const presentation = context ? todoRunButtonPresentation(lastOptions, context) : null;
+  const ProviderIcon = presentation?.provider?.icon
+    ?? (context ? iconForRunBackend(backendForOptions(context, lastOptions)) : PrimaryIcon);
+  const effortPresentation = presentation?.effort ? todoRunEffortPresentation(presentation.effort) : null;
   const EffortIcon = effortPresentation?.icon;
   const showSelection = !label && !loading;
 
@@ -811,58 +845,68 @@ export function TodoRunActionButton({
   }
 
   return (
-    <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={() => runWith(action, lastOptions)}
-        disabled={disabled}
-        title={title ?? config.title}
-        className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
-      >
-        {showSelection ? (
-          <ProviderIcon className="text-xs" style={{ color: presentation.provider?.iconColor }} />
+    <div className="flex flex-col items-start gap-1">
+      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={() => runWith(action, lastOptions)}
+          disabled={disabled || unavailable}
+          title={title ?? config.title}
+          className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
+        >
+          {showSelection && presentation ? (
+            <ProviderIcon className="text-xs" style={{ color: presentation.provider?.iconColor }} />
+          ) : (
+            <PrimaryIcon className="text-xs" />
+          )}
+          <span>{label ?? (presentation ? `${config.label} (${presentation.model})` : config.label)}</span>
+          {showSelection && EffortIcon && effortPresentation && presentation && (
+            <span className="inline-flex" title={`Effort: ${effortPresentation.label}`} aria-label={`Effort: ${effortPresentation.label}`}>
+              <EffortIcon className={`size-3.5 ${effortIconColor(presentation.effort)}`} aria-hidden="true" />
+            </span>
+          )}
+        </Button>
+        {context && !contextError ? (
+          <DropdownMenu
+            align="right"
+            menuLabel={`${config.label} todo options`}
+            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
+            trigger={
+              <Button variant="ghost" size="icon" type="button" disabled={disabled || unavailable} title={`${config.label} options`} aria-label={`${config.label} options`} className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+                <UiChevronDown className="text-xs" />
+              </Button>
+            }
+          >
+            {close => (
+              <TodoRunDropdownContent
+                context={context}
+                initialAction={action}
+                closeParent={close}
+                onSelect={runWith}
+                onAdvanced={onAdvanced}
+              />
+            )}
+          </DropdownMenu>
         ) : (
-          <PrimaryIcon className="text-xs" />
-        )}
-        <span>{label ?? `${config.label} (${presentation.model})`}</span>
-        {showSelection && EffortIcon && effortPresentation && (
-          <span className="inline-flex" title={`Effort: ${effortPresentation.label}`} aria-label={`Effort: ${effortPresentation.label}`}>
-            <EffortIcon className={`size-3.5 ${effortIconColor(presentation.effort)}`} aria-hidden="true" />
-          </span>
-        )}
-      </Button>
-      <DropdownMenu
-        align="right"
-        menuLabel={`${config.label} todo options`}
-        menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-        trigger={
-          <Button variant="ghost" size="icon" type="button" disabled={disabled} title={`${config.label} options`} aria-label={`${config.label} options`} className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
+          <Button variant="ghost" size="icon" type="button" disabled title={`${config.label} options`} aria-label={`${config.label} options`} className="h-8 w-7 rounded-none">
             <UiChevronDown className="text-xs" />
           </Button>
-        }
-      >
-        {close => (
-          <TodoRunDropdownContent
-            context={context}
-            initialAction={action}
-            closeParent={close}
-            onSelect={runWith}
-            onAdvanced={onAdvanced}
-          />
         )}
-      </DropdownMenu>
+      </div>
+      <TodoRunContextError error={contextError} />
     </div>
   );
 }
 
 function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
-  const resolved = runContextWithFallback(context);
-  const backend = backendForOptions(resolved, options);
-  const mode = backend ? runtimeModeLabel(runtimeModeForBackend(backend)) : options.backend || options.driver || options.mode || fallback;
-  const modelID = options.model || backend?.defaultModel || "default model";
-  const model = shortTodoRunModelName(backend ? labelForRunModel(backend, modelID) : modelID);
-  const effort = options.effort ? ` · ${options.effort}` : "";
+  if (!context) return fallback;
+  const backend = backendForOptions(context, options);
+  const spec = runSpec(options);
+  const mode = runtimeModeLabel(runtimeModeForBackend(backend));
+  const modelID = spec.model || backend.defaultModel;
+  const model = shortTodoRunModelName(labelForRunModel(backend, modelID));
+  const effort = spec.effort ? ` · ${spec.effort}` : "";
   return `${mode} · ${model}${effort}`;
 }
 
@@ -894,6 +938,7 @@ function TodoRunAdvancedRuntimeControls({
     <div className="space-y-3">
       <Field label="Provider">
         <TodoRunProviderSegments
+          context={context}
           value={selectedAgent}
           onChange={nextAgent => selectBackend(agentBackendForAgent(context, nextAgent))}
         />
@@ -962,7 +1007,7 @@ function TodoRunAdvancedRuntimeControls({
                 variant="outline"
                 size="sm"
                 type="button"
-                onClick={() => onChange(reconcileTodoRunOptions(actionFromRunOptions(options), options, context))}
+                onClick={() => onChange(runSpec(reconcileTodoRunOptions(actionFromRunOptions(options), options, context)))}
               >
                 {index + 1}. {runChoiceDetail(options, "advanced", context)}
               </Button>
@@ -974,7 +1019,7 @@ function TodoRunAdvancedRuntimeControls({
   );
 }
 
-const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { backend: "claude-agent", model: "claude-sonnet-5", effort: "medium", ...AUTO_COMMIT };
+const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { effort: "medium", ...AUTO_COMMIT };
 
 export function TodoRunAdvancedDialog({
   open,
@@ -1012,18 +1057,19 @@ export function TodoRunAdvancedDialog({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [regenNonce, setRegenNonce] = useState(0);
-  const [runContext, setRunContext] = useState<RunContext | null>(null);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
   // Ref mirror of promptDirty so the preview effect can read it without
   // refetching on every keystroke.
   const promptDirtyRef = useRef(false);
 
-  const context = runContextWithFallback(runContext);
-  const families = buildRunFamilies(context);
-  const agent = agentForBackend(context, runtimeValue.backend);
-  const isCmux = isCmuxBackend(agent, runtimeValue.backend);
-  const activeModels = modelsForSelection(context, agent, runtimeValue.backend);
-  const modelFallback = defaultModelForSelection(context, agent, runtimeValue.backend);
-  const { driver, runBackend } = driverForSelection(context, agent, runtimeValue.backend);
+  const families = context ? buildRunFamilies(context) : [];
+  const agent = context ? agentForBackend(context, runtimeValue.backend) : undefined;
+  const isCmux = !!agent && isCmuxBackend(agent, runtimeValue.backend);
+  const activeModels = context && agent ? modelsForSelection(context, agent, runtimeValue.backend) : [];
+  const modelFallback = context && agent ? defaultModelForSelection(context, agent, runtimeValue.backend) : "";
+  const selection = context && agent ? driverForSelection(context, agent, runtimeValue.backend) : null;
+  const driver = selection?.driver;
+  const runBackend = selection?.runBackend;
   const plan = mode === "plan";
   const advancedAction: TodoRunAction = plan ? "plan" : "run";
   const recentAdvanced = loadRecentAdvancedTodoRunOptions(advancedAction, context);
@@ -1034,6 +1080,7 @@ export function TodoRunAdvancedDialog({
   // to the new mode's default in that case, mirroring the old changeMechanism/
   // changeProvider/changeBackend resets.
   function changeRuntime(next: AISpecRuntimeValue) {
+    if (!context) return;
     const nextBackend = next.backend ?? "";
     const nextAgent = agentForBackend(context, nextBackend);
     const candidates = modelsForSelection(context, nextAgent, nextBackend);
@@ -1074,26 +1121,10 @@ export function TodoRunAdvancedDialog({
   }, [open, initialMode]);
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    fetch("/api/todos/run/context")
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to load run context");
-        if (!cancelled) {
-          const resolved = runContextWithFallback(data as RunContext);
-          setRunContext(data as RunContext);
-          const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
-          setRuntimeValue(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, resolved), resolved));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setRunContext(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, initialMode]);
+    if (!open || !context) return;
+    const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
+    setRuntimeValue(runSpec(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, context), context)));
+  }, [open, initialMode, context]);
 
   const previewModel = runtimeValue.model?.trim() || modelFallback;
   const previewBackend = runBackend;
@@ -1108,19 +1139,19 @@ export function TodoRunAdvancedDialog({
       setPreviewError("");
       return;
     }
-    if (!refID) {
+    if (!context || contextError || !refID || !driver) {
       setPreviewError("");
       return;
     }
     const url = `/api/todos/run/preview?${todoQuery(dir)}`;
+    // Same payload shape as the run POST — the preview handler decodes it with
+    // the same todoRunPayload — so the spec half is nested, not inlined.
     const body = {
       ref: refID,
       driver,
-      backend: previewBackend,
-      model: previewModel,
-      effort: runtimeValue.effort,
       runMode: plan ? "plan" : "run",
       resume: isCmux ? resume : undefined,
+      spec: { backend: previewBackend, model: previewModel, effort: runtimeValue.effort },
     };
 
     let cancelled = false;
@@ -1148,26 +1179,29 @@ export function TodoRunAdvancedDialog({
       cancelled = true;
       controller.abort();
     };
-  }, [open, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce]);
+  }, [open, context, contextError, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce]);
 
   if (!open) return null;
 
   function submit() {
+    if (!context || !driver) return;
     // spec carries the model/effort/permissions plus the run's setup (dirty),
     // workflow.verify (checks) and workflow.commits (auto-commit / dry-run) — all
     // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
     // never commit or verify; the server suppresses both for run mode plan.
     const { spec } = promptRuntimeValueToPayload(runtimeValue);
     onRun({
-      ...spec,
       driver,
-      backend: runBackend,
       runMode: plan ? "plan" : "run",
       plan: plan ? true : undefined,
       resume: isCmux ? resume : undefined,
-      prompt: {
-        // The edited prompt body is sent verbatim as the override.
-        user: promptDraft.trim() ? promptDraft : undefined,
+      spec: {
+        ...spec,
+        backend: runBackend,
+        prompt: {
+          // The edited prompt body is sent verbatim as the override.
+          user: promptDraft.trim() ? promptDraft : undefined,
+        },
       },
     });
   }
@@ -1210,37 +1244,40 @@ export function TodoRunAdvancedDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} loading={loading}>
+          <Button onClick={submit} loading={loading} disabled={contextLoading || !context || !!contextError}>
             {plan ? "Plan" : "Run"}
           </Button>
         </div>
       }
     >
       <div className="space-y-3">
-        <Field label="Mode">
-          <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
-        </Field>
-        <PromptRunEditor
-          value={runtimeValue}
-          onChange={changeRuntime}
-          models={activeModels}
-          families={families}
-          tools={context.tools}
-          specSections={RUN_SPEC_SECTIONS}
-          promptEditor={promptEditorNode}
-          promptLabel="Prompt"
-          runtimeControls={<TodoRunAdvancedRuntimeControls context={context} value={runtimeValue} onChange={changeRuntime} recent={recentAdvanced} />}
-        >
-          {isCmux && (
-            // Resume is the one run-orchestration toggle without a spec home: it
-            // continues the todo's prior claude session (--resume) rather than
-            // minting a fresh one, and only applies to cmux runs.
-            <label className="inline-flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
-              <span>Resume session</span>
-            </label>
-          )}
-        </PromptRunEditor>
+        <TodoRunContextError error={contextError} />
+        {contextLoading && <div className="text-xs text-muted-foreground">Loading Captain run providers…</div>}
+        {context && !contextError && (
+          <>
+            <Field label="Mode">
+              <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
+            </Field>
+            <PromptRunEditor
+              value={runtimeValue}
+              onChange={changeRuntime}
+              models={activeModels}
+              families={families}
+              tools={context.tools}
+              specSections={RUN_SPEC_SECTIONS}
+              promptEditor={promptEditorNode}
+              promptLabel="Prompt"
+              runtimeControls={<TodoRunAdvancedRuntimeControls context={context} value={runtimeValue} onChange={changeRuntime} recent={recentAdvanced} />}
+            >
+              {isCmux && (
+                <label className="inline-flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
+                  <span>Resume session</span>
+                </label>
+              )}
+            </PromptRunEditor>
+          </>
+        )}
       </div>
     </Modal>
   );

@@ -23,6 +23,7 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -170,13 +171,12 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 
-	if err := loadTodosDefaults(workDir); err != nil {
+	// Resolved without todos: only the config-level answers (driver, groupBy) are
+	// needed to decide how to group, and grouping decides which todos each run
+	// resolves with.
+	resolved, err := todosSpec(workDir, nil)
+	if err != nil {
 		return err
-	}
-	// --effort defaults to "medium", so fall back to the todos config only when
-	// the flag was not explicitly set (config still loses to an explicit flag).
-	if !cmd.Flags().Changed("effort") && todosDef.Spec.Effort != "" {
-		todoEffort = string(todosDef.Spec.Effort)
 	}
 
 	provider, err := newTodosProvider(workDir)
@@ -217,14 +217,14 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 
 	effectiveGroupBy := groupBy
 	if effectiveGroupBy == "" {
-		effectiveGroupBy = todosDef.GroupBy
+		effectiveGroupBy = resolved.GroupBy
 	}
 	if policy, ok := provider.(todos.GroupExecutionPolicy); ok && !policy.SupportsGroupedExecution() {
 		if effectiveGroupBy != "" && effectiveGroupBy != todos.GroupByNone {
 			return fmt.Errorf("--group-by is not supported by the native PostgreSQL runtime; run one issue at a time")
 		}
 		effectiveGroupBy = todos.GroupByNone
-	} else if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" && effectiveGroupBy == "" {
+	} else if resolved.Driver.Mechanism() == "cmux" && effectiveGroupBy == "" {
 		effectiveGroupBy = todos.GroupByRepo
 	}
 
@@ -235,7 +235,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	if dryRun {
-		return dryRunTODOs(groups, workDir, provider)
+		return dryRunTODOs(groups, workDir, resolved.Driver, provider)
 	}
 
 	interaction := newInteraction()
@@ -271,164 +271,142 @@ func newInteraction() *todos.UserInteraction {
 	}
 }
 
-func newExecutor(workDir string, todo *types.TODO, provider todos.Provider) (todos.Executor, string, error) {
-	kind, err := resolveDriverKind(todo)
+func newExecutor(workDir string, todoList []*types.TODO, provider todos.Provider) (todos.Executor, string, time.Duration, error) {
+	cfg, resolved, err := newAgentRunConfig(context.Background(), workDir, todoList, provider)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
-	cfg, err := newAgentRunConfig(context.Background(), kind, workDir, todo, provider)
-	if err != nil {
-		return nil, "", err
-	}
-	if todosRunMode != types.ModePlan {
+	if cfg.Mode != types.ModePlan {
 		// Post-run checks are fixture-backed verify plugins inside the agent loop.
 		// --check force-enables them (a bare Workflow.Verify); .gavel.yaml/frontmatter
 		// `checks` enable them too.
 		if checkAfter {
-			if cfg.Workflow == nil {
-				cfg.Workflow = &api.Workflow{}
+			if cfg.Spec.Workflow == nil {
+				cfg.Spec.Workflow = &api.Workflow{}
 			}
-			if cfg.Workflow.Verify == nil {
-				cfg.Workflow.Verify = &api.Verify{}
+			if cfg.Spec.Workflow.Verify == nil {
+				cfg.Spec.Workflow.Verify = &api.Verify{}
 			}
 		}
-		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, []*types.TODO{todo}, &cfg.Spec)
+		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, todoList, &cfg.Spec)
 		if err != nil {
-			return nil, "", err
+			return nil, "", 0, err
 		}
 		cfg.Verifiers = verifiers
 		cfg.MaxIterations = maxIter
 	}
-	return drivers.New(kind, cfg)
+	executor, sessionID, err := drivers.New(resolved.Driver, cfg)
+	return executor, sessionID, resolved.Timeout, err
 }
 
-// resolveDriverKind selects the driver mechanism: the explicit --driver flag
-// when set, otherwise the .gavel.yaml todos.driver, otherwise drivers.Default
-// (cmux; cli is the non-interactive opt-in). The mechanism combines with the
-// model — which alone determines the coding agent — inside drivers.New. --mode
-// selects the todo OPERATION (run/plan), not the mechanism.
-func resolveDriverKind(_ *types.TODO) (drivers.Kind, error) {
-	if strings.TrimSpace(todosDriver) != "" {
-		return drivers.Parse(todosDriver)
+// todosSpec resolves the run configuration for todoList through the shared
+// todos/spec seam, so the CLI and the dashboard layer .gavel.yaml, the mode's
+// .prompt frontmatter, per-todo frontmatter and the request identically.
+//
+// The flags are the request layer, so an unset flag must stay zero — that is why
+// --model and --effort have empty defaults rather than "medium": a non-zero
+// default here would silently beat the .prompt frontmatter it claims to defer to.
+func todosSpec(workDir string, todoList []*types.TODO) (todospec.Resolved, error) {
+	return todosSpecForMode(workDir, todosRunMode, todoList, 0)
+}
+
+// todosSpecForMode is todosSpec for a command that owns its mode and timeout
+// flag rather than reading the shared --mode/--timeout run flags.
+func todosSpecForMode(workDir string, mode types.RunMode, todoList []*types.TODO, timeout time.Duration) (todospec.Resolved, error) {
+	var override api.Spec
+	override.Name = todoModel
+	override.Effort = api.Effort(todoEffort)
+	override.Budget.Cost = maxBudget
+	override.Budget.MaxTurns = maxTurns
+	if timeout > 0 {
+		override.Budget.Timeout = timeout.String()
 	}
-	if strings.TrimSpace(todosDef.Driver) != "" {
-		return drivers.Parse(todosDef.Driver)
-	}
-	return drivers.Default, nil
+	return todospec.Resolve(todospec.Input{
+		WorkDir:  workDir,
+		Mode:     mode,
+		Todos:    todoList,
+		Override: override,
+		Driver:   todosDriver,
+		// The CLI drains no approval queue: a run that asked for one would block
+		// forever, so an approval-gated posture must fail loud in Resolve.
+		CanApprove: false,
+	})
 }
 
 // newAgentRunConfig assembles Captain's canonical Spec plus Gavel-only
-// orchestration state from flags and the todo.
+// orchestration state from the resolved seam and the todos being run.
 // cmux mints and manages its own --session-id (reading any prior session from
 // the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
 // resume by carrying the prior session id explicitly.
-func newAgentRunConfig(ctx context.Context, kind drivers.Kind, workDir string, todo *types.TODO, provider todos.Provider) (todos.AgentRunConfig, error) {
-	// Base layer: the .gavel.yaml todos config. Per-todo frontmatter overrides it,
-	// and an explicit CLI flag overrides that.
-	spec := todosDef.Spec
-	model := spec.Name
-	prior := ""
-	maxCost := spec.Budget.Cost
-	turns := spec.Budget.MaxTurns
-	if todo != nil && todo.LLM != nil {
-		if todo.LLM.Model != "" {
-			model = todo.LLM.Model
-		}
-		prior = todo.LLM.SessionId
-		if todo.LLM.MaxCost > 0 {
-			maxCost = todo.LLM.MaxCost
-		}
-		if todo.LLM.MaxTurns > 0 {
-			turns = todo.LLM.MaxTurns
-		}
-	}
-	if todoModel != "" {
-		model = todoModel
-	}
-	if maxBudget > 0 {
-		maxCost = maxBudget
-	}
-	if maxTurns > 0 {
-		turns = maxTurns
-	}
-
-	cwd := workDir
-	if todo != nil && todo.CWD != "" {
-		if filepath.IsAbs(todo.CWD) {
-			cwd = todo.CWD
-		} else {
-			cwd = filepath.Join(workDir, todo.CWD)
-		}
-	}
-
-	// Expand the effective (possibly compact) model into a plain api.Model early,
-	// folding in the config fallbacks, so ResolveAgent / the driver-kind switch in
-	// drivers.New see a plain Name while the fallback chain rides alongside. A
-	// malformed compact string fails loud here rather than at provider construction.
-	spec.Name = model
-	eff, err := spec.Expand()
+func newAgentRunConfig(ctx context.Context, workDir string, todoList []*types.TODO, provider todos.Provider) (todos.AgentRunConfig, todospec.Resolved, error) {
+	resolved, err := todosSpec(workDir, todoList)
 	if err != nil {
-		return todos.AgentRunConfig{}, fmt.Errorf("invalid todos model %q: %w", model, err)
+		return todos.AgentRunConfig{}, todospec.Resolved{}, err
 	}
-	if eff.Effort == "" {
-		eff.Effort = api.Effort(todoEffort)
+	spec := resolved.Spec
+	if spec.Setup == nil {
+		spec.Setup = &shell.Setup{}
 	}
-
-	spec.Model = eff
-	spec.Budget.Cost = maxCost
-	spec.Budget.MaxTurns = turns
-	spec.Budget.Timeout = todosDef.runTimeout().String()
-	setup := shell.Setup{Cwd: "."}
-	if spec.Setup != nil {
-		setup = *spec.Setup
+	// Where the work happens and how the checkout is materialised both belong to
+	// the executor: it derives the group's working directory from WorkDir plus the
+	// todo's CWD and hands it to the setup hook, which anchors the rest of the
+	// setup against it once, inside the run. Resolving or pre-joining here as well
+	// would anchor Cwd and BaseDir to the invocation directory and double-join a
+	// relative todo CWD.
+	// One representation of dirty, shared with the dashboard: --dirty makes a
+	// checkout carry the working tree's uncommitted changes across rather than
+	// discarding the checkout the config declared. With no checkout the run
+	// already happens in the dirty tree, so there is nothing to carry.
+	if dirty && spec.Setup.Checkout != nil {
+		spec.Setup.Checkout.Dirty = &shell.Dirty{Stash: shell.StashAll}
 	}
-	if dirty {
-		setup.Cwd = "."
-		setup.Checkout = nil
-	}
-	resolvedSetup, err := setup.Resolve(cwd)
-	if err != nil {
-		return todos.AgentRunConfig{}, err
-	}
-	spec.Setup = &resolvedSetup
-	if spec.Workflow != nil {
-		workflow := *spec.Workflow
-		workflow.Commits = append([]api.Commit(nil), spec.Workflow.Commits...)
-		if spec.Workflow.Verify != nil {
-			verifySpec := *spec.Workflow.Verify
-			verifySpec.Commands = append([]string(nil), spec.Workflow.Verify.Commands...)
-			workflow.Verify = &verifySpec
-		}
-		spec.Workflow = &workflow
-	}
-	if todosRunMode == types.ModePlan || !commitAfter {
+	// Resolve already cleared commits for the modes that must never commit; this
+	// is only the --commit flag, which is the CLI's alone.
+	if !commitAfter {
 		if spec.Workflow != nil {
 			spec.Workflow.Commits = nil
 		}
-	} else if spec.Workflow == nil {
-		spec.Workflow = &api.Workflow{Commits: []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesFull}}}
-	} else if len(spec.Workflow.Commits) == 0 {
-		spec.Workflow.Commits = []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesFull}}
+	} else if resolved.Mode == types.ModeRun {
+		if spec.Workflow == nil {
+			spec.Workflow = &api.Workflow{}
+		}
+		if len(spec.Workflow.Commits) == 0 {
+			spec.Workflow.Commits = []api.Commit{{On: api.CommitOnRun, Gates: api.CommitGatesFull}}
+		}
 	}
 	cfg := todos.AgentRunConfig{
-		Spec:    spec,
-		WorkDir: cwd,
-		Mode:    todosRunMode,
-		Resume:  resumeSession,
+		Spec:      spec,
+		WorkDir:   workDir,
+		Mode:      resolved.Mode,
+		Template:  resolved.Template,
+		Resume:    resumeSession,
+		Approvals: resolved.Approvals,
 	}
-	if todo != nil && (todosRunMode == types.ModePlan || todosRunMode == types.ModeRun) {
+	if len(todoList) == 1 && (resolved.Mode == types.ModePlan || resolved.Mode == types.ModeRun) {
 		// Plan mode: the recorded plan feeds a re-plan (updated/unchanged). Run
-		// mode: the approved/edited plan steers the implementation.
-		content, err := nativeExistingPlan(ctx, provider, todo, todosRunMode)
+		// mode: the approved/edited plan steers the implementation. Single-todo
+		// only — a group run has no single plan to attribute.
+		content, err := nativeExistingPlan(ctx, provider, todoList[0], resolved.Mode)
 		if err != nil {
-			return todos.AgentRunConfig{}, err
+			return todos.AgentRunConfig{}, todospec.Resolved{}, err
 		}
 		cfg.ExistingPlan = content
 	}
-	if kind.Mechanism() != "cmux" {
-		cfg.SessionID = prior
+	if resolved.Driver.Mechanism() != "cmux" {
+		cfg.Spec.SessionID = priorSessionID(todoList)
 	}
-	return cfg, nil
+	return cfg, resolved, nil
+}
+
+// priorSessionID returns the first recorded agent session among todoList, which
+// the non-cmux drivers resume into.
+func priorSessionID(todoList []*types.TODO) string {
+	for _, todo := range todoList {
+		if todo != nil && todo.LLM != nil && todo.LLM.SessionId != "" {
+			return todo.LLM.SessionId
+		}
+	}
+	return ""
 }
 
 // nativeExistingPlan loads plan content through the active DB provider.
@@ -452,14 +430,15 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing Group %d/%d: %s (%d TODOs) ===",
 			gi+1, len(groups), group.Name, len(group.TODOs)), "text-blue-600 font-bold").ANSI())
 
-		ctx, cancel := context.WithTimeout(context.Background(), todosDef.runTimeout())
-
-		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID, err := newExecutor(workDir, group.TODOs[0], provider)
+		// The deadline comes from the same resolution that built the spec, so the
+		// run's budget and the context that cancels it cannot disagree.
+		executor, sessionID, timeout, err := newExecutor(workDir, group.TODOs, provider)
 		if err != nil {
-			cancel()
 			return err
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.SetMode(todosRunMode)
 		todoExec.SetResume(resumeSession)
@@ -524,14 +503,13 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
 
-		ctx, cancel := context.WithTimeout(context.Background(), todosDef.runTimeout())
-
-		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		executor, sessionID, err := newExecutor(workDir, todo, provider)
+		executor, sessionID, timeout, err := newExecutor(workDir, []*types.TODO{todo}, provider)
 		if err != nil {
-			cancel()
 			return err
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.SetMode(todosRunMode)
 		todoExec.SetResume(resumeSession)
@@ -617,7 +595,7 @@ func safeResult(results []*todos.ExecutionResult, i int) *todos.ExecutionResult 
 	return nil
 }
 
-func dryRunTODOs(groups []todos.TODOGroup, workDir string, provider todos.Provider) error {
+func dryRunTODOs(groups []todos.TODOGroup, workDir string, kind drivers.Kind, provider todos.Provider) error {
 	isGrouped := len(groups) > 1 || (len(groups) == 1 && groups[0].Name != "")
 
 	for _, group := range groups {
@@ -625,7 +603,7 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string, provider todos.Provid
 			continue
 		}
 
-		if kind, kerr := resolveDriverKind(nil); kerr == nil && kind.Mechanism() == "cmux" {
+		if kind.Mechanism() == "cmux" {
 			if err := printCmuxDryRun(group, workDir, provider); err != nil {
 				return err
 			}
@@ -722,27 +700,15 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string, provider todos.Provi
 // buildTodoRunPrompt renders the mode's prompt exactly as a dispatch would:
 // framing, sections, effort directive, and the envelope schema instruction.
 func buildTodoRunPrompt(todoList []*types.TODO, workDir string, provider todos.Provider) (string, error) {
-	mode := todosRunMode
-	if mode == "" {
-		mode = types.ModeRun
-	}
-	tmpl, err := todoprompt.ResolveTemplate(workDir, mode)
-	if err != nil {
-		return "", err
-	}
-	kind, err := resolveDriverKind(todoList[0])
-	if err != nil {
-		return "", err
-	}
-	cfg, err := newAgentRunConfig(context.Background(), kind, workDir, todoList[0], provider)
+	cfg, resolved, err := newAgentRunConfig(context.Background(), workDir, todoList, provider)
 	if err != nil {
 		return "", err
 	}
 	opts := todoprompt.Options{
 		WorkDir:      workDir,
-		Mode:         mode,
+		Mode:         resolved.Mode,
 		Spec:         cfg.Spec,
-		Template:     tmpl,
+		Template:     cfg.Template,
 		ExistingPlan: cfg.ExistingPlan,
 	}
 	req, _, err := todoprompt.Render(todoList, opts)

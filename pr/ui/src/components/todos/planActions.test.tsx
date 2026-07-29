@@ -168,6 +168,14 @@ function mockRunContext() {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => context }) as Response));
 }
 
+function mockRunContextFailure() {
+  vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: false,
+    status: 503,
+    json: async () => ({ error: 'load run providers from Captain: catalog unavailable' }),
+  }) as Response));
+}
+
 beforeEach(() => {
   const store: Record<string, string> = {};
   vi.stubGlobal('localStorage', {
@@ -190,18 +198,30 @@ afterEach(() => {
 });
 
 describe('PlanApproveButtons', () => {
+  it('shows the Captain catalog error inline and disables approval execution', async () => {
+    mockRunContextFailure();
+    const onApprove = vi.fn();
+
+    render(<PlanApproveButtons onApprove={onApprove} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('load run providers from Captain: catalog unavailable');
+    const approveRun = screen.getByRole('button', { name: 'Approve & Run' });
+    expect((approveRun as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(approveRun);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
   it('approves and runs with the remembered run options', async () => {
     mockRunContext();
     localStorage.setItem(
-      'gavel.pr-ui.todoRunChoices.v1',
+      'gavel.pr-ui.todoRunChoices.v2',
       JSON.stringify({
         last: {
           run: {
             driver: 'claude-headless',
-            backend: 'claude-agent',
-            model: 'claude-opus-4-8',
-            effort: 'high',
             runMode: 'run',
+            spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
           },
         },
         recentAdvanced: {},
@@ -224,10 +244,12 @@ describe('PlanApproveButtons', () => {
 
     expect(onApprove).toHaveBeenCalledWith(true, expect.objectContaining({
       driver: 'claude-headless',
-      backend: 'claude-agent',
-      model: 'claude-opus-4-8',
-      effort: 'high',
       runMode: 'run',
+      spec: expect.objectContaining({
+        backend: 'claude-agent',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+      }),
     }));
   });
 
@@ -248,29 +270,29 @@ describe('PlanApproveButtons', () => {
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith(true, expect.objectContaining({
         driver: 'claude-headless',
-        backend: 'claude-agent',
-        model: 'claude-opus-4-8',
-        effort: 'high',
         runMode: 'run',
+        spec: expect.objectContaining({
+          backend: 'claude-agent',
+          model: 'claude-opus-4-8',
+          effort: 'high',
+        }),
       })),
     );
-    expect(JSON.parse(localStorage.getItem('gavel.pr-ui.promptRunChoices.v1') || '{}').approval.last).toMatchObject({
-      backend: 'claude-agent',
-      model: 'claude-opus-4-8',
-      effort: 'high',
+    expect(JSON.parse(localStorage.getItem('gavel.pr-ui.promptRunChoices.v2') || '{}').approval.last).toMatchObject({
       runMode: 'run',
+      spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
     });
   });
 
   it('offers approval-scoped recent configs and an advanced editor', async () => {
     mockRunContext();
     localStorage.setItem(
-      'gavel.pr-ui.promptRunChoices.v1',
+      'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         approval: {
-          last: { backend: 'codex-agent', model: 'gpt-5.5', effort: 'medium' },
+          last: { spec: { backend: 'codex-agent', model: 'gpt-5.5', effort: 'medium' } },
           recent: [
-            { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
+            { spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' } },
           ],
         },
       }),

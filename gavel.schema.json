@@ -1094,7 +1094,7 @@
           "type": "integer"
         },
         "retry": {
-          "description": "CEL definition-of-done predicate: while it is true the agent re-runs with the failing nodes as feedback; when false the run is verified. Reads {results, test_results, changed_files, session_log, iteration} where results carries checklist ([]{item, passed, message}). Default: results.failed \u003e 0 || results.warned \u003e 0 || !results.checklist.all(i, i.passed)",
+          "description": "CEL definition-of-done predicate: while it is true the agent re-runs with the failing nodes as feedback; when false the run is verified. Reads {results, test_results, changed_files, iteration} where results carries checklist ([]{item, passed, message}). Default: results.failed \u003e 0 || results.warned \u003e 0 || !results.checklist.all(i, i.passed)",
           "type": "string"
         },
         "test": {
@@ -1957,6 +1957,10 @@
       "additionalProperties": false,
       "description": "Settings for `gavel todos run`.",
       "properties": {
+        "approvals": {
+          "description": "Gate Bash behind a human approval prompt. Unset means the entrypoint decides: the dashboard can answer approvals, `gavel todos run` cannot. Enabling it where nothing can answer is an error rather than a run that blocks forever.",
+          "type": "boolean"
+        },
         "driver": {
           "description": "Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from the model. Last-write-wins across layers.",
           "type": "string"

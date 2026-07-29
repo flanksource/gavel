@@ -30,7 +30,15 @@ import (
 //	    prompt: { user: "Group these changes: {{diff}}" }
 //	    file: .gavel/prompts/grouping.prompt                    # or a .prompt file
 type PromptSpec struct {
-	api.Spec
+	// Spec is a named field, not embedded. api.Spec declares a value-receiver
+	// MarshalJSON/MarshalYAML to omit its empty sections; embedding promoted both
+	// onto PromptSpec, where they shadowed the default struct encoding and emitted
+	// only the spec — so File was silently dropped from .gavel.yaml on every
+	// SaveGavelConfig, and the next load fell back to the built-in prompt.
+	//
+	// The on-disk shape stays flat (model/prompt/budget beside file, not nested
+	// under a `spec:` key); MarshalJSON below is what keeps that contract.
+	Spec api.Spec `json:",inline" yaml:",inline"`
 	// File is a path to a .prompt file. Relative paths resolve against the
 	// directory of the .gavel.yaml that declared this override.
 	File string `json:"file,omitempty" yaml:"file,omitempty"`
@@ -40,10 +48,26 @@ type PromptSpec struct {
 	baseDir string
 }
 
-// IsZero reports whether no spec is configured (no model, prompt, budget, or file).
-func (s PromptSpec) IsZero() bool {
-	return s.File == "" && s.Name == "" && s.Prompt.User == "" &&
-		s.Prompt.System == "" && s.Budget == (api.Budget{}) && s.Effort == ""
+// IsEmpty reports whether this operation configures nothing at all — no prompt
+// file and no spec field of any kind. The spec half is answered reflectively by
+// captain, so a field added to api.Spec counts immediately.
+func (s PromptSpec) IsEmpty() bool {
+	return s.File == "" && api.IsEmpty(s.Spec)
+}
+
+// Merge layers override onto this spec field-wise, so a repo .gavel.yaml naming
+// only a model keeps the home config's budget and permissions.
+//
+// File is the exception structure cannot express: it travels with baseDir, the
+// directory its relative path resolves against. The config loader stamps baseDir
+// on every PromptSpec it decodes — set or not — so the two must move together or
+// an inherited file would be resolved against the overriding layer's directory.
+func (s PromptSpec) Merge(override PromptSpec) PromptSpec {
+	merged := PromptSpec{Spec: s.Spec.Merge(override.Spec), File: s.File, baseDir: s.baseDir}
+	if override.File != "" {
+		merged.File, merged.baseDir = override.File, override.baseDir
+	}
+	return merged
 }
 
 // UnmarshalJSON accepts three forms and sniffs a string's content conservatively:
@@ -68,13 +92,49 @@ func (s *PromptSpec) UnmarshalJSON(data []byte) error {
 		}
 		return s.adoptString(str)
 	}
-	type alias PromptSpec
-	var a alias
-	if err := json.Unmarshal(trimmed, &a); err != nil {
+	// The object form is flat: the spec's own keys sit beside `file`, so each
+	// half decodes from the same object. api.Spec declares no UnmarshalJSON, so
+	// this is ordinary struct decoding and unknown keys (`file`) are ignored.
+	var spec api.Spec
+	if err := json.Unmarshal(trimmed, &spec); err != nil {
 		return err
 	}
-	*s = PromptSpec(a)
+	var file struct {
+		File string `json:"file"`
+	}
+	if err := json.Unmarshal(trimmed, &file); err != nil {
+		return err
+	}
+	*s = PromptSpec{Spec: spec, File: file.File}
 	return nil
+}
+
+// MarshalJSON emits the flat object form — the spec's keys beside `file` — so a
+// .gavel.yaml round-trips through SaveGavelConfig unchanged. ghodss/yaml routes
+// YAML through JSON, so this governs the YAML shape too and no MarshalYAML is
+// needed.
+//
+// It is written by hand because api.Spec marshals through an unexported
+// projection that omits its empty sections; re-deriving those omissions here
+// would be the drift this package is trying to delete. Marshalling the spec and
+// splicing `file` in keeps captain the single authority on the spec's shape.
+func (s PromptSpec) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(s.Spec)
+	if err != nil {
+		return nil, fmt.Errorf("marshal prompt spec: %w", err)
+	}
+	flat := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return nil, fmt.Errorf("flatten prompt spec: %w", err)
+	}
+	if s.File != "" {
+		file, err := json.Marshal(s.File)
+		if err != nil {
+			return nil, fmt.Errorf("marshal prompt file: %w", err)
+		}
+		flat["file"] = file
+	}
+	return json.Marshal(flat)
 }
 
 // adoptString handles the string form of a PromptSpec (case 2/3 above).
@@ -109,7 +169,7 @@ func (s *PromptSpec) adoptString(str string) error {
 // or default) is rendered with data — so a default that templates its frontmatter
 // (e.g. a maxItems constraint) resolves too. The result is validated.
 func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string]any, dir string) (api.Spec, error) {
-	defaultSpec, err := renderTemplate(defaultPrompt, data)
+	defaultSpec, err := RenderPromptSpec(defaultPrompt, data)
 	if err != nil {
 		return api.Spec{}, fmt.Errorf("render default prompt: %w", err)
 	}
@@ -121,13 +181,13 @@ func (s PromptSpec) Resolve(base api.Spec, defaultPrompt string, data map[string
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("read prompt override file: %w", err)
 		}
-		fileSpec, err := renderTemplate(string(raw), data)
+		fileSpec, err := RenderPromptSpec(string(raw), data)
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render prompt override file: %w", err)
 		}
 		opSpec = fileSpec.Merge(s.Spec) // inline spec fields win over the file
-	case strings.TrimSpace(s.Prompt.User) != "":
-		rendered, err := renderTemplate(s.Prompt.User, data)
+	case strings.TrimSpace(s.Spec.Prompt.User) != "":
+		rendered, err := RenderPromptSpec(s.Spec.Prompt.User, data)
 		if err != nil {
 			return api.Spec{}, fmt.Errorf("render inline prompt: %w", err)
 		}
@@ -155,8 +215,8 @@ func (s PromptSpec) TemplateSource(dir, fallback string) (string, error) {
 		}
 		return string(data), nil
 	}
-	if strings.TrimSpace(s.Prompt.User) != "" {
-		return s.Prompt.User, nil
+	if strings.TrimSpace(s.Spec.Prompt.User) != "" {
+		return s.Spec.Prompt.User, nil
 	}
 	return fallback, nil
 }
@@ -210,9 +270,12 @@ func setPromptSpecBaseDirs(cfg *GavelConfig, dir string) {
 	walk(reflect.ValueOf(cfg))
 }
 
-// renderTemplate renders a .prompt source (frontmatter + Handlebars body) with
-// data, returning the resulting spec. An empty source yields the zero spec.
-func renderTemplate(source string, data map[string]any) (api.Spec, error) {
+// RenderPromptSpec renders a .prompt source (frontmatter + Handlebars body)
+// with data, returning the resulting spec. An empty source yields the zero spec.
+// Exported for call sites that layer frontmatter one source at a time — Resolve
+// merges all three internally, which loses the per-layer contribution a
+// provenance trace needs.
+func RenderPromptSpec(source string, data map[string]any) (api.Spec, error) {
 	if strings.TrimSpace(source) == "" {
 		return api.Spec{}, nil
 	}

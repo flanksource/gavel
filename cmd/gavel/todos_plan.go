@@ -110,15 +110,21 @@ func runTodosPlanRevise(_ *cobra.Command, args []string) error {
 	}
 
 	// Resume the plan session in plan mode so the agent updates its native plan
-	// file and the run lands back in review (applyPlanOutcome).
+	// file and the run lands back in review (applyPlanOutcome). Going through
+	// newExecutor is what gives a revise the same .gavel.yaml resolution — model,
+	// budget, timeout, driver — as the plan it revises.
+	//
+	// workDir is the un-joined discovery root: the todo's CWD is joined exactly
+	// once, downstream in headless.groupWorkDir.
 	todosRunMode = types.ModePlan
 	resumeSession = true
-	cwd := todoWorkDir(workDir, todo)
-	executor, sessionID, err := newExecutor(cwd, todo, provider)
+	executor, sessionID, timeout, err := newExecutor(workDir, []*types.TODO{todo}, provider)
 	if err != nil {
 		return err
 	}
-	runner := todos.NewTODOExecutor(cwd, executor, sessionID, provider)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	runner := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 	runner.SetMode(types.ModePlan)
 	execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), nil)
 	if _, err := runner.Resume(execCtx, []*types.TODO{todo}, feedback); err != nil {

@@ -243,6 +243,10 @@ func todosSchema() map[string]any {
 				"Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers."),
 			"groupBy": stringProp(
 				"How todos are grouped into runs. Last-write-wins across layers."),
+			"approvals": boolProp(
+				"Gate Bash behind a human approval prompt. Unset means the entrypoint decides: the " +
+					"dashboard can answer approvals, `gavel todos run` cannot. Enabling it where nothing " +
+					"can answer is an error rather than a run that blocks forever."),
 		},
 	)
 }
@@ -351,7 +355,7 @@ func checksSchema() map[string]any {
 			"retry": stringProp(
 				"CEL definition-of-done predicate: while it is true the agent re-runs with the failing " +
 					"nodes as feedback; when false the run is verified. Reads {results, test_results, " +
-					"changed_files, session_log, iteration} where results carries checklist " +
+					"changed_files, iteration} where results carries checklist " +
 					"([]{item, passed, message}). Default: " + types.DefaultRetryExpr),
 			"test": object(
 				"gavel test options for the check run. Omit to skip tests.",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RunContext } from './providers';
+import { buildRunFamilies, type RunContext } from './providers';
 import {
 	runButtonLabelForOptions,
 	runChoicesForAction,
@@ -57,6 +57,29 @@ const context: RunContext = {
 };
 
 describe('todo run model choices', () => {
+  it('does not invent providers or models missing from the Captain context', () => {
+    const captainContext: RunContext = {
+      defaultBackend: 'codex-agent',
+      efforts: ['medium'],
+      tools: [],
+      backends: [{
+        id: 'codex-agent',
+        label: 'Codex Agent',
+        provider: 'openai',
+        agent: 'codex',
+        defaultModel: '',
+        driver: 'codex-headless',
+        mechanisms: [{ value: 'agent', label: 'Agent', driver: 'codex-headless' }],
+        models: [],
+        configured: false,
+        modelError: 'Captain returned no models',
+      }],
+    };
+
+    expect(runChoicesForAction(captainContext, 'run')).toEqual([]);
+    expect(buildRunFamilies(captainContext).map(family => family.id)).toEqual(['codex']);
+  });
+
   it('builds plan choices for every backend from run context', () => {
     const choices = runChoicesForAction(context, 'plan');
 
@@ -67,16 +90,14 @@ describe('todo run model choices', () => {
     ]);
     expect(choices.find(choice => choice.backend.id === 'claude-agent')?.options).toMatchObject({
       driver: 'claude-headless',
-      backend: 'claude-agent',
-      model: 'claude-opus-4-8',
       runMode: 'plan',
       plan: true,
+      spec: { backend: 'claude-agent', model: 'claude-opus-4-8' },
     });
 
     expect(runChoicesForAction(context, 'run', 'high')[0]?.options).toMatchObject({
-      effort: 'high',
       runMode: 'run',
-      workflow: { commits: [{ on: 'run', gates: 'full' }] },
+      spec: { effort: 'high', workflow: { commits: [{ on: 'run', gates: 'full' }] } },
     });
 
     expect(runChoicesForRuntimeMode(context, 'run', 'cmux').map(choice => choice.backend.id)).toEqual([
@@ -89,17 +110,15 @@ describe('todo run model choices', () => {
   });
 
 	it('labels primary buttons with mechanism and short model', () => {
-    expect(runButtonLabelForOptions('plan', { driver: 'codex-cmux', backend: 'codex-cmux', model: 'gpt-5.5', runMode: 'plan' }, context)).toBe('Plan (cmux:gpt-5.5)');
-    expect(runButtonLabelForOptions('run', { driver: 'claude-headless', backend: 'claude-agent', model: 'claude-opus-4-8', runMode: 'run' }, context)).toBe('Run (Agent:opus-4.8)');
+    expect(runButtonLabelForOptions('plan', { driver: 'codex-cmux', runMode: 'plan', spec: { backend: 'codex-cmux', model: 'gpt-5.5' } }, context)).toBe('Plan (cmux:gpt-5.5)');
+    expect(runButtonLabelForOptions('run', { driver: 'claude-headless', runMode: 'run', spec: { backend: 'claude-agent', model: 'claude-opus-4-8' } }, context)).toBe('Run (Agent:opus-4.8)');
 	});
 
   it('builds compact primary-button model and effort presentation', () => {
     expect(todoRunButtonPresentation({
       driver: 'claude-headless',
-      backend: 'claude-agent',
-      model: 'claude-opus-4-8',
-      effort: 'high',
       runMode: 'run',
+      spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
     }, context)).toMatchObject({
       model: 'opus-4.8',
       effort: 'high',
@@ -120,60 +139,56 @@ describe('todo run model choices', () => {
     };
     expect(todoRunButtonPresentation({
       driver: 'claude-headless',
-      backend: 'claude-agent',
-      model: 'claude-opus-4-8',
-      effort: 'high',
       runMode: 'run',
+      spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
     }, fixedEffortContext).effort).toBeUndefined();
 
     const openAI = todoRunButtonPresentation({
       driver: 'codex-cmux',
-      backend: 'codex-cmux',
-      model: 'gpt-5.5',
-      effort: 'medium',
       runMode: 'run',
+      spec: { backend: 'codex-cmux', model: 'gpt-5.5', effort: 'medium' },
     }, context);
     expect(openAI).toMatchObject({ model: 'gpt-5.5', provider: { id: 'codex' } });
-    expect(openAI.provider?.iconColor).toBeUndefined();
+    expect(openAI.provider?.iconColor).toBe('#10A37F');
   });
 
 	it('reconciles stale remembered backend models while preserving advanced options', () => {
 		expect(reconcileTodoRunOptions('run', {
 			driver: 'codex-cmux',
-			backend: 'codex-cmux',
-			model: 'gpt-5.3-removed',
-			effort: 'high',
-			budget: { timeout: '45m', maxTurns: 12 },
 			runMode: 'run',
+			spec: {
+				backend: 'codex-cmux',
+				model: 'gpt-5.3-removed',
+				effort: 'high',
+				budget: { timeout: '45m', maxTurns: 12 },
+			},
 		}, context)).toMatchObject({
 			driver: 'codex-cmux',
-			backend: 'codex-cmux',
-			model: 'gpt-5.5',
-			effort: 'high',
-			budget: { timeout: '45m', maxTurns: 12 },
 			runMode: 'run',
+			spec: {
+				backend: 'codex-cmux',
+				model: 'gpt-5.5',
+				effort: 'high',
+				budget: { timeout: '45m', maxTurns: 12 },
+			},
 		});
 
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'claude-headless',
-			backend: 'claude-agent',
-			model: 'claude-opus-4-8',
-			effort: 'xhigh',
-			temperature: 0.7,
 			runMode: 'plan',
+			spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
 		}, context)).toEqual(expect.objectContaining({
-			backend: 'claude-agent',
-			model: 'claude-opus-4-8',
-			effort: 'high',
 			runMode: 'plan',
+			spec: expect.objectContaining({
+				backend: 'claude-agent',
+				model: 'claude-opus-4-8',
+				effort: 'high',
+			}),
 		}));
 		expect(reconcileTodoRunOptions('plan', {
 			driver: 'claude-headless',
-			backend: 'claude-agent',
-			model: 'claude-opus-4-8',
-			effort: 'xhigh',
-			temperature: 0.7,
-		}, context)).not.toHaveProperty('temperature');
+			spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'xhigh', temperature: 0.7 },
+		}, context)).not.toHaveProperty('spec.temperature');
 	});
 
   it('shortens provider and Claude version prefixes', () => {

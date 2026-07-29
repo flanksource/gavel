@@ -193,7 +193,7 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if !cfg.Commit.Message.IsZero() {
+	if !cfg.Commit.Message.IsEmpty() {
 		t.Errorf("prompt override was not cleared: %+v", cfg.Commit.Message)
 	}
 }

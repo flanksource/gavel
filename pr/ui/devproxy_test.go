@@ -63,6 +63,28 @@ func TestDevProxyRouting(t *testing.T) {
 	})
 }
 
+func TestDevProxyServesEmbeddedProductionAssets(t *testing.T) {
+	h := newDevHandler(t)
+
+	t.Run("stable entry bypasses vite", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_assets/prui.js", nil))
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Header().Get("Content-Type"), "javascript")
+		assert.NotContains(t, rec.Body.String(), viteUpstreamMarker)
+	})
+
+	t.Run("missing chunk does not fall back to html", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_assets/chunks/missing.js", nil))
+
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.NotContains(t, rec.Header().Get("Content-Type"), "text/html")
+		assert.NotContains(t, rec.Body.String(), viteUpstreamMarker)
+	})
+}
+
 func TestSetDevProxyRejectsRelativeURL(t *testing.T) {
 	s := &Server{}
 	err := s.SetDevProxy("localhost:5173")

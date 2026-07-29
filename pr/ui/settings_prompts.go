@@ -295,7 +295,7 @@ func loadSingleConfig(dir string) (verify.GavelConfig, error) {
 // model/budget/effort/…, the body carries prompt.user) for an inline override.
 func promptSpecRaw(ov *verify.PromptSpec, dir, def string) (string, error) {
 	switch {
-	case ov.IsZero():
+	case ov.IsEmpty():
 		return def, nil
 	case ov.File != "":
 		return ov.TemplateSource(dir, def)
@@ -345,7 +345,7 @@ func promptTextToSpec(text string) (api.Spec, error) {
 // overrideSource classifies an override for the row's source badge.
 func overrideSource(ov *verify.PromptSpec) string {
 	switch {
-	case ov.IsZero():
+	case ov.IsEmpty():
 		return "default"
 	case ov.File != "":
 		return "file"

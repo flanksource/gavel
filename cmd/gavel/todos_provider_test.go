@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -258,26 +257,22 @@ func TestCleanupTODOStatusKeepsReviewAndAsk(t *testing.T) {
 // TestNewAgentRunConfigModelOverride pins the CLI --model flag beating the
 // todo's recorded model in the canonical Spec.
 func TestNewAgentRunConfigModelOverride(t *testing.T) {
-	oldModel := todoModel
-	defer func() { todoModel = oldModel }()
-
+	dir := isolatedTodosRun(t, "")
 	todoModel = "opus"
 	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
 
-	cfg, err := newAgentRunConfig(context.Background(), drivers.Cli, "/repo", todo, nil)
+	cfg, _, err := newAgentRunConfig(context.Background(), dir, []*types.TODO{todo}, nil)
 	if err != nil {
 		t.Fatalf("newAgentRunConfig: %v", err)
 	}
 
-	if cfg.Name != "opus" {
-		t.Fatalf("expected CLI model override, got %q", cfg.Name)
+	if cfg.Spec.Name != "opus" {
+		t.Fatalf("expected CLI model override, got %q", cfg.Spec.Name)
 	}
 }
 
 func TestNewAgentRunConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
-	oldMode := todosRunMode
-	todosRunMode = types.ModeRun
-	t.Cleanup(func() { todosRunMode = oldMode })
+	dir := isolatedTodosRun(t, "")
 
 	provider := &planContentSpy{content: "# Approved durable plan"}
 	todo := &types.TODO{
@@ -286,7 +281,7 @@ func TestNewAgentRunConfigLoadsPlanThroughActiveDBProvider(t *testing.T) {
 			PlanPath: "/definitely/not/a/runtime/plan.md",
 		},
 	}
-	cfg, err := newAgentRunConfig(context.Background(), drivers.Cli, "/repo", todo, provider)
+	cfg, _, err := newAgentRunConfig(context.Background(), dir, []*types.TODO{todo}, provider)
 	if err != nil {
 		t.Fatalf("newAgentRunConfig: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/commons/merge"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/ghodss/yaml"
 	"github.com/samber/lo"
@@ -577,8 +578,8 @@ const DefaultMaxCheckIterations = 3
 // DefaultRetryExpr is the definition-of-done retry predicate when none is
 // configured: re-run the agent while the run's TestResults have any errors or
 // warnings, or any acceptance-criteria checklist item is not passed. It is a CEL
-// expression over {results, test_results, changed_files, session_log, iteration}
-// where results also carries `checklist` ([]{item, passed, message}).
+// expression over {results, test_results, changed_files, iteration} where results
+// also carries `checklist` ([]{item, passed, message}).
 const DefaultRetryExpr = "results.failed > 0 || results.warned > 0 || !results.checklist.all(i, i.passed)"
 
 // AgentChecksConfig configures the post-completion check loop: the gavel test
@@ -596,7 +597,7 @@ type AgentChecksConfig struct {
 	// Retry is the CEL definition-of-done predicate: while it evaluates true the
 	// agent is re-run with the failing/warned nodes as feedback; when it is false
 	// the run is verified. Empty resolves to DefaultRetryExpr. It reads
-	// {results, test_results, changed_files, session_log, iteration}.
+	// {results, test_results, changed_files, iteration}.
 	Retry string `yaml:"retry,omitempty" json:"retry,omitempty"`
 	// Test, when non-nil, runs `gavel test` with these options. nil skips tests.
 	Test *AgentTestConfig `yaml:"test,omitempty" json:"test,omitempty"`
@@ -628,30 +629,16 @@ func (c AgentChecksConfig) HasChecks() bool {
 	return c.Test != nil || c.Lint != nil
 }
 
-// Overlay returns base with override's set fields layered on top (override wins
-// field-by-field; unset fields leave base intact). It is the shared building
-// block for both .gavel.yaml layer merging and frontmatter-over-project
-// resolution. A nil override returns base unchanged.
+// Overlay returns base with override's set fields layered on top: the override
+// wins field by field, and its unset fields leave base intact — so a TODO whose
+// frontmatter names only `retry` still inherits the project's test and lint
+// options. A nil override returns base unchanged. The merge is structural, so a
+// field added above needs no code here.
 func (base AgentChecksConfig) Overlay(override *AgentChecksConfig) AgentChecksConfig {
 	if override == nil {
 		return base
 	}
-	if override.Enabled != nil {
-		base.Enabled = override.Enabled
-	}
-	if override.MaxIterations != 0 {
-		base.MaxIterations = override.MaxIterations
-	}
-	if override.Retry != "" {
-		base.Retry = override.Retry
-	}
-	if override.Test != nil {
-		base.Test = override.Test
-	}
-	if override.Lint != nil {
-		base.Lint = override.Lint
-	}
-	return base
+	return merge.Apply(base, *override, merge.Policy{Replace: []any{(*bool)(nil)}})
 }
 
 // ResolveAgentChecks produces the effective config for a run by overlaying a

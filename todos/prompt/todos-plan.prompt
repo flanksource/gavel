@@ -1,7 +1,16 @@
 ---
 model: claude
 permissions:
+  # A plan run is read-only investigation, so it states its whole posture here
+  # rather than leaving it to Go: an unstated posture is filled in with the edit
+  # preset and the full edit toolset, which is the opposite of what plan means.
+  # The plan file itself is written by the agent's native plan mode, not by a
+  # Write call (todos/plans.go: "gavel never writes it").
   mode: plan
+  tools:
+    Read: allow
+    Glob: allow
+    Grep: allow
 ---
 {{#if multiple}}You are planning the implementation of the {{count}} todo items listed below. Produce ONE plan that covers all of them.{{else}}You are planning the implementation of the todo item below in this codebase.{{/if}}
 

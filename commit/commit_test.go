@@ -107,7 +107,7 @@ var _ = Describe("RunHooks", func() {
 	})
 })
 
-var _ = Describe("verify.MergeCommitConfig", func() {
+var _ = Describe("verify.Merge of CommitConfig", func() {
 	It("appends hooks from override in order", func() {
 		base := verify.CommitConfig{
 			Hooks: []verify.CommitHook{{Name: "home-a", Run: "true"}},
@@ -118,7 +118,7 @@ var _ = Describe("verify.MergeCommitConfig", func() {
 				{Name: "repo-b", Run: "true"},
 			},
 		}
-		merged := verify.MergeCommitConfig(base, override)
+		merged := verify.Merge(base, override)
 		Expect(merged.Hooks).To(HaveLen(3))
 		Expect(merged.Hooks[0].Name).To(Equal("home-a"))
 		Expect(merged.Hooks[1].Name).To(Equal("repo-a"))
@@ -127,21 +127,21 @@ var _ = Describe("verify.MergeCommitConfig", func() {
 
 	It("overrides the Message spec model when set, preserves otherwise", func() {
 		base := msgSpecCfg("claude-haiku-4-5")
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Message.Model.Name).To(Equal("claude-haiku-4-5"))
-		Expect(verify.MergeCommitConfig(base, msgSpecCfg("gpt-4o")).Message.Model.Name).To(Equal("gpt-4o"))
+		Expect(verify.Merge(base, verify.CommitConfig{}).Message.Spec.Model.Name).To(Equal("claude-haiku-4-5"))
+		Expect(verify.Merge(base, msgSpecCfg("gpt-4o")).Message.Spec.Model.Name).To(Equal("gpt-4o"))
 	})
 
 	It("overrides the Grouping spec model when set, preserves otherwise", func() {
 		base := verify.CommitConfig{Grouping: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-sonnet-4-5"}}}}
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).Grouping.Model.Name).To(Equal("claude-sonnet-4-5"))
+		Expect(verify.Merge(base, verify.CommitConfig{}).Grouping.Spec.Model.Name).To(Equal("claude-sonnet-4-5"))
 		override := verify.CommitConfig{Grouping: verify.PromptSpec{Spec: api.Spec{Model: api.Model{Name: "claude-opus-4-1"}}}}
-		Expect(verify.MergeCommitConfig(base, override).Grouping.Model.Name).To(Equal("claude-opus-4-1"))
+		Expect(verify.Merge(base, override).Grouping.Spec.Model.Name).To(Equal("claude-opus-4-1"))
 	})
 
 	It("overrides MaxCommits when non-zero, preserves otherwise", func() {
 		base := verify.CommitConfig{MaxCommits: 7}
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{}).MaxCommits).To(Equal(7))
-		Expect(verify.MergeCommitConfig(base, verify.CommitConfig{MaxCommits: 3}).MaxCommits).To(Equal(3))
+		Expect(verify.Merge(base, verify.CommitConfig{}).MaxCommits).To(Equal(7))
+		Expect(verify.Merge(base, verify.CommitConfig{MaxCommits: 3}).MaxCommits).To(Equal(3))
 	})
 })
 

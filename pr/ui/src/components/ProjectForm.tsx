@@ -27,10 +27,17 @@ export interface ProjectRegistration {
   remove: () => Promise<boolean>;
 }
 
+export interface ProjectRegistrationOptions {
+  open: boolean;
+  project: Project | null;
+  defaults?: Partial<Pick<Project, 'name' | 'dir' | 'repos'>>;
+}
+
 // useProjectRegistration drives the projects entity: create POSTs to
 // /api/projects, edit PUTs to /api/projects/{name} (name is the id, locked while
 // editing), delete DELETEs the same path. Pass project=null for the add flow.
-export function useProjectRegistration(open: boolean, project: Project | null): ProjectRegistration {
+export function useProjectRegistration(options: ProjectRegistrationOptions): ProjectRegistration {
+  const { open, project, defaults } = options;
   const [name, setName] = useState('');
   const [dir, setDir] = useState('');
   const [repos, setRepos] = useState<string[]>([]);
@@ -38,14 +45,26 @@ export function useProjectRegistration(open: boolean, project: Project | null): 
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const editing = !!project;
+  const projectReposKey = project?.repos.join('\0') ?? '';
+  const defaultReposKey = defaults?.repos?.join('\0') ?? '';
 
   useEffect(() => {
     if (!open) return;
-    setName(project?.name || '');
-    setDir(project?.dir || '');
-    setRepos(project?.repos || []);
+    setName(project ? project.name : (defaults?.name ?? ''));
+    setDir(project ? project.dir : (defaults?.dir ?? ''));
+    setRepos([...(project ? project.repos : (defaults?.repos ?? []))]);
     setError('');
-  }, [open, project?.name]);
+    setSaving(false);
+    setDeleting(false);
+  }, [
+    open,
+    project?.name,
+    project?.dir,
+    projectReposKey,
+    defaults?.name,
+    defaults?.dir,
+    defaultReposKey,
+  ]);
 
   async function save(): Promise<boolean> {
     if (!name.trim() || !dir.trim()) {

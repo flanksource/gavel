@@ -14,8 +14,12 @@ import (
 
 // retryEnv declares the retry predicate's variables with concrete types so the
 // full CEL surface — including the list comprehension macros (`exists`, `all`,
-// `filter`) over changed_files/session_log — is available, not just the dynamic
-// field access gomplate's AnyType binding allows.
+// `filter`) over changed_files and test_results — is available, not just the
+// dynamic field access gomplate's AnyType binding allows.
+//
+// A variable this env does not declare fails to compile, which is the point: an
+// undeclared name is a loud error at the predicate rather than a silent empty
+// value that lets a definition of done pass vacuously.
 var retryEnv = newRetryEnv()
 
 func newRetryEnv() *cel.Env {
@@ -23,7 +27,6 @@ func newRetryEnv() *cel.Env {
 		cel.Variable("results", cel.MapType(cel.StringType, cel.DynType)),
 		cel.Variable("test_results", cel.ListType(cel.MapType(cel.StringType, cel.DynType))),
 		cel.Variable("changed_files", cel.ListType(cel.StringType)),
-		cel.Variable("session_log", cel.ListType(cel.MapType(cel.StringType, cel.DynType))),
 		cel.Variable("iteration", cel.IntType),
 	)
 	if err != nil {
@@ -37,10 +40,9 @@ func newRetryEnv() *cel.Env {
 // types.DefaultRetryExpr — "results.failed > 0 || results.warned > 0") decides
 // whether to re-run the agent (retry, with the failing/warned nodes as feedback)
 // or stop (verified). The predicate reads {results, test_results, changed_files,
-// session_log, iteration}, evaluated via the same gomplate CEL path fixture
-// expectations use. changed_files only binds when the hook runs scoped
-// (HookContext.Scope == agent.ScopeChanged); session_log is always empty now —
-// see sessionLog's doc comment.
+// iteration}, evaluated via the same gomplate CEL path fixture expectations use.
+// changed_files only binds when the hook runs scoped (HookContext.Scope ==
+// agent.ScopeChanged).
 
 // celVerifier is the aggregate definition-of-done verifier: it runs every DoD
 // source (configured checks test/lint step fixtures, and the todo's
@@ -140,7 +142,6 @@ func evalRetry(expr string, results []fixtures.FixtureResult, checklist []map[st
 		"results":       resultsSummary(results, checklist),
 		"test_results":  resultLeaves(results),
 		"changed_files": changedFiles(hc),
-		"session_log":   sessionLog(),
 		"iteration":     hc.Iteration,
 	})
 	if err != nil {
@@ -246,18 +247,14 @@ func changedFiles(hc *agent.HookContext) []string {
 	return []string{}
 }
 
-// sessionLog is the `session_log` CEL variable. The old captain Runner exposed
-// the completed LoopIteration, so this turn's raw events (assistant text, tool
-// uses, the result) were available directly; the current HookContext only
-// carries the run's folded state (Response.Text/Usage, Workspace), not the
-// per-event stream.
-//
-// DEVIATION: session_log is always empty now. Predicates keying off it (e.g.
-// matching a specific tool call) will see []; `results`, `test_results`, and
-// scoped changed_files remain the reliable retry signals.
-func sessionLog() []map[string]any {
-	return []map[string]any{}
-}
+// There is deliberately no `session_log` variable. The old captain Runner exposed
+// the completed LoopIteration, so a predicate could match this turn's raw events
+// (assistant text, tool uses, the result); the current HookContext carries only
+// the run's folded state (Response.Text/Usage, Workspace). Binding the name to an
+// empty list would let `session_log.exists(...)` compile and quietly evaluate
+// false forever — a definition of done that reports green while checking nothing.
+// Leaving it undeclared turns that into a compile error naming the variable.
+// Rethreading the event stream through HookContext is the real fix.
 
 // verifierFeedback renders the failing/warned deterministic nodes plus any
 // unmet checklist items as the feedback fed back to the agent on a retry.

@@ -348,17 +348,17 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	if gotReq.Options.agent() != "codex" {
 		t.Errorf("agent = %q, want codex — a codex session must not resume under claude", gotReq.Options.agent())
 	}
-	if string(gotReq.Options.Backend) != "codex-agent" {
-		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Backend)
+	if string(gotReq.Options.Spec.Backend) != "codex-agent" {
+		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Spec.Backend)
 	}
-	if gotReq.Options.Name != codexModel {
-		t.Errorf("model = %q, want %q", gotReq.Options.Name, codexModel)
+	if gotReq.Options.Spec.Name != codexModel {
+		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, codexModel)
 	}
-	if string(gotReq.Options.Effort) != "high" {
-		t.Errorf("effort = %q, want high", gotReq.Options.Effort)
+	if string(gotReq.Options.Spec.Effort) != "high" {
+		t.Errorf("effort = %q, want high", gotReq.Options.Spec.Effort)
 	}
-	if gotReq.Options.SessionID != sid {
-		t.Errorf("session id = %q, want the todo's recorded session %q", gotReq.Options.SessionID, sid)
+	if gotReq.Options.Spec.SessionID != sid {
+		t.Errorf("session id = %q, want the todo's recorded session %q", gotReq.Options.Spec.SessionID, sid)
 	}
 }
 
@@ -375,21 +375,27 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 	})
 	gotReq, _ := stubTodoAnswer(t)
 
-	// Sent as wire JSON, not a marshaled todoRunPayload: api.Spec's promoted
-	// MarshalJSON emits only the spec fields, so marshaling the struct would drop
-	// the very driver override under test.
-	body := `{"ref":"` + todos.TODOReference(created) + `","answer":"use postgres",` +
-		`"options":{"driver":"cmux","model":"claude-sonnet-5","backend":"claude-cmux","effort":"medium"}}`
+	raw, err := json.Marshal(todoAnswerPayload{
+		Ref:    todos.TODOReference(created),
+		Answer: "use postgres",
+		Options: &todoRunPayload{
+			Driver: "cmux",
+			Spec:   api.Spec{Model: api.Model{Name: "claude-sonnet-5", Backend: "claude-cmux", Effort: "medium"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal answer payload: %v", err)
+	}
 	rec := httptest.NewRecorder()
-	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(body)))
+	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(raw))))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("answer status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
 	if gotReq.Options.Driver != string(drivers.Cmux) {
 		t.Errorf("driver = %q, want the explicitly requested cmux", gotReq.Options.Driver)
 	}
-	if gotReq.Options.Name != "claude-sonnet-5" || string(gotReq.Options.Effort) != "medium" {
-		t.Errorf("model/effort = %q/%q, want the explicitly requested claude-sonnet-5/medium", gotReq.Options.Name, gotReq.Options.Effort)
+	if gotReq.Options.Spec.Name != "claude-sonnet-5" || string(gotReq.Options.Spec.Effort) != "medium" {
+		t.Errorf("model/effort = %q/%q, want the explicitly requested claude-sonnet-5/medium", gotReq.Options.Spec.Name, gotReq.Options.Spec.Effort)
 	}
 }
 

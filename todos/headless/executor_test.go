@@ -358,6 +358,33 @@ func TestHeadlessPreservesCanonicalSpecAndRunsNativeWorkflow(t *testing.T) {
 	}
 }
 
+// A todo's relative CWD is joined onto the run's WorkDir exactly once — by
+// groupWorkDir, the executor's single notion of where a group's work happens.
+// Callers pass the un-joined base (the dashboard passes the source dir, the CLI
+// the discovery root); pre-joining it would land the run one level too deep.
+func TestHeadlessJoinsRelativeTodoCWDOnce(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	var captured captainai.Request
+	var canUseTool captainai.PermissionFunc
+	executor := NewExecutor(todopkg.AgentRunConfig{
+		Spec:    api.Spec{Model: api.Model{Name: "claude"}},
+		WorkDir: base,
+		Mode:    types.ModeRun,
+	}, withStream(captureReq(&captured, &canUseTool)))
+
+	todo := &types.TODO{}
+	todo.CWD = "sub"
+	if _, err := executor.Execute(newTestCtx(), todo); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if want := filepath.Join(base, "sub"); captured.Cwd() != want {
+		t.Fatalf("prepared cwd = %q, want %q", captured.Cwd(), want)
+	}
+}
+
 func TestHeadlessPreparesAndCleansCanonicalWorktree(t *testing.T) {
 	repo := initHeadlessGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("local change\n"), 0644); err != nil {
@@ -371,6 +398,16 @@ func TestHeadlessPreparesAndCleansCanonicalWorktree(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(preparedDir, "untracked.txt")); err != nil {
 			t.Fatalf("prepared worktree omitted dirty file: %v", err)
+		}
+		// Relative setup paths anchor at the group's working directory, not at
+		// the process working directory.
+		if want := filepath.Join(repo, ".runtime"); req.Setup.BaseDir != want {
+			t.Fatalf("setup base dir = %q, want %q", req.Setup.BaseDir, want)
+		}
+		// The checkout has been performed, so the spec no longer asks for it:
+		// dispatching this same spec again must not create a second worktree.
+		if req.Setup.Checkout != nil {
+			t.Fatalf("prepared spec still requests a checkout: %+v", req.Setup.Checkout)
 		}
 		return fakeStream(captainai.Event{Kind: captainai.EventResult, Success: true})(context.Background(), req, nil)
 	}
@@ -749,6 +786,100 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 			t.Errorf("mode = %q, want default (explicit user override)", req.Permissions.Mode)
 		}
 	})
+}
+
+// TestHeadlessPlanRunIsReadOnly pins the plan posture as read-only. A plan run
+// is nominally investigation, and its template says so — `permissions.mode:
+// plan` plus an explicit read-only allowlist. Go used to read the template's
+// silence on presets and tools as "no posture stated" and stamp the edit preset
+// and the full edit toolset on top of it, so the one mode that must not touch
+// the tree was handed Write, Edit and Bash anyway.
+//
+// The posture now travels whole: a request that states any part of it owns all
+// of it.
+func TestHeadlessPlanRunIsReadOnly(t *testing.T) {
+	planStream := func(out *captainai.Request) streamFunc {
+		return func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+			*out = req
+			ch := make(chan captainai.Event, 2)
+			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/plan.md"}}`}
+			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
+			close(ch)
+			return ch, nil
+		}
+	}
+
+	for _, backend := range []captainai.Backend{captainai.BackendClaudeAgent, captainai.BackendClaudeCmux} {
+		t.Run(string(backend), func(t *testing.T) {
+			var req captainai.Request
+			e := newTestExecutor(Config{
+				WorkDir: t.TempDir(),
+				Agent:   "claude",
+				Backend: string(backend),
+				Mode:    types.ModePlan,
+				Stream:  planStream(&req),
+			})
+			if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if req.Permissions.Mode != api.PermissionPlan {
+				t.Fatalf("mode = %q, want plan", req.Permissions.Mode)
+			}
+			if req.Permissions.HasPreset(api.PresetEdit) {
+				t.Errorf("presets = %v, want no edit preset on a plan run", req.Permissions.Presets)
+			}
+			for _, tool := range []string{"Write", "Edit", "Bash"} {
+				if contains(req.Permissions.Tools.Allow, tool) {
+					t.Errorf("%s is allow-listed on a plan run: %v", tool, req.Permissions.Tools.Allow)
+				}
+			}
+			if !contains(req.Permissions.Tools.Allow, "Read") {
+				t.Errorf("allow = %v, want the template's read-only tools", req.Permissions.Tools.Allow)
+			}
+		})
+	}
+}
+
+// TestPermissionDefaults pins the two halves of the posture rule separately:
+// capability is all-or-nothing, the mode is always filled in.
+//
+// The mode carve-out is not symmetry for its own sake. An unset mode is not
+// neutral downstream — claudeagent maps "" to bypassPermissions whenever no
+// approval broker is attached — so a request that states only a toolset must
+// still leave here with a mode, or narrowing the tools would silently widen the
+// mode.
+func TestPermissionDefaults(t *testing.T) {
+	readOnly := api.Tools{Allow: []string{"Read"}}
+
+	for _, tc := range []struct {
+		name     string
+		in       api.Permissions
+		cmux     bool
+		wantMode api.PermissionMode
+		wantEdit bool // the edit preset + full toolset were stamped
+	}{
+		{"states nothing", api.Permissions{}, false, api.PermissionAcceptEdits, true},
+		{"states nothing under cmux", api.Permissions{}, true, api.PermissionDefault, false},
+		{"states only a mode", api.Permissions{Mode: api.PermissionPlan}, false, api.PermissionPlan, false},
+		{"states only tools", api.Permissions{Tools: readOnly}, false, api.PermissionAcceptEdits, false},
+		{"states only a preset", api.Permissions{Presets: []api.Preset{api.PresetBare}}, false, api.PermissionAcceptEdits, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := permissionDefaults(tc.in, tc.cmux)
+			if got.Mode != tc.wantMode {
+				t.Errorf("mode = %q, want %q", got.Mode, tc.wantMode)
+			}
+			if got.HasPreset(api.PresetEdit) != tc.wantEdit {
+				t.Errorf("presets = %v, want edit preset stamped = %v", got.Presets, tc.wantEdit)
+			}
+			if tc.wantEdit && !contains(got.Tools.Allow, "Write") {
+				t.Errorf("allow = %v, want the default edit toolset", got.Tools.Allow)
+			}
+			if !tc.wantEdit && contains(got.Tools.Allow, "Write") {
+				t.Errorf("allow = %v, want the stated toolset left alone", got.Tools.Allow)
+			}
+		})
+	}
 }
 
 func TestHeadlessModelDefaults(t *testing.T) {

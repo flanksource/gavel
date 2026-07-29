@@ -78,7 +78,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 		// The approved plan executes as an implement run, whatever the dialog sent.
 		runPayload.RunMode = string(types.ModeRun)
 		runPayload.Plan = false
-		opts, err := normalizeTodoRunOptions(runPayload)
+		opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
 		if err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
@@ -96,12 +96,12 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Agent:     opts.agent(),
 			Mode:      opts.legacyMode(),
 			Driver:    opts.Driver,
-			Backend:   string(opts.Backend),
-			Model:     opts.Name,
-			Effort:    string(opts.Effort),
+			Backend:   string(opts.Spec.Backend),
+			Model:     opts.Spec.Name,
+			Effort:    string(opts.Spec.Effort),
 			RunMode:   string(opts.RunMode),
-			SessionID: opts.SessionID,
-			Timeout:   opts.timeout().String(),
+			SessionID: opts.Spec.SessionID,
+			Timeout:   opts.Timeout.String(),
 			Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 			Message:   "Approved plan — implementing",
 		}
@@ -201,7 +201,7 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 	runPayload.Resume = sessionID != ""
 	runPayload.RunMode = string(types.ModePlan) // revise re-enters plan mode on the same session
 	runPayload.Plan = true
-	opts, err := normalizeTodoRunOptions(runPayload)
+	opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
@@ -312,12 +312,12 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 	runPayload.Resume = true
 	runPayload.RunMode = string(todo.RunMode) // continue in the mode that asked
 	runPayload.Plan = false
-	opts, err := normalizeTodoRunOptions(runPayload)
+	opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	opts.SessionID = resolveRunSessionID(opts, []*types.TODO{todo})
+	opts.Spec.SessionID = resolveRunSessionID(opts, []*types.TODO{todo})
 	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	// Pre-flight the executor before recording the answer, so a resume that
 	// cannot start fails as a 4xx the answer box renders instead of leaving the
@@ -401,14 +401,14 @@ func inheritRunRuntime(payload *todoRunPayload, run *captaindb.PromptRun) {
 			payload.Driver = string(kind)
 		}
 	}
-	if strings.TrimSpace(payload.Name) == "" {
-		payload.Name = strings.TrimSpace(resolved.Model)
+	if strings.TrimSpace(payload.Spec.Name) == "" {
+		payload.Spec.Name = strings.TrimSpace(resolved.Model)
 	}
-	if strings.TrimSpace(string(payload.Backend)) == "" {
-		payload.Backend = api.Backend(strings.TrimSpace(resolved.Backend))
+	if strings.TrimSpace(string(payload.Spec.Backend)) == "" {
+		payload.Spec.Backend = api.Backend(strings.TrimSpace(resolved.Backend))
 	}
-	if strings.TrimSpace(string(payload.Effort)) == "" {
-		payload.Effort = api.Effort(strings.TrimSpace(resolved.Effort))
+	if strings.TrimSpace(string(payload.Spec.Effort)) == "" {
+		payload.Spec.Effort = api.Effort(strings.TrimSpace(resolved.Effort))
 	}
 }
 
@@ -439,7 +439,7 @@ func defaultStartTodoAnswer(req todoRunRequest, answer string) error {
 	if err != nil {
 		return err
 	}
-	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.timeout())
+	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
 	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
 	if err != nil {

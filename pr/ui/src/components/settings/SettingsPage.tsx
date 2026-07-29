@@ -22,7 +22,6 @@ import { sectionIcon } from "../../icons/settings";
 import { useProjectRegistration, ProjectFields } from "../ProjectForm";
 import {
   buildRunFamilies,
-  runContextWithFallback,
   type RunContext,
 } from "../todos/providers";
 import {
@@ -99,21 +98,17 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
 
-  const reg = useProjectRegistration(hasProject, project);
+  const reg = useProjectRegistration({ open: hasProject, project });
   const isWorkspaceTab = hasProject && tab === WORKSPACE_TAB;
   const query = scopeQueryFor(layer, project);
 
-  const resolvedRunContext = useMemo(
-    () => runContextWithFallback(runContext),
+  const promptModels = useMemo(
+    () => runContext ? promptModelCatalog(runContext) : [],
     [runContext]
   );
-  const promptModels = useMemo(
-    () => promptModelCatalog(resolvedRunContext),
-    [resolvedRunContext]
-  );
   const promptFamilies = useMemo(
-    () => buildRunFamilies(resolvedRunContext),
-    [resolvedRunContext]
+    () => runContext ? buildRunFamilies(runContext) : [],
+    [runContext]
   );
   const pre = useMemo(() => buildPre(), []);
   const post = useMemo(
@@ -163,14 +158,18 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
     let cancelled = false;
     fetch("/api/todos/run/context")
       .then(async (r) => {
-        if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
-        return r.json();
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        return data;
       })
       .then((data: RunContext) => {
         if (!cancelled) setRunContext(data);
       })
-      .catch(() => {
-        if (!cancelled) setRunContext(null);
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setRunContext(null);
+          setError(e instanceof Error ? e.message : "Failed to load Captain run providers");
+        }
       });
     return () => {
       cancelled = true;
@@ -367,7 +366,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
       <div className="min-h-0 flex-1 overflow-y-auto @container">
         <div className="mx-auto max-w-[820px] px-density-4 py-density-4">
           {error && (
-            <div className="mb-3 text-sm text-destructive">{error}</div>
+            <div role="alert" className="mb-3 text-sm text-destructive">{error}</div>
           )}
 
           {isWorkspaceTab ? (

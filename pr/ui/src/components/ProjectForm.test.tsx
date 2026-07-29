@@ -20,17 +20,27 @@ afterEach(() => {
 });
 
 describe('ProjectForm PostgreSQL cutover', () => {
-  it('persists only native project identity fields', async () => {
+  it('initializes add defaults and persists normalized native project identity fields', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
       { ok: true, text: async () => '' }
     ) as Response);
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = renderHook(() => useProjectRegistration(true, null));
+    const { result } = renderHook(() => useProjectRegistration({
+      open: true,
+      project: null,
+      defaults: {
+        name: 'widget',
+        repos: ['acme/widget'],
+      },
+    }));
+
+    expect(result.current.name).toBe('widget');
+    expect(result.current.dir).toBe('');
+    expect(result.current.repos).toEqual(['acme/widget']);
 
     act(() => {
-      result.current.setName('gavel');
-      result.current.setDir('/work/gavel');
-      result.current.setRepos(['flanksource/gavel']);
+      result.current.setName(' widget ');
+      result.current.setDir(' /work/widget ');
     });
 
     let saved = false;
@@ -41,10 +51,32 @@ describe('ProjectForm PostgreSQL cutover', () => {
     const init = fetchMock.mock.calls[0]?.[1];
     expect(init).toBeDefined();
     expect(JSON.parse(String(init?.body))).toEqual({
+      name: 'widget',
+      dir: '/work/widget',
+      repos: ['acme/widget'],
+    });
+  });
+
+  it('keeps an edited project authoritative over add defaults', () => {
+    const project = {
       name: 'gavel',
       dir: '/work/gavel',
       repos: ['flanksource/gavel'],
-    });
+    };
+    const { result } = renderHook(() => useProjectRegistration({
+      open: true,
+      project,
+      defaults: {
+        name: 'ignored',
+        dir: '/work/ignored',
+        repos: ['acme/ignored'],
+      },
+    }));
+
+    expect(result.current.name).toBe(project.name);
+    expect(result.current.dir).toBe(project.dir);
+    expect(result.current.repos).toEqual(project.repos);
+    expect(result.current.editing).toBe(true);
   });
 
   it('shows PostgreSQL as read-only persistence and offers no provider choices', () => {

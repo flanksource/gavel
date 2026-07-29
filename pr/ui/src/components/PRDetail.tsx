@@ -139,8 +139,8 @@ interface Props {
   pr: PRItem;
   detail: PRDetail | null;
   loading: boolean;
-  // projects are the configured workspaces a PR-derived todo can be created in;
-  // the "New todo" action is hidden when none are configured.
+  // projects are the configured workspaces a PR-derived todo can be created in.
+  // The dialog can register one when this list is absent or empty.
   projects?: Project[];
   // onTodoCreated lets the host refresh todo counts after one is added.
   onTodoCreated?: () => void;
@@ -167,15 +167,13 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
   // dragged narrower still, so this tracks the panel's own width, not the viewport.
   const collapsedActions = containerWidth > 0 && containerWidth < 560;
   const extraActions = useMemo<ExtraAction[]>(
-    () => (workspaces.length > 0
-      ? [{
-          label: 'New todo',
-          icon: UiAdd,
-          onClick: () => setShowCreate(true),
-          title: "Create a todo from this PR's failures and comments",
-        }]
-      : []),
-    [workspaces.length],
+    () => [{
+      label: 'New todo',
+      icon: UiAdd,
+      onClick: () => setShowCreate(true),
+      title: "Create a todo from this PR's failures and comments",
+    }],
+    [],
   );
 
   const info = detail?.pr;
@@ -292,6 +290,7 @@ export function PRDetailPanel({ pr, detail, loading, projects, onTodoCreated, on
         detail={detail}
         workspaces={workspaces}
         onCreated={onTodoCreated}
+        onProjectsChanged={onTodoCreated}
       />
     </div>
   );

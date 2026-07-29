@@ -145,8 +145,10 @@ type LintConfig struct {
 	// AIFix is the AI spec used to repair lint violations. It is independent of
 	// commit.message because source repair needs an editing-capable agent while
 	// commit-message generation only needs to summarize a diff.
-	Fix     PromptSpec                  `yaml:"fix,omitempty" json:"fix,omitempty"`
-	Ignore  []LintIgnoreRule            `yaml:"ignore,omitempty" json:"ignore,omitempty"`
+	Fix PromptSpec `yaml:"fix,omitempty" json:"fix,omitempty"`
+	// Ignore accumulates across config layers: a suppression is a standing
+	// statement about this repo, so adding one must not revoke the home config's.
+	Ignore  []LintIgnoreRule            `yaml:"ignore,omitempty" json:"ignore,omitempty" merge:"append"`
 	Linters map[string]LintLinterConfig `yaml:"linters,omitempty" json:"linters,omitempty"`
 }
 
@@ -200,9 +202,12 @@ func (m *CheckMode) UnmarshalJSON(data []byte) error {
 }
 
 type CommitConfig struct {
-	Hooks     []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	GitIgnore []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty"`
-	Allow     []string         `yaml:"allow,omitempty" json:"allow,omitempty"`
+	// Hooks accumulate across config layers, in execution order. GitIgnore and
+	// Allow accumulate too and collapse repeats — naming the same path in two
+	// configs says nothing more than naming it once.
+	Hooks     []CommitHook     `yaml:"hooks,omitempty" json:"hooks,omitempty" merge:"append"`
+	GitIgnore []string         `yaml:"gitignore,omitempty" json:"gitignore,omitempty" merge:"append,unique"`
+	Allow     []string         `yaml:"allow,omitempty" json:"allow,omitempty" merge:"append,unique"`
 	Precommit PrecommitConfig  `yaml:"precommit,omitempty" json:"precommit,omitempty"`
 	Lint      CommitLintConfig `yaml:"lint,omitempty" json:"lint,omitempty"`
 	Tidy      CommitTidyConfig `yaml:"tidy,omitempty" json:"tidy,omitempty"`
@@ -282,8 +287,10 @@ type GavelConfig struct {
 	Commit   CommitConfig   `yaml:"commit,omitempty" json:"commit,omitempty"`
 	Fixtures FixturesConfig `yaml:"fixtures,omitempty" json:"fixtures,omitempty"`
 	SSH      SSHConfig      `yaml:"ssh,omitempty" json:"ssh,omitempty"`
-	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty"`
-	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty"`
+	// Pre and Post accumulate across config layers, in execution order: a repo
+	// config adds its steps to the home config's rather than replacing them.
+	Pre      []HookStep     `yaml:"pre,omitempty" json:"pre,omitempty" merge:"append"`
+	Post     []HookStep     `yaml:"post,omitempty" json:"post,omitempty" merge:"append"`
 	Secrets  SecretsConfig  `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Procfile ProcfileConfig `yaml:"procfile,omitempty" json:"procfile,omitempty"`
 	// Checks is the project default for the post-completion agent check loop
@@ -332,6 +339,12 @@ type TodosConfig struct {
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// GroupBy selects how todos are grouped into runs.
 	GroupBy string `yaml:"groupBy,omitempty" json:"groupBy,omitempty"`
+	// Approvals gates Bash behind a human approval prompt. It is a pointer so an
+	// explicit `false` turns off an inherited `true`. Only an entrypoint that can
+	// answer an approval request may enable it — the CLI has no approver and would
+	// block forever, so enabling it there is a loud error rather than a hang.
+	// Unset defaults to the entrypoint's own capability (dashboard on, CLI off).
+	Approvals *bool `yaml:"approvals,omitempty" json:"approvals,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes
@@ -366,8 +379,8 @@ type SecretsConfig struct {
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 	// Configs is an optional list of additional .betterleaks.toml /
 	// .gitleaks.toml paths to merge in (relative paths resolve against the
-	// .gavel.yaml's directory).
-	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty"`
+	// .gavel.yaml's directory). Layers accumulate and repeats collapse.
+	Configs []string `yaml:"configs,omitempty" json:"configs,omitempty" merge:"append,unique"`
 }
 
 type GavelConfigSource struct {
@@ -390,17 +403,23 @@ func LoadGavelConfig(cwd string) (GavelConfig, error) {
 
 	home, err := os.UserHomeDir()
 	if err == nil {
-		cfg = mergeFromFile(cfg, filepath.Join(home, ".gavel.yaml"))
+		if cfg, err = mergeFromFile(cfg, filepath.Join(home, ".gavel.yaml")); err != nil {
+			return GavelConfig{}, err
+		}
 	}
 
 	gitRoot := repomap.FindGitRoot(cwd)
 	if gitRoot != "" {
-		cfg = mergeFromFile(cfg, filepath.Join(gitRoot, ".gavel.yaml"))
+		if cfg, err = mergeFromFile(cfg, filepath.Join(gitRoot, ".gavel.yaml")); err != nil {
+			return GavelConfig{}, err
+		}
 	}
 
 	absCwd, _ := filepath.Abs(cwd)
 	if absCwd != gitRoot {
-		cfg = mergeFromFile(cfg, filepath.Join(absCwd, ".gavel.yaml"))
+		if cfg, err = mergeFromFile(cfg, filepath.Join(absCwd, ".gavel.yaml")); err != nil {
+			return GavelConfig{}, err
+		}
 	}
 
 	return cfg, nil
@@ -466,7 +485,7 @@ func LoadGavelConfigTrace(path string) (GavelConfigTrace, error) {
 		candidate.Raw = raw
 		candidate.Config = cfg
 		trace.Sources = append(trace.Sources, candidate)
-		trace.Merged = mergeGavelConfig(trace.Merged, cfg)
+		trace.Merged = MergeGavelConfig(trace.Merged, cfg)
 	}
 
 	return trace, nil
@@ -503,125 +522,20 @@ func SaveGavelConfig(dir string, cfg GavelConfig) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func mergeFromFile(base GavelConfig, path string) GavelConfig {
+// mergeFromFile layers one .gavel.yaml onto base. A missing file is the ordinary
+// case — that layer simply does not exist — but every other error is fatal: an
+// unreadable or unparseable config, or one carrying an invalid enum, used to be
+// discarded here, so a typo anywhere in .gavel.yaml silently ran the whole
+// project on built-in defaults instead of the settings it declared.
+func mergeFromFile(base GavelConfig, path string) (GavelConfig, error) {
 	cfg, err := LoadSingleGavelConfig(path)
 	if err != nil {
-		return base
+		if os.IsNotExist(err) {
+			return base, nil
+		}
+		return base, err
 	}
-	return mergeGavelConfig(base, cfg)
-}
-
-func mergeGavelConfig(base, override GavelConfig) GavelConfig {
-	base.AI = base.AI.Merge(override.AI)
-	base.Lint = MergeLintConfig(base.Lint, override.Lint)
-	base.Commit = MergeCommitConfig(base.Commit, override.Commit)
-	base.Fixtures = MergeFixturesConfig(base.Fixtures, override.Fixtures)
-	base.SSH = MergeSSHConfig(base.SSH, override.SSH)
-	base.Pre = append(base.Pre, override.Pre...)
-	base.Post = append(base.Post, override.Post...)
-	base.Secrets = MergeSecretsConfig(base.Secrets, override.Secrets)
-	base.Procfile = MergeProcfileConfig(base.Procfile, override.Procfile)
-	base.Checks = base.Checks.Overlay(&override.Checks)
-	base.Todos = MergeTodosConfig(base.Todos, override.Todos)
-	base.Status = MergeStatusConfig(base.Status, override.Status)
-	base.Test = MergeTestConfig(base.Test, override.Test)
-	base.PR = MergePRConfig(base.PR, override.PR)
-	return base
-}
-
-// MergePRConfig merges override onto base: a set content spec wins; Base is
-// last-write-wins when non-empty; Draft is OR (any layer enabling wins).
-func MergePRConfig(base, override PRConfig) PRConfig {
-	if !override.Content.IsZero() {
-		base.Content = override.Content
-	}
-	if override.Base != "" {
-		base.Base = override.Base
-	}
-	if override.Draft {
-		base.Draft = true
-	}
-	return base
-}
-
-// MergeStatusConfig merges override onto base: a set summary spec wins.
-func MergeStatusConfig(base, override StatusConfig) StatusConfig {
-	if !override.Summary.IsZero() {
-		base.Summary = override.Summary
-	}
-	return base
-}
-
-// MergeTestConfig merges override onto base: a set outline-summary spec wins.
-func MergeTestConfig(base, override TestConfig) TestConfig {
-	if !override.OutlineSummary.IsZero() {
-		base.OutlineSummary = override.OutlineSummary
-	}
-	return base
-}
-
-// MergeTodosConfig merges override onto base: each set spec wins; driver/groupBy
-// are last-write-wins when non-empty; timeout wins when non-zero.
-func MergeTodosConfig(base, override TodosConfig) TodosConfig {
-	if !override.Run.IsZero() {
-		base.Run = override.Run
-	}
-	if !override.Plan.IsZero() {
-		base.Plan = override.Plan
-	}
-	if override.Driver != "" {
-		base.Driver = override.Driver
-	}
-	if override.Timeout != "" {
-		base.Timeout = override.Timeout
-	}
-	if override.GroupBy != "" {
-		base.GroupBy = override.GroupBy
-	}
-	return base
-}
-
-// MergeProcfileConfig merges override onto base. Scalars are last-write-wins
-// (a non-empty/non-zero override replaces the base); Env is merged key-by-key so
-// a repo config can add to a home default without discarding it.
-func MergeProcfileConfig(base, override ProcfileConfig) ProcfileConfig {
-	if override.Profile != "" {
-		base.Profile = override.Profile
-	}
-	if override.AutoRestart != "" {
-		base.AutoRestart = override.AutoRestart
-	}
-	if override.MaxRestarts != 0 {
-		base.MaxRestarts = override.MaxRestarts
-	}
-	if override.Mem != "" {
-		base.Mem = override.Mem
-	}
-	if override.CPU != 0 {
-		base.CPU = override.CPU
-	}
-	base.Env = mergeStringMap(base.Env, override.Env)
-	return base
-}
-
-// mergeStringMap returns base with override's keys layered on top. A nil result
-// is returned only when both inputs are empty.
-func mergeStringMap(base, override map[string]string) map[string]string {
-	if len(base) == 0 && len(override) == 0 {
-		return base
-	}
-	merged := make(map[string]string, len(base)+len(override))
-	for k, v := range base {
-		merged[k] = v
-	}
-	for k, v := range override {
-		merged[k] = v
-	}
-	return merged
-}
-
-func MergeGavelConfig(base, override GavelConfig) GavelConfig {
-	return mergeGavelConfig(base, override)
+	return MergeGavelConfig(base, cfg), nil
 }
 
 func resolveGavelConfigTarget(path string) (string, string, error) {
@@ -644,115 +558,4 @@ func resolveGavelConfigTarget(path string) (string, string, error) {
 	}
 
 	return absPath, filepath.Dir(absPath), nil
-}
-
-// MergeSecretsConfig merges override onto base. Disabled is OR (any layer
-// disabling wins). Configs are appended and deduped so each TOML path only
-// appears once even when multiple .gavel.yaml files reference it.
-func MergeSecretsConfig(base, override SecretsConfig) SecretsConfig {
-	if override.Disabled {
-		base.Disabled = true
-	}
-	seen := make(map[string]struct{}, len(base.Configs)+len(override.Configs))
-	var merged []string
-	for _, p := range append(base.Configs, override.Configs...) {
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		merged = append(merged, p)
-	}
-	base.Configs = merged
-	return base
-}
-
-// MergeSSHConfig merges override onto base. Cmd is last-write-wins; an empty
-// override preserves the base value so a repo config can inherit the home
-// default.
-func MergeSSHConfig(base, override SSHConfig) SSHConfig {
-	if override.Cmd != "" {
-		base.Cmd = override.Cmd
-	}
-	return base
-}
-
-func MergeLintConfig(base, override LintConfig) LintConfig {
-	if !override.Fix.IsZero() {
-		base.Fix = override.Fix
-	}
-	if len(override.Ignore) > 0 {
-		base.Ignore = append(base.Ignore, override.Ignore...)
-	}
-	if len(override.Linters) > 0 {
-		if base.Linters == nil {
-			base.Linters = make(map[string]LintLinterConfig, len(override.Linters))
-		}
-		for name, cfg := range override.Linters {
-			merged := base.Linters[name]
-			if cfg.Enabled != nil {
-				merged.Enabled = cfg.Enabled
-			}
-			base.Linters[name] = merged
-		}
-	}
-	return base
-}
-
-func MergeCommitConfig(base, override CommitConfig) CommitConfig {
-	if len(override.Hooks) > 0 {
-		base.Hooks = append(base.Hooks, override.Hooks...)
-	}
-	base.GitIgnore = dedupStrings(append(base.GitIgnore, override.GitIgnore...))
-	base.Allow = dedupStrings(append(base.Allow, override.Allow...))
-	if override.Precommit.Mode != "" {
-		base.Precommit.Mode = override.Precommit.Mode
-	}
-	if override.Lint.Enabled != nil {
-		base.Lint.Enabled = override.Lint.Enabled
-	}
-	if override.Lint.Secrets != nil {
-		base.Lint.Secrets = override.Lint.Secrets
-	}
-	if !override.Message.IsZero() {
-		base.Message = override.Message
-	}
-	if !override.Grouping.IsZero() {
-		base.Grouping = override.Grouping
-	}
-	if !override.Summary.IsZero() {
-		base.Summary = override.Summary
-	}
-	if override.MaxCommits != 0 {
-		base.MaxCommits = override.MaxCommits
-	}
-	return base
-}
-
-func dedupStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
-}
-
-// MergeFixturesConfig merges override onto base. Enabled is true if either side
-// sets it; Files from the override replace base so a repo-level config can
-// override a home-level default without accumulating globs.
-func MergeFixturesConfig(base, override FixturesConfig) FixturesConfig {
-	if override.Enabled {
-		base.Enabled = true
-	}
-	if len(override.Files) > 0 {
-		base.Files = override.Files
-	}
-	return base
 }

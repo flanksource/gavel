@@ -14,6 +14,9 @@ import type { AcceptanceCriterion, PRDetail, PRItem, Project, TodoItem, TodoPrio
 import { ansiToHtml } from '../../ansi';
 import { Markdown } from '../Markdown';
 import { Avatar } from '../Avatar';
+import { AddProjectDialog } from '../AddProjectDialog';
+import { PRTodoWorkspaceField } from './PRTodoWorkspaceField';
+import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
 import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
 import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
 import {
@@ -145,6 +148,7 @@ export function CreateTodoFromPRDialog({
   detail,
   workspaces,
   onCreated,
+  onProjectsChanged,
 }: {
   open: boolean;
   onClose: () => void;
@@ -153,6 +157,8 @@ export function CreateTodoFromPRDialog({
   workspaces: Project[];
   // onCreated lets the host refresh todo counts after a todo is added.
   onCreated?: () => void;
+  // onProjectsChanged lets the host refresh the project catalog after one is registered.
+  onProjectsChanged?: () => void;
 }) {
   const candidates = useMemo(() => buildPRTodoCandidates(pr, detail), [pr, detail]);
   // Prefer the workspace whose repos include this PR's repo, else the first.
@@ -193,6 +199,9 @@ export function CreateTodoFromPRDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
+  const projectWorkspace = usePRTodoProjectWorkspace({
+    open, prRepo: pr.repo, workspaces, onDirChange: setDir, onProjectsChanged,
+  });
 
   // Reset the form on the closed→open transition, then keep re-applying the
   // default selection as the PR detail streams in (comments first, test/lint
@@ -290,7 +299,8 @@ export function CreateTodoFromPRDialog({
   const activeDetail = candidates.find(c => c.key === activeKey)?.detail;
 
   return (
-    <Modal
+    <>
+      <Modal
       open
       onClose={onClose}
       title={created ? 'Todo created' : 'New todo from PR'}
@@ -361,13 +371,10 @@ export function CreateTodoFromPRDialog({
             </div>
           )}
 
-          {workspaces.length > 1 && (
-            <Field label="Workspace">
-              <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
-                {workspaces.map(w => <option key={w.dir} value={w.dir}>{w.name}</option>)}
-              </Select>
-            </Field>
-          )}
+          <PRTodoWorkspaceField
+            choices={projectWorkspace.choices} value={dir} busy={busy}
+            onChange={setDir} onNewProject={projectWorkspace.openAddProject}
+          />
 
           <Field label="Title">
             <input
@@ -474,6 +481,14 @@ export function CreateTodoFromPRDialog({
           </Field>
         </div>
       )}
-    </Modal>
+      </Modal>
+      <AddProjectDialog
+        open={projectWorkspace.addProjectOpen}
+        onClose={projectWorkspace.closeAddProject}
+        onSaved={projectWorkspace.projectSaved}
+        repoOptions={projectWorkspace.repoOptions}
+        defaults={projectWorkspace.defaults}
+      />
+    </>
   );
 }

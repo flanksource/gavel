@@ -81,7 +81,7 @@ func resolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPro
 	var source string
 	path := ""
 	switch {
-	case override.IsZero():
+	case override.IsEmpty():
 		source = "builtin"
 	case override.File != "":
 		source = "file"

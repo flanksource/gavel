@@ -5,15 +5,18 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 
 	"github.com/flanksource/commons/logger"
 )
 
+var embeddedDevAssets = assetsHandler()
+
 // SetDevProxy switches the "/" catch-all to a reverse proxy targeting a running
 // Vite dev server, so `pr list --ui --dev` serves hot-reloaded modules instead
-// of the embedded production bundle. /api/* and the asset routes stay on the Go
-// server because they are registered as more-specific mux patterns. Returns an
-// error on a malformed target rather than silently disabling dev mode.
+// of the embedded production bundle. /api/* stays on the Go server through
+// more-specific mux patterns, while handleDevRoute keeps embedded assets local.
+// Returns an error on a malformed target rather than silently disabling dev mode.
 func (s *Server) SetDevProxy(target string) error {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -33,10 +36,15 @@ func (s *Server) SetDevProxy(target string) error {
 	return nil
 }
 
-// handleDevRoute is the dev-mode "/" handler. Server-side export URLs
-// (e.g. /prs?format=json) still render via handleExport; everything else —
-// the SPA shell, /@vite/*, /src/*, client routes — is proxied to Vite.
+// handleDevRoute is the dev-mode "/" handler. Embedded production assets stay
+// reachable so a tab loaded before a prod/dev restart can still fetch its lazy
+// chunks instead of receiving Vite's HTML fallback. Server-side export URLs
+// still render via handleExport; everything else is proxied to Vite.
 func (s *Server) handleDevRoute(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/_assets/") {
+		embeddedDevAssets.ServeHTTP(w, r)
+		return
+	}
 	if req, ok := parseRouteRequest(r); ok && req.IsExport {
 		s.handleExport(w, r, req)
 		return

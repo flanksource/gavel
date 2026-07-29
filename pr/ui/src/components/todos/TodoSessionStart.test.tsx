@@ -7,7 +7,8 @@ import type { TodoItem } from '../../types';
 const RESOLVED_OPTIONS = { driver: 'claude-headless', backend: 'claude-agent', model: 'claude-sonnet-5', effort: 'medium' };
 
 vi.mock('./run', () => ({
-  useTodoRunContext: () => ({ backends: [], efforts: [], defaultBackend: '', tools: [] }),
+  useTodoRunContext: () => ({ context: { backends: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
+  TodoRunContextError: ({ error }: { error: string }) => error ? <div role="alert">{error}</div> : null,
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   todoRunButtonPresentation: () => ({ provider: undefined, model: 'sonnet-5', effort: 'medium' }),
   todoRunModeLabel: () => 'Agent',

@@ -183,6 +183,6 @@ var _ = Describe("settings prompt override repair and round-trip", func() {
 
 		cfg, err := verify.LoadSingleGavelConfig(filepath.Join(dir, ".gavel.yaml"))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Commit.Message.IsZero()).To(BeTrue())
+		Expect(cfg.Commit.Message.IsEmpty()).To(BeTrue())
 	})
 })
