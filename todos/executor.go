@@ -413,12 +413,12 @@ func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error 
 	if runtimeProvider, ok := e.executor.(RunRuntimeProvider); ok {
 		preparation.Requested = runtimeProvider.RunRuntimeSelection()
 	}
-	if renderer, ok := e.executor.(RunPromptProvider); ok {
-		prompt, err := renderer.RenderRunPrompt(ctx, todo)
+	if renderer, ok := e.executor.(RunSpecProvider); ok {
+		spec, err := renderer.RenderRunSpec(ctx, todo)
 		if err != nil {
-			return fmt.Errorf("render native TODO prompt: %w", err)
+			return fmt.Errorf("render native TODO spec: %w", err)
 		}
-		preparation.PromptMarkdown = prompt
+		preparation.Spec = spec
 	}
 	return lifecycle.PrepareRun(persistCtx, todo, preparation)
 }

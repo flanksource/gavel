@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
@@ -29,8 +30,8 @@ type promptObservingExecutor struct {
 
 func (e *promptObservingExecutor) Name() string { return "prompt-observer" }
 
-func (e *promptObservingExecutor) RenderRunPrompt(_ *todos.ExecutorContext, _ *types.TODO) (string, error) {
-	return e.prompt, nil
+func (e *promptObservingExecutor) RenderRunSpec(_ *todos.ExecutorContext, _ *types.TODO) (api.Spec, error) {
+	return api.Spec{Prompt: api.Prompt{User: e.prompt}}, nil
 }
 
 func (e *promptObservingExecutor) Execute(ctx *todos.ExecutorContext, todo *types.TODO) (*todos.ExecutionResult, error) {

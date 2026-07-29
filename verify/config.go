@@ -23,6 +23,15 @@ import (
 // low-level verify package need not import the heavier gavel/ai package.
 const DefaultAIModel = "claude-haiku-4-5"
 
+// DefaultVerifyModel is the built-in model for the grader that marks a
+// definition of done. It is an agentic backend (claude-code) because the grader
+// is told to inspect the change with its own tools — DefaultAIModel is an API
+// model with none, and a grader that cannot read the diff still returns
+// confident verdicts. It seeds todos.verify rather than being applied where the
+// grader is built, so a repo can override it and the settings trace can say
+// where the value came from.
+const DefaultVerifyModel = "claude-code-sonnet"
+
 // DefaultAIConfig is the built-in global default base spec (precedence floor).
 func DefaultAIConfig() api.Spec {
 	return api.Spec{Model: api.Model{Name: DefaultAIModel}}
@@ -30,7 +39,10 @@ func DefaultAIConfig() api.Spec {
 
 // DefaultGavelConfig seeds the built-in defaults every loaded config layers on.
 func DefaultGavelConfig() GavelConfig {
-	return GavelConfig{AI: DefaultAIConfig()}
+	return GavelConfig{
+		AI:    DefaultAIConfig(),
+		Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: DefaultVerifyModel}}},
+	}
 }
 
 // RestartPolicy is the supervisor restart policy for a process. It accepts a
@@ -333,6 +345,19 @@ type TodosConfig struct {
 	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
 	Run  PromptSpec `yaml:"run,omitempty" json:"run,omitempty"`
 	Plan PromptSpec `yaml:"plan,omitempty" json:"plan,omitempty"`
+	// Verify is the spec a verification run executes as: `gavel todos check`, the
+	// dashboard's verify action, and the acceptance-criteria grader inside a run's
+	// definition-of-done loop. It overrides the base ai: spec field-wise and is
+	// itself overridden by the request.
+	//
+	// It is a plain spec rather than a PromptSpec because verification has no
+	// prompt template — the checklist is generated from the todo's acceptance
+	// criteria — so offering a `file:` override here would be a silent no-op.
+	//
+	// The implementer's own run spec is deliberately NOT a layer in this chain: a
+	// grader built from it inherited the session it was grading, along with the
+	// coding agent's model, backend and budget.
+	Verify api.Spec `yaml:"verify,omitempty" json:"verify,omitempty"`
 	// Driver is the execution mechanism: cmux | cli | sdk | api.
 	Driver string `yaml:"driver,omitempty" json:"driver,omitempty"`
 	// Timeout caps a run's wall-clock duration (e.g. "30m"); empty = default.

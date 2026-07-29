@@ -105,17 +105,11 @@ func Resolve(in Input) (Resolved, error) {
 		return Resolved{}, fmt.Errorf("load .gavel.yaml: %w", err)
 	}
 
-	layers := []Layer{{Name: ".gavel.yaml ai", Spec: cfg.AI}}
-
-	template := ""
-	if op, key, ok := modePromptSpec(cfg, in.Mode); ok {
-		promptLayers, tmpl, err := templateLayers(in, op, key)
-		if err != nil {
-			return Resolved{}, err
-		}
-		layers = append(layers, promptLayers...)
-		template = tmpl
+	byMode, template, err := modeLayers(in, cfg)
+	if err != nil {
+		return Resolved{}, err
 	}
+	layers := append([]Layer{{Name: ".gavel.yaml ai", Spec: cfg.AI}}, byMode...)
 
 	// todos.timeout sits above the operation spec so it stays the one place a
 	// project caps every todo run, whichever mode it is in.
@@ -180,17 +174,24 @@ func applyModeInvariants(s *api.Spec, mode types.RunMode) {
 	s.Workflow.Commits = nil
 }
 
-// modePromptSpec returns the .gavel.yaml PromptSpec for mode. ModeVerify has no
-// prompt at all — it runs through the verify engine — so it contributes only the
-// ai: base, the todo, and the request.
-func modePromptSpec(cfg verify.GavelConfig, mode types.RunMode) (verify.PromptSpec, string, bool) {
-	switch mode {
+// modeLayers returns the configuration layers the mode itself contributes, plus
+// the template source Render should use.
+//
+// Run and plan are prompt-driven: the mode's .prompt frontmatter, an optional
+// `file:` override's frontmatter, and the .gavel.yaml PromptSpec. Verification
+// has no prompt — its checklist is generated from the todo's acceptance criteria
+// — but it is still a run, and which model grades a definition of done is a
+// configuration decision like any other, so todos.verify contributes a spec.
+func modeLayers(in Input, cfg verify.GavelConfig) ([]Layer, string, error) {
+	switch in.Mode {
 	case types.ModeRun:
-		return cfg.Todos.Run, "todos.run", true
+		return templateLayers(in, cfg.Todos.Run, "todos.run")
 	case types.ModePlan:
-		return cfg.Todos.Plan, "todos.plan", true
+		return templateLayers(in, cfg.Todos.Plan, "todos.plan")
+	case types.ModeVerify:
+		return []Layer{{Name: ".gavel.yaml todos.verify", Spec: cfg.Todos.Verify}}, "", nil
 	default:
-		return verify.PromptSpec{}, "", false
+		return nil, "", fmt.Errorf("unknown todo run mode %q", in.Mode)
 	}
 }
 

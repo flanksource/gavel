@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
@@ -106,7 +107,7 @@ func TestRecordRunStartResumeKeepsExecutionSession(t *testing.T) {
 	// and effort are all blank.
 	require.NoError(t, provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex", Resume: true,
-		PromptMarkdown: "Target the staging database.",
+		Spec: api.Spec{Prompt: api.Prompt{User: "Target the staging database."}},
 	}))
 	require.NoError(t, provider.RecordRunStart(t.Context(), todo, todos.RunStartMetadata{
 		SessionID: providerSessionID, Mode: "run",

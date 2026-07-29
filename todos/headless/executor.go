@@ -45,7 +45,7 @@ type Executor struct {
 	stream streamFunc
 }
 
-var _ todopkg.RunPromptProvider = (*Executor)(nil)
+var _ todopkg.RunSpecProvider = (*Executor)(nil)
 var _ todopkg.RunRuntimeProvider = (*Executor)(nil)
 
 type option func(*Executor)
@@ -92,15 +92,12 @@ func (e *Executor) Execute(ctx *todopkg.ExecutorContext, todo *types.TODO) (*tod
 	return e.ExecuteGroup(ctx, []*types.TODO{todo})
 }
 
-// RenderRunPrompt implements todos.RunPromptProvider. It shares the exact
-// renderer used by ExecuteGroup so native admission can persist Captain's real
-// user prompt before the external provider is dispatched.
-func (e *Executor) RenderRunPrompt(_ *todopkg.ExecutorContext, todo *types.TODO) (string, error) {
-	rendered, err := e.renderInitialRequest([]*types.TODO{todo})
-	if err != nil {
-		return "", err
-	}
-	return rendered.Prompt.User, nil
+// RenderRunSpec implements todos.RunSpecProvider. It shares the exact renderer
+// used by ExecuteGroup, so native admission persists Captain's real request —
+// prompt included — before the external provider is dispatched. What setup then
+// does to that request is reported separately, once the run is under way.
+func (e *Executor) RenderRunSpec(_ *todopkg.ExecutorContext, todo *types.TODO) (captainai.Request, error) {
+	return e.renderInitialRequest([]*types.TODO{todo})
 }
 
 func (e *Executor) ExecuteGroup(ctx *todopkg.ExecutorContext, todosInGroup []*types.TODO) (*todopkg.ExecutionResult, error) {
@@ -265,6 +262,8 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 	// landed; the group's work dir is what relative setup paths anchor to, and
 	// it seeds the workspace the plugin then repoints at the prepared tree.
 	hooks = append(hooks, &capsetup.Plugin{BaseDir: workDir})
+	// Trails setup so it reports the transformed spec, not the requested one.
+	hooks = append(hooks, &specRecorder{meta: runMeta, report: ctx.RecordRunStart})
 
 	runner := &agent.Runner[string]{
 		Provider:      provider,

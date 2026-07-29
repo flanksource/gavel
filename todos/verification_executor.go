@@ -18,8 +18,20 @@ type verificationExecutor struct {
 	verifiers []agent.Verify
 }
 
+// newVerificationExecutor builds a check-only run. spec is already resolved for
+// types.ModeVerify, so it is both the run spec (whether to verify) and the
+// grader — there is no implementer here whose runtime could contaminate it.
 func newVerificationExecutor(workDir string, todoList []*types.TODO, spec *api.Spec) (*verificationExecutor, error) {
-	verifiers, _, err := BuildCheckVerifiers(workDir, todoList, spec)
+	var grader api.Spec
+	if spec != nil {
+		grader = *spec
+	}
+	verifiers, _, err := BuildCheckVerifiers(CheckVerifierOptions{
+		WorkDir: workDir,
+		Todos:   todoList,
+		Run:     spec,
+		Grader:  grader,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -31,11 +43,11 @@ func newVerificationExecutor(workDir string, todoList []*types.TODO, spec *api.S
 
 func (e *verificationExecutor) Name() string { return "gavel-fixtures" }
 
-// RenderRunPrompt deliberately returns an empty prompt. Native admission keeps
-// verify-only prompt runs empty and stores the issue's verification markdown in
-// the workflow verification spec instead.
-func (e *verificationExecutor) RenderRunPrompt(_ *ExecutorContext, _ *types.TODO) (string, error) {
-	return "", nil
+// RenderRunSpec deliberately returns the empty spec that Execute dispatches: a
+// check-only run carries no prompt, and its definition of done is stamped onto
+// the persisted spec from the issue's verification markdown.
+func (e *verificationExecutor) RenderRunSpec(_ *ExecutorContext, _ *types.TODO) (api.Spec, error) {
+	return api.Spec{}, nil
 }
 
 func (e *verificationExecutor) Execute(ctx *ExecutorContext, _ *types.TODO) (*ExecutionResult, error) {

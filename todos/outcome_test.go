@@ -419,7 +419,7 @@ func TestResumeRequiresFeedbackExecutor(t *testing.T) {
 
 func TestBuildCheckVerifiers(t *testing.T) {
 	t.Run("disabled yields none", func(t *testing.T) {
-		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{{}}, nil)
+		plugins, _, err := BuildCheckVerifiers(CheckVerifierOptions{WorkDir: t.TempDir(), Todos: []*types.TODO{{}}})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -436,7 +436,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 			MaxIterations: 2,
 			Lint:          &types.AgentLintConfig{},
 		}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
+		plugins, maxIter, err := BuildCheckVerifiers(CheckVerifierOptions{WorkDir: t.TempDir(), Todos: []*types.TODO{todo}})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -456,7 +456,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// fixture — its definition of done gates the loop regardless.
 		todo := &types.TODO{}
 		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
+		plugins, maxIter, err := BuildCheckVerifiers(CheckVerifierOptions{WorkDir: t.TempDir(), Todos: []*types.TODO{todo}})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -473,7 +473,7 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// checklist ai step feeding results.checklist.
 		todo := &types.TODO{}
 		todo.AcceptanceCriteria = []types.AcceptanceCriterion{{Text: "retries on 5xx"}}
-		plugins, _, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, nil)
+		plugins, _, err := BuildCheckVerifiers(CheckVerifierOptions{WorkDir: t.TempDir(), Todos: []*types.TODO{todo}})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)
 		}
@@ -490,8 +490,10 @@ func TestBuildCheckVerifiers(t *testing.T) {
 		// budget (initial run + N feedback rounds).
 		todo := &types.TODO{}
 		todo.Verification = []*fixtures.FixtureNode{{Test: &fixtures.FixtureTest{Name: "it works"}}}
-		plugins, maxIter, err := BuildCheckVerifiers(t.TempDir(), []*types.TODO{todo}, &api.Spec{
-			Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 5}},
+		plugins, maxIter, err := BuildCheckVerifiers(CheckVerifierOptions{
+			WorkDir: t.TempDir(),
+			Todos:   []*types.TODO{todo},
+			Run:     &api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 5}}},
 		})
 		if err != nil {
 			t.Fatalf("BuildCheckVerifiers: %v", err)

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -100,6 +101,50 @@ todos:
 			resolved, err := Resolve(Input{WorkDir: workspace(""), Mode: types.ModeRun})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved.Timeout).To(Equal(DefaultTimeout))
+		})
+
+		// A verification run has no prompt template — the checklist is generated
+		// from the todo's acceptance criteria — but it is still a run, and which
+		// model grades a definition of done is a configuration decision. The chain
+		// is request > .gavel.yaml todos.verify > .gavel.yaml ai: > captain, and
+		// the implementer's own spec is deliberately not a layer in it.
+		It("layers todos.verify over ai: for a verification run", func() {
+			dir := workspace(`ai:
+  model: claude-haiku-4-5
+todos:
+  verify:
+    model: claude-code-opus
+    budget:
+      maxTurns: 7
+`)
+			resolved, err := Resolve(Input{WorkDir: dir, Mode: types.ModeVerify})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Spec.Name).To(Equal("claude-code-opus"))
+			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(7))
+			Expect(resolved.Provenance["model"]).To(Equal(".gavel.yaml todos.verify"))
+
+			overridden, err := Resolve(Input{
+				WorkDir:  dir,
+				Mode:     types.ModeVerify,
+				Override: api.Spec{Model: api.Model{Name: "claude-code-sonnet"}},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(overridden.Spec.Name).To(Equal("claude-code-sonnet"), "the request outranks todos.verify")
+			Expect(overridden.Spec.Budget.MaxTurns).To(Equal(7), "and overrides only what it names")
+		})
+
+		// The grader is told to inspect the repository with its own tools, so it
+		// needs an agentic backend. The ai: floor is an API model with none —
+		// letting a verification run fall through to it would produce confident
+		// verdicts from a model that cannot read the diff.
+		It("keeps the built-in verify model when only ai: names one", func() {
+			resolved, err := Resolve(Input{
+				WorkDir: workspace("ai:\n  model: claude-haiku-4-5\n"),
+				Mode:    types.ModeVerify,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Spec.Name).To(Equal(verify.DefaultVerifyModel))
+			Expect(resolved.Spec.Name).ToNot(Equal("claude-haiku-4-5"))
 		})
 
 		It("carries an inline prompt as the template, not as a body override", func() {

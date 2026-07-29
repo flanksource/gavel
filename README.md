@@ -669,7 +669,7 @@ gavel todos run --check                  # run tests/lint when the agent finishe
 gavel todos check 3f2a1b                 # run the TODO's complete definition of done
 ```
 
-`--mode` selects what the agent does: `run` (implement, default) or `plan` (produce a plan that parks the TODO in `review` for approval via `gavel todos plan reject|revise`). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
+`--mode` selects what the agent does: `run` (implement, default) or `plan` (produce a plan that parks the TODO in `review` for `gavel todos plan approve|reject|revise`; `approve --run` implements it straight away). `--driver` selects the agent and mechanism (`claude-cmux` default, `claude-headless`, `codex-headless`).
 
 `--check` runs the configured `checks:` test/lint suite after the agent reports done and feeds any failures back into the same session until they pass (bounded by `maxIterations`). Opt in via the flag or `.gavel.yaml` `checks:` configuration.
 

@@ -179,6 +179,35 @@ against changed files.
 | `checks.lint.changed` | bool | `false` | — | Only report new violations versus the base ref. |
 | `checks.lint.timeout` | string | — | — | Per-linter deadline (e.g. `5m`). |
 
+### Who grades the definition of done
+
+A TODO's acceptance criteria are marked by an LLM checklist step, and the spec it
+runs as is resolved separately from the agent that did the work — a run never
+grades itself. The chain, highest first:
+
+```
+request (a `gavel todos check` flag or the dashboard's verification payload)
+  → .gavel.yaml todos.verify
+  → .gavel.yaml ai:
+  → captain
+```
+
+`todos.verify` is a Captain `api.Spec` (model, budget, permissions — no prompt:
+the checklist is generated from the criteria). It defaults to `claude-code-sonnet`,
+an agentic backend, because the grader is told to inspect the change with its own
+tools; the `ai:` base is an API model with none, so a grader that fell through to
+it would return confident verdicts without having read the diff.
+
+```yaml
+ai:
+  model: claude-haiku-4-5   # every other AI operation
+todos:
+  verify:
+    model: claude-code-opus  # …but grade the definition of done with this
+    budget:
+      maxTurns: 20
+```
+
 ## `ssh`
 
 SSH post-receive hook / push backend.

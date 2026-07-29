@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -140,7 +141,10 @@ func (e *TODOExecutor) Resume(ctx *ExecutorContext, todosInGroup []*types.TODO, 
 		for _, todo := range todosInGroup {
 			if err := lifecycle.PrepareRun(ctx, todo, RunPreparation{
 				Mode: e.Mode(), ExecutorName: e.executor.Name(), Resume: true,
-				PromptMarkdown: message,
+				// A resumed turn dispatches the answer as its user prompt; the rest
+				// of the spec is the session's, already persisted by the run that
+				// opened it.
+				Spec: api.Spec{Prompt: api.Prompt{User: message}},
 			}); err != nil {
 				return nil, fmt.Errorf("prepare resumed native TODO run: %w", err)
 			}

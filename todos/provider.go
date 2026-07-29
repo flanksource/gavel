@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos/types"
 )
@@ -49,9 +51,12 @@ type RunPreparation struct {
 	ExecutorName string
 	Resume       bool
 	Requested    captaindb.PromptRunRuntimeSelection
-	// PromptMarkdown is the exact user prompt the executor will dispatch. Native
-	// storage persists it on Captain's prompt run before external execution.
-	PromptMarkdown string
+	// Spec is the exact request the executor will dispatch — model, budget,
+	// permissions, setup, workflow and the rendered user prompt. Native storage
+	// persists it on Captain's prompt run before external execution, so a later
+	// continuation replays what actually ran instead of reconstructing it from
+	// the run's resolved model/backend labels.
+	Spec api.Spec
 }
 
 // RunRuntimeProvider exposes the configuration known before dispatch.
@@ -73,11 +78,11 @@ func RuntimeProviderForBackend(backend string) string {
 	}
 }
 
-// RunPromptProvider exposes the exact initial user prompt an executor will
-// dispatch. TODOExecutor asks for it before native admission so Captain stores
-// the same prompt rather than a lossy reconstruction from the issue body.
-type RunPromptProvider interface {
-	RenderRunPrompt(ctx *ExecutorContext, todo *types.TODO) (string, error)
+// RunSpecProvider exposes the exact request an executor will dispatch.
+// TODOExecutor asks for it before native admission so Captain stores the real
+// runtime and prompt rather than a lossy reconstruction from the issue body.
+type RunSpecProvider interface {
+	RenderRunSpec(ctx *ExecutorContext, todo *types.TODO) (api.Spec, error)
 }
 
 // RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
@@ -129,6 +134,27 @@ type PlanReviewProvider interface {
 // revise it; run mode receives only the explicitly approved revision.
 type PlanContentProvider interface {
 	PlanMarkdown(ctx context.Context, todo *types.TODO, mode types.RunMode) (string, error)
+}
+
+// Link is one issue-to-issue relationship seen from the queried TODO. The
+// target's identity and status travel with it so callers render a link without
+// a second lookup.
+type Link struct {
+	Relation      types.RelationKind `json:"relation"`
+	TargetID      string             `json:"target_id"`
+	TargetShortID string             `json:"target_short_id,omitempty"`
+	TargetTitle   string             `json:"target_title,omitempty"`
+	TargetStatus  types.Status       `json:"target_status,omitempty"`
+	CreatedAt     time.Time          `json:"created_at,omitempty"`
+}
+
+// RelationshipProvider exposes issue-to-issue links: depends_on for blocking
+// work and related_to for duplicates and overlapping scope. Links reports both,
+// plus the derived read-only blocks relation for incoming dependencies.
+type RelationshipProvider interface {
+	Link(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) (*Link, error)
+	Unlink(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) error
+	Links(ctx context.Context, todo *types.TODO) ([]Link, error)
 }
 
 // PlanRevisionProvider appends a human-edited immutable Captain revision and

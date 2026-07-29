@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
+	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -80,8 +81,9 @@ func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Reques
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
-	timeout, err := validateTodoVerificationSpec(payload.Spec)
-	if err != nil {
+	// The wire value is guarded before anything is loaded, so a malformed or
+	// committing spec is a 400 rather than a failed run.
+	if _, err := validateTodoVerificationSpec(payload.Spec); err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -90,14 +92,40 @@ func (s *Server) handleTodoVerificationRun(w http.ResponseWriter, r *http.Reques
 		writeTodoError(w, status, err)
 		return
 	}
+	workDir := todoVerifyWorkDir(source.Dir, todo)
+	// The request is the top layer of the verification chain, not the whole of
+	// it: .gavel.yaml todos.verify and ai: are what a dashboard check falls back
+	// to, exactly as `gavel todos check` does.
+	var override api.Spec
+	if payload.Spec != nil {
+		override = *payload.Spec
+	}
+	resolved, err := todospec.Resolve(todospec.Input{
+		WorkDir:    workDir,
+		Mode:       types.ModeVerify,
+		Todos:      []*types.TODO{todo},
+		Override:   override,
+		CanApprove: true,
+	})
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
+	// Re-validated after folding so the timeout comes from the layer that set it
+	// and the 10m floor still applies when no layer names one.
+	timeout, err := validateTodoVerificationSpec(&resolved.Spec)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	result := todos.CheckTODO(ctx, todo, todos.CheckOptions{
-		WorkDir:  todoVerifyWorkDir(source.Dir, todo),
+		WorkDir:  workDir,
 		Timeout:  timeout,
 		Logger:   logger.StandardLogger(),
 		Provider: provider,
-		Spec:     payload.Spec,
+		Spec:     &resolved.Spec,
 	})
 	refreshed := todo
 	if rt, gerr := provider.Get(r.Context(), todos.TODOReference(todo)); gerr == nil {

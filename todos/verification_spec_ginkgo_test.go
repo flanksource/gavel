@@ -58,17 +58,47 @@ var _ = Describe("TODO verification runtime spec", func() {
 	It("uses workflow verification from the request spec for the outer verifier", func() {
 		spec := api.Spec{Workflow: &api.Workflow{Verify: &api.Verify{MaxIterations: 4}}}
 
-		verifiers, maxIterations, err := BuildCheckVerifiers(
-			GinkgoT().TempDir(),
-			[]*types.TODO{{
+		verifiers, maxIterations, err := BuildCheckVerifiers(CheckVerifierOptions{
+			WorkDir: GinkgoT().TempDir(),
+			Todos: []*types.TODO{{
 				AcceptanceCriteria: []types.AcceptanceCriterion{{Text: "The implementation passes."}},
 			}},
-			&spec,
-		)
+			Run: &spec,
+		})
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(verifiers).To(HaveLen(1))
 		Expect(maxIterations).To(Equal(5))
+	})
+
+	// C1: the grader used to execute as the implementer — same model, same
+	// backend, same session — so a cmux run spawned a TUI to mark its own work.
+	// The run spec now decides only WHETHER to verify; the verify chain decides
+	// what grades.
+	It("grades on the verify spec, not the implementer's", func() {
+		run := api.Spec{
+			Model:     api.Model{Name: "claude-cmux", Backend: api.BackendClaudeCmux},
+			SessionID: "the-implementer-session",
+			Workflow:  &api.Workflow{Verify: &api.Verify{MaxIterations: 2}},
+		}
+		grader := api.Spec{Model: api.Model{Name: "claude-code-sonnet"}}
+
+		verifiers, _, err := BuildCheckVerifiers(CheckVerifierOptions{
+			WorkDir: GinkgoT().TempDir(),
+			Todos: []*types.TODO{{
+				AcceptanceCriteria: []types.AcceptanceCriterion{{Text: "The implementation passes."}},
+			}},
+			Run:    &run,
+			Grader: grader,
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(verifiers).To(HaveLen(1))
+		cel, ok := verifiers[0].(*celVerifier)
+		Expect(ok).To(BeTrue())
+		Expect(cel.spec.Name).To(Equal("claude-code-sonnet"))
+		Expect(cel.spec.Backend).To(BeEmpty(), "the implementer's cmux backend must not grade")
+		Expect(cel.spec.SessionID).To(BeEmpty(), "the grader never resumes the session it judges")
 	})
 
 	It("fails before executing when the request timeout is invalid", func() {

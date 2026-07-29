@@ -137,14 +137,3 @@ func TestTodoFromIssueUsesDatabaseIdentityAndVerification(t *testing.T) {
 	assert.Equal(t, "/retained/gavel", todo.CWD)
 	assert.Equal(t, "```bash\ntrue\n```", todos.ExtractVerificationFixture(todo.MarkdownBody))
 }
-
-func TestVerificationWorkflowPersistsIssueFixture(t *testing.T) {
-	fixture := "```bash\necho ok\n```"
-	workflow := verificationWorkflow(fixture)
-	assert.Equal(t, false, workflow["autoVerifyWithoutFixture"])
-	assert.Equal(t, map[string]any{"fixture": fixture}, workflow["verify"])
-
-	empty := verificationWorkflow("  ")
-	assert.Equal(t, false, empty["autoVerifyWithoutFixture"])
-	assert.NotContains(t, empty, "verify")
-}

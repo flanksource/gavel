@@ -83,6 +83,13 @@ type uiTestTODOProvider struct {
 	// native PostgreSQL runtime would report it. nil means no run history.
 	activeRun *captaindb.PromptRun
 	comments  []string
+	links     []uiTestLink
+}
+
+type uiTestLink struct {
+	issueID  string
+	targetID string
+	relation types.RelationKind
 }
 
 func (p *uiTestTODOProvider) ActivePromptRun(context.Context, *types.TODO) (*captaindb.PromptRun, error) {
@@ -227,6 +234,68 @@ func (p *uiTestTODOProvider) MoveTo(ctx context.Context, todo *types.TODO, targe
 		return nil, err
 	}
 	return created, nil
+}
+
+// Link/Unlink/Links mirror the native repository's perspective flip: an
+// incoming depends_on is reported to the target as the derived blocks relation.
+func (p *uiTestTODOProvider) Link(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) (*todos.Link, error) {
+	target, err := p.Get(ctx, targetRef)
+	if err != nil {
+		return nil, err
+	}
+	if target.ID == todo.ID {
+		return nil, fmt.Errorf("a TODO cannot be linked to itself")
+	}
+	for _, existing := range p.links {
+		if existing.issueID == todo.ID && existing.targetID == target.ID && existing.relation == relation {
+			return nil, fmt.Errorf("link already exists")
+		}
+	}
+	p.links = append(p.links, uiTestLink{issueID: todo.ID, targetID: target.ID, relation: relation})
+	return &todos.Link{
+		Relation: relation, TargetID: target.ID, TargetShortID: target.ShortID,
+		TargetTitle: target.Title, TargetStatus: target.Status,
+	}, nil
+}
+
+func (p *uiTestTODOProvider) Unlink(ctx context.Context, todo *types.TODO, targetRef string, relation types.RelationKind) error {
+	target, err := p.Get(ctx, targetRef)
+	if err != nil {
+		return err
+	}
+	for i, existing := range p.links {
+		if existing.issueID == todo.ID && existing.targetID == target.ID && existing.relation == relation {
+			p.links = append(p.links[:i], p.links[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("link not found")
+}
+
+func (p *uiTestTODOProvider) Links(ctx context.Context, todo *types.TODO) ([]todos.Link, error) {
+	links := make([]todos.Link, 0, len(p.links))
+	for _, existing := range p.links {
+		relation, targetID := existing.relation, existing.targetID
+		switch {
+		case existing.issueID == todo.ID:
+		case existing.targetID == todo.ID:
+			targetID = existing.issueID
+			if relation == types.RelationDependsOn {
+				relation = types.RelationBlocks
+			}
+		default:
+			continue
+		}
+		target, err := p.Get(ctx, targetID)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, todos.Link{
+			Relation: relation, TargetID: target.ID, TargetShortID: target.ShortID,
+			TargetTitle: target.Title, TargetStatus: target.Status,
+		})
+	}
+	return links, nil
 }
 
 func (p *uiTestTODOProvider) ApprovePlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {

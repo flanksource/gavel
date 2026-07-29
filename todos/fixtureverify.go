@@ -64,17 +64,31 @@ func fixtureFeedback(res fixtures.FixtureResult) string {
 // It returns no plugins (and a zero budget) only when the todo has no definition
 // of done at all — such a run ends `completed`.
 //
-// spec is the run's api.Spec. Workflow.Verify force-enables the checks suite and
-// overrides its loop cap; the same spec configures embedded AI fixture prompts.
-func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, spec *api.Spec) ([]agent.Verify, int, error) {
+// CheckVerifierOptions separates the two jobs one spec used to do. Run says
+// WHETHER to verify and how many rounds; Grader says what the acceptance-criteria
+// checklist executes as. They are deliberately different specs: a run may be a
+// cmux TUI resuming a long session, and none of that may grade its own work.
+type CheckVerifierOptions struct {
+	WorkDir string
+	Todos   []*types.TODO
+	// Run is the implementer's spec. Only Workflow.Verify is read: whether the
+	// checks suite is force-enabled, and the iteration cap.
+	Run *api.Spec
+	// Grader is the resolved verification spec — request > .gavel.yaml
+	// todos.verify > ai: — carrying no session of its own.
+	Grader api.Spec
+}
+
+func BuildCheckVerifiers(in CheckVerifierOptions) ([]agent.Verify, int, error) {
+	workDir, todosInGroup := in.WorkDir, in.Todos
 	gitRoot := checksWorkDirFor(workDir, todosInGroup)
 	project, err := verify.LoadGavelConfig(gitRoot)
 	if err != nil {
 		return nil, 0, fmt.Errorf("checks: load .gavel.yaml: %w", err)
 	}
 	var verifySpec *api.Verify
-	if spec != nil && spec.Workflow != nil {
-		verifySpec = spec.Workflow.Verify
+	if in.Run != nil && in.Run.Workflow != nil {
+		verifySpec = in.Run.Workflow.Verify
 	}
 	cfg := types.ResolveAgentChecks(project.Checks, firstChecksConfig(todosInGroup), verifySpec != nil)
 
@@ -129,6 +143,7 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, spec *api.S
 	if maxIter <= 0 {
 		maxIter = types.DefaultMaxCheckIterations
 	}
+	grader := in.Grader.WithoutSession()
 	verifier := &celVerifier{
 		name:      "definition-of-done",
 		retryExpr: cfg.Retry,
@@ -136,7 +151,7 @@ func BuildCheckVerifiers(workDir string, todosInGroup []*types.TODO, spec *api.S
 		nodes:     verNodes,
 		aiStep:    aiStep,
 		workDir:   gitRoot,
-		spec:      spec,
+		spec:      &grader,
 	}
 	return []agent.Verify{verifier}, maxIter + 1, nil
 }

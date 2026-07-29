@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/ai"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -43,19 +42,17 @@ type FixtureAIConfig struct {
 	NoCache       bool          `yaml:"noCache,omitempty" json:"noCache,omitempty"`
 }
 
-// ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig, falling back
-// to defaultModel when no model is set. A nil receiver yields the default config
-// (so callers can pass an absent block directly).
+// ToAgentConfig maps the `ai:` front matter onto an ai.AgentConfig. A nil
+// receiver yields the engine's own defaults (so callers can pass an absent block
+// directly) — but no model and no budget: which model grades and how much it may
+// spend is resolved by the caller's chain, not defaulted here where an override
+// would have nothing to say it came from.
 // The model stays a string on the wire — that is the fixture file's format — but
 // it lands in a structured api.Model, so `model: agent:sol:high` now carries its
 // backend and effort through instead of being flattened to a name and re-guessed.
 // The selector is resolved by ai.NewProvider.
-func (c *FixtureAIConfig) ToAgentConfig(defaultModel string) ai.AgentConfig {
-	cfg := ai.AgentConfig{
-		Model:         api.Model{Name: defaultModel},
-		Budget:        api.Budget{MaxTokens: 10000},
-		MaxConcurrent: 4,
-	}
+func (c *FixtureAIConfig) ToAgentConfig() ai.AgentConfig {
+	cfg := ai.AgentConfig{MaxConcurrent: 4}
 	if c == nil {
 		return cfg
 	}

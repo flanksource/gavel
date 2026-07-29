@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/clicky"
-	"github.com/flanksource/clicky/api"
+	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/logger"
 )
@@ -36,6 +37,12 @@ type RunStartMetadata struct {
 	Backend       string
 	ResolvedModel string
 	Effort        string
+	// Spec, when set, is the request as it stands after setup has run: the
+	// checkout consumed and Cwd pointing at the tree the agent works in. It is
+	// reported once, from a hook that trails the setup plugin, and updates the
+	// run's persisted rendered spec. Reports that cannot see it leave it nil
+	// rather than overwriting with the pre-setup request.
+	Spec *api.Spec
 }
 
 // UserInteraction handles user-facing communication during TODO execution.
@@ -59,7 +66,7 @@ type Question struct {
 }
 
 // Pretty returns a formatted text representation of the Question
-func (q Question) Pretty() api.Text {
+func (q Question) Pretty() clickyapi.Text {
 	result := clicky.Text("").Add(icons.Unknown).Append(" Question", "text-orange-600 font-bold")
 
 	if q.Text != "" {
@@ -108,7 +115,7 @@ const (
 )
 
 // Pretty returns a formatted text representation of the NotificationType with appropriate styling
-func (nt NotificationType) Pretty() api.Text {
+func (nt NotificationType) Pretty() clickyapi.Text {
 	switch nt {
 	case NotifyThinking:
 		return clicky.Text("").Add(icons.Lambda).Append(" THINKING", "text-purple-600 font-medium")
@@ -127,7 +134,7 @@ func (nt NotificationType) Pretty() api.Text {
 	}
 }
 
-func file(path string) api.Text {
+func file(path string) clickyapi.Text {
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
@@ -141,7 +148,7 @@ func file(path string) api.Text {
 }
 
 // Pretty returns a formatted text representation of the Notification
-func (n Notification) Pretty() api.Text {
+func (n Notification) Pretty() clickyapi.Text {
 	result := n.Type.Pretty()
 
 	if n.Message != "" {
@@ -272,7 +279,7 @@ type TranscriptEntry struct {
 }
 
 // Pretty returns a formatted text representation of the TranscriptEntry
-func (te TranscriptEntry) Pretty() api.Text {
+func (te TranscriptEntry) Pretty() clickyapi.Text {
 	result := clicky.Text("")
 
 	// Add timestamp
@@ -307,7 +314,7 @@ const (
 )
 
 // Pretty returns a formatted text representation of the EntryType with appropriate styling
-func (et EntryType) Pretty() api.Text {
+func (et EntryType) Pretty() clickyapi.Text {
 	switch et {
 	case EntryText:
 		return clicky.Text("").Add(icons.File).Append(" TEXT", "text-blue-600 font-medium")

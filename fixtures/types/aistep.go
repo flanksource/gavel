@@ -15,10 +15,6 @@ import (
 	"github.com/flanksource/repomap"
 )
 
-// defaultAIStepModel is an agentic captain backend (claude-code) so the agent
-// can inspect the change via its own tools. Overridden by `ai.model` front matter.
-const defaultAIStepModel = "claude-code-sonnet"
-
 func init() {
 	fixtures.AIStepRunner = RunAIStep
 }
@@ -58,11 +54,7 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	}
 
 	var schema checklistResponse
-	spec := resolveAIStepSpec(fixture, opts, &schema)
-	config := fixture.AI.ToAgentConfig(defaultAIStepModel)
-	config.Model = spec.Model
-	config.Budget = spec.Budget
-	config.SessionID = spec.SessionID
+	spec, config := resolveAIStepSpec(fixture, opts, &schema)
 	provider, err := ai.NewProvider(config)
 	if err != nil {
 		return result.Errorf(err, "build ai provider")
@@ -84,17 +76,31 @@ func RunAIStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.
 	return scoreChecklist(fixture, result, items, schema.Items, now)
 }
 
-func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) api.Spec {
-	config := fixture.AI.ToAgentConfig(defaultAIStepModel)
-	spec := api.Spec{Model: config.Model, Budget: config.Budget}
+// resolveAIStepSpec layers the fixture's own `ai:` front matter over the caller's
+// spec and returns both the spec to execute and the provider config built from
+// it. The fixture wins because it is the most specific statement about how it
+// wants to be graded; a todo run's generated fixture declares none, so the
+// caller's resolved verification spec stands.
+//
+// WithoutSession is the invariant: a grader inherits how to run, never what was
+// already said. Resuming the session it is judging would be the candidate
+// marking its own exam.
+func resolveAIStepSpec(fixture fixtures.FixtureTest, opts fixtures.RunOptions, schema *checklistResponse) (api.Spec, ai.AgentConfig) {
+	var spec api.Spec
 	if opts.Spec != nil {
-		spec = spec.Merge(*opts.Spec)
+		spec = opts.Spec.WithoutSession()
 	}
+	config := fixture.AI.ToAgentConfig()
+	spec = spec.Merge(api.Spec{Model: config.Model, Budget: config.Budget})
+
 	spec.Prompt.User = buildChecklistPrompt(fixture, fixtureRepoPath(fixture, opts), checklistItems(fixture))
 	spec.Prompt.Source = "fixtures.ai-step"
 	spec.Prompt.Schema = schema
 	spec.Prompt.SchemaJSON = nil
-	return spec
+
+	config.Model = spec.Model
+	config.Budget = spec.Budget
+	return spec, config
 }
 
 func decodeChecklistResponse(resp *api.Response, target *checklistResponse) error {

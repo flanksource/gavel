@@ -288,7 +288,23 @@ func newExecutor(workDir string, todoList []*types.TODO, provider todos.Provider
 				cfg.Spec.Workflow.Verify = &api.Verify{}
 			}
 		}
-		verifiers, maxIter, err := todos.BuildCheckVerifiers(workDir, todoList, &cfg.Spec)
+		// The grader resolves through its own chain — .gavel.yaml todos.verify >
+		// ai: — so a definition of done is never marked by the model, backend and
+		// session that implemented it. The run's flags and the todos' `llm:`
+		// frontmatter are deliberately not fed in: they state how to implement,
+		// and a todo that pins a cmux model must not thereby pin its own grader.
+		// `gavel todos check` is the entrypoint whose flags are a verification
+		// request, and it resolves them as the override layer itself.
+		grader, err := todospec.Resolve(todospec.Input{WorkDir: workDir, Mode: types.ModeVerify})
+		if err != nil {
+			return nil, "", 0, err
+		}
+		verifiers, maxIter, err := todos.BuildCheckVerifiers(todos.CheckVerifierOptions{
+			WorkDir: workDir,
+			Todos:   todoList,
+			Run:     &cfg.Spec,
+			Grader:  grader.Spec,
+		})
 		if err != nil {
 			return nil, "", 0, err
 		}

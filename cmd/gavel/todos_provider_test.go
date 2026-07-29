@@ -194,6 +194,12 @@ type testPlanReviewProvider struct {
 }
 
 func (p *testPlanReviewProvider) ApprovePlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {
+	// An approved plan leaves review and waits to be implemented; the plan pointer
+	// stays, because the implement run is what follows it.
+	pending := types.StatusPending
+	if err := p.UpdateState(ctx, todo, todos.StateUpdate{Status: &pending}); err != nil {
+		return nil, err
+	}
 	return p.Get(ctx, todo.FilePath)
 }
 

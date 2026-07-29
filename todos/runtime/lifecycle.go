@@ -83,7 +83,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if executorName == "" {
 		executorName = "unknown"
 	}
-	promptMarkdown := preparation.PromptMarkdown
+	promptMarkdown := preparation.Spec.Prompt.User
 	if strings.TrimSpace(promptMarkdown) == "" && mode != types.ModeVerify {
 		promptMarkdown = issue.Body
 	}
@@ -152,12 +152,16 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		}
 	}
 
+	rendered, err := renderedSpec(preparation.Spec, issue.Verification)
+	if err != nil {
+		return err
+	}
 	promptInput := captaindb.CreatePromptRunInput{
 		ID:           promptRunID,
 		Origin:       "gavel.todos",
 		SpecProfile:  string(mode),
 		AdmissionKey: "gavel-todo:" + seed,
-		RenderedSpec: map[string]any{"workflow": verificationWorkflow(issue.Verification)},
+		RenderedSpec: rendered,
 		Runtime: captaindb.PromptRunRuntime{
 			Mode: string(mode), Driver: executorName, Requested: preparation.Requested,
 		},
@@ -185,14 +189,6 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	}
 	p.markPrepared(issue.ID, launch.PromptRun.ID)
 	return p.replaceTODO(ctx, todo, launch.Issue, cwd)
-}
-
-func verificationWorkflow(fixture string) map[string]any {
-	workflow := map[string]any{"autoVerifyWithoutFixture": false}
-	if strings.TrimSpace(fixture) != "" {
-		workflow["verify"] = map[string]any{"fixture": fixture}
-	}
-	return workflow
 }
 
 // RecordRunStart binds the external provider identity and execution thread to
@@ -244,6 +240,16 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		}
 		if agentSession != nil {
 			update.ExecutionSessionID = &agentSession.ID
+		}
+		// Only the report that trails setup carries a spec. Reports that cannot
+		// see it (the session-id report, the verify executor) leave it nil rather
+		// than overwriting the transformed spec with the request it started as.
+		if metadata.Spec != nil {
+			rendered, err := renderedSpec(*metadata.Spec, active.issue.Verification)
+			if err != nil {
+				return err
+			}
+			update.RenderedSpec = &rendered
 		}
 		if _, err := p.captain.UpdatePromptRun(ctx, update); err != nil {
 			return fmt.Errorf("record Captain prompt-run start: %w", err)

@@ -359,6 +359,23 @@ func TestMergeGavelConfig_PromptSpecAppliesEveryField(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-5", merged.Todos.Run.Spec.Model.Name)
 }
 
+// The grader that marks a definition of done resolves through
+// request > todos.verify > ai: > captain. Its floor is a config value in the
+// layer the chain names — not an `if model == ""` at the point of use — so a repo
+// can override it and the settings trace can say where it came from. It must stay
+// an agentic backend: the grader is told to inspect the repository with its own
+// tools, and the ai: floor is an API model with none.
+func TestDefaultGavelConfig_SeedsTheVerifyGrader(t *testing.T) {
+	defaults := DefaultGavelConfig()
+	assert.Equal(t, DefaultVerifyModel, defaults.Todos.Verify.Model.Name)
+	assert.NotEqual(t, DefaultAIModel, defaults.Todos.Verify.Model.Name)
+
+	repo := GavelConfig{Todos: TodosConfig{Verify: api.Spec{Model: api.Model{Name: "claude-code-opus"}}}}
+	merged := MergeGavelConfig(defaults, repo)
+	assert.Equal(t, "claude-code-opus", merged.Todos.Verify.Model.Name)
+	assert.Equal(t, DefaultAIModel, merged.AI.Model.Name, "the grader layer is not the ai: base")
+}
+
 // File and baseDir are one fact — which prompt, and the directory its relative
 // path resolves against. A layer that names its own file brings its own
 // directory; a layer silent about the file leaves both alone, because the config

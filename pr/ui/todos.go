@@ -540,6 +540,18 @@ func (s *Server) handleTodoCreate(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid json"))
 		return
 	}
+	if payload.Status != "" {
+		if err := types.ValidateAssignableStatus(payload.Status); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if payload.Priority != "" {
+		if err := types.ValidatePriority(payload.Priority); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	source := todoSourceFromRequest(r)
 	if payload.Dir != "" {
 		source.Dir = payload.Dir
@@ -609,13 +621,17 @@ func (s *Server) handleTodoNew(w http.ResponseWriter, r *http.Request) {
 			payload.Status = types.StatusDraft
 		}
 	}
-	if payload.Status != "" && !validTodoStatus(payload.Status) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid status %q", payload.Status))
-		return
+	if payload.Status != "" {
+		if err := types.ValidateAssignableStatus(payload.Status); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
-	if payload.Priority != "" && !validTodoPriority(payload.Priority) {
-		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid priority %q", payload.Priority))
-		return
+	if payload.Priority != "" {
+		if err := types.ValidatePriority(payload.Priority); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 
 	source := todoSourceFromRequest(r)
@@ -663,15 +679,15 @@ func (s *Server) handleTodoPatch(w http.ResponseWriter, r *http.Request) {
 	// add a comment, or any combination; at least one operation is required.
 	var update todos.StateUpdate
 	if payload.Status != "" {
-		if !validTodoStatus(payload.Status) {
-			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid status %q", payload.Status))
+		if err := types.ValidateAssignableStatus(payload.Status); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
 		update.Status = &payload.Status
 	}
 	if payload.Priority != "" {
-		if !validTodoPriority(payload.Priority) {
-			writeTodoError(w, http.StatusBadRequest, fmt.Errorf("invalid priority %q", payload.Priority))
+		if err := types.ValidatePriority(payload.Priority); err != nil {
+			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
 		update.Priority = &payload.Priority
@@ -1057,7 +1073,9 @@ func todoFiltersFromRequest(r *http.Request) (todos.DiscoveryFilters, error) {
 	if status == "" {
 		return todos.DiscoveryFilters{}, nil
 	}
-	if !validTodoStatus(status) {
+	// Filtering accepts every known status, including the run projections a
+	// caller may not write.
+	if !types.IsKnownStatus(status) {
 		return todos.DiscoveryFilters{}, fmt.Errorf("invalid status %q", status)
 	}
 	return todos.DiscoveryFilters{IncludeStatuses: []types.Status{status}}, nil
@@ -1154,19 +1172,6 @@ func addTodoStatus(counts *todoCounts, status types.Status, n int) {
 	default:
 		counts.Open += n
 		counts.Pending += n
-	}
-}
-
-func validTodoStatus(status types.Status) bool {
-	return types.IsKnownStatus(status)
-}
-
-func validTodoPriority(priority types.Priority) bool {
-	switch priority {
-	case types.PriorityHigh, types.PriorityMedium, types.PriorityLow:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -1636,8 +1641,26 @@ func newTodoRunExecutorContext(ctx context.Context, req todoRunRequest) (todos.E
 	var verifiers []agent.Verify
 	var maxIterations int
 	if mode == types.ModeRun {
-		var err error
-		verifiers, maxIterations, err = todos.BuildCheckVerifiers(req.Source.Dir, req.Todos, &req.Options.Spec)
+		// The grader has its own chain (.gavel.yaml todos.verify > ai:); the run
+		// spec decides only whether to verify and for how many rounds, so the
+		// implementer's model, backend and session never mark their own work.
+		// CanApprove mirrors the run's own resolve: this entrypoint drains the
+		// approval queue, so a repo with todos.approvals: true must not fail here
+		// while its run resolves fine.
+		grader, err := todospec.Resolve(todospec.Input{
+			WorkDir:    req.Source.Dir,
+			Mode:       types.ModeVerify,
+			CanApprove: true,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		verifiers, maxIterations, err = todos.BuildCheckVerifiers(todos.CheckVerifierOptions{
+			WorkDir: req.Source.Dir,
+			Todos:   req.Todos,
+			Run:     &req.Options.Spec,
+			Grader:  grader.Spec,
+		})
 		if err != nil {
 			return nil, "", err
 		}

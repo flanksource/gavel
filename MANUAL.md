@@ -534,7 +534,10 @@ gavel todos check
 gavel todos run
 gavel todos run --interactive
 gavel todos run --group-by directory
-gavel todos run --mode plan                # propose a plan; approve/reject via `gavel todos plan`
+gavel todos run --mode plan                # propose a plan; the TODO parks in `review`
+gavel todos plan approve 3f2a1b --run      # accept the plan and implement it
+gavel todos plan revise 3f2a1b --feedback "split the migration in two"
+gavel todos plan reject 3f2a1b             # discard the plan; the TODO returns to pending
 gavel todos import --dir ./archive/todos   # explicit Markdown → PostgreSQL
 gavel todos export 3f2a1b --dir ./backup   # explicit PostgreSQL → Markdown
 ```

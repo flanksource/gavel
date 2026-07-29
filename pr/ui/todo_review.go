@@ -10,7 +10,6 @@ import (
 	"time"
 
 	cmuxprov "github.com/flanksource/captain/pkg/ai/provider/cmux"
-	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos"
@@ -63,6 +62,13 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Read the plan's prompt run before approving: the approval retires it, and it
+	// is the record of the runtime the implement run continues.
+	planRun, err := activeTodoPromptRun(r.Context(), provider, todo)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	todo, err = reviewer.ApprovePlan(r.Context(), todo, todoReviewActor, "")
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
@@ -71,14 +77,15 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 
 	resp := todoApproveResponse{Todo: summarizeTodo(todo, true)}
 	if payload.Run {
-		runPayload := todoRunPayload{}
+		override := todoRunPayload{}
 		if payload.Options != nil {
-			runPayload = *payload.Options
+			override = *payload.Options
 		}
 		// The approved plan executes as an implement run, whatever the dialog sent.
-		runPayload.RunMode = string(types.ModeRun)
-		runPayload.Plan = false
-		opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
+		opts, err := continueRun(continuation{
+			Dir: source.Dir, Todos: []*types.TODO{todo}, Prior: planRun,
+			Override: override, Mode: types.ModeRun,
+		})
 		if err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
@@ -182,6 +189,12 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Read the plan's prompt run before the revision transition retires it.
+	planRun, err := activeTodoPromptRun(r.Context(), provider, todo)
+	if err != nil {
+		writeTodoError(w, http.StatusInternalServerError, err)
+		return
+	}
 	// The native review operation records the feedback and revision-requested
 	// state together; a separate provider comment would duplicate the timeline.
 	todo, err = reviewer.RequestPlanRevision(r.Context(), todo, todoReviewActor, feedback)
@@ -190,24 +203,26 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runPayload := todoRunPayload{}
+	override := todoRunPayload{}
 	if payload.Options != nil {
-		runPayload = *payload.Options
+		override = *payload.Options
 	}
 	sessionID := ""
 	if todo.LLM != nil {
 		sessionID = todo.LLM.SessionId
 	}
-	runPayload.Resume = sessionID != ""
-	runPayload.RunMode = string(types.ModePlan) // revise re-enters plan mode on the same session
-	runPayload.Plan = true
-	opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
+	// Revise re-enters plan mode: it continues the plan run's own configuration,
+	// resuming its session when there is one to resume.
+	opts, err := continueRun(continuation{
+		Dir: source.Dir, Todos: []*types.TODO{todo}, Prior: planRun,
+		Override: override, Mode: types.ModePlan, Resume: sessionID != "",
+	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
-	if runPayload.Resume {
+	if opts.Resume {
 		err = startTodoAnswer(req, feedback)
 	} else {
 		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
@@ -301,23 +316,22 @@ func (s *Server) handleTodoAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A resumed turn continues the runtime the asking turn resolved: the prompt
-	// run's stored runtime is the record of what actually ran, and without it the
-	// payload defaults would hand a codex session to claude --resume.
-	runPayload := todoRunPayload{}
+	// A resumed turn continues the turn that asked: it stays in that mode, on the
+	// spec that turn was dispatched with and the runtime it actually resolved —
+	// without which the payload defaults would hand a codex session to
+	// claude --resume.
+	override := todoRunPayload{}
 	if payload.Options != nil {
-		runPayload = *payload.Options
+		override = *payload.Options
 	}
-	inheritRunRuntime(&runPayload, activeRun)
-	runPayload.Resume = true
-	runPayload.RunMode = string(todo.RunMode) // continue in the mode that asked
-	runPayload.Plan = false
-	opts, err := normalizeTodoRunOptions(source.Dir, []*types.TODO{todo}, runPayload)
+	opts, err := continueRun(continuation{
+		Dir: source.Dir, Todos: []*types.TODO{todo}, Prior: activeRun,
+		Override: override, Mode: todo.RunMode, Resume: true,
+	})
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
-	opts.Spec.SessionID = resolveRunSessionID(opts, []*types.TODO{todo})
 	req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
 	// Pre-flight the executor before recording the answer, so a resume that
 	// cannot start fails as a 4xx the answer box renders instead of leaving the
@@ -384,32 +398,6 @@ func answerLivenessError(run *captaindb.PromptRun, sessionID string) (int, error
 			"agent is live and waiting on approval for %s; answer it via /api/todos/session/approve", pending.Tool)
 	}
 	return http.StatusConflict, errors.New("todo run is still active; stop it before answering")
-}
-
-// inheritRunRuntime seeds a resumed turn's run options from what the asking turn
-// actually resolved. Explicit options from the dashboard still win.
-func inheritRunRuntime(payload *todoRunPayload, run *captaindb.PromptRun) {
-	if run == nil {
-		return
-	}
-	resolved := run.Runtime.Resolved
-	if strings.TrimSpace(payload.Driver) == "" && strings.TrimSpace(payload.Mode) == "" {
-		// A run's driver is only inherited when it names a coding driver: the same
-		// field also carries non-driver runner labels (a verify step's
-		// "gavel-fixtures"), which must fall through to the model-derived default.
-		if kind, err := drivers.Parse(run.Runtime.Driver); err == nil {
-			payload.Driver = string(kind)
-		}
-	}
-	if strings.TrimSpace(payload.Spec.Name) == "" {
-		payload.Spec.Name = strings.TrimSpace(resolved.Model)
-	}
-	if strings.TrimSpace(string(payload.Spec.Backend)) == "" {
-		payload.Spec.Backend = api.Backend(strings.TrimSpace(resolved.Backend))
-	}
-	if strings.TrimSpace(string(payload.Spec.Effort)) == "" {
-		payload.Spec.Effort = api.Effort(strings.TrimSpace(resolved.Effort))
-	}
 }
 
 // zombieAskSession permits resuming a todo whose worker died after Claude wrote

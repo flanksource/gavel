@@ -456,6 +456,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
 	mux.HandleFunc("GET /api/todos/attachments/{id}", s.handleTodoAttachment)
 	mux.HandleFunc("/api/todos/item", s.handleTodoItem)
+	mux.HandleFunc("/api/todos/links", s.handleTodoLinks)
 	mux.HandleFunc("/api/todos/run", s.handleTodoRun)
 	mux.HandleFunc("GET /api/todos/run/context", s.handleTodoRunContext)
 	mux.HandleFunc("/api/todos/run/preview", s.handleTodoRunPreview)

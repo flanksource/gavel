@@ -12,8 +12,10 @@ import (
 )
 
 var (
-	todoEditTitle string
-	todoEditBody  string
+	todoEditTitle    string
+	todoEditBody     string
+	todoEditStatus   string
+	todoEditPriority string
 
 	todoCommentBody string
 
@@ -24,9 +26,11 @@ var (
 var todosEditCmd = &cobra.Command{
 	Use:          "edit <id-or-alias>",
 	SilenceUsage: true,
-	Short:        "Edit a TODO's title and/or body",
+	Short:        "Edit a TODO's title, body, status, and/or priority",
 	Example: `  gavel todos edit 3f2a1b --title "Fix parser panic"
-  gavel todos edit 3f2a1b --body @new-body.md`,
+  gavel todos edit 3f2a1b --body @new-body.md
+  gavel todos edit 3f2a1b --priority low
+  gavel todos edit 3f2a1b --status completed`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTodosEdit,
 }
@@ -55,6 +59,10 @@ func init() {
 	todosCmd.AddCommand(todosEditCmd)
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
 	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body or @path")
+	todosEditCmd.Flags().StringVar(&todoEditStatus, "status", "",
+		"New status ("+joinStrings(types.AssignableStatuses())+")")
+	todosEditCmd.Flags().StringVar(&todoEditPriority, "priority", "",
+		"New priority ("+joinStrings(types.KnownPriorities())+")")
 
 	todosCmd.AddCommand(todosCommentCmd)
 	todosCommentCmd.Flags().StringVar(&todoCommentBody, "body", "", "Comment body or @path")
@@ -79,29 +87,90 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	var edit todos.EditRequest
+	flags := todoEditFlags{Status: todoEditStatus, Priority: todoEditPriority}
 	if cmd.Flags().Changed("title") {
-		title := strings.TrimSpace(todoEditTitle)
-		if title == "" {
-			return fmt.Errorf("--title cannot be empty")
-		}
-		edit.Title = &title
+		flags.Title = &todoEditTitle
 	}
 	if cmd.Flags().Changed("body") {
 		body, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--body", Value: todoEditBody})
 		if err != nil {
 			return err
 		}
-		edit.Body = &body
+		flags.Body = &body
 	}
-	if edit.IsEmpty() {
-		return fmt.Errorf("nothing to edit: provide --title and/or --body")
-	}
-
-	if err := provider.Edit(ctx, todo, edit); err != nil {
+	edit, state, err := buildTodoEdit(flags)
+	if err != nil {
 		return err
 	}
+
+	// Content first: Edit refreshes the TODO's optimistic-lock version, which
+	// the state update then reuses.
+	if !edit.IsEmpty() {
+		if err := provider.Edit(ctx, todo, edit); err != nil {
+			return err
+		}
+	}
+	if state.Status != nil || state.Priority != nil {
+		if err := provider.UpdateState(ctx, todo, state); err != nil {
+			return err
+		}
+	}
 	return printTodo(ctx, provider, args[0], todo)
+}
+
+// todoEditFlags is the already-resolved (file references expanded) flag input to
+// `todos edit`. Title and Body are nil when the flag was not set.
+type todoEditFlags struct {
+	Title    *string
+	Body     *string
+	Status   string
+	Priority string
+}
+
+// buildTodoEdit splits edit flags into a content edit and a state update,
+// rejecting statuses storage will not persist so the caller sees a failure
+// rather than a silently declined write.
+func buildTodoEdit(flags todoEditFlags) (todos.EditRequest, todos.StateUpdate, error) {
+	var edit todos.EditRequest
+	var state todos.StateUpdate
+
+	if flags.Title != nil {
+		title := strings.TrimSpace(*flags.Title)
+		if title == "" {
+			return edit, state, fmt.Errorf("--title cannot be empty")
+		}
+		edit.Title = &title
+	}
+	if flags.Body != nil {
+		edit.Body = flags.Body
+	}
+	if raw := strings.TrimSpace(flags.Status); raw != "" {
+		status := types.Status(raw)
+		if err := types.ValidateAssignableStatus(status); err != nil {
+			return edit, state, err
+		}
+		state.Status = &status
+	}
+	if raw := strings.TrimSpace(flags.Priority); raw != "" {
+		priority := types.Priority(raw)
+		if err := types.ValidatePriority(priority); err != nil {
+			return edit, state, err
+		}
+		state.Priority = &priority
+	}
+
+	if edit.IsEmpty() && state.Status == nil && state.Priority == nil {
+		return edit, state, fmt.Errorf("nothing to edit: provide --title, --body, --status, and/or --priority")
+	}
+	return edit, state, nil
+}
+
+func joinStrings[T ~string](values []T) string {
+	names := make([]string, 0, len(values))
+	for _, value := range values {
+		names = append(names, string(value))
+	}
+	return strings.Join(names, ", ")
 }
 
 func runTodosComment(cmd *cobra.Command, args []string) error {

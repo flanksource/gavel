@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
 	_ "github.com/flanksource/gavel/fixtures/types"
+	"github.com/flanksource/gavel/verify"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 )
@@ -328,8 +329,18 @@ func runFixtures(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
+	// A fixture's embedded AI step needs a model, and it comes from the same
+	// chain a todo's definition of done uses: .gavel.yaml todos.verify over the
+	// ai: base. A fixture's own `ai:` front matter still overrides it.
+	cfg, err := verify.LoadGavelConfig(wd)
+	if err != nil {
+		return fmt.Errorf("load .gavel.yaml: %w", err)
+	}
+	graderSpec := cfg.AI.Merge(cfg.Todos.Verify)
+
 	runner, err := fixtures.NewRunner(fixtures.RunnerOptions{
 		Paths:          args,
+		Spec:           &graderSpec,
 		Format:         clicky.Flags.ResolveFormat(),
 		NoColor:        clicky.Flags.NoColor,
 		WorkDir:        wd,

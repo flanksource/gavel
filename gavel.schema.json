@@ -2118,6 +2118,111 @@
         "timeout": {
           "description": "Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers.",
           "type": "string"
+        },
+        "verify": {
+          "additionalProperties": false,
+          "description": "Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides ai: and is overridden by the request. There is no prompt to override — the checklist is generated from the todo's acceptance criteria.",
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "budget": {
+              "$ref": "#/$defs/Budget"
+            },
+            "cliArgs": {
+              "type": "object"
+            },
+            "effort": {
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "$ref": "#/$defs/ModelList"
+            },
+            "id": {
+              "type": "string"
+            },
+            "interrupt": {
+              "type": "boolean"
+            },
+            "mediaTypes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "memory": {
+              "$ref": "#/$defs/Memory"
+            },
+            "messages": {
+              "items": {
+                "$ref": "#/$defs/Message"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "enum": [
+                "api",
+                "cli",
+                "agent",
+                "cmux"
+              ],
+              "type": "string"
+            },
+            "model": {
+              "default": "claude-code-sonnet",
+              "description": "Catalog model slug the grader runs as. It must be agentic (e.g. claude-code-sonnet): the grader is told to inspect the change with its own tools, and an API model returns confident verdicts without reading the diff.",
+              "type": "string"
+            },
+            "noCache": {
+              "type": "boolean"
+            },
+            "permissions": {
+              "$ref": "#/$defs/Permissions"
+            },
+            "prompt": {
+              "$ref": "#/$defs/Prompt"
+            },
+            "resume": {
+              "type": "boolean"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "setup": {
+              "$ref": "#/$defs/Setup"
+            },
+            "steer": {
+              "type": "boolean"
+            },
+            "streaming": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "toolApproval": {
+              "$ref": "#/$defs/ToolApprovalResume"
+            },
+            "toolPreferences": {
+              "$ref": "#/$defs/ToolPreferences"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow"
+            }
+          },
+          "required": [
+            "model"
+          ],
+          "type": "object"
         }
       },
       "type": "object"

@@ -172,14 +172,26 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	if todo.LLM == nil || todo.LLM.SessionId != "sess-1" {
 		t.Errorf("session id not recorded on todo: %+v", todo.LLM)
 	}
-	if len(starts) != 2 {
-		t.Fatalf("run starts = %d, want pre-dispatch and session-bound metadata: %#v", len(starts), starts)
+	// Three reports, each adding what the one before it could not know: the
+	// resolved runtime before dispatch, the spec once setup has transformed it,
+	// and the provider's session id once the stream names one.
+	if len(starts) != 3 {
+		t.Fatalf("run starts = %d, want pre-dispatch, post-setup and session-bound metadata: %#v", len(starts), starts)
 	}
 	if starts[0].SessionID != "" || starts[0].Driver != "cli" || starts[0].Agent != "claude" || starts[0].ResolvedModel != "claude-agent-sonnet" {
 		t.Fatalf("pre-dispatch run metadata = %+v", starts[0])
 	}
-	if starts[1].SessionID != "sess-1" || starts[1].Mode != "run" || starts[1].ResolvedModel != "claude-agent-sonnet" || starts[1].Effort != "high" {
-		t.Fatalf("session-bound run metadata = %+v", starts[1])
+	if starts[0].Spec != nil {
+		t.Fatalf("pre-dispatch report carried a spec before setup ran: %+v", starts[0].Spec)
+	}
+	if starts[1].Spec == nil {
+		t.Fatalf("post-setup run metadata carried no spec: %+v", starts[1])
+	}
+	if starts[2].SessionID != "sess-1" || starts[2].Mode != "run" || starts[2].ResolvedModel != "claude-agent-sonnet" || starts[2].Effort != "high" {
+		t.Fatalf("session-bound run metadata = %+v", starts[2])
+	}
+	if starts[2].Spec != nil {
+		t.Fatalf("session-bound report must leave the persisted spec alone: %+v", starts[2].Spec)
 	}
 	var messages []string
 	for _, entry := range log.GetLogs() {
@@ -288,10 +300,11 @@ func TestHeadlessPreparedPromptMatchesDispatchWithApprovedPlan(t *testing.T) {
 		Implementation:  "Remove provider fallback.",
 	}
 	ctx := newTestCtx()
-	prepared, err := e.RenderRunPrompt(ctx, todo)
+	preparedSpec, err := e.RenderRunSpec(ctx, todo)
 	if err != nil {
-		t.Fatalf("RenderRunPrompt: %v", err)
+		t.Fatalf("RenderRunSpec: %v", err)
 	}
+	prepared := preparedSpec.Prompt.User
 	if _, err := e.Execute(ctx, todo); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -439,6 +452,62 @@ func TestHeadlessPreparesAndCleansCanonicalWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(preparedDir); !os.IsNotExist(err) {
 		t.Fatalf("prepared worktree was not cleaned up: %q, stat error %v", preparedDir, err)
+	}
+}
+
+// What gets persisted as the run's rendered spec must describe the tree the
+// agent worked in, not the checkout it was asked to make — replaying a spec that
+// still asked would clone a second worktree. The setup plugin performs that
+// transform during PreRun, so the run re-reports its metadata afterwards with
+// the rewritten spec attached.
+func TestHeadlessReportsPostSetupSpec(t *testing.T) {
+	repo := initHeadlessGitRepo(t)
+	var dispatchedCwd string
+	stream := func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
+		dispatchedCwd = req.Cwd()
+		return fakeStream(captainai.Event{Kind: captainai.EventResult, Success: true})(context.Background(), req, nil)
+	}
+	executor := NewExecutor(todopkg.AgentRunConfig{
+		Spec: api.Spec{
+			Model: api.Model{Name: "claude"},
+			Setup: &shell.Setup{
+				Cwd: ".",
+				Checkout: &shell.Checkout{
+					Mode:     shell.CheckoutLocal,
+					Path:     ".",
+					Worktree: &shell.Worktree{Mode: shell.WorktreeNew},
+				},
+			},
+		},
+		WorkDir: repo,
+		Mode:    types.ModeRun,
+	}, withStream(stream))
+
+	ctx := newTestCtx()
+	var reported []todopkg.RunStartMetadata
+	ctx.SetRunStartHook(func(meta todopkg.RunStartMetadata) { reported = append(reported, meta) })
+
+	if _, err := executor.Execute(ctx, &types.TODO{}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var prepared *api.Spec
+	for _, meta := range reported {
+		if meta.Spec != nil {
+			prepared = meta.Spec
+		}
+	}
+	if prepared == nil {
+		t.Fatalf("no run-start metadata carried the dispatched spec (%d reports)", len(reported))
+	}
+	if prepared.Setup == nil || prepared.Setup.Checkout != nil {
+		t.Fatalf("reported spec still requests a checkout: %+v", prepared.Setup)
+	}
+	if dispatchedCwd == repo || dispatchedCwd == "" {
+		t.Fatalf("run did not move into a prepared worktree: %q", dispatchedCwd)
+	}
+	if prepared.Setup.Cwd != dispatchedCwd {
+		t.Fatalf("reported cwd = %q, want the prepared worktree %q", prepared.Setup.Cwd, dispatchedCwd)
 	}
 }
 

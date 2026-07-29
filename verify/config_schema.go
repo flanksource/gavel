@@ -43,7 +43,7 @@ func gavelConfigSchema() map[string]any {
 			"secrets":  secretsSchema(),
 			"procfile": procfileSchema(),
 			"checks":   checksSchema(),
-			"todos":    todosSchema(),
+			"todos":    todosSchema(specSchema),
 			"status":   statusSchema(),
 			"test":     testSchema(),
 			"pr":       prSchema(),
@@ -61,6 +61,19 @@ func gavelConfigSchema() map[string]any {
 // x-prompt-picker tells the settings UI to replace the generic object form with
 // the shared rich PromptPicker editor.
 func aiSchema(schema map[string]any) map[string]any {
+	node := specNodeSchema(schema,
+		"Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here.",
+		DefaultAIModel,
+		"Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5).")
+	node["x-prompt-picker"] = true
+	return node
+}
+
+// specNodeSchema clones the captain Spec definition into a config node carrying
+// its own description and model default. A config field typed api.Spec accepts
+// every spec field, so the shape is the spec's — only the documentation and the
+// default differ per operation.
+func specNodeSchema(schema map[string]any, description, modelDefault, modelDescription string) map[string]any {
 	defs, ok := schema["$defs"].(map[string]any)
 	if !ok {
 		panic("captain spec schema has no $defs")
@@ -69,12 +82,8 @@ func aiSchema(schema map[string]any) map[string]any {
 	if !ok {
 		panic("captain spec schema has no Spec definition")
 	}
-	node := make(map[string]any, len(spec)+2)
-	for key, value := range spec {
-		node[key] = value
-	}
-	node["description"] = "Base AI spec inherited by every AI operation. Configure model, prompt, workspace, permissions, environment, and runtime defaults here."
-	node["x-prompt-picker"] = true
+	node := cloneSchemaMap(spec)
+	node["description"] = description
 
 	props, ok := spec["properties"].(map[string]any)
 	if !ok {
@@ -86,8 +95,8 @@ func aiSchema(schema map[string]any) map[string]any {
 		panic("captain Spec definition has no model property")
 	}
 	model = cloneSchemaMap(model)
-	model["default"] = DefaultAIModel
-	model["description"] = "Default catalog model slug for all AI operations (e.g. claude-sonnet-4-5)."
+	model["default"] = modelDefault
+	model["description"] = modelDescription
 	props["model"] = model
 	node["properties"] = props
 	return node
@@ -226,7 +235,7 @@ func prSchema() map[string]any {
 	)
 }
 
-func todosSchema() map[string]any {
+func todosSchema(specSchema map[string]any) map[string]any {
 	return object(
 		"Settings for `gavel todos run`.",
 		map[string]any{
@@ -236,6 +245,15 @@ func todosSchema() map[string]any {
 			"plan": promptSpecSchema(prompts.TodosPlan,
 				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
 					"reviewable implementation plan."),
+			"verify": specNodeSchema(specSchema,
+				"Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, "+
+					"and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides "+
+					"ai: and is overridden by the request. There is no prompt to override — the checklist is "+
+					"generated from the todo's acceptance criteria.",
+				DefaultVerifyModel,
+				"Catalog model slug the grader runs as. It must be agentic (e.g. claude-code-sonnet): the "+
+					"grader is told to inspect the change with its own tools, and an API model returns "+
+					"confident verdicts without reading the diff."),
 			"driver": stringProp(
 				"Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from " +
 					"the model. Last-write-wins across layers."),
