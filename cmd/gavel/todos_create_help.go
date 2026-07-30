@@ -54,7 +54,9 @@ func todosCreateHelp(cmd *cobra.Command) api.Text {
 		Append(" accept inline text or ", muted).Append("@path", code).Append(".", muted).NewLine().
 		Append("  Relative paths resolve from ", muted).Append("--cwd", flag).Append("; use ", muted).Append(`\@text`, code).
 		Append(" for a literal leading @.", muted).NewLine().
-		Append("  An explicit ", muted).Append("--verification", flag).Append(" replaces any Verification section in the body.", muted).NewLine().NewLine().
+		Append("  Top-level ", muted).Append("# Verification", code).Append(" or ", muted).Append("## Verification", code).
+		Append(" sections move out of the body into the fixture.", muted).NewLine().
+		Append("  Explicit ", muted).Append("--verification", flag).Append(" content is kept first; extracted body fixtures are appended.", muted).NewLine().NewLine().
 		Append("PLAN LIFECYCLE", heading).NewLine().
 		Append("  ").Append("--plan", flag).Append(" stores an immutable Captain plan revision selected on the TODO.", muted).NewLine().
 		Append("  By default the plan awaits approval and the TODO appears in ", muted).Append("review", code).Append(".", muted).NewLine().

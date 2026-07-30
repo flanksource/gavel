@@ -32,9 +32,11 @@ func (p *Provider) todoFromIssue(
 		sourceDir = workspace.RootPath
 	}
 
-	body := issue.Body
-	if verification := strings.TrimSpace(issue.Verification); verification != "" {
-		body = todos.UpsertVerificationFixture(body, verification)
+	body, bodyVerification, _ := todos.SplitVerificationFixture(issue.Body)
+	body = strings.TrimSpace(body)
+	verification := strings.TrimSpace(issue.Verification)
+	if verification == "" {
+		verification = bodyVerification
 	}
 	status := todoStatus(issue.Status, issue.ExecutionState)
 	priority := todoPriority(issue.Priority)
@@ -47,6 +49,14 @@ func (p *Provider) todoFromIssue(
 		CWD:      sourceDir,
 	}
 	todo, err := todos.ParseTODOContent(issue.Title, body, sourceDir, defaults)
+	if err != nil {
+		return nil, err
+	}
+	todo.VerificationMarkdown = verification
+	todo.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
+		Name: issue.Title, Markdown: verification, SourceDir: sourceDir,
+		FrontMatter: defaults.FrontMatter,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -181,19 +181,20 @@ type CreatePlanRequest struct {
 	Approved bool
 }
 
-// EditRequest is a partial update to a TODO's title and/or body. A nil field is
-// left unchanged, mirroring StateUpdate's pointer semantics.
+// EditRequest is a partial update to a TODO's content. A nil field is left
+// unchanged, mirroring StateUpdate's pointer semantics.
 type EditRequest struct {
-	Title    *string
-	Body     *string
-	Path     *types.StringOrSlice
-	Labels   []string
-	Metadata map[string]any
+	Title        *string
+	Body         *string
+	Verification *string
+	Path         *types.StringOrSlice
+	Labels       []string
+	Metadata     map[string]any
 }
 
 // IsEmpty reports whether the edit would change nothing.
 func (e EditRequest) IsEmpty() bool {
-	return e.Title == nil && e.Body == nil && e.Path == nil && len(e.Labels) == 0 && len(e.Metadata) == 0
+	return e.Title == nil && e.Body == nil && e.Verification == nil && e.Path == nil && len(e.Labels) == 0 && len(e.Metadata) == 0
 }
 
 func TODOReference(todo *types.TODO) string {

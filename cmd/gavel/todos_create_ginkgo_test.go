@@ -86,6 +86,34 @@ var _ = Describe("TODO create lifecycle", func() {
 		_, err = resolveTodoCreateContent(GinkgoT().TempDir(), todoCreateContentOptions{VerificationSet: true})
 		Expect(err).To(MatchError("--verification cannot be empty"))
 	})
+
+	DescribeTable("moves body verification after explicit verification",
+		func(body func(string) string) {
+			workDir := GinkgoT().TempDir()
+			content, err := resolveTodoCreateContent(workDir, todoCreateContentOptions{
+				BodySet:         true,
+				Body:            body(workDir),
+				VerificationSet: true,
+				Verification:    "explicit fixture",
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(content.Body).To(Equal("Parser failures lose context."))
+			Expect(content.Verification).To(Equal("explicit fixture\n\nbody fixture"))
+		},
+		Entry("from inline body markdown", func(string) string {
+			return `Parser failures lose context.
+
+# Verification
+
+body fixture`
+		}),
+		Entry("from file-backed body markdown", func(workDir string) string {
+			path := filepath.Join(workDir, "todo.md")
+			Expect(os.WriteFile(path, []byte("Parser failures lose context.\n\n## Verification\n\nbody fixture\n"), 0o600)).To(Succeed())
+			return "@todo.md"
+		}),
+	)
 })
 
 var _ = Describe("TODO create help", func() {
@@ -104,6 +132,8 @@ var _ = Describe("TODO create help", func() {
 			"--plan @plan.md",
 			"--verification @verification.md",
 			"--status approved",
+			"# Verification",
+			"extracted body fixtures are appended",
 			"# verification.md",
 			"cwd: .                  # Resolve paths from the repository root.",
 			"ai: {}                  # Score the acceptance checklist against the diff.",
