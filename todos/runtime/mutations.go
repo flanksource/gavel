@@ -58,7 +58,35 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 	if !hasNativeChange {
 		return fmt.Errorf("native TODO storage supports title, body, and label edits; path and arbitrary metadata require explicit import/export")
 	}
-	issue, err := p.repository.UpdateIssue(ctx, id, version, patch)
+	var issue *native.Issue
+	if patch.Verification != nil && strings.TrimSpace(*patch.Verification) != "" {
+		current, getErr := p.repository.GetIssue(ctx, id)
+		if getErr != nil {
+			return getErr
+		}
+		if strings.TrimSpace(*patch.Verification) != strings.TrimSpace(current.Verification) {
+			operationID := uuid.NewSHA1(
+				uuid.NameSpaceOID,
+				[]byte(fmt.Sprintf("gavel-todo-add-verification:%s:%d", id, version)),
+			)
+			issue, err = p.coordinator.UpdateIssueWithSession(ctx, native.UpdateIssueSessionInput{
+				IssueID:              id,
+				ExpectedIssueVersion: version,
+				Patch:                patch,
+				RootSession: p.todoRootSessionInput(native.CreateIssueInput{
+					ID: current.ID, Title: current.Title, Body: current.Body,
+				}),
+				Session: p.todoOperationSessionInput(current, todoOperationSessionOptions{
+					ID: operationID, Operation: todoSessionAddVerification,
+					Provider: "gavel", CWD: p.workDir, Prompt: *patch.Verification,
+				}),
+			})
+		} else {
+			issue, err = p.repository.UpdateIssue(ctx, id, version, patch)
+		}
+	} else {
+		issue, err = p.repository.UpdateIssue(ctx, id, version, patch)
+	}
 	if err != nil {
 		return err
 	}
