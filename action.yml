@@ -130,10 +130,9 @@ runs:
         set +e
         rm -f "${JSON_FILE}" "${HTML_FILE}" "${GAVEL_LOG_FILE}"
 
-        # --show-passed is only defined on `gavel test` / `gavel lint`. Other
-        # subcommands (e.g. `fixtures`) reject unknown flags and fail at parse
-        # time. Detect the first non-flag word in $GAVEL_ARGS and only append
-        # the test-specific flag for those subcommands.
+        # --show-passed is only defined on `gavel test`. Other subcommands
+        # reject the flag and fail at parse time. Detect the first non-flag word
+        # in $GAVEL_ARGS and only append the test-specific flag for that command.
         first_subcmd=""
         for tok in $GAVEL_ARGS; do
           case "$tok" in
@@ -143,7 +142,7 @@ runs:
         done
         extra_flags=("--no-progress" "--no-color" "--format" "json=${JSON_FILE},html=${HTML_FILE}")
         case "$first_subcmd" in
-          test|lint) extra_flags=("--show-passed" "${extra_flags[@]}") ;;
+          test) extra_flags=("--show-passed" "${extra_flags[@]}") ;;
         esac
 
         # shellcheck disable=SC2086

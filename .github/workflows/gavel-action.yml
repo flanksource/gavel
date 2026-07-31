@@ -68,3 +68,14 @@ jobs:
           version: source
           comment-header: gavel-self-test
           fail-on-error: "true"
+
+      - name: Run lint-only gavel action
+        uses: ./
+        with:
+          args: lint golangci-lint
+          version: source
+          json-file: gavel-lint-results.json
+          html-file: gavel-lint-results.html
+          artifact-name: gavel-lint-results
+          comment-header: gavel-self-test-lint
+          fail-on-error: "true"
