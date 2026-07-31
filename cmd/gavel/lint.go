@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/gavel/lint"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
+	"github.com/flanksource/gavel/testrunner"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 	"github.com/flanksource/gavel/verify"
 	"github.com/flanksource/repomap"
@@ -111,7 +112,12 @@ func runLint(opts LintOptions) (any, error) {
 
 	allResults, err := lint.Run(runCtx, runOpts)
 	if err != nil {
-		return nil, err
+		// Same contract as a failed test run: serialized formats still get a
+		// document, so `--format json=FILE` never silently produces nothing.
+		return nil, testRunFailureValue(
+			testrunner.RunOptions{WorkDir: opts.WorkDir, Lint: true},
+			nil, nil, runStarted, err,
+		)
 	}
 
 	if resolveAIFix(opts) {
@@ -185,7 +191,7 @@ func runLint(opts LintOptions) (any, error) {
 	// Per-run snapshot so lint-only runs appear in the .gavel run history
 	// (the Tests dashboard scans run-*.json); Save() above only writes the
 	// sha-keyed latest.
-	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted); err != nil {
+	if path, err := snapshots.SavePerRun(opts.WorkDir, snap, runStarted, ""); err != nil {
 		logger.Warnf("persist per-run snapshot: %v", err)
 	} else {
 		logger.V(1).Infof("wrote per-run snapshot to %s", path)

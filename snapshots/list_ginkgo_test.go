@@ -37,7 +37,7 @@ var _ = Describe("LastRun", func() {
 			Metadata: &testui.SnapshotMetadata{Started: time.Date(2026, 7, 23, 8, 0, 0, 0, time.UTC)},
 			Tests:    []parsers.Test{{Name: "newer-history", Failed: true}},
 		}
-		_, err := SavePerRun(workDir, &newer, newer.Metadata.Started)
+		_, err := SavePerRun(workDir, &newer, newer.Metadata.Started, "")
 		Expect(err).NotTo(HaveOccurred())
 
 		run, err := LastRun(workDir)

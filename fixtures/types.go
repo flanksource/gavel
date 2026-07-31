@@ -511,6 +511,58 @@ type FixtureResult struct {
 	// lint violation). The runner appends them under the step's tree node so the
 	// existing stats/display pipeline rolls them up. Nil for ordinary steps.
 	Children []*FixtureNode `json:"children,omitempty"`
+
+	// Run references the engine output a runner step produced. Nil for ordinary
+	// steps, which carry their evidence in Command/Stdout/Stderr.
+	Run *RunArtifact `json:"run,omitempty" pretty:"hide"`
+}
+
+// RunArtifact is a runner step's engine output recorded by reference: the counts
+// and top failures needed to render a verdict inline, plus the .gavel snapshot
+// holding the full test tree and lint violations.
+//
+// The tree is deliberately not inlined. A FixtureResult is embedded in a TODO's
+// verification output, which is persisted into a Captain prompt run's result_json
+// and re-served on every dashboard poll — a full test tree per attempt would make
+// that quadratically expensive.
+//
+// This struct uses only primitives on purpose: package fixtures cannot import
+// testrunner/parsers, linters or snapshots, because report → linters → verify →
+// todos/types → fixtures already makes those packages depend on this one.
+type RunArtifact struct {
+	// RunID is the .gavel/<run_id>.json file stem, the same id
+	// GET /api/tests/run?runId= resolves. Path is the absolute location on the
+	// host that ran the step, which is not necessarily the host rendering it.
+	RunID string `json:"run_id"`
+	Path  string `json:"path,omitempty"`
+	Kind  string `json:"kind"` // test | lint | test+lint
+
+	Total   int `json:"total"`
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Warned  int `json:"warned"`
+	Skipped int `json:"skipped"`
+
+	LintViolations int      `json:"lint_violations,omitempty"`
+	Linters        []string `json:"linters,omitempty"`
+
+	// Failures is a bounded sample of what went wrong, so a reader gets the gist
+	// without fetching the snapshot. Truncated is set when it does not hold all
+	// of them.
+	Failures  []RunFailure `json:"failures,omitempty"`
+	Truncated int          `json:"truncated,omitempty"`
+
+	// Error explains why the run produced no results at all — the engine crashed
+	// or never started. An empty artifact without Error is a genuinely empty run.
+	Error string `json:"error,omitempty"`
+}
+
+// RunFailure is one failing test or lint violation from a RunArtifact.
+type RunFailure struct {
+	Name    string `json:"name"`
+	Suite   string `json:"suite,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func (f FixtureResult) Failf(format string, args ...interface{}) FixtureResult {

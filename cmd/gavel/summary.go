@@ -8,9 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/report"
-	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 type summaryOptions struct {
@@ -38,44 +36,6 @@ func (b compactSummaryBudget) report() report.Budget {
 	}
 }
 
-// gavelResultJSON mirrors the anonymous struct cmd/gavel/test.go returns when
-// --lint is set. It's kept here as a consumer of the JSON wire format so the
-// summary command can read any gavel test result file without depending on
-// the internal testrunner types.
-type gavelResultJSON struct {
-	Tests []parsers.Test          `json:"tests"`
-	Lint  []*linters.LinterResult `json:"lint"`
-	// Error / ExitCode / LogTail are populated by the composite action
-	// when gavel crashes before writing results. Stub files carry these
-	// fields so `gavel summary` can emit a useful crash marker instead
-	// of an empty table.
-	Error    string `json:"error,omitempty"`
-	ExitCode *int   `json:"exit_code,omitempty"`
-	LogTail  string `json:"log_tail,omitempty"`
-}
-
-// UnmarshalJSON accepts both shapes gavel emits:
-//   - plain `test`:        a JSON array of parsers.Test
-//   - `test --lint`:       an object with `tests` and `lint` keys
-func (g *gavelResultJSON) UnmarshalJSON(data []byte) error {
-	trimmed := strings.TrimSpace(string(data))
-	if strings.HasPrefix(trimmed, "[") {
-		var tests []parsers.Test
-		if err := json.Unmarshal(data, &tests); err != nil {
-			return err
-		}
-		g.Tests = tests
-		return nil
-	}
-	type alias gavelResultJSON
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	*g = gavelResultJSON(a)
-	return nil
-}
-
 func runSummary(opts summaryOptions) error {
 	if opts.InputPath == "" {
 		return fmt.Errorf("--input is required")
@@ -84,7 +44,7 @@ func runSummary(opts summaryOptions) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", opts.InputPath, err)
 	}
-	var data gavelResultJSON
+	var data report.ResultFile
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return fmt.Errorf("parse %s: %w", opts.InputPath, err)
 	}
@@ -102,27 +62,25 @@ func runSummary(opts summaryOptions) error {
 // buildCompactSummary turns a parsed gavel result file into compact markdown.
 // Crash stubs (no results + an error field) short-circuit to a crash marker;
 // everything else delegates to the shared report renderer.
-func buildCompactSummary(data gavelResultJSON, budget compactSummaryBudget) string {
-	// Crash-stub short-circuit: if gavel never produced any test or lint
-	// results AND the stub carries an error field, emit a crash marker
-	// block instead of an empty counts table. The composite action
-	// writes these stubs when gavel dies before serialising results.
-	if len(data.Tests) == 0 && len(data.Lint) == 0 && data.Error != "" {
+func buildCompactSummary(data report.ResultFile, budget compactSummaryBudget) string {
+	// Crash short-circuit: if the run never produced any test or lint results
+	// AND the file carries an error field, emit a crash marker block instead
+	// of an empty counts table.
+	if data.IsCrash() {
 		return renderCrashSummary(data, budget)
 	}
 	return report.BuildCompact(data.Tests, data.Lint, budget.report())
 }
 
-// renderCrashSummary emits a PR-comment-ready markdown block for gavel
-// crash stubs produced by the composite action. Includes the reported
-// error, exit code, and a truncated tail of the captured gavel.log so
-// the reader can see *why* the run died without having to download the
-// artifact.
-func renderCrashSummary(data gavelResultJSON, budget compactSummaryBudget) string {
+// renderCrashSummary emits a PR-comment-ready markdown block for a run that
+// died before producing results. Includes the reported error, exit code, and a
+// truncated tail of the captured gavel.log so the reader can see *why* the run
+// died without having to download the artifact.
+func renderCrashSummary(data report.ResultFile, budget compactSummaryBudget) string {
 	var b strings.Builder
 	b.WriteString("## Gavel crashed before producing results\n\n")
-	if data.ExitCode != nil {
-		fmt.Fprintf(&b, "**Exit code:** %d  \n", *data.ExitCode)
+	if code := data.ExitCodeValue(); code != nil {
+		fmt.Fprintf(&b, "**Exit code:** %d  \n", *code)
 	}
 	fmt.Fprintf(&b, "**Error:** %s\n\n", data.Error)
 	if data.LogTail != "" {

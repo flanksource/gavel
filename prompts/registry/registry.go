@@ -94,7 +94,7 @@ func resolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPro
 	if err != nil {
 		return ResolvedPrompt{}, err
 	}
-	opSpec, body, frontmatter, err := parsePromptForResolution(raw)
+	opSpec, body, frontmatter, err := ParsePromptSource(raw)
 	if err != nil {
 		return ResolvedPrompt{}, err
 	}
@@ -105,7 +105,7 @@ func resolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPro
 		opSpec.Prompt.User = body
 	}
 
-	defaultSpec, _, _, err := parsePromptForResolution(desc.Default)
+	defaultSpec, _, _, err := ParsePromptSource(desc.Default)
 	if err != nil {
 		return ResolvedPrompt{}, err
 	}
@@ -154,10 +154,19 @@ func effectiveModelFor(base, defaultSpec, opOverride api.Spec) (api.Model, strin
 	return model, source
 }
 
-func parsePromptForResolution(raw string) (api.Spec, string, map[string]any, error) {
+// ParsePromptSource returns a prompt's config-time spec, original unrendered
+// body, and frontmatter. Prompts with templated frontmatter are rendered once
+// with empty config-time data before parsing, matching Resolve while retaining
+// the source body the settings editor must round-trip.
+func ParsePromptSource(raw string) (api.Spec, string, map[string]any, error) {
 	doc, err := prompt.Parse(raw)
 	if err == nil {
 		return doc.Spec, doc.Body, doc.Frontmatter, nil
+	}
+
+	match := promptSourcePattern.FindStringSubmatch(raw)
+	if match == nil || !strings.Contains(match[1], "{{") {
+		return api.Spec{}, "", nil, err
 	}
 
 	// Some built-ins template their YAML frontmatter (for example a conditional
@@ -172,10 +181,7 @@ func parsePromptForResolution(raw string) (api.Spec, string, map[string]any, err
 	if declared.Name == "" {
 		declared.Model = cfg.Model
 	}
-	body := raw
-	if match := promptSourcePattern.FindStringSubmatch(raw); match != nil {
-		body = match[2]
-	}
+	body := match[2]
 	declared.Prompt.User = body
 	return declared, body, nil, nil
 }

@@ -32,7 +32,7 @@ func lintResults(violations int) []*linters.LinterResult {
 
 func writeRun(t *testing.T, workDir string, snap testui.Snapshot, started time.Time) {
 	t.Helper()
-	if _, err := SavePerRun(workDir, &snap, started); err != nil {
+	if _, err := SavePerRun(workDir, &snap, started, ""); err != nil {
 		t.Fatalf("SavePerRun(%s): %v", started, err)
 	}
 }
