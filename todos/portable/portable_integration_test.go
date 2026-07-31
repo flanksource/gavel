@@ -52,6 +52,7 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 		"id": id.String(), "labels": []string{"database", "portable"},
 	}
 	body := "Description.\n\n## Acceptance Criteria\n\n- [ ] Round trip\n\n## Verification\n\n```bash\ntrue\n```"
+	cleanBody := "Description.\n\n## Acceptance Criteria\n\n- [ ] Round trip"
 	content, err := todos.WriteFrontmatter(&frontmatter, "\n"+body+"\n")
 	require.NoError(t, err)
 	inputDir := filepath.Join(workDir, ".todos")
@@ -68,7 +69,7 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, workspace.ID, issue.WorkspaceID)
 	assert.Equal(t, "Portable DB round trip", issue.Title)
-	assert.Equal(t, body, issue.Body)
+	assert.Equal(t, cleanBody, issue.Body)
 	assert.Equal(t, "```bash\ntrue\n```", issue.Verification)
 	assert.ElementsMatch(t, []string{"database", "portable"}, issue.Labels)
 
@@ -81,7 +82,8 @@ func TestPortablePostgreSQLImportExportRoundTrip(t *testing.T) {
 	assert.Equal(t, "Portable DB round trip", exportedTODO.Title)
 	assert.Equal(t, types.PriorityHigh, exportedTODO.Priority)
 	assert.Equal(t, types.StatusPending, exportedTODO.Status)
-	assert.Equal(t, body, strings.TrimSpace(exportedTODO.MarkdownBody))
+	assert.Equal(t, cleanBody, strings.TrimSpace(exportedTODO.MarkdownBody))
+	assert.Equal(t, "```bash\ntrue\n```", exportedTODO.VerificationMarkdown)
 
 	replayed, err := portable.Import(t.Context(), opened.Gorm(), workspaceOptions, outputDir, nil)
 	require.NoError(t, err)

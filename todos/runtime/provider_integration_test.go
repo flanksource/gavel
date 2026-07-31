@@ -152,7 +152,10 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 
 	stored, err := repository.GetIssue(t.Context(), mustUUID(t, created.ID))
 	require.NoError(t, err)
+	assert.Equal(t, "Description", stored.Body)
 	assert.Equal(t, "```bash\ntrue\n```", stored.Verification)
+	assert.Equal(t, "Description", created.MarkdownBody)
+	assert.Equal(t, "```bash\ntrue\n```", created.VerificationMarkdown)
 
 	alias := "e2a3b8c2d0f7c9a98b400dc78e8a94a5"
 	stored, err = repository.SetAliases(t.Context(), stored.ID, stored.Version, []native.AliasInput{{
@@ -169,8 +172,10 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	assert.Equal(t, versionBeforeEdit+1, created.Version, "body and verification must share one mutation")
 	stored, err = repository.GetIssue(t.Context(), mustUUID(t, created.ID))
 	require.NoError(t, err)
-	assert.Equal(t, updatedBody, stored.Body)
+	assert.Equal(t, "Edited", stored.Body)
 	assert.Equal(t, "```bash\nmake test\n```", stored.Verification)
+	assert.Equal(t, "Edited", created.MarkdownBody)
+	assert.Equal(t, "```bash\nmake test\n```", created.VerificationMarkdown)
 
 	versionBeforeTransient := created.Version
 	failed := types.StatusFailed

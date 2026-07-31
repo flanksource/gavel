@@ -24,6 +24,13 @@ type PromptRunLaunchAttachment struct {
 	Actor                string
 }
 
+type PromptRunLaunchInput struct {
+	RootSession captaindb.CreateSessionInput
+	Session     captaindb.CreateSessionInput
+	PromptRun   captaindb.CreatePromptRunInput
+	Attachment  PromptRunLaunchAttachment
+}
+
 // PromptRunLaunch combines Captain's authoritative records with the native
 // issue after all three were committed by one database transaction.
 type PromptRunLaunch struct {
@@ -98,25 +105,37 @@ func NewLaunchCoordinator(captain *captaindb.DB, repository *Repository) (*Launc
 // ExecutionIntegration.ActivatePromptRun.
 func (c *LaunchCoordinator) LaunchPromptRun(
 	ctx context.Context,
-	sessionInput captaindb.CreateSessionInput,
-	promptRunInput captaindb.CreatePromptRunInput,
-	attachment PromptRunLaunchAttachment,
+	input PromptRunLaunchInput,
 ) (*PromptRunLaunch, error) {
-	if attachment.IssueID == uuid.Nil {
+	if input.Attachment.IssueID == uuid.Nil {
 		return nil, fmt.Errorf("%w: issue ID is required", ErrInvalidInput)
 	}
-	requestedSessionID := promptRunInput.SessionID
+	if input.RootSession.ID != input.Attachment.IssueID {
+		return nil, fmt.Errorf("%w: root session must use the issue ID", ErrInvalidInput)
+	}
+	if input.RootSession.ParentSessionID != nil || input.RootSession.RootSessionID != nil {
+		return nil, fmt.Errorf("%w: TODO root session must be canonical", ErrInvalidInput)
+	}
+	requestedSessionID := input.PromptRun.SessionID
 	result := &PromptRunLaunch{}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
-		session, err := captainTx.CreateOrGetSession(ctx, sessionInput)
+		root, err := captainTx.CreateOrGetSession(ctx, input.RootSession)
+		if err != nil {
+			return err
+		}
+		if input.Session.ParentSessionID != nil && *input.Session.ParentSessionID != root.ID {
+			return fmt.Errorf("%w: operation session parent must be the TODO root", ErrInvalidInput)
+		}
+		input.Session.ParentSessionID = &root.ID
+		session, err := captainTx.CreateOrGetSession(ctx, input.Session)
 		if err != nil {
 			return err
 		}
 		if requestedSessionID != uuid.Nil && requestedSessionID != session.ID {
 			return fmt.Errorf("%w: prompt run session does not match the authoritative session", ErrInvalidInput)
 		}
-		promptRunInput.SessionID = session.ID
-		promptRun, err := captainTx.CreatePromptRun(ctx, promptRunInput)
+		input.PromptRun.SessionID = session.ID
+		promptRun, err := captainTx.CreatePromptRun(ctx, input.PromptRun)
 		if err != nil {
 			return err
 		}
@@ -130,12 +149,12 @@ func (c *LaunchCoordinator) LaunchPromptRun(
 			return err
 		}
 		issue, dispatchOwned, err := integration.activatePromptRun(ctx, PromptRunAttachment{
-			IssueID:              attachment.IssueID,
+			IssueID:              input.Attachment.IssueID,
 			PromptRunID:          promptRun.ID,
-			StepKind:             attachment.StepKind,
-			Ordinal:              attachment.Ordinal,
-			ExpectedIssueVersion: attachment.ExpectedIssueVersion,
-			Actor:                attachment.Actor,
+			StepKind:             input.Attachment.StepKind,
+			Ordinal:              input.Attachment.Ordinal,
+			ExpectedIssueVersion: input.Attachment.ExpectedIssueVersion,
+			Actor:                input.Attachment.Actor,
 		})
 		if err != nil {
 			return err

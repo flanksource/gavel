@@ -338,11 +338,10 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 		return nil, err
 	}
 	body := strings.TrimSpace(request.Body)
-	verification := strings.TrimSpace(request.Verification)
-	if verification == "" {
-		verification = todos.ExtractVerificationFixture(body)
-	}
+	body, bodyVerification, _ := todos.SplitVerificationFixture(body)
+	verification := todos.CombineVerificationFixtures(request.Verification, bodyVerification)
 	issueInput := native.CreateIssueInput{
+		ID:           uuid.New(),
 		WorkspaceID:  p.workspace.ID,
 		Title:        title,
 		Body:         body,
@@ -354,7 +353,14 @@ func (p *Provider) Create(ctx context.Context, request todos.CreateRequest) (*ty
 	}
 	var issue *native.Issue
 	if request.Plan == nil {
-		issue, err = p.repository.CreateIssue(ctx, issueInput)
+		created, createErr := p.coordinator.CreateIssueWithSession(ctx, native.CreateIssueSessionInput{
+			Issue: issueInput, RootSession: p.todoRootSessionInput(issueInput),
+		})
+		if createErr != nil {
+			err = createErr
+		} else {
+			issue = created.Issue
+		}
 	} else {
 		issue, err = p.createIssueWithPlan(ctx, issueInput, *request.Plan)
 	}

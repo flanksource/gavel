@@ -135,5 +135,6 @@ func TestTodoFromIssueUsesDatabaseIdentityAndVerification(t *testing.T) {
 	assert.Equal(t, types.PriorityHigh, todo.Priority)
 	assert.Equal(t, "Gavel", todo.Workspace)
 	assert.Equal(t, "/retained/gavel", todo.CWD)
-	assert.Equal(t, "```bash\ntrue\n```", todos.ExtractVerificationFixture(todo.MarkdownBody))
+	assert.Equal(t, "Description", todo.MarkdownBody)
+	assert.Equal(t, "```bash\ntrue\n```", todo.VerificationMarkdown)
 }

@@ -8,6 +8,7 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/google/uuid"
 )
 
 func (p *Provider) createIssueWithPlan(
@@ -20,13 +21,14 @@ func (p *Provider) createIssueWithPlan(
 		return nil, fmt.Errorf("plan markdown is required")
 	}
 	input := native.CreateIssuePlanInput{
-		Issue: issueInput,
-		Session: captaindb.CreateSessionInput{
-			Source: "gavel", Provider: "human", HostID: captaindb.LocalHostID(),
-			Project: p.workspace.RepoKey, CWD: p.workDir, Title: issueInput.Title,
-			InitialPrompt: issueInput.Body, AgentType: "human",
-			Description: "Plan supplied by gavel todos create",
-		},
+		Issue:       issueInput,
+		RootSession: p.todoRootSessionInput(issueInput),
+		Session: p.todoOperationSessionInput(&native.Issue{
+			ID: issueInput.ID, Title: issueInput.Title,
+		}, todoOperationSessionOptions{
+			ID:        uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-plan:"+issueInput.ID.String()+":supplied")),
+			Operation: string(native.StepPlan), Provider: "human", CWD: p.workDir, Prompt: issueInput.Body,
+		}),
 		Plan: captaindb.CreatePlanInput{
 			Title: issueInput.Title, Variant: "primary", SpecProfile: "gavel.todo.plan",
 		},

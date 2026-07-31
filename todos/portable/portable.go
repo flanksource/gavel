@@ -282,7 +282,7 @@ func importIssueFromTODO(todo *types.TODO, root string, workspaceID uuid.UUID) (
 	body := strings.TrimSpace(todo.MarkdownBody)
 	return importIssue{
 		ID: id, Title: title, Body: body,
-		Verification: todos.ExtractVerificationFixture(body),
+		Verification: strings.TrimSpace(todo.VerificationMarkdown),
 		Labels:       importedLabels(todo.Metadata),
 		Priority:     priority,
 		Status:       status,
@@ -339,9 +339,17 @@ func exportMarkdown(issue native.Issue) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("export native TODO %s: %w", issue.ID, err)
 	}
-	body := strings.TrimSpace(issue.Body)
-	if verification := strings.TrimSpace(issue.Verification); verification != "" {
-		body = todos.UpsertVerificationFixture(body, verification)
+	body, bodyVerification, _ := todos.SplitVerificationFixture(issue.Body)
+	verification := strings.TrimSpace(issue.Verification)
+	if verification == "" {
+		verification = bodyVerification
+	}
+	if verification != "" {
+		body = strings.TrimSpace(body)
+		if body != "" {
+			body += "\n\n"
+		}
+		body += "# Verification\n\n" + verification
 	}
 	frontmatter := types.TODOFrontmatter{
 		Title:    issue.Title,

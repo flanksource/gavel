@@ -10,6 +10,7 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos/native"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -55,15 +56,22 @@ var _ = Describe("atomic issue and plan creation", func() {
 		coordinator, err := native.NewLaunchCoordinator(captain, repository)
 		Expect(err).NotTo(HaveOccurred())
 
+		issueID := uuid.New()
 		_, err = coordinator.CreateIssueWithPlan(ctx, native.CreateIssuePlanInput{
 			Issue: native.CreateIssueInput{
+				ID:          issueID,
 				WorkspaceID: workspace.ID,
 				Title:       "Must roll back",
 				Priority:    native.PriorityMedium,
 				Status:      native.StatusOpen,
 				Actor:       "gavel",
 			},
+			RootSession: captaindb.CreateSessionInput{
+				ID: issueID, Source: "gavel", Provider: "todos",
+				CWD: workspace.RootPath, Title: "Must roll back",
+			},
 			Session: captaindb.CreateSessionInput{
+				ID:       uuid.New(),
 				Source:   "gavel",
 				Provider: "human",
 				CWD:      workspace.RootPath,

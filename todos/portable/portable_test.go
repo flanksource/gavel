@@ -20,15 +20,11 @@ func TestPortableMarkdownRoundTripsSupportedFields(t *testing.T) {
 
 ## Acceptance Criteria
 
-- [ ] IDs survive export and import
-
-## Verification
-
-` + "```bash\ngo test ./todos/portable\n```"
+- [ ] IDs survive export and import`
 	issue := native.Issue{
 		ID: issueID, WorkspaceID: workspaceID,
 		Title: "Round-trip portable fields", Body: body,
-		Verification: "```bash\ngo test ./todos/portable\n```",
+		Verification: "## Focused tests\n\n```bash\ngo test ./todos/portable\n```\n\n## Assertions\n\n- export remains lossless",
 		Labels:       []string{"database", "todos"},
 		Priority:     native.PriorityHigh,
 		Status:       native.StatusVerified,
@@ -42,6 +38,8 @@ func TestPortableMarkdownRoundTripsSupportedFields(t *testing.T) {
 
 	parsed, err := todos.ParseTODO(path)
 	require.NoError(t, err)
+	assert.Equal(t, issue.Body, parsed.MarkdownBody)
+	assert.Equal(t, issue.Verification, parsed.VerificationMarkdown)
 	imported, err := importIssueFromTODO(parsed, dir, workspaceID)
 	require.NoError(t, err)
 	assert.Equal(t, issue.ID, imported.ID)

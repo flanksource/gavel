@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -72,13 +73,35 @@ var _ = Describe("creating TODOs with durable plans", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(created.Status).To(Equal(types.StatusReview))
 		Expect(created.PlanStatus).To(Equal(types.PlanNew))
-		Expect(todos.ExtractVerificationFixture(created.MarkdownBody)).To(ContainSubstring("./pkg/parser"))
+		Expect(created.VerificationMarkdown).To(ContainSubstring("./pkg/parser"))
 
 		plan, err := provider.PlanMarkdown(ctx, created, types.ModePlan)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(plan).To(Equal("# Parser plan\n\n1. Preserve parse context."))
 		_, err = provider.PlanMarkdown(ctx, created, types.ModeRun)
 		Expect(err).To(MatchError(ContainSubstring("approve an immutable revision")))
+	})
+
+	It("stores embedded verification only in the dedicated field", func() {
+		created, err := provider.Create(ctx, todos.CreateRequest{
+			Title: "Move embedded verification",
+			Body: `Parser failures lose context.
+
+# Verification
+
+body fixture`,
+			Verification: "explicit fixture",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.MarkdownBody).To(Equal("Parser failures lose context."))
+		Expect(created.VerificationMarkdown).To(Equal("explicit fixture\n\nbody fixture"))
+
+		issueID, err := uuid.Parse(created.ID)
+		Expect(err).NotTo(HaveOccurred())
+		stored, err := provider.repository.GetIssue(ctx, issueID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.Body).To(Equal("Parser failures lose context."))
+		Expect(stored.Verification).To(Equal("explicit fixture\n\nbody fixture"))
 	})
 
 	It("routes a planned draft through review before implementation", func() {

@@ -180,7 +180,14 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		ExpectedIssueVersion: coordinatedIssue.Version,
 		Actor:                "execution-test",
 	}
-	launch, err := coordinator.LaunchPromptRun(ctx, sessionInput, promptInput, attachment)
+	launchInput := native.PromptRunLaunchInput{
+		RootSession: captaindb.CreateSessionInput{
+			ID: coordinatedIssue.ID, Source: "gavel", Provider: "todos",
+			CWD: "/workspace/gavel-execution-integration",
+		},
+		Session: sessionInput, PromptRun: promptInput, Attachment: attachment,
+	}
+	launch, err := coordinator.LaunchPromptRun(ctx, launchInput)
 	require.NoError(t, err)
 	require.NotNil(t, launch.Session)
 	require.NotNil(t, launch.PromptRun)
@@ -194,7 +201,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 	// The Captain admission key and native exact-replay guard make the whole
 	// operation retryable with the original issue version.
-	replay, err := coordinator.LaunchPromptRun(ctx, sessionInput, promptInput, attachment)
+	replay, err := coordinator.LaunchPromptRun(ctx, launchInput)
 	require.NoError(t, err)
 	assert.Equal(t, launch.Session.ID, replay.Session.ID)
 	assert.Equal(t, launch.PromptRun.ID, replay.PromptRun.ID)
@@ -557,15 +564,22 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Provider:          "test",
 	}
 	failedAdmissionKey := "gavel:rolled-back-launch:run:0"
-	_, err = coordinator.LaunchPromptRun(ctx, failedSession, captaindb.CreatePromptRunInput{
-		AdmissionKey: failedAdmissionKey,
-		Origin:       "gavel.todos.run",
-	}, native.PromptRunLaunchAttachment{
-		IssueID:              failedIssue.ID,
-		StepKind:             native.StepRun,
-		Ordinal:              0,
-		ExpectedIssueVersion: failedIssue.Version - 1,
-		Actor:                "execution-test",
+	_, err = coordinator.LaunchPromptRun(ctx, native.PromptRunLaunchInput{
+		RootSession: captaindb.CreateSessionInput{
+			ID: failedIssue.ID, Source: "gavel", Provider: "todos",
+		},
+		Session: failedSession,
+		PromptRun: captaindb.CreatePromptRunInput{
+			AdmissionKey: failedAdmissionKey,
+			Origin:       "gavel.todos.run",
+		},
+		Attachment: native.PromptRunLaunchAttachment{
+			IssueID:              failedIssue.ID,
+			StepKind:             native.StepRun,
+			Ordinal:              0,
+			ExpectedIssueVersion: failedIssue.Version - 1,
+			Actor:                "execution-test",
+		},
 	})
 	require.ErrorIs(t, err, native.ErrVersionConflict)
 	_, err = captain.GetSessionByIdentity(ctx, failedSession.ProviderSessionID, failedSession.Source, failedSession.Provider, "local")

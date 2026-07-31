@@ -2,9 +2,11 @@ package native
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/google/uuid"
 )
 
 type InitialPlanApproval struct {
@@ -13,18 +15,25 @@ type InitialPlanApproval struct {
 }
 
 type CreateIssuePlanInput struct {
-	Issue    CreateIssueInput
-	Session  captaindb.CreateSessionInput
-	Plan     captaindb.CreatePlanInput
-	Revision captaindb.AppendPlanRevisionInput
-	Approval *InitialPlanApproval
-	Actor    string
+	Issue       CreateIssueInput
+	RootSession captaindb.CreateSessionInput
+	Session     captaindb.CreateSessionInput
+	Plan        captaindb.CreatePlanInput
+	Revision    captaindb.AppendPlanRevisionInput
+	Approval    *InitialPlanApproval
+	Actor       string
 }
 
 // CreateIssueWithPlan creates a native issue and its manually supplied Captain
 // plan in one shared transaction. A failed session, revision, selection, or
 // approval leaves no issue or provenance records behind.
 func (c *LaunchCoordinator) CreateIssueWithPlan(ctx context.Context, input CreateIssuePlanInput) (*PersistedPlan, error) {
+	if input.Issue.ID == uuid.Nil || input.RootSession.ID != input.Issue.ID {
+		return nil, fmt.Errorf("%w: issue and root session must share a non-empty ID", ErrInvalidInput)
+	}
+	if input.RootSession.ParentSessionID != nil || input.RootSession.RootSessionID != nil {
+		return nil, fmt.Errorf("%w: TODO root session must be canonical", ErrInvalidInput)
+	}
 	result := &PersistedPlan{}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
 		repositoryTx, err := NewRepository(captainTx.Gorm())
@@ -35,6 +44,14 @@ func (c *LaunchCoordinator) CreateIssueWithPlan(ctx context.Context, input Creat
 		if err != nil {
 			return err
 		}
+		root, err := captainTx.CreateOrGetSession(ctx, input.RootSession)
+		if err != nil {
+			return err
+		}
+		if input.Session.ParentSessionID != nil && *input.Session.ParentSessionID != root.ID {
+			return fmt.Errorf("%w: plan session parent must be the TODO root", ErrInvalidInput)
+		}
+		input.Session.ParentSessionID = &root.ID
 		session, err := captainTx.CreateOrGetSession(ctx, input.Session)
 		if err != nil {
 			return err

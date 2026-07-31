@@ -32,7 +32,7 @@ func (p *Provider) Delete(ctx context.Context, todo *types.TODO) error {
 
 func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRequest) error {
 	if edit.IsEmpty() {
-		return fmt.Errorf("nothing to edit: title, body, or labels are required")
+		return fmt.Errorf("nothing to edit: title, body, verification, or labels are required")
 	}
 	id, version, err := p.mutationIdentity(todo)
 	if err != nil {
@@ -45,8 +45,18 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 		hasNativeChange = true
 	}
 	if edit.Body != nil {
-		patch.Body = edit.Body
-		verification := todos.ExtractVerificationFixture(*edit.Body)
+		body, verification, hasVerification := todos.SplitVerificationFixture(*edit.Body)
+		patch.Body = &body
+		if hasVerification {
+			patch.Verification = &verification
+		}
+		hasNativeChange = true
+	}
+	if edit.Verification != nil {
+		verification := strings.TrimSpace(*edit.Verification)
+		if patch.Verification != nil {
+			verification = todos.CombineVerificationFixtures(verification, *patch.Verification)
+		}
 		patch.Verification = &verification
 		hasNativeChange = true
 	}

@@ -91,18 +91,9 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if cwd == "" {
 		cwd = p.workDir
 	}
-	sessionInput := captaindb.CreateSessionInput{
-		ID:            sessionID,
-		Source:        "gavel",
-		Provider:      executorName,
-		HostID:        captaindb.LocalHostID(),
-		Project:       p.workspace.RepoKey,
-		CWD:           cwd,
-		Title:         issue.Title,
-		InitialPrompt: promptMarkdown,
-		AgentType:     executorName,
-		Description:   "Gavel TODO " + issue.ID.String(),
-	}
+	sessionInput := p.todoOperationSessionInput(issue, todoOperationSessionOptions{
+		ID: sessionID, Operation: string(step), Provider: executorName, CWD: cwd, Prompt: promptMarkdown,
+	})
 	if preparation.Resume && issue.ActivePromptRunID != nil {
 		previousRun, runErr := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
 		if runErr != nil {
@@ -171,12 +162,19 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if err := p.attachInputPlan(ctx, issue, mode, &promptInput); err != nil {
 		return err
 	}
-	launch, err := p.coordinator.LaunchPromptRun(ctx, sessionInput, promptInput, native.PromptRunLaunchAttachment{
-		IssueID:              issue.ID,
-		StepKind:             step,
-		Ordinal:              ordinal,
-		ExpectedIssueVersion: issue.Version,
-		Actor:                mutationActor,
+	launch, err := p.coordinator.LaunchPromptRun(ctx, native.PromptRunLaunchInput{
+		RootSession: p.todoRootSessionInput(native.CreateIssueInput{
+			ID: issue.ID, Title: issue.Title, Body: issue.Body,
+		}),
+		Session:   sessionInput,
+		PromptRun: promptInput,
+		Attachment: native.PromptRunLaunchAttachment{
+			IssueID:              issue.ID,
+			StepKind:             step,
+			Ordinal:              ordinal,
+			ExpectedIssueVersion: issue.Version,
+			Actor:                mutationActor,
+		},
 	})
 	if err != nil {
 		return err
@@ -496,6 +494,7 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 		Source:            source,
 		Provider:          strings.TrimSpace(metadata.Provider),
 		HostID:            captaindb.LocalHostID(),
+		ParentSessionID:   &admission.ID,
 		Project:           admission.Project,
 		CWD:               admission.CWD,
 		Title:             admission.Title,
