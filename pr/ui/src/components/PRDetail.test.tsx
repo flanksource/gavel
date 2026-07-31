@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PRDetailPanel } from './PRDetail';
-import type { PRItem } from '../types';
+import type { GavelResultsSummary, PRItem } from '../types';
 
 // clicky-ui's SplitButton / DropdownMenu pull @floating-ui/react, which resolves
 // a duplicate React 18 under vitest and crashes on render (see PRActions.test.tsx).
@@ -63,5 +63,60 @@ describe('PRDetailPanel', () => {
     render(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
 
     expect(screen.queryByLabelText('Close pull request details')).toBeNull();
+  });
+});
+
+function makeGavelShard(overrides: Partial<GavelResultsSummary> = {}): GavelResultsSummary {
+  return {
+    artifactId: 4242,
+    artifactUrl: 'https://github.com/acme/widget/actions/runs/1/artifacts/4242',
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0,
+    testsTotal: 0,
+    lintViolations: 0,
+    lintLinters: 0,
+    hasBench: false,
+    ...overrides,
+  };
+}
+
+// A crashed run produces an artifact with no tests, no lint and no bench. The
+// reason it produced nothing is the only useful thing to show; falling back to
+// "No test, lint, or bench data" reads as if the artifact was never found.
+describe('Gavel Results section', () => {
+  const crashMessage = 'pre-build: compiling Go test binaries failed (exit 1)';
+
+  it('shows the crash reason, exit code and log tail instead of the no-data text', () => {
+    render(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [makeGavelShard({
+            error: crashMessage,
+            exitCode: 1,
+            logTail: 'go: updates to go.mod needed; to update it:\n\tgo mod tidy\n',
+          })],
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText(crashMessage)).toBeTruthy();
+    expect(screen.getByText('1')).toBeTruthy();
+    expect(screen.getByText(/go mod tidy/)).toBeTruthy();
+    expect(screen.queryByText(/No test, lint, or bench data/)).toBeNull();
+  });
+
+  it('still reports no data when an empty artifact carries no error', () => {
+    render(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard()] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText(/No test, lint, or bench data/)).toBeTruthy();
   });
 });

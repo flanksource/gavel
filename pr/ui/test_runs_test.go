@@ -2,10 +2,14 @@ package ui
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/flanksource/gavel/github"
 )
 
 func TestGroupRuns(t *testing.T) {
@@ -36,6 +40,70 @@ func TestGroupRuns(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"runs":null`) {
 		t.Errorf("response serialized a null runs field: %s", b)
+	}
+}
+
+// The Verification tab addresses a workspace by directory, not by stored
+// project name — a TODO's run artifacts must be readable without the workspace
+// being registered as a project.
+func TestHandleTestRunAcceptsDir(t *testing.T) {
+	dir := t.TempDir()
+	const stem = "run-2026-07-30T09-00-00Z-verify"
+	body := `{"tests":[{"name":"TestFoo","failed":true}]}`
+	if err := os.MkdirAll(filepath.Join(dir, ".gavel"), 0o755); err != nil {
+		t.Fatalf("mkdir .gavel: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gavel", stem+".json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write run file: %v", err)
+	}
+
+	s := &Server{}
+	call := func(query string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.handleTestRun(w, httptest.NewRequest(http.MethodGet, "/api/tests/run?"+query, nil))
+		return w
+	}
+
+	t.Run("dir and runId stream the snapshot", func(t *testing.T) {
+		w := call("dir=" + dir + "&runId=" + stem)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+		}
+		if got := w.Body.String(); got != body {
+			t.Errorf("body = %q, want %q", got, body)
+		}
+	})
+
+	// A todo surface on the server's default workspace sends `dir=` with no value;
+	// that must resolve to the work dir, not read as "no dir supplied".
+	t.Run("bare dir resolves to the server work dir", func(t *testing.T) {
+		server := &Server{ghOpts: github.Options{WorkDir: dir}}
+		w := httptest.NewRecorder()
+		server.handleTestRun(w, httptest.NewRequest(http.MethodGet, "/api/tests/run?dir=&runId="+stem, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+		}
+		if got := w.Body.String(); got != body {
+			t.Errorf("body = %q, want %q", got, body)
+		}
+	})
+
+	t.Run("unknown run is 404", func(t *testing.T) {
+		if w := call("dir=" + dir + "&runId=run-9999-01-01T00-00-00Z"); w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
+
+	// Ambiguity is a client bug, not something to resolve with a precedence rule.
+	for name, query := range map[string]string{
+		"neither project nor dir": "runId=" + stem,
+		"both project and dir":    "project=demo&dir=" + dir + "&runId=" + stem,
+	} {
+		t.Run(name+" is 400", func(t *testing.T) {
+			if w := call(query); w.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (%s)", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

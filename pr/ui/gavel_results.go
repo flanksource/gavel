@@ -12,9 +12,8 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
-	"github.com/flanksource/gavel/testrunner/bench"
+	"github.com/flanksource/gavel/report"
 	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -33,7 +32,12 @@ type GavelResultsSummary struct {
 	LintLinters      int    `json:"lintLinters"`
 	HasBench         bool   `json:"hasBench"`
 	BenchRegressions int    `json:"benchRegressions,omitempty"`
-	Error            string `json:"error,omitempty"`
+	// Error explains why this shard carries no results — either the run
+	// crashed before producing any (ExitCode / LogTail are then populated
+	// from the crash envelope) or the artifact could not be read.
+	Error    string `json:"error,omitempty"`
+	ExitCode *int   `json:"exitCode,omitempty"`
+	LogTail  string `json:"logTail,omitempty"`
 	// TopFailures lists the first 5 failing tests for at-a-glance triage.
 	// Populated in walk order (stable) so the same artifact always yields
 	// the same head items.
@@ -105,35 +109,8 @@ type LintViolation struct {
 	Message string `json:"message,omitempty"`
 }
 
-// gavelResultJSON mirrors the dual-format JSON that gavel emits:
-//   - test only: a plain JSON array of parsers.Test
-//   - test --lint: an object with "tests" and "lint" keys
-type gavelResultJSON struct {
-	Tests []parsers.Test          `json:"tests"`
-	Lint  []*linters.LinterResult `json:"lint"`
-	Bench *bench.BenchComparison  `json:"bench"`
-}
-
-func (g *gavelResultJSON) UnmarshalJSON(data []byte) error {
-	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
-		var tests []parsers.Test
-		if err := json.Unmarshal(data, &tests); err != nil {
-			return err
-		}
-		g.Tests = tests
-		return nil
-	}
-	type alias gavelResultJSON
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	*g = gavelResultJSON(a)
-	return nil
-}
-
 func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string) *GavelResultsSummary {
-	var data gavelResultJSON
+	var data report.ResultFile
 	if err := json.Unmarshal(jsonBytes, &data); err != nil {
 		return &GavelResultsSummary{
 			ArtifactID:  artifactID,
@@ -145,6 +122,16 @@ func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string)
 	summary := &GavelResultsSummary{
 		ArtifactID:  artifactID,
 		ArtifactURL: artifactURL,
+	}
+
+	// A run that died before producing results carries its reason in the
+	// envelope. Surface it as the shard error so the UI states *why* there
+	// is nothing to show instead of rendering an empty card.
+	if data.IsCrash() {
+		summary.Error = data.Error
+		summary.ExitCode = data.ExitCodeValue()
+		summary.LogTail = data.LogTail
+		return summary
 	}
 
 	for _, root := range data.Tests {
@@ -341,7 +328,7 @@ func (s *Server) getOrCreateArtifact(artifactID int64, repo string) (*artifactEn
 	var snap testui.Snapshot
 	if err := json.Unmarshal(jsonBytes, &snap); err != nil {
 		logger.Warnf("artifact %d: unmarshal as snapshot: %v, trying legacy format", artifactID, err)
-		var data gavelResultJSON
+		var data report.ResultFile
 		if err := json.Unmarshal(jsonBytes, &data); err != nil {
 			return nil, fmt.Errorf("parse artifact %d: %w", artifactID, err)
 		}

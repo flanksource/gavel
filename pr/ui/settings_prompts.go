@@ -13,6 +13,7 @@ import (
 	dotprompt "github.com/flanksource/captain/pkg/ai/prompt"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
+	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -63,14 +64,14 @@ func buildPromptDetailResponse(input promptDetailInput) promptDetailResponse {
 	resp := promptDetailResponse{
 		ID: input.ID, Scope: input.Scope, Source: input.Source, Path: input.Path, Raw: input.Raw,
 	}
-	doc, err := dotprompt.Parse(input.Raw)
+	promptSpec, body, _, err := promptregistry.ParsePromptSource(input.Raw)
 	if err != nil {
 		resp.ParseError = err.Error()
 		return resp
 	}
-	spec := specToMap(doc.Spec)
+	spec := specToMap(promptSpec)
 	resp.Spec = &spec
-	resp.Body = &doc.Body
+	resp.Body = &body
 	return resp
 }
 

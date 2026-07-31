@@ -1440,6 +1440,7 @@ func (s *Server) populatePRDetail(node *PRViewNode) error {
 	node.PR = detail.PR
 	node.Runs = detail.Runs
 	node.Comments = detail.Comments
+	node.GavelResults = detail.GavelResults
 	return nil
 }
 

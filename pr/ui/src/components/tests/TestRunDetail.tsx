@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TestRunResults } from './TestRunResults';
-import type { RunSnapshot } from './types';
+import { fetchRunSnapshot, type RunSnapshot } from './types';
 
 export function TestRunDetail({ project, projectDir, runId, onTodoCreated }: {
   project: string;
@@ -14,11 +14,9 @@ export function TestRunDetail({ project, projectDir, runId, onTodoCreated }: {
   useEffect(() => {
     setSnap(null);
     setError('');
-    const url = `/api/tests/run?project=${encodeURIComponent(project)}&runId=${encodeURIComponent(runId)}`;
-    fetch(url)
-      .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e.error || 'failed to load run'))))
+    fetchRunSnapshot({ project, runId })
       .then((s: RunSnapshot) => setSnap(s))
-      .catch(e => setError(typeof e === 'string' ? e : 'Failed to load run'));
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load run'));
   }, [project, runId]);
 
   if (error) return <Centered>{error}</Centered>;

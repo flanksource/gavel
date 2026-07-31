@@ -106,17 +106,32 @@ func (s *Server) handleTestRunsStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTestRun streams a single run's snapshot JSON, read from disk on demand.
-// The file is resolved from (project, runId) — never from a client-supplied
-// path — and validated to live inside the workspace's .gavel directory.
+// The file is resolved from (project|dir, runId) — never from a client-supplied
+// path — and validated to live inside the workspace's .gavel directory. The
+// Tests tab addresses workspaces by project name; every todo surface is
+// dir-keyed, so both spellings resolve here.
 func (s *Server) handleTestRun(w http.ResponseWriter, r *http.Request) {
-	project := r.URL.Query().Get("project")
-	runID := r.URL.Query().Get("runId")
-	p, err := GetProject(project)
-	if err != nil {
-		respondError(w, statusForProjectErr(err), err.Error())
+	query := r.URL.Query()
+	project := strings.TrimSpace(query.Get("project"))
+	runID := query.Get("runId")
+
+	// Presence, not emptiness, picks the addressing mode: a todo surface on the
+	// server's default workspace sends a bare `dir=`.
+	if query.Has("project") == query.Has("dir") {
+		http.Error(w, `{"error":"exactly one of project or dir is required"}`, http.StatusBadRequest)
 		return
 	}
-	path, err := resolveRunPath(p.ResolvedDir(), runID)
+	workDir := s.resolveTodoDir(strings.TrimSpace(query.Get("dir")))
+	if query.Has("project") {
+		p, err := GetProject(project)
+		if err != nil {
+			respondError(w, statusForProjectErr(err), err.Error())
+			return
+		}
+		workDir = p.ResolvedDir()
+	}
+
+	path, err := resolveRunPath(workDir, runID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return

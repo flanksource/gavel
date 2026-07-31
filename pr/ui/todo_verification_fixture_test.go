@@ -16,15 +16,13 @@ import (
 )
 
 // verificationFixtureBody builds a TODO body carrying the given fixture markdown
-// inside a "## Verification" section, matching how ParseTODOContent expects it.
+// inside a top-level Verification section.
 func verificationFixtureBody(description, fixture string) string {
 	return description + "\n\n## Verification\n\n" + fixture + "\n"
 }
 
 // TestHandleTodoVerificationFixtureSavesSection exercises the Verification
-// tab's save path: POST /api/todos/verification/fixture rewrites the todo's
-// "## Verification" section in place and the refreshed todo reflects it via
-// VerificationMarkdown through the native test provider.
+// tab's save path and confirms dedicated fixture markdown survives a re-read.
 func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
@@ -53,7 +51,7 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 
 	savePayload := todoVerificationFixturePayload{
 		Ref:     created.Ref,
-		Fixture: "```test\nquery: SELECT 2\n```",
+		Fixture: "## Focused query\n\n```test\nquery: SELECT 2\n```\n\n## Assertions\n\n- query passes",
 	}
 	saveRaw, err := json.Marshal(savePayload)
 	if err != nil {
@@ -75,8 +73,14 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	if strings.Contains(saved.VerificationMarkdown, "SELECT 1") {
 		t.Fatalf("saved todo should not retain the prior fixture: %+v", saved)
 	}
+	if saved.VerificationMarkdown != savePayload.Fixture {
+		t.Fatalf("saved verification = %q, want %q", saved.VerificationMarkdown, savePayload.Fixture)
+	}
 	if !strings.Contains(saved.Body, "Some description.") {
 		t.Fatalf("save must preserve unrelated body content: %+v", saved)
+	}
+	if strings.Contains(saved.Body, "Verification") {
+		t.Fatalf("save must keep verification out of body: %+v", saved)
 	}
 
 	rec = httptest.NewRecorder()
@@ -90,6 +94,9 @@ func TestHandleTodoVerificationFixtureSavesSection(t *testing.T) {
 	}
 	if !strings.Contains(reread.VerificationMarkdown, "query: SELECT 2") {
 		t.Fatalf("re-read todo missing persisted verification fixture: %+v", reread)
+	}
+	if reread.VerificationMarkdown != savePayload.Fixture {
+		t.Fatalf("re-read verification = %q, want %q", reread.VerificationMarkdown, savePayload.Fixture)
 	}
 }
 
@@ -151,6 +158,44 @@ echo dashboard-verification-ok
 	}
 	if response.Todo.Status != types.StatusVerified {
 		t.Fatalf("todo status = %q, want verified", response.Todo.Status)
+	}
+}
+
+// A verification that cannot start creates no prompt run, so the dashboard's
+// attempt list can never show it — the response's error field is the only place
+// the failure can reach the user.
+func TestHandleTodoVerificationRunReportsPreExecutionFailure(t *testing.T) {
+	workDir := t.TempDir()
+	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
+	provider := uiTestProviderFor(workDir)
+	created, err := provider.Create(t.Context(), todos.CreateRequest{
+		Title: "No definition of done",
+		Body:  "Nothing to verify here.",
+	})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+
+	payload, err := json.Marshal(todoCriteriaPayload{Ref: todos.TODOReference(created)})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/todos/verification/run", bytes.NewReader(payload)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status = %d, want 200; body = %q", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Verification types.CheckResult `json:"verification"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Verification.AllPassed {
+		t.Fatalf("verification without a definition of done must not pass: %+v", response.Verification)
+	}
+	if !strings.Contains(response.Verification.ErrorText, "no verification fixture") {
+		t.Fatalf("verification error = %q, want the missing definition-of-done reason", response.Verification.ErrorText)
 	}
 }
 

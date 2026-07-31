@@ -73,10 +73,6 @@ export type TodoDensity = 'comfortable' | 'compact';
 // grouping; 'severity' buckets by priority and 'age' by last activity, both
 // across all workspaces.
 export type TodoGroupBy = 'workspace' | 'severity' | 'age';
-// Row order within each todo group: 'priority' (default — high→low, then newest
-// activity), 'newest'/'oldest' by created age, or 'title' alphabetically.
-export type TodoSortBy = 'priority' | 'newest' | 'oldest' | 'title';
-
 export interface TodoCounts {
   total: number;
   open: number;
@@ -194,40 +190,9 @@ export interface TodoDiffStat {
   dels: number;
 }
 
-export interface TodoFixtureResult {
-  name: string;
-  type?: string;
-  status?: string;
-  duration?: number;
-  error?: string;
-  command?: string;
-  stdout?: string;
-  stderr?: string;
-}
-
-export interface TodoVerificationChecklistItem {
-  item: string;
-  passed: boolean;
-  message?: string;
-}
-
-export interface TodoVerificationOutput {
-  results?: TodoFixtureResult[];
-  checklist?: TodoVerificationChecklistItem[];
-  summary?: Record<string, unknown>;
-}
-
-// TodoVerificationRunResponse is the fixture-backed manual verification result
-// returned by POST /api/todos/verification/run.
-export interface TodoVerificationRunResponse {
-  verification: {
-    allPassed: boolean;
-    duration: number;
-    error?: string;
-    output?: TodoVerificationOutput;
-  };
-  todo: TodoItem;
-}
+// The verification payload mirrors (fixture results, checklist, definition of
+// done) live in components/todos/verificationAttempts.ts, next to the selectors
+// that read them: this module must not import from components/.
 
 // Rolled-up stats for a TODO's agent session (see /api/todos/session/stats):
 // identity (agent/model/effort), elapsed time, token usage and derived cost.
@@ -442,6 +407,9 @@ export interface TodoSessionDetailResponse {
   selectedExecutionSessionId?: string;
   thread?: TodoProviderThread;
   diagnostics: TodoSessionDiagnostic[];
+  // Set when the request asked for attempts only: the provider thread was
+  // deliberately not resolved, so a missing `thread` is not a missing session.
+  attemptsOnly?: boolean;
 }
 
 // TodoSessionApproval is a tool-permission request a driver surfaced for human
@@ -812,7 +780,11 @@ export interface GavelResultsSummary {
   lintLinters: number;
   hasBench: boolean;
   benchRegressions?: number;
+  // error is either a crash reported by gavel itself (the run died before it
+  // could produce results) or a failure to read the artifact at all.
   error?: string;
+  exitCode?: number;
+  logTail?: string;
   topFailures?: TestFailure[];
   topLintViolations?: LintViolation[];
 }

@@ -68,6 +68,26 @@ var _ = Describe("todo run context catalog", func() {
 		))
 	})
 
+	It("prefers the agent backend when Captain defaults the provider to CLI", func() {
+		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
+			return captaincli.WhoamiResult{
+				Adapters: []captaincli.AdapterStatus{
+					{Backend: "claude-cli", Models: []string{"claude-opus-4-8"}},
+					{Backend: "claude-agent", Models: []string{"claude-opus-4-8"}},
+				},
+				DefaultProvider: "anthropic",
+				ProviderDefaults: map[string]captaincli.ProviderDefaultView{
+					"anthropic": {Agent: "claude-cli", Model: "claude-opus-4-8"},
+				},
+			}, nil
+		}
+
+		context, err := todoRunContext()
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(context.DefaultBackend).To(Equal("claude-agent"))
+	})
+
 	It("does not synthesize a model when Captain returns an empty adapter catalog", func() {
 		runCaptainWhoami = func(captaincli.WhoamiOptions) (any, error) {
 			return captaincli.WhoamiResult{

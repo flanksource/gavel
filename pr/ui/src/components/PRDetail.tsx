@@ -42,7 +42,7 @@ import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
 import { VercelIcon } from '../icons/VercelIcon';
 import { Button } from '@flanksource/clicky-ui/components';
-import { GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitDiffPayload, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
+import { AnsiHtml, GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitDiffPayload, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
 import { copyText } from '../clipboard';
 import { useContainerWidth } from '../useContainerWidth';
@@ -877,6 +877,9 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
   // header don't deep-link when there are multiple shards — clicks on
   // specific results happen via the per-shard rows.
   const headerCards = buildMetricCards(agg, multi ? null : (tab: string) => shardLink(pr, agg, tab));
+  // A shard that produced no cards but carries an error knows why it produced
+  // nothing — say that instead of the generic "no data" text.
+  const errored = shards.filter(s => s.error);
 
   return (
     <Section
@@ -891,6 +894,19 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         <div className="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-2">
           {headerCards.map((c, i) => (
             <MetricCard key={i} {...c} />
+          ))}
+        </div>
+      ) : errored.length > 0 ? (
+        <div className="divide-y divide-border">
+          {errored.map(s => (
+            <div key={s.stickyId || s.artifactId} className="py-1 first:pt-0">
+              {multi && (
+                <div className="text-[11px] font-mono text-muted-foreground">
+                  {s.stickyId || `artifact ${s.artifactId}`}
+                </div>
+              )}
+              <ShardError results={s} href={shardLink(pr, s, 'tests')} />
+            </div>
           ))}
         </div>
       ) : (
@@ -1007,6 +1023,45 @@ function buildMetricCards(
   return cards;
 }
 
+// LOG_TAIL_LINES bounds how much of a crash log is rendered inline; the full
+// log is uploaded alongside the artifact.
+const LOG_TAIL_LINES = 40;
+
+// ShardError explains an artifact that carries no results: either gavel crashed
+// before producing any (exit code + log tail) or the artifact could not be read.
+function ShardError({ results, href }: { results: GavelResultsSummary; href?: string }) {
+  const lines = (results.logTail ?? '').replace(/\n+$/, '').split('\n');
+  const tail = lines.slice(-LOG_TAIL_LINES).join('\n');
+  const dropped = lines.length - LOG_TAIL_LINES;
+
+  return (
+    <div className="text-xs py-1 space-y-1.5">
+      <div className="flex items-start gap-1.5">
+        <UiWarningTriangle className="text-yellow-500 shrink-0 mt-0.5" />
+        <span className="text-foreground">{results.error}</span>
+      </div>
+      {results.exitCode !== undefined && (
+        <div className="text-muted-foreground">
+          Exit code <span className="font-mono tabular-nums text-foreground">{results.exitCode}</span>
+        </div>
+      )}
+      {tail && (
+        <details>
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            Log tail{dropped > 0 ? ` (last ${LOG_TAIL_LINES} of ${lines.length} lines)` : ''}
+          </summary>
+          <AnsiHtml
+            as="pre"
+            text={tail}
+            className="mt-1 max-h-64 overflow-auto rounded bg-black p-2 text-[11px] leading-snug text-gray-100 whitespace-pre-wrap"
+          />
+        </details>
+      )}
+      {href && <a className="text-blue-600 hover:underline" href={href}>Open results</a>}
+    </div>
+  );
+}
+
 function ShardExtras({ results }: { results: GavelResultsSummary }) {
   const failures = results.topFailures ?? [];
   const lintHits = results.topLintViolations ?? [];
@@ -1100,10 +1155,7 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
       {open && (
         <div className="px-2 pb-3 pt-1">
           {results.error ? (
-            <div className="text-xs text-muted-foreground py-1">
-              <UiWarningTriangle className="text-yellow-500 mr-1" />
-              {results.error}
-            </div>
+            <ShardError results={results} href={link('tests')} />
           ) : cards.length === 0 ? (
             <div className="text-xs text-muted-foreground py-1">
               No test, lint, or bench data in this artifact.{' '}

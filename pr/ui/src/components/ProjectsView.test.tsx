@@ -1,15 +1,11 @@
-import type React from 'react';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProjectsView } from './ProjectsView';
+import { ProjectDetailPane, ProjectsSidebar } from './ProjectsView';
 import type { Project } from '../types';
+import { useProjectCatalog } from '../useProjectCatalog';
 
 const streamListeners = new Map<string, EventListener>();
 
-vi.mock('@flanksource/clicky-ui/components', async importOriginal => ({
-  ...await importOriginal<typeof import('@flanksource/clicky-ui/components')>(),
-  SplitPane: ({ left, right }: { left: React.ReactNode; right: React.ReactNode }) => <div>{left}{right}</div>,
-}));
 vi.mock('./ProcControl', () => ({ ProcControl: () => null }));
 vi.mock('./TodoBadge', () => ({ TodoBadge: () => null }));
 vi.mock('./GitChangesBadge', () => ({ GitChangesBadge: () => null }));
@@ -37,6 +33,40 @@ const response = {
   }],
 };
 
+// Stands in for App's AppShell, which renders the sidebar into `bodySidebar` and
+// the detail pane into `children` off the one catalog the hook returns.
+function ProjectsTab({ configured, selectedName, selectedRunId, enabled = true }: {
+  configured: Project[];
+  selectedName: string;
+  selectedRunId: string;
+  enabled?: boolean;
+}) {
+  const catalog = useProjectCatalog({ configured, selectedName, enabled });
+  return (
+    <div>
+      <ProjectsSidebar
+        catalog={catalog}
+        procStatus={{}}
+        selectedName={selectedName}
+        selectedRunId={selectedRunId}
+        onSelect={() => {}}
+        onSelectRun={() => {}}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={() => {}}
+      />
+      <ProjectDetailPane
+        catalog={catalog}
+        selectedName={selectedName}
+        selectedRunId={selectedRunId}
+        diffPath=""
+        onDiffPathChange={() => {}}
+        onChanged={() => {}}
+      />
+    </div>
+  );
+}
+
 function stubRunHistory(payload: unknown) {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload }) as Response));
   vi.stubGlobal('EventSource', vi.fn(() => ({
@@ -52,25 +82,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('ProjectsView', () => {
+describe('projects tab', () => {
   it('lists history-only projects when the configured project catalog is empty', async () => {
     stubRunHistory(response);
 
-    render(
-      <ProjectsView
-        projects={[]}
-        procStatus={{}}
-        selectedName="gavel"
-        selectedRunId="run-1"
-        diffPath=""
-        onSelect={() => {}}
-        onSelectRun={() => {}}
-        onDiffPathChange={() => {}}
-        onChanged={() => {}}
-        onAdd={() => {}}
-        onSettings={() => {}}
-      />,
-    );
+    render(<ProjectsTab configured={[]} selectedName="gavel" selectedRunId="run-1" />);
 
     expect(await screen.findByRole('button', { name: 'Open lint run run-1 for gavel' })).toBeTruthy();
     expect(screen.getByText('Run gavel/run-1')).toBeTruthy();
@@ -79,21 +95,7 @@ describe('ProjectsView', () => {
   it('loads project run history and renders the selected run in the detail pane', async () => {
     stubRunHistory(response);
 
-    render(
-      <ProjectsView
-        projects={[project]}
-        procStatus={{}}
-        selectedName="gavel"
-        selectedRunId="run-1"
-        diffPath=""
-        onSelect={() => {}}
-        onSelectRun={() => {}}
-        onDiffPathChange={() => {}}
-        onChanged={() => {}}
-        onAdd={() => {}}
-        onSettings={() => {}}
-      />,
-    );
+    render(<ProjectsTab configured={[project]} selectedName="gavel" selectedRunId="run-1" />);
 
     expect(await screen.findByRole('button', { name: 'Open lint run run-1 for gavel' })).toBeTruthy();
     expect(screen.getByText('Run gavel/run-1')).toBeTruthy();
@@ -102,21 +104,7 @@ describe('ProjectsView', () => {
   it('applies valid SSE updates and surfaces malformed frames', async () => {
     stubRunHistory({ projects: [{ name: 'gavel', dir: '/work/gavel', runs: [] }] });
 
-    render(
-      <ProjectsView
-        projects={[project]}
-        procStatus={{}}
-        selectedName="gavel"
-        selectedRunId=""
-        diffPath=""
-        onSelect={() => {}}
-        onSelectRun={() => {}}
-        onDiffPathChange={() => {}}
-        onChanged={() => {}}
-        onAdd={() => {}}
-        onSettings={() => {}}
-      />,
-    );
+    render(<ProjectsTab configured={[project]} selectedName="gavel" selectedRunId="" />);
 
     await screen.findByText('No test or lint runs');
     act(() => streamListeners.get('message')?.(new MessageEvent('message', { data: JSON.stringify(response) })));
@@ -124,5 +112,14 @@ describe('ProjectsView', () => {
 
     act(() => streamListeners.get('message')?.(new MessageEvent('message', { data: '{' })));
     expect((await screen.findByRole('alert')).textContent).toContain('invalid update');
+  });
+
+  it('does not open the run-history stream while another tab is active', () => {
+    stubRunHistory(response);
+
+    render(<ProjectsTab configured={[project]} selectedName="gavel" selectedRunId="run-1" enabled={false} />);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(EventSource).not.toHaveBeenCalled();
   });
 });

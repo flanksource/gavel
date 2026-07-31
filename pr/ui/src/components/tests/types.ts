@@ -61,3 +61,53 @@ export interface RunSnapshot extends Omit<Snapshot, 'status' | 'tests'> {
   tests: Snapshot['tests'] | null;
   lint?: LinterResult[];
 }
+
+// RunFailure / RunArtifact mirror gavel's fixtures.RunFailure and
+// fixtures.RunArtifact: a fixture runner step records its engine output in the
+// .gavel store and carries only these counts, the head of the failure list, and
+// the run id inline. Fetch the full tree with fetchRunSnapshot(runId).
+export interface RunFailure {
+  name: string;
+  suite?: string;
+  status?: string;
+  message?: string;
+}
+
+export interface RunArtifact {
+  run_id: string;
+  path?: string;
+  kind: 'test' | 'lint' | 'test+lint';
+  total: number;
+  passed: number;
+  failed: number;
+  warned: number;
+  skipped: number;
+  lint_violations?: number;
+  linters?: string[];
+  failures?: RunFailure[];
+  /** Failures beyond the recorded cap; the full list lives in the snapshot. */
+  truncated?: number;
+  /** Set when the engine failed before producing results. */
+  error?: string;
+}
+
+/**
+ * Reads one run snapshot from the .gavel store. The Tests tab addresses a
+ * workspace by project name, the TODO surfaces by directory — exactly one. An
+ * empty `dir` is meaningful (the server's default workspace), so the mode is
+ * chosen by which key is supplied, not by whether its value is blank.
+ */
+export async function fetchRunSnapshot({ project, dir, runId }: { project?: string; dir?: string; runId: string }): Promise<RunSnapshot> {
+  if ((project === undefined) === (dir === undefined)) {
+    throw new Error('fetchRunSnapshot requires exactly one of project or dir');
+  }
+  const params = new URLSearchParams({ runId });
+  if (project !== undefined) params.set('project', project);
+  if (dir !== undefined) params.set('dir', dir);
+  const response = await fetch(`/api/tests/run?${params.toString()}`);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error((body && typeof body.error === 'string' && body.error) || `Failed to load run ${runId}`);
+  }
+  return body as RunSnapshot;
+}

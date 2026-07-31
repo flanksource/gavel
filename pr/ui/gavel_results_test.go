@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/gavel/github"
@@ -175,23 +176,58 @@ func TestAggregateGavelSummariesIgnoresMissingArtifacts(t *testing.T) {
 	}
 }
 
-func TestGavelResultJSON_UnmarshalArray(t *testing.T) {
-	var g gavelResultJSON
-	if err := json.Unmarshal([]byte(`[{"name":"T1","passed":true}]`), &g); err != nil {
+// A run that dies before producing results uploads a crash envelope instead of
+// a result tree. The summary must carry the reason forward so the PR page can
+// explain the empty card rather than claiming there was no data.
+func TestComputeGavelSummary_CrashEnvelope(t *testing.T) {
+	const (
+		artifactID = int64(8753065857)
+		wantErr    = "gavel exited 1 before writing results"
+		wantTail   = "pre-build: compiling Go test binaries failed"
+	)
+	stub, err := json.Marshal(map[string]any{
+		"error":     wantErr,
+		"exit_code": 1,
+		"log_tail":  wantTail,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(g.Tests) != 1 || g.Tests[0].Name != "T1" {
-		t.Errorf("got %+v", g.Tests)
+
+	got := computeGavelSummary(stub, artifactID, "")
+	if got.Error != wantErr {
+		t.Errorf("Error = %q, want %q", got.Error, wantErr)
+	}
+	if got.ExitCode == nil || *got.ExitCode != 1 {
+		t.Errorf("ExitCode = %v, want 1", got.ExitCode)
+	}
+	if got.LogTail != wantTail {
+		t.Errorf("LogTail = %q, want %q", got.LogTail, wantTail)
+	}
+	if got.TestsTotal != 0 || got.LintLinters != 0 {
+		t.Errorf("crash envelope produced counts: %+v", got)
 	}
 }
 
-func TestGavelResultJSON_UnmarshalObject(t *testing.T) {
-	var g gavelResultJSON
-	if err := json.Unmarshal([]byte(`{"tests":[{"name":"T2"}],"lint":[]}`), &g); err != nil {
-		t.Fatal(err)
+// Exit code may arrive under metadata.exit_code when gavel itself (rather than
+// the composite action's shell fallback) writes the envelope.
+func TestComputeGavelSummary_CrashExitCodeFromMetadata(t *testing.T) {
+	stub := []byte(`{"metadata":{"exit_code":2},"error":"boom","tests":[]}`)
+	got := computeGavelSummary(stub, 1, "")
+	if got.ExitCode == nil || *got.ExitCode != 2 {
+		t.Fatalf("ExitCode = %v, want 2", got.ExitCode)
 	}
-	if len(g.Tests) != 1 || g.Tests[0].Name != "T2" {
-		t.Errorf("got %+v", g.Tests)
+}
+
+// Regression: the composite action used to build its crash stub with printf +
+// `sed 's/"/\\"/g'`, which left raw control bytes (a tab from `go mod tidy`
+// output) unescaped inside a JSON string. Such an artifact must surface a parse
+// error, never be silently reported as "no data".
+func TestComputeGavelSummary_MalformedJSONReportsParseError(t *testing.T) {
+	malformed := []byte("{\"error\":\"gavel exited 1\",\"log_tail\":\"to update it: \tgo mod tidy\"}")
+	got := computeGavelSummary(malformed, 1, "")
+	if !strings.HasPrefix(got.Error, "parse artifact:") {
+		t.Fatalf("Error = %q, want a parse artifact: error", got.Error)
 	}
 }
 

@@ -3,7 +3,7 @@ import type { PRItem, PRDetail, PRInfo, Snapshot, SearchConfig, RateLimit, PRSyn
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
-import { SplitPane, AppShell, Button } from '@flanksource/clicky-ui/components';
+import { AppShell, Button } from '@flanksource/clicky-ui/components';
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ActivityView } from './components/ActivityView';
 import { TodoNewButton, TodoNavbarDensityPicker, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
@@ -16,7 +16,7 @@ import { StatusIndicator } from './components/StatusIndicator';
 import { OrgChooser } from './components/OrgChooser';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { SettingsPage, type SettingsScope } from './components/settings/SettingsPage';
-import { ProjectsView } from './components/ProjectsView';
+import { ProjectDetailPane, ProjectsSidebar } from './components/ProjectsView';
 import { ProcessManager } from './components/ProcessManager';
 import { ProjectsPlaceholder } from './components/ProjectsPlaceholder';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -38,6 +38,7 @@ import { copyCurrentViewForAgent, downloadCurrentView } from './export';
 import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
+import { useProjectCatalog } from './useProjectCatalog';
 import { useIsMobile } from './useIsMobile';
 import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
@@ -45,6 +46,11 @@ import type { ComponentType } from 'react';
 import { Spinner } from './icons/Spinner';
 
 const defaultConfig: SearchConfig = { repos: [] };
+
+// Percentage width of the AppShell body sidebar per tab. A PR row carries title,
+// repo, checks and badges so it wants half the body; a project is just a name and
+// a run list, so its list is narrow.
+const bodySplitByTab: Partial<Record<Tab, number>> = { prs: 50, projects: 22, todos: 38 };
 
 type WebKitExternalBridge = {
   webkit?: {
@@ -685,6 +691,10 @@ export function App() {
   // across workspaces), independent of the structured facet filters, and jumps to
   // the chosen item — switching tabs as needed.
   const todoEntries = useMemo(() => flattenTodos(todos.workspaces, todos.byDir), [todos.workspaces, todos.byDir]);
+
+  // Both halves of the projects tab (the AppShell body sidebar and the detail
+  // pane) read one catalog, so it is loaded here rather than inside either one.
+  const projectCatalog = useProjectCatalog({ configured: projects, selectedName: selectedPath, enabled: activeTab === 'projects' });
   function selectPRFromPalette(pr: PRItem) {
     commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, projectDiffPath: '', projectRunId: '', filters });
     loadPR(pr);
@@ -801,41 +811,47 @@ export function App() {
             />
           ) : undefined
         }
-        bodySidebar={activeTab === 'todos' ? <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} /> : undefined}
-        bodySplit={38}
+        bodySidebar={
+          activeTab === 'prs' ? (
+            <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
+          ) : activeTab === 'projects' ? (
+            <ProjectsSidebar
+              catalog={projectCatalog}
+              procStatus={procStatus}
+              selectedName={selectedPath}
+              selectedRunId={projectRunId}
+              onSelect={navigateProject}
+              onSelectRun={navigateProjectRun}
+              onChanged={onProcChanged}
+              onAdd={openAdd}
+              onSettings={openProjectSettings}
+            />
+          ) : activeTab === 'todos' ? (
+            <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
+          ) : undefined
+        }
+        bodySplit={bodySplitByTab[activeTab] ?? 38}
         contentClassName="overflow-hidden"
       >
         {activeTab === 'prs' ? (
-          <SplitPane
-            left={
-              <PRList prs={filtered} selected={selected} onSelect={handleSelect} unread={unread} syncStatus={syncStatus} gavelResults={gavelResultsMap} projectsByRepo={projectsByRepo} procStatus={procStatus} onProcChanged={onProcChanged} />
-            }
-            right={
-              selected ? (
-                <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
-              ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                  <div className="text-center">
-                    <UiGitPr className="text-4xl mb-2" />
-                    <p>Select a PR to view details</p>
-                  </div>
-                </div>
-              )
-            }
-          />
+          selected ? (
+            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              <div className="text-center">
+                <UiGitPr className="text-4xl mb-2" />
+                <p>Select a PR to view details</p>
+              </div>
+            </div>
+          )
         ) : activeTab === 'projects' ? (
-          <ProjectsView
-            projects={projects}
-            procStatus={procStatus}
+          <ProjectDetailPane
+            catalog={projectCatalog}
             selectedName={selectedPath}
             selectedRunId={projectRunId}
             diffPath={projectDiffPath}
-            onSelect={navigateProject}
-            onSelectRun={navigateProjectRun}
             onDiffPathChange={navigateProjectDiff}
             onChanged={onProcChanged}
-            onAdd={openAdd}
-            onSettings={openProjectSettings}
           />
         ) : activeTab === 'todos' ? (
           <div className="flex h-full min-h-0 flex-col">

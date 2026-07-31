@@ -72,6 +72,32 @@ type todoSessionDetailResponse struct {
 	SelectedExecutionSession *uuid.UUID          `json:"selectedExecutionSessionId,omitempty"`
 	Thread                   *todoProviderThread `json:"thread,omitempty"`
 	Diagnostics              []sessionDiagnostic `json:"diagnostics"`
+
+	// AttemptsOnly marks a response whose provider thread was deliberately not
+	// resolved, so a skipped thread is never mistaken for a missing one.
+	AttemptsOnly bool `json:"attemptsOnly,omitempty"`
+}
+
+// todoSessionDetailQuery is the parsed request. AttemptsOnly serves the
+// Verification tab and its badge, which need the attempt list (and the DoD
+// carried in each attempt's result_json) but never the transcript — resolving
+// the full thread means every session, turn, agent, cost and message on a poll
+// that runs while the tab is closed.
+type todoSessionDetailQuery struct {
+	SessionID    string
+	AttemptsOnly bool
+}
+
+func parseTodoSessionDetailQuery(r *http.Request) (todoSessionDetailQuery, error) {
+	query := todoSessionDetailQuery{SessionID: strings.TrimSpace(r.URL.Query().Get("sessionId"))}
+	switch attempts := strings.TrimSpace(r.URL.Query().Get("attempts")); attempts {
+	case "":
+	case "only":
+		query.AttemptsOnly = true
+	default:
+		return query, fmt.Errorf("unknown attempts value %q, want \"only\"", attempts)
+	}
+	return query, nil
 }
 
 func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +105,11 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
 	if ref == "" {
 		writeTodoError(w, http.StatusBadRequest, errors.New("ref is required"))
+		return
+	}
+	query, err := parseTodoSessionDetailQuery(r)
+	if err != nil {
+		writeTodoError(w, http.StatusBadRequest, err)
 		return
 	}
 	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
@@ -102,7 +133,7 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 		writeTodoError(w, http.StatusInternalServerError, fmt.Errorf("native TODO has invalid ID %q: %w", todo.ID, err))
 		return
 	}
-	response, conflict, err := buildTodoSessionDetail(r.Context(), detailProvider, issueID, strings.TrimSpace(r.URL.Query().Get("sessionId")))
+	response, conflict, err := buildTodoSessionDetail(r.Context(), detailProvider, issueID, query)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
@@ -129,7 +160,8 @@ func (s *Server) handleTodoSessionDetail(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider, issueID uuid.UUID, requestedSessionID string) (todoSessionDetailResponse, bool, error) {
+func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider, issueID uuid.UUID, query todoSessionDetailQuery) (todoSessionDetailResponse, bool, error) {
+	requestedSessionID := query.SessionID
 	links, err := provider.Repository().ListPromptRuns(ctx, issueID)
 	if err != nil {
 		return todoSessionDetailResponse{}, false, err
@@ -157,6 +189,11 @@ func buildTodoSessionDetail(ctx context.Context, provider sessionDetailProvider,
 	}
 	for left, right := 0, len(response.Attempts)-1; left < right; left, right = left+1, right-1 {
 		response.Attempts[left], response.Attempts[right] = response.Attempts[right], response.Attempts[left]
+	}
+
+	if query.AttemptsOnly {
+		response.AttemptsOnly = true
+		return response, false, nil
 	}
 
 	selected := selectAttempt(response.Attempts, requestedSessionID)

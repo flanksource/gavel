@@ -75,6 +75,26 @@ var _ = Describe("settings prompt override repair and round-trip", func() {
 		dir = newProjectDir("gavel", "flanksource/gavel")
 	})
 
+	It("parses the commit grouping default with templated frontmatter", func() {
+		rec := httptest.NewRecorder()
+		(&Server{}).Handler().ServeHTTP(
+			rec,
+			httptest.NewRequest(http.MethodGet, "/api/settings/prompts/"+prompts.CommitGrouping+"?scope=global", nil),
+		)
+
+		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
+		got := decodePromptDetail(rec)
+		Expect(got.ParseError).To(BeEmpty())
+		Expect(got.Spec).NotTo(BeNil())
+		promptSpec, ok := (*got.Spec)["prompt"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(promptSpec["schemaStrictness"]).To(Equal("retry"))
+		Expect(got.Body).NotTo(BeNil())
+		Expect(*got.Body).To(ContainSubstring("{{table}}"))
+		Expect(*got.Body).To(ContainSubstring("{{#if maxCommits}}"))
+		Expect(got.Raw).To(ContainSubstring("maxItems: {{maxCommits}}"))
+	})
+
 	It("round-trips a valid inline structured override", func() {
 		seedInlineOverride(dir, api.Spec{
 			Model:  api.Model{Name: "claude-test"},

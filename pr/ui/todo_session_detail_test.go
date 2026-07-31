@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -45,6 +47,33 @@ func (fakeProviderThreadStore) ListThreadAgents(context.Context, uuid.UUID) ([]c
 
 func (fakeProviderThreadStore) ListThreadCosts(context.Context, uuid.UUID) ([]captaindb.SessionCost, error) {
 	return nil, nil
+}
+
+func TestParseTodoSessionDetailQuery(t *testing.T) {
+	parse := func(query string) (todoSessionDetailQuery, error) {
+		return parseTodoSessionDetailQuery(httptest.NewRequest(http.MethodGet, "/api/todos/session/detail?"+query, nil))
+	}
+
+	t.Run("no attempts parameter loads the full thread", func(t *testing.T) {
+		got, err := parse("ref=abc&sessionId=session-1")
+		require.NoError(t, err)
+		assert.False(t, got.AttemptsOnly)
+		assert.Equal(t, "session-1", got.SessionID)
+	})
+
+	t.Run("attempts=only skips the thread", func(t *testing.T) {
+		got, err := parse("ref=abc&attempts=only")
+		require.NoError(t, err)
+		assert.True(t, got.AttemptsOnly)
+	})
+
+	// An unrecognised value must not silently fall back to the expensive full
+	// thread — a typo would quietly restore the cost the mode exists to avoid.
+	t.Run("unknown attempts value is rejected", func(t *testing.T) {
+		_, err := parse("ref=abc&attempts=all")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"all"`)
+	})
 }
 
 func TestLoadProviderThreadIncludesTranscriptSnapshot(t *testing.T) {

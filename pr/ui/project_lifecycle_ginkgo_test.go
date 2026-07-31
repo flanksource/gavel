@@ -237,7 +237,7 @@ var _ = Describe("project status lifecycle", func() {
 					} else {
 						completed.Lint = []*linters.LinterResult{{Linter: "golangci-lint", Success: true}}
 					}
-					_, err := snapshots.SavePerRun(workDir, &completed, completed.Metadata.Started)
+					_, err := snapshots.SavePerRun(workDir, &completed, completed.Metadata.Started, "")
 					Expect(err).NotTo(HaveOccurred())
 					return 0, nil
 				}, opts...)

@@ -66,10 +66,11 @@ type PRViewNode struct {
 	RoutePath string `json:"route_path,omitempty"`
 
 	// Populated only when Selected (single-PR export).
-	PR       *github.PRInfo                `json:"pr,omitempty"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
-	Detail   string                        `json:"detailError,omitempty"`
+	PR           *github.PRInfo                `json:"pr,omitempty"`
+	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	Comments     []github.PRComment            `json:"comments,omitempty"`
+	GavelResults []*GavelResultsSummary        `json:"gavelResults,omitempty"`
+	Detail       string                        `json:"detailError,omitempty"`
 }
 
 func (n *PRViewNode) Pretty() api.Text {

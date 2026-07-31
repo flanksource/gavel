@@ -211,9 +211,8 @@ type todoVerificationFixturePayload struct {
 	Fixture string `json:"fixture"`
 }
 
-// handleTodoVerificationFixture saves a todo's "## Verification" fixture
-// markdown, rewriting the section in place, and returns the refreshed todo —
-// mirroring handleTodoCriteria for the Verification tab's FixtureEditor.
+// handleTodoVerificationFixture saves a todo's dedicated verification markdown
+// and returns the refreshed todo, mirroring handleTodoCriteria.
 func (s *Server) handleTodoVerificationFixture(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var payload todoVerificationFixturePayload
@@ -226,8 +225,7 @@ func (s *Server) handleTodoVerificationFixture(w http.ResponseWriter, r *http.Re
 		writeTodoError(w, status, err)
 		return
 	}
-	body := todos.UpsertVerificationFixture(todo.MarkdownBody, payload.Fixture)
-	if err := provider.Edit(r.Context(), todo, todos.EditRequest{Body: &body}); err != nil {
+	if err := provider.Edit(r.Context(), todo, todos.EditRequest{Verification: &payload.Fixture}); err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}

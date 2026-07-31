@@ -10,11 +10,8 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
-	"github.com/flanksource/gavel/todos/types"
 )
 
 type todoRunContextResponse struct {
@@ -29,35 +26,6 @@ type todoRunContextResponse struct {
 	// fixture fences) so the dashboard can render the schema-driven run form
 	// (clicky PromptDialog/JsonSchemaForm). Modes with no inputs are omitted.
 	InputSchemas map[string]json.RawMessage `json:"inputSchemas,omitempty"`
-}
-
-type todoRunToolOption struct {
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Group       string `json:"group,omitempty"`
-	DefaultMode string `json:"defaultMode,omitempty"`
-}
-
-// todoRunToolCatalog maps the default agent toolset (drivers.DefaultTools) onto
-// the tool-preferences catalog, grouped for the picker.
-func todoRunToolCatalog() []todoRunToolOption {
-	group := map[string]string{
-		"Read": "Files", "Edit": "Files", "Write": "Files",
-		"Bash": "Shell",
-		"Glob": "Search", "Grep": "Search",
-	}
-	tools := drivers.DefaultTools()
-	out := make([]todoRunToolOption, 0, len(tools))
-	for _, name := range tools {
-		// Bash defaults to ask (brokered), matching the run's default posture where
-		// command execution is surfaced for approval; the rest auto-run.
-		mode := "enabled"
-		if name == "Bash" {
-			mode = "ask"
-		}
-		out = append(out, todoRunToolOption{Name: name, Label: name, Group: group[name], DefaultMode: mode})
-	}
-	return out
 }
 
 type todoRunBackendOption struct {
@@ -182,14 +150,9 @@ func todoRunContext() (todoRunContextResponse, error) {
 	if len(backends) == 0 {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
-	defaultBackend := ""
-	if defaults, ok := who.ProviderDefaults[who.DefaultProvider]; ok {
-		for _, backend := range backends {
-			if backend.ID == defaults.Agent {
-				defaultBackend = backend.ID
-				break
-			}
-		}
+	defaultBackend, err := defaultTodoRunBackend(who, backends)
+	if err != nil {
+		return todoRunContextResponse{}, err
 	}
 	return todoRunContextResponse{
 		Backends:       backends,
@@ -198,26 +161,6 @@ func todoRunContext() (todoRunContextResponse, error) {
 		Tools:          todoRunToolCatalog(),
 		InputSchemas:   todoRunInputSchemas(),
 	}, nil
-}
-
-// todoRunInputSchemas collects each mode's prompt input schema; a mode with no
-// inputs (plan, verify) is simply absent.
-func todoRunInputSchemas() map[string]json.RawMessage {
-	out := map[string]json.RawMessage{}
-	for _, mode := range []types.RunMode{types.ModeRun, types.ModePlan} {
-		raw, err := todoprompt.InputSchema(mode)
-		if err != nil {
-			logger.Warnf("todo run context: input schema for %s: %v", mode, err)
-			continue
-		}
-		if raw != nil {
-			out[string(mode)] = json.RawMessage(raw)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func todoRunBackendOptionFor(spec runBackendSpec, status captaincli.AdapterStatus, captainDefaultModel string) todoRunBackendOption {
