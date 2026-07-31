@@ -47,6 +47,15 @@ type Snapshot struct {
 	Lint        []*linters.LinterResult `json:"lint,omitempty"`
 	Bench       *bench.BenchComparison  `json:"bench,omitempty"`
 	Diagnostics *DiagnosticsSnapshot    `json:"diagnostics,omitempty"`
+
+	// Error explains why the run produced no (or only partial) results — a
+	// pre-build failure, a timeout, a crashed runner. Consumers treat a
+	// snapshot with Error and no Tests/Lint as a crash envelope rather than
+	// an empty run. LogTail carries the captured stderr tail when the
+	// producer has one; gavel itself leaves it empty (it uploads gavel.log
+	// alongside the results instead).
+	Error   string `json:"error,omitempty"`
+	LogTail string `json:"log_tail,omitempty"`
 }
 
 // Pretty is the root label of the tree clicky renders for serialized formats

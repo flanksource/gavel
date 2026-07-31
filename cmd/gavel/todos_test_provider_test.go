@@ -71,15 +71,27 @@ func (p *testTODOProvider) Create(_ context.Context, request todos.CreateRequest
 	}
 	created := time.Now().UTC()
 	id := fmt.Sprintf("todo-%d", len(p.items)+1)
-	todo := &types.TODO{
-		ID: id, FilePath: id, Provider: todos.ProviderDB,
-		TODOFrontmatter: types.TODOFrontmatter{
-			Title: request.Title, Priority: priority, Status: status, CWD: p.dir, Created: &created,
-		},
-		MarkdownBody: request.Body, Implementation: request.Body,
+	body, bodyVerification, _ := todos.SplitVerificationFixture(request.Body)
+	verification := todos.CombineVerificationFixtures(request.Verification, bodyVerification)
+	parsed, err := todos.ParseTODOContent(request.Title, body, p.dir, types.TODOFrontmatter{
+		Title: request.Title, Priority: priority, Status: status, CWD: p.dir, Created: &created,
+	})
+	if err != nil {
+		return nil, err
 	}
-	p.items = append(p.items, todo)
-	return todo, nil
+	parsed.VerificationMarkdown = verification
+	parsed.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
+		Name: request.Title, Markdown: verification, SourceDir: p.dir,
+		FrontMatter: parsed.FrontMatter,
+	})
+	if err != nil {
+		return nil, err
+	}
+	parsed.ID = id
+	parsed.FilePath = id
+	parsed.Provider = todos.ProviderDB
+	p.items = append(p.items, parsed)
+	return parsed, nil
 }
 
 func (p *testTODOProvider) Delete(_ context.Context, todo *types.TODO) error {
@@ -96,9 +108,35 @@ func (p *testTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todos.
 	if edit.Title != nil {
 		todo.Title = strings.TrimSpace(*edit.Title)
 	}
-	if edit.Body != nil {
-		todo.MarkdownBody = *edit.Body
-		todo.Implementation = *edit.Body
+	if edit.Body != nil || edit.Verification != nil {
+		body := todo.MarkdownBody
+		verification := todo.VerificationMarkdown
+		var bodyVerification string
+		if edit.Body != nil {
+			var hasVerification bool
+			body, bodyVerification, hasVerification = todos.SplitVerificationFixture(*edit.Body)
+			if hasVerification {
+				verification = bodyVerification
+			}
+		}
+		if edit.Verification != nil {
+			verification = todos.CombineVerificationFixtures(*edit.Verification, bodyVerification)
+		}
+		parsed, err := todos.ParseTODOContent(todo.Title, body, p.dir, todo.TODOFrontmatter)
+		if err != nil {
+			return err
+		}
+		parsed.VerificationMarkdown = verification
+		parsed.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
+			Name: todo.Title, Markdown: verification, SourceDir: p.dir,
+			FrontMatter: parsed.FrontMatter,
+		})
+		if err != nil {
+			return err
+		}
+		id, path, provider := todo.ID, todo.FilePath, todo.Provider
+		*todo = *parsed
+		todo.ID, todo.FilePath, todo.Provider = id, path, provider
 	}
 	return nil
 }

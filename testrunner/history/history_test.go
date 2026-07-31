@@ -109,7 +109,7 @@ func TestLoadUsesFilenameTimestampWhenMetadataMissing(t *testing.T) {
 	started := time.Date(2026, 4, 27, 10, 43, 42, 0, time.UTC)
 	path, err := snapshots.SavePerRun(workDir, &testui.Snapshot{
 		Tests: []parsers.Test{fooTest(workDir, "TestFoo", true, false, time.Millisecond)},
-	}, started)
+	}, started, "")
 	require.NoError(t, err)
 	require.Contains(t, filepath.Base(path), "2026-04-27T10-43-42Z")
 
@@ -171,7 +171,7 @@ func writeRun(t *testing.T, workDir string, started time.Time, tests []parsers.T
 		Git:      &testui.SnapshotGit{Root: workDir, Repo: "repo", SHA: "abc"},
 		Status:   testui.SnapshotStatus{Running: false},
 		Tests:    tests,
-	}, started)
+	}, started, "")
 	require.NoError(t, err)
 }
 

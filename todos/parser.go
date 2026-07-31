@@ -50,17 +50,26 @@ func ParseTODO(filePath string) (*types.TODO, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse markdown: %w", err)
 	}
+	cleanBody, verificationMarkdown, _ := SplitVerificationFixture(body)
+	verification, err := ParseVerificationMarkdown(VerificationMarkdownOptions{
+		Name: filePath, Markdown: verificationMarkdown, SourceDir: todoFrontmatter.CWD,
+		FrontMatter: todoFrontmatter.FrontMatter,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.TODO{
-		FilePath:           filePath,
-		FileNode:           fileNode,
-		TODOFrontmatter:    todoFrontmatter,
-		StepsToReproduce:   extractSection(fileNode, "Steps to Reproduce"),
-		Implementation:     extractImplementationText(fileNode, "Implementation"),
-		Verification:       extractSection(fileNode, "Verification"),
-		CustomValidations:  extractSection(fileNode, "Custom Validations"),
-		MarkdownBody:       body,
-		AcceptanceCriteria: ParseAcceptanceCriteria(body),
+		FilePath:             filePath,
+		FileNode:             fileNode,
+		TODOFrontmatter:      todoFrontmatter,
+		StepsToReproduce:     extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:       extractImplementationText(fileNode, "Implementation"),
+		Verification:         verification,
+		CustomValidations:    extractSection(fileNode, "Custom Validations"),
+		MarkdownBody:         cleanBody,
+		VerificationMarkdown: verificationMarkdown,
+		AcceptanceCriteria:   ParseAcceptanceCriteria(cleanBody),
 	}, nil
 }
 
@@ -97,17 +106,56 @@ func ParseTODOContent(name, content, sourceDir string, defaults types.TODOFrontm
 	if err != nil {
 		return nil, err
 	}
+	cleanBody, verificationMarkdown, _ := SplitVerificationFixture(body)
+	verification, err := ParseVerificationMarkdown(VerificationMarkdownOptions{
+		Name: name, Markdown: verificationMarkdown, SourceDir: sourceDir,
+		FrontMatter: fixtureFrontmatter,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.TODO{
-		FileNode:           fileNode,
-		TODOFrontmatter:    frontmatter,
-		StepsToReproduce:   extractSection(fileNode, "Steps to Reproduce"),
-		Implementation:     extractImplementationText(fileNode, "Implementation"),
-		Verification:       extractSection(fileNode, "Verification"),
-		CustomValidations:  extractSection(fileNode, "Custom Validations"),
-		MarkdownBody:       body,
-		AcceptanceCriteria: ParseAcceptanceCriteria(body),
+		FileNode:             fileNode,
+		TODOFrontmatter:      frontmatter,
+		StepsToReproduce:     extractSection(fileNode, "Steps to Reproduce"),
+		Implementation:       extractImplementationText(fileNode, "Implementation"),
+		Verification:         verification,
+		CustomValidations:    extractSection(fileNode, "Custom Validations"),
+		MarkdownBody:         cleanBody,
+		VerificationMarkdown: verificationMarkdown,
+		AcceptanceCriteria:   ParseAcceptanceCriteria(cleanBody),
 	}, nil
+}
+
+type VerificationMarkdownOptions struct {
+	Name        string
+	Markdown    string
+	SourceDir   string
+	FrontMatter fixtures.FrontMatter
+}
+
+// ParseVerificationMarkdown parses dedicated verification markdown as its own
+// fixture document so its H1/H2 subsections remain part of the definition of done.
+func ParseVerificationMarkdown(opts VerificationMarkdownOptions) ([]*fixtures.FixtureNode, error) {
+	markdown := strings.TrimSpace(opts.Markdown)
+	if markdown == "" {
+		return nil, nil
+	}
+	frontMatter := opts.FrontMatter
+	if hasFrontmatter(markdown) {
+		result, err := ParseFrontmatter(markdown)
+		if err != nil {
+			return nil, err
+		}
+		frontMatter = result.Frontmatter.FrontMatter
+		markdown = result.MarkdownContent
+	}
+	tree, err := fixtures.ParseMarkdownContentWithTree(opts.Name+" verification", markdown, opts.SourceDir, &frontMatter)
+	if err != nil {
+		return nil, err
+	}
+	return tree.Children, nil
 }
 
 func hasFrontmatter(content string) bool {

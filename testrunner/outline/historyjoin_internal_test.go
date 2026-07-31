@@ -22,7 +22,7 @@ var _ = Describe("joinHistory", func() {
 			Metadata: &testui.SnapshotMetadata{Started: ran},
 			Git:      &testui.SnapshotGit{Root: workDir, Repo: "repo", SHA: "abc"},
 			Tests:    tests,
-		}, ran)
+		}, ran, "")
 		Expect(err).NotTo(HaveOccurred())
 	}
 

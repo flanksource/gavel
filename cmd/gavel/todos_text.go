@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/todos"
 )
 
 type todoTextOptions struct {
@@ -66,5 +67,8 @@ func resolveTodoCreateContent(workDir string, opts todoCreateContentOptions) (to
 			return todoCreateContent{}, fmt.Errorf("--verification cannot be empty")
 		}
 	}
+	var bodyVerification string
+	content.Body, bodyVerification, _ = todos.SplitVerificationFixture(content.Body)
+	content.Verification = todos.CombineVerificationFixtures(content.Verification, bodyVerification)
 	return content, nil
 }

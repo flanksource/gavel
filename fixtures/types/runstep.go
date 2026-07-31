@@ -67,6 +67,19 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	result.Metadata = map[string]interface{}{"summary": summary}
 	result.Children = testChildNodes(tests, disp)
 
+	artifact, err := saveRunArtifact(runArtifactOptions{
+		WorkDir: ro.WorkDir,
+		Kind:    "test",
+		Label:   fixture.Name,
+		Started: now,
+		Tests:   tests,
+		Err:     runErr,
+	})
+	if err != nil {
+		return result.Errorf(err, "record run artifact")
+	}
+	result.Run = artifact
+
 	if runErr != nil && summary.Total == 0 {
 		return result.Errorf(runErr, "test run failed")
 	}
@@ -101,14 +114,28 @@ func RunLintStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	ctx := context.Background()
 	lo.Context = ctx
 
-	results, err := lint.Run(ctx, lo)
-	if err != nil {
-		return result.Errorf(err, "lint run failed")
-	}
+	results, runErr := lint.Run(ctx, lo)
 
 	result.CWD = lo.WorkDir
 	result.Duration = time.Since(now)
 	result.Children = lintChildNodes(results, disp)
+
+	artifact, err := saveRunArtifact(runArtifactOptions{
+		WorkDir: lo.WorkDir,
+		Kind:    "lint",
+		Label:   fixture.Name,
+		Started: now,
+		Lint:    results,
+		Err:     runErr,
+	})
+	if err != nil {
+		return result.Errorf(err, "record run artifact")
+	}
+	result.Run = artifact
+
+	if runErr != nil {
+		return result.Errorf(runErr, "lint run failed")
+	}
 
 	var violations int
 	for _, lr := range results {

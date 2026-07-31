@@ -113,6 +113,8 @@ type TODO struct {
 	Verification      []*fixtures.FixtureNode `json:"verification,omitempty"`       // Section containing verification tests
 	CustomValidations []*fixtures.FixtureNode `json:"custom_validations,omitempty"` // Section containing custom validation tests
 	MarkdownBody      string                  `json:"markdown_body,omitempty"`
+	// VerificationMarkdown is the raw fixture source stored separately from MarkdownBody.
+	VerificationMarkdown string `json:"verification_markdown,omitempty"`
 	// AcceptanceCriteria are the editable done-ness criteria parsed from the
 	// "## Acceptance Criteria" section, scored by issue-aware verification.
 	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria,omitempty"`

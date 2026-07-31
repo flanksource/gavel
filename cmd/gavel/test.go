@@ -318,12 +318,15 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		// sections; otherwise just the summary.
 		clicky.StopCapturingOutput()
 		clicky.WaitForGlobalCompletion()
-		if tests, ok := result.([]parsers.Test); ok {
+		tests, _ := result.([]parsers.Test)
+		if tests != nil {
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 		} else if isPrettyFormat() {
 			printTestRunSummary(fullSummary, lintResults)
 		}
-		return result, err
+		// Serialized formats get the partial tree plus the failure reason as
+		// a crash envelope, so `--format json=FILE` always produces a file.
+		return nil, testRunFailureValue(opts, tests, lintResults, runStarted, err)
 	}
 	if tests, ok := result.([]parsers.Test); ok {
 		if opts.Baseline != "" {
@@ -345,7 +348,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 				} else {
 					logger.V(1).Infof("wrote snapshot to %s", path)
 				}
-				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+				if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 					logger.Warnf("persist per-run snapshot: %v", err)
 				} else {
 					logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -376,7 +379,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			// flooded unless the user opts in.
 			printTestRunResults(tests, opts, fullSummary, lintResults)
 			snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
-			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+			if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 				logger.Warnf("persist per-run snapshot: %v", err)
 			} else {
 				logger.V(1).Infof("wrote per-run snapshot to %s", path)
@@ -393,7 +396,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		} else {
 			logger.V(1).Infof("wrote snapshot to %s", path)
 		}
-		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted); err != nil {
+		if path, err := snapshots.SavePerRun(opts.WorkDir, &snapshot, runStarted, ""); err != nil {
 			logger.Warnf("persist per-run snapshot: %v", err)
 		} else {
 			logger.V(1).Infof("wrote per-run snapshot to %s", path)
