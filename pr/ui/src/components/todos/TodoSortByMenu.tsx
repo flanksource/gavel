@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
-import { UiCheck, UiChevronDown } from '@flanksource/clicky-ui/icons';
-import type { TodoSortBy } from '../../types';
-import { SORT_BY_OPTIONS } from './todoGroup';
+import { UiCheck, UiChevronDown, UiChevronUp } from '@flanksource/clicky-ui/icons';
+import type { TodoSort } from './todoSort';
+import { TODO_SORT_COLUMN_OPTIONS } from './todoSort';
 
-// TodoSortByMenu is the sidebar dropdown that picks the row order within each todo
-// group: Priority (the default high→low, then newest activity), Newest/Oldest by
-// created age, or Title alphabetically. It drives the shared sort-by preference
-// next to the group-by control, mirroring TodoGroupByMenu's chrome.
 export function TodoSortByMenu({ sortBy, onChange }: {
-  sortBy: TodoSortBy;
-  onChange: (sortBy: TodoSortBy) => void;
+  sortBy: TodoSort;
+  onChange: (sortBy: TodoSort) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -26,24 +22,38 @@ export function TodoSortByMenu({ sortBy, onChange }: {
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  const active = SORT_BY_OPTIONS.find(opt => opt.value === sortBy) ?? SORT_BY_OPTIONS[0];
+  const active = TODO_SORT_COLUMN_OPTIONS.find(opt => opt.value === sortBy.column)
+    ?? TODO_SORT_COLUMN_OPTIONS[0];
   const ActiveIcon = active.icon;
+  const DirectionIcon = sortBy.dir === 'desc' ? UiChevronDown : UiChevronUp;
+  const directionLabel = sortBy.dir === 'desc' ? 'Sort descending' : 'Sort ascending';
 
   return (
-    <div className="relative" ref={rootRef}>
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="Sort todos by"
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-      >
-        <ActiveIcon className="text-xs" />
-        <span className="font-medium">Sort: {active.label}</span>
-        <UiChevronDown className="text-[10px]" />
-      </Button>
+    <div className="relative inline-flex items-center" ref={rootRef}>
+      <div className="inline-flex overflow-hidden rounded-md border border-border">
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="inline-flex h-8 items-center gap-1.5 rounded-none border-r border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ActiveIcon className="text-xs" />
+          <span className="font-medium">Sort: {active.label}</span>
+          <UiChevronDown className="text-[10px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={() => onChange({ ...sortBy, dir: sortBy.dir === 'desc' ? 'asc' : 'desc' })}
+          aria-label={directionLabel}
+          title={directionLabel}
+          className="h-8 w-8 rounded-none p-0 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <DirectionIcon className="text-xs" />
+        </Button>
+      </div>
 
       {open && (
         <div
@@ -51,8 +61,8 @@ export function TodoSortByMenu({ sortBy, onChange }: {
           aria-label="Sort todos by"
           className="absolute top-full left-0 z-50 mt-1 w-44 rounded-lg border border-border bg-popover py-1 text-sm shadow-lg"
         >
-          {SORT_BY_OPTIONS.map(opt => {
-            const selected = opt.value === sortBy;
+          {TODO_SORT_COLUMN_OPTIONS.map(opt => {
+            const selected = opt.value === sortBy.column;
             const OptIcon = opt.icon;
             return (
               <Button
@@ -61,7 +71,10 @@ export function TodoSortByMenu({ sortBy, onChange }: {
                 type="button"
                 role="menuitemradio"
                 aria-checked={selected}
-                onClick={() => { onChange(opt.value); setOpen(false); }}
+                onClick={() => {
+                  onChange({ ...sortBy, column: opt.value });
+                  setOpen(false);
+                }}
                 className={`flex h-auto w-full items-center justify-start gap-2 px-3 py-1.5 text-left transition-colors ${
                   selected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
                 }`}

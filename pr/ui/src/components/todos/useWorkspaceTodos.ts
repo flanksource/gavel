@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Project, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoSortBy, TodoStatus } from '../../types';
+import type { Project, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts, todoQuery } from './format';
 import { loadDensity, saveDensity } from './todoDensity';
-import { loadGroupBy, loadSortBy, saveGroupBy, saveSortBy } from './todoGroup';
+import { loadGroupBy, saveGroupBy } from './todoGroup';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
+import type { TodoSort } from './todoSort';
+import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
 
 const activeTodoDetailPollInterval = 1000;
@@ -54,8 +56,8 @@ export function useWorkspaceTodos(
   const [density, setDensityState] = useState<TodoDensity>(loadDensity);
   // Grouping dimension (workspace/severity/age) for the lists, persisted too.
   const [groupBy, setGroupByState] = useState<TodoGroupBy>(loadGroupBy);
-  // Row order within each group (priority/newest/oldest/title), persisted too.
-  const [sortBy, setSortByState] = useState<TodoSortBy>(loadSortBy);
+  // Sort column and direction for rows within each group, persisted too.
+  const [sortBy, setSortByState] = useState<TodoSort>(loadTodoSort);
   // Activity time-range filter (clicky-ui TimeRange tokens); null shows all.
   const [timeRange, setTimeRangeState] = useState<TodoTimeRange | null>(loadTimeRange);
 
@@ -77,9 +79,9 @@ export function useWorkspaceTodos(
     saveGroupBy(next);
   }, []);
 
-  const setSortBy = useCallback((next: TodoSortBy) => {
+  const setSortBy = useCallback((next: TodoSort) => {
     setSortByState(next);
-    saveSortBy(next);
+    saveTodoSort(next);
   }, []);
 
   const setTimeRange = useCallback((next: TodoTimeRange | null) => {

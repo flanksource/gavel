@@ -87,6 +87,60 @@ describe('TODO session details', () => {
     unmount();
   });
 
+  it('asks for attempts only when the caller does not render a transcript', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ attempts: [], diagnostics: [], attemptsOnly: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, unmount } = renderHook(() =>
+      useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs: 15000 })
+    );
+    await waitFor(() => expect(result.current.detail?.attemptsOnly).toBe(true));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('attempts=only');
+    unmount();
+  });
+
+  it('keeps the loaded attempts when only the poll period changes', async () => {
+    const body = {
+      attempts: [
+        {
+          promptRunId: 'run-1',
+          ordinal: 1,
+          step: 'verify',
+          requested: {},
+          resolved: {},
+          state: 'succeeded',
+          phase: 'finished',
+          queuedAt: '2026-07-14T12:00:00Z',
+          admissionSessionId: 'admission',
+          createdAt: '2026-07-14T12:00:00Z',
+        },
+      ],
+      diagnostics: [],
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    );
+
+    // Opening the Verification tab drops the badge's slow poll to a fast one; the
+    // already-listed attempts must survive that switch.
+    const { result, rerender, unmount } = renderHook(
+      ({ intervalMs }: { intervalMs: number }) =>
+        useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs }),
+      { initialProps: { intervalMs: 15000 } }
+    );
+    await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
+
+    rerender({ intervalMs: 1500 });
+    expect(result.current.detail?.attempts).toHaveLength(1);
+    unmount();
+  });
+
   it('maps attempts to generic session collection rows and lazy loaders', async () => {
     const root: TodoSessionOverview = {
       id: 'root',

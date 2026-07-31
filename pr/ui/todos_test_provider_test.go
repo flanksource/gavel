@@ -135,8 +135,18 @@ func (p *uiTestTODOProvider) Create(_ context.Context, request todos.CreateReque
 	}
 	created := time.Now().UTC()
 	id := fmt.Sprintf("todo-%d", uiTestTodoSequence.Add(1))
-	parsed, err := todos.ParseTODOContent(request.Title, request.Body, p.dir, types.TODOFrontmatter{
+	body, bodyVerification, _ := todos.SplitVerificationFixture(request.Body)
+	verification := todos.CombineVerificationFixtures(request.Verification, bodyVerification)
+	parsed, err := todos.ParseTODOContent(request.Title, body, p.dir, types.TODOFrontmatter{
 		Title: request.Title, Priority: priority, Status: status, CWD: p.dir, Created: &created,
+	})
+	if err != nil {
+		return nil, err
+	}
+	parsed.VerificationMarkdown = verification
+	parsed.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
+		Name: request.Title, Markdown: verification, SourceDir: p.dir,
+		FrontMatter: parsed.FrontMatter,
 	})
 	if err != nil {
 		return nil, err
@@ -163,8 +173,29 @@ func (p *uiTestTODOProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 	if edit.Title != nil {
 		todo.Title = strings.TrimSpace(*edit.Title)
 	}
-	if edit.Body != nil {
-		parsed, err := todos.ParseTODOContent(todo.Title, *edit.Body, p.dir, todo.TODOFrontmatter)
+	if edit.Body != nil || edit.Verification != nil {
+		body := todo.MarkdownBody
+		verification := todo.VerificationMarkdown
+		var bodyVerification string
+		if edit.Body != nil {
+			var hasVerification bool
+			body, bodyVerification, hasVerification = todos.SplitVerificationFixture(*edit.Body)
+			if hasVerification {
+				verification = bodyVerification
+			}
+		}
+		if edit.Verification != nil {
+			verification = todos.CombineVerificationFixtures(*edit.Verification, bodyVerification)
+		}
+		parsed, err := todos.ParseTODOContent(todo.Title, body, p.dir, todo.TODOFrontmatter)
+		if err != nil {
+			return err
+		}
+		parsed.VerificationMarkdown = verification
+		parsed.Verification, err = todos.ParseVerificationMarkdown(todos.VerificationMarkdownOptions{
+			Name: todo.Title, Markdown: verification, SourceDir: p.dir,
+			FrontMatter: parsed.FrontMatter,
+		})
 		if err != nil {
 			return err
 		}
@@ -225,7 +256,8 @@ func (p *uiTestTODOProvider) SupportsGroupedExecution() bool { return false }
 
 func (p *uiTestTODOProvider) MoveTo(ctx context.Context, todo *types.TODO, target todos.Provider) (*types.TODO, error) {
 	created, err := target.Create(ctx, todos.CreateRequest{
-		Title: todo.Title, Body: todo.MarkdownBody, Priority: todo.Priority, Status: todo.Status, Labels: todo.Labels,
+		Title: todo.Title, Body: todo.MarkdownBody, Verification: todo.VerificationMarkdown,
+		Priority: todo.Priority, Status: todo.Status, Labels: todo.Labels,
 	})
 	if err != nil {
 		return nil, err

@@ -14,6 +14,9 @@ import { priorities, statusClass, statuses, statusLabel, todoQuery } from './for
 import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
+import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
+import { useTodoSessionDetail } from './TodoSessionDetail';
+import { verificationAttempts, verificationBadge } from './verificationAttempts';
 import { TodoReviewBanner } from './planActions';
 
 export function TodoDetail({
@@ -44,7 +47,7 @@ export function TodoDetail({
   const [busy, setBusy] = useState(false);
   const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'overview' | 'verification' | 'session' | 'plan'>('overview');
+  const [tab, setTab] = useState<TodoDetailTabKey>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingBody, setEditingBody] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
@@ -56,7 +59,17 @@ export function TodoDetail({
   const closed = todo?.status === 'completed';
   const body = todo?.body?.trim() ?? '';
   const events = todo?.events ?? [];
-  const verificationCount = todo?.criteria?.length ?? 0;
+  // One attempts-only poll feeds both the tab badge and the Verification tab, so
+  // a failed check is visible before the tab is ever opened. It keeps polling
+  // while the tab is closed, just more slowly.
+  const { detail: verificationDetail, error: verificationError } = useTodoSessionDetail(
+    dir,
+    todo?.ref ?? '',
+    undefined,
+    !!todo?.ref,
+    { attemptsOnly: true, intervalMs: tab === 'verification' ? 1500 : 15000 }
+  );
+  const verification = verificationBadge(verificationAttempts(verificationDetail));
   const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
@@ -451,12 +464,7 @@ export function TodoDetail({
         refID={todo.ref}
       />
       <TodoReviewBanner todo={todo} dir={dir} onChanged={onChanged} />
-      <div className="flex shrink-0 flex-nowrap gap-1 overflow-x-auto border-b border-border bg-background px-4 pt-2">
-        <DetailTab active={tab === 'overview'} onClick={() => setTab('overview')} icon={UiListFlat} label="Overview" />
-        <DetailTab active={tab === 'verification'} onClick={() => setTab('verification')} icon={UiListDashes} label="Verification" count={verificationCount} />
-        <DetailTab active={tab === 'session'} onClick={() => setTab('session')} icon={UiComment} label="Session" />
-        <DetailTab active={tab === 'plan'} onClick={() => setTab('plan')} icon={UiListDashes} label="Plan" />
-      </div>
+      <TodoDetailTabs tab={tab} onSelect={setTab} verification={verification} />
       <div className="flex min-h-0 flex-1 flex-col bg-[#f4f6f9] dark:bg-[#0a1020]">
         {tab === 'session' ? (
           <TodoSession
@@ -476,7 +484,13 @@ export function TodoDetail({
           <TodoPlan dir={dir} todo={todo} active={tab === 'plan'} onChanged={onChanged} />
         ) : tab === 'verification' ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            <TodoVerification dir={dir} todo={todo} onChanged={onChanged} />
+            <TodoVerification
+              dir={dir}
+              todo={todo}
+              onChanged={onChanged}
+              attempts={verificationDetail}
+              attemptsError={verificationError}
+            />
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -1097,30 +1111,6 @@ function priorityBadgeClass(priority: TodoPriority | string): string {
     default:
       return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
   }
-}
-
-function DetailTab({ active, onClick, icon: Icon, label, count }: { active: boolean; onClick: () => void; icon: ComponentType<IconProps>; label: string; count?: number }) {
-  return (
-    <Button
-      variant="ghost"
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`-mb-px inline-flex h-auto shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? 'border-primary text-foreground'
-          : 'border-transparent text-muted-foreground hover:text-foreground'
-      }`}
-    >
-      <Icon className="text-sm" />
-      {label}
-      {typeof count === 'number' && count > 0 && (
-        <span className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-          {count}
-        </span>
-      )}
-    </Button>
-  );
 }
 
 function EditPencil({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {

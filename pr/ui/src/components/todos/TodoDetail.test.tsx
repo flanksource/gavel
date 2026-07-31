@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
@@ -232,5 +232,91 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect((runItem as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Session interrupt is not supported yet')).toBeTruthy();
     expect(screen.queryByText(RESOLVE_MESSAGE)).toBeNull();
+  });
+});
+
+describe('TodoDetail verification badge', () => {
+  function stubAttempts(attempts: Record<string, unknown>[]) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/todos/session/detail')) {
+          // A real Response: fetchTodoSessionDetail clones it before parsing.
+          return new Response(JSON.stringify({ attempts, diagnostics: [], attemptsOnly: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return { ok: true, json: async () => RUN_CONTEXT } as Response;
+      }),
+    );
+  }
+
+  function attempt(ordinal: number, passed: boolean) {
+    return {
+      promptRunId: `run-${ordinal}`,
+      ordinal,
+      step: 'verify',
+      requested: {},
+      resolved: {},
+      status: 'succeeded',
+      processActive: false,
+      state: 'succeeded',
+      phase: 'finished',
+      queuedAt: `2026-07-30T09:0${ordinal}:00Z`,
+      startedAt: `2026-07-30T09:0${ordinal}:00Z`,
+      admissionSessionId: `admission-${ordinal}`,
+      createdAt: `2026-07-30T09:0${ordinal}:00Z`,
+      updatedAt: `2026-07-30T09:0${ordinal}:30Z`,
+      resultJson: { definitionOfDone: { ran: true, passed } },
+    };
+  }
+
+  function verificationTab(): HTMLElement {
+    const tab = screen.getByText('Verification').closest('button');
+    if (!tab) throw new Error('Verification tab not rendered');
+    return tab;
+  }
+
+  // The badge used to count acceptance criteria, so a todo whose last check
+  // failed looked identical to one that had never run.
+  it('counts attempts and tints red when the latest one failed', async () => {
+    stubAttempts([attempt(1, true), attempt(2, false)]);
+
+    await renderDetail({
+      ...baseTodo,
+      criteria: [
+        { text: 'Criterion one', done: true },
+        { text: 'Criterion two', done: false },
+        { text: 'Criterion three', done: false },
+      ],
+    });
+
+    await waitFor(() => expect(verificationTab().querySelector('span:last-of-type')?.textContent).toBe('2'));
+    const tab = verificationTab();
+    expect(tab.querySelector('span:last-of-type')?.className).toContain('bg-red-500/10');
+    expect(tab.getAttribute('title')).toBe('Latest verification failed — 1 of 2 attempts failed');
+  });
+
+  it('keeps the badge neutral once the latest attempt passes', async () => {
+    stubAttempts([attempt(1, false), attempt(2, true)]);
+
+    await renderDetail(baseTodo);
+
+    await waitFor(() => expect(verificationTab().querySelector('span:last-of-type')?.textContent).toBe('2'));
+    const tab = verificationTab();
+    expect(tab.querySelector('span:last-of-type')?.className).not.toContain('bg-red-500/10');
+    expect(tab.getAttribute('title')).toBe('Latest verification passed — 1 of 2 attempts failed');
+  });
+
+  it('polls attempts only, so the badge never pays for a provider thread', async () => {
+    stubAttempts([]);
+    await renderDetail(baseTodo);
+
+    const detailCalls = vi.mocked(fetch).mock.calls.map((call) => String(call[0])).filter((url) => url.startsWith('/api/todos/session/detail'));
+    expect(detailCalls.length).toBeGreaterThan(0);
+    expect(detailCalls.every((url) => url.includes('attempts=only'))).toBe(true);
+    // A todo that has never been verified carries no badge at all.
+    expect(verificationTab().querySelector('span:last-of-type')).toBeNull();
   });
 });

@@ -18,18 +18,31 @@ import { Spinner } from '../../icons/Spinner';
 import { copyText } from '../../clipboard';
 import { sessionResponseError } from './SessionErrorDetails';
 
-export function useTodoSessionDetail(dir: string, ref: string, sessionId: string | undefined, active: boolean) {
+export interface TodoSessionDetailOptions {
+  /** Skip the provider thread — the attempt list and its DoD payloads only. */
+  attemptsOnly?: boolean;
+  /** Poll period; raise it for a badge that keeps polling while its tab is closed. */
+  intervalMs?: number;
+}
+
+export function useTodoSessionDetail(dir: string, ref: string, sessionId: string | undefined, active: boolean, opts: TodoSessionDetailOptions = {}) {
   const [detail, setDetail] = useState<TodoSessionDetailResponse | null>(null);
   const [error, setError] = useState('');
+  const { attemptsOnly = false, intervalMs = 1500 } = opts;
 
+  // Clearing the loaded detail is keyed on identity alone: changing the poll
+  // period (a tab switch does exactly that) must not blank the list.
   useEffect(() => {
     setDetail(null);
     setError('');
+  }, [dir, ref, sessionId]);
+
+  useEffect(() => {
     if (!active || !ref) return;
     let cancelled = false;
     const poll = async () => {
       try {
-        const body = await fetchTodoSessionDetail(dir, ref, sessionId);
+        const body = await fetchTodoSessionDetail(dir, ref, sessionId, { attemptsOnly });
         if (!cancelled) {
           setDetail(body);
           setError('');
@@ -39,21 +52,22 @@ export function useTodoSessionDetail(dir: string, ref: string, sessionId: string
       }
     };
     void poll();
-    const timer = window.setInterval(poll, 1500);
+    const timer = window.setInterval(poll, intervalMs);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [active, dir, ref, sessionId]);
+  }, [active, dir, ref, sessionId, attemptsOnly, intervalMs]);
 
   return { detail, error };
 }
 
-export async function fetchTodoSessionDetail(dir: string, ref: string, sessionId?: string) {
+export async function fetchTodoSessionDetail(dir: string, ref: string, sessionId?: string, opts: { attemptsOnly?: boolean } = {}) {
   const params = new URLSearchParams();
   if (dir.trim()) params.set('dir', dir.trim());
   params.set('ref', ref);
   if (sessionId) params.set('sessionId', sessionId);
+  if (opts.attemptsOnly) params.set('attempts', 'only');
   const response = await fetch(`/api/todos/session/detail?${params.toString()}`);
   const body = (await response
     .clone()
@@ -129,7 +143,7 @@ export function ThreadInspector({
       if (!sessionId) throw new Error(`Attempt #${attempt.ordinal} has no execution session`);
       const loaded = await fetchTodoSessionDetail(dir, todoRef, sessionId);
       if (!loaded.thread) throw new Error(`Attempt #${attempt.ordinal} has no provider thread`);
-      return requireUnifiedSession(inspectorSession(loaded, loaded.thread.messages));
+      return attemptThreadSession(loaded);
     },
     [dir, todoRef]
   );
@@ -357,6 +371,16 @@ function mergeTranscriptMessages(snapshot: SessionUIMessage[], entries: Array<Se
     if ('parts' in entry) messages.set(entry.id, entry);
   }
   return [...messages.values()];
+}
+
+/**
+ * Projects a loaded attempt's provider thread onto the shape SessionInspector
+ * and SessionViewer consume. Both the attempt list and the transcript go through
+ * here so there is a single seam.
+ */
+export function attemptThreadSession(detail: TodoSessionDetailResponse): UnifiedSessionInput {
+  if (!detail.thread) throw new Error('Attempt has no provider thread');
+  return requireUnifiedSession(inspectorSession(detail, detail.thread.messages));
 }
 
 function requireUnifiedSession(session: SessionInput): UnifiedSessionInput {

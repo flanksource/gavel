@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { Button, DropdownMenu, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
-import { ModelSelector, type ChatModel } from "@flanksource/clicky-ui/chat";
-import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
+import type { ChatModel } from "@flanksource/clicky-ui/chat";
+import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, type AIPromptRunValue, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
 import type { StaticIconComponent } from "@flanksource/clicky-ui/data";
 import { UiChevronDown, UiCloud, UiCog, UiColumns, UiListDashes, UiPlay, UiRobotAi, UiSparkles, UiTerminal, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
@@ -13,8 +13,6 @@ import {
   PROVIDERS,
   agentBackendForAgent,
   agentForBackend,
-  backendCatalog as findBackendCatalog,
-  backendsForAgent,
   buildRunFamilies,
   defaultModelForSelection,
   driverForSelection,
@@ -68,7 +66,6 @@ const RUN_ACTION_CONFIG: Record<TodoRunAction, { label: string; detail: string; 
   plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
 };
 
-const RUNTIME_MODE_ORDER: TodoRunRuntimeMode[] = ["agent", "cmux", "cli", "api"];
 const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string; icon: StaticIconComponent }> = {
   cmux: { label: "cmux", icon: UiColumns },
   agent: { label: "Agent", icon: UiRobotAi },
@@ -910,115 +907,6 @@ function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: Ru
   return `${mode} · ${model}${effort}`;
 }
 
-function TodoRunAdvancedRuntimeControls({
-  context,
-  value,
-  onChange,
-  recent,
-}: {
-  context: RunContext;
-  value: AISpecRuntimeValue;
-  onChange: (value: AISpecRuntimeValue) => void;
-  recent: TodoRunOptions[];
-}) {
-  const selectedAgent = agentForBackend(context, value.backend);
-  const selectedBackend = findBackendCatalog(context, value.backend ?? "", selectedAgent);
-  const models = modelsForRunBackend(selectedBackend);
-  const selectedModel = modelForRunBackend(selectedBackend, value.model || selectedBackend.defaultModel);
-  const providerBackends = backendsForAgent(context, selectedAgent)
-    .slice()
-    .sort((a, b) => RUNTIME_MODE_ORDER.indexOf(runtimeModeForBackend(a)) - RUNTIME_MODE_ORDER.indexOf(runtimeModeForBackend(b)));
-
-  function selectBackend(nextBackend: RunBackendCatalog) {
-    const model = nextBackend.models.some(item => item.id === value.model) ? value.model! : nextBackend.defaultModel;
-    onChange(reconcileModelCapabilities({ ...value, backend: nextBackend.id, model }, modelForRunBackend(nextBackend, model), contextEfforts(context)));
-  }
-
-  return (
-    <div className="space-y-3">
-      <Field label="Provider">
-        <TodoRunProviderSegments
-          context={context}
-          value={selectedAgent}
-          onChange={nextAgent => selectBackend(agentBackendForAgent(context, nextAgent))}
-        />
-      </Field>
-
-      <Field label="Effort">
-        <TodoRunEffortSlider
-          model={selectedModel}
-          fallbackEfforts={contextEfforts(context)}
-          value={(value.effort as TodoRunEffort | undefined) ?? "medium"}
-          onChange={effort => onChange({ ...value, effort })}
-        />
-      </Field>
-
-      <Field label="Mode">
-        <SegmentedControl<string>
-          aria-label="Runtime mode"
-          size="sm"
-          value={selectedBackend.id}
-          onChange={backendID => selectBackend(findBackendCatalog(context, backendID, selectedAgent))}
-          className="w-full"
-          options={providerBackends.map(backend => ({
-            id: backend.id,
-            label: RUNTIME_MODE_CONFIG[runtimeModeForBackend(backend)].label,
-            icon: RUNTIME_MODE_CONFIG[runtimeModeForBackend(backend)].icon,
-            disabled: backend.configured === false,
-          }))}
-        />
-      </Field>
-
-      <Field label="Model">
-        <ModelSelector
-          models={models}
-          value={value.model || selectedBackend.defaultModel}
-          onChange={model => onChange(reconcileModelCapabilities({ ...value, model }, modelForRunBackend(selectedBackend, model), contextEfforts(context)))}
-          className="w-full"
-        />
-      </Field>
-
-      {selectedModel.temperature !== false && (
-        <Field label="Temperature">
-          <input
-            type="number"
-            min={0}
-            max={2}
-            step={0.1}
-            value={value.temperature ?? ""}
-            aria-label="Temperature"
-            placeholder="Model default"
-            onChange={event => {
-              const next = event.currentTarget.value;
-              onChange({ ...value, temperature: next === "" ? undefined : Number(next) });
-            }}
-            className={inputClass}
-          />
-        </Field>
-      )}
-
-      {recent.length > 0 && (
-        <div className="space-y-1 border-t border-border pt-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Recent advanced</div>
-          <div className="flex flex-wrap gap-1.5">
-            {recent.map((options, index) => (
-              <Button
-                key={runOptionsKey(options)}
-                variant="outline"
-                size="sm"
-                type="button"
-                onClick={() => onChange(runSpec(reconcileTodoRunOptions(actionFromRunOptions(options), options, context)))}
-              >
-                {index + 1}. {runChoiceDetail(options, "advanced", context)}
-              </Button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { effort: "medium", ...AUTO_COMMIT };
 
 export function TodoRunAdvancedDialog({
@@ -1042,9 +930,10 @@ export function TodoRunAdvancedDialog({
   dir: string;
   refID: string;
 }) {
-  // Run/Plan share one AISpecRuntimeValue (model/backend/effort/budget/
-  // permissions/prompt), edited via clicky's PromptRunEditor.
-  const [runtimeValue, setRuntimeValue] = useState<AISpecRuntimeValue>(INITIAL_RUNTIME_VALUE);
+  const [runRequest, setRunRequest] = useState<AIPromptRunValue>({
+    spec: INITIAL_RUNTIME_VALUE,
+  });
+  const runtimeValue = runRequest.spec ?? {};
   const [mode, setMode] = useState<RunMode>("run");
   // Resume stays a discrete toggle (session-identity decision, cmux only); dirty,
   // auto-commit, dry-run, and checks now live on runtimeValue's spec (Workspace/
@@ -1072,25 +961,9 @@ export function TodoRunAdvancedDialog({
   const runBackend = selection?.runBackend;
   const plan = mode === "plan";
   const advancedAction: TodoRunAction = plan ? "plan" : "run";
-  const recentAdvanced = loadRecentAdvancedTodoRunOptions(advancedAction, context);
-
-  // A backend switch (cmux <-> a captain backend, or a family switch) can leave
-  // a model id that no longer belongs to the new mode (for example after
-  // switching providers) — reset
-  // to the new mode's default in that case, mirroring the old changeMechanism/
-  // changeProvider/changeBackend resets.
-  function changeRuntime(next: AISpecRuntimeValue) {
-    if (!context) return;
-    const nextBackend = next.backend ?? "";
-    const nextAgent = agentForBackend(context, nextBackend);
-    const candidates = modelsForSelection(context, nextAgent, nextBackend);
-    const modelStillValid = !!next.model && candidates.some((m) => m.id === next.model);
-    const model = modelStillValid ? next.model! : defaultModelForSelection(context, nextAgent, nextBackend);
-    setRuntimeValue(reconcileModelCapabilities({
-      ...next,
-      model,
-    }, modelForRunBackend(findBackendCatalog(context, nextBackend, nextAgent), model), contextEfforts(context)));
-  }
+  const recentAdvanced = context
+    ? loadRecentAdvancedTodoRunOptions(advancedAction, context)
+    : [];
 
   function changeMode(next: RunMode) {
     setMode(next);
@@ -1112,7 +985,7 @@ export function TodoRunAdvancedDialog({
 
   useEffect(() => {
     if (!open) return;
-    setRuntimeValue(INITIAL_RUNTIME_VALUE);
+    setRunRequest({ spec: INITIAL_RUNTIME_VALUE });
     setMode(initialMode);
     setResume(false);
     setPromptDraft("");
@@ -1123,7 +996,15 @@ export function TodoRunAdvancedDialog({
   useEffect(() => {
     if (!open || !context) return;
     const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
-    setRuntimeValue(runSpec(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, context), context)));
+    setRunRequest({
+      spec: runSpec(
+        reconcileTodoRunOptions(
+          action,
+          loadLastTodoRunOptions(action, context),
+          context,
+        ),
+      ),
+    });
   }, [open, initialMode, context]);
 
   const previewModel = runtimeValue.model?.trim() || modelFallback;
@@ -1259,22 +1140,46 @@ export function TodoRunAdvancedDialog({
               <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
             </Field>
             <PromptRunEditor
-              value={runtimeValue}
-              onChange={changeRuntime}
+              value={runRequest}
+              onChange={setRunRequest}
               models={activeModels}
               families={families}
               tools={context.tools}
               specSections={RUN_SPEC_SECTIONS}
               promptEditor={promptEditorNode}
               promptLabel="Prompt"
-              runtimeControls={<TodoRunAdvancedRuntimeControls context={context} value={runtimeValue} onChange={changeRuntime} recent={recentAdvanced} />}
             >
-              {isCmux && (
-                <label className="inline-flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
-                  <span>Resume session</span>
-                </label>
-              )}
+              <>
+                {isCmux && (
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
+                    <span>Resume session</span>
+                  </label>
+                )}
+                {recentAdvanced.length > 0 && (
+                  <div className="space-y-1 border-t border-border pt-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Recent advanced</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {recentAdvanced.map((options, index) => (
+                        <Button
+                          key={runOptionsKey(options)}
+                          variant="outline"
+                          size="sm"
+                          type="button"
+                          onClick={() =>
+                            setRunRequest((current) => ({
+                              ...current,
+                              spec: runSpec(reconcileTodoRunOptions(advancedAction, options, context)),
+                            }))
+                          }
+                        >
+                          {index + 1}. {runChoiceDetail(options, "advanced", context)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             </PromptRunEditor>
           </>
         )}

@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { FixtureEditor } from '@flanksource/clicky-ui/data';
 import type { FixtureFenceOption, FixtureFenceSchemas } from '@flanksource/clicky-ui/data';
-import { UiBeaker, UiCopy, UiError, UiPass } from '@flanksource/clicky-ui/icons';
-import type { TodoFixtureResult, TodoItem, TodoRunOptions, TodoVerificationRunResponse } from '../../types';
+import { UiBeaker, UiCopy } from '@flanksource/clicky-ui/icons';
+import type { TodoItem, TodoRunOptions, TodoSessionDetailResponse } from '../../types';
 import { todoQuery } from './format';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
+import { TodoVerificationAttempts } from './TodoVerificationAttempts';
 import { fixtureFenceSchemasFromDocument } from './fixtureSchema';
 import {
   PromptRunAdvancedDialog,
@@ -22,19 +23,34 @@ const GAVEL_FIXTURE_FENCES = [
   { info: 'bash', label: 'bash', description: 'Bash command block' },
 ] satisfies readonly FixtureFenceOption[];
 
+// The response of POST /api/todos/verification/run. Only the parts this view
+// acts on are modelled: the recorded results are read back from the attempt
+// list, not from this payload.
+interface VerificationRunResponse {
+  todo?: TodoItem;
+  verification?: { allPassed?: boolean; error?: string };
+  error?: string;
+}
+
 // TodoVerification renders the Verification tab: a FixtureEditor over the
 // todo's "## Verification" fixture markdown (explicit Save, since the editor
 // fires onChange on every keystroke), an "Add from body" shortcut that seeds
-// the fixture from the todo's body, and the existing acceptance-criteria
-// checklist underneath.
+// the fixture from the todo's body, every recorded verification attempt, and
+// the acceptance-criteria checklist underneath. Attempt results are read from
+// the persisted prompt runs (`attempts`), never held in local state — a reload
+// or a tab switch must not erase the evidence of a failed check.
 export function TodoVerification({
   dir,
   todo,
   onChanged,
+  attempts,
+  attemptsError,
 }: {
   dir: string;
   todo: TodoItem;
   onChanged: (todo: TodoItem) => void;
+  attempts: TodoSessionDetailResponse | null;
+  attemptsError?: string;
 }) {
   const saved = todo.verificationMarkdown ?? '';
   const [fixture, setFixture] = useState(saved);
@@ -44,7 +60,6 @@ export function TodoVerification({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
   const [error, setError] = useState('');
-  const [verification, setVerification] = useState<TodoVerificationRunResponse['verification'] | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -64,7 +79,6 @@ export function TodoVerification({
   // after this todo's own save round-trips back through props.
   useEffect(() => {
     setFixture(saved);
-    setVerification(null);
     setError('');
   }, [todo.ref, saved]);
 
@@ -107,10 +121,13 @@ export function TodoVerification({
         // payload, so the spec half travels alone.
         body: JSON.stringify({ ref: current.ref, spec: verificationSpec(runSpec(options)) }),
       });
-      const data = await res.json() as TodoVerificationRunResponse & { error?: string };
+      const data = await res.json() as VerificationRunResponse;
       if (!res.ok) throw new Error(data.error || 'Verification failed');
-      setVerification(data.verification);
-      onChanged(data.todo);
+      // A pre-execution failure (no fixture, no criteria, bad budget) creates no
+      // prompt run, so the attempt list can never show it — the banner is its
+      // only home.
+      if (data.verification?.error) setError(data.verification.error);
+      if (data.todo) onChanged(data.todo);
     } catch (err: any) {
       setError(err?.message || 'Verification failed');
     } finally {
@@ -191,65 +208,11 @@ export function TodoVerification({
           />
         </div>
         {error && <div className="px-3 pb-3 text-xs text-red-600">{error}</div>}
-        {verification && <VerificationResults verification={verification} />}
       </section>
+
+      <TodoVerificationAttempts dir={dir} todoRef={todo.ref} detail={attempts} error={attemptsError} />
 
       <AcceptanceCriteria dir={dir} todo={todo} onChanged={onChanged} />
     </div>
-  );
-}
-
-function VerificationResults({ verification }: { verification: TodoVerificationRunResponse['verification'] }) {
-  const results = verification.output?.results ?? [];
-  const checklist = verification.output?.checklist ?? [];
-  const StatusIcon = verification.allPassed ? UiPass : UiError;
-  return (
-    <div className="space-y-2 border-t border-border px-3 py-3">
-      <div className={`flex items-center gap-1.5 text-sm font-medium ${verification.allPassed ? 'text-emerald-600' : 'text-red-600'}`}>
-        <StatusIcon className="text-sm" />
-        {verification.allPassed ? 'Verification passed' : 'Verification failed'}
-      </div>
-      {verification.error && <div className="text-xs text-red-600">{verification.error}</div>}
-      {results.length > 0 && (
-        <ul className="space-y-1">
-          {results.map((result, index) => <FixtureResultRow key={`${result.name}:${index}`} result={result} />)}
-        </ul>
-      )}
-      {checklist.length > 0 && (
-        <ul className="space-y-1">
-          {checklist.map((item, index) => {
-            const Icon = item.passed ? UiPass : UiError;
-            return (
-              <li key={`${item.item}:${index}`} className="flex items-start gap-1.5 text-sm">
-                <Icon className={`mt-0.5 shrink-0 text-sm ${item.passed ? 'text-emerald-600' : 'text-red-600'}`} />
-                <span>
-                  {item.item}
-                  {item.message ? <span className="block text-xs text-muted-foreground">{item.message}</span> : null}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function FixtureResultRow({ result }: { result: TodoFixtureResult }) {
-  const passed = ['pass', 'passed', 'success'].includes((result.status ?? '').toLowerCase());
-  const Icon = passed ? UiPass : UiError;
-  return (
-    <li className="rounded border border-border bg-muted/20 px-2 py-1.5 text-sm">
-      <span className="flex items-start gap-1.5">
-        <Icon className={`mt-0.5 shrink-0 text-sm ${passed ? 'text-emerald-600' : 'text-red-600'}`} />
-        <span className="min-w-0">
-          <span className="font-medium">{result.name || result.type || 'Verification step'}</span>
-          {result.command && <code className="ml-2 text-xs text-muted-foreground">{result.command}</code>}
-          {result.error && <span className="block text-xs text-red-600">{result.error}</span>}
-          {result.stderr && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-red-600">{result.stderr}</pre>}
-          {result.stdout && <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">{result.stdout}</pre>}
-        </span>
-      </span>
-    </li>
   );
 }

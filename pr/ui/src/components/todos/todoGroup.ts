@@ -1,7 +1,9 @@
 import type { ComponentType } from 'react';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiArrowDown, UiChevronUp, UiFolder, UiHistory, UiListFlat, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { Project, TodoGroupBy, TodoItem, TodoListResponse, TodoSortBy } from '../../types';
+import { UiFolder, UiHistory, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import type { Project, TodoGroupBy, TodoItem, TodoListResponse } from '../../types';
+import type { TodoSort } from './todoSort';
+import { defaultTodoSort, todoComparator } from './todoSort';
 
 // Group-by is a per-user view preference for the todo lists, persisted alongside
 // density and the status filter so it survives reloads. 'workspace' keeps the
@@ -38,42 +40,6 @@ export function saveGroupBy(groupBy: TodoGroupBy): void {
   }
 }
 
-// Sort-by is the row order within each group (workspace section or severity/age
-// bucket), persisted alongside group-by so the chosen order survives reloads.
-export const SORT_BY_OPTIONS: { value: TodoSortBy; label: string; icon: ComponentType<IconProps> }[] = [
-  { value: 'priority', label: 'Priority', icon: UiWarningTriangle },
-  { value: 'newest', label: 'Newest', icon: UiArrowDown },
-  { value: 'oldest', label: 'Oldest', icon: UiChevronUp },
-  { value: 'title', label: 'Title', icon: UiListFlat },
-];
-
-const SORT_STORAGE_KEY = 'gavel.pr-ui.todoSortBy.v1';
-
-export function defaultSortBy(): TodoSortBy {
-  return 'priority';
-}
-
-function isSortBy(value: string | null): value is TodoSortBy {
-  return SORT_BY_OPTIONS.some(opt => opt.value === value);
-}
-
-export function loadSortBy(): TodoSortBy {
-  try {
-    const raw = localStorage.getItem(SORT_STORAGE_KEY);
-    return isSortBy(raw) ? raw : defaultSortBy();
-  } catch {
-    return defaultSortBy();
-  }
-}
-
-export function saveSortBy(sortBy: TodoSortBy): void {
-  try {
-    localStorage.setItem(SORT_STORAGE_KEY, sortBy);
-  } catch {
-    // best-effort: storage unavailable — skip persisting.
-  }
-}
-
 // A todo tagged with its owning workspace so severity/age buckets can mix todos
 // across workspaces while still routing a click back to the right directory.
 export interface TodoEntry {
@@ -92,12 +58,6 @@ export interface TodoBucket {
   entries: TodoEntry[];
 }
 
-const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
-
-function priorityRank(priority?: string): number {
-  return priority && priority in PRIORITY_RANK ? PRIORITY_RANK[priority] : PRIORITY_RANK.medium;
-}
-
 // ageMs is the todo's age anchor in epoch millis: its creation time when known,
 // otherwise its last activity. null when neither timestamp is recorded.
 export function ageMs(todo: TodoItem): number | null {
@@ -105,55 +65,6 @@ export function ageMs(todo: TodoItem): number | null {
   if (!raw) return null;
   const ms = Date.parse(raw);
   return Number.isNaN(ms) ? null : ms;
-}
-
-// lastUpdatedMs is the row-order tie-breaker: last_run when present, otherwise
-// native issue creation time.
-function lastUpdatedMs(todo: TodoItem): number | null {
-  const raw = todo.lastRun ?? todo.created;
-  if (!raw) return null;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-// compareTodos orders todos by severity (high→medium→low), then last update
-// newest-first. Todos with no recorded timestamp sort after dated ones within
-// their severity.
-export function compareTodos(a: TodoItem, b: TodoItem): number {
-  const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
-  if (byPriority !== 0) return byPriority;
-  const am = lastUpdatedMs(a);
-  const bm = lastUpdatedMs(b);
-  if (am === bm) return 0;
-  if (am === null) return 1;
-  if (bm === null) return -1;
-  return bm - am;
-}
-
-// compareByAge orders two age anchors so the requested direction wins while todos
-// with no recorded timestamp always sort last (regardless of direction).
-function compareByAge(am: number | null, bm: number | null, newestFirst: boolean): number {
-  if (am === bm) return 0;
-  if (am === null) return 1;
-  if (bm === null) return -1;
-  return newestFirst ? bm - am : am - bm;
-}
-
-// todoComparator resolves the sidebar's sort-by preference to a TodoItem
-// comparator. 'priority' keeps the shared severity-then-recent order; the others
-// order by created age or title. All fall back to title to keep ties stable.
-export function todoComparator(sortBy: TodoSortBy): (a: TodoItem, b: TodoItem) => number {
-  switch (sortBy) {
-    case 'newest':
-      return (a, b) => compareByAge(ageMs(a), ageMs(b), true) || (a.title || '').localeCompare(b.title || '');
-    case 'oldest':
-      return (a, b) => compareByAge(ageMs(a), ageMs(b), false) || (a.title || '').localeCompare(b.title || '');
-    case 'title':
-      return (a, b) => (a.title || '').localeCompare(b.title || '');
-    case 'priority':
-    default:
-      return compareTodos;
-  }
 }
 
 // flattenTodos tags every workspace's todos with their owning workspace, in
@@ -210,8 +121,8 @@ function ageKey(item: TodoEntry, now: number): string {
 // the given non-workspace grouping. Severity buckets follow high→medium→low; age
 // buckets run today→older then a trailing "no activity". Rows within each bucket
 // follow the caller's sort preference (defaulting to the priority order).
-export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', now: number, sortBy: TodoSortBy = 'priority'): TodoBucket[] {
-  const cmp = todoComparator(sortBy);
+export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', now: number, sort: TodoSort = defaultTodoSort()): TodoBucket[] {
+  const cmp = todoComparator(sort);
   if (groupBy === 'severity') {
     return SEVERITY_BUCKETS
       .map(def => ({

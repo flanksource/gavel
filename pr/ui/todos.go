@@ -77,9 +77,8 @@ type todoSummary struct {
 	// "## Acceptance Criteria" section; populated on detail responses so the
 	// dashboard can render and edit them structurally.
 	Criteria []types.AcceptanceCriterion `json:"criteria,omitempty"`
-	// VerificationMarkdown is the raw fixture markdown inside the todo's
-	// "## Verification" section (excluding the heading); populated on detail
-	// responses so the Verification tab's FixtureEditor can be seeded with it.
+	// VerificationMarkdown is the raw fixture source stored separately from the
+	// issue body; populated on detail responses for the Verification editor.
 	VerificationMarkdown string `json:"verificationMarkdown,omitempty"`
 	// Diff is the aggregated git diff footprint of the todo's commits (those
 	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
@@ -1112,13 +1111,13 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		out.Ref = todo.FilePath
 	}
 	out.HasPlan = todos.HasPlan(todo)
-	out.HasVerification = todos.ExtractVerificationFixture(todo.MarkdownBody) != ""
+	out.HasVerification = strings.TrimSpace(todo.VerificationMarkdown) != ""
 	if detail {
 		out.Body = strings.TrimSpace(todo.MarkdownBody)
 		out.Implementation = strings.TrimSpace(todo.Implementation)
 		out.Events = todo.ProviderEvents
 		out.Criteria = todo.AcceptanceCriteria
-		out.VerificationMarkdown = todos.ExtractVerificationFixture(todo.MarkdownBody)
+		out.VerificationMarkdown = strings.TrimSpace(todo.VerificationMarkdown)
 		if out.Body == "" {
 			out.Body = out.Implementation
 		}
