@@ -68,6 +68,9 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("    LOG_LEVEL: debug")).NewLine().
 		Add(code("  cwd: ./testdir")).Add(dim("                     # Default working directory")).NewLine().
 		Add(code("  terminal: pty")).Add(dim("                      # Use pseudo-terminal (merges stdout/stderr)")).NewLine().
+		Add(code("  setup:")).Add(dim("                             # Environment prepared once per file (see SETUP)")).NewLine().
+		Add(code("    dotenv: [.env.test]")).NewLine().
+		Add(code("    checkout: {mode: local, worktree: {mode: new}}")).NewLine().
 		Add(code("  files: \"**/*.go\"")).Add(dim("                   # Glob pattern: replicate tests per matching file")).NewLine().
 		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
 		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
@@ -272,22 +275,59 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Append("  Set ").Add(code("files")).Append(" in front-matter to replicate each test per matching file:").NewLine().NewLine().
 		Add(code("  ---\n  files: \"**/*.go\"\n  exec: golint\n  args: [\"{{.file}}\"]\n  ---")).NewLine()
 
+	// Setup
+	t = t.Add(h("SETUP")).
+		Append("  ").Add(code("setup:")).Append(" declares the environment a file's tests need — dotenv files, environment").NewLine().
+		Append("  variables, cloud/Kubernetes connections, and a git checkout or worktree to run in.").NewLine().NewLine().
+		Append("  It is ", "text-muted").Append("file-level front-matter only", "font-bold").Append(": prepared once, shared by every test in the file,", "text-muted").NewLine().
+		Append("  and torn down after the last one finishes. A per-test ", "text-muted").Add(code("setup:")).Append(" is an error. Because the", "text-muted").NewLine().
+		Append("  file's tests still run concurrently in one group, a worktree isolates the file from the", "text-muted").NewLine().
+		Append("  rest of the repository — it does not isolate the file's tests from each other.", "text-muted").NewLine().NewLine().
+		Add(sh("Example")).
+		Add(code("  ---\n  setup:\n    dotenv: [.env.test]\n    envVars:\n      - name: LOG_LEVEL\n        value: debug\n    checkout:\n      mode: local          # none | local | remote\n      worktree:\n        mode: new          # none | new | existing\n        base: HEAD         # commit-ish to branch from\n        uncommitted: clone # clone | skip — staged + unstaged + untracked\n        ignored: clone     # clone | skip — gitignored content\n        keep: false\n    connections:\n      aws: {connection: \"connection://aws/sandbox\", region: us-east-1}\n  build: go build -o ./bin/app\n  exec: ./bin/app\n  ---")).NewLine().NewLine().
+		Add(sh("Options")).
+		Add(kv("cwd", "Where the file's commands run (default: the markdown file's directory)")).
+		Add(kv("baseDir", "Where clones and worktrees land (default: a per-file dir under the user cache)")).
+		Add(kv("dotenv", "Dotenv files to load, resolved relative to the markdown file")).
+		Add(kv("envVars", "Explicit name/value (or valueFrom) environment entries")).
+		Add(kv("checkout", "Git checkout: mode none|local|remote, url, ref, path, connection, since")).
+		Add(kv("checkout.worktree", "Disposable worktree: mode none|new|existing, base, uncommitted, ignored, prefix, keep")).
+		Add(kv("connections", "Named cloud/Kubernetes connections; connection:// refs need a database")).NewLine().
+		Add(sh("Guarantees")).
+		Append("    * ", "text-muted").Append("The source repository is never mutated — nothing is stashed, moved, or restored.").NewLine().
+		Append("    * ", "text-muted").Append("Ordering is setup → build → daemon → tests → daemon stop → setup cleanup, so").NewLine().
+		Append("      ", "text-muted").Add(code("build:")).Append(" compiles the same tree the tests exercise.").NewLine().
+		Append("    * ", "text-muted").Add(code("worktree.uncommitted")).Append(" defaults to ").Add(code("clone")).Append(" only when ").Add(code("base")).Append(" is HEAD; branching").NewLine().
+		Append("      ", "text-muted").Append("elsewhere degrades it to ").Add(code("skip")).Append(" with a warning, because uncommitted work is a diff").NewLine().
+		Append("      ", "text-muted").Append("against your HEAD. ").Add(code("worktree.ignored")).Append(" defaults to ").Add(code("clone")).Append(" so node_modules, .env and").NewLine().
+		Append("      ", "text-muted").Append("build caches come along; set ").Add(code("ignored: skip")).Append(" when that tree is large.").NewLine().
+		Append("    * ", "text-muted").Add(code("$SETUP_DIR")).Append(" (template var and child env var) is the prepared directory, and").NewLine().
+		Append("      ", "text-muted").Add(code("GIT_ROOT_DIR")).Append("/").Add(code("ROOT_DIR")).Append(" are re-rooted onto it. ").Add(code("{{.setup}}")).Append(" carries commit,").NewLine().
+		Append("      ", "text-muted").Append("worktree, path and dirtyFiles.").NewLine().
+		Append("    * ", "text-muted").Append("Golden ").Add(code("@file")).Append(" expectations still resolve next to the markdown, never inside the").NewLine().
+		Append("      ", "text-muted").Append("worktree — the commands move, their expectations do not.").NewLine().
+		Append("    * ", "text-muted").Append("Environment precedence, highest first: fixture ").Add(code("env:")).Append(" > setup env > injected roots >").NewLine().
+		Append("      ", "text-muted").Append("the inherited process environment. Setup env is additive, not hermetic.").NewLine()
+
 	// CWD resolution
 	t = t.Add(h("CWD RESOLUTION")).
 		Append("  Working directory is resolved with the following priority:").NewLine().NewLine().
 		Append("    1. ", "text-yellow-400").Append("Test-level CWD").Append(" (per-test frontmatter or table column)", "text-muted").NewLine().
 		Append("    2. ", "text-yellow-400").Append("File-level CWD").Append(" (YAML front-matter at top of file)", "text-muted").NewLine().
-		Append("    3. ", "text-yellow-400").Append("SourceDir").Append(" (directory containing the fixture file)", "text-muted").NewLine().
-		Append("    4. ", "text-yellow-400").Add(code("--cwd")).Append(" flag or current working directory", "text-muted").NewLine().NewLine().
-		Append("  Relative CWD paths are resolved from SourceDir.", "text-muted").NewLine()
+		Append("    3. ", "text-yellow-400").Append("Prepared setup").Append(" (the checkout or worktree from ", "text-muted").Add(code("setup:")).Append(")", "text-muted").NewLine().
+		Append("    4. ", "text-yellow-400").Append("SourceDir").Append(" (directory containing the fixture file)", "text-muted").NewLine().
+		Append("    5. ", "text-yellow-400").Add(code("--cwd")).Append(" flag or current working directory", "text-muted").NewLine().NewLine().
+		Append("  Relative CWD paths are resolved from the prepared setup when the file declared one,", "text-muted").NewLine().
+		Append("  otherwise from SourceDir.", "text-muted").NewLine()
 
 	// Execution
 	t = t.Add(h("EXECUTION")).
 		Append("  Tests run in parallel with a 2-minute default timeout per test").NewLine().
-		Append("  and 5-minute timeout for the build step. The build command runs").NewLine().
-		Append("  once before any tests. A daemon command, when configured, starts").NewLine().
-		Append("  after build, waits for its free port to accept connections, and is").NewLine().
-		Append("  stopped after all fixtures finish.").NewLine()
+		Append("  and 5-minute timeout for the build step. Each file's ").Add(code("setup:")).Append(" is prepared").NewLine().
+		Append("  first, so the build command — which runs once before any tests —").NewLine().
+		Append("  compiles inside the prepared tree. A daemon command, when configured,").NewLine().
+		Append("  starts after build, waits for its free port to accept connections, and").NewLine().
+		Append("  is stopped after all fixtures finish; setups are torn down last.").NewLine()
 
 	t = t.Add(h("OUTPUT OPTIONS")).
 		Add(kv("-v", "Show passed fixture results")).

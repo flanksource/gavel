@@ -52,8 +52,80 @@ func gavelConfigSchema() map[string]any {
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = ConfigSchemaID
 	schema["title"] = "Gavel configuration (.gavel.yaml)"
+	patchSetupDefs(specSchema)
 	schema["$defs"] = specSchema["$defs"]
 	return schema
+}
+
+// patchSetupDefs documents the commons-db setup types that api.Spec reflects
+// into $defs. Reflection sees Go strings, so mode/uncommitted/ignored all arrive
+// as bare {"type":"string"} — editor completion offers nothing and a typo is
+// only caught at run time. This stamps on the values the Go constants already
+// define, plus the defaults the runtime actually applies, so the schema, the
+// docs and shell.Worktree.ApplyDefaults agree. It is the gavel-local stand-in
+// until commons-db carries jsonschema: tags of its own, and stays idempotent if
+// they land later.
+func patchSetupDefs(specSchema map[string]any) {
+	defs, ok := specSchema["$defs"].(map[string]any)
+	if !ok {
+		panic("captain spec schema has no $defs")
+	}
+
+	patchDefProp(defs, "Checkout", "mode", map[string]any{
+		"description": "Checkout source. Inferred from url/path when unset: url means remote, path means local.",
+		"enum":        []any{"none", "local", "remote"},
+	})
+	patchDefProp(defs, "Checkout", "since", map[string]any{
+		"description": "Commit-ish whose merge-base diff against HEAD is folded into the reported changed " +
+			"files. Informational only — it has no bearing on what the worktree contains.",
+	})
+	patchDefProp(defs, "Worktree", "mode", map[string]any{
+		"description": "Worktree lifecycle: new creates a disposable worktree and removes it afterwards, " +
+			"existing reuses the one at path, none runs in the checkout itself.",
+		"enum": []any{"none", "new", "existing"},
+	})
+	patchDefProp(defs, "Worktree", "base", map[string]any{
+		"description": "Commit-ish the new worktree branches from. Defaults to HEAD so the start commit is " +
+			"the tree you are looking at, independent of checkout.ref.",
+		"default": "HEAD",
+	})
+	// No default: for uncommitted — it is conditional on base, and a static
+	// "clone" here would promise editor users something only sometimes true.
+	patchDefProp(defs, "Worktree", "uncommitted", map[string]any{
+		"description": "Whether staged, unstaged and untracked changes are carried into the new worktree. " +
+			"Defaults to clone when base is HEAD, otherwise skip: uncommitted work is a diff against your " +
+			"HEAD, so replaying it onto a worktree branched elsewhere applies to the wrong context. Nothing " +
+			"is ever stashed — the source repository is never mutated.",
+		"enum": []any{"clone", "skip"},
+	})
+	patchDefProp(defs, "Worktree", "ignored", map[string]any{
+		"description": "Whether gitignored content is copied into the new worktree. `git worktree add` never " +
+			"brings it, so skip leaves the tree without node_modules/, .env and build caches. Use skip in " +
+			"repositories with a very large ignored tree.",
+		"default": "clone",
+		"enum":    []any{"clone", "skip"},
+	})
+}
+
+// patchDefProp merges documentation onto one reflected property. A missing
+// definition or property panics rather than being skipped: silently doing
+// nothing would ship the bare strings this function exists to replace.
+func patchDefProp(defs map[string]any, def, prop string, patch map[string]any) {
+	definition, ok := defs[def].(map[string]any)
+	if !ok {
+		panic("captain spec schema has no $defs/" + def)
+	}
+	props, ok := definition["properties"].(map[string]any)
+	if !ok {
+		panic("captain spec schema $defs/" + def + " has no properties")
+	}
+	target, ok := props[prop].(map[string]any)
+	if !ok {
+		panic("captain spec schema $defs/" + def + " has no " + prop + " property")
+	}
+	for key, value := range patch {
+		target[key] = value
+	}
 }
 
 // aiSchema exposes the complete Captain spec because every field is a valid

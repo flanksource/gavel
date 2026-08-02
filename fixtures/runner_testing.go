@@ -99,7 +99,10 @@ func (r *Runner) RegisterGinkgoSpecs() {
 			}
 		})
 		ginkgo.AfterAll(func() {
+			// Daemon first: removing a worktree a live process is sitting in
+			// leaves a stale git worktree registration behind.
 			r.stopDaemon()
+			r.cleanupSetups()
 		})
 
 		for _, child := range tree.Children {
@@ -117,7 +120,9 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 		fixture := *node.Test
 		ginkgo.It(testNodeName(node), func() {
 			ginkgo.GinkgoHelper()
-			result, err := r.runSingleFixture(fixture)
+			// Looked up inside the It, not at registration: setups are prepared
+			// in BeforeAll, which has not run yet while specs are being built.
+			result, err := r.runSingleFixture(fixture, r.setupForNode(node))
 			node.Results = &result
 			if err != nil {
 				ginkgo.Fail(formatNodeFailure(node, &result, err), 1)
@@ -137,9 +142,9 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 	})
 }
 
-func (r *Runner) runSingleFixture(fixture FixtureTest) (FixtureResult, error) {
+func (r *Runner) runSingleFixture(fixture FixtureTest, setup *PreparedSetup) (FixtureResult, error) {
 	ctx := flanksourceContext.NewContext(context.Background())
-	return r.executeFixture(ctx, fixture)
+	return r.executeFixture(ctx, fixture, setup)
 }
 
 func (r *Runner) setupGinkgoRun() error {
@@ -148,16 +153,22 @@ func (r *Runner) setupGinkgoRun() error {
 	}
 
 	ctx := flanksourceContext.NewContext(context.Background())
-	buildCmd := r.getBuildCommand()
+	// Same ordering as executeFixtures: setup before build, so a build that a
+	// setup relocated does not build the tree the tests aren't running in.
+	if err := r.prepareSetups(ctx); err != nil {
+		return err
+	}
+
+	buildCmd, buildSetup := r.getBuildCommand()
 	if buildCmd != "" {
-		if err := r.executeBuildCommand(ctx, buildCmd); err != nil {
+		if err := r.executeBuildCommand(ctx, buildCmd, buildSetup); err != nil {
 			return fmt.Errorf("build failed, skipping all fixtures: %w", err)
 		}
 	}
 
-	daemonCmd := r.getDaemonCommand()
+	daemonCmd, daemonSetup := r.getDaemonCommand()
 	if daemonCmd != "" {
-		if err := r.startDaemon(ctx, daemonCmd); err != nil {
+		if err := r.startDaemon(ctx, daemonCmd, daemonSetup); err != nil {
 			return fmt.Errorf("daemon failed to start: %w", err)
 		}
 	}

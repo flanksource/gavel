@@ -46,6 +46,10 @@ type Runner struct {
 	tree       *FixtureNode // Hierarchical tree structure
 	daemonCmd  *exec.Cmd
 	daemonPort int
+	// setups holds one prepared `setup:` per markdown file that declared one,
+	// keyed on FixtureNode.Origin.File. Keyed on the file rather than the source
+	// directory because two fixture files in one directory are independent.
+	setups map[string]*PreparedSetup
 }
 
 // NewRunner creates a new fixture runner
@@ -226,20 +230,31 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 
 	ctx := flanksourceContext.NewContext(context.Background())
 
+	// Setup runs before the build: it can relocate a file's tests into a
+	// worktree, and a build that ran in the original repo would build tree A
+	// while the tests exercise tree B — and pass.
+	if err := r.prepareSetups(ctx); err != nil {
+		return nil, err
+	}
+	// Registered before the daemon's defer so LIFO stops the daemon first:
+	// removing a worktree a live process is sitting in leaves a stale git
+	// worktree registration behind.
+	defer r.cleanupSetups()
+
 	// Run build command synchronously before any fixtures
-	buildCmd := r.getBuildCommand()
+	buildCmd, buildSetup := r.getBuildCommand()
 	if buildCmd != "" {
 		logger.V(2).Infof("Running build command: %s", buildCmd)
-		if err := r.executeBuildCommand(ctx, buildCmd); err != nil {
+		if err := r.executeBuildCommand(ctx, buildCmd, buildSetup); err != nil {
 			return nil, fmt.Errorf("build failed, skipping all fixtures: %w", err)
 		}
 		logger.V(2).Infof("Build completed successfully")
 	}
 
 	// Start daemon if configured
-	daemonCmd := r.getDaemonCommand()
+	daemonCmd, daemonSetup := r.getDaemonCommand()
 	if daemonCmd != "" {
-		if err := r.startDaemon(ctx, daemonCmd); err != nil {
+		if err := r.startDaemon(ctx, daemonCmd, daemonSetup); err != nil {
 			return nil, fmt.Errorf("daemon failed to start: %w", err)
 		}
 		defer r.stopDaemon()
@@ -251,8 +266,9 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	taskToNodeMap := make(map[task.TypedTask[FixtureResult]]*FixtureNode)
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
+			setup := r.setupForNode(node)
 			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				result, err := r.executeFixture(ctx, *node.Test)
+				result, err := r.executeFixture(ctx, *node.Test, setup)
 				if r.options.OnResult != nil {
 					r.options.OnResult(result)
 				}
@@ -314,21 +330,54 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 }
 
 // getBuildCommand extracts build command from first fixture that has one
-func (r *Runner) getBuildCommand() string {
-	for _, fixture := range r.fixtures {
-		if fixture.Build != "" {
-			return fixture.Build
+func (r *Runner) getBuildCommand() (string, *PreparedSetup) {
+	return r.firstDeclared("build", func(f FixtureTest) string { return f.Build })
+}
+
+// firstDeclared returns the first command any fixture declares, together with
+// the setup prepared for the file that declared it. Tree order is the order
+// parseFixtureFiles builds r.fixtures in, so first-wins means the same fixture
+// either way.
+//
+// build: and daemon: are run-wide, but a setup is per file, so a run with more
+// than one prepared tree can only put them in one of them. That is a real
+// ambiguity rather than a bug to paper over — warn and name the file, and make
+// them per-file only if the warning proves common.
+func (r *Runner) firstDeclared(kind string, pick func(FixtureTest) string) (string, *PreparedSetup) {
+	var command, owner string
+	r.tree.Walk(func(node *FixtureNode) {
+		if command != "" || node.Test == nil {
+			return
 		}
+		if value := pick(*node.Test); value != "" {
+			command = value
+			if node.Origin != nil {
+				owner = node.Origin.File
+			}
+		}
+	})
+
+	setup := r.setups[owner]
+	switch {
+	case command == "" || len(r.setups) == 0:
+	case setup == nil:
+		logger.Warnf("%s: runs in %s because %s declares no setup:, while other files in this run do",
+			kind, r.options.WorkDir, owner)
+	case len(r.setups) > 1:
+		logger.Warnf("%s: runs in %s (declared by %s); the other %d prepared setup(s) in this run do not get their own",
+			kind, setup.Cwd, owner, len(r.setups)-1)
 	}
-	return ""
+	return command, setup
 }
 
 // executeBuildCommand runs the build command with context cancellation and gomplate templating
-func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd string) error {
+func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd string, setup *PreparedSetup) error {
+	workDir := setup.Dir(r.options.WorkDir)
+
 	// Prepare template context for build command
 	templateData := make(map[string]interface{})
-	templateData["PWD"] = r.options.WorkDir
-	templateData["WorkDir"] = r.options.WorkDir
+	templateData["PWD"] = workDir
+	templateData["WorkDir"] = workDir
 	templateData["GOOS"] = runtime.GOOS
 	templateData["GOARCH"] = runtime.GOARCH
 	templateData["GOPATH"] = os.Getenv("GOPATH")
@@ -344,7 +393,8 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 	ctx.Logger.V(4).Infof("🔨 Build command: %s", templatedCmd)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", templatedCmd)
-	cmd.Dir = r.options.WorkDir
+	cmd.Dir = workDir
+	cmd.Env = setup.Environ()
 
 	var buildOut bytes.Buffer
 	cmd.Stdout = &buildOut
@@ -362,8 +412,9 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 	return nil
 }
 
-// executeFixture runs a single fixture test
-func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest) (FixtureResult, error) {
+// executeFixture runs a single fixture test in the environment prepared for the
+// file that declared it (nil when that file declared no `setup:`).
+func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, setup *PreparedSetup) (FixtureResult, error) {
 	if reason := fixture.ShouldSkip(); reason != "" {
 		return FixtureResult{
 			Name:   fixture.Name,
@@ -393,6 +444,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			WorkDir:        r.options.WorkDir,
 			ExecutablePath: r.options.ExecutablePath,
 			Spec:           r.options.Spec,
+			Setup:          setup,
 		}), nil
 	}
 
@@ -420,6 +472,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			WorkDir:        r.options.WorkDir,
 			ExecutablePath: r.options.ExecutablePath,
 			Spec:           r.options.Spec,
+			Setup:          setup,
 		}), nil
 	}
 
@@ -456,6 +509,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		Evaluator:      r.evaluator,
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,
+		Setup:          setup,
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},
@@ -473,27 +527,23 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 }
 
 // getDaemonCommand extracts daemon command from first fixture that has one
-func (r *Runner) getDaemonCommand() string {
-	for _, fixture := range r.fixtures {
-		if fixture.FrontMatter.Daemon != "" {
-			return fixture.FrontMatter.Daemon
-		}
-	}
-	return ""
+func (r *Runner) getDaemonCommand() (string, *PreparedSetup) {
+	return r.firstDeclared("daemon", func(f FixtureTest) string { return f.FrontMatter.Daemon })
 }
 
 // startDaemon picks a free port, templates the command, starts the process, and waits for the port to be ready.
-func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string) error {
+func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string, setup *PreparedSetup) error {
 	port, err := freePort()
 	if err != nil {
 		return fmt.Errorf("failed to find free port: %w", err)
 	}
 	r.daemonPort = port
 
+	workDir := setup.Dir(r.options.WorkDir)
 	templateData := map[string]interface{}{
 		"port":    strconv.Itoa(port),
-		"PWD":     r.options.WorkDir,
-		"WorkDir": r.options.WorkDir,
+		"PWD":     workDir,
+		"WorkDir": workDir,
 		"GOOS":    runtime.GOOS,
 		"GOARCH":  runtime.GOARCH,
 	}
@@ -507,7 +557,8 @@ func (r *Runner) startDaemon(ctx flanksourceContext.Context, daemonCmd string) e
 	logger.Infof("Starting daemon on port %d: %s", port, templated)
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", templated)
-	cmd.Dir = r.options.WorkDir
+	cmd.Dir = workDir
+	cmd.Env = setup.Environ()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

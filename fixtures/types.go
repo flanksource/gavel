@@ -396,6 +396,17 @@ type FrontMatter struct {
 	AI     *FixtureAIConfig     `yaml:"ai,omitempty" json:"ai,omitempty"`
 	Verify *FixtureVerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
 
+	// Setup declares the environment every test in this file runs against —
+	// dotenv files, env vars, cloud/k8s connections, and a git checkout that can
+	// relocate the run into an isolated worktree. It is prepared once per file
+	// before `build:` and torn down after the file's last test, so the tests in a
+	// file share one prepared tree rather than getting one each.
+	//
+	// File-level only: there is deliberately no per-test override (Setup is not on
+	// ExecFixtureBase), and the per-test frontmatter parser rejects it rather than
+	// dropping it silently.
+	Setup *SetupSpec `yaml:"setup,omitempty" json:"setup,omitempty"`
+
 	Metadata map[string]interface{} `yaml:",inline" json:"metadata,omitempty"`
 }
 
@@ -422,6 +433,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "skip")
 	delete(f.Metadata, "ai")
 	delete(f.Metadata, "verify")
+	delete(f.Metadata, "setup")
 }
 
 // ShouldSkip returns a non-empty reason string if the fixture should be skipped

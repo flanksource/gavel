@@ -343,6 +343,42 @@ func TestAnnounceHost(t *testing.T) {
 	})
 }
 
+// TestBoundHost covers the inherited-listener case: `gavel test --ui --detach`
+// binds the socket in the parent and hands it over on fd 3, so --addr keeps its
+// 0.0.0.0 default while the socket answers only on loopback. Announcing the LAN
+// IP there produces a URL that is refused.
+func TestBoundHost(t *testing.T) {
+	external := firstNonLoopbackIPv4()
+
+	cases := []struct {
+		name      string
+		bound     *net.TCPAddr
+		requested string
+		want      string
+	}{
+		{"inherited loopback ignores --addr", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}, "0.0.0.0", "localhost"},
+		{"loopback v6", &net.TCPAddr{IP: net.IPv6loopback}, "0.0.0.0", "localhost"},
+		{"concrete iface wins over --addr", &net.TCPAddr{IP: net.IPv4(192, 168, 42, 7)}, "localhost", "192.168.42.7"},
+		{"nil addr defers to --addr", nil, "buildhost.lan", "buildhost.lan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, boundHost(tc.bound, tc.requested))
+		})
+	}
+
+	// A wildcard bind is the one case where the socket does not name an
+	// interface, so --addr still decides.
+	t.Run("wildcard bind defers to --addr", func(t *testing.T) {
+		got := boundHost(&net.TCPAddr{IP: net.IPv4zero}, "0.0.0.0")
+		if external == "" {
+			assert.Equal(t, "localhost", got, "no non-loopback iface; expect fallback")
+		} else {
+			assert.Equal(t, external, got)
+		}
+	})
+}
+
 func TestMenubarHost(t *testing.T) {
 	// The native menu-bar webview always runs on the same machine, so it must
 	// dial a loopback host: macOS WKWebView blocks cleartext HTTP to non-loopback

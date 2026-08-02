@@ -370,11 +370,12 @@ func newAgentRunConfig(ctx context.Context, workDir string, todoList []*types.TO
 	// would anchor Cwd and BaseDir to the invocation directory and double-join a
 	// relative todo CWD.
 	// One representation of dirty, shared with the dashboard: --dirty makes a
-	// checkout carry the working tree's uncommitted changes across rather than
-	// discarding the checkout the config declared. With no checkout the run
-	// already happens in the dirty tree, so there is nothing to carry.
-	if dirty && spec.Setup.Checkout != nil {
-		spec.Setup.Checkout.Dirty = &shell.Dirty{Stash: shell.StashAll}
+	// checkout's worktree carry the working tree's uncommitted changes across
+	// rather than starting from a pristine tree. With no checkout, or a checkout
+	// with no worktree, the run already happens in the dirty tree, so there is
+	// nothing to carry.
+	if dirty && spec.Setup.Checkout != nil && spec.Setup.Checkout.Worktree != nil {
+		spec.Setup.Checkout.Worktree.Uncommitted = shell.CloneClone
 	}
 	// Resolve already cleared commits for the modes that must never commit; this
 	// is only the --commit flag, which is the CLI's alone.

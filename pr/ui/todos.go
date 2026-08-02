@@ -217,9 +217,9 @@ type todoRunPayload struct {
 	// resume cannot be inferred from Spec.SessionID.
 	Resume bool `json:"resume,omitempty"`
 	// Dirty/DryRun/Commit/Check are no longer sibling flags — the run's dirty-tree
-	// stash, dry-run, auto-commit, and checks all come from Spec
-	// (Setup.Checkout.Dirty and Workflow.Verify/Commits), surfaced by clicky's
-	// Workspace/Verify/Commit sections.
+	// carry-across, dry-run, auto-commit, and checks all come from Spec
+	// (Setup.Checkout.Worktree.Uncommitted and Workflow.Verify/Commits), surfaced
+	// by clicky's Workspace/Verify/Commit sections.
 }
 
 type todoRunResponse struct {
@@ -339,18 +339,14 @@ func specDryRun(spec api.Spec) bool {
 
 // specDirty reports whether the run's checkout carries the working tree's
 // uncommitted changes across (surfaced by the Workspace section). It reads the
-// stash mode rather than the pointer: an explicit `{stash: none}` is dirty
-// handling configured off, and shell.Dirty projects to nothing in that case.
+// worktree's clone mode rather than the pointer: uncommitted work is only ever
+// carried into a worktree, so a checkout without one has nothing to carry — the
+// run already happens in the dirty tree.
 func specDirty(spec api.Spec) bool {
-	if spec.Setup == nil || spec.Setup.Checkout == nil || spec.Setup.Checkout.Dirty == nil {
+	if spec.Setup == nil || spec.Setup.Checkout == nil || spec.Setup.Checkout.Worktree == nil {
 		return false
 	}
-	switch spec.Setup.Checkout.Dirty.Stash {
-	case "", shell.StashNone:
-		return false
-	default:
-		return true
-	}
+	return spec.Setup.Checkout.Worktree.Uncommitted == shell.CloneClone
 }
 
 var startTodoRun = defaultStartTodoRun

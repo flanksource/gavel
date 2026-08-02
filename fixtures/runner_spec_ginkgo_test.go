@@ -26,6 +26,7 @@ var _ = Describe("fixture runner AI spec", func() {
 		_, err := runner.executeFixture(
 			flanksourceContext.NewContext(context.Background()),
 			FixtureTest{Name: "embedded prompt", AIStep: &AIStepSpec{Criteria: []ChecklistItem{{Text: "passes"}}}},
+			nil,
 		)
 
 		Expect(err).NotTo(HaveOccurred())

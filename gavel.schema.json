@@ -125,12 +125,22 @@
           "$ref": "#/$defs/Dirty"
         },
         "mode": {
+          "description": "Checkout source. Inferred from url/path when unset: url means remote, path means local.",
+          "enum": [
+            "none",
+            "local",
+            "remote"
+          ],
           "type": "string"
         },
         "path": {
           "type": "string"
         },
         "ref": {
+          "type": "string"
+        },
+        "since": {
+          "description": "Commit-ish whose merge-base diff against HEAD is folded into the reported changed files. Informational only — it has no bearing on what the worktree contains.",
           "type": "string"
         },
         "url": {
@@ -935,18 +945,43 @@
       "additionalProperties": false,
       "properties": {
         "base": {
+          "default": "HEAD",
+          "description": "Commit-ish the new worktree branches from. Defaults to HEAD so the start commit is the tree you are looking at, independent of checkout.ref.",
+          "type": "string"
+        },
+        "ignored": {
+          "default": "clone",
+          "description": "Whether gitignored content is copied into the new worktree. `git worktree add` never brings it, so skip leaves the tree without node_modules/, .env and build caches. Use skip in repositories with a very large ignored tree.",
+          "enum": [
+            "clone",
+            "skip"
+          ],
           "type": "string"
         },
         "keep": {
           "type": "boolean"
         },
         "mode": {
+          "description": "Worktree lifecycle: new creates a disposable worktree and removes it afterwards, existing reuses the one at path, none runs in the checkout itself.",
+          "enum": [
+            "none",
+            "new",
+            "existing"
+          ],
           "type": "string"
         },
         "path": {
           "type": "string"
         },
         "prefix": {
+          "type": "string"
+        },
+        "uncommitted": {
+          "description": "Whether staged, unstaged and untracked changes are carried into the new worktree. Defaults to clone when base is HEAD, otherwise skip: uncommitted work is a diff against your HEAD, so replaying it onto a worktree branched elsewhere applies to the wrong context. Nothing is ever stashed — the source repository is never mutated.",
+          "enum": [
+            "clone",
+            "skip"
+          ],
           "type": "string"
         }
       },

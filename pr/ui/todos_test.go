@@ -840,9 +840,12 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 		Spec: api.Spec{
 			Model:  api.Model{Name: "codex", Effort: "high"},
 			Budget: api.Budget{Cost: 1.25, MaxTurns: 12, Timeout: "45m"},
-			// Dirty-worktree now rides the spec's Setup.Checkout.Dirty (Workspace
-			// section) instead of a sibling flag.
-			Setup: &shell.Setup{Checkout: &shell.Checkout{Dirty: &shell.Dirty{Stash: shell.StashAll}}},
+			// Dirty-worktree now rides the spec's
+			// Setup.Checkout.Worktree.Uncommitted (Workspace section) instead of a
+			// sibling flag.
+			Setup: &shell.Setup{Checkout: &shell.Checkout{
+				Worktree: &shell.Worktree{Mode: shell.WorktreeNew, Uncommitted: shell.CloneClone},
+			}},
 		},
 	})
 	rec := httptest.NewRecorder()

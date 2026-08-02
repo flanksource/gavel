@@ -98,7 +98,7 @@ func runUIServe(opts UIServeOptions) (any, error) {
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://%s", net.JoinHostPort(announceHost(opts.Addr), strconv.Itoa(addr.Port)))
+	url := fmt.Sprintf("http://%s", net.JoinHostPort(boundHost(addr, opts.Addr), strconv.Itoa(addr.Port)))
 
 	if opts.URLFile != "" {
 		if err := writeURLFile(opts.URLFile, url); err != nil {
@@ -273,6 +273,25 @@ func mergeSnapshotGit(dst, src *testui.SnapshotGit) *testui.SnapshotGit {
 		dst.SHA = src.SHA
 	}
 	return dst
+}
+
+// boundHost picks the hostname to announce for a listener that is already open.
+// The socket is authoritative: whenever it is bound to a concrete address, that
+// address is the only one it answers on, so --addr cannot override it.
+//
+// This matters for the inherited-socket path (`gavel test --ui --detach` passes
+// an already-bound listener on fd 3): the parent chose the bind address, --addr
+// keeps its 0.0.0.0 default, and announceHost would advertise a LAN IP for a
+// socket listening only on loopback — a URL that is refused. Only a wildcard
+// bind leaves the interface an open question, and that is where --addr decides.
+func boundHost(addr *net.TCPAddr, requested string) string {
+	if addr == nil || addr.IP == nil || addr.IP.IsUnspecified() {
+		return announceHost(requested)
+	}
+	if addr.IP.IsLoopback() {
+		return "localhost"
+	}
+	return addr.IP.String()
 }
 
 // announceHost picks the hostname to print in the "UI at ..." banner given

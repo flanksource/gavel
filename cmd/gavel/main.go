@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,8 +12,10 @@ import (
 	"github.com/flanksource/clicky/mcp"
 	"github.com/flanksource/clicky/shutdown"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
 var (
@@ -59,6 +62,17 @@ func getWorkingDir() (string, error) {
 func init() {
 	clicky.BindAllFlags(rootCmd.PersistentFlags(), "format", "tasks")
 	database.BindDatabaseURLFlag(rootCmd.PersistentFlags())
+	// A fixture's `setup:` resolves `connection://…` references against the
+	// process database. Wired here rather than imported by fixtures, which must
+	// stay free of internal/database — the same hook seam as AIStepRunner.
+	fixtures.SetupDBProvider = func(ctx context.Context) *gorm.DB {
+		db, err := database.Shared(ctx)
+		if err != nil {
+			logger.V(2).Infof("fixture setup: database unavailable: %v", err)
+			return nil
+		}
+		return db.Gorm()
+	}
 	logger.Configure(logger.Flags{LogToStderr: true, Color: true})
 	rootCmd.PersistentFlags().StringVar(&workingDir, "cwd", "", "Working directory")
 

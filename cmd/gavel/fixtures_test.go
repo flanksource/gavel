@@ -53,6 +53,12 @@ func TestFixturesHelpIncludesArgumentAndFlagReference(t *testing.T) {
 		"ansi.has_cursor_hide",
 		"ansi.final_text",
 		"has_color(s)",
+		"SETUP",
+		"setup:",
+		"file-level front-matter only",
+		"uncommitted: clone",
+		"ignored: clone",
+		"$SETUP_DIR",
 		"OUTPUT OPTIONS",
 		"gavel fixtures outline tests.md",
 		"Parse and outline without running fixtures",
@@ -201,6 +207,91 @@ func TestFixturesSchemaDocumentIncludesRunnerSchemas(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
 		t.Fatalf("schema output is not valid JSON: %v\n%s", err, buf.String())
+	}
+}
+
+// TestFixturesSchemaDocumentsSetup pins the three enums that decide which tree a
+// fixture runs in. Editor completion is the only place most people will ever read
+// these values, so a bare string here is the same as undocumented.
+func TestFixturesSchemaDocumentsSetup(t *testing.T) {
+	doc, err := fixturesSchemaDocument()
+	if err != nil {
+		t.Fatalf("fixturesSchemaDocument: %v", err)
+	}
+	frontmatter := schemaNode(t, doc["frontmatter"], "frontmatter")
+
+	setup := schemaChild(t, frontmatter, "setup")
+	assertSchemaHelp(t, fixtureSchemaProperty(setup), "Setup", "fixtures --help")
+	for _, want := range []string{"cwd", "baseDir", "dotenv", "envVars", "checkout", "connections"} {
+		schemaChild(t, setup, want)
+	}
+
+	checkout := schemaChild(t, setup, "checkout")
+	assertSchemaEnum(t, schemaChild(t, checkout, "mode"), "none", "local", "remote")
+
+	worktree := schemaChild(t, checkout, "worktree")
+	assertSchemaEnum(t, schemaChild(t, worktree, "mode"), "none", "new", "existing")
+	assertSchemaEnum(t, schemaChild(t, worktree, "uncommitted"), "clone", "skip")
+	assertSchemaEnum(t, schemaChild(t, worktree, "ignored"), "clone", "skip")
+
+	if got := schemaChild(t, worktree, "base")["default"]; got != "HEAD" {
+		t.Fatalf("worktree.base default = %#v, want HEAD", got)
+	}
+	if got := schemaChild(t, worktree, "ignored")["default"]; got != "clone" {
+		t.Fatalf("worktree.ignored default = %#v, want clone", got)
+	}
+	// uncommitted's default depends on base, so a static default would be wrong
+	// half the time; the rule lives in its description instead.
+	if _, ok := schemaChild(t, worktree, "uncommitted")["default"]; ok {
+		t.Fatalf("worktree.uncommitted must not carry a static default")
+	}
+}
+
+// schemaNode flattens the two map[string]any aliases the builders return
+// (fixtureJSONSchema for objects, fixtureSchemaProperty for leaves) so callers
+// can walk a nested schema without caring which one they landed on.
+func schemaNode(t *testing.T, value any, path string) map[string]any {
+	t.Helper()
+	switch typed := value.(type) {
+	case fixtureJSONSchema:
+		return typed
+	case fixtureSchemaProperty:
+		return typed
+	case map[string]any:
+		return typed
+	default:
+		t.Fatalf("%s is not a schema node: %#v", path, value)
+		return nil
+	}
+}
+
+func schemaChild(t *testing.T, parent map[string]any, name string) map[string]any {
+	t.Helper()
+	props, ok := parent["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema node has no properties, looking for %q: %#v", name, parent)
+	}
+	child, ok := props[name]
+	if !ok {
+		t.Fatalf("schema node missing %q, has %v", name, sortedKeys(props))
+	}
+	return schemaNode(t, child, name)
+}
+
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func assertSchemaEnum(t *testing.T, prop map[string]any, want ...string) {
+	t.Helper()
+	got := stringSliceFromAny(prop["enum"])
+	if !slices.Equal(got, want) {
+		t.Fatalf("enum = %#v, want %#v", got, want)
 	}
 }
 

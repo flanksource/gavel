@@ -40,6 +40,13 @@ type RunOptions struct {
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
+
+	// Setup is the environment prepared for the markdown file this fixture came
+	// from, or nil when that file declared no `setup:`. It lives here rather than
+	// on FixtureTest because RunOptions is the runtime-environment carrier and
+	// FixtureTest is serialized into results — the resolved environment holds
+	// credentials.
+	Setup *PreparedSetup
 }
 
 // OutputMode controls when captured command output is shown in rendered

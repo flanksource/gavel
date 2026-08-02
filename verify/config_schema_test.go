@@ -140,6 +140,45 @@ func TestConfigJSONSchema_DefaultsAndEnums(t *testing.T) {
 	assert.ElementsMatch(t, []any{"prompt", "fail", "skip"}, stringBranch["enum"])
 }
 
+// TestConfigJSONSchema_SetupDefsAreDocumented covers patchSetupDefs: the checkout
+// and worktree enums are reflected out of commons-db as bare strings, so without
+// the patch an editor offers no completion at all for the three fields that decide
+// which tree a run happens in.
+func TestConfigJSONSchema_SetupDefsAreDocumented(t *testing.T) {
+	schema := parsedConfigSchema(t)
+	defs, ok := schema["$defs"].(map[string]any)
+	require.True(t, ok, "schema should carry the reflected captain $defs")
+
+	def := func(name, prop string) map[string]any {
+		t.Helper()
+		definition, ok := defs[name].(map[string]any)
+		require.True(t, ok, "$defs/%s should exist", name)
+		props, ok := definition["properties"].(map[string]any)
+		require.True(t, ok, "$defs/%s should document properties", name)
+		node, ok := props[prop].(map[string]any)
+		require.True(t, ok, "$defs/%s should document %q", name, prop)
+		assert.NotEmpty(t, node["description"], "$defs/%s.%s should be described", name, prop)
+		return node
+	}
+
+	assert.ElementsMatch(t, []any{"none", "local", "remote"}, def("Checkout", "mode")["enum"])
+
+	worktreeMode := def("Worktree", "mode")
+	assert.ElementsMatch(t, []any{"none", "new", "existing"}, worktreeMode["enum"])
+
+	assert.Equal(t, "HEAD", def("Worktree", "base")["default"],
+		"worktree.base defaults to HEAD so the start commit is deterministic")
+
+	uncommitted := def("Worktree", "uncommitted")
+	assert.ElementsMatch(t, []any{"clone", "skip"}, uncommitted["enum"])
+	assert.NotContains(t, uncommitted, "default",
+		"uncommitted's default is conditional on base, so a static default would misinform completion")
+
+	ignored := def("Worktree", "ignored")
+	assert.ElementsMatch(t, []any{"clone", "skip"}, ignored["enum"])
+	assert.Equal(t, "clone", ignored["default"])
+}
+
 // TestConfigJSONSchema_PromptSpecShape asserts a PromptSpec node renders as the
 // string|object union carrying x-prompt-id and the spec sub-fields the settings
 // UI edits (model/prompt/budget), so the schema stays in step with promptSpecSchema.

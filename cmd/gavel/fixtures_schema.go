@@ -323,7 +323,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "files", "codeBlocks",
+			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "files", "codeBlocks",
 			"timeout", "os", "arch", "skip", "ai", "verify",
 		},
 		"properties": map[string]any{
@@ -334,6 +334,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"env":        withHelp(stringMapProp("Environment", "Environment variables for all tests."), "File structure", "Environment variables are available to build, daemon, and test commands.", "fixtures --help"),
 			"cwd":        withHelp(stringProp("Working directory", "Default working directory, resolved relative to the fixture file."), "CWD resolution", "Working directory priority: test-level cwd, file-level cwd, source directory, then `--cwd` or the current working directory.", "fixtures --help", "$GIT_ROOT_DIR/testdata", "./testdir"),
 			"terminal":   withHelp(enumProp("Terminal", "Terminal mode. `pty` uses a pseudo-terminal and merges stdout/stderr.", []string{"pty"}), "File structure", "`pty` mode uses a pseudo-terminal, which is useful for terminal UI output and ANSI assertions.", "fixtures --help", "pty"),
+			"setup":      fixtureSetupSchema(),
 			"files":      withHelp(stringProp("Files", "Glob pattern: replicate tests per matching file."), "File expansion", "Set `files` to replicate each test per matched file. File variables such as `file`, `filename`, `dir`, and `ext` become available.", "fixtures --help", "**/*.go"),
 			"codeBlocks": withHelp(stringArrayProp("Code blocks", "Executable code fence languages."), "Supported languages", "Languages to execute from standalone code fences. Non-executable labels such as yaml/frontmatter/json are parsed as config.", "fixtures --help", []string{"bash", "python"}),
 			"timeout":    withHelp(stringProp("Timeout", "Total timeout for fixture execution."), "Execution", "Total timeout for test execution. Individual command blocks can override this with YAML config or `timeout=N` fence attributes.", "fixtures --help", "30s"),
@@ -362,6 +363,103 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"verify": verifySchema(),
 		},
 	}
+}
+
+// fixtureSetupSchema describes the file-level `setup:` block: the environment
+// every fixture in the document runs in. It is prepared once per markdown file,
+// before `build:`, and torn down after the file's last test.
+func fixtureSetupSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":                 "object",
+		"description":          "Environment prepared once per markdown file, before build, and torn down after its last test.",
+		"additionalProperties": true,
+		"x-help": fixtureHelpBlock(
+			"Setup",
+			"`setup:` prepares dotenv files, environment variables, cloud/Kubernetes connections and a git checkout before any fixture in the document runs. It is file-level only — every test in the file shares one prepared tree.",
+			"fixtures --help",
+		),
+		"x-order": []string{"cwd", "baseDir", "dotenv", "envVars", "checkout", "connections"},
+		"properties": map[string]any{
+			"cwd":     withHelp(stringProp("Working directory", "Directory the file's fixtures run in, defaulting to the markdown file's own directory."), "Setup", "Where the file's fixtures run. Relative paths resolve against the markdown file. A `checkout:` with a worktree overrides this with the prepared tree.", "fixtures --help", "."),
+			"baseDir": withHelp(stringProp("Base directory", "Where clones and worktrees land, defaulting to a per-file directory under the user cache."), "Setup", "Clones and worktrees are written here. Defaults to a hash of the markdown path under the user cache directory so runs never write into the repository under test.", "fixtures --help", ".gavel/fixtures"),
+			"dotenv":  withHelp(stringArrayProp("Dotenv files", "`.env` files loaded into the fixture environment, resolved relative to the markdown file."), "Setup", "Dotenv files loaded into the environment of every fixture in the document.", "fixtures --help", []string{".env.test"}),
+			"envVars": fixtureSchemaProperty{
+				"type":        "array",
+				"title":       "Environment variables",
+				"description": "Environment variables, either literal or sourced from a secret via valueFrom.",
+				"x-help":      fixtureHelpBlock("Setup", "Environment variables for every fixture in the document. `valueFrom` resolves against a configured secret store.", "fixtures --help"),
+				"items": fixtureJSONSchema{
+					"type":                 "object",
+					"additionalProperties": true,
+					"properties": map[string]any{
+						"name":  stringProp("Name", "Variable name."),
+						"value": stringProp("Value", "Literal value."),
+					},
+				},
+			},
+			"checkout": fixtureSetupCheckoutSchema(),
+			"connections": fixtureJSONSchema{
+				"type":                 "object",
+				"description":          "Cloud and Kubernetes connections whose credentials are injected into the fixture environment.",
+				"additionalProperties": true,
+				"x-help":               fixtureHelpBlock("Setup", "Named connections (aws, azure, gcp, kubernetes, …). Each accepts inline credentials or a `connection://namespace/name` reference, which requires a configured database.", "fixtures --help"),
+			},
+		},
+	}
+}
+
+func fixtureSetupCheckoutSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":                 "object",
+		"description":          "Git checkout prepared before the file's fixtures run.",
+		"additionalProperties": true,
+		"x-help":               fixtureHelpBlock("Setup", "Checks out a local or remote repository before the file's fixtures run. With `worktree:` the fixtures run in a disposable tree; the source repository is never mutated.", "fixtures --help"),
+		"x-order":              []string{"mode", "url", "path", "connection", "ref", "depth", "since", "worktree"},
+		"properties": map[string]any{
+			"mode":       withHelp(enumProp("Mode", "Checkout source. Inferred from url/path when unset.", []string{"none", "local", "remote"}), "Setup", "`local` checks out the repository at `path`; `remote` clones `url`; `none` disables the checkout.", "fixtures --help", "local"),
+			"url":        withHelp(stringProp("URL", "Repository URL, with mode: remote."), "Setup", "Repository to clone in remote mode.", "fixtures --help", "https://github.com/flanksource/gavel"),
+			"path":       withHelp(stringProp("Path", "Local repository path, with mode: local, resolved relative to the markdown file."), "Setup", "Local repository to check out, resolved relative to the markdown file.", "fixtures --help", "."),
+			"connection": withHelp(stringProp("Connection", "Stored git credentials, as a `connection://namespace/name` reference."), "Setup", "Credentials for a private repository. Resolving a `connection://` reference requires a configured database.", "fixtures --help", "connection://git/github"),
+			"ref":        withHelp(stringProp("Ref", "Branch, tag or commit to check out."), "Setup", "Branch, tag or commit to check out.", "fixtures --help", "v1.0.42"),
+			"depth":      withHelp(integerProp("Depth", "Shallow-clone depth.", 0, 0), "Setup", "Shallow-clone depth for remote checkouts.", "fixtures --help", 1),
+			"since":      withHelp(stringProp("Since", "Commit-ish whose merge-base diff against HEAD is folded into the reported changed files."), "Setup", "Informational only: widens the reported `dirtyFiles` to include the merge-base diff against this commit. It does not change what the worktree contains.", "fixtures --help", "main"),
+			"worktree":   fixtureSetupWorktreeSchema(),
+		},
+	}
+}
+
+func fixtureSetupWorktreeSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":                 "object",
+		"description":          "Disposable worktree the file's fixtures run in.",
+		"additionalProperties": true,
+		"x-help":               fixtureHelpBlock("Setup", "A worktree isolates the file from the rest of the repository — not its tests from each other, since every test in the file shares the same tree. Nothing is ever stashed: the source repository is never mutated.", "fixtures --help"),
+		"x-order":              []string{"mode", "base", "uncommitted", "ignored", "prefix", "path", "keep"},
+		"properties": map[string]any{
+			"mode": withHelp(enumProp("Mode", "Worktree lifecycle.", []string{"none", "new", "existing"}), "Setup", "`new` creates a disposable worktree and removes it afterwards; `existing` reuses the one at `path`; `none` runs in the checkout itself.", "fixtures --help", "new"),
+			"base": withHelpDefault(stringProp("Base", "Commit-ish the new worktree branches from."), "HEAD", "Setup", "Defaults to HEAD so the start commit is the tree you are looking at, independent of `checkout.ref`.", "fixtures --help", "HEAD"),
+			// No `default:` for uncommitted — its default is conditional on
+			// base, and a static `default: clone` in the schema would tell
+			// editor completion something that is only sometimes true.
+			"uncommitted": withHelp(enumProp("Uncommitted changes", "Whether staged, unstaged and untracked changes are carried into the new worktree. Defaults to `clone` when `base` is HEAD, otherwise `skip` — uncommitted work is a diff against your HEAD, so replaying it onto a worktree branched elsewhere applies to the wrong context.", []string{"clone", "skip"}), "Setup", "`clone` carries staged, unstaged and untracked changes across. `skip` gives a pristine tree at `base`. The source repository is never mutated either way.", "fixtures --help", "clone"),
+			"ignored":     withHelpDefault(enumProp("Ignored files", "Whether gitignored content is copied into the new worktree.", []string{"clone", "skip"}), "clone", "Setup", "`git worktree add` never brings gitignored content, so without `clone` the worktree is missing node_modules/, .env and build caches. Set `skip` in repositories with a very large ignored tree.", "fixtures --help", "clone"),
+			"prefix":      withHelp(stringProp("Branch prefix", "Prefix for the generated branch name. Leave unset unless you keep worktrees."), "Setup", "The branch is disposable and its name is generated. A prefix only helps you recognise leftovers from `keep: true`.", "fixtures --help"),
+			"path":        withHelp(stringProp("Path", "Existing worktree path, with mode: existing."), "Setup", "Worktree to reuse in existing mode.", "fixtures --help"),
+			"keep": fixtureSchemaProperty{
+				"type":        "boolean",
+				"title":       "Keep",
+				"description": "Keep the worktree after the run for post-mortem inspection.",
+				"x-help":      fixtureHelpBlock("Setup", "Worktrees are removed on cleanup unless kept.", "fixtures --help"),
+			},
+		},
+	}
+}
+
+// withHelpDefault is withHelp for a property whose default the runtime actually
+// applies, so editor completion shows what will happen rather than a blank.
+func withHelpDefault(prop fixtureSchemaProperty, def any, section, body, source string, examples ...any) fixtureSchemaProperty {
+	prop["default"] = def
+	return withHelp(prop, section, body, source, examples...)
 }
 
 func verifySchema() fixtureJSONSchema {

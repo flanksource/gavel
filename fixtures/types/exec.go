@@ -38,22 +38,30 @@ func (e *ExecFixture) Name() string {
 
 // Run executes the command test with gomplate template support
 func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixtures.FixtureResult {
-	// Compute root dirs from the fixture source directory first. The CWD
-	// itself may reference these auto-injected vars, so it must be templated
-	// before we resolve the final working directory.
+	// Two directories, deliberately distinct. sourceDir is where the markdown
+	// lives — golden files resolve against it. execBase is where commands run:
+	// a `setup:` with a checkout moves it into the prepared worktree, and
+	// without one the two are the same directory.
 	sourceDir := ResolveSourceDir(fixture, opts)
-	gitRoot := repomap.FindGitRoot(sourceDir)
-	goRoot := findGoModRoot(sourceDir)
+	execBase := opts.Setup.Dir(sourceDir)
+
+	// Compute root dirs from the exec base, not the markdown's directory: a
+	// worktree fixture that kept GIT_ROOT_DIR pointing at the original repo
+	// would silently exercise the tree it was trying to isolate itself from.
+	// The CWD itself may reference these auto-injected vars, so they must be
+	// resolved before the final working directory.
+	gitRoot := repomap.FindGitRoot(execBase)
+	goRoot := findGoModRoot(execBase)
 	rootDir := gitRoot
 	if rootDir == "" {
 		rootDir = goRoot
 	}
 	if rootDir == "" {
-		rootDir = sourceDir
+		rootDir = execBase
 	}
 
 	if gitRoot != goRoot {
-		logger.V(3).Infof("Directories: source=%s git=%s go=%s root=%s", sourceDir, gitRoot, goRoot, rootDir)
+		logger.V(3).Infof("Directories: source=%s exec=%s git=%s go=%s root=%s", sourceDir, execBase, gitRoot, goRoot, rootDir)
 	}
 
 	// Inject auto-injected vars into TemplateVars so they're available
@@ -61,15 +69,23 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if fixture.TemplateVars == nil {
 		fixture.TemplateVars = make(map[string]any)
 	}
-	fixture.TemplateVars["workDir"] = sourceDir
+	fixture.TemplateVars["workDir"] = execBase
 	fixture.TemplateVars["executablePath"] = opts.ExecutablePath
 	fixture.TemplateVars["GIT_ROOT_DIR"] = gitRoot
 	fixture.TemplateVars["GO_ROOT_DIR"] = goRoot
 	fixture.TemplateVars["ROOT_DIR"] = rootDir
+	fixture.TemplateVars["SETUP_DIR"] = execBase
 	fixture.TemplateVars["GOOS"] = runtime.GOOS
 	fixture.TemplateVars["GOARCH"] = runtime.GOARCH
 	fixture.TemplateVars["GOPATH"] = os.Getenv("GOPATH")
-	fixture.TemplateVars["CWD"] = sourceDir
+	fixture.TemplateVars["CWD"] = execBase
+	// `setup` carries what the prepared tree turned out to be — commit,
+	// worktree, path, dirtyFiles. Absent rather than empty when no setup ran,
+	// so `{{.setup.commit}}` in a fixture without one fails instead of
+	// templating a blank.
+	if opts.Setup != nil {
+		fixture.TemplateVars["setup"] = opts.Setup.Extra
+	}
 
 	result := fixtures.FixtureResult{
 		Test:     fixture,
@@ -83,7 +99,7 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if err != nil {
 		return result.Errorf(err, "failed to template cwd")
 	}
-	workDir := ResolveWorkDirFromCWD(templatedCWD, sourceDir, opts)
+	workDir := ResolveWorkDirFromCWD(templatedCWD, execBase, opts)
 
 	fixture.TemplateVars["workDir"] = workDir
 	fixture.TemplateVars["CWD"] = workDir
@@ -101,7 +117,18 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	if exec.Env == nil {
 		exec.Env = make(map[string]any)
 	}
-	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "GOOS", "GOARCH", "GOPATH"} {
+	// Precedence, highest first: the fixture's own `env:` > the setup's
+	// environment > the auto-injected roots > whatever the process already
+	// had. Both clicky and os/exec start the child from os.Environ(), so a
+	// setup's environment is additive and overriding, never hermetic.
+	if opts.Setup != nil {
+		for k, v := range opts.Setup.Env {
+			if _, ok := exec.Env[k]; !ok {
+				exec.Env[k] = v
+			}
+		}
+	}
+	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "SETUP_DIR", "GOOS", "GOARCH", "GOPATH"} {
 		if _, ok := exec.Env[k]; !ok {
 			exec.Env[k] = templateData[k]
 		}
@@ -127,6 +154,10 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	result.Actual = p
+	// Deliberately fixture.SourceDir, not execBase: `@golden` files belong next
+	// to the markdown that asserts them. A worktree is disposable, so writing
+	// an updated golden into one would discard it on cleanup. The command moves;
+	// its expectations do not.
 	return fixture.Expected.Evaluate(result, *p, fixtures.EvaluateOptions{
 		SourceDir:    fixture.SourceDir,
 		UpdateGolden: opts.UpdateGolden,
@@ -184,10 +215,12 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.E
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.
-// Priority: test-level CWD > file-level frontmatter CWD > SourceDir > opts.WorkDir
-// Relative CWD paths are resolved from SourceDir (fixture file location) or opts.WorkDir.
+// Priority: test-level CWD > file-level frontmatter CWD > prepared setup cwd >
+// SourceDir > opts.WorkDir. Relative CWD paths are resolved from the prepared
+// setup's directory when the file declared one, otherwise from SourceDir (the
+// fixture file's location) or opts.WorkDir.
 func ResolveWorkDir(fixture fixtures.FixtureTest, opts fixtures.RunOptions) string {
-	baseDir := ResolveSourceDir(fixture, opts)
+	baseDir := opts.Setup.Dir(ResolveSourceDir(fixture, opts))
 
 	// Get the merged CWD (file-level frontmatter + test-level override)
 	cwd := fixture.ExecBase().CWD

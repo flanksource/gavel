@@ -431,11 +431,11 @@ func TestHeadlessPreparesAndCleansCanonicalWorktree(t *testing.T) {
 				Cwd:     ".",
 				BaseDir: ".runtime",
 				Checkout: &shell.Checkout{
-					Mode:  shell.CheckoutLocal,
-					Path:  ".",
-					Dirty: &shell.Dirty{Stash: shell.StashAll},
+					Mode: shell.CheckoutLocal,
+					Path: ".",
 					Worktree: &shell.Worktree{
-						Mode: shell.WorktreeNew,
+						Mode:        shell.WorktreeNew,
+						Uncommitted: shell.CloneClone,
 					},
 				},
 			},
