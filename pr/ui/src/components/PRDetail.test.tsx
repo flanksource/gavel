@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PRDetailPanel } from './PRDetail';
@@ -39,19 +40,27 @@ function makePR(overrides: Partial<PRItem> = {}): PRItem {
   };
 }
 
+function renderPRDetail(children: ReactNode) {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      {children}
+    </QueryClientProvider>,
+  );
+}
+
 describe('PRDetailPanel', () => {
   it.each([
     ['absent', undefined],
     ['empty', []],
   ])('renders New todo when projects are %s', (_label, projects) => {
-    render(<PRDetailPanel pr={makePR()} detail={null} loading={false} projects={projects} />);
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} projects={projects} />);
 
     expect(screen.getByRole('button', { name: 'New todo' })).toBeTruthy();
   });
 
   it('renders a close button and fires onClose when clicked', () => {
     const onClose = vi.fn();
-    render(<PRDetailPanel pr={makePR()} detail={null} loading={false} onClose={onClose} />);
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} onClose={onClose} />);
 
     const closeButton = screen.getByLabelText('Close pull request details');
     fireEvent.click(closeButton);
@@ -60,7 +69,7 @@ describe('PRDetailPanel', () => {
   });
 
   it('omits the close button when onClose is not provided', () => {
-    render(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
+    renderPRDetail(<PRDetailPanel pr={makePR()} detail={null} loading={false} />);
 
     expect(screen.queryByLabelText('Close pull request details')).toBeNull();
   });
@@ -88,7 +97,7 @@ describe('Gavel Results section', () => {
   const crashMessage = 'pre-build: compiling Go test binaries failed (exit 1)';
 
   it('shows the crash reason, exit code and log tail instead of the no-data text', () => {
-    render(
+    renderPRDetail(
       <PRDetailPanel
         pr={makePR()}
         detail={{
@@ -109,7 +118,7 @@ describe('Gavel Results section', () => {
   });
 
   it('still reports no data when an empty artifact carries no error', () => {
-    render(
+    renderPRDetail(
       <PRDetailPanel
         pr={makePR()}
         detail={{ gavelResults: [makeGavelShard()] }}

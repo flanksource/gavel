@@ -3,6 +3,7 @@ import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionOverview } from '../../types';
 import { attemptSessionCollection, inspectorSession, SessionDiagnostics, useTodoSessionDetail } from './TodoSessionDetail';
+import { queryTestWrapper } from './queryTestWrapper';
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
   SessionInspector: () => <div data-testid="session-inspector" />,
@@ -30,7 +31,9 @@ vi.mock('@flanksource/clicky-ui/icons', () => {
     UiCopy: Icon,
     UiError: Icon,
     UiLoader: Icon,
+    UiListFlat: Icon,
     UiRobotAi: Icon,
+    UiRows: Icon,
     UiStop: Icon,
     UiBatteryChargingVertical: Icon,
     UiBatteryVerticalEmpty: Icon,
@@ -80,7 +83,9 @@ describe('TODO session details', () => {
       )
     );
 
-    const { result, unmount } = renderHook(() => useTodoSessionDetail('/repo', 'todo-1', 'provider-1', true));
+    const { result, unmount } = renderHook(() => useTodoSessionDetail('/repo', 'todo-1', 'provider-1', true), {
+      wrapper: queryTestWrapper(),
+    });
     await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
     expect(result.current.error).toBe('');
     expect(result.current.detail?.diagnostics[0]?.code).toBe('ambiguous_transcript_sessions');
@@ -96,8 +101,9 @@ describe('TODO session details', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result, unmount } = renderHook(() =>
-      useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs: 15000 })
+    const { result, unmount } = renderHook(
+      () => useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs: 15000 }),
+      { wrapper: queryTestWrapper() },
     );
     await waitFor(() => expect(result.current.detail?.attemptsOnly).toBe(true));
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('attempts=only');
@@ -132,7 +138,7 @@ describe('TODO session details', () => {
     const { result, rerender, unmount } = renderHook(
       ({ intervalMs }: { intervalMs: number }) =>
         useTodoSessionDetail('/repo', 'todo-1', undefined, true, { attemptsOnly: true, intervalMs }),
-      { initialProps: { intervalMs: 15000 } }
+      { initialProps: { intervalMs: 15000 }, wrapper: queryTestWrapper() }
     );
     await waitFor(() => expect(result.current.detail?.attempts).toHaveLength(1));
 

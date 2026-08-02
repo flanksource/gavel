@@ -113,6 +113,7 @@ type TestOrchestrator struct {
 type RunOptions struct {
 	StartingPaths []string              `json:"starting_paths,omitempty" yaml:"paths,omitempty" args:"true"`                               // Package paths to test (e.g., ["./pkg/testrunner"]). If empty, all packages are discovered.
 	ExtraArgs     []string              `json:"extra_args,omitempty" yaml:"extra-args,omitempty" flag:"extra-args"`                        // Additional arguments broadcast to every selected test runner.
+	Tags          []string              `json:"tags,omitempty" yaml:"tags,omitempty" flag:"tags"`                                          // Go build tags mapped to each supported framework.
 	ShowPassed    bool                  `json:"show_passed,omitempty" yaml:"show-passed,omitempty" flag:"show-passed"`                     // Whether to show passed tests in output
 	Ignore        []string              `json:"ignore,omitempty" yaml:"ignore,omitempty" flag:"ignore"`                                    // Glob patterns for test packages/paths to exclude from discovery.
 	ShowStdout    OutputMode            `json:"show_stdout,omitempty" yaml:"show-stdout,omitempty" flag:"show-stdout" default:"OnFailure"` // When to show stdout: false|Never, OnFailure (default), true|Always
@@ -162,6 +163,9 @@ func (opts RunOptions) Pretty() api.Text {
 	}
 	if len(opts.ExtraArgs) > 0 {
 		text = text.Space().Append("ExtraArgs: ", "text-muted").Append(clicky.CompactList(opts.ExtraArgs), "text-blue-500")
+	}
+	if len(opts.Tags) > 0 {
+		text = text.Space().Append("Tags: ", "text-muted").Append(clicky.CompactList(opts.Tags), "text-blue-500")
 	}
 	if len(opts.PassThroughArgs) > 0 {
 		text = text.Space().Append("PassThroughArgs: ", "text-muted").Append(clicky.CompactList(opts.PassThroughArgs), "text-blue-500")
@@ -241,6 +245,7 @@ Examples:
   gavel test --changed                             # only changed packages
   gavel test --failed                              # re-run last run's failures (.gavel/last.json)
   gavel test --framework go,ginkgo                 # restrict frameworks
+  gavel test go ./pkg/integration --tags integration # enable Go build tags
   gavel test ./pkg/testrunner -- -run "TestName"     # focus Go test + Ginkgo
   gavel test ./pkg/testrunner -- --focus "TestName"  # equivalent focus spelling
   gavel test ginkgo . -- --label-filter "integration" # raw Ginkgo pass-through
@@ -834,6 +839,25 @@ func (o *TestOrchestrator) resolveFrameworkArgs(frameworks []Framework, extraArg
 		argsByFramework[fw] = append(argsByFramework[fw], passThrough...)
 	}
 
+	if len(o.Tags) > 0 {
+		mapped := 0
+		for _, fw := range selected {
+			runner, ok := o.registry.Get(fw)
+			if !ok {
+				return nil, nil, fmt.Errorf("no runner registered for framework %s", fw)
+			}
+			mapper, ok := runner.(runners.BuildTagsMapper)
+			if !ok {
+				continue
+			}
+			argsByFramework[fw] = append(argsByFramework[fw], mapper.BuildTagsArgs(o.Tags)...)
+			mapped++
+		}
+		if mapped == 0 {
+			return nil, nil, fmt.Errorf("--tags is not supported by the selected frameworks")
+		}
+	}
+
 	return selected, argsByFramework, nil
 }
 
@@ -968,7 +992,7 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 	// single lazily-loaded graph/hasher instance via selectorContext.
 	if o.hasChangeSelector() || o.Cache {
 		var err error
-		o.selector, err = newSelectorContext(o.WorkDir)
+		o.selector, err = newSelectorContext(o.WorkDir, o.Tags)
 		if err != nil {
 			return nil, fmt.Errorf("initialize selector: %w", err)
 		}
@@ -2056,11 +2080,18 @@ func runDiscoveredFixtures(workDir string, startingPaths []string, globs []strin
 }
 
 func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
+	return fixtureNodeToTestsWithFile(node, "")
+}
+
+func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string) []parsers.Test {
+	fixtureFile := fixtureNodeFile(node, inheritedFile)
 	if node.Results != nil {
 		r := node.Results
 		t := parsers.Test{
 			Name:      node.Name,
-			Framework: "fixture",
+			Framework: parsers.Fixture,
+			File:      fixtureFile,
+			Line:      fixtureNodeLine(node),
 			Duration:  r.Duration,
 			Stdout:    r.Stdout,
 			Stderr:    r.Stderr,
@@ -2082,7 +2113,7 @@ func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
 
 	var children parsers.Tests
 	for _, child := range node.Children {
-		children = append(children, fixtureNodeToTests(child)...)
+		children = append(children, fixtureNodeToTestsWithFile(child, fixtureFile)...)
 	}
 
 	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
@@ -2095,7 +2126,9 @@ func fixtureNodeToTests(node *fixtures.FixtureNode) []parsers.Test {
 		}
 		return []parsers.Test{{
 			Name:      node.Name,
-			Framework: "fixture",
+			Framework: parsers.Fixture,
+			File:      fixtureFile,
+			Line:      fixtureNodeLine(node),
 			Children:  children,
 			Failed:    failed,
 		}}
@@ -2115,24 +2148,50 @@ func fixtureTreeToPending(node *fixtures.FixtureNode) []parsers.Test {
 }
 
 func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
+	return fixtureNodeToPendingWithFile(node, "")
+}
+
+func fixtureNodeToPendingWithFile(node *fixtures.FixtureNode, inheritedFile string) []parsers.Test {
+	fixtureFile := fixtureNodeFile(node, inheritedFile)
 	if node.Test != nil {
 		return []parsers.Test{{
 			Name:      node.Name,
-			Framework: "fixture",
+			Framework: parsers.Fixture,
+			File:      fixtureFile,
+			Line:      fixtureNodeLine(node),
 			Pending:   true,
 		}}
 	}
 	var children parsers.Tests
 	for _, child := range node.Children {
-		children = append(children, fixtureNodeToPending(child)...)
+		children = append(children, fixtureNodeToPendingWithFile(child, fixtureFile)...)
 	}
 	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
 		return []parsers.Test{{
 			Name:      node.Name,
-			Framework: "fixture",
+			Framework: parsers.Fixture,
+			File:      fixtureFile,
+			Line:      fixtureNodeLine(node),
 			Children:  children,
 			Pending:   true,
 		}}
 	}
 	return children
+}
+
+func fixtureNodeFile(node *fixtures.FixtureNode, inherited string) string {
+	if node == nil || node.Origin == nil || node.Origin.File == "" {
+		return inherited
+	}
+	if inherited != "" && !filepath.IsAbs(node.Origin.File) {
+		return inherited
+	}
+	return node.Origin.File
+}
+
+func fixtureNodeLine(node *fixtures.FixtureNode) int {
+	if node == nil || node.Origin == nil {
+		return 0
+	}
+	return node.Origin.Line
 }

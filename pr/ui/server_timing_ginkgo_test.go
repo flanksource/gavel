@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,7 +31,11 @@ var _ = Describe("project server timing", func() {
 	It("reports total, file, and database time while browsing projects", func() {
 		projectDir := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(projectDir, "Procfile"), []byte("web: make serve\n"), 0o600)).To(Succeed())
-		Expect(SaveProjects([]Project{{Name: "gavel", Dir: projectDir}})).To(Succeed())
+		projects := make([]Project, 8)
+		for i := range projects {
+			projects[i] = Project{Name: fmt.Sprintf("project-%d", i), Dir: projectDir}
+		}
+		Expect(SaveProjects(projects)).To(Succeed())
 		projectTodoCounts = func(_ context.Context, _ Project) (todoCounts, error) {
 			return todoCounts{Total: 3, Open: 2, Completed: 1}, nil
 		}

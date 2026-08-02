@@ -56,7 +56,7 @@ var _ = Describe("Hasher", func() {
 	BeforeEach(func() {
 		root = buildHashFixture()
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -76,7 +76,7 @@ var _ = Describe("Hasher", func() {
 
 		// Reload the graph to simulate a fresh invocation, then recompute.
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		after := fingerprintsOf()
@@ -94,7 +94,7 @@ func C() string { return "updated" }
 
 		// Reload graph after edit.
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		after := fingerprintsOf()
@@ -115,7 +115,7 @@ func A() string { return b.B() + "!" }
 `), 0o644)).To(Succeed())
 
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		after := fingerprintsOf()
@@ -134,7 +134,7 @@ func A() string { return b.B() + "!" }
 		)).To(Succeed())
 
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		after := fingerprintsOf()
@@ -151,7 +151,7 @@ func C() string { return "just edited" }
 `), 0o644)).To(Succeed())
 
 		var err error
-		graph, err = changegraph.Load(root)
+		graph, err = changegraph.Load(root, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		h := runcache.NewHasher(graph, nil)

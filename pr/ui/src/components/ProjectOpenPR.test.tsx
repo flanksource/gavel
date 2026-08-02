@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStatusView } from './ProjectStatusView';
@@ -22,6 +23,7 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
 
 vi.mock('./ProjectActionDialog', () => ({ ProjectActionDialog: () => null }));
 vi.mock('./ProjectActionRunDialog', () => ({ ProjectActionRunDialog: () => null }));
+vi.mock('./ProjectCommitTasks', () => ({ ProjectCommitTasks: () => null }));
 vi.mock('./ProjectDiffView', () => ({ ProjectDiffView: () => null }));
 vi.mock('./ProjectFileTree', () => ({
   ProjectFileTree: ({ files, selected, onToggleFile }: {
@@ -54,16 +56,22 @@ describe('Project Open PR action', () => {
       }],
       resultsStale: false,
       action: { running: false },
-      commitQueue: { running: false },
     };
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (
-      init?.method === 'POST'
-        ? { ok: true, json: async () => ({ running: true, entries: [{ id: 'pr-1', action: 'open-pr', files: ['one.go'], status: 'running' }] }) }
-        : { ok: true, json: async () => status }
-    ) as Response);
+      new Response(JSON.stringify(
+        init?.method === 'POST' ? { runId: 'pr-run-1' } : status,
+      ), {
+        headers: { 'content-type': 'application/json' },
+        status: 200,
+      })
+    ));
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<ProjectStatusView project={project} />);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ProjectStatusView project={project} />
+      </QueryClientProvider>,
+    );
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select one.go' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open PR' }));
 
@@ -71,6 +79,6 @@ describe('Project Open PR action', () => {
     const request = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
     expect(request?.[0]).toBe('/api/projects/gavel/commit-queue');
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({ action: 'open-pr', files: ['one.go'] });
-    expect(screen.getByRole('button', { name: 'Commit selected (0)' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Commit selected (0)' })).toBeTruthy();
   });
 });
