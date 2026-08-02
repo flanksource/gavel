@@ -1219,15 +1219,13 @@ func mergeParentContext(primary, parent context.Context) (context.Context, conte
 // ForceKill() (SIGKILL) when a per-package or global timeout fires.
 const gracefulKillWait = 3 * time.Second
 
-// captureGlobalDiagnostics is set by the CLI layer when diagnostics are
-// enabled for the run. Called once before the first subprocess kill so the
-// snapshot captures live goroutine state.
+// captureGlobalDiagnostics is set by the CLI layer. It is called before each
+// subprocess kill so timeout output captures live goroutine, task, and process state.
 var captureGlobalDiagnostics = func() {}
 
 // SetCaptureGlobalDiagnostics installs the diagnostics hook invoked by the
 // per-package supervisor before it kills a timed-out subprocess. The caller
-// is responsible for ensuring the hook itself is safe to run concurrently
-// (typical implementations wrap sync.Once to capture exactly one snapshot).
+// is responsible for ensuring the hook itself is safe to run concurrently.
 func SetCaptureGlobalDiagnostics(fn func()) {
 	if fn == nil {
 		captureGlobalDiagnostics = func() {}

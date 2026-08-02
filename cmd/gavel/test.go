@@ -49,11 +49,16 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 	opts.LintTimeout = testDurationFlags.LintTimeout
 	opts.TestTimeout = testDurationFlags.TestTimeout
 
-	runCtx, cancelRun := newStopContext(opts.Context, opts.Timeout)
+	diagnostics := newRunDiagnosticsReporter(runDiagnosticsOptions{Output: logger.GetOutput()})
+	runCtx, cancelRun := newMonitoredStopContext(opts.Context, monitoredStopOptions{
+		Timeout:  opts.Timeout,
+		Interval: 10 * time.Minute,
+		Report:   diagnostics.Capture,
+	})
 	defer cancelRun()
 	opts.Context = runCtx
 
-	installTimeoutDiagnosticsHook(opts)
+	installTimeoutDiagnosticsHook(diagnostics)
 
 	// Route bare fmt.Print / os.Stderr writes through an in-memory buffer
 	// while the task renderer is live, then flush everything in order at
