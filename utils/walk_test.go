@@ -192,6 +192,22 @@ var _ = Describe("WalkGitIgnoredBounded", func() {
 		Expect(paths).NotTo(ContainElement("nested-repo/pkg/skip_test.go"))
 	})
 
+	// `git worktree add` writes .git as a *file* holding a `gitdir:` pointer, so
+	// a boundary check that requires a directory walks straight into the copy.
+	It("skips linked worktrees whose .git is a file", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "visible"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "visible", "keep_test.go"), nil, 0o644)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "worktree", "pkg"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "worktree", ".git"), []byte("gitdir: /elsewhere/.git/worktrees/wt\n"), 0o644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "worktree", "pkg", "skip_test.go"), nil, 0o644)).To(Succeed())
+
+		paths, err := collectBoundedPaths(root)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(paths).To(ContainElement("visible/keep_test.go"))
+		Expect(paths).NotTo(ContainElement("worktree"))
+		Expect(paths).NotTo(ContainElement("worktree/pkg/skip_test.go"))
+	})
+
 	It("skips descendant directories that contain both go.mod and .git", func() {
 		Expect(os.MkdirAll(filepath.Join(root, "nested-both", ".git"), 0o755)).To(Succeed())
 		Expect(os.MkdirAll(filepath.Join(root, "nested-both", "pkg"), 0o755)).To(Succeed())
@@ -500,6 +516,95 @@ var _ = Describe("GlobWalkGitIgnored", func() {
 		Expect(os.WriteFile(filepath.Join(root, "index.js"), nil, 0o644)).To(Succeed())
 
 		Expect(collect([]string{"**/*.js"}, []string{"dist/"})).To(ConsistOf("index.js"))
+	})
+})
+
+var _ = Describe("GlobFilesBounded", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+		setupGitRepo(root)
+	})
+
+	rel := func(files []string) []string {
+		out := make([]string, 0, len(files))
+		for _, f := range files {
+			r, err := filepath.Rel(root, f)
+			Expect(err).NotTo(HaveOccurred())
+			out = append(out, filepath.ToSlash(r))
+		}
+		return out
+	}
+
+	// Hand-written .gavel.yaml globs use "./pkg/x/*.md" as often as "pkg/x/*.md".
+	// Matching against root-relative paths only works if the pattern is cleaned
+	// the way filepath.Join used to clean it.
+	It("treats equivalent relative patterns as the same glob", func() {
+		Expect(os.MkdirAll(filepath.Join(root, "pkg", "formula"), 0o755)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "pkg", "formula", "rates.md"), nil, 0o644)).To(Succeed())
+
+		for _, pattern := range []string{"pkg/formula/**/*.md", "./pkg/formula/**/*.md", "pkg/./formula/**/*.md"} {
+			files, err := GlobFilesBounded(root, []string{pattern})
+			Expect(err).NotTo(HaveOccurred(), pattern)
+			Expect(rel(files)).To(ConsistOf("pkg/formula/rates.md"), pattern)
+		}
+	})
+
+	// Scratch worktrees hold a full copy of the repo, so a blind glob reports
+	// every match twice. They are often covered only by the user's global
+	// gitignore, so pruning has to key off the nested checkout.
+	It("skips gitignored dirs and nested checkouts", func() {
+		Expect(os.WriteFile(filepath.Join(root, ".gitignore"), []byte("node_modules/\n"), 0o644)).To(Succeed())
+		for _, dir := range []string{"examples", ".runtime/worktrees/copy/examples", "node_modules/pkg"} {
+			Expect(os.MkdirAll(filepath.Join(root, dir), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(root, dir, "a.fixture.md"), nil, 0o644)).To(Succeed())
+		}
+		Expect(os.MkdirAll(filepath.Join(root, ".runtime/worktrees/copy/.git"), 0o755)).To(Succeed())
+
+		files, err := GlobFilesBounded(root, []string{"**/*.fixture.md"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rel(files)).To(ConsistOf("examples/a.fixture.md"))
+	})
+
+	It("resolves patterns that escape root, which the bounded walk cannot reach", func() {
+		outer := filepath.Dir(root)
+		shared := filepath.Join(outer, "shared-"+filepath.Base(root))
+		Expect(os.MkdirAll(shared, 0o755)).To(Succeed())
+		DeferCleanup(os.RemoveAll, shared)
+		external := filepath.Join(shared, "a.fixture.md")
+		Expect(os.WriteFile(external, nil, 0o644)).To(Succeed())
+
+		relative, err := GlobFilesBounded(root, []string{"../" + filepath.Base(shared) + "/*.fixture.md"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(relative).To(ConsistOf(external))
+
+		absolute, err := GlobFilesBounded(root, []string{filepath.Join(shared, "*.fixture.md")})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(absolute).To(ConsistOf(external))
+	})
+
+	It("deduplicates files matched by more than one pattern", func() {
+		Expect(os.WriteFile(filepath.Join(root, "a.fixture.md"), nil, 0o644)).To(Succeed())
+
+		files, err := GlobFilesBounded(root, []string{"**/*.md", "*.fixture.md"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rel(files)).To(ConsistOf("a.fixture.md"))
+	})
+
+	// A silently-skipped bad glob turns a config typo into "no tests found".
+	It("fails loudly on an invalid glob", func() {
+		_, err := GlobFilesBounded(root, []string{"pkg/[unclosed"})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("pkg/[unclosed"))
+	})
+
+	It("returns nothing when given no patterns", func() {
+		Expect(os.WriteFile(filepath.Join(root, "a.fixture.md"), nil, 0o644)).To(Succeed())
+
+		files, err := GlobFilesBounded(root, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(files).To(BeEmpty())
 	})
 })
 

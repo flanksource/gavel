@@ -21,7 +21,9 @@ type TestLocation struct {
 func BuildTestLocationMap(dir string) (map[string]TestLocation, error) {
 	locations := make(map[string]TestLocation)
 
-	err := utils.WalkGitIgnored(dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: locations are keyed by bare test name, so a nested checkout's
+	// copy of a test file would overwrite the real one's location.
+	err := utils.WalkGitIgnoredBounded(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
 			return err
 		}

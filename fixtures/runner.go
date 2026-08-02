@@ -19,6 +19,8 @@ import (
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // RunnerOptions configures the fixture runner
@@ -36,6 +38,10 @@ type RunnerOptions struct {
 	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
 	Display        *DisplayOptions     // Optional result visibility controls for CLI rendering
 	Spec           *api.Spec           // Runtime options for embedded AI prompts
+	// Record is the run-wide `--record` default, applied only to fixtures that
+	// declared no `record:` of their own. An explicit `record: none` parses to an
+	// empty (non-nil) Spec precisely so it outranks this.
+	Record *record.Spec
 }
 
 // Runner manages fixture test execution using typed tasks
@@ -50,6 +56,11 @@ type Runner struct {
 	// keyed on FixtureNode.Origin.File. Keyed on the file rather than the source
 	// directory because two fixture files in one directory are independent.
 	setups map[string]*PreparedSetup
+	// recorders holds the diagnostics recorders per markdown file, keyed the
+	// same way. nil when nothing in the run declared `record:` — no goroutine,
+	// no listener, no file.
+	recorders map[string]*recorderSet
+	store     *record.Store
 }
 
 // NewRunner creates a new fixture runner
@@ -136,10 +147,14 @@ func (r *Runner) parseFixtureFiles() error {
 	}
 
 	for _, pattern := range r.options.Paths {
-		// Expand glob patterns
-		matches, err := doublestar.FilepathGlob(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid glob pattern '%s': %w", pattern, err)
+		// Callers that already resolved concrete files (outline discovery) would
+		// otherwise pay a second glob per path.
+		matches := []string{pattern}
+		if info, err := os.Stat(pattern); err != nil || !info.Mode().IsRegular() {
+			matches, err = doublestar.FilepathGlob(pattern)
+			if err != nil {
+				return fmt.Errorf("invalid glob pattern '%s': %w", pattern, err)
+			}
 		}
 
 		if len(matches) == 0 {
@@ -260,15 +275,24 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		defer r.stopDaemon()
 	}
 
+	// Recorders start after the daemon so its port can be excluded from the
+	// proxy, and their defer is registered after the daemon's so LIFO closes
+	// them first — a daemon shutting down can still emit requests worth
+	// recording.
+	if err := r.prepareRecorders(); err != nil {
+		return nil, err
+	}
+	defer r.closeRecorders()
+
 	// Create typed task group for fixture execution
 	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests")
 
 	taskToNodeMap := make(map[task.TypedTask[FixtureResult]]*FixtureNode)
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
-			setup := r.setupForNode(node)
+			env := r.envForNode(node)
 			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				result, err := r.executeFixture(ctx, *node.Test, setup)
+				result, err := r.executeFixture(ctx, *node.Test, env)
 				if r.options.OnResult != nil {
 					r.options.OnResult(result)
 				}
@@ -413,8 +437,20 @@ func (r *Runner) executeBuildCommand(ctx flanksourceContext.Context, buildCmd st
 }
 
 // executeFixture runs a single fixture test in the environment prepared for the
-// file that declared it (nil when that file declared no `setup:`).
-func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, setup *PreparedSetup) (FixtureResult, error) {
+// file that declared it (zero-valued when that file declared neither `setup:`
+// nor `record:`).
+func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
+	setup := env.setup
+
+	if missing := r.effectiveRecord(fixture).Missing(); len(missing) > 0 {
+		return FixtureResult{
+			Name:   fixture.Name,
+			Status: task.StatusERR,
+			Test:   fixture,
+			Error:  fmt.Sprintf("record: %v is not implemented yet", missing),
+		}, nil
+	}
+
 	if reason := fixture.ShouldSkip(); reason != "" {
 		return FixtureResult{
 			Name:   fixture.Name,
@@ -510,6 +546,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		ExecutablePath: r.options.ExecutablePath,
 		UpdateGolden:   r.options.UpdateGolden,
 		Setup:          setup,
+		Recorder:       r.recorderContext(env.file),
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},

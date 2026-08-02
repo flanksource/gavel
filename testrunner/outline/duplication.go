@@ -26,7 +26,7 @@ const testFilePattern = "**/{*_test.go,*.test.*,*.spec.*}"
 // clone. The default jscpd linter excludes test files, so the outline invokes
 // jscpd directly.
 func applyDuplication(ctx context.Context, report *Report, workDir string) error {
-	if len(report.Entries) == 0 {
+	if len(report.Entries) == 0 || !hasDuplicationConsumer(report) {
 		return nil
 	}
 
@@ -103,6 +103,18 @@ func relativeTo(path, workDir string) string {
 		}
 	}
 	return filepath.ToSlash(cleaned)
+}
+
+// hasDuplicationConsumer reports whether any leaf carries the body span
+// annotateDuplication needs. Collectors that don't record one (fixtures) would
+// have every leaf skipped, making the jscpd subprocess pure waste.
+func hasDuplicationConsumer(report *Report) bool {
+	for _, leaf := range report.Leaves() {
+		if leaf.SizeLines > 0 && leaf.Line > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func annotateDuplication(report *Report, intervals map[string][]lineInterval) {

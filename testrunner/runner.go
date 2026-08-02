@@ -1991,47 +1991,37 @@ func resolveFixtureGlobs(opts RunOptions) []string {
 }
 
 // discoverFixtures resolves each glob against every starting path (or workDir
-// when no paths are given) and returns the union of matching files.
-// Absolute globs are used as-is; relative globs are joined with the path root.
-func discoverFixtures(workDir string, startingPaths []string, globs []string) []string {
+// when no paths are given) and returns the union of matching files. Discovery
+// is gitignore-aware and stops at nested checkouts, so a scratch worktree
+// holding a full copy of the repo doesn't double-run every fixture.
+func discoverFixtures(workDir string, startingPaths []string, globs []string) ([]string, error) {
 	if len(globs) == 0 {
-		return nil
+		return nil, nil
 	}
 	roots := startingPaths
 	if len(roots) == 0 {
 		roots = []string{workDir}
 	}
 
-	var patterns []string
+	var found []string
 	for _, root := range roots {
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(workDir, root)
 		}
-		for _, g := range globs {
-			if filepath.IsAbs(g) {
-				patterns = append(patterns, g)
-			} else {
-				patterns = append(patterns, filepath.Join(root, g))
-			}
-		}
-	}
-	return globFixtures(patterns)
-}
-
-func globFixtures(patterns []string) []string {
-	var found []string
-	for _, pattern := range patterns {
-		matches, err := doublestar.FilepathGlob(pattern)
+		matches, err := utils.GlobFilesBounded(root, globs)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		found = append(found, matches...)
 	}
-	return lo.Uniq(found)
+	return lo.Uniq(found), nil
 }
 
 func runDiscoveredFixtures(workDir string, startingPaths []string, globs []string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
-	fixtureFiles := discoverFixtures(workDir, startingPaths, globs)
+	fixtureFiles, err := discoverFixtures(workDir, startingPaths, globs)
+	if err != nil {
+		return nil, err
+	}
 	if len(fixtureFiles) == 0 {
 		return nil, nil
 	}

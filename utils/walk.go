@@ -2,9 +2,12 @@ package utils
 
 import (
 	"bufio"
+	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -231,9 +234,12 @@ func stopAtNestedProjectRoot(root, path string, d fs.DirEntry) (bool, error) {
 		return false, nil
 	}
 
-	if info, err := os.Stat(filepath.Join(path, ".git")); err == nil && info.IsDir() {
+	// `.git` is a directory in a normal clone and a file holding a `gitdir:`
+	// pointer in a linked worktree or submodule. Both are separate checkouts,
+	// so both bound the walk.
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return true, nil
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if !os.IsNotExist(err) {
 		return false, err
 	}
 
@@ -286,6 +292,92 @@ func PartitionGitIgnored(paths []string, dir string) (kept, ignored []string) {
 		}
 	}
 	return kept, ignored
+}
+
+// GlobFilesBounded resolves doublestar patterns to absolute file paths using
+// WalkGitIgnoredBounded, so matches never come from a gitignored directory or a
+// nested checkout (scratch worktrees hold a full copy of the repo and would
+// otherwise double-count every match). Relative patterns are matched against
+// root-relative slash paths; patterns that are absolute or escape root are
+// globbed directly, since the bounded walk never leaves root. Results are
+// deduplicated and sorted.
+func GlobFilesBounded(root string, patterns []string) ([]string, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	root, _ = filepath.Abs(root)
+
+	var relative, external []string
+	for _, pattern := range patterns {
+		if filepath.IsAbs(pattern) {
+			external = append(external, pattern)
+			continue
+		}
+		// Patterns are compared against root-relative slash paths, so they need
+		// the same cleaning filepath.Join would apply — "./pkg/**/*.md"
+		// otherwise carries a literal "./" segment and matches nothing.
+		cleaned := path.Clean(filepath.ToSlash(pattern))
+		if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			external = append(external, filepath.Join(root, pattern))
+			continue
+		}
+		if !doublestar.ValidatePattern(cleaned) {
+			return nil, fmt.Errorf("invalid glob %q", pattern)
+		}
+		relative = append(relative, cleaned)
+	}
+
+	seen := map[string]bool{}
+	var files []string
+	add := func(file string) {
+		if seen[file] {
+			return
+		}
+		seen[file] = true
+		files = append(files, file)
+	}
+
+	if len(relative) > 0 {
+		err := WalkGitIgnoredBounded(root, func(file string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, relErr := filepath.Rel(root, file)
+			if relErr != nil {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			for _, pattern := range relative {
+				if match, _ := doublestar.Match(pattern, rel); match {
+					add(file)
+					return nil
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for _, pattern := range external {
+		matches, err := doublestar.FilepathGlob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid glob %q: %w", pattern, err)
+		}
+		for _, match := range matches {
+			info, err := os.Stat(match)
+			if err != nil {
+				return nil, fmt.Errorf("stat %s: %w", match, err)
+			}
+			if !info.IsDir() {
+				add(match)
+			}
+		}
+	}
+
+	sort.Strings(files)
+	return files, nil
 }
 
 // GlobWalkGitIgnored walks root like WalkGitIgnored — pruning .gitignored

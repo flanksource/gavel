@@ -160,7 +160,9 @@ func (h *Hasher) localHash(pkg *changegraph.Pkg) (localResult, error) {
 	var tooRecent bool
 	now := time.Now()
 
-	err := utils.WalkGitIgnored(pkg.Dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: a nested checkout under pkg.Dir belongs to another module and is
+	// not part of this package's inputs, so hashing it churns the fingerprint.
+	err := utils.WalkGitIgnoredBounded(pkg.Dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

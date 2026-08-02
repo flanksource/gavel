@@ -231,7 +231,9 @@ func hasTestFile(dir string, suffixes []string, deep bool) bool {
 		return false
 	}
 	found := false
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: a test file inside a nested checkout says nothing about whether
+	// this project has node tests.
+	_ = utils.WalkGitIgnoredBounded(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

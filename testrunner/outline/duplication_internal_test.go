@@ -54,4 +54,24 @@ var _ = Describe("duplication", func() {
 			Expect(report.Entries[0].DuplicationPct).To(BeNumerically("==", 50))
 		})
 	})
+
+	Describe("hasDuplicationConsumer", func() {
+		It("is false when no leaf carries a body span", func() {
+			// Fixture entries never set SizeLines, so running jscpd for them is
+			// pure waste — annotateDuplication discards every leaf.
+			report := &Report{Entries: []*Entry{
+				{Framework: parsers.Fixture, File: "examples/a.fixture.md", Name: "smoke", Line: 14},
+				{Framework: parsers.Fixture, File: "examples/a.fixture.md", Name: "lint"},
+			}}
+			Expect(hasDuplicationConsumer(report)).To(BeFalse())
+		})
+
+		It("is true when at least one leaf carries a body span", func() {
+			report := &Report{Entries: []*Entry{
+				{Framework: parsers.Fixture, File: "examples/a.fixture.md", Name: "smoke", Line: 14},
+				{Framework: parsers.GoTest, File: "a_test.go", Name: "TestA", Line: 10, EndLine: 19, SizeLines: 10},
+			}}
+			Expect(hasDuplicationConsumer(report)).To(BeTrue())
+		})
+	})
 })

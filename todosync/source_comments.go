@@ -18,6 +18,7 @@ import (
 
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -109,7 +110,9 @@ func ScanSourceComments(opts SourceCommentSyncOptions) ([]SourceComment, int, er
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(workDir, root)
 		}
-		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		// Bounded + gitignore-aware: a scratch worktree or vendored checkout
+		// under workDir would sync a duplicate TODO for every source marker.
+		if err := utils.WalkGitIgnoredBounded(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}

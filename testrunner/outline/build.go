@@ -33,16 +33,18 @@ func Build(opts Options) (*Report, error) {
 
 	frameworks := opts.Frameworks
 	if len(frameworks) == 0 {
-		frameworks = []parsers.Framework{parsers.GoTest, parsers.Ginkgo, parsers.Vitest}
+		frameworks = SupportedFrameworks()
 	}
 	enabled := map[parsers.Framework]bool{}
+	supported := map[parsers.Framework]bool{}
+	for _, framework := range SupportedFrameworks() {
+		supported[framework] = true
+	}
 	for _, fw := range frameworks {
-		switch fw {
-		case parsers.GoTest, parsers.Ginkgo, parsers.Vitest:
-			enabled[fw] = true
-		default:
-			return nil, fmt.Errorf("framework %q is not supported by outline yet", fw)
+		if !supported[fw] {
+			return nil, fmt.Errorf("unknown framework %q for test outline", fw)
 		}
+		enabled[fw] = true
 	}
 
 	report := &Report{WorkDir: workDir}
@@ -66,6 +68,31 @@ func Build(opts Options) (*Report, error) {
 				report.Entries = append(report.Entries, entry)
 			}
 		}
+	}
+	if enabled[parsers.Jest] {
+		jestEntries, err := collectJestTests(opts.Context, workDir, filters)
+		if err != nil {
+			return nil, err
+		}
+		report.Entries = append(report.Entries, jestEntries...)
+	}
+	if enabled[parsers.Playwright] {
+		playwrightEntries, err := collectPlaywrightTests(opts.Context, workDir, filters)
+		if err != nil {
+			return nil, err
+		}
+		report.Entries = append(report.Entries, playwrightEntries...)
+	}
+	if enabled[parsers.Fixture] {
+		patterns, err := configuredFixturePatterns(workDir, opts.FixtureFiles)
+		if err != nil {
+			return nil, err
+		}
+		fixtureEntries, err := collectFixtureTests(workDir, filters, patterns)
+		if err != nil {
+			return nil, err
+		}
+		report.Entries = append(report.Entries, fixtureEntries...)
 	}
 
 	sortEntries(report.Entries)
@@ -93,7 +120,9 @@ func Build(opts Options) (*Report, error) {
 
 func collectGoEntries(workDir string, filters []string, enabled map[parsers.Framework]bool) ([]*Entry, error) {
 	var entries []*Entry
-	err := utils.WalkGitIgnored(workDir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: a nested checkout (scratch worktree, vendored repo) holds a full
+	// copy of the tree and would list every test twice.
+	err := utils.WalkGitIgnoredBounded(workDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

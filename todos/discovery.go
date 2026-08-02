@@ -100,7 +100,8 @@ func stringInSlice(values []string, want string) bool {
 func DiscoverTODOs(dir string, filters DiscoveryFilters) (types.TODOS, error) {
 	var todos types.TODOS
 
-	err := utils.WalkGitIgnored(dir, func(path string, d fs.DirEntry, err error) error {
+	// Bounded: a nested checkout would surface a duplicate of every TODO.
+	err := utils.WalkGitIgnoredBounded(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

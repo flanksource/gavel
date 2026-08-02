@@ -20,9 +20,11 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
+	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/deps v1.0.36
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
@@ -132,7 +134,6 @@ require (
 	github.com/charmbracelet/huh v1.0.0 // indirect
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260205113103-524a6607adb8 // indirect
-	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20260122224438-b01af16209d9 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
@@ -162,7 +163,7 @@ require (
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
-	github.com/firebase/genkit/go v1.10.0 // indirect
+	github.com/firebase/genkit/go v1.11.0 // indirect
 	github.com/flanksource/clicky/aichat v1.21.48 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
