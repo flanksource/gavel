@@ -74,13 +74,18 @@ heading. It can contain command blocks, Markdown tables, CEL assertions, or
 `yaml test` / `yaml lint` fences. Run `gavel fixtures --help` for the complete
 fixture format and available runner keys.
 
+A top-level `# Verification` or `## Verification` section in `--body` is moved
+out of the issue body and stored as dedicated verification markdown. When
+`--verification` is also supplied, its content comes first and the fixture
+extracted from the body is appended.
+
 Create defaults:
 
 - priority: `medium`
 - status: `pending`
 - storage: native PostgreSQL
 - supplied plan approval: pending review
-- verification: omitted unless `--verification` or a body section supplies it
+- verification: omitted unless `--verification` or a top-level H1/H2 body section supplies it
 
 ## Statuses
 
@@ -130,3 +135,15 @@ A todo body can include normal markdown plus structured sections:
 - comments, native issue events, latest failure, attempts, and verification results.
 
 The todo engine deliberately reuses fixture parsing for verification sections. That keeps command checks, test/lint runner steps, and AI review in one format.
+
+## Verification results
+
+Every definition-of-done evaluation is persisted with the prompt run that produced it — both an explicit `gavel todos check` and the in-loop check a `gavel todos run` performs. The dashboard's **Verification** tab lists those attempts newest-first, so a failed check survives a reload, and its tab badge turns red while the latest attempt is failing.
+
+Each attempt exposes its evidence through four sub-tabs:
+
+- **Test** and **Lint** — the results of a `yaml test` / `yaml lint` runner step. The recorded counts and top failures render immediately; the full tree is read from the run's `.gavel/run-*.json` artifact.
+- **Session** — the agent transcript, when the attempt ran one.
+- **Output** — every other step (`exec`, `bash`, `ai`) with its command, exit code, ANSI-rendered streams and, for a failing step, the CEL expression and the values it saw — plus the acceptance-criteria checklist.
+
+A failure that happens *before* execution starts — no verification fixture, no acceptance criteria, no configured checks — creates no prompt run, so it is reported inline on the tab instead of being listed as an attempt.

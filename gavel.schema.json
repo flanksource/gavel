@@ -462,6 +462,9 @@
         "backend": {
           "type": "string"
         },
+        "callerTools": {
+          "type": "boolean"
+        },
         "effort": {
           "enum": [
             "",
@@ -669,6 +672,9 @@
         },
         "budget": {
           "$ref": "#/$defs/Budget"
+        },
+        "callerTools": {
+          "type": "boolean"
         },
         "cliArgs": {
           "type": "object"
@@ -962,6 +968,9 @@
         "budget": {
           "$ref": "#/$defs/Budget"
         },
+        "callerTools": {
+          "type": "boolean"
+        },
         "cliArgs": {
           "type": "object"
         },
@@ -1205,6 +1214,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1325,6 +1338,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1425,6 +1442,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1539,6 +1560,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1680,6 +1705,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1691,6 +1720,83 @@
         "draft": {
           "description": "Open the pull request as a draft.",
           "type": "boolean"
+        },
+        "fix": {
+          "additionalProperties": false,
+          "description": "AI spec for `gavel pr status --ai-fix`: the agent that repairs failing checks and unresolved review comments. Its workflow.verify.commands are the loop's definition of done (re-polling `gavel pr status`) and workflow.commits the per-turn commit policy.",
+          "properties": {
+            "budget": {
+              "additionalProperties": false,
+              "description": "Resource ceilings for the run. Zero/unset means unbounded.",
+              "properties": {
+                "cost": {
+                  "description": "Maximum spend in USD; 0 = no ceiling.",
+                  "type": "number"
+                },
+                "maxTokens": {
+                  "description": "Cap on output tokens per model call; 0 = backend default.",
+                  "type": "integer"
+                },
+                "maxTurns": {
+                  "description": "Cap on agent turns; 0 = backend default.",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "effort": {
+              "description": "Reasoning effort for thinking-capable models.",
+              "enum": [
+                "",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ],
+              "type": "string"
+            },
+            "fallbacks": {
+              "description": "Alternative model slugs tried in order when the primary is unavailable or its provider cannot be constructed.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "file": {
+              "description": "Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative paths resolve against the .gavel.yaml directory.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Catalog model slug for this operation (e.g. claude-haiku-4-5). Overrides the base ai.model.",
+              "type": "string"
+            },
+            "prompt": {
+              "additionalProperties": false,
+              "description": "The prompt body. A bare string in place of the whole spec is shorthand for prompt.user.",
+              "properties": {
+                "system": {
+                  "description": "Optional system-prompt framing.",
+                  "type": "string"
+                },
+                "user": {
+                  "description": "The user prompt / template body (Handlebars).",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
+            }
+          },
+          "type": [
+            "string",
+            "object"
+          ],
+          "x-prompt-id": "pr.fix"
         }
       },
       "type": "object"
@@ -1862,6 +1968,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -1942,6 +2052,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -2034,6 +2148,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -2107,6 +2225,10 @@
                 }
               },
               "type": "object"
+            },
+            "workflow": {
+              "$ref": "#/$defs/Workflow",
+              "description": "Loop shape for operations that run one: verify commands (the definition of done, whose exit code gates a re-run and whose output tail becomes the feedback) and the commit policy. Overriding it replaces the operation's declared workflow field-wise."
             }
           },
           "type": [
@@ -2128,6 +2250,9 @@
             },
             "budget": {
               "$ref": "#/$defs/Budget"
+            },
+            "callerTools": {
+              "type": "boolean"
             },
             "cliArgs": {
               "type": "object"

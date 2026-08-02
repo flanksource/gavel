@@ -23,7 +23,7 @@ require (
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
-	github.com/flanksource/deps v1.0.35
+	github.com/flanksource/deps v1.0.36
 	github.com/ghodss/yaml v1.0.0
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/go-git/go-billy/v5 v5.9.0

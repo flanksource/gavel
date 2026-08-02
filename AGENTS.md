@@ -4,10 +4,11 @@ Shared ways of working, the gavel todo workflow, and global skills come from the
 
 ## Skills
 - [gavel-ci-migrator](.agents/skills/gavel-ci-migrator/SKILL.md) — migrate a repo's GitHub Actions lint/test workflows onto the flanksource/gavel composite action: discover existing golangci-lint / go test / make jobs, ask per-workflow whether to replace or add, rewrite YAML, verify with actionlint without auto-committing
-- [gavel-fixture-tester](.agents/skills/gavel-fixture-tester/SKILL.md) — create and run gavel fixture-based tests using markdown files with command blocks, tables, and CEL assertions
+- [gavel-fixture-tester](.agents/skills/gavel-fixture-tester/SKILL.md) — author fixture tests and TODO executable definitions of done
 - [gavel-git](.agents/skills/gavel-git/SKILL.md) — use gavel instead of gh/git for pull requests, CI status, and commits: check PR checks with `gavel pr status`, open PRs with AI-generated content, commit with `gavel commit`
 - [gavel-runner](.agents/skills/gavel-runner/SKILL.md) — run gavel test and lint, focus on a subset, re-run only failures (defaults to .gavel/last.json), filter noise with baselines, and pull JSON/markdown results from finished or live runs
-- [gavel-todos](.agents/skills/gavel-todos/SKILL.md) — run and manage gavel TODOs, implement or plan work with an AI coding agent, and execute the fixture/CEL definition of done with `gavel todos check`
+- [gavel-todos](.agents/skills/gavel-todos/SKILL.md) — manage TODO content and lifecycle without starting implementation, then execute the persisted
+  definition of done with `gavel todos check`
 
 ## Memory
 - [Config Resolution & Prompt Registry](.agents/memory/config-and-prompts.md) — `gavel config --resolve`, `prompts/registry` as the prompt-descriptor source of truth, inline override shapes, and clicky prompt routing (module-vs-package replace gotcha)

@@ -191,7 +191,15 @@ func (e *Executor) newStreamer(req captainai.Request, canUseTool captainai.Permi
 		if model == "codex" {
 			model = ""
 		}
-		return captainprovider.NewCodexAppServer(model)
+		runtimeModel := req.Model
+		runtimeModel.Name = model
+		runtimeModel.Backend = captainai.BackendCodexAgent
+		return captainprovider.NewCodexAppServer(captainai.Config{
+			Model:      runtimeModel,
+			Budget:     req.Budget,
+			NoCache:    req.NoCache,
+			CanUseTool: canUseTool,
+		})
 	case "claude":
 		if backend == "" {
 			backend = string(captainai.BackendClaudeAgent)
