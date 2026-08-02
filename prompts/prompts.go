@@ -21,6 +21,7 @@ const (
 	CommitGrouping     = "commit.grouping"
 	LintFix            = "lint.fix"
 	PRContent          = "pr.content"
+	PRFix              = "pr.fix"
 	TodosRun           = "todos.run"
 	TodosPlan          = "todos.plan"
 	StatusSummary      = "status.summary"

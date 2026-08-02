@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	gaveldocs "github.com/flanksource/gavel"
+	"github.com/flanksource/gavel/prompts/registry"
 )
 
 func TestConfigHelpIncludesExample(t *testing.T) {
@@ -81,7 +82,7 @@ func TestRunConfigResolveReturnsResolvedResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("result type = %T, want ResolvedConfigResult", result)
 	}
-	if len(resolved.Prompts) != 9 {
-		t.Fatalf("resolved prompts = %d, want 9", len(resolved.Prompts))
+	if want := len(registry.All()); len(resolved.Prompts) != want {
+		t.Fatalf("resolved prompts = %d, want every registered prompt (%d)", len(resolved.Prompts), want)
 	}
 }

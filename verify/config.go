@@ -318,6 +318,11 @@ type GavelConfig struct {
 type PRConfig struct {
 	// Content is the AI spec for generating the PR title, body, and branch name.
 	Content PromptSpec `yaml:"content,omitempty" json:"content,omitempty"`
+	// Fix is the AI spec driving `gavel pr status --ai-fix`. Its
+	// workflow.verify.commands are the loop's definition of done (re-polling
+	// `gavel pr status`) and workflow.commits the per-turn commit policy.
+	// See prompts.PRFix.
+	Fix PromptSpec `yaml:"fix,omitempty" json:"fix,omitempty"`
 	// Base is the base branch for the PR (e.g. origin/main).
 	Base string `yaml:"base,omitempty" json:"base,omitempty"`
 	// Draft opens the PR as a draft.

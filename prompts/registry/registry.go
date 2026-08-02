@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky"
 	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/ai/aifix"
+	"github.com/flanksource/gavel/ai/prfix"
 	"github.com/flanksource/gavel/commit"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/prompts"
@@ -28,6 +29,7 @@ var promptSourcePattern = regexp.MustCompile(
 func All() []prompts.Prompt {
 	var all []prompts.Prompt
 	all = append(all, aifix.Prompts()...)
+	all = append(all, prfix.Prompts()...)
 	all = append(all, gavelgit.Prompts()...)
 	all = append(all, commit.Prompts()...)
 	all = append(all, todoprompt.Prompts()...)

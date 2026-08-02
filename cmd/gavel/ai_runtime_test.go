@@ -42,6 +42,32 @@ func TestBuildAIFixRequestUsesOperationModelIndependently(t *testing.T) {
 	assert.Equal(t, 20, req.Budget.MaxTurns)
 }
 
+// The operation's prompt and workflow are what make a spec-driven aifix run
+// possible at all: without them the request would carry no rendered prompt and no
+// verify loop, and `--ai-fix` would be back to firing once with an empty prompt.
+func TestBuildAIFixRequestCarriesOperationPromptWorkflowAndTimeout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	operation := api.Spec{
+		Model:  api.Model{Name: "agent:sonnet"},
+		Budget: api.Budget{Timeout: "45m", MaxTurns: 40},
+		Prompt: api.Prompt{System: "you fix PRs", User: "status snapshot"},
+		Workflow: &api.Workflow{
+			Verify: &api.Verify{Commands: []string{"gavel pr status --follow"}, MaxIterations: 3},
+		},
+	}
+
+	_, req, err := buildAIFixRequest(captaincli.AIRuntimeOptions{}, operation, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "you fix PRs", req.Prompt.System)
+	assert.Equal(t, "status snapshot", req.Prompt.User)
+	assert.Equal(t, "45m", req.Budget.Timeout)
+	assert.Equal(t, 40, req.Budget.MaxTurns)
+	require.NotNil(t, req.Workflow)
+	require.NotNil(t, req.Workflow.Verify)
+	assert.Equal(t, []string{"gavel pr status --follow"}, req.Workflow.Verify.Commands)
+	assert.Equal(t, 3, req.Workflow.Verify.MaxIterations)
+}
+
 func TestBuildAIFixRequestCLIModelOverridesOperation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	operation := api.Spec{Model: api.Model{Name: "agent:sonnet", Effort: api.EffortHigh}}

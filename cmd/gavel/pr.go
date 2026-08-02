@@ -48,8 +48,8 @@ type PRStatusOptions struct {
 	Args     []string        `args:"true"`
 	Context  context.Context `json:"-"`
 
-	AIFix         bool `flag:"ai-fix" help:"Feed the rendered PR status into the AI configured by 'captain configure' to fix failing checks/comments"`
-	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max AI iterations driven by the status prompt" default:"1"`
+	AIFix         bool `flag:"ai-fix" help:"Fix failing checks/comments with AI: each turn is committed and pushed, then the PR status is re-polled until it is green"`
+	AIFixMaxIters int  `flag:"ai-fix-max-iterations" help:"Max fix→push→re-poll rounds; 0 uses the pr.fix prompt's workflow.verify.maxIterations"`
 
 	// Embedded: contributes --model, --backend, --api-key, --no-cache,
 	// --budget, --debug, --max-tokens, --temperature, --permission-mode,
@@ -72,7 +72,9 @@ Key flags:
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
   --comments LIST   Filter comments by MatchItem patterns over IDs and @author/@bot tokens
   --actions LIST    Filter actions by MatchItem patterns over run/workflow IDs, YAML path, workflow name, or job/check name
-  --ai-fix          Feed the rendered status into the configured AI to fix failures/comments
+  --ai-fix          Fix failures/comments with AI, committing and pushing each turn, then
+                    re-polling this same status until it is green (--ai-fix-max-iterations
+                    caps the rounds). Configure it under pr.fix in .gavel.yaml.
 
 Examples:
   gavel pr status                              # current branch's PR
@@ -84,7 +86,7 @@ Examples:
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
   gavel pr status --actions 'lint,Install Tests - windows-amd64'   # by job/check name
-  gavel pr status --ai-fix                     # feed status into the AI to fix failures`
+  gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass`
 }
 
 func runPRStatus(opts PRStatusOptions) (any, error) {

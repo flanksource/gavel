@@ -228,6 +228,10 @@ func prSchema() map[string]any {
 		map[string]any{
 			"content": promptSpecSchema(prompts.PRContent,
 				"AI spec for generating the PR title, body, and branch name."),
+			"fix": promptSpecSchema(prompts.PRFix,
+				"AI spec for `gavel pr status --ai-fix`: the agent that repairs failing checks and "+
+					"unresolved review comments. Its workflow.verify.commands are the loop's definition of "+
+					"done (re-polling `gavel pr status`) and workflow.commits the per-turn commit policy."),
 			"base": stringProp(
 				"Base branch for the pull request (e.g. origin/main). Last-write-wins across layers."),
 			"draft": boolProp("Open the pull request as a draft."),
@@ -311,6 +315,12 @@ func promptSpecSchema(promptID, desc string) map[string]any {
 			"effort":    effortSchema(),
 			"budget":    budgetSchema(),
 			"prompt":    promptBodySchema(),
+			"workflow": map[string]any{
+				"$ref": "#/$defs/Workflow",
+				"description": "Loop shape for operations that run one: verify commands (the definition of " +
+					"done, whose exit code gates a re-run and whose output tail becomes the feedback) and " +
+					"the commit policy. Overriding it replaces the operation's declared workflow field-wise.",
+			},
 			"file": stringProp(
 				"Path to a .prompt file whose frontmatter/body supply this operation's spec. Relative " +
 					"paths resolve against the .gavel.yaml directory."),

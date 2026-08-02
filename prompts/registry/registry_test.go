@@ -13,9 +13,9 @@ import (
 )
 
 // registeredPromptCount is the number of surviving prompt-driven operations
-// (lint.fix, commit.message/summary/grouping, pr.content, todos.run/plan,
+// (lint.fix, pr.fix, commit.message/summary/grouping, pr.content, todos.run/plan,
 // status.summary, test.outlineSummary).
-const registeredPromptCount = 9
+const registeredPromptCount = 10
 
 func TestAllRegisteredPromptsAreUnique(t *testing.T) {
 	all := All()
@@ -75,7 +75,7 @@ func TestResolveLintFixUsesDedicatedDefaultModel(t *testing.T) {
 	require.NoError(t, err)
 
 	fix := resolvedByID(t, items, prompts.LintFix)
-	assert.Equal(t, "agent:sonnet", fix.EffectiveModel.Name)
+	assert.Equal(t, "agent:gpt-5.6-sol:medium,agent:opus:medium", fix.EffectiveModel.Name)
 	assert.Equal(t, "prompt default", fix.ModelSource)
 	assert.NotEqual(t, cfg.AI.Model.Name, fix.EffectiveModel.Name)
 }

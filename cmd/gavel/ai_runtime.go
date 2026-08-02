@@ -77,6 +77,18 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, wor
 	if operation.Budget.Timeout != "" {
 		req.Budget.Timeout = operation.Budget.Timeout
 	}
+	// The rendered prompt and the loop the operation declares (verify commands,
+	// commit policy). Callers that re-render per iteration (aifix) overwrite
+	// Prompt on their own turn clones; nothing overwrites Workflow.
+	if operation.Prompt.User != "" {
+		req.Prompt.User = operation.Prompt.User
+	}
+	if operation.Prompt.System != "" {
+		req.Prompt.System = operation.Prompt.System
+	}
+	if operation.Workflow != nil {
+		req.Workflow = operation.Workflow
+	}
 	req.Budget.Cost = cfg.Budget.Cost
 	cfg.Model = req.Model
 	cfg.Budget = req.Budget

@@ -34,6 +34,12 @@ type AgentRun struct {
 	// Fixup, when set, commits against that hash with `fixup!` rather than
 	// generating a message — so a per-turn commit costs no LLM call.
 	Fixup string
+	// Files, when set, stages exactly those git-root-relative paths instead of
+	// resolving the change set from the agent's session log. Callers that already
+	// know what the turn touched (captain's commit hook selects the path set
+	// itself) pass it so unrelated working-tree changes are never swept in.
+	// Mutually exclusive with Fixup (see validateFilesOptions).
+	Files []string
 	// Message overrides the generated subject. Empty leaves message generation
 	// to the pipeline, which is the reason to route through it at all.
 	Message string
@@ -43,6 +49,11 @@ type AgentRun struct {
 	// file-size, linked-deps, tidy). Callers that run their own cheap gates set
 	// it; `gates: full` is precisely the caller that does not.
 	SkipGates bool
+	// Push pushes the branch after the commit, driving the same flow as
+	// `gavel commit --push` (existing-PR branch match, protected-branch confirm,
+	// dry-run). Loops whose verification re-polls the remote need it: without the
+	// push, CI never sees the change the next verification round checks.
+	Push bool
 }
 
 // RunAfterAgent stages and commits what an agent changed, driving the same
@@ -77,11 +88,14 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 
 	// Scope the commit to the files the agent's session actually edited. Without
 	// a session id (e.g. a codex run with no on-disk Claude log) fall back to
-	// staging the whole change set, logging the reason rather than failing.
+	// staging the whole change set, logging the reason rather than failing. An
+	// explicit path set makes both moot — Run stages exactly those paths.
 	stage := StageAll
-	if meta.SessionID != "" {
+	switch {
+	case len(run.Files) > 0:
+	case meta.SessionID != "":
 		stage = meta.SessionID
-	} else {
+	default:
 		logger.Infof("commit: no agent session id; staging all changes")
 	}
 
@@ -94,10 +108,12 @@ func RunAfterAgent(ctx context.Context, run AgentRun) (*Result, error) {
 		Config:      cfg.Commit,
 		AI:          cfg.AI,
 		PR:          cfg.PR,
+		Files:       run.Files,
 		Fixup:       run.Fixup,
 		Message:     run.Message,
 		DryRun:      run.DryRun,
 		Force:       run.SkipGates,
+		Push:        run.Push,
 		// Autosquash stays off here even for fixups: the caller cutting a chain
 		// collapses it once, at the end of the run, rather than rebasing after
 		// every turn.
