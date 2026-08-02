@@ -14,6 +14,10 @@ inputs:
     description: Working directory in which gavel is executed.
     required: false
     default: "."
+  timeout-minutes:
+    description: Hard wall-clock limit for the complete gavel invocation. A timeout prints diagnostics and terminates the process tree.
+    required: false
+    default: "20"
   version:
     description: |
       Gavel release to install. Use a semver tag (e.g. "v1.2.3"), "latest"
@@ -123,6 +127,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         GAVEL_ARGS: ${{ inputs.args }}
+        GAVEL_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         JSON_FILE: ${{ inputs.json-file }}
         HTML_FILE: ${{ inputs.html-file }}
         GAVEL_LOG_FILE: gavel.log
@@ -146,7 +151,8 @@ runs:
         esac
 
         # shellcheck disable=SC2086
-        gavel $GAVEL_ARGS "${extra_flags[@]}" \
+        gavel action-watchdog --timeout "${GAVEL_TIMEOUT_MINUTES}m" -- \
+          $GAVEL_ARGS "${extra_flags[@]}" \
           2> >(tee "${GAVEL_LOG_FILE}" >&2)
         code=$?
         set -e

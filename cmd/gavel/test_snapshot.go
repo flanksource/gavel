@@ -1,11 +1,9 @@
 package main
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -56,7 +54,11 @@ func captureFinalDiagnostics(enabled bool, rootPID int) *testui.DiagnosticsSnaps
 	if !enabled {
 		return nil
 	}
-	snapshot, err := testui.NewDiagnosticsManager(rootPID, nil).Snapshot()
+	manager := testui.NewDiagnosticsManager(rootPID, nil)
+	if _, err := manager.CollectStack(rootPID); err != nil {
+		logger.Warnf("Diagnostics stack capture failed: %v", err)
+	}
+	snapshot, err := manager.Snapshot()
 	if err != nil {
 		logger.Warnf("Diagnostics capture failed: %v", err)
 		return nil
@@ -64,20 +66,8 @@ func captureFinalDiagnostics(enabled bool, rootPID int) *testui.DiagnosticsSnaps
 	return snapshot
 }
 
-// installTimeoutDiagnosticsHook wires testrunner.captureGlobalDiagnostics to
-// this package's diagnostics capture so the per-package timeout supervisor can
-// snapshot process/goroutine state before killing a subprocess. The hook is a
-// no-op when --diagnostics is disabled; always reinstalled per run so
-// concurrent `gavel test` invocations stay idempotent.
-func installTimeoutDiagnosticsHook(opts testrunner.RunOptions) {
-	rootPID := os.Getpid()
-	enabled := opts.Diagnostics
-	var once sync.Once
-	testrunner.SetCaptureGlobalDiagnostics(func() {
-		once.Do(func() {
-			_ = captureFinalDiagnostics(enabled, rootPID)
-		})
-	})
+func installTimeoutDiagnosticsHook(reporter *runDiagnosticsReporter) {
+	testrunner.SetCaptureGlobalDiagnostics(func() { reporter.Capture("test package timeout") })
 }
 
 func snapshotArgs(opts testrunner.RunOptions) map[string]any {

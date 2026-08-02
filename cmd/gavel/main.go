@@ -101,6 +101,7 @@ func newGavelMCPCommand() *cobra.Command {
 // so "^git$" does not match "git summary".
 func gavelMCPExcludedCommands() []string {
 	return []string{
+		"^action-watchdog$",
 		// long-running servers that would block the MCP request indefinitely
 		"^ssh$", "^ssh ",
 		"^ui$", "^ui ",

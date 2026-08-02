@@ -1,14 +1,12 @@
 package testrunner
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/exec"
-	"github.com/flanksource/clicky/task"
-	commonsCtx "github.com/flanksource/commons/context"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
@@ -49,39 +47,61 @@ func (o *TestOrchestrator) preBuildGoPackages(pkgs []string) error {
 	}
 
 	name := fmt.Sprintf("Pre-build (compiling %d Go test %s)", len(pkgs), plural(len(pkgs), "package", "packages"))
-	t := clicky.StartTask[string](name, func(_ commonsCtx.Context, t *task.Task) (string, error) {
-		process := exec.NewExec("go", goPreBuildArgs(pkgs)...).WithCwd(o.WorkDir).WithProcessGroup().WithTask(t)
-		// Bound a hung build by the global --timeout; the per-package
-		// --test-timeout deliberately does not apply — compilation is the
-		// whole point of this phase.
-		if o.Timeout > 0 {
-			process = process.WithTimeout(o.Timeout)
-		}
-		if o.OutputTee != nil {
-			process = process.Stream(o.OutputTee, o.OutputTee)
-		}
-
-		result := process.Run().Result()
-		if result == nil {
-			return "", fmt.Errorf("pre-build: go test -count=0 produced no result")
-		}
-		if !result.IsOk() {
-			detail := strings.TrimSpace(stripExitStatus(result.Stderr))
-			if detail == "" {
-				detail = strings.TrimSpace(result.Stdout)
-			}
-			return "", fmt.Errorf("pre-build: compiling Go test binaries failed (exit %d): %s", result.ExitCode, detail)
-		}
-		return "", nil
-	})
-
-	if _, err := t.GetResult(); err != nil {
-		t.Errorf("%v", err)
-		t.Failed()
-		return err
+	process := exec.NewExec("go", goPreBuildArgs(pkgs)...).WithCwd(o.WorkDir).WithProcessGroup()
+	if o.OutputTee != nil {
+		process = process.Stream(o.OutputTee, o.OutputTee)
 	}
-	t.Success()
+
+	ctx := o.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if o.Timeout > 0 {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, o.Timeout)
+			defer cancel()
+		}
+	}
+	result, err := runPreBuildProcess(ctx, process, name)
+	if ctx.Err() != nil {
+		return fmt.Errorf("pre-build: %w", ctx.Err())
+	}
+	if result == nil {
+		return fmt.Errorf("pre-build: go test -count=0 produced no result: %w", err)
+	}
+	if !result.IsOk() {
+		detail := strings.TrimSpace(stripExitStatus(result.Stderr))
+		if detail == "" {
+			detail = strings.TrimSpace(result.Stdout)
+		}
+		return fmt.Errorf("pre-build: compiling Go test binaries failed (exit %d): %s", result.ExitCode, detail)
+	}
+	if err != nil {
+		return fmt.Errorf("pre-build: %w", err)
+	}
 	return nil
+}
+
+func runPreBuildProcess(ctx context.Context, process *exec.Process, name string) (*exec.ExecResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	run := process.RunAsTask(name)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			run.Cancel()
+		case <-done:
+		}
+	}()
+	_, err := run.GetResult()
+	close(done)
+	if ctx.Err() != nil {
+		return process.Result(), ctx.Err()
+	}
+	return process.Result(), err
 }
 
 func plural(n int, singular, pluralForm string) string {

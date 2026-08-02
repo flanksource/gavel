@@ -48,6 +48,7 @@ jobs:
       - uses: flanksource/gavel@main
         with:
           args: test --lint
+          timeout-minutes: "20"
           version: latest
           json-file: gavel-results.json
           html-file: gavel-results.html
@@ -66,6 +67,7 @@ If you disable PR commenting (`comment: "false"`), `contents: read` is sufficien
 |-------|---------|-------------|
 | `args` | `test --lint` | Arguments passed to gavel |
 | `working-directory` | `.` | Working directory for execution |
+| `timeout-minutes` | `20` | Hard wall-clock limit; timeout diagnostics are printed before the process tree is terminated |
 | `version` | `latest` | Release tag, `latest`, or `source` to use a pre-installed binary |
 | `json-file` | `gavel-results.json` | Path for the JSON artifact |
 | `html-file` | `gavel-results.html` | Path for the HTML artifact |
