@@ -157,11 +157,13 @@ runs:
         code=$?
         set -e
 
+        # gavel writes its own crash envelope when it fails, so this only
+        # covers a process that never got that far — a panic, an OOM kill, a
+        # signal.
         if [ ! -f "${JSON_FILE}" ]; then
-          log_tail="$(tail -n 200 "${GAVEL_LOG_FILE}" 2>/dev/null | sed 's/"/\\"/g' | tr '\n' ' ')"
-          printf '{"error":"gavel exited %s before writing results","exit_code":%s,"log_tail":"%s"}\n' \
-            "$code" "$code" "$log_tail" > "${JSON_FILE}"
-          echo "gavel did not write ${JSON_FILE}; wrote placeholder stub with exit code $code" >&2
+          "${{ github.action_path }}/scripts/gavel-crash-stub.sh" \
+            "$code" "${GAVEL_LOG_FILE}" "${JSON_FILE}"
+          echo "gavel did not write ${JSON_FILE}; wrote crash stub with exit code $code" >&2
         fi
 
         {
@@ -192,7 +194,9 @@ runs:
         JSON_FILE: ${{ inputs.json-file }}
         ARTIFACT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload.outputs.artifact-id }}
       run: |
-        summary="$(gavel summary --input "${JSON_FILE}" 2>/dev/null || true)"
+        # No 2>/dev/null: a summary that cannot read the results file must say
+        # so in the job log rather than degrade silently to the exit code.
+        summary="$(gavel summary --input "${JSON_FILE}" || true)"
         {
           echo "## Gavel results"
           echo ""
@@ -222,7 +226,7 @@ runs:
       run: |
         set -euo pipefail
         marker="<!-- sticky-comment:${HEADER} -->"
-        summary="$(gavel summary --input "${JSON_FILE}" 2>/dev/null || true)"
+        summary="$(gavel summary --input "${JSON_FILE}" || true)"
         body_file="$(mktemp)"
         {
           printf '%s\n\n' "$marker"
