@@ -170,8 +170,8 @@ importers:
         specifier: 'catalog:'
         version: 6.43.4
       '@flanksource/icons':
-        specifier: 1.0.60
-        version: 1.0.60(react@18.3.1)
+        specifier: 1.0.63
+        version: 1.0.63(react@18.3.1)
       '@floating-ui/react':
         specifier: 'catalog:'
         version: 0.27.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -1274,6 +1274,11 @@ packages:
 
   '@flanksource/icons@1.0.60':
     resolution: {integrity: sha512-PH/0IFJJlyr9bNMUI2abCpiTP6pmYvwXklkw2OsoSIZHjnBvmb9ogZ0Xxd4J7QElT54T6gPZqQEQjTuAz7DISA==}
+    peerDependencies:
+      react: '*'
+
+  '@flanksource/icons@1.0.63':
+    resolution: {integrity: sha512-QJ3N49jltwT4xJVvajr/6V++LqTEYKGamjtLA+2NNECDG8I/guhgH3l984rIoE4+dkYTrUPwvoUh4SiKLic8FQ==}
     peerDependencies:
       react: '*'
 
@@ -6281,6 +6286,10 @@ snapshots:
       - '@types/react'
 
   '@flanksource/icons@1.0.60(react@18.3.1)':
+    dependencies:
+      react: 18.3.1
+
+  '@flanksource/icons@1.0.63(react@18.3.1)':
     dependencies:
       react: 18.3.1
 
