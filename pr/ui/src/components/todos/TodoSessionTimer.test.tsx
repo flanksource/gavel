@@ -2,6 +2,7 @@ import type React from 'react';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CmuxSessionButton, cmuxSurfaceLabel, useSessionStats } from './TodoSessionTimer';
+import { queryTestWrapper } from './queryTestWrapper';
 
 // DropdownMenu is mocked to render its trigger and menu content inline and to
 // report itself open (so the lazy cmux-surface fetch runs), letting the test
@@ -82,7 +83,9 @@ describe('useSessionStats', () => {
       }),
     }));
 
-    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-1', true));
+    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-1', true), {
+      wrapper: queryTestWrapper(),
+    });
 
     await waitFor(() => expect(result.current.error).toContain('HTTP 500 Internal Server Error'));
     expect(result.current.error).toContain('provider session ID "session-1" is ambiguous');
@@ -117,10 +120,11 @@ describe('useSessionStats', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-clock', true));
+    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-clock', true), {
+      wrapper: queryTestWrapper(),
+    });
     await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.elapsedMs).toBe(30_000);
 
@@ -159,6 +163,7 @@ describe('CmuxSessionButton', () => {
 
     render(
       <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={vi.fn()} />,
+      { wrapper: queryTestWrapper() },
     );
 
     // The surface comment maps the session to its cmux terminal.
@@ -178,6 +183,7 @@ describe('CmuxSessionButton', () => {
 
     const { rerender } = render(
       <CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" onResume={onResume} />,
+      { wrapper: queryTestWrapper() },
     );
 
     fireEvent.click(await screen.findByRole('button', { name: /Resume in cmux/ }));
@@ -193,12 +199,40 @@ describe('CmuxSessionButton', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CmuxSessionButton dir="/repo" sessionId="sess-9" agent="claude" onResume={vi.fn()} />);
+    render(<CmuxSessionButton dir="/repo" sessionId="sess-9" agent="claude" onResume={vi.fn()} />, {
+      wrapper: queryTestWrapper(),
+    });
 
     const focus = await screen.findByRole('button', { name: /Focus in cmux/ });
-    expect((focus as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect((focus as HTMLButtonElement).disabled).toBe(true));
     expect(screen.getByText(/session terminal may have been closed/)).toBeTruthy();
     // Resume stays available to reopen the closed terminal.
     expect((screen.getByRole('button', { name: /Resume in cmux/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('surfaces the contextual server error when focus fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/session/cmux')) {
+        return { ok: true, json: async () => ({ found: true, workspace: 'workspace:2', surface: 'surface:1' }) };
+      }
+      if (url.includes('/session/focus')) {
+        return {
+          ok: false,
+          status: 502,
+          json: async () => ({ error: 'cmux socket is unavailable' }),
+          text: async () => JSON.stringify({ error: 'cmux socket is unavailable' }),
+        };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<CmuxSessionButton dir="/repo" sessionId="sess-1234" agent="claude" />, {
+      wrapper: queryTestWrapper(),
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Focus in cmux/ }));
+
+    expect(await screen.findByText(/could not focus cmux session.*cmux socket is unavailable/i)).toBeTruthy();
   });
 });

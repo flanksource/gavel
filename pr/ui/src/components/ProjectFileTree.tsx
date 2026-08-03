@@ -11,6 +11,7 @@ interface ProjectFileTreeProps {
   // position, so it cannot be selected into a second group.
   locked?: Map<string, number>;
   disabled: boolean;
+  showResults: boolean;
   diffPath?: string;
   onToggleFile: (path: string) => void;
   onToggleFiles: (paths: string[]) => void;
@@ -25,6 +26,7 @@ export function ProjectFileTree({
   selected,
   locked = noLockedFiles,
   disabled,
+  showResults,
   diffPath = '',
   onToggleFile,
   onToggleFiles,
@@ -52,6 +54,7 @@ export function ProjectFileTree({
           selected={selected}
           locked={locked}
           disabled={disabled}
+          showResults={showResults}
           onToggleFile={onToggleFile}
           onToggleFiles={onToggleFiles}
           onIgnore={onIgnore}
@@ -80,6 +83,7 @@ function ProjectFileTreeRow({
   selected,
   locked,
   disabled,
+  showResults,
   onToggleFile,
   onToggleFiles,
   onIgnore,
@@ -89,6 +93,7 @@ function ProjectFileTreeRow({
   selected: Set<string>;
   locked: Map<string, number>;
   disabled: boolean;
+  showResults: boolean;
   onToggleFile: (path: string) => void;
   onToggleFiles: (paths: string[]) => void;
   onIgnore: (path: string, directory: boolean) => void;
@@ -126,7 +131,7 @@ function ProjectFileTreeRow({
           {file && <DiffSummary file={file} />}
           {directory && <span className="text-[10px] text-muted-foreground">{descendants.length} files</span>}
         </span>
-        {file && <FileDiagnostics file={file} />}
+        {file && showResults && <FileDiagnostics file={file} />}
       </span>
       {ignorable && <IgnoreButton node={node} directory={directory} disabled={disabled} onIgnore={onIgnore} />}
     </>

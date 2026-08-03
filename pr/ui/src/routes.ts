@@ -12,6 +12,8 @@ export interface RouteState {
   selectedPath: string;
   projectDiffPath: string;
   projectRunId: string;
+  projectHistory: boolean;
+  projectResults: boolean;
   filters: Filters;
 }
 
@@ -59,6 +61,8 @@ export function parseRoute(location: Location): RouteState {
     selectedPath,
     projectDiffPath: tab === 'projects' && !projectRunId ? params.get('diff') ?? '' : '',
     projectRunId,
+    projectHistory: tab === 'projects' && (projectRunId !== '' || params.get('history') === 'true'),
+    projectResults: tab === 'projects' && params.get('results') === 'true',
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -86,8 +90,10 @@ export function buildRoute(state: RouteState): string {
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
     if (Object.keys(repos).length) params.set('repos', buildFacet(repos));
     if (Object.keys(authors).length) params.set('authors', buildFacet(authors));
-  } else if (state.tab === 'projects' && !state.projectRunId && state.projectDiffPath) {
-    params.set('diff', state.projectDiffPath);
+  } else if (state.tab === 'projects') {
+    if (!state.projectRunId && state.projectDiffPath) params.set('diff', state.projectDiffPath);
+    if (!state.projectRunId && state.projectHistory) params.set('history', 'true');
+    if (state.projectResults) params.set('results', 'true');
   }
 
   const query = params.toString();
@@ -113,5 +119,13 @@ export function findPRByRoutePath(prs: PRItem[], target: string): PRItem | null 
 }
 
 export function emptyRouteState(): RouteState {
-  return { tab: 'prs', selectedPath: '', projectDiffPath: '', projectRunId: '', filters: emptyFilters() };
+  return {
+    tab: 'prs',
+    selectedPath: '',
+    projectDiffPath: '',
+    projectRunId: '',
+    projectHistory: false,
+    projectResults: false,
+    filters: emptyFilters(),
+  };
 }

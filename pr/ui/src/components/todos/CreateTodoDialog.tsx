@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
-import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
+import { inputClass, priorities, statuses, statusLabel } from './format';
+import { useCreateTodoMutation } from './todoMutations';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
 // it's a configured one, otherwise the first workspace.
@@ -31,11 +32,12 @@ export function CreateTodoDialog({
   const [body, setBody] = useState('');
   const [priority, setPriority] = useState<TodoPriority>('medium');
   const [status, setStatus] = useState<TodoStatus>('pending');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // Capture a pasted screenshot only while the dialog is open — it stays mounted
   // (closed) in the dashboard, so an always-on listener would hijack paste.
   const { attachments, previews, add, remove, clear } = useAttachments({ pasteAnywhere: open });
+  const createTodo = useCreateTodoMutation(dir);
+  const busy = createTodo.isPending;
 
   useEffect(() => {
     if (open) {
@@ -45,34 +47,28 @@ export function CreateTodoDialog({
       setPriority('medium');
       setStatus('pending');
       setError('');
-      setBusy(false);
+      createTodo.reset();
       clear();
     }
-  }, [open, workspaces, defaultDir, clear]);
+  }, [open, workspaces, defaultDir, clear, createTodo.reset]);
 
   if (!open) return null;
 
   async function submit() {
     if (!title.trim() || !dir || busy) return;
-    setBusy(true);
     setError('');
     try {
       // /api/todos/new accepts both JSON and multipart; post the image bytes as
       // multipart when screenshots are attached, otherwise the lighter JSON path.
-      const url = `/api/todos/new?${todoQuery(dir)}`;
-      const response = attachments.length
-        ? await fetch(url, { method: 'POST', body: todoFormData({ title, body, priority, status }, attachments) })
-        : await fetch(url, {
-            method: 'POST',
+      const result = await createTodo.mutateAsync(attachments.length
+        ? { body: todoFormData({ title, body, priority, status }, attachments) }
+        : {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, body, priority, status }),
           });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Create failed');
-      onCreated(dir, data.todo as TodoItem);
-    } catch (err: any) {
-      setError(err?.message || 'Create failed');
-      setBusy(false);
+      onCreated(dir, result.todo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
   }
 

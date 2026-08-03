@@ -17,8 +17,8 @@ type SystemStartOptions struct {
 	WaitTimeout duration.Duration `flag:"wait-timeout" help:"How long to wait for readiness before giving up" default:"30s"`
 }
 
-func (SystemStartOptions) Help() string {
-	return `Start the PR UI in the background as a detached process.
+func (SystemStartOptions) Help() api.Textable {
+	return clicky.Text(`Start the PR UI in the background as a detached process.
 
 Runs ` + "`gavel pr list --all --ui --menu-bar`" + ` — the --menu-bar flag shows the
 status indicator on macOS and is a no-op on Linux.
@@ -33,7 +33,7 @@ Readiness (--wait, default true):
   ~/.config/gavel/pr-ui.port, defaulting to 9092) accepts TCP connections
   or --wait-timeout elapses. If the daemon crashes during startup the full
   logfile is printed so you can see what went wrong. Pass --wait=false to
-  return immediately after spawning the process.`
+  return immediately after spawning the process.`)
 }
 
 func init() {

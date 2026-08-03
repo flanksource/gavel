@@ -1,9 +1,14 @@
 import type React from 'react';
 import { createContext, useContext } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PRDetail, PRItem, Project } from '../../types';
 import { CreateTodoFromPRDialog } from './CreateTodoFromPRDialog';
+import { queryTestWrapper } from './queryTestWrapper';
+
+function render(ui: React.ReactElement, options?: RenderOptions) {
+  return rtlRender(ui, { wrapper: queryTestWrapper(), ...options });
+}
 
 interface Selection {
   isSelected: (key: string) => boolean;
@@ -285,7 +290,7 @@ describe('CreateTodoFromPRDialog', () => {
     fireEvent.change(screen.getByLabelText('Directory'), { target: { value: '/work/widget' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText('project already exists')).toBeTruthy();
+    expect(await screen.findByText(/project already exists/)).toBeTruthy();
     expect(screen.getByLabelText('Add local directory')).toBeTruthy();
     expect((screen.getByLabelText('Workspace') as HTMLSelectElement).value).toBe('');
     expect((screen.getByRole('button', { name: 'Add todo' }) as HTMLButtonElement).disabled).toBe(true);

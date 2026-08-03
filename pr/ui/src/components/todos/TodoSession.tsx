@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SessionViewer, type SessionEntry, type SessionPendingTool, type SessionToolDecision, type SessionUIMessage } from '@flanksource/clicky-ui/ai';
 import { UiCancel, UiCircleFilled, UiComment, UiError, UiLightbulb, UiPass, UiShield, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionApproval, TodoSessionAttempt } from '../../types';
+import type { SessionStats, TodoItem, TodoRunOptions, TodoSessionAttempt } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
 import { TodoSessionTimer } from './TodoSessionTimer';
 import { TodoSessionStart } from './TodoSessionStart';
-import { SessionErrorDetails, sessionResponseError, type SessionError } from './SessionErrorDetails';
+import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
 import { CopyAllDetailsButton, SessionDiagnostics, ThreadInspector, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
+import { invalidateTodoCollections, setTodoCaches, todoMutationJSON } from './todoMutations';
+import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 
 interface SessionStateView {
   label: string;
@@ -138,82 +141,49 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
 // session timer uses), so the header badge and the approval banner stay in sync
 // without re-deriving anything from the event stream.
 export function useSessionStatus(dir: string, sessionId: string | undefined, active: boolean) {
-  const [status, setStatus] = useState<{
-    state: string;
-    error: string;
-    inProgress: boolean;
-    approval: TodoSessionApproval | null;
-  }>({ state: '', error: '', inProgress: false, approval: null });
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setStatus({ state: '', error: '', inProgress: false, approval: null });
-    if (!active || !sessionId) return;
-    let cancelled = false;
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('sessionId', sessionId);
-    const url = `/api/todos/session/stats?${params.toString()}`;
-    const poll = async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          const error = await sessionResponseError(res, 'Session status request failed');
-          if (!cancelled) setStatus((previous) => ({ ...previous, error }));
-          return;
-        }
-        const stats = (await res.json()) as SessionStats;
-        if (!cancelled)
-          setStatus({
-            state: stats.state ?? '',
-            error: stats.error ?? '',
-            inProgress: stats.inProgress ?? false,
-            approval: stats.approval ?? null,
-          });
-      } catch (error) {
-        if (!cancelled)
-          setStatus((previous) => ({
-            ...previous,
-            error: `Session status request failed\n${error instanceof Error ? error.stack || error.message : String(error)}`,
-          }));
-      }
-    };
-    poll();
-    const id = setInterval(poll, 1500);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [dir, sessionId, active]);
+  const queryClient = useQueryClient();
+  const enabled = active && !!sessionId;
+  const options = sessionStatsQueryOptions(dir, sessionId ?? '');
+  const query = useQuery({ ...options, enabled });
+  const stats = enabled ? query.data : undefined;
+  const approveMutation = useMutation({
+    mutationKey: ['todos', 'session', 'approve', { sessionId: sessionId ?? '' }],
+    mutationFn: ({ allow, message, updatedInput }: {
+      allow: boolean;
+      message?: string;
+      updatedInput?: Record<string, unknown>;
+    }) => todoMutationJSON<{ resolved: boolean; allow: boolean }>(
+      '/api/todos/session/approve',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, allow, message, updatedInput }),
+      },
+      'Session approval update failed',
+    ),
+    onSuccess: () => {
+      queryClient.setQueryData<SessionStats>(options.queryKey, previous => previous
+        ? { ...previous, approval: undefined }
+        : previous);
+    },
+  });
 
   const approve = useCallback(
     async (allow: boolean, message?: string, updatedInput?: Record<string, unknown>) => {
-      if (!sessionId) return;
-      setBusy(true);
-      try {
-        const res = await fetch('/api/todos/session/approve', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, allow, message, updatedInput }),
-        });
-        if (!res.ok) {
-          let detail = 'Approval update failed';
-          try {
-            const data = await res.json();
-            detail = data.error || detail;
-          } catch {
-            detail = (await res.text()) || detail;
-          }
-          throw new Error(detail);
-        }
-        setStatus((prev) => ({ ...prev, approval: null }));
-      } finally {
-        setBusy(false);
-      }
+      if (!sessionId) throw new Error('Session is unavailable');
+      await approveMutation.mutateAsync({ allow, message, updatedInput });
     },
-    [sessionId]
+    [approveMutation.mutateAsync, sessionId]
   );
 
-  return { ...status, approve, busy };
+  return {
+    state: stats?.state ?? '',
+    error: approveMutation.error?.message || query.error?.message || stats?.error || '',
+    inProgress: stats?.inProgress ?? false,
+    approval: stats?.approval ?? null,
+    approve,
+    busy: approveMutation.isPending,
+  };
 }
 
 export function TodoSession({
@@ -245,6 +215,7 @@ export function TodoSession({
   runBusy?: boolean;
   runDisabled?: boolean;
 }) {
+  const queryClient = useQueryClient();
   const { detail, error: detailError } = useTodoSessionDetail(dir, todo.ref, sessionId, active);
   const followedSessionId = detail?.thread?.providerSessionId || sessionId;
   const { entries, connected, error } = useTodoSession(dir, followedSessionId, active);
@@ -257,6 +228,56 @@ export function TodoSession({
   // Follow the tail like a terminal, but stop following once the user scrolls up
   // to read earlier history (re-engages when they scroll back to the bottom).
   const followRef = useRef(true);
+  const answerMutation = useMutation({
+    mutationKey: ['todos', 'session', 'answer', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: async (decision: SessionToolDecision) => {
+      const data = await todoMutationJSON<{ todo?: TodoItem; status?: string }>(
+        '/api/todos/answer',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dir,
+            ref: todo.ref,
+            answer: decision.message || formatDecisionAnswers(decision.answers),
+            answers: decision.answers,
+            rejected: !decision.allow,
+          }),
+        },
+        'Could not resume the agent session',
+      );
+      if (!data.todo?.ref) throw new Error('Could not resume the agent session: response did not include the updated todo');
+      return data.todo;
+    },
+    onSuccess: async (updated) => {
+      await setTodoCaches(queryClient, dir, updated);
+      onChanged?.(updated);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
+      ]);
+    },
+  });
+  const stopMutation = useMutation({
+    mutationKey: ['todos', 'session', 'stop', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: (attempt: TodoSessionAttempt) => todoMutationJSON<{ status: string; promptRunId: string }>(
+      `/api/todos/session/stop?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: todo.ref, promptRunId: attempt.promptRunId }),
+      },
+      'Could not stop the attempt',
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        invalidateTodoCollections(queryClient, dir),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
+        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, undefined, true) }),
+      ]);
+    },
+  });
 
   function onScroll() {
     const el = scrollRef.current;
@@ -320,39 +341,14 @@ export function TodoSession({
         await approve(decision.allow, decision.message, updatedInput);
         return;
       }
-      const res = await fetch('/api/todos/answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dir,
-          ref: todo.ref,
-          answer: decision.message || formatDecisionAnswers(decision.answers),
-          answers: decision.answers,
-          rejected: !decision.allow,
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || 'Could not resume the agent session');
-      }
-      onChanged?.(body.todo ?? todo);
+      await answerMutation.mutateAsync(decision);
     },
-    [approval, approve, dir, followedSessionId, onChanged, todo]
+    [answerMutation.mutateAsync, approval, approve, followedSessionId]
   );
 
   const stopAttempt = useCallback(
-    async (attempt: TodoSessionAttempt) => {
-      const res = await fetch(`/api/todos/session/stop?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ref: todo.ref,
-          promptRunId: attempt.promptRunId,
-        }),
-      });
-      if (!res.ok) throw new Error(await sessionResponseError(res, 'Could not stop the attempt'));
-    },
-    [dir, todo.ref]
+    (attempt: TodoSessionAttempt) => stopMutation.mutateAsync(attempt).then(() => undefined),
+    [stopMutation.mutateAsync]
   );
 
   if (!sessionId) {
@@ -365,6 +361,8 @@ export function TodoSession({
     ...(error ? [{ source: 'Session stream', message: error }] : []),
     ...(statusError ? [{ source: 'Session status', message: statusError }] : []),
     ...(detailError ? [{ source: 'Session detail', message: detailError }] : []),
+    ...(answerMutation.error ? [{ source: 'Session answer', message: answerMutation.error.message }] : []),
+    ...(stopMutation.error ? [{ source: 'Session stop', message: stopMutation.error.message }] : []),
   ];
 
   return (

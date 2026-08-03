@@ -12,10 +12,12 @@ import (
 )
 
 var (
-	todoEditTitle    string
-	todoEditBody     string
-	todoEditStatus   string
-	todoEditPriority string
+	todoEditTitle        string
+	todoEditBody         string
+	todoEditPlan         string
+	todoEditVerification string
+	todoEditStatus       string
+	todoEditPriority     string
 
 	todoCommentBody string
 
@@ -26,9 +28,10 @@ var (
 var todosEditCmd = &cobra.Command{
 	Use:          "edit <id-or-alias>",
 	SilenceUsage: true,
-	Short:        "Edit a TODO's title, body, status, and/or priority",
+	Short:        "Edit a TODO's content, plan, status, and/or priority",
 	Example: `  gavel todos edit 3f2a1b --title "Fix parser panic"
-  gavel todos edit 3f2a1b --body @new-body.md
+  gavel todos edit 3f2a1b --body new-body.md
+  gavel todos edit 3f2a1b --plan revised-plan.md --verification verification.md
   gavel todos edit 3f2a1b --priority low
   gavel todos edit 3f2a1b --status completed`,
 	Args: cobra.ExactArgs(1),
@@ -58,7 +61,9 @@ var todosReopenCmd = &cobra.Command{
 func init() {
 	todosCmd.AddCommand(todosEditCmd)
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
-	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body or @path")
+	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body, path, or @path")
+	todosEditCmd.Flags().StringVar(&todoEditPlan, "plan", "", "New plan revision, path, or @path")
+	todosEditCmd.Flags().StringVar(&todoEditVerification, "verification", "", "New verification fixture, path, or @path")
 	todosEditCmd.Flags().StringVar(&todoEditStatus, "status", "",
 		"New status ("+joinStrings(types.AssignableStatuses())+")")
 	todosEditCmd.Flags().StringVar(&todoEditPriority, "priority", "",
@@ -98,20 +103,51 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 		}
 		flags.Body = &body
 	}
-	edit, state, err := buildTodoEdit(flags)
+	if cmd.Flags().Changed("plan") {
+		plan, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--plan", Value: todoEditPlan})
+		if err != nil {
+			return err
+		}
+		flags.Plan = &plan
+	}
+	if cmd.Flags().Changed("verification") {
+		verification, err := resolveTodoText(todoTextOptions{WorkDir: workDir, Flag: "--verification", Value: todoEditVerification})
+		if err != nil {
+			return err
+		}
+		flags.Verification = &verification
+	}
+	changes, err := buildTodoEdit(flags)
 	if err != nil {
 		return err
 	}
+	var planRevisions todos.PlanRevisionProvider
+	if changes.Plan != nil {
+		var ok bool
+		planRevisions, ok = provider.(todos.PlanRevisionProvider)
+		if !ok {
+			return fmt.Errorf("TODO provider does not support plan revisions")
+		}
+	}
 
 	// Content first: Edit refreshes the TODO's optimistic-lock version, which
-	// the state update then reuses.
-	if !edit.IsEmpty() {
-		if err := provider.Edit(ctx, todo, edit); err != nil {
+	// subsequent plan and state updates then reuse.
+	if !changes.Content.IsEmpty() {
+		if err := provider.Edit(ctx, todo, changes.Content); err != nil {
 			return err
 		}
 	}
-	if state.Status != nil || state.Priority != nil {
-		if err := provider.UpdateState(ctx, todo, state); err != nil {
+	if changes.Plan != nil {
+		todo, err = planRevisions.SavePlanRevision(ctx, todo, *changes.Plan, "")
+		if err != nil {
+			return err
+		}
+		if todo == nil {
+			return fmt.Errorf("plan revision provider returned no TODO")
+		}
+	}
+	if changes.State.Status != nil || changes.State.Priority != nil {
+		if err := provider.UpdateState(ctx, todo, changes.State); err != nil {
 			return err
 		}
 	}
@@ -119,50 +155,67 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 }
 
 // todoEditFlags is the already-resolved (file references expanded) flag input to
-// `todos edit`. Title and Body are nil when the flag was not set.
+// `todos edit`. Content pointers are nil when their flag was not set.
 type todoEditFlags struct {
-	Title    *string
-	Body     *string
-	Status   string
-	Priority string
+	Title        *string
+	Body         *string
+	Plan         *string
+	Verification *string
+	Status       string
+	Priority     string
 }
 
-// buildTodoEdit splits edit flags into a content edit and a state update,
-// rejecting statuses storage will not persist so the caller sees a failure
-// rather than a silently declined write.
-func buildTodoEdit(flags todoEditFlags) (todos.EditRequest, todos.StateUpdate, error) {
-	var edit todos.EditRequest
-	var state todos.StateUpdate
+type todoEditChanges struct {
+	Content todos.EditRequest
+	Plan    *string
+	State   todos.StateUpdate
+}
+
+// buildTodoEdit splits edit flags into content, plan, and state updates. It
+// rejects statuses storage will not persist so callers see a failure rather
+// than a silently declined write.
+func buildTodoEdit(flags todoEditFlags) (todoEditChanges, error) {
+	var changes todoEditChanges
 
 	if flags.Title != nil {
 		title := strings.TrimSpace(*flags.Title)
 		if title == "" {
-			return edit, state, fmt.Errorf("--title cannot be empty")
+			return changes, fmt.Errorf("--title cannot be empty")
 		}
-		edit.Title = &title
+		changes.Content.Title = &title
 	}
 	if flags.Body != nil {
-		edit.Body = flags.Body
+		changes.Content.Body = flags.Body
+	}
+	if flags.Plan != nil {
+		plan := strings.TrimSpace(*flags.Plan)
+		if plan == "" {
+			return changes, fmt.Errorf("--plan cannot be empty")
+		}
+		changes.Plan = &plan
+	}
+	if flags.Verification != nil {
+		changes.Content.Verification = flags.Verification
 	}
 	if raw := strings.TrimSpace(flags.Status); raw != "" {
 		status := types.Status(raw)
 		if err := types.ValidateAssignableStatus(status); err != nil {
-			return edit, state, err
+			return changes, err
 		}
-		state.Status = &status
+		changes.State.Status = &status
 	}
 	if raw := strings.TrimSpace(flags.Priority); raw != "" {
 		priority := types.Priority(raw)
 		if err := types.ValidatePriority(priority); err != nil {
-			return edit, state, err
+			return changes, err
 		}
-		state.Priority = &priority
+		changes.State.Priority = &priority
 	}
 
-	if edit.IsEmpty() && state.Status == nil && state.Priority == nil {
-		return edit, state, fmt.Errorf("nothing to edit: provide --title, --body, --status, and/or --priority")
+	if changes.Content.IsEmpty() && changes.Plan == nil && changes.State.Status == nil && changes.State.Priority == nil {
+		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, and/or --priority")
 	}
-	return edit, state, nil
+	return changes, nil
 }
 
 func joinStrings[T ~string](values []T) string {

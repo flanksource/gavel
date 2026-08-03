@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/gavel/fixtures"
@@ -21,6 +23,24 @@ func resolveTodoText(opts todoTextOptions) (string, error) {
 	}
 	if ref.IsFile {
 		return strings.TrimSpace(ref.Contents), nil
+	}
+	if strings.HasPrefix(opts.Value, `\@`) || strings.ContainsAny(opts.Value, "\r\n\x00") {
+		return strings.TrimSpace(ref.Raw), nil
+	}
+	path := opts.Value
+	if path == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(opts.WorkDir, path)
+	}
+	info, err := os.Stat(path)
+	if err == nil && info.Mode().IsRegular() {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: read existing file %q: %w", opts.Flag, opts.Value, err)
+		}
+		return strings.TrimSpace(string(contents)), nil
 	}
 	return strings.TrimSpace(ref.Raw), nil
 }

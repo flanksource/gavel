@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { TestRunResults } from './TestRunResults';
-import { fetchRunSnapshot, type RunSnapshot } from './types';
+import { runSnapshotQuery } from './types';
 
 export function TestRunDetail({ project, projectDir, runId, onTodoCreated }: {
   project: string;
@@ -8,22 +9,17 @@ export function TestRunDetail({ project, projectDir, runId, onTodoCreated }: {
   runId: string;
   onTodoCreated?: () => void;
 }) {
-  const [snap, setSnap] = useState<RunSnapshot | null>(null);
-  const [error, setError] = useState('');
+  const identity = useMemo(() => ({ project, runId }), [project, runId]);
+  const query = useQuery({
+    ...runSnapshotQuery(identity),
+    enabled: Boolean(project && runId),
+  });
 
-  useEffect(() => {
-    setSnap(null);
-    setError('');
-    fetchRunSnapshot({ project, runId })
-      .then((s: RunSnapshot) => setSnap(s))
-      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load run'));
-  }, [project, runId]);
-
-  if (error) return <Centered>{error}</Centered>;
-  if (!snap) return <Centered>Loading…</Centered>;
+  if (query.error) return <Centered>{query.error.message}</Centered>;
+  if (!query.data) return <Centered>Loading…</Centered>;
   return (
     <TestRunResults
-      snapshot={snap}
+      snapshot={query.data}
       done
       runKey={runId}
       projectName={project}

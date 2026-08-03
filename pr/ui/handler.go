@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/monitor"
 	"github.com/flanksource/clicky/metrics"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
@@ -451,6 +452,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/stream", s.handleTestRunsStream)
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.HandleFunc("/api/todos", s.handleTodos)
+	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
@@ -506,7 +508,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/actions", s.handleProjectAction)
 	mux.HandleFunc("GET /api/projects/{name}/actions/schema", s.handleProjectActionSchema)
 	mux.HandleFunc("POST /api/projects/{name}/commit-queue", s.handleCommitQueue)
-	mux.HandleFunc("DELETE /api/projects/{name}/commit-queue/{id}", s.handleCommitQueueEntry)
 	mux.Handle("/api/project-runs/", http.StripPrefix("/api/project-runs", s.projectRunServer().Handler()))
 	mux.HandleFunc("GET /api/projects/{name}/diff", s.handleProjectDiff)
 	mux.HandleFunc("POST /api/projects/{name}/ignore", s.handleProjectIgnore)
@@ -530,7 +531,7 @@ func (s *Server) Handler() http.Handler {
 	registerPprof(mux)
 	registerIngestStats(mux, s.readIngestStats)
 	mux.HandleFunc("/results/", s.handleGavelResults)
-	return mux
+	return rpchttp.TimingMiddleware(mux)
 }
 
 func handleFavicon(w http.ResponseWriter, r *http.Request) {

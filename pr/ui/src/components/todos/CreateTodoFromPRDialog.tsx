@@ -18,7 +18,8 @@ import { AddProjectDialog } from '../AddProjectDialog';
 import { PRTodoWorkspaceField } from './PRTodoWorkspaceField';
 import { usePRTodoProjectWorkspace } from './usePRTodoProjectWorkspace';
 import { UiBeaker, UiComment, UiError, UiLinkExternal, UiPass, UiWarningTriangle, type IconProps } from '@flanksource/clicky-ui/icons';
-import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
+import { inputClass, priorities, statuses, statusLabel } from './format';
+import { useCreateTodoMutation } from './todoMutations';
 import {
   buildPRTodoBody,
   buildPRTodoCandidates,
@@ -196,9 +197,10 @@ export function CreateTodoFromPRDialog({
   const [status, setStatus] = useState<TodoStatus>('pending');
   const [notes, setNotes] = useState('');
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
+  const createTodo = useCreateTodoMutation(dir);
+  const busy = createTodo.isPending;
   const projectWorkspace = usePRTodoProjectWorkspace({
     open, prRepo: pr.repo, workspaces, onDirChange: setDir, onProjectsChanged,
   });
@@ -224,7 +226,7 @@ export function CreateTodoFromPRDialog({
       setStatus('pending');
       setNotes('');
       setError('');
-      setBusy(false);
+      createTodo.reset();
       setCreated(null);
     }
     if (!touched.current) {
@@ -233,7 +235,7 @@ export function CreateTodoFromPRDialog({
         prev && candidates.some(c => c.key === prev) ? prev : (defaultKeys[0] ?? candidates[0]?.key ?? null),
       );
     }
-  }, [open, defaultDir, pr.repo, pr.number, candidates, defaultKeys]);
+  }, [open, defaultDir, pr.repo, pr.number, candidates, defaultKeys, createTodo.reset]);
 
   if (!open) return null;
 
@@ -258,7 +260,6 @@ export function CreateTodoFromPRDialog({
 
   async function submit() {
     if (!title.trim() || !dir || busy) return;
-    setBusy(true);
     setError('');
     try {
       const sel = new Set(selectedKeys);
@@ -276,19 +277,14 @@ export function CreateTodoFromPRDialog({
         prVerification?: PRTodoVerificationPayload;
       } = { title: title.trim(), body: buildPRTodoBody(pr, notes, selected), priority, status, criteria };
       if (prVerification) payload.prVerification = prVerification;
-      const res = await fetch(`/api/todos/new?${todoQuery(dir)}`, {
-        method: 'POST',
+      const data = await createTodo.mutateAsync({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Create failed');
-      setCreated(data.todo as TodoItem);
+      setCreated(data.todo);
       onCreated?.();
-    } catch (err: any) {
-      setError(err?.message || 'Create failed');
-    } finally {
-      setBusy(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
   }
 

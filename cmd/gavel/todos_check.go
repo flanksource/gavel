@@ -265,7 +265,7 @@ func init() {
 	// applies medium once nothing else has spoken.
 	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "", "Reasoning effort directive: low, medium, high, or xhigh (empty: the mode's .prompt frontmatter, else medium)")
 	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
-	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Carry the working tree's uncommitted changes into the configured checkout (no-op without one: the run already happens in the dirty tree)")
+	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Carry the working tree's uncommitted changes into the configured checkout's worktree (no-op without one: the run already happens in the dirty tree)")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
 	todosRunCmd.Flags().BoolVar(&checkAfter, "check", false, "After each TODO's agent completes, run the configured `checks` test/lint suite and feed failures back to the agent until they pass (see .gavel.yaml checks / frontmatter)")

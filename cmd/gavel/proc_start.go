@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -11,8 +12,8 @@ type ProcStartOptions struct {
 	Names    []string `json:"-" args:"true"`
 }
 
-func (ProcStartOptions) Help() string {
-	return `Start the Procfile's processes as a detached background daemon.
+func (ProcStartOptions) Help() api.Textable {
+	return clicky.Text(`Start the Procfile's processes as a detached background daemon.
 
 A supervisor process is spawned in its own session; it owns every process and
 survives this command returning. Use ` + "`gavel proc status`" + ` to inspect it,
@@ -20,7 +21,7 @@ survives this command returning. Use ` + "`gavel proc status`" + ` to inspect it
 down. Refuses to start when a daemon is already running for this Procfile.
 
 Pass process names to start only a subset:
-  gavel proc start web worker`
+  gavel proc start web worker`)
 }
 
 func init() {

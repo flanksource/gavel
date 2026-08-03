@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, DropdownMenu, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
 import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, type AIPromptRunValue, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
@@ -8,6 +9,8 @@ import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewRespons
 import { Spinner } from "../../icons/Spinner";
 import { inputClass, todoQuery } from "./format";
 import { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
+import { settingsRunContextQuery } from "../settings/queries";
+import { invalidateTodoCaches, todoMutationJSON } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   PROVIDERS,
@@ -183,47 +186,16 @@ function unavailableRunContextError(context: RunContext): string {
 }
 
 export function useTodoRunContext(enabled = true): TodoRunContextState {
-  const [runContext, setRunContext] = useState<RunContext | null>(null);
-  const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!enabled) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    fetch("/api/todos/run/context")
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to load run context");
-        if (!cancelled) {
-          const context = data as RunContext;
-          if (!Array.isArray(context.backends) || !Array.isArray(context.efforts) || !Array.isArray(context.tools)) {
-            throw new Error("Captain returned an invalid run context");
-          }
-          const unavailable = unavailableRunContextError(context);
-          setRunContext(context);
-          setError(unavailable);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setRunContext(null);
-          setError(err instanceof Error ? err.message : "Failed to load run context");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-
-  return { context: runContext, loading, error };
+  const query = useQuery({ ...settingsRunContextQuery(), enabled });
+  if (!enabled) return { context: null, loading: false, error: "" };
+  if (query.error) {
+    return { context: null, loading: query.isFetching, error: query.error instanceof Error ? query.error.message : "Failed to load run context" };
+  }
+  const context = query.data ?? null;
+  if (context && (!Array.isArray(context.backends) || !Array.isArray(context.efforts) || !Array.isArray(context.tools))) {
+    return { context: null, loading: false, error: "Captain returned an invalid run context" };
+  }
+  return { context, loading: query.isFetching, error: context ? unavailableRunContextError(context) : "" };
 }
 
 export function TodoRunContextError({ error }: { error: string }) {
@@ -495,45 +467,58 @@ export function rememberTodoRunOptionsForMode(options: TodoRunOptions, advanced 
 
 // useTodoRun POSTs a run for one native TODO in a workspace.
 export function useTodoRun(dir: string) {
-  const [runBusy, setRunBusy] = useState(false);
-  const [runMessage, setRunMessage] = useState("");
-  const [runError, setRunError] = useState("");
-
-  const reset = useCallback(() => {
-    setRunMessage("");
-    setRunError("");
-  }, []);
+  const client = useQueryClient();
+  const mutation = useMutation({
+    mutationKey: ["todos", "run", { dir: dir.trim() }],
+    mutationFn: ({ ref, options }: { ref: string; options: TodoRunOptions }) => todoMutationJSON<TodoRunResponse>(
+      `/api/todos/run?${todoQuery(dir)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ref, ...options }),
+      },
+      `Failed to run todo ${ref}`,
+    ),
+    onSuccess: (_result, { ref }) => invalidateTodoCaches(client, dir, ref),
+  });
 
   const run = useCallback(
     async (ref: string, options: TodoRunOptions = defaultRunOptions): Promise<TodoRunResponse | null> => {
       const cleaned = ref.trim();
-      if (!cleaned || runBusy) return null;
-      setRunBusy(true);
-      setRunError("");
-      setRunMessage("");
+      if (!cleaned || mutation.isPending) return null;
       try {
-        const body = { ref: cleaned, ...options };
-        const response = await fetch(`/api/todos/run?${todoQuery(dir)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Run failed");
-        const result = data as TodoRunResponse;
-        setRunMessage(result.message || (result.status === "dry_run" ? "Todo run validated" : "Todo run started"));
-        return result;
-      } catch (err: any) {
-        setRunError(err?.message || "Run failed");
+        return await mutation.mutateAsync({ ref: cleaned, options });
+      } catch {
         return null;
-      } finally {
-        setRunBusy(false);
       }
     },
-    [dir, runBusy],
+    [mutation],
   );
 
-  return { runBusy, runMessage, runError, reset, run };
+  const result = mutation.data;
+  return {
+    runBusy: mutation.isPending,
+    runMessage: result?.message || (result?.status === "dry_run" ? "Todo run validated" : result ? "Todo run started" : ""),
+    runError: mutation.error instanceof Error ? mutation.error.message : "",
+    reset: mutation.reset,
+    run,
+  };
+}
+
+export function useTodoRunPreview(dir: string) {
+  return useMutation({
+    mutationKey: ["todos", "run", "preview", { dir: dir.trim() }],
+    mutationFn: ({ body, signal }: { body: Record<string, unknown>; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
+      `/api/todos/run/preview?${todoQuery(dir)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      },
+      "Failed to preview todo run",
+    ),
+  });
 }
 
 type TodoRunDropdownSelect = (action: TodoRunAction, options: TodoRunOptions, advanced?: boolean) => void;
@@ -943,10 +928,11 @@ export function TodoRunAdvancedDialog({
   // promptDirty stops the live preview from clobbering the user's edits.
   const [promptDraft, setPromptDraft] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [regenNonce, setRegenNonce] = useState(0);
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
+  const previewMutation = useTodoRunPreview(dir);
+  const previewLoading = previewMutation.isPending;
   // Ref mirror of promptDirty so the preview effect can read it without
   // refetching on every keystroke.
   const promptDirtyRef = useRef(false);
@@ -1024,7 +1010,6 @@ export function TodoRunAdvancedDialog({
       setPreviewError("");
       return;
     }
-    const url = `/api/todos/run/preview?${todoQuery(dir)}`;
     // Same payload shape as the run POST — the preview handler decodes it with
     // the same todoRunPayload — so the spec half is nested, not inlined.
     const body = {
@@ -1037,30 +1022,20 @@ export function TodoRunAdvancedDialog({
 
     let cancelled = false;
     const controller = new AbortController();
-    setPreviewLoading(true);
     setPreviewError("");
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Preview failed");
-        if (!cancelled && !promptDirtyRef.current) setPromptDraft((data as TodoRunPreviewResponse).prompt ?? "");
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== "AbortError") setPreviewError(err?.message || "Preview failed");
-      })
-      .finally(() => {
-        if (!cancelled) setPreviewLoading(false);
-      });
+    previewMutation.mutate({ body, signal: controller.signal }, {
+      onSuccess: data => {
+        if (!cancelled && !promptDirtyRef.current) setPromptDraft(data.prompt ?? "");
+      },
+      onError: err => {
+        if (!cancelled && !(err instanceof DOMException && err.name === "AbortError")) setPreviewError(err.message);
+      },
+    });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [open, context, contextError, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce]);
+  }, [open, context, contextError, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce, previewMutation.mutate]);
 
   if (!open) return null;
 

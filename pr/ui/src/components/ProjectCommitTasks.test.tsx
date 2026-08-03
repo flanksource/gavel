@@ -92,7 +92,7 @@ describe('ProjectCommitTasks', () => {
       '/api/v1/tasks/commit-run-1/tasks/commit-one/control',
     ]);
     expect(invalidateQueries).toHaveBeenCalledTimes(2);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatus('gavel'), exact: true });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.projectStatusScope('gavel') });
     expect(client.getQueryData(projectCommitTaskKeys.run('gavel', 'commit-run-1'))).toEqual(snapshots);
   });
 

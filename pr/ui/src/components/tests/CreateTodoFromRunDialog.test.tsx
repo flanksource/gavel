@@ -2,6 +2,7 @@ import type React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreateTodoFromRunDialog } from './CreateTodoFromRunDialog';
+import { queryTestWrapper } from '../todos/queryTestWrapper';
 import type { RunFailureCandidate } from './RunFailureCandidates';
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
@@ -60,6 +61,7 @@ describe('CreateTodoFromRunDialog', () => {
         onClose={vi.fn()}
         onCreated={onCreated}
       />,
+      { wrapper: queryTestWrapper() },
     );
 
     expect((screen.getByLabelText('Include TestSave') as HTMLInputElement).checked).toBe(true);
@@ -99,10 +101,11 @@ describe('CreateTodoFromRunDialog', () => {
         onClose={vi.fn()}
         onCreated={onCreated}
       />,
+      { wrapper: queryTestWrapper() },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
 
-    expect((await screen.findByRole('alert')).textContent).toBe('native todo provider is unavailable');
+    expect((await screen.findByRole('alert')).textContent).toContain('native todo provider is unavailable');
     expect(onCreated).not.toHaveBeenCalled();
   });
 });

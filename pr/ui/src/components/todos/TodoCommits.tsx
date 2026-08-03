@@ -1,50 +1,35 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiChevronRight, UiGitGraph } from '@flanksource/clicky-ui/icons';
 import type { TodoCommit, TodoCommitsResponse } from '../../types';
+import { fetchJSON } from '../../query';
 import { RelativeTime } from '../RelativeTime';
 import { CommitFiles } from './TodoCommitFiles';
 import { todoQuery } from './format';
+import { todoQueryKeys } from './todoQueries';
 
 // useTodoCommits fetches the git commits linked to a todo via its Gavel-Issue-Id
 // trailer. It refetches when the todo ref changes and reports nothing for a todo
 // with no linked commits.
 function useTodoCommits(dir: string, todoRef: string) {
-  const [commits, setCommits] = useState<TodoCommit[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!todoRef) {
-      setCommits([]);
-      setError('');
-      return;
-    }
-    let cancelled = false;
-    const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('ref', todoRef);
-    fetch(`/api/todos/commits?${params.toString()}`, { signal: controller.signal })
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load commits');
-        if (!cancelled) setCommits((data as TodoCommitsResponse).commits ?? []);
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== 'AbortError') setError(err?.message || 'Failed to load commits');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+  const query = useQuery({
+    queryKey: todoQueryKeys.commits(dir, todoRef),
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams(todoQuery(dir));
+      params.set('ref', todoRef);
+      const data = await fetchJSON<TodoCommitsResponse>({
+        url: `/api/todos/commits?${params.toString()}`,
+        signal,
+        context: 'Failed to load Todo commits',
       });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [dir, todoRef]);
+      return data.commits ?? [];
+    },
+    enabled: !!todoRef,
+    staleTime: 5_000,
+  });
 
-  return { commits, loading, error };
+  return { commits: query.data ?? [], loading: query.isFetching, error: query.error?.message ?? '' };
 }
 
 // CommitRow renders one linked commit with an expand toggle that reveals its

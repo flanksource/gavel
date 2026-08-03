@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Field, Combobox } from '@flanksource/clicky-ui/components';
 import type { ComboboxOption } from '@flanksource/clicky-ui/components';
+import { mutationJSON, queryKeys } from '../query';
 import type { Project } from '../types';
+import { projectDiffQueryKey } from './projectMutations';
 
 const inputClass =
   'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
@@ -42,11 +45,42 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
   const [dir, setDir] = useState('');
   const [repos, setRepos] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const editing = !!project;
   const projectReposKey = project?.repos.join('\0') ?? '';
   const defaultReposKey = defaults?.repos?.join('\0') ?? '';
+  const queryClient = useQueryClient();
+  const saveMutation = useMutation({
+    mutationFn: (registration: Project) => mutationJSON<Project>({
+      url: project ? `/api/projects/${encodeURIComponent(project.name)}` : '/api/projects',
+      method: project ? 'PUT' : 'POST',
+      body: registration,
+      context: `Failed to ${project ? 'update' : 'create'} project ${project?.name ?? registration.name}`,
+    }),
+    onSuccess: async () => {
+      const invalidations = [
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true }),
+      ];
+      if (project) {
+        invalidations.push(
+          queryClient.invalidateQueries({ queryKey: queryKeys.projectStatusScope(project.name) }),
+          queryClient.invalidateQueries({ queryKey: projectDiffQueryKey(project.name) }),
+        );
+      }
+      await Promise.all(invalidations);
+    },
+  });
+  const removeMutation = useMutation({
+    mutationFn: (projectName: string) => mutationJSON<void>({
+      url: `/api/projects/${encodeURIComponent(projectName)}`,
+      method: 'DELETE',
+      context: `Failed to delete project ${projectName}`,
+    }),
+    onSuccess: async (_, projectName) => {
+      queryClient.removeQueries({ queryKey: queryKeys.projectStatusScope(projectName) });
+      queryClient.removeQueries({ queryKey: projectDiffQueryKey(projectName) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projects(), exact: true });
+    },
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -54,8 +88,6 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
     setDir(project ? project.dir : (defaults?.dir ?? ''));
     setRepos([...(project ? project.repos : (defaults?.repos ?? []))]);
     setError('');
-    setSaving(false);
-    setDeleting(false);
   }, [
     open,
     project?.name,
@@ -71,25 +103,14 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
       setError('Name and directory are required');
       return false;
     }
-    setSaving(true);
+    const registration = { name: name.trim(), dir: dir.trim(), repos };
+    setError('');
     try {
-      const url = project ? `/api/projects/${encodeURIComponent(project.name)}` : '/api/projects';
-      const res = await fetch(url, {
-        method: project ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), dir: dir.trim(), repos }),
-      });
-      if (!res.ok) {
-        setError((await res.text()) || `HTTP ${res.status}`);
-        setSaving(false);
-        return false;
-      }
-    } catch (e: any) {
-      setError(e?.message || 'request failed');
-      setSaving(false);
+      await saveMutation.mutateAsync(registration);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Project save failed');
       return false;
     }
-    setSaving(false);
     return true;
   }
 
@@ -98,26 +119,19 @@ export function useProjectRegistration(options: ProjectRegistrationOptions): Pro
     if (!window.confirm(`Remove project "${project.name}"? This only forgets the workspace; nothing on disk is deleted.`)) {
       return false;
     }
-    setDeleting(true);
+    setError('');
     try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(project.name)}`, { method: 'DELETE' });
-      if (!res.ok) {
-        setError((await res.text()) || `HTTP ${res.status}`);
-        setDeleting(false);
-        return false;
-      }
-    } catch (e: any) {
-      setError(e?.message || 'request failed');
-      setDeleting(false);
+      await removeMutation.mutateAsync(project.name);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Project delete failed');
       return false;
     }
-    setDeleting(false);
     return true;
   }
 
   return {
     name, setName, dir, setDir, repos, setRepos,
-    error, saving, deleting, editing, save, remove,
+    error, saving: saveMutation.isPending, deleting: removeMutation.isPending, editing, save, remove,
   };
 }
 
@@ -132,7 +146,7 @@ export function ProjectFields({ reg, repoOptions }: { reg: ProjectRegistration; 
 
   return (
     <div className="space-y-3">
-      {reg.error && <div className="text-sm text-destructive">{reg.error}</div>}
+      {reg.error && <div role="alert" className="text-sm text-destructive">{reg.error}</div>}
       <Field label="Name" helper={reg.editing ? 'The name identifies the project and cannot be changed' : undefined}>
         <input className={inputClass} value={reg.name} placeholder="my-project" readOnly={reg.editing}
           onChange={(e) => reg.setName(e.currentTarget.value)} />

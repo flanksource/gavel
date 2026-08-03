@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	cexec "github.com/flanksource/clicky/exec"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickytask "github.com/flanksource/clicky/task"
 	commonscontext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
@@ -108,7 +110,6 @@ type projectStatusResponse struct {
 	Files        []projectFileStatus `json:"files"`
 	ResultsStale bool                `json:"resultsStale"`
 	Action       projectActionStatus `json:"action"`
-	CommitQueue  commitQueueStatus   `json:"commitQueue"`
 }
 
 type projectActionRegistry struct {
@@ -290,12 +291,23 @@ func (w *projectActionOutputWriter) Write(data []byte) (int, error) {
 }
 
 func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
+	includeResults := false
+	if value := strings.TrimSpace(r.URL.Query().Get("includeResults")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid includeResults %q: expected a boolean", value))
+			return
+		}
+		includeResults = parsed
+	}
+	stopFile := rpchttp.Track(r.Context(), "file")
 	project, err := GetProject(r.PathValue("name"))
+	stopFile()
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true})
+	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true, NoResults: !includeResults, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -307,7 +319,6 @@ func (s *Server) handleProjectStatus(w http.ResponseWriter, r *http.Request) {
 		Files:        projectStatusFiles(result.Files),
 		ResultsStale: result.ResultsStale,
 		Action:       s.projectActionFor(project.Name),
-		CommitQueue:  s.commitQueueFor(project.Name),
 	})
 }
 
@@ -507,7 +518,7 @@ func validateProjectOptionPaths(dir string, paths []string) error {
 }
 
 func validateProjectActionFiles(dir string, requested []string) error {
-	result, err := gatherProjectStatus(dir, status.Options{NoRepomap: true})
+	result, err := gatherProjectStatus(dir, status.Options{NoRepomap: true, NoResults: true})
 	if err != nil {
 		return fmt.Errorf("gather project status: %w", err)
 	}

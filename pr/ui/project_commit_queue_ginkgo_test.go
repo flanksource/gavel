@@ -19,33 +19,51 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// fakeCommitRuns stands in for the `gavel commit` processes the queue spawns.
-// Each run is keyed on the single file its group commits, so a spec can observe
-// the order commands actually started in and hold one open while it posts the
-// next group.
 type fakeCommitRuns struct {
 	mu      sync.Mutex
 	started []string
 	gates   map[string]chan struct{}
 	failing map[string]bool
+	output  map[string]string
+}
+
+type fakeCommitController struct {
+	task *clickytask.Task
+}
+
+func (c *fakeCommitController) Actions() []clickytask.ControlAction {
+	if status := c.task.Status(); status == clickytask.StatusPending || status == clickytask.StatusRunning {
+		return []clickytask.ControlAction{clickytask.ControlStop}
+	}
+	return nil
+}
+
+func (c *fakeCommitController) Control(_ context.Context, action clickytask.ControlAction) error {
+	if action != clickytask.ControlStop {
+		return fmt.Errorf("fake commit does not support %q", action)
+	}
+	c.task.Cancel()
+	return nil
 }
 
 func newFakeCommitRuns(files ...string) *fakeCommitRuns {
-	runs := &fakeCommitRuns{gates: map[string]chan struct{}{}, failing: map[string]bool{}}
+	runs := &fakeCommitRuns{
+		gates:   map[string]chan struct{}{},
+		failing: map[string]bool{},
+		output:  map[string]string{},
+	}
 	for _, file := range files {
 		runs.gates[file] = make(chan struct{})
 	}
 	original := executeProjectAction
-	executeProjectAction = func(_ context.Context, _ string, args []string, output io.Writer, group *clickytask.Group, opts ...clickytask.Option) clickytask.TypedTask[cexec.ExecResult] {
+	executeProjectAction = func(_ context.Context, _ string, args []string, _ io.Writer, group *clickytask.Group, opts ...clickytask.Option) clickytask.TypedTask[cexec.ExecResult] {
 		file := args[len(args)-1]
-		return clickytask.StartTask("fake commit "+file, func(ctx commonscontext.Context, _ *clickytask.Task) (cexec.ExecResult, error) {
+		task := clickytask.StartTask("fake commit "+file, func(ctx commonscontext.Context, _ *clickytask.Task) (cexec.ExecResult, error) {
 			runs.mu.Lock()
 			runs.started = append(runs.started, file)
+			runs.output[file] = "committing " + file + "\n"
 			gate, failing := runs.gates[file], runs.failing[file]
 			runs.mu.Unlock()
-			if _, err := io.WriteString(output, "committing "+file+"\n"); err != nil {
-				return cexec.ExecResult{ExitCode: -1}, err
-			}
 			select {
 			case <-gate:
 			case <-ctx.Done():
@@ -56,6 +74,13 @@ func newFakeCommitRuns(files ...string) *fakeCommitRuns {
 			}
 			return cexec.ExecResult{}, nil
 		}, append([]clickytask.Option{clickytask.WithGroup(group)}, opts...)...)
+		task.SetOutputProvider(func() clickytask.OutputSnapshot {
+			runs.mu.Lock()
+			defer runs.mu.Unlock()
+			return clickytask.OutputSnapshot{Stdout: runs.output[file]}
+		})
+		task.SetController(&fakeCommitController{task: task.Task})
+		return task
 	}
 	DeferCleanup(func() { executeProjectAction = original })
 	return runs
@@ -79,7 +104,7 @@ func (r *fakeCommitRuns) commands() []string {
 	return append([]string(nil), r.started...)
 }
 
-var _ = Describe("project commit queue", func() {
+var _ = Describe("project commit task groups", func() {
 	var (
 		originalProjectsPath string
 		server               *Server
@@ -102,26 +127,22 @@ var _ = Describe("project commit queue", func() {
 		})
 
 		server = &Server{}
-		// The queue archives its run into the project directory once the last
-		// group finishes, so a spec that ends with work still in flight races
-		// ginkgo's temp-dir removal. Stop whatever is left and wait for the
-		// archive to land before the directory goes away.
 		DeferCleanup(func() {
 			queue := server.projectCommitQueue("gavel")
 			queue.mu.Lock()
-			pending := queue.runID != ""
-			for _, entry := range queue.entries {
-				entry.task.Cancel()
+			generation := queue.current
+			if generation != nil {
+				generation.group.Cancel()
 			}
 			queue.mu.Unlock()
-			if !pending {
+			if generation == nil {
 				return
 			}
 			Eventually(func() bool {
 				queue.mu.Lock()
 				defer queue.mu.Unlock()
-				return queue.archived
-			}).Should(BeTrue(), "the commit queue should archive its run before the project directory is removed")
+				return generation.archived
+			}).Should(BeTrue(), "the task generation should archive before the project directory is removed")
 		})
 	})
 
@@ -135,189 +156,142 @@ var _ = Describe("project commit queue", func() {
 		return recorder
 	}
 
-	cancelEntry := func(id string) *httptest.ResponseRecorder {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodDelete, "/api/projects/gavel/commit-queue/"+id, nil)
-		request.SetPathValue("name", "gavel")
-		request.SetPathValue("id", id)
-		server.handleCommitQueueEntry(recorder, request)
-		return recorder
+	decodeRun := func(recorder *httptest.ResponseRecorder) projectCommitRun {
+		var run projectCommitRun
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &run)).To(Succeed())
+		return run
 	}
 
-	queueStatus := func() commitQueueStatus { return server.commitQueueFor("gavel") }
-
-	entryStatuses := func() []string {
-		var statuses []string
-		for _, entry := range queueStatus().Entries {
-			statuses = append(statuses, entry.Status)
+	taskSnapshots := func(runID string) []clickytask.TaskSnapshot {
+		var tasks []clickytask.TaskSnapshot
+		for _, snapshot := range clickytask.SnapshotByID(runID) {
+			if snapshot.Type == "task" {
+				tasks = append(tasks, snapshot)
+			}
 		}
-		return statuses
+		return tasks
 	}
 
-	It("runs queued groups one at a time in the order they were posted", func() {
+	It("runs posted commits serially and exposes their metadata through the generic task snapshot", func() {
 		runs := newFakeCommitRuns("one.go", "two.go")
-
-		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
+		first := queueCommit("one.go")
+		Expect(first.Code).To(Equal(http.StatusAccepted), first.Body.String())
+		run := decodeRun(first)
 		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
-		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
+
+		second := queueCommit("two.go")
+		Expect(second.Code).To(Equal(http.StatusAccepted), second.Body.String())
+		Expect(decodeRun(second).RunID).To(Equal(run.RunID))
 		Consistently(runs.commands).Should(Equal([]string{"one.go"}))
-		Eventually(entryStatuses).Should(Equal([]string{"running", "pending"}))
-		Expect(queueStatus().Entries[0].Files).To(Equal([]string{"one.go"}))
-		Expect(queueStatus().Entries[0].Output).To(Equal("committing one.go\n"))
-		Expect(queueStatus().Running).To(BeTrue())
+
+		Eventually(func(g Gomega) {
+			snapshots := clickytask.SnapshotByID(run.RunID)
+			g.Expect(snapshots).To(HaveLen(3))
+			g.Expect(snapshots[0].Kind).To(Equal("gavel-commit"))
+			g.Expect(snapshots[0].Labels).To(HaveKeyWithValue("project", "gavel"))
+			g.Expect(snapshots[0].Details).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
+				{TaskID: snapshots[1].ID, Action: projectActionCommit, Files: []string{"one.go"}},
+				{TaskID: snapshots[2].ID, Action: projectActionCommit, Files: []string{"two.go"}},
+			}}))
+			g.Expect(snapshots[1].Name).To(Equal("Commit one.go"))
+			g.Expect(snapshots[1].Description).To(Equal("one.go"))
+			g.Expect(snapshots[1].Stdout).To(Equal("committing one.go\n"))
+			g.Expect(snapshots[1].Controls).To(Equal([]clickytask.ControlAction{clickytask.ControlStop}))
+			g.Expect(snapshots[2].Name).To(Equal("Commit two.go"))
+			g.Expect(snapshots[2].Status).To(Equal(string(clickytask.StatusPending)))
+		}).Should(Succeed())
 
 		runs.release("one.go")
 		Eventually(runs.commands).Should(Equal([]string{"one.go", "two.go"}))
 		runs.release("two.go")
-		Eventually(entryStatuses).Should(Equal([]string{"success", "success"}))
-		Expect(queueStatus().Running).To(BeFalse())
+		Eventually(func() []string {
+			return []string{taskSnapshots(run.RunID)[0].Status, taskSnapshots(run.RunID)[1].Status}
+		}).Should(Equal([]string{"success", "success"}))
 	})
 
-	// Commit order is the whole point of building groups by hand: each group is
-	// staged against the tree the previous one left behind, so a queue that
-	// reorders them writes a history the user did not ask for.
-	It("keeps the posted order once several groups are waiting behind the running one", func() {
-		posted := []string{"one.go", "two.go", "three.go", "four.go"}
-		runs := newFakeCommitRuns(posted...)
-		for _, file := range posted {
-			Expect(queueCommit(file).Code).To(Equal(http.StatusAccepted))
-		}
+	It("stops one task without stopping the tasks queued behind it", func() {
+		runs := newFakeCommitRuns("one.go", "two.go")
+		run := decodeRun(queueCommit("one.go"))
+		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
+		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
+		firstTask := taskSnapshots(run.RunID)[0]
 
-		for index, file := range posted {
-			Eventually(runs.commands).Should(Equal(posted[:index+1]), "group %d should have started next", index+1)
-			Consistently(runs.commands).Should(Equal(posted[:index+1]))
-			runs.release(file)
-		}
-		Eventually(entryStatuses).Should(Equal([]string{"success", "success", "success", "success"}))
+		Expect(clickytask.ControlTask(GinkgoT().Context(), run.RunID, firstTask.ID, clickytask.ControlStop)).To(Succeed())
+
+		Eventually(runs.commands).Should(Equal([]string{"one.go", "two.go"}))
+		runs.release("two.go")
+		Eventually(func() string { return taskSnapshots(run.RunID)[1].Status }).Should(Equal("success"))
 	})
 
-	// Dropping one group is not a decision about the groups behind it: those
-	// files are still selected, still staged in the user's head, and must still
-	// be committed in the order they were posted.
-	It("keeps the groups behind a dropped one queued", func() {
-		posted := []string{"one.go", "two.go", "three.go", "four.go"}
-		runs := newFakeCommitRuns(posted...)
-		for _, file := range posted {
-			Expect(queueCommit(file).Code).To(Equal(http.StatusAccepted))
-		}
+	It("stops the whole generation through its advertised group control", func() {
+		runs := newFakeCommitRuns("one.go", "two.go")
+		run := decodeRun(queueCommit("one.go"))
+		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
 		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
 
-		Expect(cancelEntry(queueStatus().Entries[1].ID).Code).To(Equal(http.StatusOK))
-		runs.release("one.go")
-		Eventually(runs.commands).Should(Equal([]string{"one.go", "three.go"}))
-		runs.release("three.go")
-		Eventually(runs.commands).Should(Equal([]string{"one.go", "three.go", "four.go"}))
-		runs.release("four.go")
-		Eventually(entryStatuses).Should(Equal([]string{"success", "success", "success"}))
+		Expect(clickytask.ControlRun(GinkgoT().Context(), run.RunID, clickytask.ControlStop)).To(Succeed())
+
+		Eventually(func() []string {
+			tasks := taskSnapshots(run.RunID)
+			return []string{tasks[0].Status, tasks[1].Status}
+		}).Should(Equal([]string{"canceled", "canceled"}))
+		Consistently(runs.commands).Should(Equal([]string{"one.go"}))
 	})
 
-	// A failing commit stops the whole queue, not just the group immediately
-	// behind it: the later groups were staged against a tree that never came to
-	// be, so committing them would write a history nobody reviewed.
-	It("cancels the groups behind a failing commit instead of committing them", func() {
+	It("cancels every dependent task after a failed commit", func() {
 		runs := newFakeCommitRuns("one.go", "two.go", "three.go")
 		runs.failOn("one.go")
-
-		for _, file := range []string{"one.go", "two.go", "three.go"} {
-			Expect(queueCommit(file).Code).To(Equal(http.StatusAccepted))
-		}
-		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
-
-		runs.release("one.go")
-		Eventually(entryStatuses).Should(Equal([]string{"failed", "canceled", "canceled"}))
-		Consistently(runs.commands).Should(Equal([]string{"one.go"}))
-		Expect(queueStatus().Entries[0].Error).To(ContainSubstring("commit one.go failed"))
-		Expect(queueStatus().Running).To(BeFalse())
-	})
-
-	It("drops a queued group so its commit never runs", func() {
-		runs := newFakeCommitRuns("one.go", "two.go")
-
-		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
-		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
-		Eventually(entryStatuses).Should(Equal([]string{"running", "pending"}))
-
-		Expect(cancelEntry(queueStatus().Entries[1].ID).Code).To(Equal(http.StatusOK))
-		Expect(queueStatus().Entries).To(HaveLen(1))
-
-		runs.release("one.go")
-		Eventually(entryStatuses).Should(Equal([]string{"success"}))
-		Consistently(runs.commands).Should(Equal([]string{"one.go"}))
-	})
-
-	// Stopping a commit that is taking too long is not the same as a commit that
-	// broke: everything still queued behind it stays queued.
-	It("cancels the running commit and lets the groups behind it proceed", func() {
-		runs := newFakeCommitRuns("one.go", "two.go", "three.go")
-
-		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
+		run := decodeRun(queueCommit("one.go"))
 		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
 		Expect(queueCommit("three.go").Code).To(Equal(http.StatusAccepted))
 		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
 
-		Expect(cancelEntry(queueStatus().Entries[0].ID).Code).To(Equal(http.StatusOK))
-		Eventually(runs.commands).Should(Equal([]string{"one.go", "two.go"}))
-		runs.release("two.go")
-		Eventually(runs.commands).Should(Equal([]string{"one.go", "two.go", "three.go"}))
-		runs.release("three.go")
-		Eventually(entryStatuses).Should(Equal([]string{"success", "success"}))
+		runs.release("one.go")
+
+		Eventually(func() []string {
+			tasks := taskSnapshots(run.RunID)
+			return []string{tasks[0].Status, tasks[1].Status, tasks[2].Status}
+		}).Should(Equal([]string{"failed", "canceled", "canceled"}))
+		Consistently(runs.commands).Should(Equal([]string{"one.go"}))
 	})
 
-	It("reports unknown commit groups instead of silently succeeding", func() {
+	It("rejects files already owned by an active task in the project generation", func() {
 		newFakeCommitRuns("one.go")
 		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
 
-		recorder := cancelEntry("not-a-task")
-		Expect(recorder.Code).To(Equal(http.StatusNotFound))
-		Expect(recorder.Body.String()).To(ContainSubstring("not-a-task"))
+		duplicate := queueCommit("one.go")
+
+		Expect(duplicate.Code).To(Equal(http.StatusConflict))
+		Expect(duplicate.Body.String()).To(ContainSubstring("one.go"))
 	})
 
-	It("rejects a commit group whose files are not current project changes", func() {
+	It("rejects files that are not current project changes", func() {
 		newFakeCommitRuns()
 		recorder := queueCommit("missing.go")
 		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
 		Expect(recorder.Body.String()).To(ContainSubstring("missing.go"))
-		Expect(queueStatus().Entries).To(BeEmpty())
 	})
 
-	It("keeps running commits posted after the queue drained", func() {
+	It("starts a fresh generation after the previous one drains", func() {
 		runs := newFakeCommitRuns("one.go", "two.go")
-
-		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
+		first := decodeRun(queueCommit("one.go"))
 		runs.release("one.go")
-		Eventually(entryStatuses).Should(Equal([]string{"success"}))
+		Eventually(func() string { return taskSnapshots(first.RunID)[0].Status }).Should(Equal("success"))
 
-		Expect(queueCommit("two.go").Code).To(Equal(http.StatusAccepted))
+		second := decodeRun(queueCommit("two.go"))
+
+		Expect(second.RunID).NotTo(Equal(first.RunID))
 		Eventually(runs.commands).Should(Equal([]string{"one.go", "two.go"}))
 		runs.release("two.go")
-		Eventually(func() bool { return queueStatus().Running }).Should(BeFalse())
 	})
 
-	It("publishes the queue on the project status endpoint under a commit task group", func() {
-		runs := newFakeCommitRuns("one.go")
-		Expect(queueCommit("one.go").Code).To(Equal(http.StatusAccepted))
-		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
-
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status", nil)
-		request.SetPathValue("name", "gavel")
-		server.handleProjectStatus(recorder, request)
-		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
-
-		var response projectStatusResponse
+	It("returns only the generic task run id from the queue endpoint", func() {
+		newFakeCommitRuns("one.go")
+		recorder := queueCommit("one.go")
+		Expect(recorder.Code).To(Equal(http.StatusAccepted), recorder.Body.String())
+		var response map[string]any
 		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
-		Expect(response.CommitQueue.Running).To(BeTrue())
-		Expect(response.CommitQueue.Href).To(Equal("/tasks/" + response.CommitQueue.RunID))
-		Expect(response.CommitQueue.Entries).To(HaveLen(1))
-		Expect(response.CommitQueue.Entries[0].Files).To(Equal([]string{"one.go"}))
-
-		snapshots := clickytask.SnapshotByID(response.CommitQueue.RunID)
-		Expect(snapshots).NotTo(BeEmpty())
-		Expect(snapshots[0].Type).To(Equal("group"))
-		Expect(snapshots[0].Kind).To(Equal("gavel-commit"))
-		Expect(snapshots[0].Labels).To(HaveKeyWithValue("project", "gavel"))
-
-		runs.release("one.go")
-		Eventually(func() bool { return queueStatus().Running }).Should(BeFalse())
+		Expect(response).To(HaveLen(1))
+		Expect(response).To(HaveKey("runId"))
 	})
 })

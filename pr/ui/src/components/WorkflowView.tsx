@@ -1,24 +1,12 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { WorkflowRun, Job } from '../types';
 import { statusIcon, statusColor } from '../utils';
 import { useNow } from '../useNow';
 import { LogViewer } from './LogViewer';
 import { UiChevronDown, UiChevronRight, UiLinkExternal } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
-
-interface JobLogsResponse {
-  jobId: number;
-  logs?: string;
-  steps?: { number: number; logs?: string }[];
-  error?: string;
-}
-
-async function fetchJobLogs(repo: string, runId: number, jobId: number, tail = 100): Promise<JobLogsResponse> {
-  const url = `/api/prs/job-logs?repo=${encodeURIComponent(repo)}&runId=${runId}&jobId=${jobId}&tail=${tail}`;
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`job-logs ${r.status}`);
-  return r.json();
-}
+import { jobLogsQuery } from './oneShotQueries';
 
 export function formatDuration(start?: string, end?: string): string {
   if (!start) return '';
@@ -111,41 +99,25 @@ export function WorkflowRunView({ run, repo }: { run: WorkflowRun; repo: string 
 function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }) {
   const failed = job.conclusion?.toLowerCase() === 'failure';
 
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [stepLogs, setStepLogs] = useState<Map<number, string>>(new Map());
-  const [jobLogs, setJobLogs] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
+  const [logsRequested, setLogsRequested] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [expandedJobFallback, setExpandedJobFallback] = useState(false);
+  const logsResult = useQuery({
+    ...jobLogsQuery(repo, runId, job.databaseId),
+    enabled: logsRequested,
+  });
+  const loading = logsResult.isFetching;
+  const loaded = logsResult.isSuccess;
+  const jobLogs = logsResult.data?.logs || '';
+  const stepLogs = new Map(
+    (logsResult.data?.steps ?? [])
+      .filter(step => !!step.logs)
+      .map(step => [step.number, step.logs!]),
+  );
+  const error = logsResult.error instanceof Error ? logsResult.error.message : null;
 
-  async function ensureLogs() {
-    if (loaded || loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const resp = await fetchJobLogs(repo, runId, job.databaseId);
-      if (resp.error) {
-        setError(resp.error);
-      } else {
-        const m = new Map<number, string>();
-        for (const s of resp.steps || []) {
-          if (s.logs) m.set(s.number, s.logs);
-        }
-        setStepLogs(m);
-        setJobLogs(resp.logs || '');
-      }
-      setLoaded(true);
-    } catch (e) {
-      setError(String(e));
-      setLoaded(true);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function toggleStep(stepNum: number) {
-    await ensureLogs();
+  function toggleStep(stepNum: number) {
+    setLogsRequested(true);
     setExpandedSteps(prev => {
       const next = new Set(prev);
       if (next.has(stepNum)) next.delete(stepNum);
@@ -154,8 +126,8 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
     });
   }
 
-  async function toggleJobFallback() {
-    await ensureLogs();
+  function toggleJobFallback() {
+    setLogsRequested(true);
     setExpandedJobFallback(v => !v);
   }
 
@@ -217,7 +189,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
               <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this step.</div>
             )}
             {isOpen && error && (
-              <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
+              <div className="ml-4 mt-0.5 text-[10px] text-red-500">{error}</div>
             )}
           </div>
         );
@@ -229,7 +201,7 @@ function JobView({ job, repo, runId }: { job: Job; repo: string; runId: number }
         <div className="ml-4 mt-0.5 text-[10px] text-muted-foreground">No logs captured for this job.</div>
       )}
       {failed && !hasSteps && expandedJobFallback && error && (
-        <div className="ml-4 mt-0.5 text-[10px] text-red-500">Failed to load logs: {error}</div>
+        <div className="ml-4 mt-0.5 text-[10px] text-red-500">{error}</div>
       )}
     </div>
   );

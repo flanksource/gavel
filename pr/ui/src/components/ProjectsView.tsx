@@ -10,11 +10,13 @@ import { TestRunDetail } from './tests/TestRunDetail';
 // bodySidebar, ProjectDetailPane into children — so both take the shared
 // catalog rather than owning the /api/tests state between them.
 
-export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRunId, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
+export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRunId, historyEnabled, onHistoryChange, onSelect, onSelectRun, onChanged, onAdd, onSettings }: {
   catalog: ProjectCatalog;
   procStatus: Record<string, ProcStatus>;
   selectedName: string;
   selectedRunId: string;
+  historyEnabled: boolean;
+  onHistoryChange: (enabled: boolean) => void;
   onSelect: (name: string) => void;
   onSelectRun: (project: string, runId: string) => void;
   onChanged: () => void;
@@ -30,6 +32,8 @@ export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRun
       selectedRunId={selectedRunId}
       runError={catalog.error}
       runsLoading={catalog.loading}
+      historyEnabled={historyEnabled}
+      onHistoryChange={onHistoryChange}
       onSelect={project => onSelect(project.name)}
       onSelectRun={onSelectRun}
       onChanged={onChanged}
@@ -39,11 +43,12 @@ export function ProjectsSidebar({ catalog, procStatus, selectedName, selectedRun
   );
 }
 
-export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPath, onDiffPathChange, onChanged }: {
+export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPath, resultsEnabled, onDiffPathChange, onChanged }: {
   catalog: ProjectCatalog;
   selectedName: string;
   selectedRunId: string;
   diffPath: string;
+  resultsEnabled: boolean;
   onDiffPathChange: (path: string) => void;
   onChanged: () => void;
 }) {
@@ -65,5 +70,5 @@ export function ProjectDetailPane({ catalog, selectedName, selectedRunId, diffPa
       </ErrorBoundary>
     );
   }
-  return <ProjectStatusView key={selected.name} project={selected} diffPath={diffPath} onDiffPathChange={onDiffPathChange} onChanged={onChanged} />;
+  return <ProjectStatusView key={selected.name} project={selected} diffPath={diffPath} showResults={resultsEnabled} onDiffPathChange={onDiffPathChange} onChanged={onChanged} />;
 }

@@ -23,6 +23,7 @@ const (
 	Jest       Framework = "jest"
 	Vitest     Framework = "vitest"
 	Playwright Framework = "playwright"
+	Fixture    Framework = "fixture"
 )
 
 // String returns the string representation of the framework.

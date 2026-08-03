@@ -1,4 +1,5 @@
 import type { Snapshot } from '@flanksource/clicky-ui/data';
+import { queryOptions } from '@tanstack/react-query';
 
 // TestRunView mirrors the Go pr/ui.testRunView served by /api/tests.
 export interface TestRunView {
@@ -97,17 +98,40 @@ export interface RunArtifact {
  * empty `dir` is meaningful (the server's default workspace), so the mode is
  * chosen by which key is supplied, not by whether its value is blank.
  */
-export async function fetchRunSnapshot({ project, dir, runId }: { project?: string; dir?: string; runId: string }): Promise<RunSnapshot> {
+export interface RunSnapshotIdentity {
+  project?: string;
+  dir?: string;
+  runId: string;
+}
+
+export function runSnapshotQuery(identity: RunSnapshotIdentity) {
+  return queryOptions({
+    queryKey: ['tests', 'run', identity] as const,
+    queryFn: ({ signal }) => fetchRunSnapshot(identity, signal),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export async function fetchRunSnapshot({ project, dir, runId }: RunSnapshotIdentity, signal?: AbortSignal): Promise<RunSnapshot> {
   if ((project === undefined) === (dir === undefined)) {
     throw new Error('fetchRunSnapshot requires exactly one of project or dir');
   }
   const params = new URLSearchParams({ runId });
   if (project !== undefined) params.set('project', project);
   if (dir !== undefined) params.set('dir', dir);
-  const response = await fetch(`/api/tests/run?${params.toString()}`);
+  let response: Response;
+  try {
+    response = await fetch(`/api/tests/run?${params.toString()}`, { signal });
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    const scope = project !== undefined ? `project ${project}` : `directory ${dir}`;
+    throw new Error(`Failed to load run ${runId} for ${scope}: ${cause instanceof Error ? cause.message : 'request failed'}`, { cause });
+  }
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error((body && typeof body.error === 'string' && body.error) || `Failed to load run ${runId}`);
+    const scope = project !== undefined ? `project ${project}` : `directory ${dir}`;
+    const detail = body && typeof body.error === 'string' && body.error;
+    throw new Error(`Failed to load run ${runId} for ${scope}${detail ? `: ${detail}` : ` (${response.status})`}`);
   }
   return body as RunSnapshot;
 }

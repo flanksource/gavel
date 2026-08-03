@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useState, type KeyboardEvent } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiCancel, UiCheck, UiEdit, UiEye, UiQuestion } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoQuestion, TodoRunOptions } from '../../types';
@@ -6,6 +7,7 @@ import { Spinner } from '../../icons/Spinner';
 import { inputClass, todoQuery } from './format';
 import { defaultRunOptions, loadLastTodoRunOptions } from './run';
 import { PromptRunAdvancedDialog, PromptRunButton } from './PromptRunButton';
+import { invalidateTodoWorkflowCaches, todoMutationJSON } from './todoMutations';
 
 export interface PlanApproveResult {
   todo: TodoItem;
@@ -46,126 +48,104 @@ export function buildTodoAnswerInput(questions: TodoQuestion[], selections: Todo
   return { answers };
 }
 
-export function usePlanActions(dir: string) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const reset = useCallback(() => setError(''), []);
-
-  const approve = useCallback(
-    async (ref: string, opts: { run?: boolean; options?: TodoRunOptions } = {}): Promise<PlanApproveResult | null> => {
-      if (busy || !ref.trim()) return null;
-      setBusy(true);
-      setError('');
-      try {
-        const body: Record<string, unknown> = { ref: ref.trim(), run: !!opts.run };
-        if (opts.run) body.options = opts.options ?? defaultRunOptions;
-        const res = await fetch(`/api/todos/plan/approve?${todoQuery(dir)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Approve failed');
-        return data as PlanApproveResult;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Approve failed');
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [dir, busy],
-  );
-
-  const answer = useCallback(
-    async (ref: string, input: TodoAnswerInput): Promise<PlanAnswerResult | null> => {
-      const trimmedAnswer = input.answer?.trim() ?? '';
-      const normalizedAnswers = Object.fromEntries(
-        Object.entries(input.answers ?? {})
-          .map(([question, value]) => [question.trim(), value.trim()])
-          .filter(([question, value]) => question && value),
+function usePlanActionMutation<TResult extends { todo: TodoItem }, TVariables>(
+  dir: string,
+  action: string,
+  request: (variables: TVariables) => { path: string; body: Record<string, unknown>; context: string },
+) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'plan-action', action, { dir: dir.trim() }],
+    mutationFn: (variables: TVariables) => {
+      const { path, body, context } = request(variables);
+      return todoMutationJSON<TResult>(
+        `${path}?${todoQuery(dir)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+        context,
       );
-      const hasAnswers = Object.keys(normalizedAnswers).length > 0;
-      if (busy || !ref.trim() || (!trimmedAnswer && !hasAnswers)) return null;
-      if (trimmedAnswer && hasAnswers) {
-        setError('Answer must use either free text or structured selections, not both');
-        return null;
-      }
-      setBusy(true);
-      setError('');
-      try {
-        const body: Record<string, unknown> = { ref: ref.trim() };
-        if (hasAnswers) body.answers = normalizedAnswers;
-        else body.answer = trimmedAnswer;
-        if (input.options) body.options = input.options;
-        const res = await fetch(`/api/todos/answer?${todoQuery(dir)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Answer failed');
-        return data as PlanAnswerResult;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Answer failed');
-        return null;
-      } finally {
-        setBusy(false);
-      }
     },
-    [dir, busy],
-  );
+    onSuccess: result => invalidateTodoWorkflowCaches(client, dir, result.todo),
+  });
+}
 
-  const reject = useCallback(
-    async (ref: string): Promise<PlanApproveResult | null> => {
-      if (busy || !ref.trim()) return null;
-      setBusy(true);
-      setError('');
-      try {
-        const res = await fetch(`/api/todos/plan/reject?${todoQuery(dir)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ref: ref.trim() }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Reject failed');
-        return data as PlanApproveResult;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Reject failed');
-        return null;
-      } finally {
-        setBusy(false);
-      }
+export function usePlanActions(dir: string) {
+  const [validationError, setValidationError] = useState('');
+  const approveMutation = usePlanActionMutation<PlanApproveResult, { ref: string; opts: { run?: boolean; options?: TodoRunOptions } }>(
+    dir,
+    'approve',
+    ({ ref, opts }) => {
+      const body: Record<string, unknown> = { ref, run: !!opts.run };
+      if (opts.run) body.options = opts.options ?? defaultRunOptions;
+      return { path: '/api/todos/plan/approve', body, context: `Failed to approve plan for todo ${ref}` };
     },
-    [dir, busy],
   );
+  const answerMutation = usePlanActionMutation<PlanAnswerResult, { ref: string; body: Record<string, unknown> }>(
+    dir,
+    'answer',
+    ({ ref, body }) => ({ path: '/api/todos/answer', body, context: `Failed to answer todo ${ref}` }),
+  );
+  const rejectMutation = usePlanActionMutation<PlanApproveResult, string>(
+    dir,
+    'reject',
+    ref => ({ path: '/api/todos/plan/reject', body: { ref }, context: `Failed to reject plan for todo ${ref}` }),
+  );
+  const reviseMutation = usePlanActionMutation<PlanAnswerResult, { ref: string; feedback: string }>(
+    dir,
+    'revise',
+    ({ ref, feedback }) => ({
+      path: '/api/todos/plan/revise',
+      body: { ref, feedback, options: loadLastTodoRunOptions('plan') },
+      context: `Failed to request plan changes for todo ${ref}`,
+    }),
+  );
+  const mutations = [approveMutation, answerMutation, rejectMutation, reviseMutation];
+  const busy = mutations.some(mutation => mutation.isPending);
+  const mutationError = mutations.find(mutation => mutation.error)?.error;
+  const error = validationError || (mutationError instanceof Error ? mutationError.message : '');
+  const reset = useCallback(() => {
+    setValidationError('');
+    for (const mutation of mutations) mutation.reset();
+  }, [approveMutation.reset, answerMutation.reset, rejectMutation.reset, reviseMutation.reset]);
 
-  const revise = useCallback(
-    async (ref: string, feedback: string): Promise<PlanAnswerResult | null> => {
-      const trimmed = feedback.trim();
-      if (busy || !ref.trim() || !trimmed) return null;
-      setBusy(true);
-      setError('');
-      try {
-        const options = loadLastTodoRunOptions('plan');
-        const res = await fetch(`/api/todos/plan/revise?${todoQuery(dir)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ref: ref.trim(), feedback: trimmed, options }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Revise failed');
-        return data as PlanAnswerResult;
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Revise failed');
-        return null;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [dir, busy],
-  );
+  const approve = useCallback(async (ref: string, opts: { run?: boolean; options?: TodoRunOptions } = {}) => {
+    const cleaned = ref.trim();
+    if (busy || !cleaned) return null;
+    setValidationError('');
+    try { return await approveMutation.mutateAsync({ ref: cleaned, opts }); } catch { return null; }
+  }, [approveMutation.mutateAsync, busy]);
+
+  const answer = useCallback(async (ref: string, input: TodoAnswerInput) => {
+    const trimmedAnswer = input.answer?.trim() ?? '';
+    const normalizedAnswers = Object.fromEntries(Object.entries(input.answers ?? {})
+      .map(([question, value]) => [question.trim(), value.trim()]).filter(([question, value]) => question && value));
+    const hasAnswers = Object.keys(normalizedAnswers).length > 0;
+    if (busy || !ref.trim() || (!trimmedAnswer && !hasAnswers)) return null;
+    if (trimmedAnswer && hasAnswers) {
+      setValidationError('Answer must use either free text or structured selections, not both');
+      return null;
+    }
+    setValidationError('');
+    const body: Record<string, unknown> = { ref: ref.trim() };
+    if (hasAnswers) body.answers = normalizedAnswers;
+    else body.answer = trimmedAnswer;
+    if (input.options) body.options = input.options;
+    try { return await answerMutation.mutateAsync({ ref: ref.trim(), body }); } catch { return null; }
+  }, [answerMutation.mutateAsync, busy]);
+
+  const reject = useCallback(async (ref: string) => {
+    const cleaned = ref.trim();
+    if (busy || !cleaned) return null;
+    setValidationError('');
+    try { return await rejectMutation.mutateAsync(cleaned); } catch { return null; }
+  }, [rejectMutation.mutateAsync, busy]);
+
+  const revise = useCallback(async (ref: string, feedback: string) => {
+    const cleanedRef = ref.trim();
+    const cleanedFeedback = feedback.trim();
+    if (busy || !cleanedRef || !cleanedFeedback) return null;
+    setValidationError('');
+    try { return await reviseMutation.mutateAsync({ ref: cleanedRef, feedback: cleanedFeedback }); } catch { return null; }
+  }, [reviseMutation.mutateAsync, busy]);
 
   return { busy, error, reset, approve, answer, reject, revise };
 }

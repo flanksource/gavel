@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -18,6 +19,9 @@ func (r *Report) Pretty() api.Text {
 		files[leaf.File] = true
 	}
 	t := clicky.Text(fmt.Sprintf("Test outline: %d tests in %d files", len(leaves), len(files)), "bold text-blue-500")
+	if counts := frameworkCounts(leaves); counts != "" {
+		t = t.Space().Append("("+counts+")", "text-muted")
+	}
 	if r.RunCount > 0 {
 		t = t.Space().Append(fmt.Sprintf("(history from %d runs)", r.RunCount), "text-muted")
 	} else {
@@ -123,11 +127,11 @@ func (n *entryNode) Pretty() api.Text {
 	e := n.entry
 	if e.Error != "" {
 		t := clicky.Text(e.Name, "bold text-red-600")
-		return t.Space().Append("— "+e.Error, "text-red-600")
+		return appendFrameworkBadge(t, e.Framework).Space().Append("— "+e.Error, "text-red-600")
 	}
 	if e.Container {
 		t := clicky.Text(e.Name, "bold text-muted")
-		return appendBadges(t, e)
+		return appendBadges(appendFrameworkBadge(t, e.Framework), e)
 	}
 
 	t := clicky.Text("", "")
@@ -136,6 +140,7 @@ func (n *entryNode) Pretty() api.Text {
 		t = t.Space()
 	}
 	t = t.Append(e.Name, "bold wrap-space")
+	t = appendFrameworkBadge(t, e.Framework)
 	if e.SizeLines > 0 {
 		t = t.Space().Append(fmt.Sprintf("%dL", e.SizeLines), "text-muted")
 	}
@@ -158,6 +163,9 @@ func (n *entryNode) Pretty() api.Text {
 }
 
 func appendBadges(t api.Text, e *Entry) api.Text {
+	for _, label := range e.Labels {
+		t = t.Space().Append(label, "text-cyan-600")
+	}
 	if e.Dynamic {
 		t = t.Space().Append("dynamic", "text-yellow-600")
 	}
@@ -168,6 +176,27 @@ func appendBadges(t api.Text, e *Entry) api.Text {
 		t = t.Space().Append("FOCUSED", "text-red-600 bold")
 	}
 	return t
+}
+
+func appendFrameworkBadge(t api.Text, framework parsers.Framework) api.Text {
+	if framework == "" {
+		return t
+	}
+	return t.Space().Append("["+framework.String()+"]", "text-muted")
+}
+
+func frameworkCounts(entries []*Entry) string {
+	counts := map[parsers.Framework]int{}
+	for _, entry := range entries {
+		counts[entry.Framework]++
+	}
+	var parts []string
+	for _, framework := range SupportedFrameworks() {
+		if counts[framework] > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", framework, counts[framework]))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func historySegment(e *Entry) string {

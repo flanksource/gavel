@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { SessionInspector, type UnifiedSessionInput } from '@flanksource/clicky-ui/ai';
+import { useQuery } from '@tanstack/react-query';
+import { SessionInspector } from '@flanksource/clicky-ui/ai';
 import { Spinner } from '../../icons/Spinner';
-import { attemptThreadSession, fetchTodoSessionDetail } from './TodoSessionDetail';
+import { attemptThreadSession } from './TodoSessionDetail';
+import { sessionDetailQueryOptions } from './todoQueries';
 
 /**
  * The Session tab of one verification attempt: the agent thread that produced
@@ -17,38 +18,24 @@ export function VerificationAttemptSession({
   todoRef: string;
   sessionId: string;
 }) {
-  const [session, setSession] = useState<UnifiedSessionInput | null>(null);
-  const [error, setError] = useState('');
+  const query = useQuery({
+    ...sessionDetailQueryOptions(dir, todoRef, sessionId, false, 1_500),
+    select: attemptThreadSession,
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    setSession(null);
-    setError('');
-    fetchTodoSessionDetail(dir, todoRef, sessionId)
-      .then((loaded) => {
-        if (!cancelled) setSession(attemptThreadSession(loaded));
-      })
-      .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dir, todoRef, sessionId]);
-
-  if (error) {
+  if (query.error) {
     return (
       <p role="alert" className="px-3 py-4 text-xs text-red-600">
-        {error}
+        {query.error.message}
       </p>
     );
   }
-  if (!session) {
+  if (!query.data) {
     return (
       <p className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
         <Spinner /> Loading session…
       </p>
     );
   }
-  return <SessionInspector session={session} className="h-[28rem]" transcriptProps={{ showHeader: false, className: 'text-xs' }} />;
+  return <SessionInspector session={query.data} className="h-[28rem]" transcriptProps={{ showHeader: false, className: 'text-xs' }} />;
 }

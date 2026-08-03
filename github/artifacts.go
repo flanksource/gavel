@@ -42,7 +42,7 @@ var artifactLinkPattern = regexp.MustCompile(
 	`\[View full results\]\((https://[^)]+/actions/runs/\d+/artifacts/\d+)\)`,
 )
 
-var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*) -->`)
+var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*|[^\s>]+-gavel(?:-[^\s>]*)?) -->`)
 
 // GavelArtifact identifies one gavel sticky comment on a PR — typically
 // one per matrix shard (e.g. gavel-test-pg15, gavel-e2e). A single PR can

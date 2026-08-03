@@ -1,8 +1,10 @@
 import { useEffect, useState, type ComponentType } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiEdit, UiListDashes, UiTrash, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { AcceptanceCriterion, TodoItem } from '../../types';
 import { inputClass, todoQuery } from './format';
+import { optimisticallySetTodoCaches, setTodoCaches, todoMutationJSON } from './todoMutations';
 
 // AcceptanceCriteria renders a todo's acceptance criteria as a structured,
 // editable list (add / edit / remove / toggle, each auto-saved). Verification is
@@ -16,12 +18,38 @@ export function AcceptanceCriteria({
   todo: TodoItem;
   onChanged: (todo: TodoItem) => void;
 }) {
+  const queryClient = useQueryClient();
   const [criteria, setCriteria] = useState<AcceptanceCriterion[]>(todo.criteria ?? []);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
   const [adding, setAdding] = useState('');
+  const updateMutation = useMutation({
+    mutationKey: ['todos', 'criteria', 'update', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: (next: AcceptanceCriterion[]) => todoMutationJSON<TodoItem>(
+      `/api/todos/criteria?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: todo.ref, criteria: next }),
+      },
+      'Acceptance criteria update failed',
+    ),
+    onMutate: (next) => {
+      const previous = criteria;
+      setCriteria(next);
+      return { previous, rollback: optimisticallySetTodoCaches(queryClient, dir, { ...todo, criteria: next }) };
+    },
+    onError: (_error, _next, context) => {
+      context?.rollback();
+      if (context) setCriteria(context.previous);
+    },
+    onSuccess: async (updated) => {
+      setCriteria(updated.criteria ?? []);
+      await setTodoCaches(queryClient, dir, updated);
+      onChanged(updated);
+    },
+  });
+  const busy = updateMutation.isPending;
 
   // Adopt the server's criteria whenever they change (a save returns the
   // re-parsed list); keep this independent of the verdict so showing a verdict
@@ -33,31 +61,17 @@ export function AcceptanceCriteria({
   // Reset transient view state only when switching to a different todo.
   useEffect(() => {
     setEditing(null);
-    setError('');
+    updateMutation.reset();
   }, [todo.ref]);
 
   // save persists the full criteria list and adopts the server's returned todo.
   async function save(next: AcceptanceCriterion[]): Promise<boolean> {
     if (busy) return false;
-    setBusy(true);
-    setError('');
-    setCriteria(next); // optimistic
     try {
-      const res = await fetch(`/api/todos/criteria?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref, criteria: next }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Save failed');
-      onChanged(data as TodoItem);
+      await updateMutation.mutateAsync(next);
       return true;
-    } catch (err: any) {
-      setError(err?.message || 'Save failed');
-      setCriteria(todo.criteria ?? []); // revert
+    } catch {
       return false;
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -154,7 +168,7 @@ export function AcceptanceCriteria({
           aria-label="Add acceptance criterion"
         />
 
-        {error && <div className="text-xs text-red-600">{error}</div>}
+        {updateMutation.error && <div className="text-xs text-red-600">{updateMutation.error.message}</div>}
       </div>
     </section>
   );

@@ -74,6 +74,7 @@ func snapshotArgs(opts testrunner.RunOptions) map[string]any {
 	return map[string]any{
 		"starting_paths": append([]string(nil), opts.StartingPaths...),
 		"extra_args":     append([]string(nil), opts.ExtraArgs...),
+		"tags":           append([]string(nil), opts.Tags...),
 		"runner_args":    append([]string(nil), opts.PassThroughArgs...),
 		"show_passed":    opts.ShowPassed,
 		"ignore":         append([]string(nil), opts.Ignore...),

@@ -207,6 +207,24 @@ func (s *supervisorTaskSource) Control(_ context.Context, id string, action clic
 	return fmt.Errorf("run %q not found", id)
 }
 
+func (s *supervisorTaskSource) ControlTask(_ context.Context, runID, taskID string, action clickytask.ControlAction) error {
+	roots, err := runningSupervisorRoots()
+	if err != nil {
+		return err
+	}
+	for _, root := range roots {
+		snapshots, err := procfile.TaskSnapshot(root, runID)
+		if err != nil {
+			return fmt.Errorf("locate supervisor task %s in %s: %w", runID, root, err)
+		}
+		if len(snapshots) == 0 {
+			continue
+		}
+		return procfile.TaskControlTask(root, runID, taskID, action)
+	}
+	return fmt.Errorf("run %q not found", runID)
+}
+
 func (s *supervisorTaskSource) QueryMetric(_ context.Context, request metrics.QueryRequest) ([]metrics.Point, error) {
 	roots, err := runningSupervisorRoots()
 	if err != nil {

@@ -130,6 +130,22 @@ func TestFindGavelArtifacts(t *testing.T) {
 			want: []want{{StickyID: "gavel", ArtifactID: 555, ArtifactURL: "https://github.com/flanksource/gavel/actions/runs/999/artifacts/555", CommentID: 2}},
 		},
 		{
+			name: "repository-prefixed gavel header",
+			comments: []PRComment{
+				{
+					ID: 42,
+					Body: "<!-- sticky-comment:captain-gavel-test -->\n\n## Gavel summary\n\n" +
+						"[View full results](https://github.com/flanksource/captain/actions/runs/30736694536/artifacts/8829852604)",
+				},
+			},
+			want: []want{{
+				StickyID:    "captain-gavel-test",
+				ArtifactID:  8829852604,
+				ArtifactURL: "https://github.com/flanksource/captain/actions/runs/30736694536/artifacts/8829852604",
+				CommentID:   42,
+			}},
+		},
+		{
 			name: "matrix shards (PR 1926 shape)",
 			comments: []PRComment{
 				{
@@ -196,7 +212,11 @@ func TestFindGavelArtifacts(t *testing.T) {
 		{
 			name: "non-gavel sticky comments are ignored",
 			comments: []PRComment{
-				{ID: 1, Body: "<!-- sticky-comment:codecov -->\nCoverage report"},
+				{
+					ID: 1,
+					Body: "<!-- sticky-comment:codecov -->\nCoverage report\n" +
+						"[View full results](https://github.com/a/b/actions/runs/1/artifacts/23)",
+				},
 				{ID: 2, Body: "LGTM"},
 			},
 			want: nil,

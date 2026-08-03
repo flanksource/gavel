@@ -17,7 +17,7 @@ func (opts RepomapGetOptions) GetName() string {
 	return "get"
 }
 
-func (opts RepomapGetOptions) Help() api.Text {
+func (opts RepomapGetOptions) Help() api.Textable {
 	return clicky.Text(`Get the FileMap for a specific file path.
 
 This command returns the file mapping including detected language, scopes,

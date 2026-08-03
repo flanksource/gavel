@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, SplitButton, SplitPane } from '@flanksource/clicky-ui/components';
 import {
   UiBeaker,
@@ -12,12 +13,15 @@ import {
 } from '@flanksource/clicky-ui/icons';
 import type { Project } from '../types';
 import { Spinner } from '../icons/Spinner';
-import { CommitQueuePanel, commitQueueLockedFiles, type CommitQueueAction, type CommitQueueStatus } from './CommitQueuePanel';
+import { fetchJSON, mutationJSON, queryKeys } from '../query';
+import { useDocumentVisible } from '../useDocumentVisible';
 import { ProjectActionDialog, type ProjectAction } from './ProjectActionDialog';
 import { type ProjectActionStatus } from './ProjectActionFeedback';
 import { ProjectActionRunDialog, type ProjectRunnerAction } from './ProjectActionRunDialog';
+import { ProjectCommitTasks } from './ProjectCommitTasks';
 import { ProjectDiffView } from './ProjectDiffView';
 import { ProjectFileTree } from './ProjectFileTree';
+import { projectDiffQueryKey } from './projectMutations';
 
 export type FileState = 'staged' | 'unstaged' | 'both' | 'untracked' | 'conflict';
 
@@ -47,71 +51,88 @@ interface ProjectStatusResponse {
   files: ProjectFileStatus[];
   resultsStale: boolean;
   action: ProjectActionStatus;
-  commitQueue: CommitQueueStatus;
 }
+
+interface ProjectCommitRun {
+  runId: string;
+}
+
+type ProjectCommitAction = 'commit' | 'open-pr';
 
 interface Props {
   project: Project;
   diffPath?: string;
+  showResults?: boolean;
   onDiffPathChange?: (path: string) => void;
   onChanged?: () => void;
 }
 
 const ignoreDiffPathChange = () => {};
 const ignoreChanged = () => {};
+const STATUS_POLL_INTERVAL_MS = 750;
 
-export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
-  const [status, setStatus] = useState<ProjectStatusResponse | null>(null);
+export function ProjectStatusView({ project, diffPath = '', showResults = false, onDiffPathChange = ignoreDiffPathChange, onChanged = ignoreChanged }: Props) {
+  const queryClient = useQueryClient();
+  const visible = useDocumentVisible();
+  const statusQuery = useQuery({
+    queryKey: queryKeys.projectStatus(project.name, showResults),
+    queryFn: ({ signal }) => fetchJSON<ProjectStatusResponse>({
+      url: `/api/projects/${encodeURIComponent(project.name)}/status${showResults ? '?includeResults=true' : ''}`,
+      signal,
+      context: `Failed to load project status for ${project.name}`,
+    }),
+    enabled: visible,
+    staleTime: STATUS_POLL_INTERVAL_MS,
+    refetchInterval: query => visible && query.state.data?.action.running ? STATUS_POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+  const status = statusQuery.data ?? null;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
   const [advancedAction, setAdvancedAction] = useState<ProjectAction | null>(null);
   const [activeRun, setActiveRun] = useState<{ action: ProjectRunnerAction; runId: string } | null>(projectActionRunFromLocation);
-  const [diffRevision, setDiffRevision] = useState(0);
+  const [commitRunId, setCommitRunId] = useState('');
+  const [lockedFiles, setLockedFiles] = useState<Map<string, number>>(new Map());
+  const [commitTaskError, setCommitTaskError] = useState('');
   const actionWasRunning = useRef(false);
 
-  const load = useCallback(async (refreshDiff = false) => {
-    try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}/status`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Failed to load project status');
-      const next = payload as ProjectStatusResponse;
-      setStatus(next);
-      const locked = commitQueueLockedFiles(next.commitQueue);
-      const paths = new Set(next.files.filter(file => file.state !== 'conflict' && !locked.has(file.path)).map(file => file.path));
-      setSelected(current => new Set([...current].filter(path => paths.has(path))));
-      setError('');
-      if (refreshDiff) setDiffRevision(current => current + 1);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Failed to load project status');
-    } finally {
-      setLoading(false);
-    }
-  }, [project.name]);
+  const refreshProjectData = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.projectStatusScope(project.name) }),
+      queryClient.invalidateQueries({ queryKey: projectDiffQueryKey(project.name) }),
+    ]);
+  }, [project.name, queryClient]);
 
   useEffect(() => {
-    setStatus(null);
     setSelected(new Set());
     setActiveRun(projectActionRunFromLocation());
-    setLoading(true);
-    void load();
-  }, [load]);
+    setCommitRunId('');
+    setLockedFiles(new Map());
+    setCommitTaskError('');
+    setError('');
+    actionWasRunning.current = false;
+  }, [project.name]);
 
   const actionRunning = status?.action.running ?? false;
-  const commitQueueRunning = status?.commitQueue?.running ?? false;
 
   useEffect(() => {
-    if (!actionRunning && !commitQueueRunning) {
+    if (!actionRunning) {
       if (actionWasRunning.current) {
         actionWasRunning.current = false;
-        setDiffRevision(current => current + 1);
+        void queryClient.invalidateQueries({ queryKey: projectDiffQueryKey(project.name) });
       }
       return;
     }
     actionWasRunning.current = true;
-    const timer = window.setInterval(() => { void load(); }, 750);
-    return () => window.clearInterval(timer);
-  }, [actionRunning, commitQueueRunning, load]);
+  }, [actionRunning, project.name, queryClient]);
+
+  useEffect(() => {
+    if (!status) return;
+    const available = new Set(status.files
+      .filter(file => file.state !== 'conflict' && !commitTaskError && !lockedFiles.has(file.path))
+      .map(file => file.path));
+    setSelected(current => new Set([...current].filter(path => available.has(path))));
+  }, [commitTaskError, lockedFiles, status]);
 
   useEffect(() => {
     if (!diffPath || !status) return;
@@ -119,39 +140,80 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
     if (!present) onDiffPathChange('');
   }, [diffPath, onDiffPathChange, status]);
 
-  const lockedFiles = useMemo(() => commitQueueLockedFiles(status?.commitQueue), [status?.commitQueue]);
   const selectable = useMemo(
-    () => status?.files.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)) ?? [],
-    [lockedFiles, status],
+    () => commitTaskError ? [] : status?.files.filter(file => file.state !== 'conflict' && !lockedFiles.has(file.path)) ?? [],
+    [commitTaskError, lockedFiles, status],
   );
   const allSelected = selectable.length > 0 && selectable.every(file => selected.has(file.path));
   const selectedFiles = useMemo(() => [...selected].sort(), [selected]);
 
+  const queueCommitMutation = useMutation({
+    mutationFn: async ({ action, options, files }: {
+      action: ProjectCommitAction;
+      options?: Record<string, unknown>;
+      files: string[];
+    }) => {
+      const label = action === 'open-pr' ? 'open PR' : 'commit';
+      const result = await mutationJSON<ProjectCommitRun>({
+        url: `/api/projects/${encodeURIComponent(project.name)}/commit-queue`,
+        method: 'POST',
+        body: options ? { action, options } : { action, files },
+        context: `Failed to queue ${label} for ${project.name}`,
+      });
+      if (typeof result.runId !== 'string' || result.runId === '') {
+        throw new Error(`Failed to queue ${label} for ${project.name}: response did not include a run id`);
+      }
+      return result;
+    },
+    onSuccess: result => {
+      setCommitRunId(result.runId);
+      setSelected(new Set());
+      setError('');
+    },
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: async ({ action, body }: { action: ProjectRunnerAction; body: Record<string, unknown> }) => {
+      const result = await mutationJSON<ProjectActionStatus>({
+        url: `/api/projects/${encodeURIComponent(project.name)}/actions`,
+        method: 'POST',
+        body,
+        context: `Failed to start ${action} for ${project.name}`,
+      });
+      if (!result.runId) {
+        throw new Error(`Failed to start ${action} for ${project.name}: response did not include a test-runner id`);
+      }
+      return { actionStatus: result, runId: result.runId };
+    },
+    onSuccess: async ({ actionStatus, runId }, { action }) => {
+      setActiveRun({ action, runId });
+      queryClient.setQueryData<ProjectStatusResponse>(queryKeys.projectStatus(project.name, showResults), current => (
+        current ? { ...current, action: actionStatus } : current
+      ));
+      setError('');
+      if (!actionStatus.running) await refreshProjectData();
+    },
+  });
+
+  const ignoreMutation = useMutation({
+    mutationFn: ({ path, directory }: { path: string; directory: boolean }) => mutationJSON({
+      url: `/api/projects/${encodeURIComponent(project.name)}/ignore`,
+      method: 'POST',
+      body: { path, directory },
+      context: `Failed to ignore ${path} in ${project.name}`,
+    }),
+    onSuccess: async (_, { path, directory }) => {
+      setSelected(current => new Set([...current].filter(selectedPath => directory ? !selectedPath.startsWith(`${path}/`) : selectedPath !== path)));
+      setError('');
+      await refreshProjectData();
+    },
+  });
+
   // Commits go to the per-project queue rather than the one-shot action so a
   // second selection can be handed over while the first is still committing.
-  const queueCommit = useCallback(async (action: CommitQueueAction, options?: Record<string, unknown>) => {
-    const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}/commit-queue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(options ? { action, options } : { action, files: selectedFiles }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `Failed to queue ${action === 'open-pr' ? 'Open PR' : 'commit'}`);
-    setStatus(current => current ? { ...current, commitQueue: payload as CommitQueueStatus } : current);
-    setSelected(new Set());
-    setError('');
-  }, [project.name, selectedFiles]);
-
-  const cancelCommitGroup = useCallback(async (id: string) => {
-    try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}/commit-queue/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Failed to cancel commit group');
-      setStatus(current => current ? { ...current, commitQueue: payload as CommitQueueStatus } : current);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Failed to cancel commit group');
-    }
-  }, [project.name]);
+  const queueCommit = useCallback(async (action: ProjectCommitAction, options?: Record<string, unknown>) => {
+    await queueCommitMutation.mutateAsync({ action, options, files: selectedFiles });
+  }, [queueCommitMutation.mutateAsync, selectedFiles]);
 
   const startAction = useCallback(async (action: ProjectAction, options?: Record<string, unknown>) => {
     if (action === 'commit') return queueCommit('commit', options);
@@ -160,19 +222,8 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
       : action === 'lint' && selectedFiles.length > 0
         ? { action, files: selectedFiles }
         : { action };
-    const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}/actions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `Failed to start ${action}`);
-    const actionStatus = payload as ProjectActionStatus;
-    if (!actionStatus.runId) throw new Error(`${action} did not return a test-runner id`);
-    setActiveRun({ action, runId: actionStatus.runId });
-    setStatus(current => current ? { ...current, action: actionStatus } : current);
-    setError('');
-  }, [project.name, queueCommit, selectedFiles]);
+    await actionMutation.mutateAsync({ action, body });
+  }, [actionMutation.mutateAsync, queueCommit, selectedFiles]);
 
   const closeActiveRun = useCallback(() => {
     setActiveRun(null);
@@ -190,7 +241,7 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
     }
   }, [startAction]);
 
-  const queueSelected = useCallback(async (action: CommitQueueAction) => {
+  const queueSelected = useCallback(async (action: ProjectCommitAction) => {
     try {
       await queueCommit(action);
     } catch (cause) {
@@ -198,26 +249,23 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
     }
   }, [queueCommit]);
 
+  const refreshAfterCommit = useCallback(() => {
+    void refreshProjectData().catch(cause => setError(cause instanceof Error ? cause.message : 'Failed to refresh project data'));
+  }, [refreshProjectData]);
+
   const ignore = useCallback(async (path: string, directory: boolean) => {
     try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(project.name)}/ignore`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, directory }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || `Failed to ignore ${path}`);
-      setSelected(current => new Set([...current].filter(selectedPath => directory ? !selectedPath.startsWith(`${path}/`) : selectedPath !== path)));
-      await load(true);
+      await ignoreMutation.mutateAsync({ path, directory });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Failed to ignore ${path}`);
     }
-  }, [load, project.name]);
+  }, [ignoreMutation.mutateAsync]);
 
-  if (loading && !status) return <Centered><Spinner /> Loading project status…</Centered>;
-  if (!status) return <Centered>{error || 'Project status is unavailable.'}</Centered>;
+  const statusError = statusQuery.error instanceof Error ? statusQuery.error.message : '';
+  if (statusQuery.isPending && !status) return <Centered><Spinner /> Loading project status…</Centered>;
+  if (!status) return <Centered>{error || statusError || 'Project status is unavailable.'}</Centered>;
 
-  const busy = status.action.running;
+  const busy = status.action.running || actionMutation.isPending;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-border px-4 py-3">
@@ -258,7 +306,7 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
             <SplitButton
               variant="default"
               size="sm"
-              disabled={selected.size === 0}
+              disabled={selected.size === 0 || queueCommitMutation.isPending}
               label={<span className="flex items-center gap-1"><UiGitCommit />Commit selected ({selected.size})</span>}
               title="Commit options"
               onClick={() => void run('commit')}
@@ -273,16 +321,23 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
                 },
               ]}
             />
-            <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={() => void load(true)} aria-label="Refresh project status">
+            <Button type="button" variant="ghost" size="icon" disabled={busy} onClick={refreshAfterCommit} aria-label="Refresh project status">
               <UiRefresh />
             </Button>
           </div>
         </div>
-        {error && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</div>}
-        {status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
+        {(error || statusError) && <div role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{error || statusError}</div>}
+        {showResults && status.resultsStale && <div className="mt-2 text-xs text-amber-600">Test or lint results are from an earlier commit.</div>}
       </div>
 
-      <CommitQueuePanel queue={status.commitQueue} onCancel={id => void cancelCommitGroup(id)} />
+      <ProjectCommitTasks
+        key={project.name}
+        projectName={project.name}
+        preferredRunId={commitRunId}
+        onLockedFilesChange={setLockedFiles}
+        onErrorChange={setCommitTaskError}
+        onComplete={refreshAfterCommit}
+      />
 
       <SplitPane
         className="min-h-0 flex-1"
@@ -302,7 +357,7 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
                       type="checkbox"
                       aria-label="Select all files"
                       checked={allSelected}
-                      disabled={busy || selectable.length === 0}
+                      disabled={busy || ignoreMutation.isPending || commitTaskError !== '' || selectable.length === 0}
                       onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map(file => file.path)))}
                     />
                     Select all committable files
@@ -311,7 +366,8 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
                     files={status.files}
                     selected={selected}
                     locked={lockedFiles}
-                    disabled={busy}
+                    disabled={busy || ignoreMutation.isPending || commitTaskError !== ''}
+                    showResults={showResults}
                     diffPath={diffPath}
                     onDiffPathChange={onDiffPathChange}
                     onToggleFile={path => setSelected(current => togglePath(current, path))}
@@ -323,7 +379,7 @@ export function ProjectStatusView({ project, diffPath = '', onDiffPathChange = i
             </div>
           </div>
         }
-        right={<ProjectDiffView projectName={project.name} path={diffPath} refreshKey={diffRevision} />}
+        right={<ProjectDiffView projectName={project.name} path={diffPath} />}
       />
 
       <ProjectActionDialog

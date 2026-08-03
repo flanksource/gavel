@@ -1,14 +1,103 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Project, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoStatus } from '../../types';
-import { addCounts, emptyCounts, todoQuery } from './format';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoStatus } from '../../types';
+import { addCounts, emptyCounts } from './format';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
 import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
 import type { TodoSort } from './todoSort';
 import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
+import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys } from './todoQueries';
+import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 const activeTodoDetailPollInterval = 1000;
+
+export interface WorkspaceTodoError {
+  code: string;
+  message: string;
+}
+
+interface WorkspaceTodoBatchResult {
+  dir: string;
+  counts?: TodoCounts;
+  items: TodoItem[] | null;
+  error?: WorkspaceTodoError;
+}
+
+interface WorkspaceTodoBatchResponse {
+  results: WorkspaceTodoBatchResult[];
+}
+
+interface WorkspaceTodoBatchState {
+  byDir: Record<string, TodoListResponse>;
+  errorsByDir: Record<string, WorkspaceTodoError>;
+  error: string;
+}
+
+function normalizeWorkspaceDir(dir: string): string {
+  const trimmed = dir.trim();
+  if (!trimmed) return '';
+  const parts: string[] = [];
+  for (const part of trimmed.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `${trimmed.startsWith('/') ? '/' : ''}${parts.join('/')}` || (trimmed.startsWith('/') ? '/' : '.');
+}
+
+function workspaceTodoBatchState(dirs: string[], payload: WorkspaceTodoBatchResponse): WorkspaceTodoBatchState {
+  if (!Array.isArray(payload.results) || payload.results.length !== dirs.length) {
+    throw new Error(`Todo batch response returned ${payload.results?.length ?? 'no'} results for ${dirs.length} workspaces`);
+  }
+  const byDir: Record<string, TodoListResponse> = {};
+  const errorsByDir: Record<string, WorkspaceTodoError> = {};
+  for (let index = 0; index < dirs.length; index++) {
+    const dir = dirs[index];
+    const result = payload.results[index];
+    if (result?.dir !== dir) {
+      throw new Error(`Todo batch result ${index} returned workspace ${JSON.stringify(result?.dir)} instead of ${JSON.stringify(dir)}`);
+    }
+    if (result.error) {
+      if (!result.error.code?.trim() || !result.error.message?.trim()) {
+        throw new Error(`Todo batch result for ${dir} returned an invalid error`);
+      }
+      errorsByDir[dir] = result.error;
+      byDir[dir] = { dir, counts: emptyCounts, items: [] };
+      continue;
+    }
+    if (!result.counts || !Array.isArray(result.items)) {
+      throw new Error(`Todo batch result for ${dir} omitted counts or items`);
+    }
+    byDir[dir] = { dir, counts: result.counts, items: result.items };
+  }
+  return {
+    byDir,
+    errorsByDir,
+    error: [...new Set(Object.values(errorsByDir).map(result => result.message))].join('; '),
+  };
+}
+
+function responseError(payload: unknown, status: number): string {
+  if (typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string') {
+    return payload.error || `Load failed (HTTP ${status})`;
+  }
+  return `Load failed (HTTP ${status})`;
+}
+
+async function fetchWorkspaceTodoBatch(dirs: string[], signal: AbortSignal): Promise<WorkspaceTodoBatchState> {
+  const response = await fetch('/api/todos/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dirs }),
+    signal,
+  });
+  const payload = await response.json().catch(() => null) as WorkspaceTodoBatchResponse | null;
+  if (!response.ok) throw new Error(responseError(payload, response.status));
+  if (!payload) throw new Error('Todo batch response was not valid JSON');
+  return workspaceTodoBatchState(dirs, payload);
+}
 
 export interface SelectedTodo {
   dir: string;
@@ -16,7 +105,7 @@ export interface SelectedTodo {
 }
 
 // useWorkspaceTodos drives the shared todos data layer: it lists every
-// configured workspace's todos in parallel, loads the selected todo's detail,
+// configured workspace's todos in one batch, loads the selected todo's detail,
 // aggregates counts, and exposes the create/update/delete callbacks. Both the
 // dashboard TodoView and the compact MenubarTodos render off this one hook so
 // they hit the same /api/todos endpoints and stay in sync.
@@ -35,19 +124,37 @@ export function useWorkspaceTodos(
   onNavigate?: (id: string) => void,
   enabled = true,
 ) {
-  // Every configured workspace with a directory is listed straight from
-  // projects.json; ones with no todos render an empty "No todos" group.
-  const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
-  const dirsKey = useMemo(() => JSON.stringify(workspaces.map(w => w.dir)), [workspaces]);
-
-  const [byDir, setByDir] = useState<Record<string, TodoListResponse>>({});
-  const [loadingList, setLoadingList] = useState(false);
-  const [error, setError] = useState('');
-  const [detailError, setDetailError] = useState('');
-  const [refreshTick, setRefreshTick] = useState(0);
+  // Normalize and de-duplicate configured directories before they reach the
+  // strict batch API. Rendering retains projects.json order while the query key
+  // and request body use a stable set order.
+  const workspaces = useMemo(() => {
+    const seen = new Set<string>();
+    return projects.flatMap(project => {
+      const dir = normalizeWorkspaceDir(project.dir);
+      if (!dir || seen.has(dir)) return [];
+      seen.add(dir);
+      return [{ ...project, dir }];
+    });
+  }, [projects]);
+  const workspaceDirsKey = JSON.stringify(workspaces.map(workspace => workspace.dir).sort());
+  const workspaceDirs = useMemo(() => JSON.parse(workspaceDirsKey) as string[], [workspaceDirsKey]);
+  const listQueryKey = useMemo(() => workspaceTodoBatchKeys.list(workspaceDirs), [workspaceDirs]);
+  const queryClient = useQueryClient();
+  const listQuery = useQuery({
+    queryKey: listQueryKey,
+    queryFn: ({ signal }) => fetchWorkspaceTodoBatch(workspaceDirs, signal),
+    enabled: enabled && workspaceDirs.length > 0,
+    staleTime: Infinity,
+  });
+  const emptyByDir = useMemo(
+    () => Object.fromEntries(workspaceDirs.map(dir => [dir, { dir, counts: emptyCounts, items: [] }])),
+    [workspaceDirs],
+  );
+  const byDir = listQuery.data?.byDir ?? emptyByDir;
+  const errorsByDir = listQuery.data?.errorsByDir ?? {};
+  const error = listQuery.error?.message ?? listQuery.data?.error ?? '';
+  const loadingList = listQuery.isFetching;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
-  const [detail, setDetail] = useState<TodoItem | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   // Closed/Status filter: the set of statuses hidden from the lists. Defaults to
   // hiding completed (closed) and persists the user's choice across reloads.
@@ -89,138 +196,9 @@ export function useWorkspaceTodos(
     saveTimeRange(next);
   }, []);
 
-  // Fetch every workspace's todos in parallel; refetch only when the set of
-  // workspace directories changes or on an explicit refresh, not on every
-  // projects poll. A per-workspace failure degrades to an empty group.
-  useEffect(() => {
-    if (!enabled) return;
-    const dirs = JSON.parse(dirsKey) as string[];
-    if (dirs.length === 0) {
-      setByDir({});
-      setError('');
-      setLoadingList(false);
-      return;
-    }
-    let cancelled = false;
-    setLoadingList(true);
-    setError('');
-    (async () => {
-      const results = await Promise.all(dirs.map(async (dir) => {
-        try {
-          const res = await fetch(`/api/todos?${todoQuery(dir)}`);
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'Load failed');
-          return { dir, data: data as TodoListResponse, error: '' };
-        } catch (err: any) {
-          return {
-            dir,
-            data: { dir, counts: emptyCounts, items: [] } as TodoListResponse,
-            error: err?.message || 'Load failed',
-          };
-        }
-      }));
-      if (!cancelled) {
-        setByDir(Object.fromEntries(results.map(result => [result.dir, result.data])));
-        setError([...new Set(results.map(result => result.error).filter(Boolean))].join('; '));
-        setLoadingList(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [dirsKey, refreshTick, enabled]);
-
-  // A route lookup below already returns the full detail. Skip the ordinary
-  // dir-scoped refetch for that exact canonical selection.
-  const skipDetailKey = useRef('');
-  // Tracks the route identity that produced the current selection. It is
-  // declared before the detail effect so a route change can suppress a stale
-  // refetch of the previously selected canonical Todo while the new global
-  // UUID/alias lookup is in flight.
+  // The applied route identity distinguishes a URL-driven selection from a
+  // locally clicked one while the parent catches up with onNavigate.
   const appliedId = useRef('');
-
-  // Load a clicked todo's detail (body + history).
-  useEffect(() => {
-    if (!selected) {
-      if (!selectedId) {
-        setDetail(null);
-        setDetailError('');
-        setLoadingDetail(false);
-      }
-      return;
-    }
-    if (onNavigate && selectedId !== appliedId.current) return;
-    const selectionKey = `${selected.dir}\u0000${selected.ref}`;
-    if (skipDetailKey.current === selectionKey) {
-      skipDetailKey.current = '';
-      setLoadingDetail(false);
-      return;
-    }
-    let cancelled = false;
-    setLoadingDetail(true);
-    setDetailError('');
-    (async () => {
-      try {
-        const params = new URLSearchParams(todoQuery(selected.dir));
-        params.set('ref', selected.ref);
-        const res = await fetch(`/api/todos/item?${params.toString()}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Load failed');
-        if (!cancelled) setDetail(data as TodoItem);
-      } catch (err: any) {
-        if (!cancelled) {
-          setDetail(null);
-          setDetailError(err?.message || 'Load failed');
-        }
-      } finally {
-        if (!cancelled) setLoadingDetail(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [selected, selectedId, onNavigate]);
-
-  // Inline agents discover their provider session ID after the run request has
-  // already returned. Keep the selected detail current while execution is live
-  // so the Session tab can attach as soon as that identity is persisted, and so
-  // the terminal plan/run projection replaces the optimistic in-progress row
-  // without requiring a manual page refresh. This deliberately polls only the
-  // selected detail; workspace lists refresh once when the run leaves the
-  // active state instead of fanning out on every tick.
-  useEffect(() => {
-    if (!selected || detail?.status !== 'in_progress') return;
-
-    let cancelled = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      let stillActive = true;
-      try {
-        const params = new URLSearchParams(todoQuery(selected.dir));
-        params.set('ref', selected.ref);
-        const res = await fetch(`/api/todos/item?${params.toString()}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Load failed');
-        if (cancelled) return;
-        const next = data as TodoItem;
-        stillActive = next.status === 'in_progress';
-        setDetail(next);
-        if (!stillActive) setRefreshTick(tick => tick + 1);
-      } catch {
-        // A transient detail read must not disconnect a live session. The next
-        // tick retries while the locally projected todo is still active.
-      }
-      if (!cancelled && stillActive) {
-        timer = window.setTimeout(poll, activeTodoDetailPollInterval);
-      }
-    };
-
-    timer = window.setTimeout(poll, activeTodoDetailPollInterval);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [detail?.status, selected]);
-
-  // select changes the active todo and pushes its ref into the URL (when the
-  // caller wired onNavigate). The resolution effect below mirrors the reverse —
-  // a URL change (deep link, back/forward) into `selected`.
   const selectedRef = useRef<SelectedTodo | null>(null);
   const setSelection = useCallback((next: SelectedTodo | null) => {
     selectedRef.current = next;
@@ -228,85 +206,91 @@ export function useWorkspaceTodos(
   }, []);
   const select = useCallback((next: SelectedTodo | null) => {
     appliedId.current = next?.ref ?? '';
-    setDetailError('');
     setSelection(next);
     onNavigate?.(next?.ref ?? '');
   }, [onNavigate, setSelection]);
 
-  // Resolve a deep link directly by reference, independently of the workspace
-  // list requests. The database endpoint resolves canonical IDs, short IDs, and
-  // imported aliases globally and returns the canonical ref plus workspace CWD.
-  // Adopt those for subsequent mutations but do not navigate: an alias URL must
-  // remain stable when it resolves successfully.
+  const resolvingRoute = !!selectedId
+    && selectedId !== appliedId.current
+    && selectedRef.current?.ref !== selectedId;
+  const globalDetailQuery = useQuery({
+    ...todoGlobalItemQueryOptions(selectedId),
+    enabled: resolvingRoute,
+  });
+  const selectedDetailQuery = useQuery({
+    ...todoItemQueryOptions(selected?.dir ?? '', selected?.ref ?? '', {
+      pollWhileActive: true,
+      intervalMs: activeTodoDetailPollInterval,
+    }),
+    enabled: !!selected && !resolvingRoute,
+  });
+  const detail = resolvingRoute ? null : selectedDetailQuery.data ?? null;
+  const detailError = resolvingRoute
+    ? globalDetailQuery.error?.message ?? ''
+    : selectedDetailQuery.error?.message ?? '';
+  const loadingDetail = resolvingRoute
+    ? globalDetailQuery.isFetching
+    : !!selected && selectedDetailQuery.isFetching && !selectedDetailQuery.data;
+
+  // Refresh the batch once when a polled run becomes terminal. React Query owns
+  // the visible-only interval and retains the last good detail on read errors.
+  const previousDetail = useRef<{ key: string; status?: TodoStatus }>({ key: '' });
+  useEffect(() => {
+    const key = selected ? `${selected.dir}\u0000${selected.ref}` : '';
+    const status = detail?.status;
+    const previous = previousDetail.current;
+    if (previous.key === key && previous.status === 'in_progress' && status && status !== 'in_progress') {
+      void queryClient.invalidateQueries({ queryKey: listQueryKey, exact: true });
+    }
+    previousDetail.current = { key, status };
+  }, [detail?.status, listQueryKey, queryClient, selected]);
+
+  // Resolve a deep link independently of the batch. The global query accepts a
+  // canonical ID, short ID, session ID, or imported alias; seed its canonical
+  // workspace query so adopting the selection does not issue a duplicate read.
   useEffect(() => {
     if (selectedId === appliedId.current) return;
     if (!selectedId) {
       appliedId.current = '';
       setSelection(null);
-      setDetail(null);
-      setDetailError('');
-      setLoadingDetail(false);
       return;
     }
     if (selectedRef.current?.ref === selectedId) {
       appliedId.current = selectedId;
       return;
     }
-
-    let cancelled = false;
     setSelection(null);
-    setDetail(null);
-    setDetailError('');
-    setLoadingDetail(true);
-    (async () => {
-      try {
-        const params = new URLSearchParams({ ref: selectedId });
-        const res = await fetch(`/api/todos/item?${params.toString()}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `Load failed (HTTP ${res.status})`);
-        const todo = data as TodoItem & { dir?: string };
-        const canonicalRef = todo.ref?.trim();
-        const canonicalDir = todo.cwd?.trim() || todo.dir?.trim();
-        if (!canonicalRef) throw new Error('Database returned a todo without a canonical reference');
-        if (!canonicalDir) throw new Error('Database returned a todo without a workspace directory');
-        if (cancelled) return;
-        appliedId.current = selectedId;
-        skipDetailKey.current = `${canonicalDir}\u0000${canonicalRef}`;
-        setSelection({ dir: canonicalDir, ref: canonicalRef });
-        setDetail(todo);
-      } catch (err: any) {
-        if (!cancelled) {
-          appliedId.current = selectedId;
-          setDetailError(err?.message || 'Load failed');
-        }
-      } finally {
-        if (!cancelled) setLoadingDetail(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [selectedId, setSelection]);
+    const todo = globalDetailQuery.data;
+    if (!todo) return;
+    const canonicalRef = todo.ref.trim();
+    const canonicalDir = todo.cwd?.trim() || todo.dir?.trim() || '';
+    appliedId.current = selectedId;
+    queryClient.setQueryData(todoQueryKeys.item(canonicalDir, canonicalRef), todo);
+    setSelection({ dir: canonicalDir, ref: canonicalRef });
+  }, [globalDetailQuery.data, queryClient, selectedId, setSelection]);
 
   const aggregate = useMemo(
     () => workspaces.reduce((acc, ws) => addCounts(acc, byDir[ws.dir]?.counts ?? ws.todoCounts ?? emptyCounts), emptyCounts),
     [workspaces, byDir],
   );
 
-  const refresh = useCallback(() => setRefreshTick(t => t + 1), []);
+  const refresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: listQueryKey, exact: true });
+  }, [listQueryKey, queryClient]);
 
   const created = useCallback((dir: string, todo: TodoItem) => {
     setShowCreate(false);
+    setTodoQueryData(queryClient, dir, todo);
     select({ dir, ref: todo.ref });
-    setDetail(todo);
     refresh();
-  }, [refresh, select]);
+  }, [queryClient, refresh, select]);
 
   const updateItem = useCallback((todo: TodoItem) => {
-    setDetail(todo);
+    if (selected) setTodoQueryData(queryClient, selected.dir, todo);
     refresh();
-  }, [refresh]);
+  }, [queryClient, refresh, selected]);
 
   const deleted = useCallback(() => {
-    setDetail(null);
     select(null);
     refresh();
   }, [refresh, select]);
@@ -314,14 +298,15 @@ export function useWorkspaceTodos(
   // A transferred todo now lives in the target workspace: follow it there so the
   // detail pane keeps showing it after the move (the source list loses it).
   const transferred = useCallback((toDir: string, todo: TodoItem) => {
+    setTodoQueryData(queryClient, toDir, todo);
     select({ dir: toDir, ref: todo.ref });
-    setDetail(todo);
     refresh();
-  }, [refresh, select]);
+  }, [queryClient, refresh, select]);
 
   return {
     workspaces,
     byDir,
+    errorsByDir,
     loadingList,
     error,
     detailError,

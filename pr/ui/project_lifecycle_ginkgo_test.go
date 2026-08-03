@@ -42,16 +42,16 @@ var _ = Describe("project status lifecycle", func() {
 		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
 			Expect(workDir).To(Equal("/work/gavel"))
 			Expect(opts.NoRepomap).To(BeTrue())
+			Expect(opts.NoResults).To(BeTrue())
 			return &status.Result{
 				WorkDir: "/work/gavel",
 				Branch:  "feature/projects",
 				Files: []status.FileStatus{{
-					Path:       "pr/ui/src/App.tsx",
-					State:      status.StateUnstaged,
-					WorkKind:   status.KindModified,
-					Adds:       12,
-					Dels:       3,
-					TestStatus: status.TestStatus{Passed: 4},
+					Path:     "pr/ui/src/App.tsx",
+					State:    status.StateUnstaged,
+					WorkKind: status.KindModified,
+					Adds:     12,
+					Dels:     3,
 				}},
 			}, nil
 		}
@@ -70,14 +70,57 @@ var _ = Describe("project status lifecycle", func() {
 			WorkDir: "/work/gavel",
 			Branch:  "feature/projects",
 			Files: []projectFileStatus{{
-				Path:       "pr/ui/src/App.tsx",
-				State:      status.StateUnstaged,
-				WorkKind:   status.KindModified,
-				Adds:       12,
-				Dels:       3,
-				TestStatus: projectTestStatus{Passed: 4},
+				Path:     "pr/ui/src/App.tsx",
+				State:    status.StateUnstaged,
+				WorkKind: status.KindModified,
+				Adds:     12,
+				Dels:     3,
 			}},
 		}))
+		var rawResponse map[string]any
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &rawResponse)).To(Succeed())
+		Expect(rawResponse).NotTo(HaveKey("commitQueue"))
+	})
+
+	It("includes snapshot-derived project results only when requested", func() {
+		originalGather := gatherProjectStatus
+		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
+			Expect(workDir).To(Equal("/work/gavel"))
+			Expect(opts.NoResults).To(BeFalse())
+			return &status.Result{
+				WorkDir:      workDir,
+				ResultsStale: true,
+				Files: []status.FileStatus{{
+					Path:         "pr/ui/src/App.tsx",
+					TestStatus:   status.TestStatus{Passed: 4},
+					ResultsStale: true,
+				}},
+			}, nil
+		}
+		DeferCleanup(func() { gatherProjectStatus = originalGather })
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status?includeResults=true", nil)
+		request.SetPathValue("name", "gavel")
+		(&Server{}).handleProjectStatus(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		var response projectStatusResponse
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.ResultsStale).To(BeTrue())
+		Expect(response.Files).To(HaveLen(1))
+		Expect(response.Files[0].TestStatus.Passed).To(Equal(4))
+		Expect(response.Files[0].ResultsStale).To(BeTrue())
+	})
+
+	It("rejects an invalid includeResults option", func() {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/status?includeResults=sometimes", nil)
+		request.SetPathValue("name", "gavel")
+		(&Server{}).handleProjectStatus(recorder, request)
+
+		Expect(recorder.Code).To(Equal(http.StatusBadRequest), recorder.Body.String())
+		Expect(recorder.Body.String()).To(ContainSubstring("includeResults"))
 	})
 
 	It("serves deep links for the dedicated projects tab", func() {
@@ -96,6 +139,9 @@ var _ = Describe("project status lifecycle", func() {
 		statusPath, ok := paths["/api/projects/{name}/status"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(statusPath).To(HaveKey("get"))
+		statusJSON, err := json.Marshal(statusPath["get"])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(statusJSON)).To(ContainSubstring(`"name":"includeResults"`))
 
 		actionsPath, ok := paths["/api/projects/{name}/actions"].(map[string]any)
 		Expect(ok).To(BeTrue())
@@ -116,6 +162,11 @@ var _ = Describe("project status lifecycle", func() {
 		runPath, ok := paths["/api/project-runs/{runId}/api/tests/stream"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(runPath).To(HaveKey("get"))
+
+		commitPath, ok := paths["/api/projects/{name}/commit-queue"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(commitPath).To(HaveKey("post"))
+		Expect(paths).NotTo(HaveKey("/api/projects/{name}/commit-queue/{id}"))
 	})
 
 	It("serves project action schemas from the injected command provider", func() {
@@ -219,6 +270,17 @@ var _ = Describe("project status lifecycle", func() {
 
 		Expect(<-commands).To(Equal([]string{"lint", "--work-dir", "/work/gavel"}))
 		Expect(<-commands).To(Equal([]string{"test", "--work-dir", "/work/gavel", "--changed"}))
+	})
+
+	It("validates project action files without loading historical results", func() {
+		originalGather := gatherProjectStatus
+		gatherProjectStatus = func(_ string, opts status.Options) (*status.Result, error) {
+			Expect(opts.NoResults).To(BeTrue())
+			return &status.Result{Files: []status.FileStatus{{Path: "one.go"}}}, nil
+		}
+		DeferCleanup(func() { gatherProjectStatus = originalGather })
+
+		Expect(validateProjectActionFiles("/work/gavel", []string{"one.go"})).To(Succeed())
 	})
 
 	It("serves test and lint action details from isolated runner SSE streams", func() {

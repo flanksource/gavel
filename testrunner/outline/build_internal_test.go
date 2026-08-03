@@ -46,9 +46,16 @@ var _ = Describe("Build", func() {
 		}
 	})
 
-	It("rejects unsupported frameworks", func() {
-		_, err := Build(Options{WorkDir: "testdata", Frameworks: []parsers.Framework{parsers.Jest}})
-		Expect(err).To(MatchError(ContainSubstring("not supported by outline")))
+	It("registers every runnable framework plus markdown fixtures", func() {
+		Expect(SupportedFrameworks()).To(Equal(append(
+			append([]parsers.Framework{}, parsers.AllFrameworks...),
+			parsers.Fixture,
+		)))
+	})
+
+	It("rejects unknown frameworks", func() {
+		_, err := Build(Options{WorkDir: "testdata", Frameworks: []parsers.Framework{"unknown"}})
+		Expect(err).To(MatchError(ContainSubstring("unknown framework")))
 	})
 })
 

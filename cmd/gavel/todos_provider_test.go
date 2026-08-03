@@ -191,6 +191,14 @@ func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 
 type testPlanReviewProvider struct {
 	*testTODOProvider
+	lastPlan  string
+	planActor string
+}
+
+func (p *testPlanReviewProvider) SavePlanRevision(_ context.Context, todo *types.TODO, markdown, actor string) (*types.TODO, error) {
+	p.lastPlan = markdown
+	p.planActor = actor
+	return todo, nil
 }
 
 func (p *testPlanReviewProvider) ApprovePlan(ctx context.Context, todo *types.TODO, _, _ string) (*types.TODO, error) {

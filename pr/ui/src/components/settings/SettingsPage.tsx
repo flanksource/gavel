@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, Suspense } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Button,
   JsonSchemaForm,
@@ -20,17 +21,13 @@ import type { Project } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { sectionIcon } from "../../icons/settings";
 import { useProjectRegistration, ProjectFields } from "../ProjectForm";
-import {
-  buildRunFamilies,
-  type RunContext,
-} from "../todos/providers";
+import { buildRunFamilies } from "../todos/providers";
 import {
   TABS,
   WORKSPACE_TAB,
   SECTION_TITLES,
   decorateSchema,
   usesPromptPicker,
-  type PromptDescriptor,
 } from "./schema";
 import { promptModelCatalog } from "./models";
 import { buildPre, buildPost } from "./extensions";
@@ -38,6 +35,14 @@ import { LayerSwitch } from "./LayerSwitch";
 import { SettingsSectionCard } from "./SettingsSectionCard";
 import { SaveBar } from "./SaveBar";
 import type { GavelTrace, SettingsLayer } from "./provenance";
+import {
+  settingsConfigQuery,
+  settingsPromptsQuery,
+  settingsRunContextQuery,
+  settingsSchemaQuery,
+  settingsTraceQuery,
+} from "./queries";
+import { useSaveSettingsMutation } from "./mutations";
 
 // Two-digit section index shown in each SectionCard header (01, 02, …).
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -58,11 +63,6 @@ interface Props {
   onSaved: () => void;
 }
 
-// The schema and prompt registry are identical for every scope, so fetch each
-// once and reuse across page opens.
-let schemaCache: JsonSchemaObject | null = null;
-let promptsCache: Record<string, PromptDescriptor> | null = null;
-
 // scopeQueryFor maps the edited layer to the single-file settings endpoint's
 // query: the user layer is always the global ~/.gavel.yaml; the project layer is
 // the workspace's own .gavel.yaml.
@@ -80,27 +80,34 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
   const project = scope.kind === "project" ? scope.project : null;
   const hasProject = project != null;
 
-  const [schema, setSchema] = useState<JsonSchemaObject | null>(schemaCache);
-  const [registry, setRegistry] = useState<Record<
-    string,
-    PromptDescriptor
-  > | null>(promptsCache);
   const [value, setValue] = useState<Record<string, unknown>>({});
   const [path, setPath] = useState("");
-  const [trace, setTrace] = useState<GavelTrace | null>(null);
-  const [runContext, setRunContext] = useState<RunContext | null>(null);
   const [layer, setLayer] = useState<SettingsLayer>(
     hasProject ? "project" : "user"
   );
   const [tab, setTab] = useState(TABS[0].id);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
 
   const reg = useProjectRegistration({ open: hasProject, project });
   const isWorkspaceTab = hasProject && tab === WORKSPACE_TAB;
   const query = scopeQueryFor(layer, project);
+  const traceScopeQuery = hasProject
+    ? `project=${encodeURIComponent(project.name)}`
+    : "scope=global";
+  const schemaResult = useQuery(settingsSchemaQuery());
+  const promptsResult = useQuery(settingsPromptsQuery());
+  const runContextResult = useQuery(settingsRunContextQuery());
+  const traceResult = useQuery(settingsTraceQuery(traceScopeQuery));
+  const configResult = useQuery(settingsConfigQuery(query));
+  const saveSettings = useSaveSettingsMutation(query);
+  const schema = useMemo(
+    () => schemaResult.data ? decorateSchema(schemaResult.data) : null,
+    [schemaResult.data]
+  );
+  const registry = promptsResult.data ?? null;
+  const runContext = runContextResult.data ?? null;
+  const trace: GavelTrace | null = traceResult.data ?? null;
 
   const promptModels = useMemo(
     () => runContext ? promptModelCatalog(runContext) : [],
@@ -133,109 +140,27 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
   }, [hasProject, project?.name]);
 
   useEffect(() => {
-    if (schemaCache) return;
-    fetch("/api/settings/schema")
-      .then((r) => r.json())
-      .then((s: JsonSchemaObject) => {
-        schemaCache = decorateSchema(s);
-        setSchema(schemaCache);
-      })
-      .catch((e) => setError(e?.message || "failed to load schema"));
-  }, []);
-
-  useEffect(() => {
-    if (promptsCache) return;
-    fetch("/api/settings/prompts")
-      .then((r) => r.json())
-      .then((list: PromptDescriptor[]) => {
-        promptsCache = Object.fromEntries((list ?? []).map((p) => [p.id, p]));
-        setRegistry(promptsCache);
-      })
-      .catch((e) => setError(e?.message || "failed to load prompt registry"));
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/todos/run/context")
-      .then(async (r) => {
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-        return data;
-      })
-      .then((data: RunContext) => {
-        if (!cancelled) setRunContext(data);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setRunContext(null);
-          setError(e instanceof Error ? e.message : "Failed to load Captain run providers");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // The layer trace feeds read-only provenance badges. It spans every layer for
-  // the widest scope (project when present) so a badge is correct regardless of
-  // which layer is being edited.
-  useEffect(() => {
-    const traceQuery = hasProject
-      ? `project=${encodeURIComponent(project.name)}`
-      : "scope=global";
-    let cancelled = false;
-    fetch(`/api/settings/gavel/trace?${traceQuery}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data: GavelTrace) => {
-        if (!cancelled) setTrace(data);
-      })
-      .catch(() => {
-        if (!cancelled) setTrace(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [hasProject, project?.name]);
+    setError("");
+    setDirty(false);
+  }, [query]);
 
   // Load the edited layer's single file. Re-runs when the layer switches.
   useEffect(() => {
-    setError("");
+    if (!configResult.data) return;
     setDirty(false);
-    setLoading(true);
-    fetch(`/api/settings/gavel?${query}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((resp) => {
-        setValue((resp.config as Record<string, unknown>) ?? {});
-        setPath(resp.path || "");
-      })
-      .catch((e) => setError(e?.message || "failed to load config"))
-      .finally(() => setLoading(false));
-  }, [query]);
+    setValue(configResult.data.config ?? {});
+    setPath(configResult.data.path || "");
+  }, [query, configResult.data]);
 
   async function saveConfig() {
-    setSaving(true);
     setError("");
     try {
-      const res = await fetch(`/api/settings/gavel?${query}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(value),
-      });
-      if (!res.ok) {
-        setError((await res.text()) || `HTTP ${res.status}`);
-        return;
-      }
+      const saved = await saveSettings.mutateAsync(value);
+      setValue(saved.config ?? {});
+      setPath(saved.path || "");
       setDirty(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "save failed");
-    } finally {
-      setSaving(false);
+      setError(e instanceof Error ? e.message : "Failed to save settings");
     }
   }
 
@@ -247,13 +172,19 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
     }
   }
 
-  function onDiscard() {
+  async function onDiscard() {
     // Reload the current layer, dropping in-memory edits.
-    setDirty(false);
-    fetch(`/api/settings/gavel?${query}`)
-      .then((r) => r.json())
-      .then((resp) => setValue((resp.config as Record<string, unknown>) ?? {}))
-      .catch(() => {});
+    setError("");
+    try {
+      const result = await configResult.refetch({ throwOnError: true });
+      if (result.data) {
+        setValue(result.data.config ?? {});
+        setPath(result.data.path || "");
+        setDirty(false);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reload settings");
+    }
   }
 
   // updateSection replaces one top-level section of the config and marks dirty.
@@ -303,6 +234,13 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
   }
 
   const configReady = schema && registry;
+  const queryFailure = schemaResult.error
+    ?? promptsResult.error
+    ?? runContextResult.error
+    ?? traceResult.error
+    ?? configResult.error;
+  const errorMessage = error || (queryFailure instanceof Error ? queryFailure.message : "");
+  const loading = configResult.isPending || schemaResult.isPending || promptsResult.isPending;
   const layerLabel = layer === "user" ? "User layer" : "Project layer";
   // clicky-ui ships React 18 types; our icon components are typed against React
   // 19, so the structurally-identical icon prop needs a cast at this boundary.
@@ -365,8 +303,8 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
 
       <div className="min-h-0 flex-1 overflow-y-auto @container">
         <div className="mx-auto max-w-[820px] px-density-4 py-density-4">
-          {error && (
-            <div role="alert" className="mb-3 text-sm text-destructive">{error}</div>
+          {errorMessage && (
+            <div role="alert" className="mb-3 text-sm text-destructive">{errorMessage}</div>
           )}
 
           {isWorkspaceTab ? (
@@ -445,7 +383,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
         <SaveBar
           path={path}
           dirty={dirty}
-          saving={saving}
+          saving={saveSettings.isPending}
           onDiscard={onDiscard}
           onSave={onSave}
         />

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SessionInspector,
   type SessionAgent,
@@ -16,7 +17,9 @@ import { UiCheck, UiChevronDown, UiChevronRight, UiCopy, UiError, UiStop, UiWarn
 import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionDiagnostic } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { copyText } from '../../clipboard';
-import { sessionResponseError } from './SessionErrorDetails';
+import { sessionDetailQueryOptions } from './todoQueries';
+
+export { fetchTodoSessionDetail } from './todoQueries';
 
 export interface TodoSessionDetailOptions {
   /** Skip the provider thread — the attempt list and its DoD payloads only. */
@@ -26,55 +29,18 @@ export interface TodoSessionDetailOptions {
 }
 
 export function useTodoSessionDetail(dir: string, ref: string, sessionId: string | undefined, active: boolean, opts: TodoSessionDetailOptions = {}) {
-  const [detail, setDetail] = useState<TodoSessionDetailResponse | null>(null);
-  const [error, setError] = useState('');
   const { attemptsOnly = false, intervalMs = 1500 } = opts;
-
-  // Clearing the loaded detail is keyed on identity alone: changing the poll
-  // period (a tab switch does exactly that) must not blank the list.
-  useEffect(() => {
-    setDetail(null);
-    setError('');
-  }, [dir, ref, sessionId]);
-
-  useEffect(() => {
-    if (!active || !ref) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const body = await fetchTodoSessionDetail(dir, ref, sessionId, { attemptsOnly });
-        if (!cancelled) {
-          setDetail(body);
-          setError('');
-        }
-      } catch (reason) {
-        if (!cancelled) setError(`Session detail request failed\n${reason instanceof Error ? reason.stack || reason.message : String(reason)}`);
-      }
-    };
-    void poll();
-    const timer = window.setInterval(poll, intervalMs);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [active, dir, ref, sessionId, attemptsOnly, intervalMs]);
-
-  return { detail, error };
-}
-
-export async function fetchTodoSessionDetail(dir: string, ref: string, sessionId?: string, opts: { attemptsOnly?: boolean } = {}) {
-  const params = new URLSearchParams();
-  if (dir.trim()) params.set('dir', dir.trim());
-  params.set('ref', ref);
-  if (sessionId) params.set('sessionId', sessionId);
-  if (opts.attemptsOnly) params.set('attempts', 'only');
-  const response = await fetch(`/api/todos/session/detail?${params.toString()}`);
-  const body = (await response
-    .clone()
-    .json()
-    .catch(() => null)) as TodoSessionDetailResponse | null;
-  if ((response.ok || response.status === 409) && body?.attempts && body.diagnostics) return body;
-  throw new Error(await sessionResponseError(response, 'Session detail request failed'));
+  const enabled = active && !!ref;
+  const query = useQuery({
+    ...sessionDetailQueryOptions(dir, ref, sessionId, attemptsOnly, intervalMs),
+    enabled,
+  });
+  return {
+    detail: enabled ? query.data ?? null : null,
+    error: enabled && query.error
+      ? `Session detail request failed\n${query.error instanceof Error ? query.error.stack || query.error.message : String(query.error)}`
+      : '',
+  };
 }
 
 export function SessionDiagnostics({ diagnostics }: { diagnostics: TodoSessionDiagnostic[] }) {
@@ -137,15 +103,16 @@ export function ThreadInspector({
   pendingTools: SessionPendingTool[];
   onPendingToolDecision: (decision: SessionToolDecision) => Promise<void> | void;
 }) {
+  const queryClient = useQueryClient();
   const loadAttempt = useCallback(
     async (attempt: TodoSessionAttempt) => {
       const sessionId = attempt.executionSessionId || attempt.providerSessionId;
       if (!sessionId) throw new Error(`Attempt #${attempt.ordinal} has no execution session`);
-      const loaded = await fetchTodoSessionDetail(dir, todoRef, sessionId);
+      const loaded = await queryClient.fetchQuery(sessionDetailQueryOptions(dir, todoRef, sessionId, false, 1_500));
       if (!loaded.thread) throw new Error(`Attempt #${attempt.ordinal} has no provider thread`);
       return attemptThreadSession(loaded);
     },
-    [dir, todoRef]
+    [dir, queryClient, todoRef]
   );
   const collection = useMemo(() => attemptSessionCollection(detail, entries, loadAttempt), [detail, entries, loadAttempt]);
   return (

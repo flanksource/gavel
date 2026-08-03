@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Field, Button, Select } from '@flanksource/clicky-ui/components';
 import { UiClose } from '@flanksource/clicky-ui/icons';
-import type { ProcStatus, Project, TodoItem, TodoListResponse, TodoPriority, TodoStatus } from '../../types';
+import type { ProcStatus, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoCommentFormData, todoFormData, useAttachments } from './attachments';
-import { inputClass, priorities, statuses, statusLabel, todoQuery } from './format';
+import { inputClass, priorities, statuses, statusLabel } from './format';
+import { useCreateTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import { todoListQueryOptions } from './todoQueries';
 
 // firstParam reads the first present query value across a set of aliases so
 // external callers can use the field name they have (e.g. ?body= or ?text=).
@@ -153,12 +156,19 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
   const [status, setStatus] = useState<TodoStatus>(() => oneOf(firstParam(params, 'status'), statuses, autoSave ? 'pending' : 'draft'));
   const [todoSearch, setTodoSearch] = useState('');
   const [selectedRef, setSelectedRef] = useState(queryRef);
-  const [existingTodos, setExistingTodos] = useState<TodoItem[]>([]);
-  const [loadingTodos, setLoadingTodos] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [completeMessage, setCompleteMessage] = useState('');
   const { attachments, previews, add, remove } = useAttachments({ pasteAnywhere: true });
+  const existingTodosQuery = useQuery({
+    ...todoListQueryOptions(dir),
+    enabled: mode === 'existing' && !!dir,
+  });
+  const createTodo = useCreateTodoMutation(dir);
+  const commentTodo = useUpdateTodoMutation(dir, `Failed to add comment to todo ${selectedRef}`);
+  const existingTodos = existingTodosQuery.data?.items ?? [];
+  const loadingTodos = existingTodosQuery.isFetching;
+  const busy = createTodo.isPending || commentTodo.isPending;
+  const visibleError = error || (existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
   const showModeSwitch = embed || initialMode === 'existing';
 
   const setDir = useCallback((next: string) => {
@@ -186,33 +196,6 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
     window.parent.postMessage({ source: 'gavel-react-grab', type: 'embed-ready' }, '*');
     return () => window.removeEventListener('message', onMessage);
   }, [embed, add]);
-
-  useEffect(() => {
-    if (mode !== 'existing') return;
-    if (!dir) {
-      setExistingTodos([]);
-      return;
-    }
-    const controller = new AbortController();
-    setLoadingTodos(true);
-    setError('');
-    (async () => {
-      try {
-        const res = await fetch(`/api/todos?${todoQuery(dir)}`, { signal: controller.signal });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Load failed');
-        setExistingTodos((data as TodoListResponse).items || []);
-      } catch (err: any) {
-        if (err?.name !== 'AbortError') {
-          setExistingTodos([]);
-          setError(err?.message || 'Load failed');
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoadingTodos(false);
-      }
-    })();
-    return () => controller.abort();
-  }, [dir, mode]);
 
   const selectableTodos = useMemo(
     () => existingTodos
@@ -254,21 +237,16 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
 
   async function submitNew() {
     if (!title.trim() || busy) return;
-    setBusy(true);
     setError('');
     try {
-      const url = `/api/todos/new?${todoQuery(dir)}`;
       // With attachments, post multipart so the image bytes ride along and the
       // server persists them; otherwise keep the lighter JSON path.
-      const response = attachments.length
-        ? await fetch(url, { method: 'POST', body: todoFormData({ title, body, priority, status }, attachments) })
-        : await fetch(url, {
-            method: 'POST',
+      const data = await createTodo.mutateAsync(attachments.length
+        ? { body: todoFormData({ title, body, priority, status }, attachments) }
+        : {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title, body, priority, status }),
           });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Create failed');
       const todo = data.todo as TodoItem | undefined;
       if (embed) {
         setCompleteMessage('Todo created');
@@ -276,27 +254,25 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
         return;
       }
       leave(back ?? (todo?.ref ? `/todos/${encodeURIComponent(todo.ref)}` : '/todos'));
-    } catch (err: any) {
-      setError(err?.message || 'Create failed');
-      setBusy(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create todo');
     }
   }
 
   async function submitExisting() {
     if (!selectedRef || busy || (!body.trim() && attachments.length === 0)) return;
-    setBusy(true);
     setError('');
     try {
-      const url = `/api/todos/item?${todoQuery(dir)}`;
-      const response = attachments.length
-        ? await fetch(url, { method: 'PATCH', body: todoCommentFormData({ ref: selectedRef, comment: body }, attachments) })
-        : await fetch(url, {
-            method: 'PATCH',
+      const data = await commentTodo.mutateAsync(attachments.length
+        ? {
+            ref: selectedRef,
+            body: todoCommentFormData({ ref: selectedRef, comment: body }, attachments),
+          }
+        : {
+            ref: selectedRef,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ref: selectedRef, comment: body }),
           });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Comment failed');
       const todo = data as TodoItem | undefined;
       const ref = todo?.ref || selectedRef;
       if (embed) {
@@ -305,9 +281,8 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
         return;
       }
       leave(back ?? `/todos/${encodeURIComponent(ref)}`);
-    } catch (err: any) {
-      setError(err?.message || 'Comment failed');
-      setBusy(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add comment');
     }
   }
 
@@ -354,7 +329,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
             void submit();
           }}
         >
-          {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
+          {visibleError && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{visibleError}</div>}
           {showModeSwitch && (
             <div className="grid grid-cols-2 rounded-md border border-border bg-muted p-1">
               {(['new', 'existing'] as const).map(next => (

@@ -1,6 +1,7 @@
 package status
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func TestGatherPopulatesProblemsFromSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "deadbeef", "", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "deadbeef", Path: ".gavel/sha-deadbeef.json"}, nil

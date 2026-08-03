@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/internal/httpx"
 )
 
 const (
@@ -120,7 +120,7 @@ func portOccupied(host string) bool {
 // it must answer with HTML containing our entry script, so a stray HTTP server
 // on the same port is not mistaken for our dev server.
 func viteReachable() bool {
-	client := &http.Client{Timeout: time.Second}
+	client := httpx.Client(time.Second)
 	resp, err := client.Get(viteDevURL)
 	if err != nil {
 		return false

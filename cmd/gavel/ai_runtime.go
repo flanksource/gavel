@@ -95,6 +95,6 @@ func buildAIFixRequest(opts captaincli.AIRuntimeOptions, operation api.Spec, wor
 	return cfg, req, nil
 }
 
-func newAIFixRenderer() func(int, captainai.Event) {
+func newAIFixRenderer() *captaincli.EventRenderer {
 	return captaincli.NewEventRenderer(os.Stderr)
 }

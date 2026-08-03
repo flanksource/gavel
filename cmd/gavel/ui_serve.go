@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
@@ -47,8 +48,8 @@ var uiServeDurations struct {
 	IdleTimeout time.Duration
 }
 
-func (o UIServeOptions) Help() string {
-	return `Run a detached gavel UI server that replays a captured test run.
+func (o UIServeOptions) Help() api.Textable {
+	return clicky.Text(`Run a detached gavel UI server that replays a captured test run.
 
 Standalone replay of a JSON snapshot:
 
@@ -58,7 +59,7 @@ Standalone replay of a JSON snapshot:
 The server prints its URL on the first line of stdout so a wrapping script can
 ` + "`head -n1`" + ` it, and exits when either --auto-stop (hard wall clock from
 start) or --idle-timeout (reset on every HTTP request) fires — whichever comes
-first. A zero duration disables the corresponding timer.`
+first. A zero duration disables the corresponding timer.`)
 }
 
 func init() {

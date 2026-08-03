@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useState, type ComponentType } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiClock, UiCollapseAll, UiDebugStepOver, UiError, UiEye, UiHubot, UiUnknown, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { SessionStats } from '../../types';
+import { fetchJSON } from '../../query';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
-import { sessionResponseError } from './SessionErrorDetails';
+import { todoMutationJSON } from './todoMutations';
+import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 
 // useSessionStats polls /api/todos/session/stats for one agent session. The
 // server serves live runs from the cmux tailer's in-memory cache and reads
@@ -13,52 +16,17 @@ import { sessionResponseError } from './SessionErrorDetails';
 // stops once a finished session's totals are final. Between polls of a running
 // session the displayed clock ticks locally so the timer advances smoothly.
 export function useSessionStats(dir: string, sessionId: string | undefined, active: boolean) {
-  const [stats, setStats] = useState<SessionStats | null>(null);
-  const [error, setError] = useState('');
-  const fetchedAtRef = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const enabled = active && !!sessionId;
+  const query = useQuery({
+    ...sessionStatsQueryOptions(dir, sessionId ?? ''),
+    enabled,
+  });
+  const stats = enabled && !query.error ? query.data ?? null : null;
 
   useEffect(() => {
-    setStats(null);
-    setError('');
-    if (!active || !sessionId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('sessionId', sessionId);
-    const url = `/api/todos/session/stats?${params.toString()}`;
-
-    const poll = async () => {
-      let nextDelay = 5000;
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          const detail = await sessionResponseError(res, 'Session stats request failed');
-          if (cancelled) return;
-          setStats(null);
-          setError(detail);
-          timer = setTimeout(poll, nextDelay);
-          return;
-        }
-        const data = (await res.json()) as SessionStats;
-        if (cancelled) return;
-        setStats(data);
-        setError('');
-        fetchedAtRef.current = Date.now();
-        setNowMs(Date.now());
-        if (data.inProgress) nextDelay = 2000;
-        else if (!data.found) nextDelay = 4000;
-        else return; // finished: totals are final, stop polling
-      } catch (cause) {
-        if (cancelled) return;
-        setStats(null);
-        setError(`Session stats request failed\n${cause instanceof Error ? cause.stack || cause.message : String(cause)}`);
-      }
-      timer = setTimeout(poll, nextDelay);
-    };
-    poll();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [dir, sessionId, active]);
+    if (enabled && query.dataUpdatedAt) setNowMs(Date.now());
+  }, [enabled, query.dataUpdatedAt]);
 
   useEffect(() => {
     if (!stats?.inProgress) return;
@@ -68,11 +36,15 @@ export function useSessionStats(dir: string, sessionId: string | undefined, acti
 
   const elapsedMs = stats
     ? stats.inProgress
-      ? stats.durationMs + Math.max(0, nowMs - fetchedAtRef.current)
+      ? stats.durationMs + Math.max(0, nowMs - query.dataUpdatedAt)
       : stats.durationMs
     : 0;
 
-  return { stats, elapsedMs, error };
+  return {
+    stats,
+    elapsedMs,
+    error: enabled && query.error ? query.error.message : '',
+  };
 }
 
 export function formatDuration(ms: number): string {
@@ -214,27 +186,25 @@ interface CmuxSurface {
 // out to cmux; a stopped cmux or a closed terminal resolves to found=false with a
 // reason rather than throwing, so the control still offers Resume.
 function useCmuxSurface(dir: string, agent: string | undefined, enabled: boolean) {
-  const [surface, setSurface] = useState<CmuxSurface | null>(null);
-  const [loading, setLoading] = useState(false);
+  const query = useQuery({
+    queryKey: todoQueryKeys.cmuxSurface(dir, agent),
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams(todoQuery(dir));
+      if (agent) params.set('agent', agent);
+      return fetchJSON<CmuxSurface>({
+        url: `/api/todos/session/cmux?${params.toString()}`,
+        signal,
+        context: 'Cmux session request failed',
+      });
+    },
+    enabled,
+    staleTime: 5_000,
+  });
 
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    const params = new URLSearchParams(todoQuery(dir));
-    if (agent) params.set('agent', agent);
-    setLoading(true);
-    fetch(`/api/todos/session/cmux?${params.toString()}`)
-      .then(res => res.json() as Promise<CmuxSurface>)
-      .then(data => { if (!cancelled) setSurface(data); })
-      // An unreachable endpoint is inconclusive, not proof the terminal is gone —
-      // leave the surface unknown (null) so Focus stays enabled and fails loudly on
-      // its own if the terminal really is closed, rather than pre-disabling it.
-      .catch(() => { if (!cancelled) setSurface(null); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [dir, agent, enabled]);
-
-  return { surface, loading };
+  // An unreachable endpoint is inconclusive, not proof the terminal is gone —
+  // leave the surface unknown (null) so Focus stays enabled and fails loudly on
+  // its own if the terminal really is closed, rather than pre-disabling it.
+  return { surface: query.error ? null : query.data ?? null, loading: query.isFetching };
 }
 
 // CmuxSessionButton is the session header's cmux control: a dropdown that either
@@ -247,30 +217,22 @@ export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisab
   onResume?: () => void;
   resumeDisabled?: boolean;
 }) {
-  const [focusBusy, setFocusBusy] = useState(false);
-  const [focusError, setFocusError] = useState('');
   const [open, setOpen] = useState(false);
   const { surface, loading } = useCmuxSurface(dir, agent, open);
-
-  // focusSession brings the agent's cmux terminal to the front. The workspace is
-  // keyed by the run's working directory and agent, so the server finds it without
-  // the UI tracking cmux refs. A closed terminal / stopped cmux surfaces its reason
-  // inline rather than failing silently.
-  const focusSession = async () => {
-    if (focusBusy) return;
-    setFocusBusy(true);
-    setFocusError('');
-    try {
+  const focusMutation = useMutation({
+    mutationKey: ['todos', 'session', 'focus', { dir: dir.trim(), agent: agent ?? '' }],
+    mutationFn: () => {
       const params = new URLSearchParams(todoQuery(dir));
       if (agent) params.set('agent', agent);
-      const res = await fetch(`/api/todos/session/focus?${params.toString()}`, { method: 'POST' });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not focus cmux session');
-    } catch (err: any) {
-      setFocusError(err?.message || 'Could not focus cmux session');
-    } finally {
-      setFocusBusy(false);
-    }
-  };
+      return todoMutationJSON<{ focused: boolean }>(
+        `/api/todos/session/focus?${params.toString()}`,
+        { method: 'POST' },
+        'Could not focus cmux session',
+      );
+    },
+  });
+  const focusBusy = focusMutation.isPending;
+  const focusError = focusMutation.error?.message ?? '';
 
   // A resolved-but-absent workspace means the terminal was closed, so Focus can't
   // land there — only Resume can reopen it.
@@ -319,7 +281,7 @@ export function CmuxSessionButton({ dir, sessionId, agent, onResume, resumeDisab
               label="Focus in cmux"
               detail={focusUnavailable ? 'Terminal closed' : 'Bring the terminal to the front'}
               disabled={focusBusy || focusUnavailable}
-              onClick={() => { close(); focusSession(); }}
+              onClick={() => { close(); focusMutation.mutate(); }}
             />
             {onResume && (
               <CmuxMenuItem

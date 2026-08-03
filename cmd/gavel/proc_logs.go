@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -14,12 +15,12 @@ type ProcLogsOptions struct {
 	Names    []string `json:"-" args:"true"`
 }
 
-func (ProcLogsOptions) Help() string {
-	return `Tail the per-process logs under .gavel/proc/<name>.log.
+func (ProcLogsOptions) Help() api.Textable {
+	return clicky.Text(`Tail the per-process logs under .gavel/proc/<name>.log.
 
 With no arguments every process's log is shown; pass names to select a subset.
 Use -f/--follow to stream new output until interrupted:
-  gavel proc logs -f web worker`
+  gavel proc logs -f web worker`)
 }
 
 func init() {

@@ -1,24 +1,56 @@
-// Package outline statically enumerates tests (go test functions, ginkgo
-// specs, vitest tests) without executing them and annotates each with
-// location, size, complexity, duplication, and run history so test quality
-// can be evaluated at a glance.
+// Package outline enumerates supported tests without executing test bodies and
+// annotates each with location, size, complexity, duplication, and run history.
 package outline
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/flanksource/gavel/testrunner/history"
 	"github.com/flanksource/gavel/testrunner/parsers"
 )
 
 type Options struct {
-	WorkDir     string
-	Paths       []string            // positional path filters, relative to WorkDir
-	Frameworks  []parsers.Framework // empty = gotest + ginkgo + vitest
-	AISummary   bool
-	Duplication bool
-	History     bool
-	Context     context.Context
+	WorkDir      string
+	Paths        []string            // positional path filters, relative to WorkDir
+	Frameworks   []parsers.Framework // empty = every supported outline framework
+	FixtureFiles []string            // fixture globs; empty = config or **/*.fixture.md
+	AISummary    bool
+	Duplication  bool
+	History      bool
+	Context      context.Context
+}
+
+// SupportedFrameworks returns the stable set accepted by test outline. Fixture
+// is intentionally not part of parsers.AllFrameworks because it is executed by
+// the fixture runner rather than a testrunner framework runner.
+func SupportedFrameworks() []parsers.Framework {
+	return []parsers.Framework{
+		parsers.GoTest,
+		parsers.Ginkgo,
+		parsers.Jest,
+		parsers.Vitest,
+		parsers.Playwright,
+		parsers.Fixture,
+	}
+}
+
+// ParseFramework resolves CLI names accepted by test outline.
+func ParseFramework(name string) (parsers.Framework, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "fixture", "fixtures":
+		return parsers.Fixture, nil
+	}
+	framework, err := parsers.ParseFramework(name)
+	if err == nil {
+		return framework, nil
+	}
+	known := make([]string, 0, len(SupportedFrameworks()))
+	for _, supported := range SupportedFrameworks() {
+		known = append(known, supported.String())
+	}
+	return "", fmt.Errorf("unknown framework %q; known: %s", name, strings.Join(known, ", "))
 }
 
 // Entry is one test (or ginkgo container) in the outline.

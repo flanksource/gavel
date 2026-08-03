@@ -1,10 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { AnsiHtml } from '@flanksource/clicky-ui/data';
 import type { TodoCommitDiffResponse, TodoCommitFile, TodoCommitFilesResponse } from '../../types';
+import { fetchJSON } from '../../query';
 import { UiDiff } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import { todoQuery } from './format';
+import { todoQueryKeys } from './todoQueries';
 
 // fileStatusView maps a commit file's change kind to its diff icon, accent
 // color, and label, matching how the rest of the dashboard signals add/edit/
@@ -33,36 +36,26 @@ function splitPath(path: string): { dir: string; base: string } {
 // is expanded. Each file carries its repomap scope/language so the rows read as
 // a "repomap-based commit status" rather than a flat file list.
 function useCommitFiles(dir: string, hash: string) {
-  const [files, setFiles] = useState<TodoCommitFile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('hash', hash);
-    fetch(`/api/todos/commits/files?${params.toString()}`, { signal: controller.signal })
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load files');
-        if (!cancelled) setFiles((data as TodoCommitFilesResponse).files ?? []);
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== 'AbortError') setError(err?.message || 'Failed to load files');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+  const query = useQuery({
+    queryKey: todoQueryKeys.commitFiles(dir, hash),
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams(todoQuery(dir));
+      params.set('hash', hash);
+      const data = await fetchJSON<TodoCommitFilesResponse>({
+        url: `/api/todos/commits/files?${params.toString()}`,
+        signal,
+        context: `Failed to load files for commit ${hash}`,
       });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [dir, hash]);
+      return data.files ?? [];
+    },
+    staleTime: Infinity,
+  });
 
-  return { files, loading, error };
+  return {
+    files: query.data ?? [],
+    loading: query.isFetching && !query.data,
+    error: query.error?.message ?? '',
+  };
 }
 
 function Chip({ children, className }: { children: ReactNode; className: string }) {
@@ -73,40 +66,24 @@ function Chip({ children, className }: { children: ReactNode; className: string 
 // `git show -- <file>` output). It is the hover/expand payload for a file row,
 // shown in the same black terminal panel the full-commit diff used.
 function FileDiffCard({ dir, hash, file }: { dir: string; hash: string; file: TodoCommitFile }) {
-  const [diff, setDiff] = useState('');
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('hash', hash);
-    params.set('file', file.path);
-    fetch(`/api/todos/commits/diff?${params.toString()}`, { signal: controller.signal })
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load diff');
-        if (!cancelled) {
-          const payload = data as TodoCommitDiffResponse;
-          setDiff(payload.diff ?? '');
-          setTruncated(!!payload.truncated);
-        }
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== 'AbortError') setError(err?.message || 'Failed to load diff');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+  const query = useQuery({
+    queryKey: todoQueryKeys.commitDiff(dir, hash, file.path),
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams(todoQuery(dir));
+      params.set('hash', hash);
+      params.set('file', file.path);
+      return fetchJSON<TodoCommitDiffResponse>({
+        url: `/api/todos/commits/diff?${params.toString()}`,
+        signal,
+        context: `Failed to load ${file.path} diff for commit ${hash}`,
       });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [dir, hash, file.path]);
+    },
+    staleTime: Infinity,
+  });
+  const diff = query.data?.diff ?? '';
+  const truncated = !!query.data?.truncated;
+  const loading = query.isFetching && !query.data;
+  const error = query.error?.message ?? '';
 
   return (
     <div className="absolute left-0 right-0 top-full z-30 pt-1">

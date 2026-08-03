@@ -17,23 +17,25 @@ import (
 
 // Control actions exchanged over the supervisor's unix control socket.
 const (
-	actionStatus     = "status"
-	actionStart      = "start"
-	actionStop       = "stop"
-	actionRestart    = "restart"
-	actionTaskRuns   = "task-runs"
-	actionTaskGet    = "task-get"
-	actionTaskCtrl   = "task-control"
-	actionTaskMetric = "task-metric"
+	actionStatus       = "status"
+	actionStart        = "start"
+	actionStop         = "stop"
+	actionRestart      = "restart"
+	actionTaskRuns     = "task-runs"
+	actionTaskGet      = "task-get"
+	actionTaskCtrl     = "task-control"
+	actionTaskItemCtrl = "task-item-control"
+	actionTaskMetric   = "task-metric"
 )
 
 type ctrlRequest struct {
-	Action     string                   `json:"action"`
-	Names      []string                 `json:"names,omitempty"`
-	TaskID     string                   `json:"taskId,omitempty"`
-	TaskAction clickytask.ControlAction `json:"taskAction,omitempty"`
-	TaskFilter clickytask.RunFilter     `json:"taskFilter,omitempty"`
-	Metric     metrics.QueryRequest     `json:"metric,omitempty"`
+	Action      string                   `json:"action"`
+	Names       []string                 `json:"names,omitempty"`
+	TaskID      string                   `json:"taskId,omitempty"`
+	ChildTaskID string                   `json:"childTaskId,omitempty"`
+	TaskAction  clickytask.ControlAction `json:"taskAction,omitempty"`
+	TaskFilter  clickytask.RunFilter     `json:"taskFilter,omitempty"`
+	Metric      metrics.QueryRequest     `json:"metric,omitempty"`
 }
 
 type ctrlResponse struct {
@@ -160,6 +162,11 @@ func (s *Supervisor) handle(req ctrlRequest) ctrlResponse {
 			return ctrlResponse{Error: err.Error()}
 		}
 		return ctrlResponse{OK: true}
+	case actionTaskItemCtrl:
+		if err := clickytask.ControlTask(context.Background(), req.TaskID, req.ChildTaskID, req.TaskAction); err != nil {
+			return ctrlResponse{Error: err.Error()}
+		}
+		return ctrlResponse{OK: true}
 	case actionTaskMetric:
 		points, err := clickytask.Metrics().Query(req.Metric)
 		if err != nil {
@@ -227,6 +234,14 @@ func TaskSnapshot(root, id string) ([]clickytask.TaskSnapshot, error) {
 // TaskControl performs a lifecycle action on a detached supervisor task.
 func TaskControl(root, id string, action clickytask.ControlAction) error {
 	_, err := sendControl(root, ctrlRequest{Action: actionTaskCtrl, TaskID: id, TaskAction: action})
+	return err
+}
+
+// TaskControlTask performs a lifecycle action on one child task owned by a detached supervisor.
+func TaskControlTask(root, runID, taskID string, action clickytask.ControlAction) error {
+	_, err := sendControl(root, ctrlRequest{
+		Action: actionTaskItemCtrl, TaskID: runID, ChildTaskID: taskID, TaskAction: action,
+	})
 	return err
 }
 

@@ -1,19 +1,16 @@
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Button,
   JsonSchemaForm,
   Modal,
-  type JsonSchemaObject,
 } from '@flanksource/clicky-ui/components';
+import {
+  projectActionSchemaQuery,
+  type ProjectActionName,
+} from './oneShotQueries';
 
-export type ProjectAction = 'commit' | 'lint' | 'test';
-
-interface ProjectActionSchemaResponse {
-  schemaVersion: number;
-  action: ProjectAction;
-  schema: JsonSchemaObject;
-  defaults: Record<string, unknown>;
-}
+export type ProjectAction = ProjectActionName;
 
 interface Props {
   projectName: string;
@@ -33,53 +30,42 @@ type RememberedOptions = Record<string, Partial<Record<ProjectAction, Remembered
 const storageKey = 'gavel.project-action-options.v1';
 
 export function ProjectActionDialog({ projectName, action, selectedFiles, onClose, onRun }: Props) {
-  const [definition, setDefinition] = useState<ProjectActionSchemaResponse | null>(null);
   const [value, setValue] = useState<Record<string, unknown>>({});
-  const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
-  const [error, setError] = useState('');
+  const [runError, setRunError] = useState('');
+  const definitionResult = useQuery({
+    ...projectActionSchemaQuery(projectName, action),
+    enabled: action !== null,
+  });
+  const definition = definitionResult.data ?? null;
+  const loading = action !== null && definitionResult.isPending;
+  const error = runError || (definitionResult.error instanceof Error ? definitionResult.error.message : '');
 
   useEffect(() => {
-    if (!action) return;
-    const controller = new AbortController();
-    setDefinition(null);
-    setLoading(true);
-    setError('');
-    fetch(`/api/projects/${encodeURIComponent(projectName)}/actions/schema?action=${action}`, { signal: controller.signal })
-      .then(async response => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || `Failed to load ${action} options`);
-        return payload as ProjectActionSchemaResponse;
-      })
-      .then(next => {
-        const remembered = readRememberedOptions(projectName, action);
-        const initial = remembered?.schemaVersion === next.schemaVersion
-          ? { ...next.defaults, ...remembered.value }
-          : { ...next.defaults };
-        if (action !== 'test' && selectedFiles.length > 0) initial.files = [...selectedFiles].sort();
-        setDefinition(next);
-        setValue(initial);
-      })
-      .catch(cause => {
-        if (cause instanceof DOMException && cause.name === 'AbortError') return;
-        setError(cause instanceof Error ? cause.message : `Failed to load ${action} options`);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [action, projectName, selectedFiles]);
+    setRunError('');
+  }, [action, projectName]);
+
+  useEffect(() => {
+    if (!action || !definition) return;
+    const remembered = readRememberedOptions(projectName, action);
+    const initial = remembered?.schemaVersion === definition.schemaVersion
+      ? { ...definition.defaults, ...remembered.value }
+      : { ...definition.defaults };
+    if (action !== 'test' && selectedFiles.length > 0) initial.files = [...selectedFiles].sort();
+    setValue(initial);
+    setRunError('');
+  }, [action, definition, projectName, selectedFiles]);
 
   const run = async () => {
     if (!action || !definition) return;
     setRunning(true);
-    setError('');
+    setRunError('');
     try {
       await onRun(action, value);
       rememberOptions(projectName, action, definition.schemaVersion, value);
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Failed to start ${action}`);
+      setRunError(cause instanceof Error ? cause.message : `Failed to start ${action}`);
     } finally {
       setRunning(false);
     }

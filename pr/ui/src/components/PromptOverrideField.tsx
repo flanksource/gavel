@@ -1,38 +1,19 @@
 import { useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   PromptPickerField,
   type PromptPickerValue,
-  type PromptSpecDetail,
   type PromptSpecSavePayload,
   type SpecRuntimeFamily,
 } from '@flanksource/clicky-ui/ai';
 import type { ChatModel } from '@flanksource/clicky-ui/chat';
+import { promptDetailQuery } from './oneShotQueries';
+import { useSavePromptMutation } from './settings/mutations';
 
 // A prompt override is either inline template text or a path to a .prompt file
 // (the union the Go PromptOverride marshals). An unset/empty override means the
 // built-in default is used.
 export type PromptOverrideValue = PromptPickerValue;
-
-// promptResponseError turns a non-ok settings response into a readable Error.
-// Gavel replies with a `{ "error": "..." }` body, so it extracts that message;
-// it falls back to trimmed plain text, then to a status-based fallback. This
-// keeps repair errors human-readable instead of surfacing raw JSON.
-async function promptResponseError(response: Response, fallback: string): Promise<Error> {
-  const text = await response.text().catch(() => '');
-  const trimmed = text.trim();
-  if (trimmed) {
-    try {
-      const parsed = JSON.parse(trimmed) as { error?: unknown };
-      if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) {
-        return new Error(parsed.error.trim());
-      }
-    } catch {
-      // Body was not JSON — fall through and surface the plain text as-is.
-    }
-    return new Error(trimmed);
-  }
-  return new Error(fallback);
-}
 
 interface Props {
   value: PromptOverrideValue | undefined;
@@ -53,24 +34,16 @@ interface Props {
 // PromptOverrideField adapts Gavel's settings prompt endpoints to clicky-ui's
 // reusable one-line PromptPickerField.
 export function PromptOverrideField({ value, onChange, description, id, title, scopeQuery, models, families }: Props) {
+  const queryClient = useQueryClient();
+  const { mutateAsync: savePrompt } = useSavePromptMutation(id, scopeQuery);
+
   const loadDetail = useCallback(() => {
-    return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`)
-      .then(async (response) => {
-        if (!response.ok) throw await promptResponseError(response, `load failed (${response.status})`);
-        return response.json() as Promise<PromptSpecDetail>;
-      });
-  }, [id, scopeQuery]);
+    return queryClient.fetchQuery(promptDetailQuery(id, scopeQuery));
+  }, [id, queryClient, scopeQuery]);
 
   const saveDetail = useCallback((payload: PromptSpecSavePayload) => {
-    return fetch(`/api/settings/prompts/${encodeURIComponent(id)}?${scopeQuery}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).then(async (response) => {
-      if (!response.ok) throw await promptResponseError(response, `save failed (${response.status})`);
-      return response.json() as Promise<PromptSpecDetail>;
-    });
-  }, [id, scopeQuery]);
+    return savePrompt(payload);
+  }, [savePrompt]);
 
   return (
     <PromptPickerField

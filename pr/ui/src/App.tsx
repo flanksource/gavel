@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { PRItem, PRDetail, PRInfo, Snapshot, SearchConfig, RateLimit, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import type { PRItem, PRDetail, PRInfo, SearchConfig, PRSyncStatus, GavelResultsSummary, Project, ProcStatus } from './types';
 import { PRList } from './components/PRList';
 import { PRDetailPanel } from './components/PRDetail';
 import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
@@ -39,6 +39,9 @@ import { copyText } from './clipboard';
 import { loadUIState, saveUIState, filtersFromStored } from './storage';
 import { useDocumentVisible } from './useDocumentVisible';
 import { useProjectCatalog } from './useProjectCatalog';
+import { useAppQueries } from './useAppQueries';
+import { useAppMutations } from './useAppMutations';
+import { usePRDetailStream } from './usePRDetailStream';
 import { useIsMobile } from './useIsMobile';
 import { UiActivity, UiArrowLeft, UiCheck, UiClose, UiCog, UiCopy, UiFolderGit, UiGitPr, UiJson, UiLink, UiListChecks, UiMarkdown } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
@@ -176,7 +179,7 @@ function mergePRItemFromDetail(pr: PRItem, info: PRInfo): PRItem {
 export function App() {
   const initialRoute: RouteState = typeof window !== 'undefined'
     ? parseRoute(window.location)
-    : { tab: 'prs', selectedPath: '', projectDiffPath: '', projectRunId: '', filters: emptyFilters() };
+    : { tab: 'prs', selectedPath: '', projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters: emptyFilters() };
 
   // Hydrate org/search config and filters from localStorage. URL query params
   // (if present) win for filters so deep links still work.
@@ -188,37 +191,16 @@ export function App() {
   const initialFilters = hasUrlFilters ? initialRoute.filters : (filtersFromStored(stored.filters) ?? defaultFilters);
   const initialConfig: SearchConfig = { ...defaultConfig, ...stored.config };
 
-  const [rawPrs, setRawPrs] = useState<PRItem[]>([]);
-  const [viewer, setViewer] = useState('');
-  const [botsAvailable, setBotsAvailable] = useState(false);
-  const [includeBotsServer, setIncludeBotsServer] = useState(false);
-  const [showClosedServer, setShowClosedServer] = useState(false);
-  const [unread, setUnread] = useState<Record<string, boolean>>({});
-  const [fetchedAt, setFetchedAt] = useState('');
-  const [nextFetchIn, setNextFetchIn] = useState(60);
-  const [error, setError] = useState<string | undefined>();
   const [selected, setSelected] = useState<PRItem | null>(null);
-  const [detail, setDetail] = useState<PRDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [filters, setFilters] = useState<Filters>(initialFilters);
   const [selectedPath, setSelectedPath] = useState(initialRoute.selectedPath);
   const [projectDiffPath, setProjectDiffPath] = useState(initialRoute.projectDiffPath);
   const [projectRunId, setProjectRunId] = useState(initialRoute.projectRunId);
-  const [config, setConfig] = useState<SearchConfig>(initialConfig);
-  const [paused, setPaused] = useState(false);
-  const [rateLimit, setRateLimit] = useState<RateLimit | undefined>();
+  const [projectHistory, setProjectHistory] = useState(initialRoute.projectHistory);
+  const [projectResults, setProjectResults] = useState(initialRoute.projectResults);
   const [activeTab, setActiveTab] = useState<Tab>(initialRoute.tab);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { copyState, copyError, beginCopy, resetCopyFeedback } = useCopyFeedback({ copiedMs: 2500, errorMs: 2500 });
-  const [syncStatus, setSyncStatus] = useState<Record<string, PRSyncStatus>>({});
-  const [gavelResultsMap, setGavelResultsMap] = useState<Record<string, GavelResultsSummary>>({});
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectError, setProjectError] = useState('');
-  // False until /api/projects has resolved once, success or failure. Every
-  // "no projects/workspaces configured" empty state is gated on it: before the
-  // first response an empty list means "not loaded yet", not "nothing here".
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
-  const [procStatus, setProcStatus] = useState<Record<string, ProcStatus>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [settingsScope, setSettingsScope] = useState<SettingsScope | null>(null);
   const visible = useDocumentVisible();
@@ -247,6 +229,42 @@ export function App() {
   // sampling — while the desktop tab keeps the pause-on-hide optimization.
   const streamsActive = visible || isMenubar;
 
+  const {
+    snapshot,
+    projects,
+    projectsLoaded,
+    projectError,
+    procStatus,
+    processError,
+    updateSnapshot,
+    refreshProjects,
+    refreshProjectsAndProcesses,
+  } = useAppQueries({ enabled: streamsActive, initialConfig });
+  const {
+    error: mutationError,
+    markSeen,
+    refresh: refreshPRs,
+    togglePause,
+    saveConfig,
+    setIncludeBots,
+    setShowClosed,
+  } = useAppMutations();
+  const { detail, loading: detailLoading, refresh: refreshDetail } = usePRDetailStream(selected);
+  const rawPrs = snapshot.prs;
+  const viewer = snapshot.viewer ?? '';
+  const botsAvailable = !!snapshot.botsAvailable;
+  const includeBotsServer = !!snapshot.includeBots;
+  const showClosedServer = !!snapshot.showClosed;
+  const unread = snapshot.unread ?? {};
+  const fetchedAt = snapshot.fetchedAt;
+  const nextFetchIn = snapshot.nextFetchIn;
+  const error = mutationError || snapshot.error || processError;
+  const config = snapshot.config;
+  const paused = snapshot.paused;
+  const rateLimit = snapshot.rateLimit;
+  const syncStatus = snapshot.syncStatus ?? {};
+  const gavelResultsMap = snapshot.gavelResults ?? {};
+
   // The native menu-bar webview is a small always-on-top popover, so shrink the
   // root font-size a notch: Tailwind's text and spacing are rem-based, so the
   // whole compact window scales down together and fits more without restyling
@@ -262,8 +280,8 @@ export function App() {
   const prs = useMemo(() => annotateRoutePaths(rawPrs), [rawPrs]);
 
   const routeState: RouteState = useMemo(
-    () => ({ tab: activeTab, selectedPath, projectDiffPath, projectRunId, filters }),
-    [activeTab, selectedPath, projectDiffPath, projectRunId, filters],
+    () => ({ tab: activeTab, selectedPath, projectDiffPath, projectRunId, projectHistory, projectResults, filters }),
+    [activeTab, selectedPath, projectDiffPath, projectRunId, projectHistory, projectResults, filters],
   );
 
   const commitRoute = useCallback((next: RouteState, mode: 'push' | 'replace' = 'push') => {
@@ -271,6 +289,8 @@ export function App() {
     setSelectedPath(next.selectedPath);
     setProjectDiffPath(next.projectDiffPath);
     setProjectRunId(next.projectRunId);
+    setProjectHistory(next.projectHistory);
+    setProjectResults(next.projectResults);
     setFilters(next.filters);
     const url = buildRoute(next);
     const current = `${window.location.pathname}${window.location.search}`;
@@ -283,31 +303,43 @@ export function App() {
   // Switching the top-level tab navigates (so /todos, /activity are linkable and
   // back/forward works); the PR selection is dropped when leaving the prs tab.
   const changeTab = useCallback((next: Tab) => {
-    commitRoute({ tab: next, selectedPath: '', projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: next, selectedPath: '', projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
   }, [commitRoute, filters]);
 
   // Selecting a todo encodes its ref in the path (/todos/{guid}) so a todo is
   // deep-linkable and back/forward works, mirroring PR selection. An empty id
   // clears the selection back to /todos.
   const navigateTodo = useCallback((id: string) => {
-    commitRoute({ tab: 'todos', selectedPath: id, projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: 'todos', selectedPath: id, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
   }, [commitRoute, filters]);
 
   const navigateTask = useCallback((id: string | null) => {
-    commitRoute({ tab: 'tasks', selectedPath: id ?? '', projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: 'tasks', selectedPath: id ?? '', projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
   }, [commitRoute, filters]);
 
   const navigateProject = useCallback((name: string) => {
-    commitRoute({ tab: 'projects', selectedPath: name, projectDiffPath: '', projectRunId: '', filters });
-  }, [commitRoute, filters]);
+    commitRoute({ tab: 'projects', selectedPath: name, projectDiffPath: '', projectRunId: '', projectHistory, projectResults, filters });
+  }, [commitRoute, filters, projectHistory, projectResults]);
 
   const navigateProjectRun = useCallback((project: string, runId: string) => {
-    commitRoute({ tab: 'projects', selectedPath: project, projectDiffPath: '', projectRunId: runId, filters });
-  }, [commitRoute, filters]);
+    commitRoute({ tab: 'projects', selectedPath: project, projectDiffPath: '', projectRunId: runId, projectHistory: true, projectResults, filters });
+  }, [commitRoute, filters, projectResults]);
 
   const navigateProjectDiff = useCallback((path: string) => {
-    commitRoute({ tab: 'projects', selectedPath, projectDiffPath: path, projectRunId: '', filters });
-  }, [commitRoute, filters, selectedPath]);
+    commitRoute({ tab: 'projects', selectedPath, projectDiffPath: path, projectRunId: '', projectHistory, projectResults, filters });
+  }, [commitRoute, filters, projectHistory, projectResults, selectedPath]);
+
+  const setProjectHistoryEnabled = useCallback((enabled: boolean) => {
+    commitRoute({
+      tab: 'projects',
+      selectedPath,
+      projectDiffPath: projectRunId ? '' : projectDiffPath,
+      projectRunId: enabled ? projectRunId : '',
+      projectHistory: enabled,
+      projectResults,
+      filters,
+    });
+  }, [commitRoute, filters, projectDiffPath, projectResults, projectRunId, selectedPath]);
 
   // The Todos data layer is mounted permanently so its chrome can live in the
   // AppShell's body slots, but only fetches while the Todos tab is active — or
@@ -337,59 +369,13 @@ export function App() {
       setSelectedPath(next.selectedPath);
       setProjectDiffPath(next.projectDiffPath);
       setProjectRunId(next.projectRunId);
+      setProjectHistory(next.projectHistory);
+      setProjectResults(next.projectResults);
       setFilters(next.filters);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
-
-  // Pull the PR snapshot and keep it live over SSE while the streams are active
-  // (always in the menu-bar; only while visible on the desktop — see
-  // streamsActive). The menu-bar webview stays resident when dismissed, but it
-  // reports hidden even when shown, so pausing there would strand the popover on
-  // stale data; on the desktop tab the stream still closes on hide and reopens —
-  // refetching fresh — on show.
-  useEffect(() => {
-    if (!streamsActive) return;
-    fetch('/api/prs')
-      .then(r => r.json())
-      .then((snap: Snapshot) => applySnapshot(snap))
-      .catch(() => {});
-
-    const es = new EventSource('/api/prs/stream');
-    es.addEventListener('message', (e: MessageEvent) => {
-      applySnapshot(JSON.parse(e.data));
-    });
-    es.onerror = () => setError('Connection lost — retrying...');
-
-    return () => { es.close(); };
-  }, [streamsActive]);
-
-  // Relative timestamps refresh themselves: each <RelativeTime/> (and the process
-  // uptime / sync countdown leaves) subscribes to the shared useNow() clock, so
-  // the per-second tick re-renders only those leaves instead of forcing a
-  // full-app reconcile here. The clock is visibility-gated in useNow itself.
-  function applySnapshot(snap: Snapshot) {
-    setRawPrs(snap.prs || []);
-    if (snap.viewer) setViewer(snap.viewer);
-    setBotsAvailable(!!snap.botsAvailable);
-    setIncludeBotsServer(!!snap.includeBots);
-    setShowClosedServer(!!snap.showClosed);
-    setUnread(snap.unread || {});
-    setFetchedAt(snap.fetchedAt);
-    setNextFetchIn(snap.nextFetchIn);
-    setError(snap.error);
-    setPaused(snap.paused);
-    if (snap.rateLimit) setRateLimit(snap.rateLimit);
-    // The server doesn't persist org/all (only repos/author/etc), so after a
-    // server restart its config carries empty org/all — keep the locally
-    // restored values in that case rather than clobbering them.
-    if (snap.config) setConfig(prev => ({ ...snap.config, org: snap.config.org || prev.org, all: snap.config.all || prev.all }));
-    if (snap.syncStatus) setSyncStatus(snap.syncStatus);
-    if (snap.gavelResults) {
-      setGavelResultsMap(prev => ({ ...prev, ...snap.gavelResults }));
-    }
-  }
 
   // When PRs arrive (or the URL selection changes), reconcile `selected` with
   // the route's selectedPath. Fetches detail automatically for deep-linked PRs.
@@ -399,7 +385,7 @@ export function App() {
     // there and let onSelect/onBack own it.
     if (useMenubarLayout || isProcessesPage || activeTab !== 'prs') return;
     if (!selectedPath) {
-      if (selected) { setSelected(null); setDetail(null); }
+      if (selected) setSelected(null);
       return;
     }
     if (selected && selected.route_path === selectedPath) return;
@@ -414,85 +400,9 @@ export function App() {
     }
   }, [activeTab, selectedPath, prs]);
 
-  // Resolves true once the list has been applied, false on failure, so the mount
-  // loader below can retry. A failed refetch keeps the last good list rather than
-  // blanking every tab to "No projects/workspaces configured" on a transient blip.
-  const fetchProjects = useCallback((): Promise<boolean> => {
-    return fetch('/api/projects')
-      .then(async r => {
-        const payload = await r.json().catch(() => null);
-        if (!r.ok) {
-          const message = payload && typeof payload === 'object' && 'error' in payload
-            ? String(payload.error)
-            : `Load projects failed (HTTP ${r.status})`;
-          throw new Error(message);
-        }
-        if (!Array.isArray(payload)) throw new Error('Load projects returned an invalid response');
-        return payload as Project[];
-      })
-      .then(ps => {
-        setProjects(ps);
-        setProjectError('');
-        return true;
-      })
-      .catch(err => {
-        setProjectError(err instanceof Error ? err.message : 'Load projects failed');
-        return false;
-      })
-      .finally(() => setProjectsLoaded(true));
-  }, []);
-
-  const fetchProcStatus = useCallback(() => {
-    fetch('/api/proc/status')
-      .then(r => r.json())
-      .then((m: Record<string, ProcStatus>) => setProcStatus(m || {}))
-      .catch(() => {});
-  }, []);
-
   const onProcChanged = useCallback(() => {
-    fetchProjects();
-    fetchProcStatus();
-  }, [fetchProjects, fetchProcStatus]);
-
-  // Load the project list on mount and retry until it succeeds. The list has no
-  // live stream, and the menu-bar webview navigates to the dashboard as `gavel
-  // system start` brings the server up — a one-shot fetch that lost that race
-  // would strand every tab on "No projects/workspaces configured" with no
-  // recovery. Back off up to a cap; onProcChanged refetches after that.
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const attempt = (delay: number) => {
-      fetchProjects().then(ok => {
-        if (cancelled || ok) return;
-        timer = setTimeout(() => attempt(Math.min(delay * 2, 15000)), delay);
-      });
-    };
-    attempt(1000);
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [fetchProjects]);
-
-  // Stream process status over SSE while the streams are active (always in the
-  // menu-bar; only while visible on the desktop — see streamsActive) — this is
-  // the sole driver of the sidebar's per-repo proc badges and is intentionally
-  // decoupled from the GitHub PR poller. The server pushes a fresh frame on
-  // connect and then drives the cadence (faster while a process is
-  // starting/restarting), replacing the old client-side poll. On the desktop,
-  // closing on hide lets the backend stop sampling; reopening on show pushes an
-  // immediate frame.
-  //
-  // Deliberately NOT gated on projects.length: the stream resolves the project
-  // list server-side and is cheap, so Processes populates on its own rather than
-  // waiting behind /api/projects' per-workspace todo counts.
-  useEffect(() => {
-    if (!streamsActive) return;
-    const es = new EventSource('/api/proc/status/stream');
-    es.addEventListener('message', (e: MessageEvent) => {
-      try { setProcStatus(JSON.parse(e.data)); } catch { /* ignore malformed frame */ }
-    });
-    // EventSource auto-reconnects; proc status is best-effort, so swallow errors.
-    return () => { es.close(); };
-  }, [streamsActive]);
+    void refreshProjectsAndProcesses();
+  }, [refreshProjectsAndProcesses]);
 
   const projectsByRepo = useMemo(() => {
     const m: Record<string, Project> = {};
@@ -509,88 +419,28 @@ export function App() {
 
   useEffect(() => { saveUIState(config, filters); }, [config, filters]);
 
-  const markSeen = useCallback((pr: PRItem) => {
-    const key = prKey(pr);
-    setUnread(prev => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-    fetch('/api/prs/seen', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: pr.repo, number: pr.number }),
-    }).catch(() => {});
-  }, []);
+  useEffect(() => {
+    if (!detail?.pr) return;
+    setSelected(current => current && current.repo === selected?.repo && current.number === selected.number
+      ? mergePRItemFromDetail(current, detail.pr!)
+      : current);
+  }, [detail?.pr, selected?.number, selected?.repo]);
 
-  const detailESRef = useRef<EventSource | null>(null);
+  useEffect(() => {
+    if (!selected || !detail?.gavelResults) return;
+    const aggregate = aggregateShards(detail.gavelResults);
+    if (!aggregate) return;
+    const key = prKey(selected);
+    updateSnapshot(current => ({
+      ...current,
+      gavelResults: { ...current.gavelResults, [key]: aggregate },
+    }));
+  }, [detail?.gavelResults, selected?.number, selected?.repo, updateSnapshot]);
 
   function loadPR(pr: PRItem) {
-    const isNewPR = !selected || selected.repo !== pr.repo || selected.number !== pr.number;
+    if (selected?.repo === pr.repo && selected.number === pr.number) refreshDetail();
     setSelected(pr);
-    // Only clear detail when switching to a different PR; keep stale data during refresh
-    if (isNewPR) setDetail(null);
-    setDetailLoading(true);
     markSeen(pr);
-
-    // Close any previous detail stream
-    if (detailESRef.current) {
-      detailESRef.current.close();
-      detailESRef.current = null;
-    }
-
-    const url = `/api/prs/detail?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`;
-    const es = new EventSource(url);
-    detailESRef.current = es;
-
-    es.addEventListener('pr', (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDetail(prev => ({ ...prev, pr: data.pr, comments: data.comments }));
-      if (data.pr) {
-        setSelected(current => current && current.repo === pr.repo && current.number === pr.number
-          ? mergePRItemFromDetail(current, data.pr as PRInfo)
-          : current);
-      }
-      setDetailLoading(false);
-    });
-
-    es.addEventListener('runs', (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      setDetail(prev => prev ? { ...prev, runs: data.runs } : prev);
-    });
-
-    es.addEventListener('gavel', (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      const shards: GavelResultsSummary[] = data.gavelResults ?? [];
-      setDetail(prev => prev ? { ...prev, gavelResults: shards } : prev);
-      const agg = aggregateShards(shards);
-      if (agg) {
-        setGavelResultsMap(prev => ({ ...prev, [prKey(pr)]: agg }));
-      }
-    });
-
-    es.addEventListener('error', (e: MessageEvent) => {
-      if (e.data) {
-        const data = JSON.parse(e.data);
-        setDetail(prev => prev ?? { error: data.error });
-      }
-      setDetailLoading(false);
-    });
-
-    es.addEventListener('done', () => {
-      setDetailLoading(false);
-      es.close();
-      detailESRef.current = null;
-    });
-
-    es.onerror = () => {
-      if (!detailESRef.current) return; // already closed normally
-      setDetail(prev => prev ?? { error: 'Connection lost' });
-      setDetailLoading(false);
-      es.close();
-      detailESRef.current = null;
-    };
   }
 
   function handleSelect(pr: PRItem) {
@@ -599,13 +449,7 @@ export function App() {
   }
 
   function clearSelectedPR() {
-    if (detailESRef.current) {
-      detailESRef.current.close();
-      detailESRef.current = null;
-    }
     setSelected(null);
-    setDetail(null);
-    setDetailLoading(false);
   }
 
   // Closing the desktop detail pane tears down the stream + state and drops the
@@ -621,21 +465,15 @@ export function App() {
   }
 
   function handleRefresh() {
-    fetch('/api/prs/refresh', { method: 'POST' }).catch(() => {});
+    refreshPRs();
   }
 
   function handlePause() {
-    fetch('/api/prs/pause', { method: 'POST' }).catch(() => {});
+    togglePause();
   }
 
   function updateConfig(partial: Partial<SearchConfig>) {
-    const next = { ...config, ...partial };
-    setConfig(next);
-    fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(next),
-    }).catch(() => {});
+    saveConfig({ ...config, ...partial });
   }
 
   const onDownloadJSON = useCallback(() => downloadCurrentView(routeState, 'json'), [routeState]);
@@ -662,12 +500,8 @@ export function App() {
   useEffect(() => {
     const wantBots = (filters.authors['@bots'] ?? '') !== 'exclude';
     if (wantBots === includeBotsServer) return;
-    fetch('/api/prs/bots', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include: wantBots }),
-    }).catch(() => {});
-  }, [filters.authors, includeBotsServer]);
+    setIncludeBots(wantBots);
+  }, [filters.authors, includeBotsServer, setIncludeBots]);
 
   // Selecting the Closed or Merged State chip opts into fetching closed PRs (the
   // daemon syncs open-only by default). Asking the server to widen the fetch
@@ -676,12 +510,8 @@ export function App() {
   useEffect(() => {
     const wantClosed = filters.state['closed'] === 'include' || filters.state['merged'] === 'include';
     if (wantClosed === showClosedServer) return;
-    fetch('/api/prs/closed', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ show: wantClosed }),
-    }).catch(() => {});
-  }, [filters.state, showClosedServer]);
+    setShowClosed(wantClosed);
+  }, [filters.state, setShowClosed, showClosedServer]);
   const filtered = useMemo(
     () => filterPRs(prs, filters.state, filters.checks, filters.repos, filters.authors, viewer),
     [prs, filters, viewer],
@@ -694,19 +524,19 @@ export function App() {
 
   // Both halves of the projects tab (the AppShell body sidebar and the detail
   // pane) read one catalog, so it is loaded here rather than inside either one.
-  const projectCatalog = useProjectCatalog({ configured: projects, selectedName: selectedPath, enabled: activeTab === 'projects' });
+  const projectCatalog = useProjectCatalog({ configured: projects, selectedName: selectedPath, enabled: activeTab === 'projects' && projectHistory });
   function selectPRFromPalette(pr: PRItem) {
-    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: 'prs', selectedPath: pr.route_path || `${pr.repo}/${pr.number}`, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
     loadPR(pr);
   }
   function selectTodoFromPalette(entry: TodoEntry) {
-    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: 'todos', selectedPath: entry.todo.ref, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
   }
   function openUUIDFromPalette(uuid: string) {
     // Keep the pasted identity in the URL. The global detail endpoint resolves
     // Todo UUIDs directly and Captain/provider session UUIDs through durable
     // prompt-run links, so reload/back navigation preserves the same lookup.
-    commitRoute({ tab: 'todos', selectedPath: uuid, projectDiffPath: '', projectRunId: '', filters });
+    commitRoute({ tab: 'todos', selectedPath: uuid, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, filters });
   }
 
   if (useMenubarLayout) {
@@ -820,6 +650,8 @@ export function App() {
               procStatus={procStatus}
               selectedName={selectedPath}
               selectedRunId={projectRunId}
+              historyEnabled={projectHistory}
+              onHistoryChange={setProjectHistoryEnabled}
               onSelect={navigateProject}
               onSelectRun={navigateProjectRun}
               onChanged={onProcChanged}
@@ -835,7 +667,7 @@ export function App() {
       >
         {activeTab === 'prs' ? (
           selected ? (
-            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={fetchProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
+            <PRDetailPanel pr={selected} detail={detail} loading={detailLoading} projects={projects} onTodoCreated={refreshProjects} onActionDone={() => { if (selected) loadPR(selected); }} onClose={closeSelectedPR} />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
               <div className="text-center">
@@ -850,6 +682,7 @@ export function App() {
             selectedName={selectedPath}
             selectedRunId={projectRunId}
             diffPath={projectDiffPath}
+            resultsEnabled={projectResults}
             onDiffPathChange={navigateProjectDiff}
             onChanged={onProcChanged}
           />

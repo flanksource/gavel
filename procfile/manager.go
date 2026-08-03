@@ -60,7 +60,13 @@ func Run(workDir, pfOverride string, names []string, profile string, foreground 
 	if err != nil {
 		return err
 	}
-	sup, err := NewSupervisor(Options{Root: root, Procfile: pf, Names: names, Profile: profile, Foreground: foreground, Config: cfg})
+	opts := Options{Root: root, Procfile: pf, Profile: profile, Foreground: foreground, Config: cfg}
+	if foreground {
+		opts.Names = names
+	} else {
+		opts.StartNames = names
+	}
+	sup, err := NewSupervisor(opts)
 	if err != nil {
 		return err
 	}

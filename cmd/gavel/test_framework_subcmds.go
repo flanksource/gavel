@@ -21,16 +21,18 @@ func registerTestFrameworkSubcommands() {
 	for _, fw := range parsers.AllFrameworks {
 		fw := fw
 		name := frameworkSubcommandName(fw)
+		var flags testCommandFlags
 		var sub *cobra.Command
 		sub = clicky.AddNamedCommand(name, testCmd, testrunner.RunOptions{}, func(opts testrunner.RunOptions) (any, error) {
-			if err := splitTestPassThroughArgs(sub, &opts); err != nil {
+			opts, detach, err := finalizeTestCommandOptions(sub, opts, flags)
+			if err != nil {
 				return nil, err
 			}
 			opts.Frameworks = []string{string(fw)}
-			return runTests(opts)
+			return runTests(opts, detach)
 		})
 		sub.Short = fmt.Sprintf("Run only %s tests", fw)
-		sub.Flags().SetInterspersed(true)
+		bindTestCommandFlags(sub, &flags)
 		if err := sub.Flags().MarkHidden("framework"); err != nil {
 			panic(fmt.Sprintf("hide --framework on %s subcommand: %v", name, err))
 		}

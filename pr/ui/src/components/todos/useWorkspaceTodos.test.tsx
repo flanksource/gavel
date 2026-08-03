@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { focusManager } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, TodoItem, TodoListResponse } from '../../types';
+import { queryTestWrapper } from './queryTestWrapper';
 import { useWorkspaceTodos } from './useWorkspaceTodos';
 
 vi.mock('./format', () => {
@@ -51,7 +53,11 @@ const counts = {
 };
 
 function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 500): Response {
-  return { ok, status, json: async () => body } as Response;
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText: ok ? 'OK' : 'Error',
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 beforeEach(() => {
@@ -67,12 +73,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  focusManager.setFocused(undefined);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-describe('useWorkspaceTodos deep links', () => {
+describe('useWorkspaceTodos', () => {
   it('resolves the route ref before workspace lists finish and adopts canonical database identity without navigating', async () => {
     const routeRef = 'legacy/ref';
     const detail: TodoItem = {
@@ -88,13 +95,15 @@ describe('useWorkspaceTodos deep links', () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/todos/item?')) return Promise.resolve(jsonResponse(detail));
-      if (url.startsWith('/api/todos?')) return pendingList;
+      if (url === '/api/todos/batch') return pendingList;
       throw new Error(`unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
     const onNavigate = vi.fn();
 
-    const { result, unmount } = renderHook(() => useWorkspaceTodos(projects, routeRef, onNavigate));
+    const { result, unmount } = renderHook(() => useWorkspaceTodos(projects, routeRef, onNavigate), {
+      wrapper: queryTestWrapper(),
+    });
 
     await waitFor(() => expect(result.current.detail?.ref).toBe(detail.ref));
     expect(result.current.selected).toEqual({
@@ -108,7 +117,7 @@ describe('useWorkspaceTodos deep links', () => {
     ]);
 
     const list: TodoListResponse = { dir: '/work/gavel', counts, items: [] };
-    await act(async () => resolveList(jsonResponse(list)));
+    await act(async () => resolveList(jsonResponse({ results: [list] })));
     await waitFor(() => expect(result.current.loadingList).toBe(false));
     unmount();
   });
@@ -128,8 +137,8 @@ describe('useWorkspaceTodos deep links', () => {
     const historical = { ...base, lookupSessionId: sessionID };
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.startsWith('/api/todos?')) {
-        return Promise.resolve(jsonResponse({ dir: '/work/gavel', counts, items: [base] }));
+      if (url === '/api/todos/batch') {
+        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [base] }] }));
       }
       if (url === `/api/todos/item?ref=${todoID}`) return Promise.resolve(jsonResponse(base));
       if (url === `/api/todos/item?ref=${sessionID}`) return Promise.resolve(jsonResponse(historical));
@@ -140,7 +149,7 @@ describe('useWorkspaceTodos deep links', () => {
 
     const { result, rerender } = renderHook(
       ({ selectedId }: { selectedId: string }) => useWorkspaceTodos(projects, selectedId, onNavigate),
-      { initialProps: { selectedId: todoID } },
+      { initialProps: { selectedId: todoID }, wrapper: queryTestWrapper() },
     );
     await waitFor(() => expect(result.current.detail?.ref).toBe(todoID));
 
@@ -162,28 +171,146 @@ describe('useWorkspaceTodos deep links', () => {
       if (url.startsWith('/api/todos/item?')) {
         return Promise.resolve(jsonResponse({ error: message }, false, status));
       }
-      return Promise.resolve(jsonResponse({ dir: '/work/gavel', counts, items: [] }));
+      return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects, status === 404 ? 'missing123' : 'abc123'));
+    const { result } = renderHook(() => useWorkspaceTodos(projects, status === 404 ? 'missing123' : 'abc123'), {
+      wrapper: queryTestWrapper(),
+    });
 
-    await waitFor(() => expect(result.current.detailError).toBe(message));
+    const selectedId = status === 404 ? 'missing123' : 'abc123';
+    await waitFor(() => expect(result.current.detailError).toBe(`Failed to resolve todo ${selectedId}: ${message}`));
     expect(result.current.detail).toBeNull();
     expect(result.current.selected).toBeNull();
   });
 
-  it('keeps a database list failure visible while retaining an empty workspace group', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'database unavailable: connection refused' }, false, 503)));
+  it('aborts a stale workspace detail query when local selection changes', async () => {
+    const detailSignals: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/todos/batch') {
+        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
+      }
+      if (url.startsWith('/api/todos/item?')) {
+        detailSignals.push(init?.signal as AbortSignal);
+        return new Promise<Response>(() => {});
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const { result, unmount } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects));
+    act(() => result.current.select({ dir: '/work/gavel', ref: 'todo-one' }));
+    await waitFor(() => expect(detailSignals).toHaveLength(1));
+    act(() => result.current.select({ dir: '/work/gavel', ref: 'todo-two' }));
+
+    await waitFor(() => expect(detailSignals).toHaveLength(2));
+    expect(detailSignals[0]?.aborted).toBe(true);
+    unmount();
+    expect(detailSignals[1]?.aborted).toBe(true);
+  });
+
+  it('keeps a database list failure visible while retaining an empty workspace group', async () => {
+    const workspaceError = { code: 'load_failed', message: 'database unavailable: connection refused' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      results: [{ dir: '/work/gavel', items: null, error: workspaceError }],
+    })));
+
+    const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
 
     await waitFor(() => expect(result.current.error).toBe('database unavailable: connection refused'));
     expect(result.current.byDir['/work/gavel']?.items).toEqual([]);
+    expect(result.current.errorsByDir).toEqual({ '/work/gavel': workspaceError });
+  });
+
+  it('loads the complete normalized workspace set with one ordered batch request', async () => {
+    const configuredProjects: Project[] = [
+      { name: 'second', dir: '/work/second/', repos: [] },
+      { name: 'first', dir: ' /work/first/./ ', repos: [] },
+      { name: 'duplicate', dir: '/work/first', repos: [] },
+    ];
+    const firstTodo: TodoItem = {
+      ref: 'first-1', id: 'first-1', cwd: '/work/first', title: 'First workspace todo',
+      status: 'pending', priority: 'high',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input) !== '/api/todos/batch') throw new Error(`unexpected request: ${String(input)}`);
+      return jsonResponse({ results: [
+        { dir: '/work/first', counts: { ...counts, total: 1, open: 1, pending: 1 }, items: [firstTodo] },
+        { dir: '/work/second', counts, items: [] },
+      ] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useWorkspaceTodos(configuredProjects), { wrapper: queryTestWrapper() });
+
+    await waitFor(() => expect(result.current.byDir['/work/first']?.items).toEqual([firstTodo]));
+    expect(result.current.workspaces.map(workspace => workspace.dir)).toEqual(['/work/second', '/work/first']);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dirs: ['/work/first', '/work/second'] }),
+    });
+  });
+
+  it('retains successful workspaces beside an explicit per-workspace failure', async () => {
+    const twoProjects: Project[] = [
+      projects[0],
+      { name: 'captain', dir: '/work/captain', repos: ['flanksource/captain'] },
+    ];
+    const successfulTodo: TodoItem = {
+      ref: 'todo-1', id: 'todo-1', cwd: '/work/gavel', title: 'Successful result',
+      status: 'pending', priority: 'medium',
+    };
+    const workspaceError = { code: 'load_failed', message: 'captain database unavailable' };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: [
+      { dir: '/work/captain', items: null, error: workspaceError },
+      { dir: '/work/gavel', counts: { ...counts, total: 1, open: 1, pending: 1 }, items: [successfulTodo] },
+    ] })));
+
+    const { result } = renderHook(() => useWorkspaceTodos(twoProjects), { wrapper: queryTestWrapper() });
+
+    await waitFor(() => expect(result.current.error).toBe(workspaceError.message));
+    expect(result.current.byDir['/work/gavel']?.items).toEqual([successfulTodo]);
+    expect(result.current.byDir['/work/captain']?.items).toEqual([]);
+    expect(result.current.errorsByDir['/work/captain']).toEqual(workspaceError);
+  });
+
+  it('refetches the active normalized batch query on explicit refresh', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      results: [{ dir: '/work/gavel', counts, items: [] }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.refresh());
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/todos/batch',
+      '/api/todos/batch',
+    ]);
+  });
+
+  it('aborts the batch request when its last observer unmounts', async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal as AbortSignal;
+      return new Promise<Response>(() => {});
+    }));
+    const { unmount } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
+    await waitFor(() => expect(requestSignal).toBeDefined());
+
+    unmount();
+
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
   });
 
   it('polls an active detail until the provider session and terminal projection arrive', async () => {
-    vi.useFakeTimers();
+    focusManager.setFocused(true);
     const active: TodoItem = {
       ref: 'run-1', id: 'run-1', cwd: '/work/gavel', title: 'Live run',
       status: 'in_progress', priority: 'medium',
@@ -191,32 +318,35 @@ describe('useWorkspaceTodos deep links', () => {
     const attached: TodoItem = { ...active, sessionId: 'codex-session-1' };
     const completed: TodoItem = { ...attached, status: 'review', hasPlan: true };
     const details = [active, attached, completed];
+    const detailURLs: string[] = [];
     let detailRead = 0;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('/api/todos/item?')) {
+        detailURLs.push(url);
         const body = details[Math.min(detailRead, details.length - 1)];
         detailRead++;
         return Promise.resolve(jsonResponse(body));
       }
-      if (url.startsWith('/api/todos?')) {
-        return Promise.resolve(jsonResponse({ dir: '/work/gavel', counts, items: [] }));
+      if (url === '/api/todos/batch') {
+        return Promise.resolve(jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] }));
       }
       throw new Error(`unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useWorkspaceTodos(projects, 'run-1'));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(result.current.detail?.status).toBe('in_progress');
+    const { result } = renderHook(() => useWorkspaceTodos(projects, 'run-1'), { wrapper: queryTestWrapper() });
+    await waitFor(() => expect(result.current.detail?.status).toBe('in_progress'));
     expect(result.current.detail?.sessionId).toBeUndefined();
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    expect(result.current.detail?.sessionId).toBe('codex-session-1');
+    await waitFor(() => expect(result.current.detail?.sessionId).toBe('codex-session-1'), { timeout: 1_500 });
+    expect(detailURLs).toEqual([
+      '/api/todos/item?ref=run-1',
+      '/api/todos/item?dir=%2Fwork%2Fgavel&ref=run-1',
+    ]);
     expect(result.current.detail?.status).toBe('in_progress');
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    expect(result.current.detail?.status).toBe('review');
+    await waitFor(() => expect(result.current.detail?.status).toBe('review'), { timeout: 1_500 });
     expect(result.current.detail?.hasPlan).toBe(true);
   });
 });

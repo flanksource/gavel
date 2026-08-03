@@ -12,6 +12,7 @@ import (
 type historyKey struct {
 	framework parsers.Framework
 	pkg       string
+	file      string
 	suite     string
 	name      string
 }
@@ -34,12 +35,20 @@ func joinHistory(report *Report, opts Options) (int, error) {
 	byKey := map[historyKey]*history.Entry{}
 	for i := range hist.Tests {
 		entry := &hist.Tests[i]
-		byKey[historyKey{
+		key := historyKey{
 			framework: entry.Framework,
 			pkg:       cleanRelPath(entry.PackagePath),
+			file:      cleanRelPath(entry.File),
 			suite:     strings.Join(entry.Suite, "\x00"),
 			name:      entry.Name,
-		}] = entry
+		}
+		if key.file != "" {
+			exactKey := key
+			exactKey.pkg = ""
+			byKey[exactKey] = entry
+		}
+		key.file = ""
+		byKey[key] = entry
 	}
 
 	for _, leaf := range report.Leaves() {
@@ -48,9 +57,17 @@ func joinHistory(report *Report, opts Options) (int, error) {
 		}
 		key := historyKey{
 			framework: leaf.Framework,
+			file:      cleanRelPath(leaf.File),
 			suite:     strings.Join(leaf.Suite, "\x00"),
 			name:      leaf.Name,
 		}
+		if key.file != "" {
+			if entry := byKey[key]; entry != nil {
+				leaf.History = entry
+				continue
+			}
+		}
+		key.file = ""
 		for dir := cleanRelPath(path.Dir(leaf.File)); ; dir = parentDir(dir) {
 			key.pkg = dir
 			if entry := byKey[key]; entry != nil {

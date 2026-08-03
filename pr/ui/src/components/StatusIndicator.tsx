@@ -1,10 +1,12 @@
 import type { ComponentType, ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Version } from '@flanksource/clicky-ui/data';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiWarningTriangle, UiPause, UiPlay, UiSync, UiRefresh } from '@flanksource/clicky-ui/icons';
 import type { HealthStatus, RateLimit, Severity } from '../types';
+import { fetchJSON, queryKeys } from '../query';
+import { useDocumentVisible } from '../useDocumentVisible';
 import { timeAgoShort } from '../utils';
 import { useNow } from '../useNow';
 import { Spinner } from '../icons/Spinner';
@@ -45,24 +47,22 @@ const backend = typeof window !== 'undefined' ? window.__GAVEL__ : undefined;
 const frontend = { version: __GAVEL_UI_VERSION__, commit: __GAVEL_UI_COMMIT__ };
 
 export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, error, onRefresh, onPause, networkBusy }: Props) {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [fetchErr, setFetchErr] = useState<string | null>(null);
-  const [healthLoading, setHealthLoading] = useState(false);
-
-  const loadHealth = useCallback(() => {
-    setHealthLoading(true);
-    fetch('/api/status')
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((h: HealthStatus) => { setHealth(h); setFetchErr(null); })
-      .catch(err => setFetchErr(err?.message || 'fetch failed'))
-      .finally(() => setHealthLoading(false));
-  }, []);
-
-  useEffect(() => {
-    loadHealth();
-    const timer = setInterval(loadHealth, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [loadHealth]);
+  const visible = useDocumentVisible();
+  const healthQuery = useQuery({
+    queryKey: queryKeys.health(),
+    queryFn: ({ signal }) => fetchJSON<HealthStatus>({
+      url: '/api/status',
+      signal,
+      context: 'Failed to load health status',
+    }),
+    enabled: visible,
+    staleTime: POLL_INTERVAL_MS,
+    refetchInterval: visible ? POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+  const health = healthQuery.data ?? null;
+  const fetchErr = healthQuery.error instanceof Error ? healthQuery.error.message : null;
+  const loadHealth = () => { void healthQuery.refetch(); };
 
   const dotClass = fetchErr
     ? 'bg-red-500'
@@ -119,7 +119,7 @@ export function StatusIndicator({ fetchedAt, nextFetchIn, paused, rateLimit, err
               paused={paused}
               error={error}
               networkBusy={networkBusy}
-              healthLoading={healthLoading}
+              healthLoading={healthQuery.isFetching}
               onRefresh={onRefresh}
               onPause={onPause}
               onStatusRefresh={loadHealth}

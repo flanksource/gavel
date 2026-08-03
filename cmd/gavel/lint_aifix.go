@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -40,6 +41,7 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 		return initial, err
 	}
 
+	renderer := newAIFixRenderer()
 	res, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        opts.WorkDir,
 		Linters:        opts.Linters,
@@ -55,10 +57,10 @@ func runAIFix(opts LintOptions, initial []*linters.LinterResult) ([]*linters.Lin
 			rerunOpts.AIFix = false
 			return lint.Execute(rerunOpts)
 		},
-		OnEvent: newAIFixRenderer(),
+		OnEvent: renderer.Handle,
 	})
-	if err != nil {
-		return initial, err
+	if runErr := errors.Join(err, renderer.Flush()); runErr != nil {
+		return initial, runErr
 	}
 
 	logger.Infof("ai-fix: stop=%s iterations=%d cost=$%.4f",

@@ -29,15 +29,15 @@ type selectorContext struct {
 
 // newSelectorContext initializes the graph and hasher. The cache store is
 // opened lazily on first cache hit/miss.
-func newSelectorContext(workDir string) (*selectorContext, error) {
-	graph, err := changegraph.Load(workDir)
+func newSelectorContext(workDir string, tags []string) (*selectorContext, error) {
+	graph, err := changegraph.Load(workDir, tags)
 	if err != nil {
 		return nil, fmt.Errorf("load package graph: %w", err)
 	}
 	return &selectorContext{
 		workDir:         workDir,
 		graph:           graph,
-		hasher:          runcache.NewHasher(graph, nil),
+		hasher:          runcache.NewHasher(graph, tags),
 		absDirByPkgPath: map[string]string{},
 	}, nil
 }

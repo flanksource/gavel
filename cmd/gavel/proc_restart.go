@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -12,8 +13,8 @@ type ProcRestartOptions struct {
 	Names    []string `json:"-" args:"true"`
 }
 
-func (ProcRestartOptions) Help() string {
-	return `Restart the running processes.
+func (ProcRestartOptions) Help() api.Textable {
+	return clicky.Text(`Restart the running processes.
 
 With no arguments every process is restarted on the running supervisor. Pass
 names to restart only those:
@@ -22,7 +23,7 @@ names to restart only those:
 When no daemon is running, restart starts one (equivalent to ` + "`gavel proc start`" + `).
 
 Process logs are streamed while the restarted processes come back up; -f/--follow
-keeps streaming until interrupted. Exits non-zero if a process fails to start.`
+keeps streaming until interrupted. Exits non-zero if a process fails to start.`)
 }
 
 func init() {

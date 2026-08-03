@@ -17,6 +17,7 @@ import { statusDotClass, aggregateDotClass, statusLabel } from "../utils";
 import type { ProcProcess, Project, ProcStatus } from "../types";
 import { TodoBadge } from "./TodoBadge";
 import { filesLabel, ProcExpanded } from "./ProcessDetails";
+import { useProcessControl, type ProcessAction } from "./processMutations";
 
 // MetricIcon is the gauge's own icon prop type, derived from the component so it
 // matches clicky-ui's icon typing (avoids a React 18/19 @types/react mismatch).
@@ -113,34 +114,15 @@ export function ProcessPortLink({ port }: { project: string; port: number }) {
   );
 }
 
-async function control(project: string, name: string, action: "start" | "stop" | "restart") {
-  try {
-    await fetch(`/api/proc/${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project, names: [name] }),
-    });
-  } catch {
-    /* surfaced on the next status poll */
-  }
-}
-
 function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChanged: () => void; showWorkspace: boolean }) {
   const { project, proc } = row;
-  const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const processControl = useProcessControl(project, onChanged);
 
   const transitioning = proc.status === "starting" || proc.status === "restarting";
   const active = proc.status === "running" || transitioning;
   const ports = (proc.ports ?? []).slice().sort((a, b) => a - b);
   const faviconPort = firstPort(proc);
-
-  async function act(action: "start" | "stop" | "restart") {
-    setBusy(true);
-    await control(project.name, proc.name, action);
-    setBusy(false);
-    onChanged();
-  }
 
   const ChevronIcon = open ? UiChevronDown : UiChevronRight;
 
@@ -170,11 +152,16 @@ function ProcessRow({ row, onChanged, showWorkspace }: { row: FlatProc; onChange
           ))}
         </td>
         <td className="px-1 text-right whitespace-nowrap">
-          {!active && <IconBtn icon={UiPlay} title="Start" disabled={busy} onClick={() => act("start")} />}
-          {active && <IconBtn icon={UiRestart} title="Restart" disabled={busy} onClick={() => act("restart")} />}
-          {active && <IconBtn icon={UiStop} title="Stop" disabled={busy} onClick={() => act("stop")} />}
+          {!active && <IconBtn icon={UiPlay} title="Start" disabled={processControl.busy} onClick={() => void processControl.control({ action: "start", names: [proc.name] })} />}
+          {active && <IconBtn icon={UiRestart} title="Restart" disabled={processControl.busy} onClick={() => void processControl.control({ action: "restart", names: [proc.name] })} />}
+          {active && <IconBtn icon={UiStop} title="Stop" disabled={processControl.busy} onClick={() => void processControl.control({ action: "stop", names: [proc.name] })} />}
         </td>
       </tr>
+      {processControl.error && (
+        <tr>
+          <td colSpan={7} role="alert" className="px-2 py-1 text-[10px] text-red-600">{processControl.error}</td>
+        </tr>
+      )}
       {open && (
         <tr className="bg-gray-50">
           <td colSpan={7} className="px-2 pb-2">
@@ -249,6 +236,13 @@ export function ProcessTable({ procs, onChanged, showWorkspace = true }: { procs
 // processes auto-start; the selector is editable only while stopped (switching a
 // running daemon's profile means stop → start).
 export function WorkspaceGroup({ project, status, onChanged }: { project: Project; status: ProcStatus; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [profile, setProfile] = useState(status.profile ?? "");
+  const processControl = useProcessControl(project, onChanged);
+  useEffect(() => {
+    setProfile(status.profile ?? "");
+  }, [status.profile]);
+
   // A configured workspace without a Procfile has nothing to supervise: render a
   // compact, control-free row (a Start button here would always 400 server-side)
   // so the workspace still appears in every process listing.
@@ -274,27 +268,8 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
   const running = procs.filter((p) => p.status === "running").length;
   const anyActive = procs.some((p) => p.status === "running" || p.status === "starting" || p.status === "restarting");
 
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [profile, setProfile] = useState(status.profile ?? "");
-  // Track the active profile when the daemon (re)starts so the selector reflects it.
-  useEffect(() => {
-    setProfile(status.profile ?? "");
-  }, [status.profile]);
-
-  async function control(action: "start" | "stop" | "restart", withProfile: boolean) {
-    setBusy(true);
-    try {
-      await fetch(`/api/proc/${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: project.name, ...(withProfile ? { profile } : {}) }),
-      });
-    } catch {
-      /* surfaced on the next status poll */
-    }
-    setBusy(false);
-    onChanged();
+  function control(action: ProcessAction, withProfile: boolean) {
+    void processControl.control({ action, ...(withProfile ? { profile } : {}) });
   }
 
   // Workspace-level controls; shared by the single-process row and the multi
@@ -304,7 +279,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
       {profiles.length > 0 && (
         <label className="flex items-center gap-1 text-[10px] text-gray-500" title="Profile to start">
           <UiLayers className="text-gray-400" />
-          <Select value={profile} disabled={busy || anyActive} onChange={(e) => setProfile(e.target.value)} className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white disabled:opacity-60 w-auto">
+          <Select value={profile} disabled={processControl.busy || anyActive} onChange={(e) => setProfile(e.target.value)} className="text-[10px] border border-gray-200 rounded px-1 py-0.5 bg-white disabled:opacity-60 w-auto">
             <option value="">(default)</option>
             {profiles.map((pr) => (
               <option key={pr} value={pr}>
@@ -314,9 +289,9 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
           </Select>
         </label>
       )}
-      {!anyActive && <IconBtn icon={UiPlay} title="Start" disabled={busy} onClick={() => control("start", true)} />}
-      {anyActive && <IconBtn icon={UiRestart} title={single ? "Restart" : "Restart all"} disabled={busy} onClick={() => control("restart", false)} />}
-      {anyActive && <IconBtn icon={UiStop} title={single ? "Stop" : "Stop all"} disabled={busy} onClick={() => control("stop", false)} />}
+      {!anyActive && <IconBtn icon={UiPlay} title="Start" disabled={processControl.busy} onClick={() => control("start", true)} />}
+      {anyActive && <IconBtn icon={UiRestart} title={single ? "Restart" : "Restart all"} disabled={processControl.busy} onClick={() => control("restart", false)} />}
+      {anyActive && <IconBtn icon={UiStop} title={single ? "Stop" : "Stop all"} disabled={processControl.busy} onClick={() => control("stop", false)} />}
     </>
   );
 
@@ -349,6 +324,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
           <div className="flex-1" />
           {controls}
         </div>
+        {processControl.error && <div role="alert" className="px-2 pt-1 text-[10px] text-red-600">{processControl.error}</div>}
         {open && (
           <div className="px-2 pb-1">
             <ProcExpanded project={project.name} proc={proc} />
@@ -378,6 +354,7 @@ export function WorkspaceGroup({ project, status, onChanged }: { project: Projec
         <MemoryBars metricKey={`${project.name}/__total__`} icon={UiDatabase} />
         {controls}
       </div>
+      {processControl.error && <div role="alert" className="px-2 pt-1 text-[10px] text-red-600">{processControl.error}</div>}
       <ProcessTable procs={procs.map((proc) => ({ project, proc }))} onChanged={onChanged} showWorkspace={false} />
     </div>
   );

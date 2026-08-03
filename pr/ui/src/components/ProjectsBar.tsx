@@ -28,6 +28,8 @@ interface Props {
   selectedRunId: string;
   runError?: string;
   runsLoading?: boolean;
+  historyEnabled: boolean;
+  onHistoryChange: (enabled: boolean) => void;
   onSelect: (project: Project) => void;
   onSelectRun: (project: string, runId: string) => void;
   onChanged: () => void;
@@ -48,21 +50,30 @@ const KIND_ARIA_LABEL: Record<TestRunView['kind'], string> = {
 };
 
 export function ProjectsBar(props: Props) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(props.selected ? [props.selected] : []));
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(props.historyEnabled && props.selected ? [props.selected] : []));
   const runsByProject = useMemo(() => new Map(props.runs.map(project => [project.name, project.runs])), [props.runs]);
 
   useEffect(() => {
-    if (!props.selected) return;
+    if (!props.historyEnabled || !props.selected) return;
     setExpanded(current => current.has(props.selected) ? current : new Set(current).add(props.selected));
-  }, [props.selected]);
+  }, [props.historyEnabled, props.selected]);
 
   return (
     <div className="h-full overflow-auto border-b border-border">
-      <div className="sticky top-0 z-20 bg-muted px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        Projects
+      <div className="sticky top-0 z-20 flex items-center justify-between gap-2 bg-muted px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span>Projects</span>
+        <Button
+          variant="ghost"
+          type="button"
+          onClick={() => props.onHistoryChange(!props.historyEnabled)}
+          aria-label={`${props.historyEnabled ? 'Hide' : 'Show'} test and lint history`}
+          className="h-auto px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal"
+        >
+          {props.historyEnabled ? 'Hide history' : 'Show history'}
+        </Button>
       </div>
-      {props.runError && <div role="alert" className="border-b border-red-200 px-3 py-2 text-xs text-red-600 dark:border-red-900 dark:text-red-400">{props.runError}</div>}
-      {props.runsLoading && !props.runError && <div role="status" className="border-b border-border px-3 py-2 text-xs text-muted-foreground">Loading test and lint runs…</div>}
+      {props.historyEnabled && props.runError && <div role="alert" className="border-b border-red-200 px-3 py-2 text-xs text-red-600 dark:border-red-900 dark:text-red-400">{props.runError}</div>}
+      {props.historyEnabled && props.runsLoading && !props.runError && <div role="status" className="border-b border-border px-3 py-2 text-xs text-muted-foreground">Loading test and lint runs…</div>}
       {props.projects.map(project => (
         <ProjectBranch
           key={project.name}
@@ -96,7 +107,7 @@ export function ProjectsBar(props: Props) {
   );
 }
 
-function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, runsLoading, onToggle, onOpen, onSelectRun, onChanged, onSettings }: Props & {
+function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, procStatus, runsLoading, historyEnabled, onToggle, onOpen, onSelectRun, onChanged, onSettings }: Props & {
   project: Project;
   projectRuns: TestRunView[];
   open: boolean;
@@ -110,13 +121,15 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
   return (
     <div>
       <div className={`flex items-center gap-1 pr-3 transition-colors ${projectActive ? 'bg-primary/10' : 'hover:bg-muted'}`}>
-        <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 rounded-none text-muted-foreground">
-          <Chevron />
-        </Button>
+        {historyEnabled ? (
+          <Button variant="ghost" size="icon" type="button" onClick={onToggle} aria-label={`${open ? 'Collapse' : 'Expand'} ${project.name} runs`} className="h-7 w-7 shrink-0 rounded-none text-muted-foreground">
+            <Chevron />
+          </Button>
+        ) : <span className="h-7 w-7 shrink-0" />}
         <Button variant="ghost" type="button" onClick={onOpen} aria-label={`Open ${project.name} project`} className="h-auto min-w-0 flex-1 justify-start gap-2 rounded-none py-1.5 pr-2 text-left">
           <UiFolder className="shrink-0 text-muted-foreground" />
           <span className="truncate text-sm font-medium text-foreground" title={project.dir}>{project.name}</span>
-          <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>
+          {historyEnabled && <span className="text-[10px] tabular-nums text-muted-foreground" title={`${projectRuns.length} test and lint runs`}>{projectRuns.length}</span>}
         </Button>
         <TodoBadge counts={project.todoCounts} />
         <GitChangesBadge count={procStatus[project.name]?.gitChanges} />
@@ -125,7 +138,7 @@ function ProjectBranch({ project, projectRuns, open, selected, selectedRunId, pr
         </Button>
         <ProcControl repo={key} project={project} status={procStatus[project.name]} onChanged={onChanged} />
       </div>
-      {open && (
+      {historyEnabled && open && (
         <div role="group" aria-label={`${project.name} test and lint runs`}>
           {projectRuns.length > 0 ? projectRuns.map(run => (
             <TestRunRow key={run.runId} project={project.name} run={run} selected={selected === project.name && selectedRunId === run.runId} onSelect={onSelectRun} />

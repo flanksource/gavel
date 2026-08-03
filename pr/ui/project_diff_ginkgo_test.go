@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flanksource/gavel/status"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -32,6 +34,12 @@ var _ = Describe("project working-tree diff", func() {
 		writeDiffFile(dir, "src/unstaged.go", "package src\n\nvar Unstaged = true\n")
 		writeDiffFile(dir, "src/new.go", "package src\n\nvar New = true\n")
 		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+		originalGather := gatherProjectStatus
+		gatherProjectStatus = func(workDir string, opts status.Options) (*status.Result, error) {
+			Expect(opts.NoResults).To(BeTrue())
+			return originalGather(workDir, opts)
+		}
+		DeferCleanup(func() { gatherProjectStatus = originalGather })
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/api/projects/gavel/diff?path=src", nil)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 )
 
 type ProcStopOptions struct {
@@ -10,8 +11,8 @@ type ProcStopOptions struct {
 	Names    []string `json:"-" args:"true"`
 }
 
-func (ProcStopOptions) Help() string {
-	return `Stop the running processes.
+func (ProcStopOptions) Help() api.Textable {
+	return clicky.Text(`Stop the running processes.
 
 With no arguments the whole daemon is stopped (every process is terminated and
 the supervisor exits). Pass process names to stop only those, leaving the
@@ -19,7 +20,7 @@ supervisor running:
   gavel proc stop worker
 
 Process logs are streamed while the processes shut down; -f/--follow keeps
-streaming until interrupted. Stopping does nothing when no daemon is running.`
+streaming until interrupted. Stopping does nothing when no daemon is running.`)
 }
 
 func init() {

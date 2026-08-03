@@ -119,10 +119,29 @@ var _ = Describe("task manager API", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(response.Body.Close()).To(Succeed())
 		Expect(response.StatusCode).To(Equal(http.StatusNoContent))
+		var restartedRunID string
 		Eventually(func() string {
 			process, _ := supervisor.State().Process("worker")
-			return process.TaskRunID
+			restartedRunID = process.TaskRunID
+			return restartedRunID
 		}).WithTimeout(4 * time.Second).ShouldNot(Equal(run.ID))
+		response, err = http.Get(server.URL + "/api/v1/tasks/" + restartedRunID)
+		Expect(err).NotTo(HaveOccurred())
+		var restartedSnapshots []clickytask.TaskSnapshot
+		Expect(json.NewDecoder(response.Body).Decode(&restartedSnapshots)).To(Succeed())
+		Expect(response.Body.Close()).To(Succeed())
+		Expect(restartedSnapshots).To(HaveLen(2))
+		request, err = http.NewRequest(
+			http.MethodPost,
+			server.URL+"/api/v1/tasks/"+restartedRunID+"/tasks/"+restartedSnapshots[1].ID+"/control",
+			strings.NewReader(`{"action":"stop"}`),
+		)
+		Expect(err).NotTo(HaveOccurred())
+		request.Header.Set("Content-Type", "application/json")
+		response, err = http.DefaultClient.Do(request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.Body.Close()).To(Succeed())
+		Expect(response.StatusCode).To(Equal(http.StatusNoContent))
 		response, err = http.Get(server.URL + "/api/v1/tasks/archived-only")
 		Expect(err).NotTo(HaveOccurred())
 		defer response.Body.Close()

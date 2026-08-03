@@ -27,7 +27,9 @@ var noisePackages = map[string]bool{
 // applyDescriptions sets a zero-cost static description on every leaf.
 func applyDescriptions(report *Report) {
 	for _, leaf := range report.Leaves() {
-		leaf.Description = staticDescription(leaf)
+		if leaf.Description == "" {
+			leaf.Description = staticDescription(leaf)
+		}
 	}
 }
 

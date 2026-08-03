@@ -45,8 +45,7 @@ export function ProjectCommitTasks({
   const controlMutation = useMutation({
     mutationFn: requestProjectCommitTaskControl,
     onSuccess: async () => queryClient.invalidateQueries({
-      queryKey: queryKeys.projectStatus(projectName),
-      exact: true,
+      queryKey: queryKeys.projectStatusScope(projectName),
     }),
   });
 

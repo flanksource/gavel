@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/pr/ui"
@@ -47,8 +48,8 @@ type PRListOptions struct {
 	Repos       []string `args:"true"`
 }
 
-func (o PRListOptions) Help() string {
-	return `List GitHub pull requests — the gavel alternative to gh pr list.
+func (o PRListOptions) Help() api.Textable {
+	return clicky.Text(`List GitHub pull requests — the gavel alternative to gh pr list.
 
 Defaults to your open PRs (--author @me) updated in the last --since window (7d).
 Optional positional args restrict to specific repos. Add check status with
@@ -61,7 +62,7 @@ Examples:
   gavel pr list --all --org acme   # every open PR across the org
   gavel pr list --state all --any  # all states, all authors
   gavel pr list --ui               # live browser dashboard (port 9092)
-  gavel pr list --ci --failed-only # org repos whose default branch is red`
+  gavel pr list --ci --failed-only # org repos whose default branch is red`)
 }
 
 var bareDurationRe = regexp.MustCompile(`^\d+[dhms]$`)

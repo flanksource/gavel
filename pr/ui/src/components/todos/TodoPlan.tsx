@@ -1,9 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiSave } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../../icons/Spinner';
 import type { TodoItem } from '../../types';
+import { fetchJSON } from '../../query';
 import { inputClass, todoQuery } from './format';
+import { setTodoCaches, todoMutationJSON } from './todoMutations';
+import { todoQueryKeys } from './todoQueries';
 
 // MdxEditorField lazily pulls in the heavy @mdxeditor/editor (the same markdown
 // field the run dialog uses), so it is code-split and rendered under Suspense with a
@@ -37,87 +41,55 @@ export function TodoPlan({
   active: boolean;
   onChanged?: (todo: TodoItem) => void;
 }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [found, setFound] = useState(false);
-  const [path, setPath] = useState('');
+  const queryClient = useQueryClient();
   const [loaded, setLoaded] = useState(''); // server content — the save baseline
   const [draft, setDraft] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setError('');
-    setFound(false);
-    setPath('');
-    setLoaded('');
-    setDraft('');
-    if (!active || !todo.ref) return;
-
-    let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams(todoQuery(dir));
-    params.set('ref', todo.ref);
-    fetch(`/api/todos/session/plan?${params.toString()}`)
-      .then(async res => {
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
-          const message = data && typeof data === 'object' && 'error' in data
-            ? String(data.error)
-            : `plan request failed (${res.status})`;
-          throw new Error(message);
-        }
-        return data as PlanResponse;
-      })
-      .then((data: PlanResponse) => {
-        if (cancelled) return;
-        setFound(!!data.found);
-        setPath(data.path ?? '');
-        setLoaded(data.content ?? '');
-        setDraft(data.content ?? '');
-      })
-      .catch(err => !cancelled && setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, todo.ref, dir]);
-
-  async function save() {
-    if (saving || draft === loaded) return;
-    setSaving(true);
-    setError('');
-    try {
+  const queryKey = todoQueryKeys.plan(dir, todo.ref);
+  const planQuery = useQuery({
+    queryKey,
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams(todoQuery(dir));
-      const res = await fetch(`/api/todos/session/plan?${params.toString()}`, {
+      params.set('ref', todo.ref);
+      return fetchJSON<PlanResponse>({
+        url: `/api/todos/session/plan?${params.toString()}`,
+        signal,
+        context: 'Plan request failed',
+      });
+    },
+    enabled: active && !!todo.ref,
+    staleTime: 5_000,
+  });
+  const saveMutation = useMutation({
+    mutationKey: ['todos', 'session', 'plan', 'save', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: (content: string) => todoMutationJSON<PlanResponse>(
+      `/api/todos/session/plan?${todoQuery(dir)}`,
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref, version: todo.version, content: draft }),
-      });
-      if (!res.ok) {
-        let detail = `save failed (${res.status})`;
-        try {
-          const data = await res.json();
-          detail = data.error || detail;
-        } catch {
-          // Keep the status fallback when the response is not JSON.
-        }
-        throw new Error(detail);
-      }
-      const data = (await res.json()) as PlanResponse;
-      const next = data.content ?? draft;
+        body: JSON.stringify({ ref: todo.ref, version: todo.version, content }),
+      },
+      'Plan save failed',
+    ),
+    onSuccess: async (data, content) => {
+      const next = data.content ?? content;
+      queryClient.setQueryData<PlanResponse>(queryKey, data);
       setLoaded(next);
       setDraft(next);
-      if (data.todo) onChanged?.(data.todo);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
+      if (data.todo) {
+        await setTodoCaches(queryClient, dir, data.todo);
+        onChanged?.(data.todo);
+      }
+    },
+  });
 
-  if (loading) {
+  useEffect(() => {
+    saveMutation.reset();
+    const content = active ? planQuery.data?.content ?? '' : '';
+    setLoaded(content);
+    setDraft(content);
+  }, [active, dir, planQuery.data, saveMutation.reset, todo.ref]);
+
+  if (planQuery.isFetching && !planQuery.data) {
     return (
       <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
         <Spinner />
@@ -125,24 +97,26 @@ export function TodoPlan({
       </div>
     );
   }
-  if (!found) {
-    if (error) return <div role="alert" className="px-4 py-3 text-sm text-red-600">{error}</div>;
+  if (!planQuery.data?.found) {
+    if (planQuery.error) return <div role="alert" className="px-4 py-3 text-sm text-red-600">{planQuery.error.message}</div>;
     return <PlanEmpty message="No plan yet. Run this todo in Plan mode to produce one." />;
   }
 
   const dirty = draft !== loaded;
+  const saving = saveMutation.isPending;
+  const path = planQuery.data.path ?? '';
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
       <div className="flex shrink-0 items-center justify-between gap-2">
         <div className="min-w-0 truncate text-xs text-muted-foreground" title={path}>
           {path || 'PostgreSQL plan revision'}
         </div>
-        <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={() => void save()}>
+        <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={() => saveMutation.mutate(draft)}>
           {saving ? <Spinner /> : <UiSave />}
           Save
         </Button>
       </div>
-      {error && <div className="shrink-0 text-xs text-red-600">{error}</div>}
+      {saveMutation.error && <div className="shrink-0 text-xs text-red-600">{saveMutation.error.message}</div>}
       <div className="min-h-0 flex-1 overflow-auto">
         <Suspense
           fallback={

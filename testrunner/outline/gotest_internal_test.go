@@ -15,6 +15,7 @@ var (
 	It         = ginkgo.It
 	BeforeEach = ginkgo.BeforeEach
 	Fail       = ginkgo.Fail
+	GinkgoT    = ginkgo.GinkgoT
 )
 
 func parseTestdataFile(path string) (*token.FileSet, *Entry, []*Entry) {

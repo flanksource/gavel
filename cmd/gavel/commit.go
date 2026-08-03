@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/aiflags"
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons/logger"
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/github"
@@ -52,8 +53,8 @@ type CommitOptions struct {
 	AddMetadata  bool   `flag:"add-metadata" default:"true" help:"Append Gavel-Issue-Id / Claude-Session-Id trailers to commit messages, sourced from GAVEL_ISSUE_ID / GAVEL_SESSION_ID (set by 'gavel todos run')."`
 }
 
-func (o CommitOptions) Help() string {
-	return `Generate a conventional commit message via LLM and run pre-commit hooks.
+func (o CommitOptions) Help() api.Textable {
+	return clicky.Text(`Generate a conventional commit message via LLM and run pre-commit hooks.
 
 Reads pre-commit hooks from .gavel.yaml under commit.hooks. Hooks run with
 sh -c in the git root and abort the commit on non-zero exit. Pass --force
@@ -154,7 +155,7 @@ Examples:
   gavel commit --fixup                  # auto-route each file by last-touching commit; leftovers fall through to a normal commit
   gavel commit --fixup --no-autosquash  # leave fixup! commits in place; user runs rebase later
   gavel commit --since=origin/main      # merge commits sharing a Gavel-Issue-Id in origin/main..HEAD into one each
-  gavel commit --since=~20 --dry-run    # preview which Gavel-Issue-Id groups in the last 20 commits would merge`
+  gavel commit --since=~20 --dry-run    # preview which Gavel-Issue-Id groups in the last 20 commits would merge`)
 }
 
 func init() {

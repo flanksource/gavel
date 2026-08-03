@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	cexec "github.com/flanksource/clicky/exec"
 	clickytask "github.com/flanksource/clicky/task"
@@ -18,83 +18,49 @@ import (
 
 const projectActionOpenPR projectAction = "open-pr"
 
-// The commit queue lets the dashboard build up several commits without waiting:
-// each selection is posted as its own group and becomes one task inside a
-// per-project clicky group started WithConcurrency(1). That group *is* the
-// queue — it owns the single-runner guarantee, cancellation and history, so
-// nothing here re-implements a scheduler.
-//
-// Order comes from declaring every group already queued as a dependency with
-// WithDependencies. The group's permit alone only guarantees one commit at a
-// time, not which one: tasks waiting on the permit are re-queued with a short
-// delay and equally urgent tasks have no defined order between them, so a plain
-// fan-in commits the groups shuffled. The dependencies state the ordering the
-// user built by hand, and they also stop the queue at the first failing group,
-// which is where clicky cancels a task whose dependency failed. Cancelling a
-// group is not a failure and takes nothing else with it.
-//
-// Serialization is not cosmetic: `gavel commit <files>` stages explicitly and
-// resets the git index, so two commit processes must never overlap on one repo.
-// This mirrors the CLI's sequential loop in commit/interactive_batch.go.
-
-// Times are pointers so a group that has not started — clicky stamps a task's
-// start time when it is created, not when it is dequeued — reports no elapsed
-// time at all instead of a clock ticking since it was queued.
-type commitQueueEntryView struct {
-	ID        string        `json:"id"`
-	Action    projectAction `json:"action"`
-	Files     []string      `json:"files"`
-	Status    string        `json:"status"`
-	StartedAt *time.Time    `json:"startedAt,omitempty"`
-	EndedAt   *time.Time    `json:"endedAt,omitempty"`
-	ExitCode  int           `json:"exitCode,omitempty"`
-	Output    string        `json:"output,omitempty"`
-	Error     string        `json:"error,omitempty"`
+type projectCommitRun struct {
+	RunID string `json:"runId"`
 }
 
-type commitQueueStatus struct {
-	RunID   string                 `json:"runId,omitempty"`
-	Href    string                 `json:"href,omitempty"`
-	Running bool                   `json:"running"`
-	Entries []commitQueueEntryView `json:"entries,omitempty"`
+type projectCommitTaskDetails struct {
+	TaskID string        `json:"taskId"`
+	Action projectAction `json:"action"`
+	Files  []string      `json:"files"`
+}
+
+type projectCommitGroupDetails struct {
+	Entries []projectCommitTaskDetails `json:"entries"`
 }
 
 type commitQueueEntry struct {
 	action projectAction
 	files  []string
 	task   clickytask.TypedTask[cexec.ExecResult]
-	output *commitQueueOutput
+}
+
+type commitQueueGeneration struct {
+	runID     string
+	entries   []*commitQueueEntry
+	group     *clickytask.TypedGroup[cexec.ExecResult]
+	archived  bool
+	archiving bool
 }
 
 type commitQueue struct {
-	mu       sync.Mutex
-	entries  []*commitQueueEntry
-	group    *clickytask.TypedGroup[cexec.ExecResult]
-	runID    string
-	archived bool
+	mu      sync.Mutex
+	current *commitQueueGeneration
 }
 
 type commitQueueRegistry struct {
 	queues map[string]*commitQueue
 }
 
-// commitQueueOutput collects one group's streamed command output; the dashboard
-// polls it while the commit is still running.
-type commitQueueOutput struct {
-	mu   sync.Mutex
-	text strings.Builder
+type commitQueueConflictError struct {
+	files []string
 }
 
-func (o *commitQueueOutput) Write(data []byte) (int, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.text.Write(data)
-}
-
-func (o *commitQueueOutput) String() string {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.text.String()
+func (e *commitQueueConflictError) Error() string {
+	return "project files already queued: " + strings.Join(e.files, ", ")
 }
 
 func (s *Server) projectCommitQueue(project string) *commitQueue {
@@ -111,23 +77,12 @@ func (s *Server) projectCommitQueue(project string) *commitQueue {
 	return queue
 }
 
-func (s *Server) commitQueueFor(project string) commitQueueStatus {
-	queue := s.projectCommitQueue(project)
-	queue.mu.Lock()
-	defer queue.mu.Unlock()
-	return queue.statusLocked()
-}
-
-// enqueueCommitGroup validates one selection through the same argv builder the
-// other project actions use and hands it to the project's commit queue. It
-// returns as soon as the task is enqueued — the commit runs asynchronously,
-// behind whatever is already queued.
-func (s *Server) enqueueCommitGroup(project Project, request projectActionRequest) (commitQueueStatus, error) {
+func (s *Server) enqueueCommitGroup(project Project, request projectActionRequest) (projectCommitRun, error) {
 	action, files, args, err := s.commitQueueActionArgs(project, request)
 	if err != nil {
-		return commitQueueStatus{}, err
+		return projectCommitRun{}, err
 	}
-	return s.projectCommitQueue(project.Name).enqueue(s, project, action, files, args), nil
+	return s.projectCommitQueue(project.Name).enqueue(s, project, action, files, args)
 }
 
 func (s *Server) commitQueueActionArgs(project Project, request projectActionRequest) (projectAction, []string, []string, error) {
@@ -159,9 +114,6 @@ func (s *Server) commitQueueActionArgs(project Project, request projectActionReq
 	return action, files, args, nil
 }
 
-// commitGroupFiles reports the paths a queued group owns so the dashboard can
-// lock them out of the next selection. projectActionArgs has already validated
-// them against the current status.
 func commitGroupFiles(request projectActionRequest) ([]string, error) {
 	if request.Options != nil {
 		raw, present := request.Options["files"]
@@ -173,161 +125,148 @@ func commitGroupFiles(request projectActionRequest) ([]string, error) {
 	return request.Files, nil
 }
 
-func (q *commitQueue) enqueue(s *Server, project Project, action projectAction, files, args []string) commitQueueStatus {
+func (q *commitQueue) enqueue(s *Server, project Project, action projectAction, files, args []string) (projectCommitRun, error) {
 	q.mu.Lock()
-	group := q.ensureGroupLocked(project)
-	entry := &commitQueueEntry{action: action, files: files, output: &commitQueueOutput{}}
+	if duplicates := q.duplicateFilesLocked(files); len(duplicates) > 0 {
+		q.mu.Unlock()
+		return projectCommitRun{}, &commitQueueConflictError{files: duplicates}
+	}
+	generation := q.ensureGenerationLocked(project)
+	entry := &commitQueueEntry{action: action, files: append([]string(nil), files...)}
 	var opts []clickytask.Option
-	if predecessors := q.predecessorsLocked(); len(predecessors) > 0 {
+	if predecessors := predecessorsLocked(generation); len(predecessors) > 0 {
 		opts = append(opts, clickytask.WithDependencies(predecessors...))
 	}
-	entry.task = executeProjectAction(group.Context(), project.ResolvedDir(), args, entry.output, group.Group, opts...)
-	q.entries = append(q.entries, entry)
-	current := q.statusLocked()
+	entry.task = executeProjectAction(generation.group.Context(), project.ResolvedDir(), args, io.Discard, generation.group.Group, opts...)
+	entry.task.SetName(projectCommitTaskName(action, files))
+	entry.task.SetDescription(strings.Join(files, ", "))
+	generation.entries = append(generation.entries, entry)
 	q.mu.Unlock()
 
-	go q.watch(s, project, entry)
-	return current
+	go q.watch(s, project, generation, entry)
+	return projectCommitRun{RunID: generation.runID}, nil
 }
 
-// predecessorsLocked returns the groups a newly queued one has to wait for:
-// every group still in the queue, not just the one in front of it. Depending on
-// all of them is what makes a failure stop the queue rather than only the next
-// group — a group cancelled because an earlier one failed counts as finished to
-// the group behind it, so a pairwise chain lets the third group commit against
-// the tree the first one never produced.
-func (q *commitQueue) predecessorsLocked() []*clickytask.Task {
-	predecessors := make([]*clickytask.Task, 0, len(q.entries))
-	for _, entry := range q.entries {
+func (q *commitQueue) duplicateFilesLocked(files []string) []string {
+	if q.current == nil || commitQueueTerminal(q.current.group.Status()) {
+		return nil
+	}
+	claimed := map[string]struct{}{}
+	for _, entry := range q.current.entries {
+		if commitQueueTerminal(entry.task.Status()) {
+			continue
+		}
+		for _, file := range entry.files {
+			claimed[file] = struct{}{}
+		}
+	}
+	seen := map[string]struct{}{}
+	var duplicates []string
+	for _, file := range files {
+		if _, exists := claimed[file]; !exists {
+			continue
+		}
+		if _, exists := seen[file]; exists {
+			continue
+		}
+		seen[file] = struct{}{}
+		duplicates = append(duplicates, file)
+	}
+	return duplicates
+}
+
+func predecessorsLocked(generation *commitQueueGeneration) []*clickytask.Task {
+	predecessors := make([]*clickytask.Task, 0, len(generation.entries))
+	for _, entry := range generation.entries {
 		predecessors = append(predecessors, entry.task.Task)
 	}
 	return predecessors
 }
 
-// ensureGroupLocked returns the group new tasks join. A finished group is
-// replaced rather than reused: clicky evicts terminal groups from its registry
-// after its run-retention window, so a stale handle would silently lose the
-// /tasks view. Entries belong to a group, so a fresh group starts a fresh list.
-func (q *commitQueue) ensureGroupLocked(project Project) *clickytask.TypedGroup[cexec.ExecResult] {
-	if q.group != nil && q.group.FinishedAt().IsZero() {
-		return q.group
+func (q *commitQueue) ensureGenerationLocked(project Project) *commitQueueGeneration {
+	if q.current != nil && !commitQueueTerminal(q.current.group.Status()) {
+		return q.current
 	}
-	q.runID = uuid.NewString()
-	q.entries = nil
-	q.archived = false
+	generation := &commitQueueGeneration{runID: uuid.NewString()}
 	controller := &projectActionController{}
 	group := clickytask.StartGroup[cexec.ExecResult](
 		"Commit "+project.Name,
-		clickytask.WithGroupID(q.runID),
+		clickytask.WithGroupID(generation.runID),
 		clickytask.WithKind("gavel-"+string(projectActionCommit)),
 		clickytask.WithLabels(map[string]string{"project": project.Name, "action": string(projectActionCommit)}),
-		clickytask.WithHref(commitQueueHref(q.runID)),
+		clickytask.WithHref("/tasks/"+generation.runID),
 		clickytask.WithConcurrency(1),
 		clickytask.WithController(controller),
+		clickytask.WithDetailsProvider(func() any { return q.details(generation) }),
 	)
 	controller.setGroup(group.Group)
-	q.group = &group
-	return q.group
+	generation.group = &group
+	q.current = generation
+	return generation
 }
 
-func commitQueueHref(runID string) string {
-	return "/tasks/" + runID
-}
-
-// watch waits for one group's commit so the run is archived once the last of
-// them is done. Stopping the queue after a failure is not its job: a commit that
-// exits non-zero fails its task, and the groups behind it depend on that task.
-func (q *commitQueue) watch(s *Server, project Project, entry *commitQueueEntry) {
-	_, _ = entry.task.GetResult()
-	q.settle(s, project)
-}
-
-// settle archives the run once every group in it has finished, mirroring what
-// startProjectAction does for lint and test runs. Archiving happens under the
-// lock so `archived` means "the run is on disk" rather than "someone is about
-// to write it" — the last group's watcher is the only one that gets here.
-func (q *commitQueue) settle(s *Server, project Project) {
+func (q *commitQueue) details(generation *commitQueueGeneration) projectCommitGroupDetails {
 	q.mu.Lock()
-	if q.readyToArchiveLocked() {
-		q.archived = true
-		if err := taskhistory.Archive(project.ResolvedDir(), q.runID); err != nil {
-			logger.Errorf("archive commit queue run %s: %v", q.runID, err)
-		}
+	defer q.mu.Unlock()
+	details := projectCommitGroupDetails{Entries: make([]projectCommitTaskDetails, 0, len(generation.entries))}
+	for _, entry := range generation.entries {
+		details.Entries = append(details.Entries, projectCommitTaskDetails{
+			TaskID: entry.task.ID(),
+			Action: entry.action,
+			Files:  append([]string(nil), entry.files...),
+		})
 	}
+	return details
+}
+
+func projectCommitTaskName(action projectAction, files []string) string {
+	verb := "Commit"
+	if action == projectActionOpenPR {
+		verb = "Open PR"
+	}
+	if len(files) == 1 {
+		return verb + " " + files[0]
+	}
+	return fmt.Sprintf("%s %d files", verb, len(files))
+}
+
+func (q *commitQueue) watch(s *Server, project Project, generation *commitQueueGeneration, entry *commitQueueEntry) {
+	_, _ = entry.task.GetResult()
+	q.settle(s, project, generation)
+}
+
+func (q *commitQueue) settle(s *Server, project Project, generation *commitQueueGeneration) {
+	q.mu.Lock()
+	if !generation.readyToArchive() {
+		q.mu.Unlock()
+		s.notify()
+		return
+	}
+	generation.archiving = true
 	q.mu.Unlock()
 
+	err := taskhistory.Archive(project.ResolvedDir(), generation.runID)
+	q.mu.Lock()
+	generation.archiving = false
+	generation.archived = err == nil
+	q.mu.Unlock()
+	if err != nil {
+		logger.Errorf("archive commit task group %s: %v", generation.runID, err)
+	}
 	s.nudgeTaskHistoryImport()
 	s.notify()
 }
 
-func (q *commitQueue) readyToArchiveLocked() bool {
-	if q.archived || q.runID == "" {
+func (generation *commitQueueGeneration) readyToArchive() bool {
+	if generation.archived || generation.archiving || len(generation.entries) == 0 {
 		return false
 	}
-	for _, entry := range q.entries {
+	for _, entry := range generation.entries {
 		if !commitQueueTerminal(entry.task.Status()) {
 			return false
 		}
 	}
 	return true
-}
-
-// cancel stops a queued or running group — clicky's Task.Cancel covers both,
-// skipping it at dequeue when pending and killing the process when running —
-// and drops it from the queue.
-func (q *commitQueue) cancel(id string) (commitQueueStatus, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for index, entry := range q.entries {
-		if entry.task.ID() != id {
-			continue
-		}
-		entry.task.Cancel()
-		q.entries = append(q.entries[:index], q.entries[index+1:]...)
-		return q.statusLocked(), nil
-	}
-	return commitQueueStatus{}, fmt.Errorf("unknown commit group %q", id)
-}
-
-func (q *commitQueue) statusLocked() commitQueueStatus {
-	if q.group == nil {
-		return commitQueueStatus{}
-	}
-	current := commitQueueStatus{RunID: q.runID, Href: commitQueueHref(q.runID)}
-	for _, entry := range q.entries {
-		status := entry.task.Status()
-		if !commitQueueTerminal(status) {
-			current.Running = true
-		}
-		view := commitQueueEntryView{
-			ID:      entry.task.ID(),
-			Action:  entry.action,
-			Files:   entry.files,
-			Status:  string(status),
-			EndedAt: optionalTime(entry.task.EndTime()),
-			Output:  entry.output.String(),
-		}
-		if status != clickytask.StatusPending {
-			view.StartedAt = optionalTime(entry.task.StartTime())
-		}
-		if result, _ := entry.task.Task.GetResult(); result != nil {
-			if exec, ok := result.(cexec.ExecResult); ok {
-				view.ExitCode = exec.ExitCode
-			}
-		}
-		if err := entry.task.Error(); err != nil {
-			view.Error = err.Error()
-		}
-		current.Entries = append(current.Entries, view)
-	}
-	return current
-}
-
-func optionalTime(at time.Time) *time.Time {
-	if at.IsZero() {
-		return nil
-	}
-	return &at
 }
 
 func commitQueueTerminal(status clickytask.Status) bool {
@@ -345,24 +284,15 @@ func (s *Server) handleCommitQueue(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	current, err := s.enqueueCommitGroup(project, request)
+	run, err := s.enqueueCommitGroup(project, request)
 	if err != nil {
+		var conflict *commitQueueConflictError
+		if errors.As(err, &conflict) {
+			respondError(w, http.StatusConflict, err.Error())
+			return
+		}
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	respondJSON(w, http.StatusAccepted, current)
-}
-
-func (s *Server) handleCommitQueueEntry(w http.ResponseWriter, r *http.Request) {
-	project, err := GetProject(r.PathValue("name"))
-	if err != nil {
-		respondError(w, statusForProjectErr(err), err.Error())
-		return
-	}
-	current, err := s.projectCommitQueue(project.Name).cancel(r.PathValue("id"))
-	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	respondJSON(w, http.StatusOK, current)
+	respondJSON(w, http.StatusAccepted, run)
 }

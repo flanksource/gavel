@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/flanksource/clicky"
@@ -75,24 +78,62 @@ func runTestANSI(opts testANSIOptions) (any, error) {
 		Height:           height,
 		SnapshotInterval: interval,
 		Command:          command,
+		// The settled screen and its duplicate lines are the whole point of this
+		// command, as opposed to a fixture that only wants a PTY.
+		Snapshots: true,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	data, err := json.MarshalIndent(capture, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal capture: %w", err)
-	}
-
 	if outPath == "" {
-		fmt.Println(string(data))
+		if err := encodeANSICapture(os.Stdout, capture); err != nil {
+			return nil, fmt.Errorf("write capture to stdout: %w", err)
+		}
 		return nil, nil
 	}
-	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+	if err := writeANSICapture(outPath, capture); err != nil {
 		return nil, fmt.Errorf("write %s: %w", outPath, err)
 	}
 	return ansiCaptureSummary(capture, outPath), nil
+}
+
+func encodeANSICapture(w io.Writer, capture *fixtures.Capture) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(capture)
+}
+
+func writeANSICapture(path string, capture *fixtures.Capture) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func(cause error) error {
+		closeErr := tmp.Close()
+		if errors.Is(closeErr, os.ErrClosed) {
+			closeErr = nil
+		}
+		removeErr := os.Remove(tmpPath)
+		if os.IsNotExist(removeErr) {
+			removeErr = nil
+		}
+		return errors.Join(cause, closeErr, removeErr)
+	}
+	if err = tmp.Chmod(0o644); err != nil {
+		return cleanup(err)
+	}
+	if err = encodeANSICapture(tmp, capture); err != nil {
+		return cleanup(err)
+	}
+	if err = tmp.Close(); err != nil {
+		return cleanup(err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return cleanup(err)
+	}
+	return nil
 }
 
 // resolveANSISize fills in 0-valued width/height from the controlling terminal,
@@ -133,16 +174,7 @@ type ansiSummary struct {
 // the PTY width flags content that soft-wraps — the precondition for the
 // cursor-up-under-count smear.
 func ansiCaptureSummary(c *fixtures.Capture, outPath string) ansiSummary {
-	var raw string
-	for _, e := range c.Events {
-		raw += e.Data
-	}
-	maxW := 0
-	for _, line := range splitLines(fixtures.Debug_SettleANSI(raw, 0)) {
-		if w := runeWidth(line); w > maxW {
-			maxW = w
-		}
-	}
+	maxW := c.MaxLineWidth()
 	return ansiSummary{
 		Out:           outPath,
 		Command:       c.Command,
@@ -156,26 +188,6 @@ func ansiCaptureSummary(c *fixtures.Capture, outPath string) ansiSummary {
 		MaxLineWidth:  maxW,
 		WidthOverflow: maxW > c.Width,
 	}
-}
-
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
-		}
-	}
-	return append(out, s[start:])
-}
-
-func runeWidth(s string) int {
-	n := 0
-	for range s {
-		n++
-	}
-	return n
 }
 
 func init() {

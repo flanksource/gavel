@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
 import { FixtureEditor } from '@flanksource/clicky-ui/data';
 import type { FixtureFenceOption, FixtureFenceSchemas } from '@flanksource/clicky-ui/data';
 import { UiBeaker, UiCopy } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoRunOptions, TodoSessionDetailResponse } from '../../types';
+import { fetchJSON } from '../../query';
 import { todoQuery } from './format';
 import { AcceptanceCriteria } from './AcceptanceCriteria';
 import { TodoVerificationAttempts } from './TodoVerificationAttempts';
@@ -14,6 +16,8 @@ import {
   verificationSpec,
 } from './PromptRunButton';
 import { defaultRunOptions, runSpec } from './run';
+import { setTodoCaches, todoMutationJSON } from './todoMutations';
+import { todoQueryKeys } from './todoQueries';
 
 const GAVEL_FIXTURE_FENCES = [
   { info: 'yaml test', label: 'test', description: 'Gavel test options' },
@@ -52,86 +56,95 @@ export function TodoVerification({
   attempts: TodoSessionDetailResponse | null;
   attemptsError?: string;
 }) {
+  const queryClient = useQueryClient();
   const saved = todo.verificationMarkdown ?? '';
   const [fixture, setFixture] = useState(saved);
-  const [schemas, setSchemas] = useState<FixtureFenceSchemas>({});
-  const [busy, setBusy] = useState(false);
-  const [runBusy, setRunBusy] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advancedOptions, setAdvancedOptions] = useState<TodoRunOptions>(defaultRunOptions);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch('/api/todos/verification/schema', { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
-      })
-      .then((doc) => setSchemas(fixtureFenceSchemasFromDocument(doc)))
-      .catch((err) => {
-        if (err?.name !== 'AbortError') setSchemas({});
+  const [verificationError, setVerificationError] = useState('');
+  const { data: schemas = {} } = useQuery<unknown, Error, FixtureFenceSchemas>({
+    queryKey: todoQueryKeys.verificationSchema(),
+    queryFn: ({ signal }) => fetchJSON<unknown>({
+      url: '/api/todos/verification/schema',
+      signal,
+      context: 'Verification schema request failed',
+    }),
+    select: fixtureFenceSchemasFromDocument,
+    staleTime: Infinity,
+  });
+  const fixtureMutation = useMutation({
+    mutationKey: ['todos', 'verification', 'fixture', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: (content: string) => todoMutationJSON<TodoItem>(
+      `/api/todos/verification/fixture?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: todo.ref, fixture: content }),
+      },
+      'Verification fixture save failed',
+    ),
+    onSuccess: async (updated) => {
+      await setTodoCaches(queryClient, dir, updated);
+      onChanged(updated);
+    },
+  });
+  const runMutation = useMutation({
+    mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref: todo.ref }],
+    mutationFn: ({ current, options }: { current: TodoItem; options: TodoRunOptions }) => todoMutationJSON<VerificationRunResponse>(
+      `/api/todos/verification/run?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: current.ref, spec: verificationSpec(runSpec(options)) }),
+      },
+      'Verification run failed',
+    ),
+    onSuccess: async (data) => {
+      setVerificationError(data.verification?.error ?? '');
+      if (data.todo) {
+        await setTodoCaches(queryClient, dir, data.todo);
+        onChanged(data.todo);
+      }
+      await queryClient.invalidateQueries({
+        queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, undefined, true),
       });
-    return () => controller.abort();
-  }, []);
+    },
+  });
+  const busy = fixtureMutation.isPending;
+  const runBusy = runMutation.isPending;
 
   // Adopt the server's saved fixture whenever a different todo is shown, or
   // after this todo's own save round-trips back through props.
   useEffect(() => {
     setFixture(saved);
-    setError('');
+    setVerificationError('');
+    fixtureMutation.reset();
+    runMutation.reset();
   }, [todo.ref, saved]);
 
   const dirty = fixture !== saved;
 
   async function save(): Promise<TodoItem | null> {
     if (busy || !dirty) return todo;
-    setBusy(true);
-    setError('');
+    setVerificationError('');
+    fixtureMutation.reset();
     try {
-      const res = await fetch(`/api/todos/verification/fixture?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref, fixture }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Save failed');
-      const refreshed = data as TodoItem;
-      onChanged(refreshed);
-      return refreshed;
-    } catch (err: any) {
-      setError(err?.message || 'Save failed');
+      return await fixtureMutation.mutateAsync(fixture);
+    } catch {
       return null;
-    } finally {
-      setBusy(false);
     }
   }
 
   async function runVerification(options: TodoRunOptions) {
     if (busy || runBusy) return;
-    setRunBusy(true);
-    setError('');
+    setVerificationError('');
+    runMutation.reset();
     try {
       const current = dirty ? await save() : todo;
       if (!current) return;
-      const res = await fetch(`/api/todos/verification/run?${todoQuery(dir)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // The verification endpoint takes a bare api.Spec under `spec`, not a run
-        // payload, so the spec half travels alone.
-        body: JSON.stringify({ ref: current.ref, spec: verificationSpec(runSpec(options)) }),
-      });
-      const data = await res.json() as VerificationRunResponse;
-      if (!res.ok) throw new Error(data.error || 'Verification failed');
-      // A pre-execution failure (no fixture, no criteria, bad budget) creates no
-      // prompt run, so the attempt list can never show it — the banner is its
-      // only home.
-      if (data.verification?.error) setError(data.verification.error);
-      if (data.todo) onChanged(data.todo);
-    } catch (err: any) {
-      setError(err?.message || 'Verification failed');
-    } finally {
-      setRunBusy(false);
+      await runMutation.mutateAsync({ current, options });
+    } catch {
+      // The owning mutation exposes its contextual error below.
     }
   }
 
@@ -165,7 +178,7 @@ export function TodoVerification({
           </Button>
           <Button
             size="sm"
-            onClick={save}
+            onClick={() => void save()}
             loading={busy}
             disabled={busy || !dirty}
             title="Save the verification fixture"
@@ -207,7 +220,11 @@ export function TodoVerification({
             placeholder="Write the verification fixture markdown…"
           />
         </div>
-        {error && <div className="px-3 pb-3 text-xs text-red-600">{error}</div>}
+        {(fixtureMutation.error || runMutation.error || verificationError) && (
+          <div className="px-3 pb-3 text-xs text-red-600">
+            {fixtureMutation.error?.message || runMutation.error?.message || verificationError}
+          </div>
+        )}
       </section>
 
       <TodoVerificationAttempts dir={dir} todoRef={todo.ref} detail={attempts} error={attemptsError} />

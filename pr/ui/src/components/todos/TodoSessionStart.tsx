@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import { UiHubot, UiRobotAi, type IconProps } from '@flanksource/clicky-ui/icons';
-import type { TodoItem, TodoRunOptions, TodoRunPreviewResponse } from '../../types';
+import type { TodoItem, TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
-import { todoQuery } from './format';
 import {
   TodoRunActionButton,
   TodoRunContextError,
@@ -12,6 +11,7 @@ import {
   todoRunButtonPresentation,
   todoRunModeLabel,
   useTodoRunContext,
+  useTodoRunPreview,
   type TodoRunAction,
 } from './run';
 
@@ -21,44 +21,37 @@ import {
 // stops the user from starting the run.
 function useRunPromptPreview(dir: string, ref: string, options: TodoRunOptions | null) {
   const [prompt, setPrompt] = useState('');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const previewMutation = useTodoRunPreview(dir);
 
   useEffect(() => {
     if (!ref || !options) return;
     let cancelled = false;
     const controller = new AbortController();
-    setLoading(true);
     setError('');
-    fetch(`/api/todos/run/preview?${todoQuery(dir)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    previewMutation.mutate({
+      body: {
         ref,
         driver: options.driver,
         runMode: 'run',
         spec: { backend: options.spec?.backend, model: options.spec?.model, effort: options.spec?.effort },
-      }),
+      },
       signal: controller.signal,
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Preview failed');
-        if (!cancelled) setPrompt((data as TodoRunPreviewResponse).prompt ?? '');
-      })
-      .catch((err: any) => {
-        if (!cancelled && err?.name !== 'AbortError') setError(err?.message || 'Preview failed');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    }, {
+      onSuccess: data => {
+        if (!cancelled) setPrompt(data.prompt ?? '');
+      },
+      onError: err => {
+        if (!cancelled && !(err instanceof DOMException && err.name === 'AbortError')) setError(err.message);
+      },
+    });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [dir, ref, options?.driver, options?.spec?.backend, options?.spec?.model, options?.spec?.effort]);
+  }, [dir, ref, options?.driver, options?.spec?.backend, options?.spec?.model, options?.spec?.effort, previewMutation.mutate]);
 
-  return { prompt, loading, error };
+  return { prompt, loading: previewMutation.isPending, error };
 }
 
 function DetailChip({

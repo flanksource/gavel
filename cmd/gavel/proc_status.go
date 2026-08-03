@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -9,11 +10,11 @@ type ProcStatusOptions struct {
 	Procfile string `json:"procfile,omitempty" flag:"procfile" help:"Path to the Procfile (default: nearest Procfile up to the git root)"`
 }
 
-func (ProcStatusOptions) Help() string {
-	return `Show the status of each process: state, pid, uptime and restart count.
+func (ProcStatusOptions) Help() api.Textable {
+	return clicky.Text(`Show the status of each process: state, pid, uptime and restart count.
 
 When a daemon is running the data is live (queried over the control socket);
-otherwise every configured process is shown as stopped.`
+otherwise every configured process is shown as stopped.`)
 }
 
 func init() {

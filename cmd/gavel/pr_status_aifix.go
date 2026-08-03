@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -96,6 +97,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	hooks = append(hooks, capverify.HooksForWorkflow(req.Workflow)...)
 
 	runStart := time.Now()
+	renderer := newAIFixRenderer()
 	runner := &agent.Runner[string]{
 		Provider:      streamer,
 		Request:       req,
@@ -104,9 +106,10 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		Repo:          workDir,
 		Cwd:           workDir,
 		Scope:         capverify.ScopeForWorkflow(req.Workflow),
-		OnEvent:       newAIFixRenderer(),
+		OnEvent:       renderer.Handle,
 	}
 	res, runErr := runner.Run(ctx)
+	renderErr := renderer.Flush()
 
 	logger.Infof("pr ai-fix: stop=%s iterations=%d cost=$%.4f verified=%t",
 		loopReason(res.Loop), loopIterations(res.Loop), loopCost(res.Loop), prFixVerified(res))
@@ -117,7 +120,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	if err := renderCaptainHistory(runStart, loopSessionID(res.Loop)); err != nil {
 		logger.Warnf("pr ai-fix: failed to render captain history: %v", err)
 	}
-	return runErr
+	return errors.Join(runErr, renderErr)
 }
 
 // applyMaxIterations lets --ai-fix-max-iterations have the last word on the

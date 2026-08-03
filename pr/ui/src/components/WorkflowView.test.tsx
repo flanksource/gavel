@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { WorkflowRun } from '../types';
 import { WorkflowRunView } from './WorkflowView';
 
@@ -45,11 +46,19 @@ describe('WorkflowRunView job log fallback', () => {
       }],
     };
 
-    const { container } = render(<WorkflowRunView run={run} repo="acme/widget" />);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <WorkflowRunView run={run} repo="acme/widget" />
+      </QueryClientProvider>,
+    );
     fireEvent.click(screen.getByText('failed build'));
     await waitFor(() => expect(container.querySelector('pre')).not.toBeNull());
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/prs/job-logs?repo=acme%2Fwidget&runId=11&jobId=22&tail=100');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/prs/job-logs?repo=acme%2Fwidget&runId=11&jobId=22&tail=100',
+      { signal: expect.any(AbortSignal) },
+    );
     const pre = container.querySelector('pre');
     expect(pre).not.toBeNull();
     expect(pre!.className).toContain('bg-muted');

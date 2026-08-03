@@ -39,8 +39,10 @@ describe('ProjectsBar', () => {
         procStatus={{}}
         selected="gavel"
         selectedRunId=""
+        historyEnabled
         onSelect={onSelect}
         onSelectRun={() => {}}
+        onHistoryChange={() => {}}
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={onSettings}
@@ -66,8 +68,10 @@ describe('ProjectsBar', () => {
         procStatus={{}}
         selected="gavel"
         selectedRunId="run-2026-07-21T10-59-33Z"
+        historyEnabled
         onSelect={() => {}}
         onSelectRun={onSelectRun}
+        onHistoryChange={() => {}}
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
@@ -99,8 +103,10 @@ describe('ProjectsBar', () => {
         procStatus={{}}
         selected=""
         selectedRunId=""
+        historyEnabled
         onSelect={() => {}}
         onSelectRun={() => {}}
+        onHistoryChange={() => {}}
         onChanged={() => {}}
         onAdd={() => {}}
         onSettings={() => {}}
@@ -112,5 +118,32 @@ describe('ProjectsBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand clicky runs' }));
     expect(screen.getByRole('button', { name: 'Open lint run run-2026-07-21T10-59-33Z for gavel' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open test run run-clicky for clicky' })).toBeTruthy();
+  });
+
+  it('keeps run controls hidden until history is explicitly enabled', () => {
+    const project: Project = { name: 'gavel', dir: '/work/gavel', repos: ['acme/gavel'] };
+    const onHistoryChange = vi.fn();
+
+    render(
+      <ProjectsBar
+        projects={[project]}
+        runs={runHistory}
+        procStatus={{}}
+        selected="gavel"
+        selectedRunId=""
+        historyEnabled={false}
+        onSelect={() => {}}
+        onSelectRun={() => {}}
+        onHistoryChange={onHistoryChange}
+        onChanged={() => {}}
+        onAdd={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Expand gavel runs' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open lint run run-2026-07-21T10-59-33Z for gavel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show test and lint history' }));
+    expect(onHistoryChange).toHaveBeenCalledWith(true);
   });
 });

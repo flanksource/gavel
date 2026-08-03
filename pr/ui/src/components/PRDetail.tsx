@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, type ReactNode, type ComponentType } from 'react';
+import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
 import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
@@ -42,10 +43,11 @@ import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
 import { VercelIcon } from '../icons/VercelIcon';
 import { Button } from '@flanksource/clicky-ui/components';
-import { AnsiHtml, GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitDiffPayload, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
+import { AnsiHtml, GitChangedFilesSummary, GitCommitList, GitFileList, type GitCommitItem, type GitFileChangeItem } from '@flanksource/clicky-ui/data';
 import { useTimeoutFlash } from '../useTimeoutFlash';
 import { copyText } from '../clipboard';
 import { useContainerWidth } from '../useContainerWidth';
+import { prCommitDiffQuery, prFileDiffQuery } from './oneShotQueries';
 
 function formatWorkflowsText(runs: WorkflowRun[]): string {
   return runs.map(r => {
@@ -113,26 +115,6 @@ function formatGavelMarkdown(g: GavelResultsSummary): string {
     }
   }
   return lines.join('\n');
-}
-
-type PRDiffAPIResponse = GitDiffPayload & { error?: string };
-
-async function loadGitDiff(url: string): Promise<GitDiffPayload> {
-  const response = await fetch(url);
-  let payload: PRDiffAPIResponse = { diff: '' };
-  try {
-    payload = await response.json();
-  } catch {
-    payload = { diff: '', error: await response.text().catch(() => '') };
-  }
-  if (!response.ok) {
-    throw new Error(payload.error || `Failed to load diff (${response.status})`);
-  }
-  return {
-    diff: payload.diff || '',
-    truncated: !!payload.truncated,
-    binary: !!payload.binary,
-  };
 }
 
 interface Props {
@@ -361,6 +343,7 @@ function DetailTabBar({ active, onChange, commitCount, fileCount }: {
 }
 
 function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
+  const queryClient = useQueryClient();
   const items = useMemo<GitCommitItem[]>(() => commits.map(commit => ({
     id: commit.oid,
     sha: commit.oid,
@@ -377,8 +360,9 @@ function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
     href: `https://github.com/${pr.repo}/commit/${commit.oid}`,
   })), [commits, pr.repo]);
 
-  const loadDiff = (commit: GitCommitItem) => loadGitDiff(
-    `/api/prs/commits/diff?repo=${encodeURIComponent(pr.repo)}&sha=${encodeURIComponent(commit.sha)}`,
+  const loadDiff = useCallback(
+    (commit: GitCommitItem) => queryClient.fetchQuery(prCommitDiffQuery(pr.repo, commit.sha)),
+    [pr.repo, queryClient],
   );
 
   return (
@@ -393,6 +377,7 @@ function CommitsTab({ commits, pr }: { commits: PRCommitInfo[]; pr: PRItem }) {
 }
 
 function FilesTab({ files, pr, info }: { files: PRFileInfo[]; pr: PRItem; info?: import('../types').PRInfo }) {
+  const queryClient = useQueryClient();
   const totalAdds = info?.additions ?? files.reduce((s, f) => s + f.additions, 0);
   const totalDels = info?.deletions ?? files.reduce((s, f) => s + f.deletions, 0);
   const items = useMemo<GitFileChangeItem[]>(() => files.map(file => ({
@@ -404,8 +389,9 @@ function FilesTab({ files, pr, info }: { files: PRFileInfo[]; pr: PRItem; info?:
     href: `${pr.url}/files#diff-${btoa(file.path).replace(/=/g, '')}`,
   })), [files, pr.url]);
 
-  const loadDiff = (file: GitFileChangeItem) => loadGitDiff(
-    `/api/prs/files/diff?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}&path=${encodeURIComponent(file.path)}`,
+  const loadDiff = useCallback(
+    (file: GitFileChangeItem) => queryClient.fetchQuery(prFileDiffQuery(pr.repo, pr.number, file.path)),
+    [pr.number, pr.repo, queryClient],
   );
 
   return (

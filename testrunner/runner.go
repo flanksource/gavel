@@ -141,6 +141,8 @@ type RunOptions struct {
 	Bench         string                `json:"bench,omitempty" yaml:"bench,omitempty" flag:"bench"`                                       // Run Go benchmarks matching this regex ("." or "true" runs all). Auto-enabled for packages containing only Benchmark* funcs.
 	Fixtures      bool                  `json:"fixtures,omitempty" yaml:"fixtures,omitempty" flag:"fixtures"`                              // Discover and run fixture files. Off by default; can also be enabled via .gavel.yaml fixtures.enabled
 	FixtureFiles  []string              `json:"fixture_files,omitempty" yaml:"fixture-files,omitempty" flag:"fixture-files"`               // Globs for fixture discovery. Overrides .gavel.yaml fixtures.files. Default: **/*.fixture.md
+	FixturesOnly  bool                  `json:"-" yaml:"-"`                                                                                // Run only the supplied fixture runner without discovering ordinary test frameworks.
+	FixtureRunner *fixtureOptions       `json:"-" yaml:"-"`                                                                                // Direct fixture command options; nil uses normal fixture discovery.
 	Frameworks    []string              `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"`                          // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline      string                `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline"`                              // Path to previous results JSON; only report NEW failures not in baseline
 	Failed        string                `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`                                    // Path to previous results JSON; re-run only failed tests
@@ -152,6 +154,8 @@ type RunOptions struct {
 	PassThroughArgs []string `json:"pass_through_args,omitempty" yaml:"-"` // CLI-only arguments supplied after --. Focus aliases are normalized; remaining args require one selected framework.
 
 }
+
+type fixtureOptions = fixtures.RunnerOptions
 
 func (opts RunOptions) Pretty() api.Text {
 	text := clicky.Text("")
@@ -409,6 +413,10 @@ func Run(opts RunOptions) (any, error) {
 	if opts.WorkDir == "" {
 		opts.WorkDir, _ = os.Getwd()
 	}
+	if opts.FixturesOnly {
+		opts.WorkDir, _ = filepath.Abs(opts.WorkDir)
+		return runSingleRoot(opts)
+	}
 
 	// Split starting paths by execution root so each group runs with the
 	// correct WorkDir. Nested Go modules get their own groups.
@@ -603,7 +611,11 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 		registry:   DefaultRegistry(opts.WorkDir),
 		streamer:   streamer,
 	}
-	results, err := t.Run()
+	var results parsers.TestSuiteResults
+	var err error
+	if !opts.FixturesOnly {
+		results, err = t.Run()
+	}
 	// Populate SummaryOut from whatever completed before the error, so the
 	// CLI can still print an end-of-run summary when a subprocess failed.
 	if opts.SummaryOut != nil {
@@ -627,7 +639,17 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	// Discover and run fixture tests, gated on the --fixtures flag or
 	// fixtures.enabled in .gavel.yaml. Fixture failures are captured in the
 	// tree, not returned as errors, so AddNamedCommand still prints results.
-	if globs := resolveFixtureGlobs(opts); globs != nil {
+	if opts.FixtureRunner != nil {
+		fixtureTree, err := runFixtureRunner(*opts.FixtureRunner, streamer)
+		if err != nil {
+			logger.Warnf("fixture execution failed: %v", err)
+		}
+		if fixtureTree != nil {
+			for _, child := range fixtureTree.Children {
+				tree = append(tree, fixtureNodeToTests(child)...)
+			}
+		}
+	} else if globs := resolveFixtureGlobs(opts); globs != nil {
 		fixtureTree, err := runDiscoveredFixtures(opts.WorkDir, opts.StartingPaths, globs, streamer)
 		if err != nil {
 			logger.Warnf("fixture discovery failed: %v", err)
@@ -640,6 +662,9 @@ func runSingleRootWithUpdateOwnership(opts RunOptions, closeUpdates bool) (any, 
 	}
 
 	tree = annotateTestsWorkDir(tree, opts.WorkDir)
+	if opts.FixturesOnly && opts.SummaryOut != nil {
+		*opts.SummaryOut = opts.SummaryOut.Add(parsers.Tests(tree).Sum())
+	}
 
 	return tree, nil
 }
@@ -2027,15 +2052,23 @@ func runDiscoveredFixtures(workDir string, startingPaths []string, globs []strin
 	}
 
 	execPath, _ := os.Executable()
-	runnerOpts := fixtures.RunnerOptions{
+	return runFixtureRunner(fixtures.RunnerOptions{
 		Paths:          fixtureFiles,
 		WorkDir:        workDir,
 		Logger:         logger.StandardLogger(),
 		ExecutablePath: execPath,
-	}
+	}, streamer)
+}
 
+func runFixtureRunner(runnerOpts fixtures.RunnerOptions, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
 	if streamer != nil {
-		runnerOpts.ProgressSink = func(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
+		upstream := runnerOpts.ProgressSink
+		runnerOpts.ProgressSink = func(ctx context.Context, snapshot fixtures.ExecutionSnapshot) error {
+			if upstream != nil {
+				if err := upstream(ctx, snapshot); err != nil {
+					return err
+				}
+			}
 			streamer.UpdateFixtures(executionSnapshotToTests(snapshot))
 			return nil
 		}

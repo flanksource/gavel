@@ -12,6 +12,21 @@ vi.mock('./run', () => ({
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   todoRunButtonPresentation: () => ({ provider: undefined, model: 'sonnet-5', effort: 'medium' }),
   todoRunModeLabel: () => 'Agent',
+  useTodoRunPreview: () => ({
+    isPending: false,
+    mutate: (
+      { body, signal }: { body: Record<string, unknown>; signal?: AbortSignal },
+      callbacks: { onSuccess: (data: { prompt?: string }) => void; onError: (error: Error) => void },
+    ) => {
+      fetch('/api/todos/run/preview?dir=%2Frepo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
+      }).then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Preview failed');
+        callbacks.onSuccess(data);
+      }).catch(callbacks.onError);
+    },
+  }),
   TodoRunEffortBadge: ({ effort }: { effort?: string }) => <span data-testid="effort-badge">{effort}</span>,
   TodoRunActionButton: ({ action, onRun }: { action: string; onRun?: (options?: unknown) => void }) => (
     // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stub for the run button.

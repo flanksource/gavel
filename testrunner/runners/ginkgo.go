@@ -45,6 +45,10 @@ func (r *Ginkgo) FocusArgs(pattern string) []string {
 	return []string{"--focus", pattern}
 }
 
+func (r *Ginkgo) BuildTagsArgs(tags []string) []string {
+	return []string{"--tags=" + strings.Join(tags, ",")}
+}
+
 // Detect checks if Ginkgo is used (looks for ginkgo imports in test files).
 // Like GoTest.Detect we do not gate on go.mod; we bail out early via a
 // sentinel error on the first hit so we don't keep walking.

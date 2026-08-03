@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -12,15 +13,15 @@ type ProcRunOptions struct {
 	Names    []string `json:"-" args:"true"`
 }
 
-func (ProcRunOptions) Help() string {
-	return `Run the Procfile's processes in the foreground (foreman-style).
+func (ProcRunOptions) Help() api.Textable {
+	return clicky.Text(`Run the Procfile's processes in the foreground (foreman-style).
 
 Each process's output is streamed to the terminal with a coloured "name |"
 prefix and also captured to .gavel/proc/<name>.log. Press Ctrl-C to stop every
 process and exit.
 
 Pass process names to run only a subset:
-  gavel proc run web worker`
+  gavel proc run web worker`)
 }
 
 func init() {

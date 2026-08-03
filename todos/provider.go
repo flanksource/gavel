@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
 )
 
@@ -34,7 +35,7 @@ type Provider interface {
 	Get(ctx context.Context, ref string) (*types.TODO, error)
 	Create(ctx context.Context, req CreateRequest) (*types.TODO, error)
 	Delete(ctx context.Context, todo *types.TODO) error
-	// Edit updates a TODO's title and/or body in place.
+	// Edit updates a TODO's content fields in place.
 	Edit(ctx context.Context, todo *types.TODO, edit EditRequest) error
 	// Comment appends a free-form comment to a TODO's history.
 	Comment(ctx context.Context, todo *types.TODO, body string) error
@@ -90,6 +91,10 @@ type RunSpecProvider interface {
 type RunLifecycleProvider interface {
 	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) error
 	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
+}
+
+type RunProgressProvider interface {
+	RecordRunProgress(ctx context.Context, todo *types.TODO, snapshot fixtures.ExecutionSnapshot) error
 }
 
 // GroupExecutionPolicy lets a persistence boundary reject execution shapes

@@ -10,7 +10,7 @@ import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
-import { priorities, statusClass, statuses, statusLabel, todoQuery } from './format';
+import { priorities, statusClass, statuses, statusLabel } from './format';
 import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
@@ -18,6 +18,7 @@ import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationAttempts';
 import { TodoReviewBanner } from './planActions';
+import { useDeleteTodoMutation, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 
 export function TodoDetail({
   todo,
@@ -44,7 +45,6 @@ export function TodoDetail({
   workspaces?: Project[];
   onTransferred?: (toDir: string, todo: TodoItem) => void;
 }) {
-  const [busy, setBusy] = useState(false);
   const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<TodoDetailTabKey>('overview');
@@ -54,6 +54,10 @@ export function TodoDetail({
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
+  const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
+  const deleteTodo = useDeleteTodoMutation(dir);
+  const transferTodo = useTransferTodoMutation();
+  const busy = updateTodo.isPending || deleteTodo.isPending || transferTodo.isPending;
   // Projects this todo can move to: every configured workspace except its own.
   const transferTargets = workspaces.filter(ws => !!ws.dir && ws.dir !== dir);
   const closed = todo?.status === 'completed';
@@ -108,23 +112,18 @@ export function TodoDetail({
     comment?: string;
   }): Promise<boolean> {
     if (!todo || busy) return false;
-    setBusy(true);
     setError('');
     try {
-      const response = await fetch(`/api/todos/item?${todoQuery(dir)}`, {
-        method: 'PATCH',
+      const data = await updateTodo.mutateAsync({
+        ref: todo.ref,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ref: todo.ref, ...payload }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Update failed');
-      onChanged(data as TodoItem);
+      onChanged(data);
       return true;
-    } catch (err: any) {
-      setError(err?.message || 'Update failed');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update todo');
       return false;
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -153,46 +152,24 @@ export function TodoDetail({
 
   async function transferTo(toDir: string) {
     if (!todo || busy || !toDir || !onTransferred) return;
-    setBusy(true);
     setError('');
     try {
-      const response = await fetch('/api/todos/transfer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ref: todo.ref,
-          fromDir: dir,
-          toDir,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Move failed');
-      onTransferred(toDir, data.todo as TodoItem);
-    } catch (err: any) {
-      setError(err?.message || 'Move failed');
-    } finally {
-      setBusy(false);
+      const { todo: moved } = await transferTodo.mutateAsync({ ref: todo.ref, fromDir: dir, toDir });
+      onTransferred(toDir, moved);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to move todo');
     }
   }
 
   async function archiveTodo() {
     if (!todo || busy) return;
     if (!window.confirm('Archive this todo?')) return;
-    setBusy(true);
     setError('');
     try {
-      const params = new URLSearchParams(todoQuery(dir));
-      params.set('ref', todo.ref);
-      const response = await fetch(`/api/todos/item?${params.toString()}`, { method: 'DELETE' });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Archive failed');
-      }
+      await deleteTodo.mutateAsync(todo.ref);
       onDeleted();
-    } catch (err: any) {
-      setError(err?.message || 'Archive failed');
-    } finally {
-      setBusy(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to archive todo');
     }
   }
 

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import type { Org, SearchConfig } from '../types';
 import { UiCheck, UiChevronDown, UiChevronRight, UiEye, UiEyeClosed, UiGlobe, UiOrganization, UiUser } from '@flanksource/clicky-ui/icons';
+import { orgsQuery } from './oneShotQueries';
 
 interface Props {
   config: SearchConfig;
@@ -24,23 +26,12 @@ interface Props {
 
 export function OrgChooser({ config, onChange }: Props) {
   const [open, setOpen] = useState(false);
-  const [orgs, setOrgs] = useState<Org[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setLoading(true);
-    // include-ignored=1 so the chooser sees the full membership list —
-    // it needs that to render the "Manage hidden" section.
-    fetch('/api/orgs?include-ignored=1')
-      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((data: Org[]) => { setOrgs(data || []); setErr(null); })
-      .catch(e => setErr(e?.message || 'fetch failed'))
-      .finally(() => setLoading(false));
-  }, [open]);
+  const orgsResult = useQuery({ ...orgsQuery(), enabled: open });
+  const orgs: Org[] = orgsResult.data ?? [];
+  const loading = orgsResult.isPending && open;
+  const err = orgsResult.error instanceof Error ? orgsResult.error.message : null;
 
   // Close on outside click — the dropdown is anchored to the button so a
   // stray click should dismiss rather than trap the user.

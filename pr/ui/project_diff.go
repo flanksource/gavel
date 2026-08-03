@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	gavelgit "github.com/flanksource/gavel/git"
 	"github.com/flanksource/gavel/status"
 )
@@ -22,12 +24,14 @@ type projectDiffResponse struct {
 }
 
 func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
+	stopFile := rpchttp.Track(r.Context(), "file")
 	project, err := GetProject(r.PathValue("name"))
+	stopFile()
 	if err != nil {
 		respondError(w, statusForProjectErr(err), err.Error())
 		return
 	}
-	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true})
+	result, err := gatherProjectStatus(project.ResolvedDir(), status.Options{NoRepomap: true, NoResults: true, Context: r.Context()})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gather project status: %v", err))
 		return
@@ -37,7 +41,7 @@ func (s *Server) handleProjectDiff(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	diff, binary, err := projectWorkingTreeDiff(project.ResolvedDir(), files)
+	diff, binary, err := projectWorkingTreeDiff(r.Context(), project.ResolvedDir(), files)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,11 +71,11 @@ func selectProjectDiffFiles(target string, files []status.FileStatus) (string, [
 	return target, selected, nil
 }
 
-func projectWorkingTreeDiff(workDir string, files []status.FileStatus) (string, bool, error) {
+func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.FileStatus) (string, bool, error) {
 	var patches []string
 	allBinary := true
 	for _, file := range files {
-		filePatches, err := projectFilePatches(workDir, file)
+		filePatches, err := projectFilePatches(ctx, workDir, file)
 		if err != nil {
 			return "", false, err
 		}
@@ -88,16 +92,18 @@ func projectWorkingTreeDiff(workDir string, files []status.FileStatus) (string, 
 	return strings.Join(patches, "\n"), len(files) == 1 && len(patches) > 0 && allBinary, nil
 }
 
-func projectFilePatches(workDir string, file status.FileStatus) ([]string, error) {
+func projectFilePatches(ctx context.Context, workDir string, file status.FileStatus) ([]string, error) {
 	if file.State == status.StateUntracked {
+		stopFile := rpchttp.Track(ctx, "file")
 		info, err := os.Lstat(filepath.Join(workDir, filepath.FromSlash(file.Path)))
+		stopFile()
 		if err != nil {
 			return nil, fmt.Errorf("inspect untracked file %q: %w", file.Path, err)
 		}
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("untracked diff target %q is not a regular file", file.Path)
 		}
-		patch, err := runProjectGitDiff(workDir, true, "--no-index", "--no-color", "--", "/dev/null", file.Path)
+		patch, err := runProjectGitDiff(ctx, workDir, true, "--no-index", "--no-color", "--", "/dev/null", file.Path)
 		if err != nil {
 			return nil, fmt.Errorf("diff untracked file %q: %w", file.Path, err)
 		}
@@ -110,20 +116,22 @@ func projectFilePatches(workDir string, file status.FileStatus) ([]string, error
 	}
 	paths = append(paths, file.Path)
 	stagedArgs := append([]string{"--cached", "--find-renames", "--no-color"}, paths...)
-	staged, err := runProjectGitDiff(workDir, false, stagedArgs...)
+	staged, err := runProjectGitDiff(ctx, workDir, false, stagedArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("diff staged file %q: %w", file.Path, err)
 	}
 	workArgs := append([]string{"--find-renames", "--no-color"}, paths...)
-	unstaged, err := runProjectGitDiff(workDir, false, workArgs...)
+	unstaged, err := runProjectGitDiff(ctx, workDir, false, workArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("diff unstaged file %q: %w", file.Path, err)
 	}
 	return []string{staged, unstaged}, nil
 }
 
-func runProjectGitDiff(workDir string, allowChanges bool, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"diff"}, args...)...)
+func runProjectGitDiff(ctx context.Context, workDir string, allowChanges bool, args ...string) (string, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"diff"}, args...)...)
 	cmd.Dir = workDir
 	output, err := cmd.CombinedOutput()
 	if err == nil {

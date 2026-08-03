@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/procfile"
 )
 
@@ -9,9 +10,9 @@ type ProcListOptions struct {
 	Procfile string `json:"procfile,omitempty" flag:"procfile" help:"Path to the Procfile (default: nearest Procfile up to the git root)"`
 }
 
-func (ProcListOptions) Help() string {
-	return `List the processes defined in the Procfile and their commands, annotated
-with each process's current status.`
+func (ProcListOptions) Help() api.Textable {
+	return clicky.Text(`List the processes defined in the Procfile and their commands, annotated
+with each process's current status.`)
 }
 
 func init() {

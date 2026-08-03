@@ -99,6 +99,28 @@ var _ = Describe("joinHistory", func() {
 		Expect(report.Entries[1].Children[2].History).To(BeNil())
 	})
 
+	It("uses fixture source files to disambiguate repeated names", func() {
+		fixtureDir := ginkgo.GinkgoT().TempDir()
+		_, err := snapshots.SavePerRun(fixtureDir, &testui.Snapshot{
+			Metadata: &testui.SnapshotMetadata{Started: ran},
+			Git:      &testui.SnapshotGit{Root: fixtureDir, Repo: "repo", SHA: "abc"},
+			Tests: []parsers.Test{
+				{Framework: parsers.Fixture, File: "a/check.fixture.md", Name: "health", Passed: true},
+				{Framework: parsers.Fixture, File: "b/check.fixture.md", Name: "health", Failed: true},
+			},
+		}, ran, "")
+		Expect(err).NotTo(HaveOccurred())
+
+		fixtureReport := &Report{Entries: []*Entry{
+			{Framework: parsers.Fixture, File: "a/check.fixture.md", Name: "health"},
+			{Framework: parsers.Fixture, File: "b/check.fixture.md", Name: "health"},
+		}}
+		_, err = joinHistory(fixtureReport, Options{WorkDir: fixtureDir})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fixtureReport.Entries[0].History.PassCount).To(Equal(1))
+		Expect(fixtureReport.Entries[1].History.FailCount).To(Equal(1))
+	})
+
 	It("returns zero runs without error when no history exists", func() {
 		empty := ginkgo.GinkgoT().TempDir()
 		runs, err := joinHistory(report, Options{WorkDir: empty})

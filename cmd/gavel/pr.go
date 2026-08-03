@@ -8,6 +8,7 @@ import (
 
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	commonsContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
@@ -59,8 +60,8 @@ type PRStatusOptions struct {
 	captaincli.AIRuntimeOptions
 }
 
-func (o PRStatusOptions) Help() string {
-	return `Show a PR's GitHub Actions status — checks, conclusions, timing, and failing-step logs.
+func (o PRStatusOptions) Help() api.Textable {
+	return clicky.Text(`Show a PR's GitHub Actions status — checks, conclusions, timing, and failing-step logs.
 
 Use this instead of gh pr view / gh run view / gh run list: one readable view of
 every workflow step for the PR. With no argument it resolves the current branch's
@@ -86,7 +87,7 @@ Examples:
   gavel pr status --comments '1,2,!3,*,!@coderabbit'
   gavel pr status --actions '.github/workflows/ci.yml,!deploy'
   gavel pr status --actions 'lint,Install Tests - windows-amd64'   # by job/check name
-  gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass`
+  gavel pr status --ai-fix                     # fix, push, and re-poll until checks pass`)
 }
 
 func runPRStatus(opts PRStatusOptions) (any, error) {

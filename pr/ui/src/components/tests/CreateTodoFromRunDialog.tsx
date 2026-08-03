@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Field, Modal } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiLinkExternal, UiPass } from '@flanksource/clicky-ui/icons';
 import type { TodoItem } from '../../types';
-import { inputClass, todoQuery } from '../todos/format';
+import { inputClass } from '../todos/format';
+import { useCreateTodoMutation } from '../todos/todoMutations';
 import { defaultRunTodoTitle, type RunFailureCandidate } from './RunFailureCandidates';
 
 export interface CreateTodoFromRunDialogProps {
@@ -27,9 +28,10 @@ export function CreateTodoFromRunDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState<TodoItem | null>(null);
+  const createTodo = useCreateTodoMutation(projectDir);
+  const busy = createTodo.isPending;
   const selectedCandidates = useMemo(() => candidates.filter(candidate => selected.has(candidate.key)), [candidates, selected]);
 
   useEffect(() => {
@@ -37,10 +39,10 @@ export function CreateTodoFromRunDialog({
     setSelected(new Set(candidates.map(candidate => candidate.key)));
     setTitle(defaultRunTodoTitle(projectName, candidates));
     setNotes('');
-    setBusy(false);
+    createTodo.reset();
     setError('');
     setCreated(null);
-  }, [candidates, open, projectName, runId]);
+  }, [candidates, open, projectName, runId, createTodo.reset]);
 
   async function submit() {
     if (busy || !title.trim() || selectedCandidates.length === 0) return;
@@ -48,13 +50,11 @@ export function CreateTodoFromRunDialog({
       setError('Project directory is required to create a todo.');
       return;
     }
-    setBusy(true);
     setError('');
     try {
       const runHref = `/projects/${encodeURIComponent(projectName)}/runs/${encodeURIComponent(runId)}`;
       const body = [notes.trim(), `_From [Project run \`${runId}\`](${runHref})._`].filter(Boolean).join('\n\n');
-      const response = await fetch(`/api/todos/new?${todoQuery(projectDir)}`, {
-        method: 'POST',
+      const payload = await createTodo.mutateAsync({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: title.trim(),
@@ -64,15 +64,11 @@ export function CreateTodoFromRunDialog({
           criteria: selectedCandidates.map(candidate => ({ text: candidate.criterion })),
         }),
       });
-      const payload = await response.json() as { error?: string; todo?: TodoItem };
-      if (!response.ok) throw new Error(payload.error || `Create todo failed (${response.status})`);
       if (!payload.todo?.ref) throw new Error('Create todo response did not include the created todo.');
       setCreated(payload.todo);
       onCreated?.();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Create todo failed');
-    } finally {
-      setBusy(false);
+      setError(cause instanceof Error ? cause.message : 'Failed to create todo');
     }
   }
 

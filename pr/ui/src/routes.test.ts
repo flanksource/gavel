@@ -24,8 +24,18 @@ describe('project routes', () => {
     expect(buildRoute(parsed)).toBe('/projects/gavel?diff=pr%2Fui%2Fsrc');
   });
 
+  it('round-trips independent project history and result options with a diff', () => {
+    const location = new URL('http://localhost:9092/projects/gavel?diff=pr%2Fui%2Fsrc&history=true&results=true');
+
+    const parsed = parseRoute(location as unknown as Location);
+
+    expect(parsed.projectHistory).toBe(true);
+    expect(parsed.projectResults).toBe(true);
+    expect(buildRoute(parsed)).toBe('/projects/gavel?diff=pr%2Fui%2Fsrc&history=true&results=true');
+  });
+
   it('round-trips a historical project run and drops the diff selection', () => {
-    const location = new URL('http://localhost:9092/projects/Clicky%20UI/runs/run-2026-07-21T10-59-33Z?diff=src');
+    const location = new URL('http://localhost:9092/projects/Clicky%20UI/runs/run-2026-07-21T10-59-33Z?diff=src&results=true');
 
     const parsed = parseRoute(location as unknown as Location);
 
@@ -34,8 +44,10 @@ describe('project routes', () => {
       tab: 'projects',
       selectedPath: 'Clicky UI',
       projectRunId: 'run-2026-07-21T10-59-33Z',
+      projectHistory: true,
+      projectResults: true,
     });
-    expect(buildRoute(parsed)).toBe('/projects/Clicky%20UI/runs/run-2026-07-21T10-59-33Z');
+    expect(buildRoute(parsed)).toBe('/projects/Clicky%20UI/runs/run-2026-07-21T10-59-33Z?results=true');
   });
 });
 

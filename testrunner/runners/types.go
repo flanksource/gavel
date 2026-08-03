@@ -34,6 +34,12 @@ type FocusMapper interface {
 	FocusArgs(pattern string) []string
 }
 
+// BuildTagsMapper is an optional runner capability for translating Go build
+// tags into framework-native command-line arguments.
+type BuildTagsMapper interface {
+	BuildTagsArgs(tags []string) []string
+}
+
 type Package string
 type TestRun struct {
 	Framework  parsers.Framework

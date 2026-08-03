@@ -1,9 +1,13 @@
 import type React from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FixtureEditorProps } from '@flanksource/clicky-ui/data';
 import type { TodoItem, TodoSessionDetailResponse } from '../../types';
 import { TodoVerification } from './TodoVerification';
+import { queryTestWrapper } from './queryTestWrapper';
+import { todoQueryKeys } from './todoQueries';
+import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
 
 const fixtureEditorCalls = vi.hoisted(() => ({
   props: [] as FixtureEditorProps[],
@@ -100,28 +104,27 @@ const verificationRunContext = {
 };
 
 function mockSchemaFetch() {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input) === '/api/todos/run/context') {
-        return {
-          ok: true,
-          json: async () => verificationRunContext,
-          text: async (): Promise<string> => '',
-        };
-      }
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/todos/run/context') {
       return {
         ok: true,
-        json: async () => ({
-          fences: {
-            test: { schema: testSchema, aliases: ['yaml test'] },
-            lint: { schema: lintSchema, aliases: ['yaml lint'] },
-          },
-        }),
+        json: async () => verificationRunContext,
         text: async (): Promise<string> => '',
       };
-    }),
-  );
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        fences: {
+          test: { schema: testSchema, aliases: ['yaml test'] },
+          lint: { schema: lintSchema, aliases: ['yaml lint'] },
+        },
+      }),
+      text: async (): Promise<string> => '',
+    };
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 describe('TodoVerification', () => {
@@ -155,6 +158,7 @@ describe('TodoVerification', () => {
         onChanged={() => {}}
         attempts={null}
       />,
+      { wrapper: queryTestWrapper() },
     );
 
     await waitFor(() => {
@@ -176,6 +180,7 @@ describe('TodoVerification', () => {
         onChanged={() => {}}
         attempts={null}
       />,
+      { wrapper: queryTestWrapper() },
     );
 
     await waitFor(() => {
@@ -188,9 +193,30 @@ describe('TodoVerification', () => {
     });
   });
 
+  it('reuses the cached verification schema after remount', async () => {
+    const fetchMock = mockSchemaFetch();
+    const wrapper = queryTestWrapper();
+    const first = render(
+      <TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={null} />,
+      { wrapper },
+    );
+    await waitFor(() => expect(fixtureEditorCalls.props.at(-1)?.schemas?.test).toEqual(testSchema));
+    first.unmount();
+
+    render(
+      <TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={null} />,
+      { wrapper },
+    );
+    await waitFor(() => expect(fixtureEditorCalls.props.at(-1)?.schemas?.test).toEqual(testSchema));
+
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/todos/verification/schema')).toHaveLength(1);
+  });
+
   it('saves a dirty fixture before running the shared verification endpoint', async () => {
     const updatedTodo = { ...todo, verificationMarkdown: '### command: smoke' };
     const onChanged = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/todos/verification/schema') {
@@ -254,7 +280,9 @@ describe('TodoVerification', () => {
       ],
       diagnostics: [],
     };
-    render(<TodoVerification dir="/workspace" todo={todo} onChanged={onChanged} attempts={attempts} />);
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={onChanged} attempts={attempts} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
     act(() => fixtureEditorCalls.props.at(-1)?.onChange('### command: smoke'));
     fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
@@ -279,6 +307,11 @@ describe('TodoVerification', () => {
     });
     expect(screen.getByText('Verification runtime editor')).toBeTruthy();
     expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workspaceTodoBatchKeys.all });
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: todoQueryKeys.sessionDetail('/workspace', 'todo-1', undefined, true),
+    });
+    expect(client.getQueryState(todoQueryKeys.verificationSchema())?.isInvalidated).toBe(false);
   });
 
   // A pre-execution failure creates no prompt run, so it can never reach the
@@ -306,12 +339,43 @@ describe('TodoVerification', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [], diagnostics: [] }} />);
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [], diagnostics: [] }} />, {
+      wrapper: queryTestWrapper(),
+    });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
 
     await waitFor(() =>
       expect(screen.getByText('no verification fixture, acceptance criteria, or configured checks')).toBeTruthy()
     );
+  });
+
+  it('surfaces verification request failures with action context', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/todos/verification/schema') {
+        return { ok: true, json: async () => ({ fences: {} }), text: async (): Promise<string> => '' };
+      }
+      if (url === '/api/todos/run/context') {
+        return { ok: true, json: async () => verificationRunContext, text: async (): Promise<string> => '' };
+      }
+      if (url.startsWith('/api/todos/verification/run')) {
+        return {
+          ok: false,
+          status: 409,
+          json: async () => ({ error: 'verification is already running' }),
+          text: async () => JSON.stringify({ error: 'verification is already running' }),
+        };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    render(<TodoVerification dir="/workspace" todo={todo} onChanged={() => {}} attempts={{ attempts: [], diagnostics: [] }} />, {
+      wrapper: queryTestWrapper(),
+    });
+    await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
+
+    expect(await screen.findByText(/verification run failed.*verification is already running/i)).toBeTruthy();
   });
 });

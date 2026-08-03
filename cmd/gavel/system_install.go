@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
@@ -24,8 +25,8 @@ type SystemInstallOptions struct {
 	Force           bool   `flag:"force" help:"Overwrite an existing service file"`
 }
 
-func (SystemInstallOptions) Help() string {
-	return `Install a user-level background service that keeps gavel pr list --all --ui
+func (SystemInstallOptions) Help() api.Textable {
+	return clicky.Text(`Install a user-level background service that keeps gavel pr list --all --ui
 running across logins.
 
 Gavel database backend (defaults to --embedded when no flag is given):
@@ -61,7 +62,7 @@ and loads it via launchctl. On Linux it writes
 ~/.config/systemd/user/gavel.service and starts it via systemctl --user;
 run 'loginctl enable-linger $USER' if you want it to survive logout.
 
-No root required. Use --dry-run to preview.`
+No root required. Use --dry-run to preview.`)
 }
 
 func init() {

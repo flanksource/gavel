@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 
+	clickytask "github.com/flanksource/clicky/task"
 	"github.com/flanksource/gavel/status"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -71,12 +72,16 @@ var _ = Describe("project Open PR queue", func() {
 
 		Expect(recorder.Code).To(Equal(http.StatusAccepted), recorder.Body.String())
 		Eventually(runs.commands).Should(Equal([]string{"one.go"}))
-		entries := server.commitQueueFor("gavel").Entries
-		Expect(entries).To(HaveLen(1))
-		Expect(entries[0].Action).To(Equal(projectActionOpenPR))
-		Expect(entries[0].Files).To(Equal([]string{"one.go"}))
+		var run projectCommitRun
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &run)).To(Succeed())
+		snapshots := clickytask.SnapshotByID(run.RunID)
+		Expect(snapshots).To(HaveLen(2))
+		Expect(snapshots[1].Name).To(Equal("Open PR one.go"))
+		Expect(snapshots[0].Details).To(Equal(projectCommitGroupDetails{Entries: []projectCommitTaskDetails{
+			{TaskID: snapshots[1].ID, Action: projectActionOpenPR, Files: []string{"one.go"}},
+		}}))
 		runs.release("one.go")
-		Eventually(func() bool { return server.commitQueueFor("gavel").Running }).Should(BeFalse())
+		Eventually(func() string { return clickytask.SnapshotByID(run.RunID)[1].Status }).Should(Equal("success"))
 	})
 
 	It("publishes separate action and commit-queue request contracts", func() {
@@ -84,10 +89,11 @@ var _ = Describe("project Open PR queue", func() {
 		schemas := components["schemas"].(map[string]any)
 		actionProperties := schemas["ProjectActionRequest"].(map[string]any)["properties"].(map[string]any)
 		queueProperties := schemas["ProjectCommitQueueRequest"].(map[string]any)["properties"].(map[string]any)
-		entry := schemas["CommitQueueEntry"].(map[string]any)
+		run := schemas["ProjectCommitRun"].(map[string]any)
 
 		Expect(actionProperties["action"].(map[string]any)["enum"]).To(Equal([]string{"lint", "test"}))
 		Expect(queueProperties["action"].(map[string]any)["enum"]).To(Equal([]string{"commit", "open-pr"}))
-		Expect(entry["required"]).To(ContainElement("action"))
+		Expect(run["required"]).To(Equal([]string{"runId"}))
+		Expect(schemas).NotTo(HaveKey("CommitQueueEntry"))
 	})
 })

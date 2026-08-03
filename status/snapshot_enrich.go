@@ -1,11 +1,13 @@
 package status
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/snapshots"
 	"github.com/flanksource/gavel/testrunner/parsers"
@@ -19,19 +21,23 @@ var (
 	snapshotIDFunc   = snapshots.SnapshotID
 )
 
-func enrichWithSnapshot(workDir string, result *Result) error {
-	currentSHA, currentUncommitted, err := snapshotIDFunc(workDir)
+func enrichWithSnapshot(ctx context.Context, workDir string, result *Result) error {
+	currentSHA, currentUncommitted, err := snapshotIDFunc(ctx, workDir)
 	if err != nil {
 		return err
 	}
 	result.CurrentSHA = currentSHA
 
+	stopFile := rpchttp.Track(ctx, "file")
 	pointer, err := loadPointerFunc(workDir, snapshots.PointerLast)
+	stopFile()
 	if err != nil || pointer == nil {
 		return err
 	}
 
+	stopFile = rpchttp.Track(ctx, "file")
 	snap, err := loadSnapshotFunc(workDir, pointer)
+	stopFile()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Stale pointer: last.json references a snapshot whose dirty-state

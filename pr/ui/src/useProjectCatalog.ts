@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ProjectRuns, TestRunsResponse } from './components/tests/types';
+import { fetchJSON, queryKeys } from './query';
 import type { Project } from './types';
 import { useDocumentVisible } from './useDocumentVisible';
 
@@ -12,6 +14,8 @@ export interface ProjectCatalog {
   loading: boolean;
   error: string;
 }
+
+const emptyRuns: TestRunsResponse = { projects: [] };
 
 // useProjectCatalog loads the latest test and lint runs and merges them with the
 // configured project catalog. It lives above the projects UI because the AppShell
@@ -26,10 +30,19 @@ export function useProjectCatalog({ configured, selectedName, enabled }: {
   selectedName: string;
   enabled: boolean;
 }): ProjectCatalog {
-  const [latestRuns, setLatestRuns] = useState<TestRunsResponse>({ projects: [] });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [streamError, setStreamError] = useState('');
   const visible = useDocumentVisible();
+  const queryClient = useQueryClient();
+  const queryEnabled = enabled && visible;
+  const runsQuery = useQuery({
+    queryKey: queryKeys.testRuns(),
+    queryFn: async ({ signal }) => parseLatestRuns(
+      await fetchJSON<unknown>({ url: '/api/tests', signal, context: 'Load test and lint runs' }),
+    ),
+    enabled: queryEnabled,
+    staleTime: 30_000,
+  });
+  const latestRuns = enabled ? (runsQuery.data ?? emptyRuns) : emptyRuns;
 
   const projects = useMemo(() => {
     const merged = new Map(configured.map(project => [project.name, project]));
@@ -45,50 +58,40 @@ export function useProjectCatalog({ configured, selectedName, enabled }: {
   }, [latestRuns.projects, configured]);
 
   useEffect(() => {
-    if (!enabled || !visible) return;
-    let active = true;
+    if (queryEnabled) return;
+    void queryClient.cancelQueries({ queryKey: queryKeys.testRuns(), exact: true });
+  }, [queryClient, queryEnabled]);
+
+  useEffect(() => {
+    if (!queryEnabled) return;
     const apply = (payload: unknown) => {
       const next = parseLatestRuns(payload);
-      if (!active) return;
-      setLatestRuns(next);
-      setLoading(false);
-      setError('');
+      queryClient.setQueryData(queryKeys.testRuns(), next);
+      setStreamError('');
     };
-
-    fetch('/api/tests')
-      .then(async response => {
-        if (!response.ok) throw new Error(`Load test and lint runs failed (HTTP ${response.status})`);
-        apply(await response.json());
-      })
-      .catch(cause => {
-        if (!active) return;
-        setLoading(false);
-        setError(cause instanceof Error ? cause.message : 'Load test and lint runs failed');
-      });
 
     const stream = new EventSource('/api/tests/stream');
     stream.addEventListener('message', event => {
       try {
         apply(JSON.parse((event as MessageEvent<string>).data));
       } catch {
-        if (active) setError('Latest test and lint runs received an invalid update.');
+        setStreamError('Latest test and lint runs received an invalid update.');
       }
     });
     stream.onerror = () => {
-      if (active) setError(current => current || 'Latest test and lint runs disconnected; reconnecting…');
+      setStreamError(current => current || 'Latest test and lint runs disconnected; reconnecting…');
     };
-    return () => {
-      active = false;
-      stream.close();
-    };
-  }, [enabled, visible]);
+    return () => stream.close();
+  }, [queryClient, queryEnabled]);
+
+  const queryError = runsQuery.failureReason ?? runsQuery.error;
 
   return {
     projects,
     runs: latestRuns.projects,
     selected: projects.find(project => project.name === selectedName) ?? null,
-    loading,
-    error,
+    loading: enabled && runsQuery.data === undefined && runsQuery.isPending,
+    error: enabled ? streamError || (queryError instanceof Error ? queryError.message : '') : '',
   };
 }
 

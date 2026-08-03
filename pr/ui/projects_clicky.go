@@ -201,37 +201,12 @@ func projectActionStatusSchema() map[string]any {
 	}
 }
 
-func commitQueueEntrySchema() map[string]any {
+func projectCommitRunSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"id", "action", "files", "status"},
+		"required": []string{"runId"},
 		"properties": map[string]any{
-			"id":        map[string]any{"type": "string", "description": "Task id, used to cancel this group"},
-			"action":    map[string]any{"type": "string", "enum": []string{"commit", "open-pr"}},
-			"files":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"status":    map[string]any{"type": "string", "enum": []string{"pending", "running", "success", "warning", "failed", "canceled"}},
-			"startedAt": map[string]any{"type": "string", "format": "date-time"},
-			"endedAt":   map[string]any{"type": "string", "format": "date-time"},
-			"exitCode":  map[string]any{"type": "integer"},
-			"output":    map[string]any{"type": "string"},
-			"error":     map[string]any{"type": "string"},
-		},
-	}
-}
-
-func commitQueueSchema() map[string]any {
-	return map[string]any{
-		"type":     "object",
-		"required": []string{"running"},
-		"properties": map[string]any{
-			"runId":   map[string]any{"type": "string"},
-			"href":    map[string]any{"type": "string"},
-			"running": map[string]any{"type": "boolean"},
-			"entries": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"$ref": "#/components/schemas/CommitQueueEntry"},
-				"description": "Queued commit groups in execution order; one gavel commit each, run one at a time",
-			},
+			"runId": map[string]any{"type": "string", "description": "Clicky task group id"},
 		},
 	}
 }
@@ -263,7 +238,7 @@ func projectIgnoreResponseSchema() map[string]any {
 func projectStatusSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"project", "workDir", "branch", "files", "resultsStale", "action", "commitQueue"},
+		"required": []string{"project", "workDir", "branch", "files", "resultsStale", "action"},
 		"properties": map[string]any{
 			"project":      map[string]any{"$ref": "#/components/schemas/Project"},
 			"workDir":      map[string]any{"type": "string"},
@@ -271,7 +246,6 @@ func projectStatusSchema() map[string]any {
 			"files":        map[string]any{"type": "array", "items": map[string]any{"$ref": "#/components/schemas/ProjectFileStatus"}},
 			"resultsStale": map[string]any{"type": "boolean"},
 			"action":       map[string]any{"$ref": "#/components/schemas/ProjectActionStatus"},
-			"commitQueue":  map[string]any{"$ref": "#/components/schemas/CommitQueue"},
 		},
 	}
 }
@@ -338,24 +312,22 @@ func projectsOpenAPI() map[string]any {
 				"delete": clickyOp("projects_delete", "Delete project", "delete", "entity", "name", nameParam()),
 			},
 			"/api/projects/{name}/status": map[string]any{
-				"get": projectLifecycleOp("projects_status", "Get project working-tree status", "200", "ProjectStatus"),
+				"get": projectLifecycleOp("projects_status", "Get project working-tree status", "200", "ProjectStatus", map[string]any{
+					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
+						"name": "includeResults", "in": "query", "required": false,
+						"description": "Enrich changed files with the latest test and lint snapshot",
+						"schema":      map[string]any{"type": "boolean", "default": false},
+					}),
+				}),
 			},
 			"/api/projects/{name}/commit-queue": map[string]any{
-				"post": projectLifecycleOp("projects_commit_queue_add", "Queue a commit group; it runs as soon as the project's earlier groups finish", "202", "CommitQueue", map[string]any{
+				"post": projectLifecycleOp("projects_commit_queue_add", "Add a serial commit task to the project's current task group", "202", "ProjectCommitRun", map[string]any{
 					"requestBody": map[string]any{
 						"required": true,
 						"content": map[string]any{"application/json": map[string]any{
 							"schema": map[string]any{"$ref": "#/components/schemas/ProjectCommitQueueRequest"},
 						}},
 					},
-				}),
-			},
-			"/api/projects/{name}/commit-queue/{id}": map[string]any{
-				"delete": projectLifecycleOp("projects_commit_queue_cancel", "Cancel a queued or running commit group", "200", "CommitQueue", map[string]any{
-					"parameters": append(nameParam()["parameters"].([]any), map[string]any{
-						"name": "id", "in": "path", "required": true,
-						"schema": map[string]any{"type": "string"},
-					}),
 				}),
 			},
 			"/api/projects/{name}/actions": map[string]any{
@@ -413,9 +385,8 @@ func projectsOpenAPI() map[string]any {
 			"ProjectActionRequest":      projectActionRequestSchema(),
 			"ProjectCommitQueueRequest": projectCommitQueueRequestSchema(),
 			"ProjectActionStatus":       projectActionStatusSchema(),
+			"ProjectCommitRun":          projectCommitRunSchema(),
 			"ProjectActionSchema":       projectActionSchemaResponseSchema(),
-			"CommitQueue":               commitQueueSchema(),
-			"CommitQueueEntry":          commitQueueEntrySchema(),
 			"ProjectDiff":               projectDiffResponseSchema(),
 			"ProjectIgnoreRequest":      projectIgnoreRequestSchema(),
 			"ProjectIgnoreResponse":     projectIgnoreResponseSchema(),

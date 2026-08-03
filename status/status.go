@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	clickyai "github.com/flanksource/gavel/ai"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/utils"
@@ -111,6 +112,7 @@ type Result struct {
 
 type Options struct {
 	NoRepomap bool
+	NoResults bool
 	// FolderFilter, when non-empty, restricts the result to files at or
 	// below this slash-separated path relative to workDir. The filter is
 	// applied before line-count, repomap, and snapshot enrichment so we
@@ -155,13 +157,17 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	if workDir == "" {
 		return nil, errors.New("status.GatherBase: workDir is required")
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	branch, err := currentBranch(workDir)
+	branch, err := currentBranch(ctx, workDir)
 	if err != nil {
 		return nil, err
 	}
 
-	raw, err := runGitStatus(workDir)
+	raw, err := runGitStatus(ctx, workDir)
 	if err != nil {
 		return nil, err
 	}
@@ -172,14 +178,18 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 	}
 	files = filterGavelCache(files)
 	files = filterByFolder(files, opts.FolderFilter)
+	stopFile := rpchttp.Track(ctx, "file")
 	files = filterGitIgnored(files, workDir)
+	stopFile()
 
-	if err := enrichWithLineCounts(workDir, files); err != nil {
+	if err := enrichWithLineCounts(ctx, workDir, files); err != nil {
 		return nil, err
 	}
 
+	stopFile = rpchttp.Track(ctx, "file")
 	enrichWithModTime(workDir, files)
 	enrichWithConflictMarkers(workDir, files)
+	stopFile()
 
 	if !opts.NoRepomap {
 		for i := range files {
@@ -194,15 +204,19 @@ func GatherBase(workDir string, opts Options) (*Result, error) {
 		Verbose: opts.Verbose,
 	}
 
-	if err := enrichWithSnapshot(workDir, result); err != nil {
-		return nil, err
+	if !opts.NoResults {
+		if err := enrichWithSnapshot(ctx, workDir, result); err != nil {
+			return nil, err
+		}
 	}
 
 	return result, nil
 }
 
-func runGitStatus(workDir string) ([]byte, error) {
-	cmd := exec.Command("git", "status", "--porcelain=v1", "-z")
+func runGitStatus(ctx context.Context, workDir string) ([]byte, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z")
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -213,8 +227,10 @@ func runGitStatus(workDir string) ([]byte, error) {
 	return out, nil
 }
 
-func currentBranch(workDir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+func currentBranch(ctx context.Context, workDir string) (string, error) {
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {
@@ -394,12 +410,12 @@ func isConflictPair(staged, work byte) bool {
 // enrichWithLineCounts fills in Adds/Dels for each FileStatus by combining
 // staged and unstaged numstat output, and by counting lines of any untracked
 // file directly (git numstat does not report untracked content).
-func enrichWithLineCounts(workDir string, files []FileStatus) error {
-	staged, err := numstat(workDir, true)
+func enrichWithLineCounts(ctx context.Context, workDir string, files []FileStatus) error {
+	staged, err := numstat(ctx, workDir, true)
 	if err != nil {
 		return err
 	}
-	unstaged, err := numstat(workDir, false)
+	unstaged, err := numstat(ctx, workDir, false)
 	if err != nil {
 		return err
 	}
@@ -416,7 +432,9 @@ func enrichWithLineCounts(workDir string, files []FileStatus) error {
 			f.Dels += u.dels
 		}
 		if f.State == StateUntracked && f.Adds == 0 && f.Dels == 0 {
+			stopFile := rpchttp.Track(ctx, "file")
 			f.Adds = countFileLines(filepath.Join(workDir, f.Path))
+			stopFile()
 		}
 	}
 	return nil
@@ -427,12 +445,14 @@ type numstatEntry struct {
 	dels int
 }
 
-func numstat(workDir string, cached bool) (map[string]numstatEntry, error) {
+func numstat(ctx context.Context, workDir string, cached bool) (map[string]numstatEntry, error) {
 	args := []string{"diff", "--numstat", "-z", "--find-renames"}
 	if cached {
 		args = append(args, "--cached")
 	}
-	cmd := exec.Command("git", args...)
+	stopGit := rpchttp.Track(ctx, "git")
+	defer stopGit()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

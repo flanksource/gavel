@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/procfile"
 )
@@ -33,14 +34,19 @@ func statusForProjectErr(err error) int {
 // directory's current contents, and todo counts are scoped to the workspace.
 func newProjectInfo(ctx context.Context, p Project) (projectInfo, error) {
 	dir := p.ResolvedDir()
+	stopFile := rpchttp.Track(ctx, "file")
+	hasProcfile := dir != "" && procfile.Find(dir, "") != ""
+	stopFile()
 	info := projectInfo{
 		Name:        p.Name,
 		Dir:         dir,
 		Repos:       p.Repos,
-		HasProcfile: dir != "" && procfile.Find(dir, "") != "",
+		HasProcfile: hasProcfile,
 		TodoBackend: "db",
 	}
+	stopDB := rpchttp.Track(ctx, "db")
 	counts, err := projectTodoCounts(ctx, p)
+	stopDB()
 	if err != nil {
 		return info, err
 	}
@@ -91,7 +97,9 @@ func listProjectInfos(ctx context.Context, ps []Project) []projectInfo {
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		stopFile := rpchttp.Track(r.Context(), "file")
 		ps, err := LoadProjects()
+		stopFile()
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -128,7 +136,9 @@ func (s *Server) handleProjectByName(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	switch r.Method {
 	case http.MethodGet:
+		stopFile := rpchttp.Track(r.Context(), "file")
 		p, err := GetProject(name)
+		stopFile()
 		if err != nil {
 			respondError(w, statusForProjectErr(err), err.Error())
 			return

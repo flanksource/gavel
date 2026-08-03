@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem, TodoQuestion } from '../../types';
 import type { RunContext } from './providers';
@@ -10,6 +10,11 @@ import {
   TodoReviewBanner,
   type TodoQuestionSelections,
 } from './planActions';
+import { queryTestWrapper } from './queryTestWrapper';
+
+function render(ui: React.ReactElement, options?: RenderOptions) {
+  return rtlRender(ui, { wrapper: queryTestWrapper(), ...options });
+}
 
 vi.mock('@flanksource/clicky-ui/components', () => {
   return {
@@ -169,11 +174,10 @@ function mockRunContext() {
 }
 
 function mockRunContextFailure() {
-  vi.stubGlobal('fetch', vi.fn(async () => ({
-    ok: false,
-    status: 503,
-    json: async () => ({ error: 'load run providers from Captain: catalog unavailable' }),
-  }) as Response));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(
+    JSON.stringify({ error: 'load run providers from Captain: catalog unavailable' }),
+    { status: 503, headers: { 'Content-Type': 'application/json' } },
+  )));
 }
 
 beforeEach(() => {
@@ -452,7 +456,7 @@ describe('TodoReviewBanner', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '  Keep the adapter boundary.  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send & resume' }));
 
-    await screen.findByText('resume failed');
+    await screen.findByText(/resume failed/);
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       ref: 'todo-1',

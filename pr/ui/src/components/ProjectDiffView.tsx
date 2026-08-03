@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { GitDiffPanel, type GitDiffPayload } from '@flanksource/clicky-ui/data';
 import { UiDiff } from '@flanksource/clicky-ui/icons';
+import { fetchJSON, queryKeys } from '../query';
 
 interface Props {
   projectName: string;
@@ -9,35 +10,16 @@ interface Props {
 }
 
 export function ProjectDiffView({ projectName, path, refreshKey = 0 }: Props) {
-  const [payload, setPayload] = useState<GitDiffPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!path) {
-      setPayload(null);
-      setError('');
-      return;
-    }
-    const controller = new AbortController();
-    setPayload(null);
-    setLoading(true);
-    setError('');
-    fetch(`/api/projects/${encodeURIComponent(projectName)}/diff?path=${encodeURIComponent(path)}`, { signal: controller.signal })
-      .then(async response => {
-        const next = await response.json();
-        if (!response.ok) throw new Error(next.error || `Failed to load diff for ${path}`);
-        setPayload(next as GitDiffPayload);
-      })
-      .catch(cause => {
-        if (cause instanceof DOMException && cause.name === 'AbortError') return;
-        setError(cause instanceof Error ? cause.message : `Failed to load diff for ${path}`);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [path, projectName, refreshKey]);
+  const diff = useQuery({
+    queryKey: queryKeys.projectDiff(projectName, path, refreshKey),
+    queryFn: ({ signal }) => fetchJSON<GitDiffPayload>({
+      url: `/api/projects/${encodeURIComponent(projectName)}/diff?path=${encodeURIComponent(path)}`,
+      signal,
+      context: `Failed to load diff for ${path}`,
+    }),
+    enabled: path !== '',
+    staleTime: Infinity,
+  });
 
   if (!path) {
     return (
@@ -54,9 +36,9 @@ export function ProjectDiffView({ projectName, path, refreshKey = 0 }: Props) {
         <h3 className="min-w-0 flex-1 truncate font-mono text-sm font-semibold" title={path}>{path}</h3>
       </div>
       <GitDiffPanel
-        loading={loading}
-        payload={payload}
-        error={error}
+        loading={diff.isPending}
+        payload={diff.data ?? null}
+        error={diff.error instanceof Error ? diff.error.message : ''}
         className="min-h-0 flex-1 overflow-auto border-t-0"
         maxHeightClassName="max-h-none"
       />

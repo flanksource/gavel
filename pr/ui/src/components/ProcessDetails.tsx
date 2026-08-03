@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Button, Modal } from "@flanksource/clicky-ui/components";
 import { AnsiHtml } from "@flanksource/clicky-ui/data";
 import { UiFullscreen } from "@flanksource/clicky-ui/icons";
 import type { ProcNode, ProcProcess, ProcStatus } from "../types";
+import { fetchJSON, fetchText, queryKeys } from "../query";
+import { useDocumentVisible } from "../useDocumentVisible";
 import { humanizeBytes } from "../utils";
 import { useNow } from "../useNow";
+
+const PROC_POLL_INTERVAL_MS = 3_000;
 
 function cpuLabel(process: { cpuPercent?: number }): string {
   return process.cpuPercent && process.cpuPercent > 0 ? `${process.cpuPercent.toFixed(0)}%` : "—";
@@ -37,62 +42,48 @@ export function filesLabel(process: { openFiles?: number }): string {
 }
 
 function ProcLogPreview({ project, name }: { project: string; name: string }) {
-  const [text, setText] = useState("loading…");
-  useEffect(() => {
-    let alive = true;
-    let inflight: AbortController | null = null;
-    const load = () => {
-      inflight?.abort();
-      inflight = new AbortController();
-      fetch(`/api/proc/logs?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}&lines=5`, { signal: inflight.signal })
-        .then((response) => response.text())
-        .then((value) => {
-          if (alive) setText(value.trimEnd() || "(no output)");
-        })
-        .catch((error) => {
-          if (alive && error?.name !== "AbortError") setText("failed to load logs");
-        });
-    };
-    load();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 3000);
-    return () => {
-      alive = false;
-      inflight?.abort();
-      clearInterval(id);
-    };
-  }, [project, name]);
+  const logs = useProcLogs({ project, name, lines: 5, poll: true });
+  const text = logs.isPending
+    ? "loading…"
+    : logs.error instanceof Error
+      ? logs.error.message
+      : logs.data?.trimEnd() || "(no output)";
 
   return <AnsiHtml as="pre" text={text} className="text-[10px] leading-snug bg-black text-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-32" />;
 }
 
-function useProcTree(project: string, name: string): ProcNode[] {
-  const [tree, setTree] = useState<ProcNode[]>([]);
-  useEffect(() => {
-    let alive = true;
-    let inflight: AbortController | null = null;
-    const load = () => {
-      inflight?.abort();
-      inflight = new AbortController();
-      fetch(`/api/proc/status?project=${encodeURIComponent(project)}`, { signal: inflight.signal })
-        .then((response) => response.json())
-        .then((status: ProcStatus) => {
-          if (alive) setTree((status.processes ?? []).find((process) => process.name === name)?.tree ?? []);
-        })
-        .catch(() => undefined);
-    };
-    load();
-    const id = setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 3000);
-    return () => {
-      alive = false;
-      inflight?.abort();
-      clearInterval(id);
-    };
-  }, [project, name]);
-  return tree;
+function useProcLogs({ project, name, lines, poll }: { project: string; name: string; lines: number; poll: boolean }) {
+  const visible = useDocumentVisible();
+  return useQuery({
+    queryKey: queryKeys.processLogs(project, name, lines),
+    queryFn: ({ signal }) => fetchText({
+      url: `/api/proc/logs?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}&lines=${lines}`,
+      signal,
+      context: `Failed to load logs for ${project}/${name}`,
+    }),
+    enabled: visible,
+    staleTime: poll ? PROC_POLL_INTERVAL_MS : Infinity,
+    refetchInterval: visible && poll ? PROC_POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+function useProcTree(project: string, name: string) {
+  const visible = useDocumentVisible();
+  const status = useQuery({
+    queryKey: queryKeys.processStatus(project),
+    queryFn: ({ signal }) => fetchJSON<ProcStatus>({
+      url: `/api/proc/status?project=${encodeURIComponent(project)}`,
+      signal,
+      context: `Failed to load process status for ${project}`,
+    }),
+    enabled: visible,
+    staleTime: PROC_POLL_INTERVAL_MS,
+    refetchInterval: visible ? PROC_POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: false,
+    select: (snapshot) => (snapshot.processes ?? []).find((process) => process.name === name)?.tree ?? [],
+  });
+  return { nodes: status.data ?? [], error: status.error };
 }
 
 function flattenTree(nodes: ProcNode[]): { node: ProcNode; depth: number }[] {
@@ -148,23 +139,12 @@ function ProcTree({ nodes }: { nodes: ProcNode[] }) {
 }
 
 function ProcLogsDialog({ project, name, onClose }: { project: string; name: string; onClose: () => void }) {
-  const [text, setText] = useState("loading…");
-  useEffect(() => {
-    let alive = true;
-    const controller = new AbortController();
-    fetch(`/api/proc/logs?project=${encodeURIComponent(project)}&name=${encodeURIComponent(name)}&lines=500`, { signal: controller.signal })
-      .then((response) => response.text())
-      .then((value) => {
-        if (alive) setText(value.trimEnd() || "(no output)");
-      })
-      .catch((error) => {
-        if (alive && error?.name !== "AbortError") setText("failed to load logs");
-      });
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-  }, [project, name]);
+  const logs = useProcLogs({ project, name, lines: 500, poll: false });
+  const text = logs.isPending
+    ? "loading…"
+    : logs.error instanceof Error
+      ? logs.error.message
+      : logs.data?.trimEnd() || "(no output)";
 
   return (
     <Modal open onClose={onClose} title={`${project} · ${name} · logs`} size="xl">
@@ -178,7 +158,8 @@ export function ProcExpanded({ project, proc }: { project: string; proc: ProcPro
   const tree = useProcTree(project, proc.name);
   return (
     <div className="space-y-2 py-1">
-      {tree.length > 0 && (
+      {tree.error instanceof Error && <div role="alert" className="text-[10px] text-red-500">{tree.error.message}</div>}
+      {tree.nodes.length > 0 && (
         <div>
           <div className="mb-0.5 flex items-center justify-between gap-2">
             <div className="text-[10px] uppercase tracking-wide text-gray-400">Process tree</div>
@@ -187,7 +168,7 @@ export function ProcExpanded({ project, proc }: { project: string; proc: ProcPro
               {proc.taskRunId && <a href={`/tasks/${encodeURIComponent(proc.taskRunId)}`} className="ml-2 text-primary hover:underline">Task details</a>}
             </div>
           </div>
-          <ProcTree nodes={tree} />
+          <ProcTree nodes={tree.nodes} />
         </div>
       )}
       <div>

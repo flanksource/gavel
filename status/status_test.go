@@ -547,7 +547,7 @@ func TestGatherWithFreshSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "deadbeef", "", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "deadbeef", Path: ".gavel/sha-deadbeef.json"}, nil
@@ -575,7 +575,7 @@ func TestGatherWithStaleSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha.json"}, nil
@@ -599,7 +599,7 @@ func TestGatherNoSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "deadbeef", "", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return nil, nil
@@ -621,7 +621,7 @@ func TestGatherStalePointerMissingSnapshotFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package x\n"), 0o644))
 	gitRun(t, repo, "add", "a.go")
 
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
@@ -643,7 +643,7 @@ func TestGatherSnapshotLoadErrorPropagates(t *testing.T) {
 	gitRun(t, repo, "add", "a.go")
 
 	wantErr := errors.New("decode snapshot: invalid JSON")
-	restore := stubSnapshot(func(string) (string, string, error) {
+	restore := stubSnapshot(func(context.Context, string) (string, string, error) {
 		return "newsha", "ab12cd34", nil
 	}, func(string, string) (*snapshots.Pointer, error) {
 		return &snapshots.Pointer{SHA: "oldsha", Path: ".gavel/sha-oldsha-deadbeef.json"}, nil
@@ -679,7 +679,7 @@ func TestPrettyShowsTestLintBadgesAndStaleBanner(t *testing.T) {
 }
 
 func stubSnapshot(
-	id func(string) (string, string, error),
+	id func(context.Context, string) (string, string, error),
 	load func(string, string) (*snapshots.Pointer, error),
 	snap func(string, *snapshots.Pointer) (*testui.Snapshot, error),
 ) func() {

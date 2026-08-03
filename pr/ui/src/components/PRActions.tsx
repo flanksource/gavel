@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button, SplitButton, DropdownMenu, Modal, type DropdownMenuItem } from '@flanksource/clicky-ui/components';
 import { UiCheck, UiEllipsis, UiGitGraph, UiGitMerge, UiGitPr, UiRocket, UiSync } from '@flanksource/clicky-ui/icons';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import type { ComponentType } from 'react';
 import type { PRItem, PRDetail } from '../types';
+import { mutationJSON, queryKeys } from '../query';
 
 type MergeMethod = 'rebase' | 'squash' | 'merge';
 
@@ -40,24 +42,6 @@ function menuLabel(icon: ComponentType<IconProps>, text: string) {
   );
 }
 
-async function postAction(path: string, body: Record<string, unknown>): Promise<void> {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let msg = `Request failed (${res.status})`;
-    try {
-      const data = await res.json();
-      if (data?.error) msg = data.error;
-    } catch {
-      // non-JSON error body; keep the status-based message
-    }
-    throw new Error(msg);
-  }
-}
-
 // PRActions renders merge / auto-merge / approve / update-branch controls for an
 // OPEN PR. Each action is confirmed in a modal before it hits GitHub. On success
 // it calls onChanged so the host can re-fetch the detail and reflect the new state
@@ -77,10 +61,10 @@ export function PRActions({
   collapsed?: boolean;
   extras?: ExtraAction[];
 }) {
+  const queryClient = useQueryClient();
   const [pending, setPending] = useState<Pending | null>(null);
   const [comment, setComment] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const submittingRef = useRef(false);
 
   const info = detail?.pr;
   const nodeId = info?.nodeId;
@@ -92,6 +76,20 @@ export function PRActions({
   // Only OPEN PRs are actionable; merged/closed ones have nothing to merge or
   // approve, but callers may still pass extras (e.g. New todo) to render.
   const isOpen = state === 'OPEN';
+  const actionMutation = useMutation({
+    mutationFn: (request: { pending: Pending; comment: string }) => submitAction(pr, nodeId, request),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.prSnapshot(), exact: true }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.prDetail(pr.repo, pr.number), exact: true }),
+      ]);
+      setPending(null);
+      onChanged?.();
+    },
+    onSettled: () => { submittingRef.current = false; },
+  });
+  const busy = actionMutation.isPending;
+  const error = actionMutation.error instanceof Error ? actionMutation.error.message : '';
 
   // The node ID arrives with the first detail SSE frame; gate actions until then.
   const loading = !nodeId;
@@ -175,7 +173,7 @@ export function PRActions({
   ];
 
   function open(p: Pending) {
-    setError('');
+    actionMutation.reset();
     setComment('');
     setPending(p);
   }
@@ -185,33 +183,10 @@ export function PRActions({
     setPending(null);
   }
 
-  async function confirm() {
-    if (!pending) return;
-    setBusy(true);
-    setError('');
-    try {
-      if (pending.type === 'approve') {
-        if (!nodeId) return;
-        await postAction('/api/prs/approve', { repo: pr.repo, number: pr.number, nodeId, body: comment.trim() });
-      } else if (pending.type === 'update-branch') {
-        await postAction('/api/prs/update-branch', { repo: pr.repo, number: pr.number });
-      } else {
-        if (!nodeId) return;
-        await postAction('/api/prs/merge', {
-          repo: pr.repo,
-          number: pr.number,
-          nodeId,
-          method: pending.method,
-          auto: pending.type === 'automerge',
-        });
-      }
-      setPending(null);
-      onChanged?.();
-    } catch (err: any) {
-      setError(err?.message || 'Action failed');
-    } finally {
-      setBusy(false);
-    }
+  function confirm() {
+    if (!pending || submittingRef.current) return;
+    submittingRef.current = true;
+    actionMutation.mutate({ pending, comment: comment.trim() });
   }
 
   const copy = modalCopy(pending, pr, base);
@@ -243,7 +218,7 @@ export function PRActions({
             autoFocus
           />
         )}
-        {error && <div className="text-sm text-destructive">{error}</div>}
+        {error && <div role="alert" className="text-sm text-destructive">{error}</div>}
       </div>
     </Modal>
   );
@@ -339,6 +314,39 @@ export function PRActions({
       {modal}
     </>
   );
+}
+
+function submitAction(pr: PRItem, nodeId: string | undefined, request: { pending: Pending; comment: string }) {
+  if (request.pending.type === 'approve') {
+    if (!nodeId) throw new Error('Approve pull request: missing pull request node ID');
+    return mutationJSON({
+      url: '/api/prs/approve',
+      method: 'POST',
+      body: { repo: pr.repo, number: pr.number, nodeId, body: request.comment },
+      context: 'Approve pull request',
+    });
+  }
+  if (request.pending.type === 'update-branch') {
+    return mutationJSON({
+      url: '/api/prs/update-branch',
+      method: 'POST',
+      body: { repo: pr.repo, number: pr.number },
+      context: 'Update pull request branch',
+    });
+  }
+  if (!nodeId) throw new Error('Merge pull request: missing pull request node ID');
+  return mutationJSON({
+    url: '/api/prs/merge',
+    method: 'POST',
+    body: {
+      repo: pr.repo,
+      number: pr.number,
+      nodeId,
+      method: request.pending.method,
+      auto: request.pending.type === 'automerge',
+    },
+    context: 'Merge pull request',
+  });
 }
 
 function modalCopy(pending: Pending | null, pr: PRItem, base: string): { title: string; confirmLabel: string; description: string } {

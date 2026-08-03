@@ -177,9 +177,19 @@ var _ = Describe("Supervisor", func() {
 		})
 
 		Expect(pf.TaskControl(root, first, clickytask.ControlRestart)).To(Succeed())
+		var second string
 		waitFor(4*time.Second, func() bool {
 			process, _ := liveProc(sup, "worker")
-			return process.TaskRunID != "" && process.TaskRunID != first
+			second = process.TaskRunID
+			return second != "" && second != first
+		})
+		secondSnapshots, err := pf.TaskSnapshot(root, second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secondSnapshots).To(HaveLen(2))
+		Expect(pf.TaskControlTask(root, second, secondSnapshots[1].ID, clickytask.ControlStop)).To(Succeed())
+		waitFor(4*time.Second, func() bool {
+			stopped, err := pf.TaskSnapshot(root, second)
+			return err == nil && len(stopped) == 2 && stopped[0].Status == string(clickytask.StatusCancelled)
 		})
 		terminal, err := pf.TaskSnapshot(root, first)
 		Expect(err).NotTo(HaveOccurred())

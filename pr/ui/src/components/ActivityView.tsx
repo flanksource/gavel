@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@flanksource/clicky-ui/components';
+import { fetchJSON, mutationJSON, queryKeys } from '../query';
 import type { ActivitySnapshot, ActivityEntry, ActivityKindStats, CacheStatus } from '../types';
 import { useDocumentVisible } from '../useDocumentVisible';
 import { UiActivity, UiCheck, UiCloudDownload, UiDatabase, UiGlobe, UiTrash, UiWarningTriangle, UiWatch } from '@flanksource/clicky-ui/icons';
@@ -19,56 +21,77 @@ const KIND_COLORS: Record<string, string> = {
   search: 'bg-amber-100 text-amber-700',
 };
 
+const emptyActivity: ActivitySnapshot = {
+  entries: [],
+  stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
+};
+
 export function ActivityView() {
-  const [snap, setSnap] = useState<ActivitySnapshot>({
-    entries: [],
-    stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} },
-  });
-  const [cache, setCache] = useState<CacheStatus | null>(null);
+  const [streamError, setStreamError] = useState('');
   const [kindFilter, setKindFilter] = useState<string>('');
   const visible = useDocumentVisible();
+  const queryClient = useQueryClient();
+  const activityQuery = useQuery({
+    queryKey: queryKeys.activity(),
+    queryFn: async ({ signal }) => parseActivitySnapshot(
+      await fetchJSON<unknown>({ url: '/api/activity', signal, context: 'Load HTTP activity' }),
+    ),
+    enabled: visible,
+    staleTime: 30_000,
+  });
+  const cacheQuery = useQuery({
+    queryKey: queryKeys.activityCache(),
+    queryFn: async ({ signal }) => parseCacheStatus(
+      await fetchJSON<unknown>({ url: '/api/activity/cache', signal, context: 'Load activity cache status' }),
+    ),
+    enabled: visible,
+    staleTime: 10_000,
+    refetchInterval: visible ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  });
+  const snap = activityQuery.data ?? emptyActivity;
+  const cache = cacheQuery.data ?? null;
+  const resetMutation = useMutation({
+    mutationFn: () => mutationJSON({
+      url: '/api/activity/reset',
+      method: 'POST',
+      context: 'Reset HTTP activity',
+    }),
+    onSuccess: () => queryClient.setQueryData(queryKeys.activity(), emptyActivity),
+  });
 
-  const refreshCache = () => {
-    fetch('/api/activity/cache')
-      .then(r => r.json())
-      .then((c: CacheStatus) => setCache(c))
-      .catch(() => {});
-  };
+  useEffect(() => {
+    if (visible) return;
+    void queryClient.cancelQueries({ queryKey: queryKeys.activity(), exact: true });
+    void queryClient.cancelQueries({ queryKey: queryKeys.activityCache(), exact: true });
+  }, [queryClient, visible]);
 
   // Stream the activity feed only while visible: a hidden window has no reason to
   // hold the SSE open. The per-row 'Xs ago' timestamps refresh themselves via the
   // shared useNow() clock inside <RelativeTime/>, so no app-level tick is needed.
   useEffect(() => {
     if (!visible) return;
-    fetch('/api/activity')
-      .then(r => r.json())
-      .then((s: ActivitySnapshot) => setSnap(s))
-      .catch(() => {});
-    refreshCache();
-
     const es = new EventSource('/api/activity/stream');
     es.addEventListener('message', (e: MessageEvent) => {
       try {
-        setSnap(JSON.parse(e.data));
-      } catch { /* ignore */ }
+        queryClient.setQueryData<ActivitySnapshot>(queryKeys.activity(), parseActivitySnapshot(JSON.parse(e.data)));
+        setStreamError('');
+      } catch {
+        setStreamError('HTTP activity stream received an invalid update.');
+      }
     });
-    es.onerror = () => { /* auto-reconnect */ };
+    es.onerror = () => setStreamError(current => current || 'HTTP activity stream disconnected; reconnecting…');
 
-    // Cache status changes rarely — refresh every 10s.
-    const cacheTimer = setInterval(refreshCache, 10000);
-    return () => { es.close(); clearInterval(cacheTimer); };
-  }, [visible]);
+    return () => es.close();
+  }, [queryClient, visible]);
 
   const filtered = useMemo(
     () => kindFilter ? snap.entries.filter(e => e.kind === kindFilter) : snap.entries,
     [snap.entries, kindFilter],
   );
 
-  const handleReset = () => {
-    fetch('/api/activity/reset', { method: 'POST' })
-      .then(() => setSnap({ entries: [], stats: { total: 0, cacheHits: 0, errors: 0, totalBytes: 0, totalNs: 0, byKind: {} } }))
-      .catch(() => {});
-  };
+  const requestError = resetMutation.error ?? activityQuery.error ?? cacheQuery.error;
+  const error = streamError || (requestError instanceof Error ? requestError.message : '');
 
   const { stats } = snap;
   const hitRate = stats.total > 0 ? (stats.cacheHits / stats.total) * 100 : 0;
@@ -84,7 +107,8 @@ export function ActivityView() {
           </h2>
           <Button
             variant="ghost"
-            onClick={handleReset}
+            onClick={() => resetMutation.mutate()}
+            disabled={resetMutation.isPending}
             className="text-xs px-3 py-1.5 bg-card border border-border rounded hover:bg-muted text-foreground h-auto"
             title="Clear all recorded activity"
           >
@@ -92,6 +116,12 @@ export function ActivityView() {
             Reset
           </Button>
         </div>
+
+        {error && (
+          <div role="alert" className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+            {error}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <KPI
@@ -328,4 +358,18 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function parseActivitySnapshot(payload: unknown): ActivitySnapshot {
+  if (!payload || typeof payload !== 'object' || !('entries' in payload) || !Array.isArray(payload.entries) || !('stats' in payload) || !payload.stats || typeof payload.stats !== 'object') {
+    throw new Error('Load HTTP activity: invalid response');
+  }
+  return payload as ActivitySnapshot;
+}
+
+function parseCacheStatus(payload: unknown): CacheStatus {
+  if (!payload || typeof payload !== 'object' || !('enabled' in payload) || typeof payload.enabled !== 'boolean' || !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object') {
+    throw new Error('Load activity cache status: invalid response');
+  }
+  return payload as CacheStatus;
 }

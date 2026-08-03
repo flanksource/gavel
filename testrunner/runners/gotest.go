@@ -48,6 +48,10 @@ func (r *GoTest) FocusArgs(pattern string) []string {
 	return []string{"-run", pattern}
 }
 
+func (r *GoTest) BuildTagsArgs(tags []string) []string {
+	return []string{"-tags=" + strings.Join(tags, ",")}
+}
+
 // Detect checks if go test is used (looks for *_test.go files). We
 // deliberately do NOT gate on go.mod presence — a nested repo without its
 // own module, or a workDir inside a module whose go.mod sits above

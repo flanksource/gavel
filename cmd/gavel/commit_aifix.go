@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -48,6 +49,7 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		return lintFindingsBlocked
 	}
 
+	renderer := newAIFixRenderer()
 	fixRes, err := aifix.Run(ctx, aifix.Request{
 		WorkDir:        workDir,
 		Linters:        requested,
@@ -59,10 +61,10 @@ func runCommitAIFix(workDir string, result *commitpkg.Result, assumeYes bool) li
 		ReLint: func(rctx context.Context) ([]*linters.LinterResult, error) {
 			return runCommitLint(rctx, workDir, requested, files)
 		},
-		OnEvent: newAIFixRenderer(),
+		OnEvent: renderer.Handle,
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", err)
+	if runErr := errors.Join(err, renderer.Flush()); runErr != nil {
+		fmt.Fprintf(os.Stderr, "ai-fix: %v\n", runErr)
 		return lintFindingsBlocked
 	}
 

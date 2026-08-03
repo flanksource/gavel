@@ -101,13 +101,6 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		recorder.Stop(runSucceeded)
 	}()
 
-	// Dynamic default for --skip-hooks: when the user didn't pass the flag,
-	// skip hooks unless $CI is set. This keeps local `gavel test` snappy and
-	// auto-enables pre/post hooks in CI / SSH-push contexts.
-	if testCmd != nil && !testCmd.Flags().Changed("skip-hooks") {
-		opts.SkipHooks = os.Getenv("CI") == ""
-	}
-
 	// Load .gavel.yaml once at the top — previously the lint path loaded it
 	// lazily, but the push-hook support needs Pre/Post from the same config
 	// before tests run.
@@ -341,7 +334,7 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 			exitCode = 1
 		}
 		if uiServer != nil {
-			if testDurationFlags.Detach {
+			if detach {
 				snapshot := buildTestSnapshot(opts, tests, lintResults, runStarted, time.Now().UTC(), captureFinalDiagnostics(opts.Diagnostics, os.Getpid()))
 				if path, err := snapshots.Save(opts.WorkDir, &snapshot); err != nil {
 					logger.Warnf("persist snapshot: %v", err)
@@ -808,10 +801,11 @@ func prepareRerunOptions(base testrunner.RunOptions, req testui.RerunRequest, up
 	return rerunOpts
 }
 
-// testDurationFlags holds duration flags registered imperatively on `gavel
-// test` because clicky cannot bind time.Duration fields via struct tags.
-// runTests reads these back into the RunOptions it receives.
-var testDurationFlags struct {
+// testCmd is the cobra command for `gavel test`. Framework subcommands are
+// registered against it after this file's init function runs.
+var testCmd *cobra.Command
+
+type testCommandFlags struct {
 	AutoStop    time.Duration
 	IdleTimeout time.Duration
 	Timeout     time.Duration
@@ -820,10 +814,40 @@ var testDurationFlags struct {
 	Detach      bool
 }
 
-// testCmd is the cobra command for `gavel test`. Kept as a package var so
-// runTests can query `testCmd.Flags().Changed("skip-hooks")` to distinguish
-// an explicit --skip-hooks=... from the unset default.
-var testCmd *cobra.Command
+func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, flags testCommandFlags) (testrunner.RunOptions, bool, error) {
+	if err := splitTestPassThroughArgs(cmd, &opts); err != nil {
+		return opts, false, err
+	}
+	opts.AutoStop = flags.AutoStop
+	opts.IdleTimeout = flags.IdleTimeout
+	opts.Timeout = flags.Timeout
+	opts.LintTimeout = flags.LintTimeout
+	opts.TestTimeout = flags.TestTimeout
+	if !cmd.Flags().Changed("skip-hooks") {
+		opts.SkipHooks = os.Getenv("CI") == ""
+	}
+	return opts, flags.Detach, nil
+}
+
+func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
+	cmd.Flags().SetInterspersed(true)
+	cmd.Flags().BoolVar(&flags.Detach, "detach", false,
+		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
+	cmd.Flags().DurationVar(&flags.AutoStop, "auto-stop", 0,
+		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
+	cmd.Flags().DurationVar(&flags.IdleTimeout, "idle-timeout", 0,
+		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
+	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 10*time.Minute,
+		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
+	cmd.Flags().DurationVar(&flags.LintTimeout, "lint-timeout", 5*time.Minute,
+		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
+	cmd.Flags().DurationVar(&flags.TestTimeout, "test-timeout", 5*time.Minute,
+		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
+	if failed := cmd.Flags().Lookup("failed"); failed != nil {
+		failed.NoOptDefVal = failedAutoSentinel
+		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+	}
+}
 
 // splitTestPassThroughArgs separates positional package paths from the raw
 // runner arguments supplied after --. Clicky binds every positional token to
@@ -842,33 +866,19 @@ func splitTestPassThroughArgs(cmd *cobra.Command, opts *testrunner.RunOptions) e
 }
 
 func init() {
+	var flags testCommandFlags
 	testCmd = clicky.AddNamedCommand("test", rootCmd, testrunner.RunOptions{}, func(opts testrunner.RunOptions) (any, error) {
-		if err := splitTestPassThroughArgs(testCmd, &opts); err != nil {
+		opts, detach, err := finalizeTestCommandOptions(testCmd, opts, flags)
+		if err != nil {
 			return nil, err
 		}
-		return runTests(opts)
+		return runTests(opts, detach)
 	})
 	// Allow flags and positional package paths to interleave so callers (e.g. the
 	// flanksource/gavel composite action) can append flags after user-supplied
 	// paths. Use `--` to terminate flag parsing for framework-aware focus or
 	// single-framework raw runner arguments.
-	testCmd.Flags().SetInterspersed(true)
-	testCmd.Flags().BoolVar(&testDurationFlags.Detach, "detach", false,
-		"With --ui, fork a detached UI server and exit. The child serves until --auto-stop (default 30m) or --idle-timeout (default 5m) fires.")
-	testCmd.Flags().DurationVar(&testDurationFlags.AutoStop, "auto-stop", 0,
-		"With --ui --detach, hard wall-clock deadline for the detached UI server (default 30m when --detach is set).")
-	testCmd.Flags().DurationVar(&testDurationFlags.IdleTimeout, "idle-timeout", 0,
-		"With --ui --detach, exit the detached UI server after this long with no HTTP requests (default 5m when --detach is set).")
-	testCmd.Flags().DurationVar(&testDurationFlags.Timeout, "timeout", 10*time.Minute,
-		"Global wall-clock deadline for the entire test+lint run. On timeout, diagnostics are captured and every subprocess is killed.")
-	testCmd.Flags().DurationVar(&testDurationFlags.LintTimeout, "lint-timeout", 5*time.Minute,
-		"Per-linter subprocess deadline when --lint is set. Applies to each linter invocation.")
-	testCmd.Flags().DurationVar(&testDurationFlags.TestTimeout, "test-timeout", 5*time.Minute,
-		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
-	if f := testCmd.Flags().Lookup("failed"); f != nil {
-		f.NoOptDefVal = failedAutoSentinel
-		f.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
-	}
+	bindTestCommandFlags(testCmd, &flags)
 }
 
 // failedAutoSentinel is the value cobra assigns to --failed when the flag is

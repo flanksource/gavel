@@ -5,17 +5,18 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/gavel/service"
 )
 
 type SystemStopOptions struct{}
 
-func (SystemStopOptions) Help() string {
-	return `Stop the detached gavel pr UI daemon if running.
+func (SystemStopOptions) Help() api.Textable {
+	return clicky.Text(`Stop the detached gavel pr UI daemon if running.
 
 Sends SIGTERM to the pid in ~/.config/gavel/pr-ui.pid and waits up to 5s for
 graceful exit before escalating to SIGKILL. Does nothing if no daemon is
-recorded or the pid is already dead (stale pidfile is cleaned up).`
+recorded or the pid is already dead (stale pidfile is cleaned up).`)
 }
 
 func init() {

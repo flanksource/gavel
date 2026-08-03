@@ -5,6 +5,7 @@ import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
 import { TodoDetail } from './TodoDetail';
 import { useSessionStats } from './TodoSessionTimer';
+import { queryTestWrapper } from './queryTestWrapper';
 
 // This test targets only the review/ask guard on Resume/Run/Plan — not full
 // TodoDetail coverage — so every tab-gated or unconditionally-rendered sibling
@@ -25,54 +26,52 @@ vi.mock('./planActions', () => ({ TodoReviewBanner: () => null }));
 
 vi.mock('./TodoSessionTimer', () => ({ useSessionStats: vi.fn(() => ({ stats: null })) }));
 
-vi.mock('@flanksource/clicky-ui/components', async () => {
-  const React = await import('react');
-  return {
-    Button: ({
-      children,
-      variant: _variant,
-      size: _size,
-      loading: _loading,
-      ...props
-    }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string; loading?: boolean }) => (
-      // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Button itself.
-      <button type="button" {...props}>
-        {children}
-      </button>
-    ),
-    ListMenuItem: ({ children, ...props }: { children?: React.ReactNode }) => <div {...props}>{children}</div>,
-    DropdownMenu: ({
-      trigger,
-      children,
-    }: {
-      trigger: React.ReactNode;
-      children: (close: () => void) => React.ReactNode;
-    }) => (
-      <div>
-        {trigger}
-        {children(() => {})}
-      </div>
-    ),
-    Combobox: () => null,
-    Field: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    Modal: ({ children, open }: { children?: React.ReactNode; open?: boolean }) => (open === false ? null : <div>{children}</div>),
-    SegmentedControl: <T extends string>({
-      options,
-      onChange,
-    }: {
-      options: Array<{ id: T; label: string; disabled?: boolean }>;
-      onChange: (value: T) => void;
-    }) => (
-      <div>
-        {options.map(option => (
-          <button key={option.id} type="button" disabled={option.disabled} onClick={() => onChange(option.id)}>
-            {option.label}
-          </button>
-        ))}
-      </div>
-    ),
-  };
-});
+vi.mock('@flanksource/clicky-ui/components', () => ({
+  Button: ({
+    children,
+    variant: _variant,
+    size: _size,
+    loading: _loading,
+    ...props
+  }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string; loading?: boolean }) => (
+    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky Button itself.
+    <button type="button" {...props}>
+      {children}
+    </button>
+  ),
+  ListMenuItem: ({ children, ...props }: { children?: React.ReactNode }) => <div {...props}>{children}</div>,
+  DropdownMenu: ({
+    trigger,
+    children,
+  }: {
+    trigger: React.ReactNode;
+    children: (close: () => void) => React.ReactNode;
+  }) => (
+    <div>
+      {trigger}
+      {children(() => {})}
+    </div>
+  ),
+  Combobox: () => null,
+  Field: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  Modal: ({ children, open }: { children?: React.ReactNode; open?: boolean }) => (open === false ? null : <div>{children}</div>),
+  SegmentedControl: <T extends string>({
+    options,
+    onChange,
+  }: {
+    options: Array<{ id: T; label: string; disabled?: boolean }>;
+    onChange: (value: T) => void;
+  }) => (
+    <div>
+      {options.map(option => (
+        // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky SegmentedControl itself.
+        <button key={option.id} type="button" disabled={option.disabled} onClick={() => onChange(option.id)}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  ),
+}));
 
 vi.mock('@flanksource/clicky-ui/data', () => ({
   Markdown: ({ text }: { text: string }) => <div>{text}</div>,
@@ -133,6 +132,7 @@ async function renderDetail(todo: TodoItem) {
       onChanged={() => {}}
       onDeleted={() => {}}
     />,
+    { wrapper: queryTestWrapper() },
   );
   // Flush the run-context fetch each TodoRunActionButton kicks off on mount so
   // its state settles before assertions run (and before the next test's stubs
@@ -175,6 +175,7 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
         onDeleted={() => {}}
         onBack={() => {}}
       />,
+      { wrapper: queryTestWrapper() },
     );
 
     expect(screen.getByRole('alert').textContent).toContain('todo reference abc123 is ambiguous');
