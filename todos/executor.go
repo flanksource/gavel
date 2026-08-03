@@ -203,7 +203,22 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	}
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	ctx.SetRunStartHook(e.runStartPersister(ctx, []*types.TODO{todo}))
+	var progress *progressPersister
+	if provider, ok := e.activeProvider().(RunProgressProvider); ok {
+		progress = newProgressPersister(ctx, provider, todo)
+		ctx.Context = fixtures.WithProgressSink(ctx.Context, progress.Sink)
+	}
 	result, err := e.executor.Execute(ctx, todo)
+	if progress != nil {
+		if progressErr := progress.Close(); progressErr != nil {
+			err = errors.Join(err, progressErr)
+			if result == nil {
+				result = &ExecutionResult{ExecutorName: e.executor.Name()}
+			}
+			result.Success = false
+			result.ErrorMessage = progressErr.Error()
+		}
+	}
 	// The executor may generate its own session id (e.g. cmux's claude
 	// --session-id); persist it now that it is known, regardless of outcome.
 	e.persistSessionID(ctx, todo)
@@ -556,32 +571,65 @@ func (e *TODOExecutor) ExecuteSection(ctx context.Context, nodes []*fixtures.Fix
 // runner infrastructure, returning one result per test node. Shared by the
 // reproduction/verification section runners and the in-loop DoD verifier.
 func runFixtureSection(ctx context.Context, nodes []*fixtures.FixtureNode, workDir string, spec *captainapi.Spec) []fixtures.FixtureResult {
+	reporter := fixtures.NewExecutionReporter(nodes, workDir, nil, fixtures.ProgressSinkFromContext(ctx))
+	if err := reporter.Publish(ctx); err != nil {
+		return []fixtures.FixtureResult{fixtureErr(fixtures.FixtureTest{Name: "verification progress"}, err.Error())}
+	}
+	results, err := runFixtureSectionWithProgress(ctx, nodes, workDir, spec, reporter)
+	if err != nil {
+		return append(results, fixtureErr(fixtures.FixtureTest{Name: "verification progress"}, err.Error()))
+	}
+	return results
+}
+
+func runFixtureSectionWithProgress(
+	ctx context.Context,
+	nodes []*fixtures.FixtureNode,
+	workDir string,
+	spec *captainapi.Spec,
+	reporter *fixtures.ExecutionReporter,
+) ([]fixtures.FixtureResult, error) {
 	evaluator, err := fixtures.NewCELEvaluator()
 	if err != nil {
 		return []fixtures.FixtureResult{{
 			Status: "error",
 			Error:  fmt.Sprintf("failed to create CEL evaluator: %v", err),
-		}}
+		}}, nil
 	}
 	opts := fixtures.RunOptions{Context: ctx, WorkDir: workDir, Evaluator: evaluator, Spec: spec}
 
 	var results []fixtures.FixtureResult
-	var walk func(*fixtures.FixtureNode)
-	walk = func(node *fixtures.FixtureNode) {
+	var walk func(*fixtures.FixtureNode) error
+	walk = func(node *fixtures.FixtureNode) error {
 		if node == nil {
-			return
+			return nil
 		}
 		if node.Test != nil {
-			results = append(results, dispatchFixture(ctx, *node.Test, opts))
+			if err := reporter.StartFixture(ctx, node); err != nil {
+				return err
+			}
+			opts.Progress = func(done, total int) error {
+				return reporter.UpdateFixture(ctx, node, done, total)
+			}
+			result := dispatchFixture(ctx, *node.Test, opts)
+			results = append(results, result)
+			if err := reporter.CompleteFixture(ctx, node, result); err != nil {
+				return err
+			}
 		}
 		for _, child := range node.Children {
-			walk(child)
+			if err := walk(child); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
 	for _, node := range nodes {
-		walk(node)
+		if err := walk(node); err != nil {
+			return results, err
+		}
 	}
-	return results
+	return results, nil
 }
 
 // dispatchFixture runs one fixture test with the same node-type dispatch the

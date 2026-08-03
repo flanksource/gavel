@@ -1,5 +1,55 @@
 import type { TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
+import type { Test } from '@flanksource/clicky-ui/data';
 import type { RunArtifact } from '../tests/types';
+
+export type ExecutionState = 'queued' | 'running' | 'passed' | 'failed' | 'errored' | 'warned' | 'skipped' | 'cancelled' | 'timed_out';
+
+export interface ExecutionOrigin {
+  file?: string;
+  section_path?: string;
+  kind?: string;
+  table_index?: number;
+  row_index?: number;
+  line?: number;
+}
+
+export interface ExecutionNode {
+  key: string;
+  name: string;
+  kind: string;
+  state: ExecutionState;
+  origin?: ExecutionOrigin;
+  started_at?: string;
+  finished_at?: string;
+  duration?: number;
+  done?: number;
+  total?: number;
+  error?: string;
+  children?: ExecutionNode[];
+}
+
+export interface ExecutionSummary {
+  total: number;
+  queued?: number;
+  running?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  warned?: number;
+  skipped?: number;
+  cancelled?: number;
+  timed_out?: number;
+}
+
+export interface ExecutionSnapshot {
+  version: number;
+  iteration: number;
+  state: ExecutionState;
+  started_at?: string;
+  ended_at?: string;
+  summary: ExecutionSummary;
+  root: ExecutionNode;
+}
 
 /**
  * Mirrors of gavel's fixtures.FixtureResult, types.VerificationOutput and
@@ -42,19 +92,21 @@ export interface VerificationOutput {
 }
 
 export interface DefinitionOfDone {
-  ran: boolean;
-  passed: boolean;
+  ran?: boolean;
+  passed?: boolean;
   output?: VerificationOutput;
+  progress?: ExecutionSnapshot;
 }
 
 export type AttemptOutcome = 'passed' | 'failed' | 'running' | 'cancelled' | 'errored';
 
-export type AttemptTab = 'test' | 'lint' | 'session' | 'output';
+export type AttemptTab = 'fixtures' | 'test' | 'lint' | 'session' | 'output';
 
 export interface VerificationAttempt {
   attempt: TodoSessionAttempt;
   dod: DefinitionOfDone | null;
   outcome: AttemptOutcome;
+  progress?: ExecutionSnapshot;
   steps: VerificationFixtureResult[];
   checklist: VerificationChecklistItem[];
 }
@@ -82,6 +134,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function readExecutionNode(value: unknown, path: string): ExecutionNode | string {
+  if (!isRecord(value)) return `${path} is not an object`;
+  for (const field of ['key', 'name', 'kind', 'state'] as const) {
+    if (typeof value[field] !== 'string') return `${path}.${field} is not a string`;
+  }
+  if (value.children !== undefined) {
+    if (!Array.isArray(value.children)) return `${path}.children is not an array`;
+    for (let index = 0; index < value.children.length; index += 1) {
+      const child = readExecutionNode(value.children[index], `${path}.children[${index}]`);
+      if (typeof child === 'string') return child;
+    }
+  }
+  return value as unknown as ExecutionNode;
+}
+
+function readExecutionSnapshot(value: unknown): ExecutionSnapshot | undefined | string {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) return 'definitionOfDone.progress is not an object';
+  if (value.version !== 1) return 'definitionOfDone.progress has an unsupported version';
+  if (typeof value.iteration !== 'number' || typeof value.state !== 'string') {
+    return 'definitionOfDone.progress is missing iteration/state';
+  }
+  if (!isRecord(value.summary) || typeof value.summary.total !== 'number') {
+    return 'definitionOfDone.progress.summary is missing total';
+  }
+  const root = readExecutionNode(value.root, 'definitionOfDone.progress.root');
+  if (typeof root === 'string') return root;
+  return value as unknown as ExecutionSnapshot;
+}
+
 /**
  * Reads the definition-of-done payload off an attempt. Returns undefined when
  * the attempt simply has none, and a string when the payload is present but not
@@ -92,7 +174,11 @@ function readDefinitionOfDone(attempt: TodoSessionAttempt): DefinitionOfDone | u
   const raw = attempt.resultJson?.definitionOfDone;
   if (raw === undefined || raw === null) return undefined;
   if (!isRecord(raw)) return `definitionOfDone is ${Array.isArray(raw) ? 'an array' : typeof raw}, expected an object`;
+  const progress = readExecutionSnapshot(raw.progress);
+  if (typeof progress === 'string') return progress;
   if (typeof raw.ran !== 'boolean' || typeof raw.passed !== 'boolean') {
+    const state = (attempt.state || attempt.status || '').toLowerCase();
+    if (progress && !TERMINAL_STATES.has(state)) return raw as unknown as DefinitionOfDone;
     return 'definitionOfDone is missing the boolean ran/passed verdict';
   }
   const output = raw.output;
@@ -140,6 +226,7 @@ export function verificationAttempts(detail: TodoSessionDetailResponse | null): 
       attempt,
       dod,
       outcome: attemptOutcome(attempt, dod),
+      progress: dod?.progress,
       steps: dod?.output?.results ?? [],
       checklist: dod?.output?.checklist ?? [],
     });
@@ -199,14 +286,111 @@ export function attemptOutputSteps(entry: VerificationAttempt): VerificationFixt
   return entry.steps.filter((step) => !step.run?.run_id);
 }
 
+function executionNodeTest(node: ExecutionNode): Test {
+  const test: Test = {
+    name: node.name,
+    framework: node.kind,
+    task_id: node.key,
+    file: node.origin?.file,
+    line: node.origin?.line,
+    duration: node.duration,
+    message: node.error,
+    detail: node,
+    children: node.children?.map(executionNodeTest),
+  };
+  if (node.total && (node.state === 'running' || node.state === 'queued')) {
+    test.progress = { phase: node.kind, done: node.done ?? 0, total: node.total };
+  }
+  applyExecutionState(test, node.state);
+  return test;
+}
+
+function applyExecutionState(test: Test, state: ExecutionState): void {
+  if (state === 'queued') test.pending = true;
+  else if (state === 'running') test.running = true;
+  else if (state === 'passed') test.passed = true;
+  else if (state === 'failed' || state === 'errored') test.failed = true;
+  else if (state === 'warned') test.warned = true;
+  else if (state === 'timed_out') test.timed_out = true;
+  else test.skipped = true;
+}
+
+function resultTest(result: VerificationFixtureResult, index: number, parentKey = 'result'): Test {
+  const key = `${parentKey}:${index}:${result.name || result.type || 'fixture'}`;
+  const test: Test = {
+    name: result.name || result.type || 'Fixture',
+    framework: result.type || 'fixture',
+    task_id: key,
+    duration: result.duration,
+    message: result.error,
+    command: result.command,
+    work_dir: result.cwd,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    detail: result,
+    children: result.children
+      ?.filter(isRecord)
+      .map((child, childIndex) => resultTest(child as unknown as VerificationFixtureResult, childIndex, key)),
+  };
+  applyResultStatus(test, result.status);
+  return test;
+}
+
+function applyResultStatus(test: Test, status?: string): void {
+  const normalized = (status || '').toLowerCase();
+  if (normalized === 'pass' || normalized === 'passed') test.passed = true;
+  else if (normalized === 'fail' || normalized === 'failed' || normalized === 'error' || normalized === 'errored') test.failed = true;
+  else if (normalized === 'warn' || normalized === 'warned') test.warned = true;
+  else if (normalized === 'skip' || normalized === 'skipped' || normalized === 'cancelled') test.skipped = true;
+  else if (normalized === 'timeout' || normalized === 'timed_out') test.timed_out = true;
+  else if (normalized === 'running') test.running = true;
+  else if (normalized === 'queued' || normalized === 'pending') test.pending = true;
+}
+
+function checklistTest(checklist: VerificationChecklistItem[]): Test | null {
+  if (checklist.length === 0) return null;
+  const children = checklist.map((item, index): Test => ({
+    name: item.item || `Criterion ${index + 1}`,
+    framework: 'checklist',
+    task_id: `acceptance-criteria:${index}`,
+    message: item.message,
+    passed: item.passed === true,
+    failed: item.passed === false,
+    pending: typeof item.passed !== 'boolean',
+    detail: item,
+  }));
+  return {
+    name: 'Acceptance criteria',
+    framework: 'checklist',
+    task_id: 'acceptance-criteria',
+    children,
+    passed: children.every((child) => child.passed),
+    failed: children.some((child) => child.failed),
+    pending: children.some((child) => child.pending),
+  };
+}
+
+/** The shared fixture execution tree, live while running and rebuilt from terminal evidence afterward. */
+export function attemptFixtureTests(entry: VerificationAttempt): Test[] {
+  if (entry.progress) return entry.progress.root.children?.map(executionNodeTest) ?? [];
+  const tests = entry.steps.map((step, index) => resultTest(step, index));
+  const checklist = checklistTest(entry.checklist);
+  if (checklist) tests.push(checklist);
+  return tests;
+}
+
 export function attemptTabs(entry: VerificationAttempt): Record<AttemptTab, AttemptTabState> {
   const artifacts = attemptRunArtifacts(entry);
+  const fixtures = attemptFixtureTests(entry);
   const tests = artifacts.filter((item) => item.kind === 'test');
   const lints = artifacts.filter((item) => item.kind === 'lint');
   const outputs = attemptOutputSteps(entry);
   const sessionId = entry.attempt.executionSessionId || entry.attempt.providerSessionId;
 
   return {
+    fixtures: fixtures.length > 0
+      ? { available: true, count: entry.progress?.summary.total ?? fixtures.length }
+      : { available: false, reason: 'This attempt recorded no fixture execution tree' },
     test: tests.length > 0
       ? { available: true, count: tests.reduce((sum, item) => sum + item.artifact.total, 0) }
       : { available: false, reason: 'This attempt ran no test step' },
@@ -225,7 +409,10 @@ export function attemptTabs(entry: VerificationAttempt): Record<AttemptTab, Atte
 /** Opens on the evidence most likely to explain the verdict. */
 export function defaultAttemptTab(entry: VerificationAttempt): AttemptTab {
   const tabs = attemptTabs(entry);
+  if (entry.outcome === 'running' && tabs.fixtures.available) return 'fixtures';
   const failed = entry.outcome === 'failed' || entry.outcome === 'errored';
-  const byFailure: AttemptTab[] = failed ? ['test', 'lint', 'output', 'session'] : ['test', 'output', 'lint', 'session'];
+  const byFailure: AttemptTab[] = failed
+    ? ['test', 'lint', 'output', 'fixtures', 'session']
+    : ['test', 'output', 'lint', 'fixtures', 'session'];
   return byFailure.find((tab) => tabs[tab].available) ?? 'output';
 }

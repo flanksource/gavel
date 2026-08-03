@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import type { RunSnapshot } from '../tests/types';
 import { TodoVerificationAttempts } from './TodoVerificationAttempts';
+import { queryTestWrapper } from './queryTestWrapper';
 
 const runResultsCalls = vi.hoisted(() => ({ props: [] as { snapshot: RunSnapshot; runKey: string }[] }));
 const snapshotFetch = vi.hoisted(() => ({ fn: vi.fn() }));
@@ -36,15 +37,14 @@ vi.mock('../tests/TestRunResults', () => ({
   },
 }));
 
-vi.mock('../tests/types', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  fetchRunSnapshot: (opts: { dir?: string; runId: string }) => snapshotFetch.fn(opts),
-}));
-
 vi.mock('./VerificationAttemptSession', () => ({
   VerificationAttemptSession: ({ sessionId }: { sessionId: string }) => (
     <div data-testid="attempt-session">{sessionId}</div>
   ),
+}));
+
+vi.mock('./VerificationFixtureResults', () => ({
+  VerificationFixtureResults: () => <div data-testid="fixture-results">fixture tree</div>,
 }));
 
 function attempt(ordinal: number, overrides: Partial<TodoSessionAttempt> = {}): TodoSessionAttempt {
@@ -92,10 +92,25 @@ const snapshot: RunSnapshot = {
   tests: [],
 } as unknown as RunSnapshot;
 
+function snapshotResponse(value: RunSnapshot): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function renderAttempts(detail: TodoSessionDetailResponse | null, error?: string) {
+  return render(
+    <TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} error={error} />,
+    { wrapper: queryTestWrapper() },
+  );
+}
+
 describe('TodoVerificationAttempts', () => {
   beforeEach(() => {
     runResultsCalls.props.length = 0;
-    snapshotFetch.fn = vi.fn(async () => snapshot);
+    snapshotFetch.fn = vi.fn(async () => snapshotResponse(snapshot));
+    vi.stubGlobal('fetch', snapshotFetch.fn);
   });
 
   afterEach(() => {
@@ -107,14 +122,14 @@ describe('TodoVerificationAttempts', () => {
       attempt(1, { resultJson: { definitionOfDone: { ran: true, passed: true } } }),
       attempt(2, { resultJson: { definitionOfDone: { ran: true, passed: false } } }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     const ordinals = screen.getAllByText(/^#\d+$/).map((node) => node.textContent);
     expect(ordinals).toEqual(['#2', '#1']);
   });
 
   it('distinguishes loading from an empty attempt list', () => {
-    const { rerender } = render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={null} />);
+    const { rerender } = renderAttempts(null);
     expect(screen.getByText('Loading attempts…')).toBeTruthy();
 
     rerender(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detailOf()} />);
@@ -124,15 +139,50 @@ describe('TodoVerificationAttempts', () => {
 
   it('reports unreadable payloads instead of dropping the attempt silently', () => {
     const detail = detailOf(attempt(4, { resultJson: { definitionOfDone: 'nope' } }));
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     expect(screen.getByText('1 attempt(s) could not be read:')).toBeTruthy();
     expect(screen.getByText(/#4 — definitionOfDone is string/)).toBeTruthy();
   });
 
+  it('opens a running attempt on the live Fixtures tab', () => {
+    const detail = detailOf(attempt(1, {
+      state: 'running',
+      status: 'running',
+      phase: 'verify',
+      resultJson: {
+        definitionOfDone: {
+          progress: {
+            version: 1,
+            iteration: 2,
+            state: 'running',
+            summary: { total: 2, running: 1, queued: 1 },
+            root: {
+              key: 'verification',
+              name: 'Verification',
+              kind: 'root',
+              state: 'running',
+              children: [
+                { key: 'checks:test', name: 'Test', kind: 'test', state: 'running' },
+                { key: 'acceptance-criteria', name: 'Acceptance criteria', kind: 'checklist', state: 'queued' },
+              ],
+            },
+          },
+        },
+      },
+    }));
+    renderAttempts(detail);
+
+    expect(screen.getByRole('button', { name: /^Fixtures 2$/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('fixture-results')).toBeTruthy();
+  });
+
   it('renders the recorded summary before the full snapshot arrives, then hands it to TestRunResults', async () => {
     let resolveSnapshot: (value: RunSnapshot) => void = () => {};
-    snapshotFetch.fn = vi.fn(() => new Promise<RunSnapshot>((resolve) => { resolveSnapshot = resolve; }));
+    snapshotFetch.fn = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveSnapshot = (value) => resolve(snapshotResponse(value));
+    }));
+    vi.stubGlobal('fetch', snapshotFetch.fn);
     const detail = detailOf(
       attempt(1, {
         resultJson: {
@@ -144,25 +194,30 @@ describe('TodoVerificationAttempts', () => {
         },
       }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     // The counts and failure heads come from the attempt payload, so they must be
     // legible while the .gavel artifact is still in flight.
     expect(screen.getByText('10/12 passed · 2 failed')).toBeTruthy();
     expect(screen.getByText('TodoDetail > renders the badge')).toBeTruthy();
     expect(screen.getByText('…and 3 more')).toBeTruthy();
-    expect(snapshotFetch.fn).toHaveBeenCalledWith({ dir: '/workspace', runId: testRun.run_id });
+    expect(snapshotFetch.fn).toHaveBeenCalledWith(
+      `/api/tests/run?runId=${testRun.run_id}&dir=%2Fworkspace`,
+      expect.objectContaining({ signal: expect.anything() }),
+    );
 
     resolveSnapshot(snapshot);
     await waitFor(() => expect(screen.getByTestId('test-run-results')).toBeTruthy());
-    expect(runResultsCalls.props.at(-1)?.snapshot).toBe(snapshot);
+    expect(runResultsCalls.props.at(-1)?.snapshot).toEqual(snapshot);
     expect(runResultsCalls.props.at(-1)?.runKey).toBe(testRun.run_id);
   });
 
   it('keeps the recorded summary when the artifact file is gone', async () => {
-    snapshotFetch.fn = vi.fn(async () => {
-      throw new Error('run snapshot not found');
-    });
+    snapshotFetch.fn = vi.fn(async () => new Response(JSON.stringify({ error: 'run snapshot not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', snapshotFetch.fn);
     const detail = detailOf(
       attempt(1, {
         resultJson: {
@@ -174,9 +229,11 @@ describe('TodoVerificationAttempts', () => {
         },
       }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
-    await waitFor(() => expect(screen.getByText('Full results unavailable: run snapshot not found')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(
+      'Full results unavailable: Failed to load run run-2026-07-30T09-00-00Z for directory /workspace: run snapshot not found',
+    )).toBeTruthy());
     expect(screen.getByText('10/12 passed · 2 failed')).toBeTruthy();
   });
 
@@ -192,7 +249,7 @@ describe('TodoVerificationAttempts', () => {
         },
       }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     const lint = screen.getByRole('button', { name: /^Lint$/ });
     expect(lint.hasAttribute('disabled')).toBe(true);
@@ -216,7 +273,7 @@ describe('TodoVerificationAttempts', () => {
         },
       }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     fireEvent.click(screen.getByRole('button', { name: /^Session$/ }));
     expect(screen.getByTestId('attempt-session').textContent).toBe('session-abc');
@@ -243,7 +300,7 @@ describe('TodoVerificationAttempts', () => {
         },
       }),
     );
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={detail} />);
+    renderAttempts(detail);
 
     expect(screen.getByText('make two')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /#1/ }));
@@ -251,7 +308,79 @@ describe('TodoVerificationAttempts', () => {
   });
 
   it('surfaces a fetch error for the attempt list itself', () => {
-    render(<TodoVerificationAttempts dir="/workspace" todoRef="todo-1" detail={null} error="session detail unavailable" />);
+    renderAttempts(null, 'session detail unavailable');
     expect(screen.getByRole('alert').textContent).toBe('session detail unavailable');
+  });
+
+  it('reuses a cached run snapshot when an attempt is reopened', async () => {
+    const firstRun = { ...testRun, run_id: 'run-first' };
+    const secondRun = { ...testRun, run_id: 'run-second' };
+    const detail = detailOf(
+      attempt(1, {
+        resultJson: {
+          definitionOfDone: {
+            ran: true,
+            passed: false,
+            output: { results: [{ name: 'first', type: 'test', status: 'FAIL', run: firstRun }] },
+          },
+        },
+      }),
+      attempt(2, {
+        resultJson: {
+          definitionOfDone: {
+            ran: true,
+            passed: false,
+            output: { results: [{ name: 'second', type: 'test', status: 'FAIL', run: secondRun }] },
+          },
+        },
+      }),
+    );
+    renderAttempts(detail);
+
+    await waitFor(() => expect(screen.getByTestId('test-run-results').textContent).toBe(secondRun.run_id));
+    fireEvent.click(screen.getByRole('button', { name: /#1/ }));
+    await waitFor(() => expect(screen.getByTestId('test-run-results').textContent).toBe(firstRun.run_id));
+    fireEvent.click(screen.getByRole('button', { name: /#2/ }));
+    await waitFor(() => expect(screen.getByTestId('test-run-results').textContent).toBe(secondRun.run_id));
+
+    expect(snapshotFetch.fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels an in-flight snapshot when its attempt is closed', async () => {
+    const signals: AbortSignal[] = [];
+    snapshotFetch.fn = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) throw new Error('snapshot request did not receive an AbortSignal');
+      signals.push(signal);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
+    vi.stubGlobal('fetch', snapshotFetch.fn);
+    const detail = detailOf(
+      attempt(1, {
+        resultJson: {
+          definitionOfDone: {
+            ran: true,
+            passed: false,
+            output: { results: [{ name: 'first', type: 'test', status: 'FAIL', run: { ...testRun, run_id: 'run-first' } }] },
+          },
+        },
+      }),
+      attempt(2, {
+        resultJson: {
+          definitionOfDone: {
+            ran: true,
+            passed: false,
+            output: { results: [{ name: 'second', type: 'test', status: 'FAIL', run: { ...testRun, run_id: 'run-second' } }] },
+          },
+        },
+      }),
+    );
+    renderAttempts(detail);
+    await waitFor(() => expect(snapshotFetch.fn).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /#1/ }));
+
+    await waitFor(() => expect(snapshotFetch.fn).toHaveBeenCalledTimes(2));
+    expect(signals[0]?.aborted).toBe(true);
   });
 });

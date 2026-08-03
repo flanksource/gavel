@@ -4,12 +4,29 @@ import (
 	"testing"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+var _ = Describe("verification progress projection", func() {
+	It("replaces only the live snapshot while preserving other run results", func() {
+		original := map[string]any{
+			"session":          map[string]any{"id": "session-1"},
+			"definitionOfDone": map[string]any{"note": "keep", "progress": "stale"},
+		}
+		snapshot := fixtures.ExecutionSnapshot{Version: 1, Iteration: 4, State: fixtures.ExecutionRunning}
+
+		projected := progressResultJSON(original, snapshot)
+
+		Expect(projected).To(HaveKeyWithValue("session", original["session"]))
+		Expect(projected["definitionOfDone"]).To(Equal(map[string]any{"note": "keep", "progress": snapshot}))
+		Expect(original["definitionOfDone"]).To(Equal(map[string]any{"note": "keep", "progress": "stale"}))
+	})
+})
 
 func TestRuntimeCancellation(t *testing.T) {
 	RegisterFailHandler(Fail)

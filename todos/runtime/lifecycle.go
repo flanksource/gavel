@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	captaindb "github.com/flanksource/captain/pkg/database"
+	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -16,6 +17,7 @@ import (
 
 var (
 	_ todos.RunLifecycleProvider = (*Provider)(nil)
+	_ todos.RunProgressProvider  = (*Provider)(nil)
 	_ todos.PlanContentProvider  = (*Provider)(nil)
 )
 
@@ -254,6 +256,46 @@ func (p *Provider) RecordRunStart(ctx context.Context, todo *types.TODO, metadat
 		}
 	}
 	return p.reloadTODO(ctx, todo, todo.CWD)
+}
+
+func (p *Provider) RecordRunProgress(ctx context.Context, todo *types.TODO, snapshot fixtures.ExecutionSnapshot) error {
+	active, err := p.loadActiveRun(ctx, todo)
+	if err != nil {
+		return err
+	}
+	if terminalPromptRun(active.run.State) {
+		return fmt.Errorf("record verification progress: Captain prompt run %s is already %s", active.run.ID, active.run.State)
+	}
+	resultJSON := progressResultJSON(active.run.ResultJSON, snapshot)
+	phase := captaindb.PromptRunPhaseVerify
+	if _, err := p.captain.UpdatePromptRun(ctx, captaindb.UpdatePromptRunInput{
+		ID: active.run.ID, ExpectedVersion: active.run.Version,
+		Phase: &phase, ResultJSON: &resultJSON,
+	}); err != nil {
+		return fmt.Errorf("record Captain verification progress: %w", err)
+	}
+	return nil
+}
+
+func cloneResultJSON(source map[string]any) map[string]any {
+	clone := make(map[string]any, len(source)+1)
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func progressResultJSON(source map[string]any, snapshot fixtures.ExecutionSnapshot) map[string]any {
+	resultJSON := cloneResultJSON(source)
+	definitionOfDone := map[string]any{}
+	if existing, ok := resultJSON["definitionOfDone"].(map[string]any); ok {
+		for key, value := range existing {
+			definitionOfDone[key] = value
+		}
+	}
+	definitionOfDone["progress"] = snapshot
+	resultJSON["definitionOfDone"] = definitionOfDone
+	return resultJSON
 }
 
 // PlanMarkdown returns Captain-owned immutable plan content. Runtime callers

@@ -47,8 +47,12 @@ var _ = Describe("TODO verification runtime spec", func() {
 			},
 		}
 
-		verifier.runDeterministic(nil)
-		verifier.runChecklist(nil)
+		reporter := verifier.executionReporter(context.Background())
+		Expect(reporter.Publish(context.Background())).To(Succeed())
+		_, err := verifier.runDeterministic(nil, reporter)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = verifier.runChecklist(nil, reporter)
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(received).To(HaveLen(2))
 		Expect(received[0]).To(BeIdenticalTo(&spec))

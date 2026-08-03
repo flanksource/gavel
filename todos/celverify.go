@@ -1,6 +1,7 @@
 package todos
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -72,8 +73,18 @@ type stepFixture struct {
 func (v *celVerifier) Name() string { return v.name }
 
 func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) {
-	results := v.runDeterministic(hc)
-	checklist := v.runChecklist(hc)
+	reporter := v.executionReporter(hc)
+	if err := reporter.Publish(hc); err != nil {
+		return agent.VerifyResult{}, err
+	}
+	results, err := v.runDeterministic(hc, reporter)
+	if err != nil {
+		return agent.VerifyResult{}, err
+	}
+	checklist, err := v.runChecklist(hc, reporter)
+	if err != nil {
+		return agent.VerifyResult{}, err
+	}
 	summary := resultsSummary(results, checklist)
 	output := types.VerificationOutput{Results: results, Checklist: checklist, Summary: summary}
 	retry, err := evalRetry(v.retryExpr, results, checklist, hc)
@@ -100,26 +111,65 @@ func (v *celVerifier) Verify(hc *agent.HookContext) (agent.VerifyResult, error) 
 
 // runDeterministic executes the configured checks and the todo's `## Verification`
 // section — the cheap, deterministic part of the definition of done.
-func (v *celVerifier) runDeterministic(hc *agent.HookContext) []fixtures.FixtureResult {
+func (v *celVerifier) runDeterministic(hc *agent.HookContext, reporter *fixtures.ExecutionReporter) ([]fixtures.FixtureResult, error) {
 	var results []fixtures.FixtureResult
 	for _, s := range v.steps {
-		results = append(results, s.runner(s.fixture, fixtures.RunOptions{Context: hc, WorkDir: v.workDir, Spec: v.spec}))
+		key := s.fixture.Name
+		if err := reporter.StartStep(hc, key); err != nil {
+			return results, err
+		}
+		result := s.runner(s.fixture, fixtures.RunOptions{
+			Context: hc, WorkDir: v.workDir, Spec: v.spec,
+			Progress: func(done, total int) error { return reporter.UpdateStep(hc, key, done, total) },
+		})
+		results = append(results, result)
+		if err := reporter.CompleteStep(hc, key, result); err != nil {
+			return results, err
+		}
 	}
 	if len(v.nodes) > 0 {
-		results = append(results, runFixtureSection(hc, v.nodes, v.workDir, v.spec)...)
+		fixtureResults, err := runFixtureSectionWithProgress(hc, v.nodes, v.workDir, v.spec, reporter)
+		results = append(results, fixtureResults...)
+		if err != nil {
+			return results, err
+		}
 	}
-	return results
+	return results, nil
 }
 
 // runChecklist executes the acceptance-criteria checklist (the LLM step) and
 // returns one {item, passed, message} entry per criterion — nil when the todo
 // has no criteria.
-func (v *celVerifier) runChecklist(hc *agent.HookContext) []map[string]any {
+func (v *celVerifier) runChecklist(hc *agent.HookContext, reporter *fixtures.ExecutionReporter) ([]map[string]any, error) {
 	if v.aiStep == nil {
-		return nil
+		return nil, nil
+	}
+	key := v.aiStep.fixture.Name
+	if err := reporter.StartStep(hc, key); err != nil {
+		return nil, err
 	}
 	res := v.aiStep.runner(v.aiStep.fixture, fixtures.RunOptions{Context: hc, WorkDir: v.workDir, Spec: v.spec})
-	return checklistFromResult(res)
+	if err := reporter.CompleteStep(hc, key, res); err != nil {
+		return nil, err
+	}
+	return checklistFromResult(res), nil
+}
+
+func (v *celVerifier) executionReporter(ctx context.Context) *fixtures.ExecutionReporter {
+	steps := make([]fixtures.ExecutionStep, 0, len(v.steps)+1)
+	for _, step := range v.steps {
+		kind := fixtures.ExecutionKindTest
+		if step.fixture.IsLintStep() {
+			kind = fixtures.ExecutionKindLint
+		}
+		steps = append(steps, fixtures.ExecutionStep{Key: step.fixture.Name, Name: step.fixture.Name, Kind: kind})
+	}
+	if v.aiStep != nil {
+		steps = append(steps, fixtures.ExecutionStep{
+			Key: v.aiStep.fixture.Name, Name: v.aiStep.fixture.Name, Kind: fixtures.ExecutionKindChecklist,
+		})
+	}
+	return fixtures.NewExecutionReporter(v.nodes, v.workDir, steps, fixtures.ProgressSinkFromContext(ctx))
 }
 
 // evalRetry builds the CEL activation from the run's results, the checklist, and

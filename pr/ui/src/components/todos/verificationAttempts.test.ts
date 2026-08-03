@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { TodoSessionAttempt, TodoSessionDetailResponse } from '../../types';
 import type { RunArtifact } from '../tests/types';
 import {
+  attemptFixtureTests,
   attemptOutputSteps,
   attemptRunArtifacts,
   attemptTabs,
   defaultAttemptTab,
   verificationAttempts,
   verificationBadge,
+  type ExecutionSnapshot,
   type VerificationFixtureResult,
 } from './verificationAttempts';
 
@@ -44,6 +46,25 @@ function dod(passed: boolean, results: VerificationFixtureResult[] = [], checkli
 
 function detail(attempts: TodoSessionAttempt[]): TodoSessionDetailResponse {
   return { attempts, diagnostics: [] };
+}
+
+function liveProgress(): ExecutionSnapshot {
+  return {
+    version: 1,
+    iteration: 3,
+    state: 'running',
+    summary: { total: 2, queued: 1, running: 1 },
+    root: {
+      key: 'verification',
+      name: 'Verification',
+      kind: 'root',
+      state: 'running',
+      children: [
+        { key: 'checks:test', name: 'Test', kind: 'test', state: 'running', done: 3, total: 8 },
+        { key: 'acceptance-criteria', name: 'Acceptance criteria', kind: 'checklist', state: 'queued' },
+      ],
+    },
+  };
 }
 
 describe('verificationAttempts', () => {
@@ -109,6 +130,27 @@ describe('verificationAttempts', () => {
     const set = verificationAttempts(detail([attempt(1, { resultJson: { definitionOfDone: { ran: 'yes', passed: 1 } } })]));
     expect(set.malformed).toHaveLength(1);
     expect(set.attempts).toEqual([]);
+  });
+
+  it('accepts a running progress snapshot before the terminal verdict exists', () => {
+    const progress = liveProgress();
+    const set = verificationAttempts(detail([attempt(1, {
+      state: 'running',
+      resultJson: { definitionOfDone: { progress } },
+    })]));
+
+    expect(set.malformed).toEqual([]);
+    expect(set.attempts[0]).toMatchObject({ outcome: 'running', progress });
+  });
+
+  it('rejects an invalid live execution tree instead of guessing at its shape', () => {
+    const set = verificationAttempts(detail([attempt(1, {
+      state: 'running',
+      resultJson: { definitionOfDone: { progress: { version: 1, root: [] } } },
+    })]));
+
+    expect(set.attempts).toEqual([]);
+    expect(set.malformed[0]?.reason).toContain('definitionOfDone.progress');
   });
 });
 
@@ -197,5 +239,55 @@ describe('attempt sub-tabs', () => {
 
     const checklistOnly = verificationAttempts(detail([attempt(1, { resultJson: dod(true, [], [{ item: 'docs updated', passed: true }]) })])).attempts[0];
     expect(defaultAttemptTab(checklistOnly)).toBe('output');
+  });
+
+  it('opens a running attempt on its live fixture tree with nested progress', () => {
+    const entry = verificationAttempts(detail([attempt(1, {
+      state: 'running',
+      resultJson: { definitionOfDone: { progress: liveProgress() } },
+    })])).attempts[0];
+
+    expect(attemptTabs(entry).fixtures).toEqual({ available: true, count: 2 });
+    expect(defaultAttemptTab(entry)).toBe('fixtures');
+    expect(attemptFixtureTests(entry)).toEqual([
+      expect.objectContaining({
+        name: 'Test',
+        framework: 'test',
+        running: true,
+        task_id: 'checks:test',
+        progress: { phase: 'test', done: 3, total: 8 },
+      }),
+      expect.objectContaining({
+        name: 'Acceptance criteria',
+        framework: 'checklist',
+        pending: true,
+        task_id: 'acceptance-criteria',
+      }),
+    ]);
+  });
+
+  it('reconstructs the fixture tree from terminal results after live progress is replaced', () => {
+    const entry = verificationAttempts(detail([attempt(1, {
+      resultJson: dod(true, [{
+        name: 'fixture.md',
+        type: 'fixture',
+        status: 'PASS',
+        children: [{ name: 'make lint', type: 'lint', status: 'PASS' }],
+      }], [{ item: 'docs updated', passed: true }]),
+    })])).attempts[0];
+    const tests = attemptFixtureTests(entry);
+
+    expect(attemptTabs(entry).fixtures).toEqual({ available: true, count: 2 });
+    expect(tests[0]).toMatchObject({
+      name: 'fixture.md',
+      passed: true,
+      children: [expect.objectContaining({ name: 'make lint', framework: 'lint', passed: true })],
+    });
+    expect(tests[1]).toMatchObject({
+      name: 'Acceptance criteria',
+      framework: 'checklist',
+      passed: true,
+      children: [expect.objectContaining({ name: 'docs updated', passed: true })],
+    });
   });
 });

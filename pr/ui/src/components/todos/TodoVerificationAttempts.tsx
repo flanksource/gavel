@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@flanksource/clicky-ui/components';
 import { UiBeaker, UiError, UiPass, UiStop, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { useQuery } from '@tanstack/react-query';
 import type { TodoSessionDetailResponse } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { ageShort } from '../../utils';
 import { formatDuration } from './TodoSessionTimer';
 import { TestRunResults } from '../tests/TestRunResults';
-import { fetchRunSnapshot, type RunArtifact, type RunSnapshot } from '../tests/types';
+import { runSnapshotQuery, type RunArtifact } from '../tests/types';
 import { VerificationAttemptSession } from './VerificationAttemptSession';
+import { VerificationFixtureResults } from './VerificationFixtureResults';
 import { VerificationStepOutput } from './VerificationStepOutput';
 import {
   attemptRunArtifacts,
@@ -20,12 +22,12 @@ import {
   type VerificationAttempt,
 } from './verificationAttempts';
 
-const TAB_LABELS: Record<AttemptTab, string> = { test: 'Test', lint: 'Lint', session: 'Session', output: 'Output' };
+const TAB_LABELS: Record<AttemptTab, string> = { fixtures: 'Fixtures', test: 'Test', lint: 'Lint', session: 'Session', output: 'Output' };
 
 /**
  * Every verification attempt this todo has made — the explicit `gavel todos
  * check` runs and the in-loop definition-of-done evaluations — newest first,
- * each with Test / Lint / Session / Output evidence.
+ * each with Fixtures / Test / Lint / Session / Output evidence.
  */
 export function TodoVerificationAttempts({
   dir,
@@ -90,19 +92,21 @@ export function TodoVerificationAttempts({
           No verification has run yet. Use “Run verification” above to check the definition of done.
         </p>
       ) : (
-        <>
-          <ul className="divide-y divide-border">
-            {set.attempts.map((entry) => (
-              <AttemptRow
-                key={entry.attempt.promptRunId}
-                entry={entry}
-                selected={entry.attempt.promptRunId === selected?.attempt.promptRunId}
-                onSelect={() => setSelectedId(entry.attempt.promptRunId)}
-              />
-            ))}
-          </ul>
-          {selected && <AttemptEvidence key={selected.attempt.promptRunId} dir={dir} todoRef={todoRef} entry={selected} />}
-        </>
+        <ul className="divide-y divide-border">
+          {set.attempts.map((entry) => {
+            const isSelected = entry.attempt.promptRunId === selected?.attempt.promptRunId;
+            return (
+              <li key={entry.attempt.promptRunId}>
+                <AttemptRow
+                  entry={entry}
+                  selected={isSelected}
+                  onSelect={() => setSelectedId(entry.attempt.promptRunId)}
+                />
+                {isSelected && <AttemptEvidence dir={dir} todoRef={todoRef} entry={entry} />}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </section>
   );
@@ -113,32 +117,30 @@ function AttemptRow({ entry, selected, onSelect }: { entry: VerificationAttempt;
   const started = attempt.startedAt || attempt.queuedAt || attempt.createdAt;
   const failing = attemptRunArtifacts(entry).reduce((sum, item) => sum + item.artifact.failed + (item.artifact.lint_violations ?? 0), 0);
   return (
-    <li>
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={onSelect}
-        aria-pressed={selected}
-        className={`flex h-auto w-full items-center justify-start gap-2 rounded-none px-3 py-2 text-left text-xs ${selected ? 'bg-muted/60' : ''}`}
-      >
-        <OutcomeIcon outcome={entry.outcome} />
-        <span className="font-medium tabular-nums">#{attempt.ordinal}</span>
-        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{attempt.step}</span>
-        {started && <span className="text-[11px] text-muted-foreground">{ageShort(started)}</span>}
-        {typeof attempt.durationMs === 'number' && attempt.durationMs > 0 && (
-          <span className="text-[11px] tabular-nums text-muted-foreground">{formatDuration(attempt.durationMs)}</span>
-        )}
-        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-          {[attempt.provider, attempt.model].filter(Boolean).join(' · ')}
+    <Button
+      variant="ghost"
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={`flex h-auto w-full items-center justify-start gap-2 rounded-none px-3 py-2 text-left text-xs ${selected ? 'bg-muted/60' : ''}`}
+    >
+      <OutcomeIcon outcome={entry.outcome} />
+      <span className={`${selected ? 'font-semibold' : 'font-medium'} tabular-nums`}>#{attempt.ordinal}</span>
+      <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{attempt.step}</span>
+      {started && <span className="text-[11px] text-muted-foreground">{ageShort(started)}</span>}
+      {typeof attempt.durationMs === 'number' && attempt.durationMs > 0 && (
+        <span className="text-[11px] tabular-nums text-muted-foreground">{formatDuration(attempt.durationMs)}</span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+        {[attempt.provider, attempt.model].filter(Boolean).join(' · ')}
+      </span>
+      {failing > 0 && <span className="shrink-0 text-[11px] tabular-nums text-red-600">{failing} failing</span>}
+      {attempt.error && (
+        <span className="max-w-40 shrink-0 truncate text-[11px] text-red-600" title={attempt.error}>
+          {attempt.error}
         </span>
-        {failing > 0 && <span className="shrink-0 text-[11px] tabular-nums text-red-600">{failing} failing</span>}
-        {attempt.error && (
-          <span className="max-w-40 shrink-0 truncate text-[11px] text-red-600" title={attempt.error}>
-            {attempt.error}
-          </span>
-        )}
-      </Button>
-    </li>
+      )}
+    </Button>
   );
 }
 
@@ -179,6 +181,8 @@ function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string
       </div>
       {!tabs[active].available ? (
         <p className="px-3 py-4 text-xs text-muted-foreground">{tabs[active].reason}</p>
+      ) : active === 'fixtures' ? (
+        <VerificationFixtureResults entry={entry} />
       ) : active === 'session' ? (
         <VerificationAttemptSession dir={dir} todoRef={todoRef} sessionId={sessionId!} />
       ) : active === 'output' ? (
@@ -200,24 +204,11 @@ function AttemptEvidence({ dir, todoRef, entry }: { dir: string; todoRef: string
  * so and leaves the summary standing.
  */
 function AttemptRunPanel({ dir, artifact, stepName }: { dir: string; artifact: RunArtifact; stepName?: string }) {
-  const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    setSnapshot(null);
-    setError('');
-    fetchRunSnapshot({ dir, runId: artifact.run_id })
-      .then((loaded) => {
-        if (!cancelled) setSnapshot(loaded);
-      })
-      .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dir, artifact.run_id]);
+  const identity = useMemo(() => ({ dir, runId: artifact.run_id }), [dir, artifact.run_id]);
+  const query = useQuery({
+    ...runSnapshotQuery(identity),
+    enabled: Boolean(artifact.run_id),
+  });
 
   return (
     <section className="rounded border border-border">
@@ -226,7 +217,7 @@ function AttemptRunPanel({ dir, artifact, stepName }: { dir: string; artifact: R
         <RunCounts artifact={artifact} />
       </header>
       {artifact.error && <p className="px-2.5 py-1.5 text-[11px] text-red-600">{artifact.error}</p>}
-      {artifact.failures && artifact.failures.length > 0 && !snapshot && (
+      {artifact.failures && artifact.failures.length > 0 && !query.data && (
         <ul className="space-y-0.5 px-2.5 py-1.5 text-[11px]">
           {artifact.failures.map((failure, index) => (
             <li key={`${failure.name}:${index}`} className="truncate text-red-600" title={failure.message}>
@@ -237,16 +228,16 @@ function AttemptRunPanel({ dir, artifact, stepName }: { dir: string; artifact: R
           {artifact.truncated ? <li className="text-muted-foreground">…and {artifact.truncated} more</li> : null}
         </ul>
       )}
-      {error ? (
-        <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">Full results unavailable: {error}</p>
-      ) : !snapshot ? (
+      {query.error ? (
+        <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">Full results unavailable: {query.error.message}</p>
+      ) : !query.data ? (
         <p className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground">
           <Spinner /> Loading {artifact.run_id}…
         </p>
       ) : (
         <div className="min-h-0">
           <TestRunResults
-            snapshot={snapshot}
+            snapshot={query.data}
             done
             runKey={artifact.run_id}
             projectName={projectNameFor(dir)}

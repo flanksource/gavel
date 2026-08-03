@@ -2035,25 +2035,15 @@ func runDiscoveredFixtures(workDir string, startingPaths []string, globs []strin
 	}
 
 	if streamer != nil {
-		runnerOpts.OnParsed = func(tree *fixtures.FixtureNode) {
-			streamer.SetFixtureOutline(fixtureTreeToPending(tree))
+		runnerOpts.ProgressSink = func(_ context.Context, snapshot fixtures.ExecutionSnapshot) error {
+			streamer.UpdateFixtures(executionSnapshotToTests(snapshot))
+			return nil
 		}
 	}
 
 	runner, err := fixtures.NewRunner(runnerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fixture runner: %w", err)
-	}
-
-	if streamer != nil {
-		runner.SetOnResult(func(_ fixtures.FixtureResult) {
-			tree := runner.Tree()
-			var fixtureTests []parsers.Test
-			for _, child := range tree.Children {
-				fixtureTests = append(fixtureTests, fixtureNodeToTests(child)...)
-			}
-			streamer.UpdateFixtures(fixtureTests)
-		})
 	}
 
 	result, err := runner.Run()
@@ -2121,49 +2111,6 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 			Line:      fixtureNodeLine(node),
 			Children:  children,
 			Failed:    failed,
-		}}
-	}
-	return children
-}
-
-func fixtureTreeToPending(node *fixtures.FixtureNode) []parsers.Test {
-	if node == nil {
-		return nil
-	}
-	var result []parsers.Test
-	for _, child := range node.Children {
-		result = append(result, fixtureNodeToPending(child)...)
-	}
-	return result
-}
-
-func fixtureNodeToPending(node *fixtures.FixtureNode) []parsers.Test {
-	return fixtureNodeToPendingWithFile(node, "")
-}
-
-func fixtureNodeToPendingWithFile(node *fixtures.FixtureNode, inheritedFile string) []parsers.Test {
-	fixtureFile := fixtureNodeFile(node, inheritedFile)
-	if node.Test != nil {
-		return []parsers.Test{{
-			Name:      node.Name,
-			Framework: parsers.Fixture,
-			File:      fixtureFile,
-			Line:      fixtureNodeLine(node),
-			Pending:   true,
-		}}
-	}
-	var children parsers.Tests
-	for _, child := range node.Children {
-		children = append(children, fixtureNodeToPendingWithFile(child, fixtureFile)...)
-	}
-	if node.Type == fixtures.FileNode || node.Type == fixtures.SectionNode {
-		return []parsers.Test{{
-			Name:      node.Name,
-			Framework: parsers.Fixture,
-			File:      fixtureFile,
-			Line:      fixtureNodeLine(node),
-			Children:  children,
-			Pending:   true,
 		}}
 	}
 	return children

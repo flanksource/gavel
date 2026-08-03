@@ -51,21 +51,43 @@ func RunTestStep(fixture fixtures.FixtureTest, opts fixtures.RunOptions) fixture
 	// back into fixture discovery (fixture → test → fixture).
 	ro.UI = false
 	ro.Fixtures = false
-	ro.Updates = nil
 	ro.OutputTee = nil
 	if ro.WorkDir == "" {
 		ro.WorkDir = resolveStepWorkDir(fixture, opts)
 	}
 	var summary parsers.TestSummary
 	ro.SummaryOut = &summary
+	var progressDone chan struct{}
+	var progressErr error
+	if opts.Progress != nil {
+		updates := make(chan []parsers.Test, 16)
+		ro.Updates = updates
+		progressDone = make(chan struct{})
+		go func() {
+			defer close(progressDone)
+			for update := range updates {
+				current := parsers.Tests(update).Sum()
+				done := current.Total - current.Pending - current.Running
+				if err := opts.Progress(done, current.Total); err != nil && progressErr == nil {
+					progressErr = err
+				}
+			}
+		}()
+	}
 
 	raw, runErr := testrunner.Run(ro)
+	if progressDone != nil {
+		<-progressDone
+	}
 	tests, _ := raw.([]parsers.Test)
 
 	result.CWD = ro.WorkDir
 	result.Duration = time.Since(now)
 	result.Metadata = map[string]interface{}{"summary": summary}
 	result.Children = testChildNodes(tests, disp)
+	if progressErr != nil {
+		return result.Errorf(progressErr, "report test progress")
+	}
 
 	artifact, err := saveRunArtifact(runArtifactOptions{
 		WorkDir: ro.WorkDir,

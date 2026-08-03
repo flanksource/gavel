@@ -3,12 +3,14 @@ package fixtures
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,12 +34,11 @@ type RunnerOptions struct {
 	WorkDir        string   // Working directory
 	MaxWorkers     int      // Maximum number of parallel workers
 	Logger         logger.Logger
-	ExecutablePath string              // Path to the current executable (for fixtures to use)
-	OnResult       func(FixtureResult) // Called after each fixture completes
-	OnParsed       func(*FixtureNode)  // Called after fixture files are parsed, before execution
-	UpdateGolden   bool                // When true, mismatched @file expectations are rewritten with actual output instead of failing
-	Display        *DisplayOptions     // Optional result visibility controls for CLI rendering
-	Spec           *api.Spec           // Runtime options for embedded AI prompts
+	ExecutablePath string          // Path to the current executable (for fixtures to use)
+	ProgressSink   ProgressSink    // Receives immutable execution-tree snapshots
+	UpdateGolden   bool            // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Display        *DisplayOptions // Optional result visibility controls for CLI rendering
+	Spec           *api.Spec       // Runtime options for embedded AI prompts
 	// Record is the run-wide `--record` default, applied only to fixtures that
 	// declared no `record:` of their own. An explicit `record: none` parses to an
 	// empty (non-nil) Spec precisely so it outranks this.
@@ -61,6 +62,8 @@ type Runner struct {
 	// no listener, no file.
 	recorders map[string]*recorderSet
 	store     *record.Store
+	progress  *executionTracker
+	resultMu  sync.Mutex
 }
 
 // NewRunner creates a new fixture runner
@@ -82,21 +85,15 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}, nil
 }
 
-// Tree returns the parsed fixture tree.
-func (r *Runner) Tree() *FixtureNode {
-	return r.tree
-}
-
-// SetOnResult sets the per-fixture completion callback (can be set after NewRunner).
-func (r *Runner) SetOnResult(fn func(FixtureResult)) {
-	r.options.OnResult = fn
-}
-
 // Run executes the fixture tests and returns the result tree.
 // The caller is responsible for formatting/printing the output.
 func (r *Runner) Run() (*FixtureNode, error) {
 	if _, err := r.prepareFixtureTree(); err != nil {
 		return nil, err
+	}
+	r.progress = newExecutionTracker(r.tree, r.options.WorkDir, r.executionSteps(), r.options.ProgressSink)
+	if err := r.progress.Publish(context.Background()); err != nil {
+		return nil, fmt.Errorf("publish queued fixture progress: %w", err)
 	}
 
 	results, err := r.executeFixtures()
@@ -121,10 +118,6 @@ func (r *Runner) Parse() (*FixtureNode, error) {
 func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if err := r.parseFixtureFiles(); err != nil {
 		return nil, fmt.Errorf("failed to parse fixture files: %w", err)
-	}
-
-	if r.options.OnParsed != nil {
-		r.options.OnParsed(r.tree)
 	}
 
 	if r.options.Filter != "" {
@@ -248,7 +241,16 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	// Setup runs before the build: it can relocate a file's tests into a
 	// worktree, and a build that ran in the original repo would build tree A
 	// while the tests exercise tree B — and pass.
+	if err := r.startProgressStep(ctx, ExecutionKindSetup); err != nil {
+		return nil, err
+	}
 	if err := r.prepareSetups(ctx); err != nil {
+		if progressErr := r.failPrerequisite(ctx, ExecutionKindSetup, err); progressErr != nil {
+			return nil, errors.Join(err, progressErr)
+		}
+		return nil, err
+	}
+	if err := r.completeProgressStep(ctx, ExecutionKindSetup); err != nil {
 		return nil, err
 	}
 	// Registered before the daemon's defer so LIFO stops the daemon first:
@@ -259,9 +261,18 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	// Run build command synchronously before any fixtures
 	buildCmd, buildSetup := r.getBuildCommand()
 	if buildCmd != "" {
+		if err := r.startProgressStep(ctx, ExecutionKindBuild); err != nil {
+			return nil, err
+		}
 		logger.V(2).Infof("Running build command: %s", buildCmd)
 		if err := r.executeBuildCommand(ctx, buildCmd, buildSetup); err != nil {
+			if progressErr := r.failPrerequisite(ctx, ExecutionKindBuild, err); progressErr != nil {
+				return nil, errors.Join(err, progressErr)
+			}
 			return nil, fmt.Errorf("build failed, skipping all fixtures: %w", err)
+		}
+		if err := r.completeProgressStep(ctx, ExecutionKindBuild); err != nil {
+			return nil, err
 		}
 		logger.V(2).Infof("Build completed successfully")
 	}
@@ -269,8 +280,17 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	// Start daemon if configured
 	daemonCmd, daemonSetup := r.getDaemonCommand()
 	if daemonCmd != "" {
+		if err := r.startProgressStep(ctx, ExecutionKindDaemon); err != nil {
+			return nil, err
+		}
 		if err := r.startDaemon(ctx, daemonCmd, daemonSetup); err != nil {
+			if progressErr := r.failPrerequisite(ctx, ExecutionKindDaemon, err); progressErr != nil {
+				return nil, errors.Join(err, progressErr)
+			}
 			return nil, fmt.Errorf("daemon failed to start: %w", err)
+		}
+		if err := r.completeProgressStep(ctx, ExecutionKindDaemon); err != nil {
+			return nil, err
 		}
 		defer r.stopDaemon()
 	}
@@ -287,18 +307,23 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	// Create typed task group for fixture execution
 	fixtureGroup := task.StartGroup[FixtureResult]("Fixture Tests")
 
-	taskToNodeMap := make(map[task.TypedTask[FixtureResult]]*FixtureNode)
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
 			env := r.envForNode(node)
-			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				result, err := r.executeFixture(ctx, *node.Test, env)
-				if r.options.OnResult != nil {
-					r.options.OnResult(result)
+			fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
+				if err := r.progress.Start(ctx, node); err != nil {
+					return FixtureResult{Name: node.Name, Status: task.StatusERR, Error: err.Error()}, err
+				}
+				runContext := flanksourceContext.NewContext(withFixtureProgress(ctx, func(done, total int) error {
+					return r.progress.Update(ctx, node, done, total)
+				}))
+				result, err := r.executeFixture(runContext, *node.Test, env)
+				r.attachResult(node, result)
+				if progressErr := r.progress.Complete(ctx, node, result); progressErr != nil {
+					return result, progressErr
 				}
 				return result, err
 			}, clicky.WithTaskTimeout(2*time.Minute))
-			taskToNodeMap[typedTask] = node
 		}
 	})
 
@@ -314,7 +339,7 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		return nil, fmt.Errorf("failed to get fixture results: %w", err)
 	}
 
-	for typedTask, result := range fixtureResults {
+	for _, result := range fixtureResults {
 		// Create a FixtureNode for the result
 		resultNode := FixtureNode{
 			Name:    result.Name,
@@ -323,21 +348,6 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		}
 		results.Tests = append(results.Tests, resultNode)
 
-		// Update the corresponding tree node with results
-		if testNode, exists := taskToNodeMap[typedTask]; exists {
-			if len(result.Children) > 0 {
-				// Runner steps (test/lint) return one child node per test /
-				// violation. Render the step as a group: leave Results nil so
-				// stats roll up from the children (UpdateStatsRecursive counts
-				// Results + children, so setting both would double-count) and
-				// the existing display/prune pipeline handles each child.
-				testNode.Children = append(testNode.Children, result.Children...)
-			} else {
-				testNode.Results = &result
-			}
-		} else {
-			logger.Warnf("No tree node found for task: %s", typedTask.Name())
-		}
 	}
 
 	r.tree.UpdateStatsRecursive()
@@ -351,6 +361,81 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	r.tree.PruneEmptySections()
 
 	return results, nil
+}
+
+func (r *Runner) executionSteps() []ExecutionStep {
+	var steps []ExecutionStep
+	if r.hasSetup() {
+		steps = append(steps, ExecutionStep{Key: "setup", Name: "Setup", Kind: ExecutionKindSetup})
+	}
+	if command, _ := r.getBuildCommand(); command != "" {
+		steps = append(steps, ExecutionStep{Key: "build", Name: "Build", Kind: ExecutionKindBuild})
+	}
+	if command, _ := r.getDaemonCommand(); command != "" {
+		steps = append(steps, ExecutionStep{Key: "daemon", Name: "Daemon", Kind: ExecutionKindDaemon})
+	}
+	return steps
+}
+
+func (r *Runner) hasSetup() bool {
+	for _, file := range r.tree.Children {
+		if setup, _, _ := fileSetup(file); setup != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) startProgressStep(ctx context.Context, kind ExecutionKind) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return nil
+	}
+	return r.progress.StartStep(ctx, key)
+}
+
+func (r *Runner) completeProgressStep(ctx context.Context, kind ExecutionKind) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return nil
+	}
+	return r.progress.CompleteStep(ctx, key, ExecutionPassed, nil)
+}
+
+func (r *Runner) failPrerequisite(ctx context.Context, kind ExecutionKind, cause error) error {
+	key := progressStepKey(kind)
+	if key == "" || r.progress.byKey[key] == nil {
+		return r.progress.CancelQueued(ctx, cause)
+	}
+	return errors.Join(
+		r.progress.CompleteStep(ctx, key, ExecutionErrored, cause),
+		r.progress.CancelQueued(ctx, cause),
+	)
+}
+
+func progressStepKey(kind ExecutionKind) string {
+	switch kind {
+	case ExecutionKindSetup:
+		return "setup"
+	case ExecutionKindBuild:
+		return "build"
+	case ExecutionKindDaemon:
+		return "daemon"
+	default:
+		return ""
+	}
+}
+
+func (r *Runner) attachResult(node *FixtureNode, result FixtureResult) {
+	r.resultMu.Lock()
+	defer r.resultMu.Unlock()
+	if len(result.Children) == 0 {
+		node.Results = &result
+		return
+	}
+	for _, child := range result.Children {
+		node.AddChild(child)
+	}
 }
 
 // getBuildCommand extracts build command from first fixture that has one
@@ -481,6 +566,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			ExecutablePath: r.options.ExecutablePath,
 			Spec:           r.options.Spec,
 			Setup:          setup,
+			Progress:       fixtureProgressFromContext(ctx),
 		}), nil
 	}
 
@@ -509,6 +595,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 			ExecutablePath: r.options.ExecutablePath,
 			Spec:           r.options.Spec,
 			Setup:          setup,
+			Progress:       fixtureProgressFromContext(ctx),
 		}), nil
 	}
 
@@ -547,6 +634,7 @@ func (r *Runner) executeFixture(ctx flanksourceContext.Context, fixture FixtureT
 		UpdateGolden:   r.options.UpdateGolden,
 		Setup:          setup,
 		Recorder:       r.recorderContext(env.file),
+		Progress:       fixtureProgressFromContext(ctx),
 		ExtraArgs: map[string]interface{}{
 			"flanksource_context": ctx,
 		},
