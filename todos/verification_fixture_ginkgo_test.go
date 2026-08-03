@@ -132,6 +132,88 @@ also not a fixture
 		Expect(verification).To(BeEmpty())
 	})
 
+	It("keeps fixture frontmatter and its H2 steps inside an H2 verification section", func() {
+		prose := `The step controls float over the source listing.
+
+## Acceptance Criteria
+
+- [ ] The step controls render in the AppShell chrome.
+
+## Scope
+
+- Only the remote debugger page and its colocated tests.`
+
+		fixture := `---
+cwd: .
+timeout: 30m
+codeBlocks: [test, lint]
+ai: {}
+verify:
+  scope: diff
+  threshold: 80
+---
+
+## Remote debugger chrome tests
+
+` + "```yaml test" + `
+work-dir: ./www
+framework: [vitest]
+` + "```" + `
+
+## Changed-code lint
+
+` + "```yaml lint" + `
+linters:
+  - eslint
+files:
+  - www/src/pages/RemoteDebugger*.tsx
+` + "```"
+
+		cleanBody, verification, found := SplitVerificationFixture(prose + "\n\n## Verification\n\n" + fixture)
+
+		Expect(found).To(BeTrue())
+		Expect(verification).To(Equal(fixture))
+		Expect(cleanBody).To(Equal(prose))
+	})
+
+	It("ends a frontmatter fixture at the next operational section", func() {
+		fixture := `---
+cwd: .
+codeBlocks: [test]
+---
+
+## Focused tests
+
+` + "```yaml test" + `
+paths: [./pkg/parser]
+` + "```"
+
+		body := "Description.\n\n## Verification\n\n" + fixture + "\n\n## Attempts\n\n| # |"
+
+		cleanBody, verification, found := SplitVerificationFixture(body)
+
+		Expect(found).To(BeTrue())
+		Expect(verification).To(Equal(fixture))
+		Expect(cleanBody).To(Equal("Description.\n\n## Attempts\n\n| # |"))
+	})
+
+	It("round-trips a frontmatter fixture with H2 steps through the body", func() {
+		fixture := `---
+cwd: .
+codeBlocks: [test]
+---
+
+## Focused tests
+
+` + "```yaml test" + `
+paths: [./pkg/parser]
+` + "```"
+
+		body := UpsertVerificationFixture("Issue description.", fixture)
+
+		Expect(ExtractVerificationFixture(body)).To(Equal(fixture))
+	})
+
 	It("parses dedicated verification with H2 subsections as one fixture document", func() {
 		markdown := `## Focused tests
 

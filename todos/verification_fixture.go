@@ -44,15 +44,26 @@ func SplitVerificationFixture(body string) (cleanBody, verification string, foun
 		if start < coveredUntil {
 			continue
 		}
+		contentStart := headingContentStart(source, heading)
+		frontmatterEnd := fixtureFrontmatterEnd(source, contentStart)
 		end := len(source)
 		for _, next := range headings[i+1:] {
-			if next.Level <= heading.Level {
-				end = headingLineStart(source, next)
-				break
+			nextStart := headingLineStart(source, next)
+			if nextStart < frontmatterEnd {
+				continue
 			}
+			if frontmatterEnd < 0 {
+				if next.Level > heading.Level {
+					continue
+				}
+			} else if !closesFixtureDocument(source, next) {
+				continue
+			}
+			end = nextStart
+			break
 		}
 		ranges = append(ranges, verificationSectionRange{
-			start: start, contentStart: headingContentStart(source, heading), end: end,
+			start: start, contentStart: contentStart, end: end,
 		})
 		coveredUntil = end
 	}
@@ -72,6 +83,60 @@ func SplitVerificationFixture(body string) (cleanBody, verification string, foun
 	}
 	bodyBuilder.WriteString(body[cursor:])
 	return strings.TrimSpace(bodyBuilder.String()), strings.Join(parts, "\n\n"), true
+}
+
+// fixtureFrontmatterEnd reports the offset just past the closing "---" of the
+// YAML frontmatter opening a Verification section, or -1 when the section does
+// not start with frontmatter.
+//
+// A fixture's closing "---" underlines the YAML above it, so CommonMark reads it
+// as a setext H2. Left alone that phantom heading ends the section at the first
+// frontmatter key, storing "---" as the whole definition of done.
+func fixtureFrontmatterEnd(source []byte, contentStart int) int {
+	cursor := contentStart
+	for cursor < len(source) {
+		end := lineEnd(source, cursor)
+		line := strings.TrimSpace(string(source[cursor:end]))
+		if line == "" {
+			cursor = end
+			continue
+		}
+		if !isFrontmatterDelimiter(line) {
+			return -1
+		}
+		for cursor = end; cursor < len(source); cursor = end {
+			end = lineEnd(source, cursor)
+			if isFrontmatterDelimiter(strings.TrimSpace(string(source[cursor:end]))) {
+				return end
+			}
+		}
+		return -1
+	}
+	return -1
+}
+
+func isFrontmatterDelimiter(line string) bool {
+	return len(line) >= 3 && strings.Trim(line, "-") == ""
+}
+
+// closesFixtureDocument reports whether heading ends a Verification section that
+// declared itself a fixture document with frontmatter. Such a section owns its
+// H2 step subsections, so only a top-level heading, another Verification
+// section, or one of the operational sections rendered after it can close it.
+func closesFixtureDocument(source []byte, heading *ast.Heading) bool {
+	if heading.Level <= 1 {
+		return true
+	}
+	title := strings.TrimSpace(markdownNodeText(heading, source))
+	if strings.EqualFold(title, verificationFixtureSection) {
+		return true
+	}
+	for _, operational := range verificationFixtureInsertBefore {
+		if strings.EqualFold(title, operational) {
+			return true
+		}
+	}
+	return false
 }
 
 func documentHeadings(document ast.Node) []*ast.Heading {
