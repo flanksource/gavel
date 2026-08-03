@@ -23,6 +23,27 @@ tests exercise its own help output.
 | todos export help names PostgreSQL | todos export --help | stdout.contains("PostgreSQL") |
 | commit help has examples | commit --help | stdout.contains("Examples") |
 
+## Options-struct help reaches cobra
+
+Clicky only wires an Options struct's long help into `cmd.Long` when it satisfies
+`entity.Help` exactly (`Help() api.Textable`). A near-miss signature compiles and
+is silently ignored, and an inherited parent help func shadows a subcommand's own
+page — both leave `--help` with nothing but the flag list.
+
+| Name | Args | CEL |
+|------|------|-----|
+| pr status help has examples | pr status --help | stdout.contains("Examples") |
+| proc start help describes the daemon | proc start --help | stdout.contains("detached background daemon") |
+| proc status help describes the control socket | proc status --help | stdout.contains("control socket") |
+| system install help covers auth | system install --help | stdout.contains("GitHub authentication") |
+| system status help names the shared status source | system status --help | stdout.contains("single source of truth") |
+| ssh install help names systemd | ssh install --help | stdout.contains("systemd") |
+| ui serve help documents auto-stop | ui serve --help | stdout.contains("auto-stop") |
+| repomap view help has examples | repomap view --help | stdout.contains("EXAMPLES") |
+| test outline help lists every source | test outline --help | stdout.contains("Markdown fixture") |
+| test history help explains the columns | test history --help | stdout.contains("pass rate") |
+| fixtures outline help is not the parent page | fixtures outline --help | stdout.contains("only parses fixture files") |
+
 ## todos check is the definition-of-done surface
 
 | Name | Args | Exit Code | CEL |

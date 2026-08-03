@@ -194,6 +194,18 @@ gavel lint jscpd eslint                     # run specific linters by name
 
 Config-file-gated linters only run when a usable config or native project signal is discovered, unless explicitly named. For betterleaks that includes native config files (`.betterleaks.toml` / `.gitleaks.toml`) and any existing paths from `secrets.configs` across layered `.gavel.yaml` files. React Doctor runs when `package.json` declares React or a common React framework/plugin, and can also be enabled with `doctor.config.*`, legacy `react-doctor.config.json`, or `package.json#reactDoctor`. Disable betterleaks entirely via `secrets.disabled: true` in `.gavel.yaml`.
 
+#### `gavel test outline`
+
+Inspect every supported test source without running test bodies:
+
+```bash
+gavel test outline
+gavel test outline --framework jest,playwright
+gavel test outline --framework fixture --fixture-files 'examples/*.fixture.md'
+```
+
+The default outline includes Go test, Ginkgo, Jest, Vitest, Playwright, and Markdown fixtures. Positional paths constrain discovery, while `--fixture-files` overrides fixture globs from `.gavel.yaml`. Use `gavel fixtures outline` when you need fixture-specific sections, tables, AI criteria, and kind counts rather than the unified test view.
+
 #### `gavel fixtures`
 
 Run declarative tests defined in markdown files using tables, command blocks, or standalone code blocks.

@@ -323,7 +323,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"fixtures --help",
 		),
 		"x-order": []string{
-			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "files", "codeBlocks",
+			"build", "daemon", "exec", "args", "env", "cwd", "terminal", "setup", "record", "files", "codeBlocks",
 			"timeout", "os", "arch", "skip", "ai", "verify",
 		},
 		"properties": map[string]any{
@@ -335,6 +335,7 @@ func fixtureFrontmatterSchema() fixtureJSONSchema {
 			"cwd":        withHelp(stringProp("Working directory", "Default working directory, resolved relative to the fixture file."), "CWD resolution", "Working directory priority: test-level cwd, file-level cwd, source directory, then `--cwd` or the current working directory.", "fixtures --help", "$GIT_ROOT_DIR/testdata", "./testdir"),
 			"terminal":   withHelp(enumProp("Terminal", "Terminal mode. `pty` uses a pseudo-terminal and merges stdout/stderr.", []string{"pty"}), "File structure", "`pty` mode uses a pseudo-terminal, which is useful for terminal UI output and ANSI assertions.", "fixtures --help", "pty"),
 			"setup":      fixtureSetupSchema(),
+			"record":     fixtureRecordSchema(),
 			"files":      withHelp(stringProp("Files", "Glob pattern: replicate tests per matching file."), "File expansion", "Set `files` to replicate each test per matched file. File variables such as `file`, `filename`, `dir`, and `ext` become available.", "fixtures --help", "**/*.go"),
 			"codeBlocks": withHelp(stringArrayProp("Code blocks", "Executable code fence languages."), "Supported languages", "Languages to execute from standalone code fences. Non-executable labels such as yaml/frontmatter/json are parsed as config.", "fixtures --help", []string{"bash", "python"}),
 			"timeout":    withHelp(stringProp("Timeout", "Total timeout for fixture execution."), "Execution", "Total timeout for test execution. Individual command blocks can override this with YAML config or `timeout=N` fence attributes.", "fixtures --help", "30s"),
@@ -406,6 +407,104 @@ func fixtureSetupSchema() fixtureJSONSchema {
 			},
 		},
 	}
+}
+
+// fixtureRecordSchema describes the `record:` block: the diagnostic evidence a
+// fixture captures beyond stdout, stderr and an exit code. Only the full mapping
+// form is described here; the shorthands (`record: http`, `record: [ansi, http]`)
+// are documented on the block itself, because a oneOf of a string, an array and
+// an object would cost editor completion on the fields that matter.
+func fixtureRecordSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		// Three surfaces, one schema: `record: http`, `record: [ansi, http]` and
+		// the full mapping all parse. A type union rather than a oneOf so the
+		// `properties` below keep driving completion for the mapping form, which
+		// is the only surface with anything to complete.
+		"type":                 []string{"string", "array", "object"},
+		"description":          "Recorders capturing ANSI, HTTP and SQL traffic as artifacts under .gavel/recordings. Also accepts the shorthands `record: http` and `record: [ansi, http]`, or `record: none` to opt a fixture out of a file-level or --record default.",
+		"examples":             []any{"http", []string{"ansi", "http"}, "none"},
+		"items":                fixtureSchemaProperty{"type": "string", "enum": []string{"ansi", "http", "sql", "clients", "all", "none"}},
+		"additionalProperties": true,
+		"x-help": fixtureHelpBlock(
+			"Recording",
+			"`record:` captures evidence a failing fixture would otherwise not have: how the terminal rendered, what HTTP calls the child made, what SQL it issued. Artifacts land in `.gavel/recordings/` and their contents become CEL roots (`cast`, `http`, `sql`) the fixture can assert on. Nothing starts unless a fixture asks for it.",
+			"fixtures --help",
+		),
+		"x-order": []string{"ansi", "http", "sql", "clients"},
+		"properties": map[string]any{
+			"ansi": fixtureJSONSchema{
+				"type":                 "object",
+				"description":          "Asciinema cast recorded from the fixture's PTY. Implies terminal: pty.",
+				"additionalProperties": true,
+				"x-help":               fixtureHelpBlock("Recording", "Records the terminal as an asciinema v2 cast, replayable with `asciinema play`. There is no ANSI to record from a pipe, so this implies `terminal: pty`.", "fixtures --help"),
+				"x-order":              []string{"width", "height", "interval", "maxBytes"},
+				"properties": map[string]any{
+					"width":    withHelp(integerProp("Width", "PTY width in columns.", 1, 0), "Recording", "PTY width, which decides where output wraps.", "fixtures --help", 120),
+					"height":   withHelp(integerProp("Height", "PTY height in rows.", 1, 0), "Recording", "PTY height.", "fixtures --help", 40),
+					"interval": withHelp(stringProp("Snapshot interval", "How often the screen is sampled."), "Recording", "How often the rendered screen is sampled for the duplicate-line analysis.", "fixtures --help", "100ms"),
+					"maxBytes": withHelp(stringProp("Max bytes", "Cap on the cast size, e.g. 4MiB."), "Recording", "Cap on the recorded cast. Accepts humanized sizes.", "fixtures --help", "4MiB"),
+				},
+			},
+			"http": fixtureRecordHTTPSchema(),
+			"sql": fixtureJSONSchema{
+				"type":                 "object",
+				"description":          "SQL captured as JSONL.",
+				"additionalProperties": true,
+				"x-help":               fixtureHelpBlock("Recording", "`proxy` sits between the child process and postgres and requires `sslmode=disable`. `inprocess` hooks gavel's own gorm logger and therefore sees nothing a child process does.", "fixtures --help"),
+				"x-order":              []string{"mode", "dsn", "params", "scope"},
+				"properties": map[string]any{
+					"mode": withHelpDefault(enumProp("Mode", "Where SQL is observed.", []string{"off", "proxy", "inprocess"}), "proxy", "Recording", "`proxy` observes a child process; `inprocess` observes gavel's own queries.", "fixtures --help", "proxy"),
+					"dsn":  withHelp(stringProp("DSN", "Upstream postgres the proxy forwards to. Read from the fixture environment when unset."), "Recording", "Upstream database. Left unset the recorder reads it from the fixture's own environment.", "fixtures --help", "$GAVEL_DB_DSN"),
+					"params": fixtureSchemaProperty{
+						"type":        "boolean",
+						"title":       "Bind parameters",
+						"description": "Keep bind parameter values in the artifact.",
+						"x-help":      fixtureHelpBlock("Recording", "Off by default: bind parameters carry the row data, which is the most likely place for a secret.", "fixtures --help"),
+					},
+					"scope": fixtureRecordScopeProp(),
+				},
+			},
+			"clients": fixtureJSONSchema{
+				"type":                 "object",
+				"description":          "HAR of gavel's own http.Client calls, as opposed to a child process's.",
+				"additionalProperties": true,
+				"x-help":               fixtureHelpBlock("Recording", "Records the HTTP calls gavel itself makes while running the fixture. Separate from `http:` because those clients live all over the gavel process rather than inside a fixture's call stack.", "fixtures --help"),
+				"x-order":              []string{"bodies", "redact"},
+				"properties": map[string]any{
+					"bodies": withHelp(stringProp("Bodies", "Cap on captured body size, e.g. 64KiB."), "Recording", "How much of each body is written to the HAR.", "fixtures --help", "64KiB"),
+					"redact": withHelp(stringArrayProp("Redact", "Extra header names to blank out."), "Recording", "Blanked in addition to the built-in denylist, which is always applied and cannot be disabled.", "fixtures --help", []string{"x-my-token"}),
+				},
+			},
+		},
+	}
+}
+
+func fixtureRecordHTTPSchema() fixtureJSONSchema {
+	return fixtureJSONSchema{
+		"type":                 "object",
+		"description":          "HTTP proxy the child process is pointed at, written as a HAR 1.2 document.",
+		"additionalProperties": true,
+		"x-help": fixtureHelpBlock(
+			"Recording",
+			"Points the child at a recording proxy through HTTP_PROXY/HTTPS_PROXY and writes what it sees as a HAR, openable in Chrome DevTools. In the default `connect` mode TLS payloads stay encrypted and each tunnel is recorded as one entry with its host, duration and byte counts; plain HTTP is always recorded in full.",
+			"fixtures --help",
+		),
+		"x-order": []string{"mode", "hosts", "bodies", "redact", "requireEntries", "scope"},
+		"properties": map[string]any{
+			"mode":   withHelpDefault(enumProp("Mode", "How much of the traffic is visible.", []string{"off", "connect", "mitm"}), "connect", "Recording", "`connect` records TLS tunnels without decrypting them. `mitm` terminates TLS with a generated, ephemeral CA — opt-in, because whether a given runtime trusts that CA is best-effort. The CA is never installed into a system trust store.", "fixtures --help", "connect"),
+			"hosts":  withHelp(stringArrayProp("Hosts", "Glob patterns limiting what is recorded. Empty records everything."), "Recording", "Only matching hosts are recorded, and under `mitm` only matching hosts are decrypted.", "fixtures --help", []string{"*.github.com"}),
+			"bodies": withHelp(stringProp("Bodies", "Cap on captured body size, e.g. 64KiB. Zero in connect mode — a tunnel has no readable body."), "Recording", "How much of each request and response body is written to the HAR. Bodies over the cap are truncated and marked.", "fixtures --help", "64KiB"),
+			"redact": withHelp(stringArrayProp("Redact", "Extra header names to blank out."), "Recording", "Blanked in addition to the built-in denylist (authorization, proxy-authorization, cookie, set-cookie, x-api-key, x-auth-token), which is always applied on disk and cannot be disabled.", "fixtures --help", []string{"x-my-token"}),
+			"requireEntries": withHelp(integerProp("Require entries", "Fail the fixture when fewer than N entries were recorded.", 0, 0), "Recording",
+				"Guards against the silent failure: if the child cannot verify the generated CA its TLS handshake fails, nothing is recorded, and the fixture passes with an empty HAR. Set this and that becomes a red test.", "fixtures --help", 1),
+			"scope": fixtureRecordScopeProp(),
+		},
+	}
+}
+
+func fixtureRecordScopeProp() fixtureSchemaProperty {
+	return withHelpDefault(enumProp("Scope", "Whether the recorder is shared by the whole file or started per test.", []string{"file", "test"}), "file", "Recording",
+		"Under `file` one recorder serves every test in the document, so attributing an entry to a single test is a time-slice heuristic — the file's tests run concurrently and overlap. `test` gives each test its own recorder at the cost of one listener per test.", "fixtures --help", "file")
 }
 
 func fixtureSetupCheckoutSchema() fixtureJSONSchema {

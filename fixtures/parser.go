@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // ParseMarkdownFixtures parses markdown files containing test fixtures
@@ -69,10 +71,12 @@ func ParseMarkdownFixtures(fixtureFilePath string) ([]FixtureNode, error) {
 	return nodes, nil
 }
 
-// parseTableRow converts a table row into a FixtureTest
-func parseTableRow(headers, values []string) *FixtureNode {
+// parseTableRow converts a table row into a FixtureTest. It returns a nil node
+// for a row that declares no test, and an error for a row that declares one
+// badly — a mistyped recorder is a red parse, not a silently absent recording.
+func parseTableRow(headers, values []string) (*FixtureNode, error) {
 	if len(headers) != len(values) {
-		return nil
+		return nil, nil
 	}
 
 	fixture := FixtureTest{
@@ -94,6 +98,12 @@ func parseTableRow(headers, values []string) *FixtureNode {
 			fixture.Exec = value
 		case "terminal", "term":
 			fixture.Terminal = value
+		case "record", "recording":
+			spec, err := record.Parse(value)
+			if err != nil {
+				return nil, err
+			}
+			fixture.Record = spec
 		case "os":
 			fixture.TestOS = value
 		case "arch":
@@ -146,13 +156,13 @@ func parseTableRow(headers, values []string) *FixtureNode {
 
 	// Don't return fixtures without names
 	if fixture.Name == "" {
-		return nil
+		return nil, nil
 	}
 
 	return &FixtureNode{
 		Type: TestNode,
 		Test: &fixture,
-	}
+	}, nil
 }
 
 // parseFrontMatter extracts YAML front-matter from a markdown file

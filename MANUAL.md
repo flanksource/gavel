@@ -383,6 +383,18 @@ The linter subcommands are shortcuts for pinning `--linters`:
 
 Use those shortcuts when you want discoverability and stable command names in scripts.
 
+### `gavel test outline`
+
+`test outline` provides one read-only inventory across Go test, Ginkgo, Jest, Vitest, Playwright, and Markdown fixtures. It uses native framework collection where available, statically parses Jest declarations, and parses fixture Markdown without running setup or commands.
+
+```bash
+gavel test outline
+gavel test outline --framework go,ginkgo ./pkg
+gavel test outline --framework fixture --fixture-files 'examples/*.fixture.md'
+```
+
+An empty `--framework` includes every supported source. Positional paths filter all collectors; `--fixture-files` overrides the configured fixture patterns. Collection failures remain visible as error rows so one broken Node package does not hide the rest of the repository.
+
 ### `gavel fixtures`
 
 `fixtures` is Gavel's declarative testing mode. It runs tests described in Markdown using tables, command blocks, and CEL assertions. This is useful when the thing you want to test is easier to express as examples and expected output than as Go test code.

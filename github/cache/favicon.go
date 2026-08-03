@@ -16,6 +16,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github/activity"
+	"github.com/flanksource/gavel/internal/httpx"
 	"golang.org/x/net/html"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"

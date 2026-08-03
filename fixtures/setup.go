@@ -164,12 +164,12 @@ func (r *Runner) cleanupSetups() {
 	}
 }
 
-// setupForNode returns the setup prepared for the file that declared a node.
-func (r *Runner) setupForNode(node *FixtureNode) *PreparedSetup {
+// envForNode returns the per-file runtime environment a node executes in.
+func (r *Runner) envForNode(node *FixtureNode) fixtureEnv {
 	if node == nil || node.Origin == nil {
-		return nil
+		return fixtureEnv{}
 	}
-	return r.setups[node.Origin.File]
+	return fixtureEnv{file: node.Origin.File, setup: r.setups[node.Origin.File]}
 }
 
 // fileSetup finds the `setup:` a file declared, along with the markdown path to

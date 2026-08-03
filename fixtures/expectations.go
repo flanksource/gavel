@@ -42,6 +42,11 @@ type EvaluateOptions struct {
 	// UpdateGolden, when true, causes mismatched @file expectations to
 	// be overwritten with the actual output instead of failing the test.
 	UpdateGolden bool
+	// CELVars are extra roots contributed by whatever ran the fixture — today
+	// the recorders' `http`. They are absent, not empty, when nothing recorded,
+	// so a fixture asserting on a recording that never happened fails on the
+	// missing variable instead of on a zero that looks like an answer.
+	CELVars map[string]any
 }
 
 func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
@@ -121,6 +126,12 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		for name, tempFile := range fixture.Test.TempFiles {
 			t[name] = tempFile.GetCELData()
 		}
+		// Recorder roots are applied last and win: `http` is a reserved name, and
+		// a fixture that happens to declare a temp file by that name should still
+		// find the recording where the docs say it is.
+		for name, value := range opts.CELVars {
+			t[name] = value
+		}
 		output, err := gomplate.RunExpression(t, gomplate.Template{
 			Expression: e.CEL,
 			CelEnvs:    ANSICelFunctions(),
@@ -134,14 +145,14 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			if !v {
 				fixture.CELExpression = e.CEL
 				fixture.CELVars = t
-				return fixture.Failf("CEL expression evaluated to false")
+				return fixture.Failf("%s is false", fixture.CELExpression)
 			}
 		case string:
 			if strings.ToLower(strings.TrimSpace(v)) != "true" {
-				return fixture.Failf("%s != true", v)
+				return fixture.Failf("%s => %s != true", fixture.CELExpression, v)
 			}
 		default:
-			return fixture.Failf("CEL expression did not return a boolean: got %T(%v)", output, output)
+			return fixture.Failf("%s did not return a boolean: got %T(%v)", fixture.CELExpression, output, output)
 		}
 	}
 	fixture.Status = task.StatusPASS

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gomplate/v3"
 )
 
@@ -192,6 +193,11 @@ type ExecFixtureBase struct {
 	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
 	// Terminal mode: "pty" to allocate a pseudo-terminal, "" for piped (default)
 	Terminal string `yaml:"terminal,omitempty" json:"terminal,omitempty"`
+	// Record declares which diagnostic recorders run for this fixture — the
+	// terminal's ANSI stream, the child's HTTP calls, its SQL. Nil means none
+	// start: every fixture in a run shares one parallel task group, so an
+	// always-on recorder would multiply listeners across the whole run.
+	Record *record.Spec `yaml:"record,omitempty" json:"record,omitempty"`
 }
 
 func relativePath(path string) string {
@@ -359,6 +365,14 @@ func (e ExecFixtureBase) MergeInto(other ExecFixtureBase) ExecFixtureBase {
 		merged.Terminal = other.Terminal
 	}
 
+	// A per-test `record:` replaces the file's wholesale rather than unioning
+	// with it, matching args/exec above — otherwise a test that names one
+	// recorder would silently inherit the file's other three, and `record: none`
+	// would have no way to opt out.
+	if other.Record != nil {
+		merged.Record = other.Record
+	}
+
 	if merged.Exec == "" {
 		merged.Exec = "bash"
 	}
@@ -424,6 +438,7 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "env")
 	delete(f.Metadata, "cwd")
 	delete(f.Metadata, "terminal")
+	delete(f.Metadata, "record")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
 	delete(f.Metadata, "codeBlocks")
@@ -527,7 +542,17 @@ type FixtureResult struct {
 	// Run references the engine output a runner step produced. Nil for ordinary
 	// steps, which carry their evidence in Command/Stdout/Stderr.
 	Run *RunArtifact `json:"run,omitempty" pretty:"hide"`
+
+	// Recordings reference the diagnostic artifacts the fixture's `record:`
+	// produced — one fixture can emit a cast, a HAR and a SQL log at once. Like
+	// Run, they carry counts inline and leave the payload on disk.
+	Recordings []Recording `json:"recordings,omitempty" pretty:"hide"`
 }
+
+// Recording is one diagnostic artifact produced for a fixture. Aliased rather
+// than mirrored because package record is a leaf that imports nothing from
+// gavel, so embedding it here costs no dependency.
+type Recording = record.Result
 
 // RunArtifact is a runner step's engine output recorded by reference: the counts
 // and top failures needed to render a verdict inline, plus the .gavel snapshot
@@ -614,7 +639,7 @@ func (f FixtureResult) String() string {
 	return fmt.Sprintf("%s - %s", f.Test.Name, f.Status.String())
 }
 
-func (f FixtureResult) Pretty() api.Text {
+func (f FixtureResult) PrettyFull() api.Textable {
 	if f.Display != nil && !f.Display.ShowPassed && isPassingStatus(f.Status) {
 		return clicky.Text("")
 	}
@@ -663,7 +688,7 @@ func (f FixtureResult) Pretty() api.Text {
 		}
 		t = t.NewLine().Add(api.Collapsed{
 			Label:   label,
-			Content: clicky.Text(f.Stdout, "font-mono text-xs whitespace-pre-wrap"),
+			Content: prettyFixtureStdout(f.Stdout),
 		})
 	}
 	if f.Stderr != "" && f.showStderr(isFailed) {
@@ -876,6 +901,9 @@ func (s Stats) Pretty() api.Text {
 		t = t.Append(fmt.Sprintf(" %d skipped", s.Skipped), "text-yellow-500")
 	}
 	if s.Error > 0 {
+		if !t.IsEmpty() {
+			t = t.Append("/", "text-gray-500")
+		}
 		t = t.Append(fmt.Sprintf("%d errors", s.Error), "text-red-500")
 	}
 	return t

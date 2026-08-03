@@ -40,6 +40,7 @@ type RunOptions struct {
 	ExtraArgs      map[string]interface{}
 	ExecutablePath string // Path to the current executable
 	UpdateGolden   bool   // When true, mismatched @file expectations are rewritten with actual output instead of failing
+	Progress       func(done, total int) error
 
 	// Setup is the environment prepared for the markdown file this fixture came
 	// from, or nil when that file declared no `setup:`. It lives here rather than
@@ -47,6 +48,12 @@ type RunOptions struct {
 	// FixtureTest is serialized into results — the resolved environment holds
 	// credentials.
 	Setup *PreparedSetup
+
+	// Recorder is the runtime state a fixture type needs to run under the
+	// recorders watching its file — nil when nothing is recording it. Here for
+	// the same reason as Setup: a proxy address is runtime state, not part of the
+	// fixture's declaration.
+	Recorder *RecorderContext
 }
 
 // OutputMode controls when captured command output is shown in rendered

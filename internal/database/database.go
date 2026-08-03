@@ -14,6 +14,7 @@ import (
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/migrate"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gavel/service"
 	"github.com/spf13/pflag"
 	"gorm.io/gorm"
@@ -125,7 +126,13 @@ func open(ctx context.Context, deps openDependencies, optionFns ...Option) (*DB,
 		}
 	}
 
-	gormDB, err := deps.open(dsn, commonsdb.DefaultGormConfig())
+	// The handle is built once, long before any fixture declares `record: sql`,
+	// so the recording logger is always installed. It costs one atomic load per
+	// query until a fixture actually starts a recording.
+	config := commonsdb.DefaultGormConfig()
+	config.Logger = record.WrapGorm(config.Logger)
+
+	gormDB, err := deps.open(dsn, config)
 	if err != nil {
 		return nil, fmt.Errorf("open gavel database: %w", err)
 	}

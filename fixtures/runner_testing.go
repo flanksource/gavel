@@ -99,8 +99,10 @@ func (r *Runner) RegisterGinkgoSpecs() {
 			}
 		})
 		ginkgo.AfterAll(func() {
-			// Daemon first: removing a worktree a live process is sitting in
-			// leaves a stale git worktree registration behind.
+			// Recorders first: a daemon shutting down can still emit requests.
+			// Then the daemon, because removing a worktree a live process is
+			// sitting in leaves a stale git worktree registration behind.
+			r.closeRecorders()
 			r.stopDaemon()
 			r.cleanupSetups()
 		})
@@ -122,7 +124,7 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 			ginkgo.GinkgoHelper()
 			// Looked up inside the It, not at registration: setups are prepared
 			// in BeforeAll, which has not run yet while specs are being built.
-			result, err := r.runSingleFixture(fixture, r.setupForNode(node))
+			result, err := r.runSingleFixture(fixture, r.envForNode(node))
 			node.Results = &result
 			if err != nil {
 				ginkgo.Fail(formatNodeFailure(node, &result, err), 1)
@@ -142,9 +144,9 @@ func registerGinkgoNode(r *Runner, node *FixtureNode) {
 	})
 }
 
-func (r *Runner) runSingleFixture(fixture FixtureTest, setup *PreparedSetup) (FixtureResult, error) {
+func (r *Runner) runSingleFixture(fixture FixtureTest, env fixtureEnv) (FixtureResult, error) {
 	ctx := flanksourceContext.NewContext(context.Background())
-	return r.executeFixture(ctx, fixture, setup)
+	return r.executeFixture(ctx, fixture, env)
 }
 
 func (r *Runner) setupGinkgoRun() error {

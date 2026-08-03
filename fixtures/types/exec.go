@@ -1,21 +1,18 @@
 package types
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
-	osExec "os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/flanksource/clicky"
 	clickyExec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/fixtures/record"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/flanksource/repomap"
 )
@@ -128,6 +125,17 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 			}
 		}
 	}
+	// The recorder's proxy sits below both declarations: a fixture or setup that
+	// names HTTP_PROXY itself is pointing at something it needs, and silently
+	// hijacking it would be worse than not recording. `requireEntries:` is how a
+	// fixture turns "recorded nothing" into a failure.
+	if opts.Recorder != nil {
+		for k, v := range opts.Recorder.ProxyEnv {
+			if _, ok := exec.Env[k]; !ok {
+				exec.Env[k] = v
+			}
+		}
+	}
 	for _, k := range []string{"GIT_ROOT_DIR", "GO_ROOT_DIR", "ROOT_DIR", "SETUP_DIR", "GOOS", "GOARCH", "GOPATH"} {
 		if _, ok := exec.Env[k]; !ok {
 			exec.Env[k] = templateData[k]
@@ -138,9 +146,17 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 		return result.Errorf(fmt.Errorf("no command specified"), "no command specified")
 	}
 
+	// `record: ansi` implies a PTY: there is no ANSI to record from a pipe.
+	var ansi *record.ANSIOptions
+	if opts.Recorder != nil {
+		ansi = opts.Recorder.ANSI
+	}
+
+	started := time.Now()
 	var p *clickyExec.ExecResult
-	if exec.Terminal == "pty" {
-		p = runWithPTY(exec, workDir)
+	var capture *fixtures.Capture
+	if exec.Terminal == "pty" || ansi != nil {
+		p, capture = runWithPTY(exec, workDir, ansi)
 	} else {
 		cmd := clicky.Exec(exec.Exec, exec.Args...).WithCwd(workDir)
 		if len(exec.Env) > 0 {
@@ -154,50 +170,86 @@ func (e *ExecFixture) Run(ctx context.Context, fixture fixtures.FixtureTest, opt
 	}
 
 	result.Actual = p
+
+	// Harvested here rather than by the runner because the CEL roots have to
+	// exist before Evaluate runs the fixture's expression. The window is the
+	// child's own lifetime; under the default file scope every test in the file
+	// shares one proxy, so overlapping fixtures see each other's traffic — that
+	// is what `scope: test` is for.
+	var harvest fixtures.Harvest
+	evaluate := fixtures.EvaluateOptions{SourceDir: fixture.SourceDir, UpdateGolden: opts.UpdateGolden}
+	if opts.Recorder != nil && opts.Recorder.Harvest != nil {
+		harvest = opts.Recorder.Harvest(fixtures.HarvestRequest{
+			Label:   fixture.Name,
+			Start:   started,
+			End:     time.Now(),
+			Capture: capture,
+		})
+		result.Recordings = harvest.Recordings
+		evaluate.CELVars = harvest.CELVars
+	}
+
 	// Deliberately fixture.SourceDir, not execBase: `@golden` files belong next
 	// to the markdown that asserts them. A worktree is disposable, so writing
 	// an updated golden into one would discard it on cleanup. The command moves;
 	// its expectations do not.
-	return fixture.Expected.Evaluate(result, *p, fixtures.EvaluateOptions{
-		SourceDir:    fixture.SourceDir,
-		UpdateGolden: opts.UpdateGolden,
-	})
+	evaluated := fixture.Expected.Evaluate(result, *p, evaluate)
+
+	// A `requireEntries` shortfall only decides a fixture the assertions left
+	// passing — the fixture's own expectations are the more specific answer.
+	if harvest.Err != nil && evaluated.Error == "" {
+		return evaluated.Failf("%s", harvest.Err.Error())
+	}
+	return evaluated
 }
 
-func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.ExecResult {
+// ptyWidth and ptyHeight are the terminal a fixture sees when it does not say.
+// A size is mandatory: the previous implementation started a 0x0 PTY, which
+// makes a CLI that queries its width fall back to a default that has nothing to
+// do with what the fixture asserts.
+const (
+	ptyWidth  = 120
+	ptyHeight = 40
+)
+
+// runWithPTY runs the command under a pseudo-terminal. ansi is non-nil when the
+// run is being recorded, which adds settled-screen tracking on top; without it
+// the capture is only the output stream, which costs no more than the plain
+// io.Copy this replaced.
+func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string, ansi *record.ANSIOptions) (*clickyExec.ExecResult, *fixtures.Capture) {
 	// Invoke the configured executable directly so shells like bash/sh don't
 	// get double-wrapped (`bash -c "bash -c '<script>'"` mis-parses: the
 	// outer shell treats the inner `bash` as the script and the rest as
 	// positional args — the command never runs and we get the target
 	// program's help banner instead).
-	cmd := osExec.Command(execBase.Exec, execBase.Args...)
-	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	opts := fixtures.CaptureOptions{
+		Command: append([]string{execBase.Exec}, execBase.Args...),
+		Dir:     workDir,
+		Width:   ptyWidth,
+		Height:  ptyHeight,
+	}
 	for k, v := range execBase.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))
+		opts.Env = append(opts.Env, fmt.Sprintf("%s=%v", k, v))
+	}
+	if ansi != nil {
+		opts.Snapshots = true
+		opts.MaxBytes = int64(ansi.MaxBytes)
+		opts.SnapshotInterval = ansi.Interval
+		if ansi.Width > 0 {
+			opts.Width = ansi.Width
+		}
+		if ansi.Height > 0 {
+			opts.Height = ansi.Height
+		}
 	}
 
 	now := time.Now()
-	var buf bytes.Buffer
-
-	ptmx, err := pty.Start(cmd)
+	capture, err := fixtures.CaptureANSI(opts)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Stdout:  "",
-			Stderr:  "",
 			Error:   fmt.Errorf("failed to start PTY: %w", err),
 			Started: &now,
-		}
-	}
-	defer ptmx.Close()
-
-	// PTY merges stdout+stderr into a single stream
-	_, _ = io.Copy(&buf, ptmx)
-	_ = cmd.Wait()
-
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
+		}, nil
 	}
 
 	// PTY merges stdout+stderr into a single byte stream; there is no way
@@ -207,11 +259,11 @@ func runWithPTY(execBase fixtures.ExecFixtureBase, workDir string) *clickyExec.E
 	// doubled form was flagging every non-empty line as a duplicate in
 	// ansi.has_duplicates.
 	return &clickyExec.ExecResult{
-		Stdout:   buf.String(),
-		ExitCode: exitCode,
+		Stdout:   capture.Raw(),
+		ExitCode: capture.ExitCode,
 		Started:  &now,
-		Duration: time.Since(now),
-	}
+		Duration: time.Duration(capture.DurationMs) * time.Millisecond,
+	}, capture
 }
 
 // ResolveWorkDir determines the working directory for fixture execution.

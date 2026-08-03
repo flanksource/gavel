@@ -13,6 +13,8 @@ import (
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+
+	"github.com/flanksource/gavel/fixtures/record"
 )
 
 // commandBlockBuilder helps build a command fixture from markdown AST
@@ -32,6 +34,7 @@ type executableFenceConfig struct {
 	CWD        string                 `yaml:"cwd"`
 	Env        map[string]any         `yaml:"env"`
 	Terminal   string                 `yaml:"terminal"`
+	Record     *record.Spec           `yaml:"record"`
 	OS         string                 `yaml:"os"`
 	Arch       string                 `yaml:"arch"`
 	Skip       string                 `yaml:"skip"`
@@ -498,6 +501,19 @@ func buildFixtureFromCommand(cmd *commandBlockBuilder, frontMatter *FrontMatter,
 			Setup map[string]any `yaml:"setup"`
 		}
 
+		// `record:` is decoded on its own, ahead of the tolerant decode below that
+		// drops every key when any one of them fails: a mistyped recorder must be a
+		// red parse, not a fixture that silently records nothing.
+		var recordOnly struct {
+			Record *record.Spec `yaml:"record"`
+		}
+		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &recordOnly); err != nil {
+			return nil, fmt.Errorf("%s: %w", cmd.name, err)
+		}
+		if recordOnly.Record != nil {
+			fixture.Record = recordOnly.Record
+		}
+
 		if err := yaml.Unmarshal([]byte(cmd.frontmatter), &cmdFrontMatter); err == nil {
 			if cmdFrontMatter.Setup != nil {
 				return nil, fmt.Errorf("%s: setup: is file-level frontmatter only, it cannot be set per-test", cmd.name)
@@ -592,6 +608,9 @@ func applyExecutableFenceConfig(fixture *FixtureTest, cfg executableFenceConfig)
 	if cfg.Terminal != "" {
 		fixture.Terminal = cfg.Terminal
 	}
+	if cfg.Record != nil {
+		fixture.Record = cfg.Record
+	}
 	if cfg.OS != "" {
 		fixture.TestOS = cfg.OS
 	}
@@ -674,7 +693,11 @@ func parseTableFromAST(tableAST *extast.Table, source []byte, frontMatter *Front
 
 			// Create fixture from row
 			if len(headers) > 0 && len(values) == len(headers) {
-				if fixtureNode := parseTableRow(headers, values); fixtureNode != nil {
+				fixtureNode, err := parseTableRow(headers, values)
+				if err != nil {
+					return nil, err
+				}
+				if fixtureNode != nil {
 					// Apply frontmatter and source directory
 					if fixtureNode.Test != nil {
 						applyFrontMatterToFixture(fixtureNode.Test, frontMatter)
