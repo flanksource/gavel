@@ -320,6 +320,26 @@ var _ = Describe("FindGitRoot", func() {
 	})
 })
 
+var _ = Describe("GitRoot", func() {
+	var root string
+
+	BeforeEach(func() {
+		root = GinkgoT().TempDir()
+	})
+
+	It("lifts a subdirectory to the root of its working tree", func() {
+		// An agent run anchored on a subdirectory records its edits in a
+		// namespace git never uses, so nothing it changed can be attributed.
+		Expect(os.MkdirAll(filepath.Join(root, ".git"), 0o755)).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(root, "apps", "storybook"), 0o755)).To(Succeed())
+		Expect(GitRoot(filepath.Join(root, "apps", "storybook"))).To(Equal(root))
+	})
+
+	It("keeps a directory that is outside any repository", func() {
+		Expect(GitRoot(root)).To(Equal(root))
+	})
+})
+
 var _ = Describe("FindAllProjectRoots", func() {
 	var root string
 

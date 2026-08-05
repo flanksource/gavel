@@ -35,6 +35,21 @@ func FindGitRoot(dir string) string {
 	}
 }
 
+// GitRoot resolves dir to the root of the working tree it belongs to, keeping
+// dir itself when it is not inside a repository.
+//
+// Anything that crosses the agent/commit boundary is repo-relative: the paths
+// an agent is recorded as editing, and the paths `git status` reports as dirty,
+// which git anchors on the root however deep it is invoked. A run launched in a
+// subdirectory that names that subdirectory as its repo therefore describes its
+// own edits in a namespace nothing else uses.
+func GitRoot(dir string) string {
+	if root := FindGitRoot(dir); root != "" {
+		return root
+	}
+	return dir
+}
+
 func FindNearestGoModRoot(dir string) string {
 	return FindNearestProjectRoot(dir, []string{"go.mod"})
 }

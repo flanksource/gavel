@@ -19,6 +19,7 @@ import (
 	commitpkg "github.com/flanksource/gavel/commit"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
+	"github.com/flanksource/gavel/utils"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -45,6 +46,12 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
+	// Repo is the repo root even when invoked from a subdirectory, while Cwd
+	// stays where the user ran the command: the runner records the agent's edits
+	// relative to Repo, and they only line up with the dirty set the commit hooks
+	// read out of git — which git anchors on the root however deep it is
+	// invoked — when Repo is that same root.
+	repoRoot := utils.GitRoot(workDir)
 
 	gavelCfg, err := verify.LoadGavelConfig(workDir)
 	if err != nil {
@@ -103,7 +110,7 @@ func runPRStatusAIFix(ctx context.Context, opts PRStatusOptions, result *prwatch
 		Request:       req,
 		Hooks:         hooks,
 		MaxIterations: maxIters,
-		Repo:          workDir,
+		Repo:          repoRoot,
 		Cwd:           workDir,
 		Scope:         capverify.ScopeForWorkflow(req.Workflow),
 		OnEvent:       renderer.Handle,

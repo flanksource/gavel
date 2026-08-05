@@ -25,6 +25,7 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/utils"
 )
 
 const (
@@ -270,9 +271,12 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		Request:       req,
 		Hooks:         hooks,
 		MaxIterations: maxIter,
-		Repo:          workDir,
-		Cwd:           workDir,
-		Scope:         scope,
+		// Repo is the root of the tree workDir sits in, not workDir itself: a
+		// todo carrying a subdirectory CWD still has its edits recorded relative
+		// to the root, which is the namespace the commit hooks compare against.
+		Repo:  utils.GitRoot(workDir),
+		Cwd:   workDir,
+		Scope: scope,
 		OnEvent: func(_ int, ev captainai.Event) {
 			e.handleEvent(ctx, ev, result, todosInGroup, &sawResult, runMeta)
 		},
