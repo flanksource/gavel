@@ -200,6 +200,7 @@ type FixtureContext struct {
 	ExitCode      int            `json:"exit_code,omitempty"`
 	CWD           string         `json:"cwd,omitempty"`
 	CELExpression string         `json:"cel_expression,omitempty"`
+	CELTrace      string         `json:"cel_trace,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 	Expected      any            `json:"expected,omitempty"`
 	Actual        any            `json:"actual,omitempty"`

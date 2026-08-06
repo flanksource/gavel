@@ -132,11 +132,15 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		for name, value := range opts.CELVars {
 			t[name] = value
 		}
-		output, err := gomplate.RunExpression(t, gomplate.Template{
+		template := gomplate.Template{
 			Expression: e.CEL,
 			CelEnvs:    ANSICelFunctions(),
-		})
+		}
+		output, err := gomplate.RunExpression(t, template)
 		if err != nil {
+			fixture.CELExpression = e.CEL
+			fixture.CELVars = t
+			fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureError)
 			return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
 		}
 
@@ -145,6 +149,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			if !v {
 				fixture.CELExpression = e.CEL
 				fixture.CELVars = t
+				fixture.CELTrace = traceCELFailure(e.CEL, t, template, celFailureFalse)
 				return fixture.Failf("%s is false", fixture.CELExpression)
 			}
 		case string:

@@ -823,6 +823,9 @@ func finalizeTestCommandOptions(cmd *cobra.Command, opts testrunner.RunOptions, 
 	opts.Timeout = flags.Timeout
 	opts.LintTimeout = flags.LintTimeout
 	opts.TestTimeout = flags.TestTimeout
+	if opts.Failed == failedAutoSentinel && opts.Baseline != "" {
+		opts.Failed = opts.Baseline
+	}
 	if !cmd.Flags().Changed("skip-hooks") {
 		opts.SkipHooks = os.Getenv("CI") == ""
 	}
@@ -845,7 +848,7 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 		"Per-test-package subprocess deadline. Applies to each go test / ginkgo / vitest invocation.")
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel
-		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use .gavel/last.json."
+		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use --baseline when set, otherwise .gavel/last.json."
 	}
 }
 
@@ -882,8 +885,8 @@ func init() {
 }
 
 // failedAutoSentinel is the value cobra assigns to --failed when the flag is
-// supplied with no argument (`gavel test --failed`). The runTests/runLint
-// callers swap it for the resolved .gavel/last.json path before the runner
-// sees it. Must not start with "@" — clicky's flag binding treats a leading
-// "@" as "load this path or URL", which would try to open the sentinel.
+// supplied with no argument (`gavel test --failed`). Test option finalization
+// prefers --baseline; runTests and runLint otherwise resolve .gavel/last.json
+// before the runner sees it. Must not start with "@" — clicky's flag binding
+// treats a leading "@" as a path or URL and would try to open the sentinel.
 const failedAutoSentinel = "auto"

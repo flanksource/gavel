@@ -755,6 +755,25 @@ func TestDiscoverFixturesWithStartingPaths(t *testing.T) {
 	})
 }
 
+func TestDiscoverFixturesResolvesGlobsFromWorkDirBeforeFilteringStartingPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	fixture := filepath.Join(tmpDir, "pkg", "formula", "rates-fixture.md")
+	if err := os.MkdirAll(filepath.Dir(fixture), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture, []byte("# rates"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := discoverFixtures(tmpDir, []string{"pkg/formula"}, []string{"./pkg/formula/**/*.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(found, []string{fixture}) {
+		t.Errorf("discoverFixtures = %v, want %v", found, []string{fixture})
+	}
+}
+
 // Scratch agent worktrees under .runtime/ hold a full copy of the repo, so a
 // blind glob discovers — and the runner then executes — every fixture twice.
 func TestDiscoverFixturesSkipsNestedCheckoutsAndIgnoredDirs(t *testing.T) {

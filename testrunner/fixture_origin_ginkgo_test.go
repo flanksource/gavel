@@ -35,4 +35,25 @@ var _ = Describe("fixture test projection", func() {
 		Expect(projected[0].Children[0].File).To(Equal(file))
 		Expect(projected[0].Children[0].Line).To(Equal(12))
 	})
+
+	It("projects native CEL traces into fixture context", func() {
+		trace := "cel: actual == expected\n     │         │"
+		node := &fixtures.FixtureNode{
+			Name: "trace",
+			Type: fixtures.TestNode,
+			Results: &fixtures.FixtureResult{
+				Status:        task.StatusFAIL,
+				CELExpression: "actual == expected",
+				CELTrace:      trace,
+			},
+		}
+
+		projected := fixtureNodeToTests(node)
+
+		Expect(projected).To(HaveLen(1))
+		Expect(projected[0].Context).To(Equal(parsers.FixtureContext{
+			CELExpression: "actual == expected",
+			CELTrace:      trace,
+		}))
+	})
 })

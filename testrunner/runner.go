@@ -976,6 +976,9 @@ func (o *TestOrchestrator) detectAndRun(frameworks []Framework, startingPaths []
 		if !ok {
 			return nil, fmt.Errorf("no runner registered for framework %s, registry = %s", fw, renderText(o.registry.Pretty()))
 		}
+		if mapper, ok := runner.(runners.BuildTagsMapper); ok {
+			mapper.SetBuildTags(o.Tags)
+		}
 
 		var packages []string
 		var err error
@@ -2015,31 +2018,42 @@ func resolveFixtureGlobs(opts RunOptions) []string {
 	return cfg.Fixtures.ResolvedFiles()
 }
 
-// discoverFixtures resolves each glob against every starting path (or workDir
-// when no paths are given) and returns the union of matching files. Discovery
-// is gitignore-aware and stops at nested checkouts, so a scratch worktree
-// holding a full copy of the repo doesn't double-run every fixture.
+// discoverFixtures resolves globs against workDir, then limits matches to the
+// supplied starting paths. Discovery is gitignore-aware and stops at nested
+// checkouts, so a scratch worktree holding a full copy of the repo doesn't
+// double-run every fixture.
 func discoverFixtures(workDir string, startingPaths []string, globs []string) ([]string, error) {
 	if len(globs) == 0 {
 		return nil, nil
 	}
-	roots := startingPaths
-	if len(roots) == 0 {
-		roots = []string{workDir}
+	matches, err := utils.GlobFilesBounded(workDir, globs)
+	if err != nil || len(startingPaths) == 0 {
+		return matches, err
 	}
 
-	var found []string
-	for _, root := range roots {
+	roots := make([]string, 0, len(startingPaths))
+	for _, startingPath := range startingPaths {
+		root := startingPath
 		if !filepath.IsAbs(root) {
 			root = filepath.Join(workDir, root)
 		}
-		matches, err := utils.GlobFilesBounded(root, globs)
+		root, err := filepath.Abs(root)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve fixture starting path %q: %w", startingPath, err)
 		}
-		found = append(found, matches...)
+		roots = append(roots, root)
 	}
-	return lo.Uniq(found), nil
+
+	filtered := make([]string, 0, len(matches))
+	for _, match := range matches {
+		for _, root := range roots {
+			if utils.IsWithin(match, root) {
+				filtered = append(filtered, match)
+				break
+			}
+		}
+	}
+	return filtered, nil
 }
 
 func runDiscoveredFixtures(workDir string, startingPaths []string, globs []string, streamer *TestStreamer) (*fixtures.FixtureNode, error) {
@@ -2116,6 +2130,7 @@ func fixtureNodeToTestsWithFile(node *fixtures.FixtureNode, inheritedFile string
 				ExitCode:      r.ExitCode,
 				CWD:           r.CWD,
 				CELExpression: r.CELExpression,
+				CELTrace:      r.CELTrace,
 				CELVars:       r.CELVars,
 				Expected:      r.Expected,
 				Actual:        r.Actual,

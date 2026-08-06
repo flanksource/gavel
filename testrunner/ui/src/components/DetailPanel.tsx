@@ -520,6 +520,7 @@ function FailureDetailView({ detail: d, rawMessage }: { detail: FailureDetail; r
 
 function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
   const hasComparison = ctx.expected !== undefined && ctx.actual !== undefined;
+  const celExpression = ctx.cel_trace || ctx.cel_expression;
 
   return (
     <>
@@ -537,10 +538,10 @@ function FixtureDetail({ ctx }: { ctx: FixtureContext }) {
         </Section>
       )}
 
-      {ctx.cel_expression && (
+      {celExpression && (
         <Section title="CEL Expression">
-          <pre className="text-sm whitespace-pre-wrap font-mono bg-purple-50 text-purple-800 rounded p-3">
-            {ctx.cel_expression}
+          <pre className="text-sm whitespace-pre font-mono bg-purple-50 text-purple-800 rounded p-3 overflow-x-auto">
+            {celExpression}
           </pre>
         </Section>
       )}

@@ -69,6 +69,19 @@ var _ = Describe("test framework command flags", func() {
 		Expect(opts.SkipHooks).To(BeTrue())
 	})
 
+	It("uses the CLI baseline as the source for bare --failed", func() {
+		const baselinePath = ".gavel/baseline.json"
+		command := &cobra.Command{Use: "test"}
+		command.Flags().Bool("skip-hooks", false, "")
+
+		opts, _, err := finalizeTestCommandOptions(command, testrunner.RunOptions{
+			Baseline: baselinePath,
+			Failed:   failedAutoSentinel,
+		}, testCommandFlags{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(opts.Failed).To(Equal(baselinePath))
+	})
+
 	It("persists tags in snapshot metadata", func() {
 		Expect(snapshotArgs(testrunner.RunOptions{Tags: []string{"integration", "postgres"}})).To(
 			HaveKeyWithValue("tags", []string{"integration", "postgres"}),

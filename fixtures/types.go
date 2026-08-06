@@ -522,6 +522,7 @@ type FixtureResult struct {
 
 	// CEL failure details
 	CELExpression string         `json:"cel_expression,omitempty"`
+	CELTrace      string         `json:"cel_trace,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
 
 	// Execution metadata
@@ -658,7 +659,9 @@ func (f FixtureResult) PrettyFull() api.Textable {
 		t = t.Space().Append(fmt.Sprintf("(%s)", f.Duration), "text-muted")
 	}
 
-	if f.CELExpression != "" {
+	if f.CELTrace != "" {
+		t = t.NewLine().Append(f.CELTrace, "font-mono text-red-500")
+	} else if f.CELExpression != "" {
 		t = t.Space().Append(f.CELExpression, "font-mono text-red-500")
 	} else if f.Error != "" {
 		t = t.Space().Append(f.Error, "text-red-600")
@@ -764,9 +767,9 @@ func (f FixtureResult) compactLine() api.Text {
 
 // fixtureFailureSnippet returns the first non-blank, ANSI-free line of
 // the best available failure source: explicit Error, then Stderr,
-// Stdout, CELExpression.
+// Stdout, CELTrace, CELExpression.
 func fixtureFailureSnippet(f FixtureResult) string {
-	for _, body := range []string{f.Error, f.Stderr, f.Stdout, f.CELExpression} {
+	for _, body := range []string{f.Error, f.Stderr, f.Stdout, f.CELTrace, f.CELExpression} {
 		line := firstNonBlankFixtureLine(body)
 		if line != "" {
 			return line

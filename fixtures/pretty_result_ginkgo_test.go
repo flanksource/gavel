@@ -22,7 +22,27 @@ func visibleFixtureLines(value string) []string {
 }
 
 var _ = Describe("fixture result rendering", func() {
-	It("puts details below the header and limits their combined budget to five lines", func() {
+	It("renders the native CEL trace directly beneath the failed result", func() {
+		trace := "cel: a == b && c > d\n     │    │    │   │\n     │    │    │   └─ int(4)"
+		result := fixtures.FixtureResult{
+			Status:        task.StatusFAIL,
+			Test:          fixtures.FixtureTest{Name: "traced fixture"},
+			Error:         "a == b && c > d is false",
+			CELExpression: "a == b && c > d",
+			CELTrace:      trace,
+		}
+
+		lines := visibleFixtureLines(result.Pretty().ANSI())
+
+		Expect(lines).To(ContainElements(
+			"cel: a == b && c > d",
+			"│    │    │   │",
+			"│    │    │   └─ int(4)",
+		))
+		Expect(strings.Join(lines, "\n")).NotTo(ContainSubstring("cel: cel:"))
+	})
+
+	It("puts every requested detail below the header", func() {
 		result := fixtures.FixtureResult{
 			Status:        task.StatusFAIL,
 			Test:          fixtures.FixtureTest{Name: "bounded fixture"},
@@ -43,13 +63,13 @@ var _ = Describe("fixture result rendering", func() {
 
 		lines := visibleFixtureLines(result.Pretty().ANSI())
 
-		Expect(lines).To(HaveLen(6), "one header plus five detail lines")
+		Expect(lines).To(HaveLen(11), "one header plus every detail line")
 		Expect(lines[0]).To(ContainSubstring("bounded fixture"))
 		Expect(lines[1]).To(ContainSubstring("error: first error"))
 		Expect(lines[2]).To(ContainSubstring("second error"))
 		Expect(lines[3]).To(ContainSubstring("cel: actual == expected"))
 		Expect(lines[4]).To(ContainSubstring("$ formula evaluate"))
-		Expect(lines[5]).To(MatchRegexp(`… [0-9]+ more lines`))
+		Expect(lines[10]).To(ContainSubstring("stdout two"))
 		Expect(result.Stderr).To(Equal("stderr one\nstderr two"))
 		Expect(result.Stdout).To(Equal("stdout one\nstdout two"))
 	})

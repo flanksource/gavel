@@ -302,7 +302,9 @@ func formatNodeFailure(node *FixtureNode, result *FixtureResult, err error) stri
 		if result.Stdout != "" {
 			fmt.Fprintf(&b, "\nstdout:\n%s", truncateFixtureOutput(result.Stdout))
 		}
-		if result.CELExpression != "" {
+		if result.CELTrace != "" {
+			fmt.Fprintf(&b, "\n%s", result.CELTrace)
+		} else if result.CELExpression != "" {
 			fmt.Fprintf(&b, "\ncel: %s", result.CELExpression)
 		}
 	}

@@ -5,12 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
 )
-
-const maxFixtureDetailLines = 5
 
 func (f FixtureResult) PrettyShort() api.Textable {
 	if f.Display != nil && !f.Display.ShowPassed && isPassingStatus(f.Status) {
@@ -26,10 +23,7 @@ func (f FixtureResult) Pretty() api.Text {
 
 	text := f.fixtureHeader()
 	details := f.fixtureDetailLines()
-	if len(details) > maxFixtureDetailLines {
-		omitted := len(details) - maxFixtureDetailLines + 1
-		details = append(details[:maxFixtureDetailLines-1], clicky.Text(fmt.Sprintf("… %d more lines", omitted), "text-muted"))
-	}
+
 	for _, detail := range details {
 		text = text.NewLine().Append("  ").Add(detail)
 	}
@@ -53,7 +47,11 @@ func (f FixtureResult) fixtureDetailLines() []api.Text {
 	failed := f.Status == task.StatusFAIL || f.Status == task.StatusERR || f.Status == task.StatusFailed
 	var lines []api.Text
 	lines = appendFixtureDetail(lines, "error: ", f.Error, "text-red-600")
-	lines = appendFixtureDetail(lines, "cel: ", f.CELExpression, "text-red-500 font-mono")
+	if f.CELTrace != "" {
+		lines = appendFixtureDetail(lines, "", f.CELTrace, "text-red-500 font-mono")
+	} else {
+		lines = appendFixtureDetail(lines, "cel: ", f.CELExpression, "text-red-500 font-mono")
+	}
 	if f.Command != "" && f.showCommand() {
 		command := f.Command
 		if f.CWD != "" {
@@ -72,10 +70,10 @@ func (f FixtureResult) fixtureDetailLines() []api.Text {
 		}
 	}
 	if f.Stderr != "" && f.showStderr(failed) {
-		lines = appendFixtureDetail(lines, "stderr: ", f.Stderr, "text-red-500 font-mono text-xs")
+		lines = appendFixtureDetail(lines, "stderr: ", f.Stderr, "text-red-500 font-mono text-xs max-lines-[100] ")
 	}
 	if f.Stdout != "" && f.showStdout(failed) {
-		lines = appendFixtureDetail(lines, "stdout: ", fixtureStdoutContent(f.Stdout), "font-mono text-xs")
+		lines = appendFixtureDetail(lines, "stdout: ", fixtureStdoutContent(f.Stdout), "font-mono text-xs max-lines-[10]")
 	}
 	return lines
 }
