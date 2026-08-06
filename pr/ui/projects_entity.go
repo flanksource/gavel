@@ -181,7 +181,9 @@ func decodeProject(r *http.Request) (Project, error) {
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		return Project{}, fmt.Errorf("invalid json: %w", err)
 	}
-	return p, nil
+	// The create and update handlers echo the decoded project back, so it has to
+	// carry the same non-null repos list the collection endpoint serves.
+	return p.withRepos(), nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, v any) {

@@ -31,6 +31,27 @@ type Project struct {
 
 var projectsPath = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "projects.json")
 
+// withRepos returns the project with a non-nil Repos list. Go marshals a nil
+// slice as JSON null, and every consumer of the catalog — the dashboard's
+// Project type, the CLI table, the TODO runtime — treats repos as a list, so a
+// project registered without repos must stay an empty list on the wire and on
+// disk rather than becoming null.
+func (p Project) withRepos() Project {
+	if p.Repos == nil {
+		p.Repos = []string{}
+	}
+	return p
+}
+
+// normalizeRepos normalizes a whole catalog. Both ends of the file are
+// normalized so a catalog written by an older gavel is healed on read.
+func normalizeRepos(ps []Project) []Project {
+	for i := range ps {
+		ps[i] = ps[i].withRepos()
+	}
+	return ps
+}
+
 // LoadProjects reads ~/.config/gavel/projects.json. A missing file is the
 // normal "no projects configured yet" state. Read and parse failures name the
 // exact catalog file instead of being mistaken for an empty configuration.
@@ -46,7 +67,7 @@ func LoadProjects() ([]Project, error) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		return nil, fmt.Errorf("parse gavel projects file %s: %w", projectsPath, err)
 	}
-	return ps, nil
+	return normalizeRepos(ps), nil
 }
 
 // SaveProjects writes the project list back to ~/.config/gavel/projects.json.
@@ -54,7 +75,7 @@ func SaveProjects(ps []Project) error {
 	if err := os.MkdirAll(filepath.Dir(projectsPath), 0o755); err != nil {
 		return fmt.Errorf("create gavel projects directory for %s: %w", projectsPath, err)
 	}
-	data, err := json.MarshalIndent(ps, "", "  ")
+	data, err := json.MarshalIndent(normalizeRepos(ps), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal gavel projects file %s: %w", projectsPath, err)
 	}

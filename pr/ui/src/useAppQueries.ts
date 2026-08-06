@@ -166,8 +166,20 @@ function parseSnapshot(payload: unknown): Snapshot {
   return payload as Snapshot;
 }
 
+// The projects payload is read directly by the sidebar (project.repos[0]) and by
+// the process and settings dialogs, so its shape is checked here rather than
+// trusted: a malformed entry fails the query loudly instead of throwing mid-render
+// and unmounting the app.
 function parseProjects(payload: unknown): Project[] {
   if (!Array.isArray(payload)) throw new Error('Load projects: invalid response');
+  for (const project of payload) {
+    if (!project || typeof project !== 'object'
+      || typeof project.name !== 'string'
+      || typeof project.dir !== 'string'
+      || !Array.isArray(project.repos)) {
+      throw new Error('Load projects: invalid project');
+    }
+  }
   return payload as Project[];
 }
 

@@ -54,7 +54,7 @@ class FakeEventSource {
 function Probe({ name, enabled }: { name: string; enabled: boolean }) {
   const state = useAppQueries({ enabled, initialConfig: { repos: [] } });
   return (
-    <div data-testid={name} data-error={state.processError}>
+    <div data-testid={name} data-error={state.processError} data-project-error={state.projectError}>
       {state.snapshot.prs.length}/{state.projects.length}/{Object.keys(state.procStatus).length}
     </div>
   );
@@ -121,6 +121,31 @@ describe('useAppQueries', () => {
     expect(calls.filter(url => url === '/api/prs')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/projects')).toHaveLength(1);
     expect(calls.filter(url => url === '/api/proc/status')).toHaveLength(1);
+  });
+
+  // The dashboard's Project type declares repos as a plain array and the projects
+  // sidebar indexes it directly, so a null list has to be rejected here rather
+  // than crashing a render deep in the tree.
+  it('rejects a projects payload whose repos list is not an array', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url === '/api/prs'
+        ? snapshot
+        : url === '/api/projects'
+          ? [{ name: 'time-kiosk', dir: '/work/time-kiosk', repos: null }]
+          : procStatus;
+      return { ok: true, json: async () => payload } as Response;
+    }));
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    render(
+      <Provider client={createClient()}>
+        <Probe name="probe" enabled />
+      </Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('probe').dataset.projectError).toContain('invalid project'));
+    expect(screen.getByTestId('probe').textContent).toBe('1/0/1');
   });
 
   it('aborts in-flight bootstrap reads and closes streams when disabled', async () => {
