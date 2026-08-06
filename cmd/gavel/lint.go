@@ -198,7 +198,7 @@ func runLint(opts LintOptions) (any, error) {
 	}
 
 	if opts.Summary {
-		return newLintSummaryView(allResults, opts.SummaryLimit), nil
+		return linters.NewSummaryView(allResults, opts.SummaryLimit), nil
 	}
 	return allResults, nil
 }

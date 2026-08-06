@@ -629,7 +629,7 @@ func formatTestRunSummary(summary parsers.TestSummary, lintResults []*linters.Li
 		b.WriteByte('\n')
 	}
 	if len(lintResults) > 0 {
-		b.WriteString(clicky.MustFormat(newLintSummaryView(lintResults, 0), clicky.FormatOptions{Pretty: true}))
+		b.WriteString(clicky.MustFormat(linters.NewSummaryView(lintResults, 0), clicky.FormatOptions{Pretty: true}))
 		b.WriteByte('\n')
 	}
 	return b.String()

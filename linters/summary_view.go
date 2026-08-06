@@ -1,4 +1,4 @@
-package main
+package linters
 
 import (
 	"fmt"
@@ -7,25 +7,32 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
 
-// lintSummaryView is a TreeNode wrapper that renders []*LinterResult as a
-// compact tree: root -> linter -> rule -> example locations (capped).
-type lintSummaryView struct {
-	Results []*linters.LinterResult `json:"results"`
-	Limit   int                     `json:"-"`
+// SummaryView is a TreeNode wrapper that renders []*LinterResult as a
+// compact tree: root -> linter -> rule -> example locations (capped). It is the
+// rendering `gavel lint` and `gavel test --lint` print, and the one every other
+// surface that shows lint findings in a terminal (e.g. `gavel pr status`)
+// reuses so the output cannot drift between them.
+type SummaryView struct {
+	Results []*LinterResult `json:"results"`
+	Limit   int             `json:"-"`
+	// Total is the violation count of the run the Results were sampled from.
+	// Callers that pass a trimmed slice (e.g. a PR artifact summary) set it so
+	// the header reads "3 of 47 violations"; leave it zero when Results is the
+	// whole run.
+	Total int `json:"-"`
 }
 
-func newLintSummaryView(results []*linters.LinterResult, limit int) *lintSummaryView {
+func NewSummaryView(results []*LinterResult, limit int) *SummaryView {
 	if limit < 1 {
 		limit = 5
 	}
-	return &lintSummaryView{Results: results, Limit: limit}
+	return &SummaryView{Results: results, Limit: limit}
 }
 
-func (s *lintSummaryView) Pretty() api.Text {
+func (s *SummaryView) Pretty() api.Text {
 	violations, skipped := 0, 0
 	for _, r := range s.Results {
 		if r == nil {
@@ -37,14 +44,18 @@ func (s *lintSummaryView) Pretty() api.Text {
 		}
 		violations += len(r.Violations)
 	}
-	t := api.Text{}.Append(fmt.Sprintf("Lint summary: %d violations", violations), "text-blue-500")
+	label := fmt.Sprintf("Lint summary: %d violations", violations)
+	if s.Total > violations {
+		label = fmt.Sprintf("Lint summary: %d of %d violations", violations, s.Total)
+	}
+	t := api.Text{}.Append(label, "text-blue-500")
 	if skipped > 0 {
 		t = t.Append(fmt.Sprintf(" (%d linters skipped)", skipped), "text-muted")
 	}
 	return t
 }
 
-func (s *lintSummaryView) GetChildren() []api.TreeNode {
+func (s *SummaryView) GetChildren() []api.TreeNode {
 	// Aggregate across multiple results for the same linter (the per-project
 	// fan-out may produce more than one result per linter name).
 	type linterBucket struct {

@@ -70,11 +70,29 @@ tasks:
     generates:
       - testrunner/ui/dist/testui.js
 
+  gavel-lib:
+    desc: |
+      Build the @flanksource/gavel React library (dist/lib). pr/ui imports it as
+      @flanksource/gavel/testrunner to render test/lint results, and the package's
+      exports map points at dist/lib — so this must exist before pr-ui bundles.
+    dir: testrunner/ui
+    deps:
+      - ui-install
+    cmds:
+      - corepack pnpm run build:lib
+    sources:
+      - testrunner/ui/src/**/*
+      - testrunner/ui/package.json
+      - testrunner/ui/vite.lib.config.ts
+    generates:
+      - testrunner/ui/dist/lib/testrunner.js
+
   pr-ui:
     desc: Build the PR review UI frontend bundle (React + Vite)
     dir: pr/ui
     deps:
       - ui-install
+      - gavel-lib
     cmds:
       - corepack pnpm run build
     sources:

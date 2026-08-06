@@ -20,6 +20,10 @@ export default defineConfig({
       fileName: () => 'testui.js',
     },
     outDir: 'dist',
+    // dist/ is shared with the library build (vite.lib.config.ts -> dist/lib),
+    // which pr/ui imports as @flanksource/gavel/testrunner. Emptying it here
+    // would delete that consumer's entrypoints on every embed-bundle build.
+    emptyOutDir: false,
     minify: true,
     rollupOptions: {
       output: { inlineDynamicImports: true },

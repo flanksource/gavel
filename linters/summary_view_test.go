@@ -1,11 +1,10 @@
-package main
+package linters
 
 import (
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/flanksource/gavel/linters"
 	"github.com/flanksource/gavel/models"
 )
 
@@ -19,8 +18,8 @@ func mkViolation(file string, line int, rule, msg string) models.Violation {
 	}
 }
 
-func TestLintSummaryView_GroupsByLinterAndRule(t *testing.T) {
-	results := []*linters.LinterResult{
+func TestSummaryView_GroupsByLinterAndRule(t *testing.T) {
+	results := []*LinterResult{
 		{
 			Linter:  "eslint",
 			WorkDir: "/repo/frontend",
@@ -47,7 +46,7 @@ func TestLintSummaryView_GroupsByLinterAndRule(t *testing.T) {
 		},
 	}
 
-	view := newLintSummaryView(results, 5)
+	view := NewSummaryView(results, 5)
 	linterNodes := view.GetChildren()
 	if len(linterNodes) != 2 {
 		t.Fatalf("expected 2 linter groups, got %d", len(linterNodes))
@@ -87,19 +86,19 @@ func TestLintSummaryView_GroupsByLinterAndRule(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_TruncatesAtLimit(t *testing.T) {
+func TestSummaryView_TruncatesAtLimit(t *testing.T) {
 	var vs []models.Violation
 	for i := 1; i <= 12; i++ {
 		vs = append(vs, mkViolation(fmt.Sprintf("f%d.go", i), i, "errcheck", ""))
 	}
-	results := []*linters.LinterResult{{
+	results := []*LinterResult{{
 		Linter:     "golangci-lint",
 		WorkDir:    "/repo",
 		Success:    true,
 		Violations: vs,
 	}}
 
-	view := newLintSummaryView(results, 3)
+	view := NewSummaryView(results, 3)
 	rules := view.GetChildren()[0].GetChildren()
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule group, got %d", len(rules))
@@ -118,15 +117,15 @@ func TestLintSummaryView_TruncatesAtLimit(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_NoTrailerWhenUnderLimit(t *testing.T) {
-	results := []*linters.LinterResult{{
+func TestSummaryView_NoTrailerWhenUnderLimit(t *testing.T) {
+	results := []*LinterResult{{
 		Linter:  "ruff",
 		Success: true,
 		Violations: []models.Violation{
 			mkViolation("a.py", 1, "E501", "line too long"),
 		},
 	}}
-	view := newLintSummaryView(results, 5)
+	view := NewSummaryView(results, 5)
 	rule := view.GetChildren()[0].GetChildren()[0]
 	children := rule.GetChildren()
 	if len(children) != 1 {
@@ -137,14 +136,14 @@ func TestLintSummaryView_NoTrailerWhenUnderLimit(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_DefaultLimitWhenZero(t *testing.T) {
-	view := newLintSummaryView(nil, 0)
+func TestSummaryView_DefaultLimitWhenZero(t *testing.T) {
+	view := NewSummaryView(nil, 0)
 	if view.Limit != 5 {
 		t.Fatalf("expected fallback limit=5, got %d", view.Limit)
 	}
 }
 
-func TestLintSummaryView_CollapsesPerFile(t *testing.T) {
+func TestSummaryView_CollapsesPerFile(t *testing.T) {
 	// Same rule, same file, many lines -> a single child with count suffix.
 	var vs []models.Violation
 	for i := 1; i <= 10; i++ {
@@ -152,13 +151,13 @@ func TestLintSummaryView_CollapsesPerFile(t *testing.T) {
 	}
 	// One violation in a second file to confirm distinct files stay distinct.
 	vs = append(vs, mkViolation("other.ts", 42, "TS1005", "',' expected."))
-	results := []*linters.LinterResult{{
+	results := []*LinterResult{{
 		Linter:     "tsc",
 		Success:    true,
 		Violations: vs,
 	}}
 
-	view := newLintSummaryView(results, 5)
+	view := NewSummaryView(results, 5)
 	rule := view.GetChildren()[0].GetChildren()[0].(*ruleSummaryNode)
 	if len(rule.violations) != 11 {
 		t.Fatalf("expected 11 raw violations retained, got %d", len(rule.violations))
@@ -180,15 +179,15 @@ func TestLintSummaryView_CollapsesPerFile(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_TrailerUsesFileCountNotViolationCount(t *testing.T) {
+func TestSummaryView_TrailerUsesFileCountNotViolationCount(t *testing.T) {
 	// 3 files, rule limit=2 -> 2 file children + trailer of 1 (not N-2).
 	vs := []models.Violation{
 		mkViolation("a.ts", 1, "X", "boom"), mkViolation("a.ts", 2, "X", "boom"), mkViolation("a.ts", 3, "X", "boom"),
 		mkViolation("b.ts", 1, "X", "boom"),
 		mkViolation("c.ts", 1, "X", "boom"),
 	}
-	results := []*linters.LinterResult{{Linter: "tsc", Success: true, Violations: vs}}
-	rule := newLintSummaryView(results, 2).GetChildren()[0].GetChildren()[0]
+	results := []*LinterResult{{Linter: "tsc", Success: true, Violations: vs}}
+	rule := NewSummaryView(results, 2).GetChildren()[0].GetChildren()[0]
 	children := rule.GetChildren()
 	if len(children) != 3 {
 		t.Fatalf("expected 2 file children + trailer = 3, got %d", len(children))
@@ -202,16 +201,16 @@ func TestLintSummaryView_TrailerUsesFileCountNotViolationCount(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_SurfacesLinterError(t *testing.T) {
+func TestSummaryView_SurfacesLinterError(t *testing.T) {
 	errMsg := "eslint configuration error:\nOops! Something went wrong! :(\n\nError: Cannot find package 'typescript-eslint'"
-	results := []*linters.LinterResult{{
+	results := []*LinterResult{{
 		Linter:  "eslint",
 		WorkDir: "/repo",
 		Success: false,
 		Error:   errMsg,
 	}}
 
-	view := newLintSummaryView(results, 5)
+	view := NewSummaryView(results, 5)
 	linterNodes := view.GetChildren()
 	if len(linterNodes) != 1 {
 		t.Fatalf("expected 1 linter node, got %d", len(linterNodes))
@@ -249,16 +248,16 @@ func TestLintSummaryView_SurfacesLinterError(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_ErrorAndViolationsCoexist(t *testing.T) {
+func TestSummaryView_ErrorAndViolationsCoexist(t *testing.T) {
 	// Partial-failure case: linter ran, emitted some violations AND errored.
-	results := []*linters.LinterResult{{
+	results := []*LinterResult{{
 		Linter:     "tsc",
 		WorkDir:    "/repo",
 		Success:    false,
 		Error:      "type checker crashed",
 		Violations: []models.Violation{mkViolation("a.ts", 1, "TS1005", "',' expected.")},
 	}}
-	node := newLintSummaryView(results, 5).GetChildren()[0].(*linterSummaryNode)
+	node := NewSummaryView(results, 5).GetChildren()[0].(*linterSummaryNode)
 	if node.errorMsg == "" {
 		t.Fatal("expected errorMsg to be populated")
 	}
@@ -274,8 +273,8 @@ func TestLintSummaryView_ErrorAndViolationsCoexist(t *testing.T) {
 	}
 }
 
-func TestLintSummaryView_HandlesViolationsWithoutRule(t *testing.T) {
-	results := []*linters.LinterResult{{
+func TestSummaryView_HandlesViolationsWithoutRule(t *testing.T) {
+	results := []*LinterResult{{
 		Linter:  "jscpd",
 		Success: true,
 		Violations: []models.Violation{
@@ -283,7 +282,7 @@ func TestLintSummaryView_HandlesViolationsWithoutRule(t *testing.T) {
 			{File: "b.go", Line: 2, Message: models.StringPtr("duplicate code")},
 		},
 	}}
-	view := newLintSummaryView(results, 5)
+	view := NewSummaryView(results, 5)
 	rules := view.GetChildren()[0].GetChildren()
 	if len(rules) != 1 {
 		t.Fatalf("expected single (no rule) bucket, got %d", len(rules))
