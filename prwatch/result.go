@@ -8,18 +8,23 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/api"
+	clickymarkdown "github.com/flanksource/clicky/markdown"
 	"github.com/flanksource/gavel/github"
 )
 
 type PRWatchResult struct {
-	PR       *github.PRInfo                `json:"pr"`
-	Runs     map[int64]*github.WorkflowRun `json:"runs,omitempty"`
-	Comments []github.PRComment            `json:"comments,omitempty"`
+	PR           *github.PRInfo                `json:"pr"`
+	Runs         map[int64]*github.WorkflowRun `json:"runs,omitempty"`
+	GavelResults []*GavelResultsSummary        `json:"gavelResults,omitempty"`
+	Comments     []github.PRComment            `json:"comments,omitempty"`
 }
 
 func (r PRWatchResult) Pretty() api.Text {
 	text := r.PR.Pretty()
 	text = text.NewLine().NewLine().Add(r.prettyWorkflows())
+	if gt := r.prettyGavelResults(); gt.String() != "" {
+		text = text.NewLine().NewLine().Add(gt)
+	}
 	if ct := r.prettyComments(); ct.String() != "" {
 		text = text.NewLine().NewLine().Add(ct)
 	}
@@ -181,7 +186,7 @@ func renderCommentBody(body string) renderedCommentBody {
 
 	var content api.Textable
 	plain := body
-	if doc, err := clicky.ParseMarkdown(body); err == nil && doc != nil {
+	if doc, err := clicky.ParseMarkdown(body, clickymarkdown.WithPreserveHTML(false)); err == nil && doc != nil {
 		content = doc
 		plain = doc.String()
 	} else {

@@ -236,8 +236,15 @@ func TestFindGavelArtifacts(t *testing.T) {
 			}
 			for i, g := range got {
 				w := tt.want[i]
+				_, wantRunID, _, err := ParseArtifactURL(w.ArtifactURL)
+				if err != nil {
+					t.Fatalf("[%d] parse expected artifact URL: %v", i, err)
+				}
 				if g.StickyID != w.StickyID {
 					t.Errorf("[%d] StickyID = %q, want %q", i, g.StickyID, w.StickyID)
+				}
+				if g.RunID != wantRunID {
+					t.Errorf("[%d] RunID = %d, want %d", i, g.RunID, wantRunID)
 				}
 				if g.ArtifactID != w.ArtifactID {
 					t.Errorf("[%d] ArtifactID = %d, want %d", i, g.ArtifactID, w.ArtifactID)

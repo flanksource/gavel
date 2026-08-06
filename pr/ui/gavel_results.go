@@ -2,7 +2,6 @@ package ui
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -12,268 +11,23 @@ import (
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
-	"github.com/flanksource/gavel/models"
+	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/report"
-	"github.com/flanksource/gavel/testrunner/parsers"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
-type GavelResultsSummary struct {
-	// StickyID is the gavel sticky-comment id, e.g. "gavel-test-pg15".
-	// Empty for the legacy single-artifact path or for an aggregate.
-	StickyID         string `json:"stickyId,omitempty"`
-	ArtifactID       int64  `json:"artifactId"`
-	ArtifactURL      string `json:"artifactUrl"`
-	TestsPassed      int    `json:"testsPassed"`
-	TestsFailed      int    `json:"testsFailed"`
-	TestsSkipped     int    `json:"testsSkipped"`
-	TestsTotal       int    `json:"testsTotal"`
-	LintViolations   int    `json:"lintViolations"`
-	LintLinters      int    `json:"lintLinters"`
-	HasBench         bool   `json:"hasBench"`
-	BenchRegressions int    `json:"benchRegressions,omitempty"`
-	// Error explains why this shard carries no results — either the run
-	// crashed before producing any (ExitCode / LogTail are then populated
-	// from the crash envelope) or the artifact could not be read.
-	Error    string `json:"error,omitempty"`
-	ExitCode *int   `json:"exitCode,omitempty"`
-	LogTail  string `json:"logTail,omitempty"`
-	// TopFailures lists the first 5 failing tests for at-a-glance triage.
-	// Populated in walk order (stable) so the same artifact always yields
-	// the same head items.
-	TopFailures []TestFailure `json:"topFailures,omitempty"`
-	// TopLintViolations lists the first 5 lint findings across all linters.
-	TopLintViolations []LintViolation `json:"topLintViolations,omitempty"`
-}
+type GavelResultsSummary = prwatch.GavelResultsSummary
 
-// aggregateGavelSummaries rolls up per-shard results into a single summary
-// suitable for the sidebar badge, where there is only room for one number
-// per PR. The detail page renders the shards individually and does not use
-// this. Returns nil if shards is empty.
 func aggregateGavelSummaries(shards []*GavelResultsSummary) *GavelResultsSummary {
-	var only *GavelResultsSummary
-	agg := &GavelResultsSummary{}
-	count := 0
-	for _, s := range shards {
-		if s == nil {
-			continue
-		}
-		count++
-		only = s
-		agg.TestsPassed += s.TestsPassed
-		agg.TestsFailed += s.TestsFailed
-		agg.TestsSkipped += s.TestsSkipped
-		agg.TestsTotal += s.TestsTotal
-		agg.LintViolations += s.LintViolations
-		agg.LintLinters += s.LintLinters
-		agg.BenchRegressions += s.BenchRegressions
-		if s.HasBench {
-			agg.HasBench = true
-		}
-		for _, f := range s.TopFailures {
-			if len(agg.TopFailures) >= 5 {
-				break
-			}
-			agg.TopFailures = append(agg.TopFailures, f)
-		}
-		for _, v := range s.TopLintViolations {
-			if len(agg.TopLintViolations) >= 5 {
-				break
-			}
-			agg.TopLintViolations = append(agg.TopLintViolations, v)
-		}
-	}
-	if count == 0 {
-		return nil
-	}
-	if count == 1 {
-		return only
-	}
-	return agg
-}
-
-type TestFailure struct {
-	Name    string `json:"name"`
-	Suite   string `json:"suite,omitempty"`
-	File    string `json:"file,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	Message string `json:"message,omitempty"`
-	Details string `json:"details,omitempty"`
-}
-
-type LintViolation struct {
-	Linter  string `json:"linter"`
-	File    string `json:"file,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	Rule    string `json:"rule,omitempty"`
-	Message string `json:"message,omitempty"`
+	return prwatch.AggregateGavelSummaries(shards)
 }
 
 func computeGavelSummary(jsonBytes []byte, artifactID int64, artifactURL string) *GavelResultsSummary {
-	var data report.ResultFile
-	if err := json.Unmarshal(jsonBytes, &data); err != nil {
-		return &GavelResultsSummary{
-			ArtifactID:  artifactID,
-			ArtifactURL: artifactURL,
-			Error:       fmt.Sprintf("parse artifact: %v", err),
-		}
-	}
-
-	summary := &GavelResultsSummary{
-		ArtifactID:  artifactID,
-		ArtifactURL: artifactURL,
-	}
-
-	// A run that died before producing results carries its reason in the
-	// envelope. Surface it as the shard error so the UI states *why* there
-	// is nothing to show instead of rendering an empty card.
-	if data.IsCrash() {
-		summary.Error = data.Error
-		summary.ExitCode = data.ExitCodeValue()
-		summary.LogTail = data.LogTail
-		return summary
-	}
-
-	for _, root := range data.Tests {
-		walkTestCounts(root, summary)
-	}
-
-	for _, lr := range data.Lint {
-		if lr.Skipped {
-			continue
-		}
-		summary.LintLinters++
-		summary.LintViolations += len(lr.Violations)
-		for _, v := range lr.Violations {
-			if len(summary.TopLintViolations) >= 5 {
-				break
-			}
-			summary.TopLintViolations = append(summary.TopLintViolations, LintViolation{
-				Linter:  lr.Linter,
-				File:    v.File,
-				Line:    v.Line,
-				Rule:    violationRule(v),
-				Message: derefString(v.Message),
-			})
-		}
-	}
-
-	if data.Bench != nil {
-		summary.HasBench = true
-		for _, d := range data.Bench.Deltas {
-			if d.IsRegression(data.Bench.Threshold) {
-				summary.BenchRegressions++
-			}
-		}
-	}
-
-	return summary
+	return prwatch.ComputeGavelSummary(jsonBytes, github.GavelArtifact{ArtifactID: artifactID, ArtifactURL: artifactURL})
 }
 
-func walkTestCounts(t parsers.Test, s *GavelResultsSummary) {
-	for _, child := range t.Children {
-		walkTestCounts(child, s)
-	}
-	if len(t.Children) > 0 || t.IsFolder() {
-		return
-	}
-	s.TestsTotal++
-	switch {
-	case t.Failed:
-		s.TestsFailed++
-		if len(s.TopFailures) < 5 {
-			s.TopFailures = append(s.TopFailures, toTestFailure(t))
-		}
-	case t.Skipped, t.Pending:
-		s.TestsSkipped++
-	case t.Passed:
-		s.TestsPassed++
-	}
-}
-
-func toTestFailure(t parsers.Test) TestFailure {
-	suite := ""
-	if len(t.Suite) > 0 {
-		suite = strings.Join(t.Suite, " › ")
-	}
-	details := t.Stderr
-	if details == "" {
-		details = t.Stdout
-	}
-	message := t.Message
-	if d := t.FailureDetail; d != nil && d.Summary != "" {
-		message = d.Summary
-	}
-	return TestFailure{
-		Name:    t.Name,
-		Suite:   suite,
-		File:    t.File,
-		Line:    t.Line,
-		Message: message,
-		Details: details,
-	}
-}
-
-func violationRule(v models.Violation) string {
-	if v.Code != nil && *v.Code != "" {
-		return *v.Code
-	}
-	if v.Rule != nil && v.Rule.Pattern != "" {
-		return v.Rule.Pattern
-	}
-	return ""
-}
-
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-// fetchGavelArtifacts downloads each artifact and returns the usable summaries.
-// Artifacts without a JSON result payload are omitted: the download succeeded,
-// but there is no gavel result to render. Concurrency is capped so a PR with
-// many matrix shards does not fan out onto GitHub's artifacts API.
 func fetchGavelArtifacts(opts github.Options, artifacts []github.GavelArtifact) []*GavelResultsSummary {
-	const maxConcurrent = 4
-	out := make([]*GavelResultsSummary, len(artifacts))
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	for i, a := range artifacts {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, a github.GavelArtifact) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			jsonBytes, err := github.DownloadArtifact(opts, a.ArtifactID)
-			if err != nil {
-				if errors.Is(err, github.ErrArtifactResultsNotFound) {
-					return
-				}
-				logger.Warnf("artifact %d (%s) download failed: %v", a.ArtifactID, a.StickyID, err)
-				out[i] = &GavelResultsSummary{
-					StickyID:    a.StickyID,
-					ArtifactID:  a.ArtifactID,
-					ArtifactURL: a.ArtifactURL,
-					Error:       err.Error(),
-				}
-				return
-			}
-			summary := computeGavelSummary(jsonBytes, a.ArtifactID, a.ArtifactURL)
-			summary.StickyID = a.StickyID
-			out[i] = summary
-		}(i, a)
-	}
-	wg.Wait()
-
-	usable := make([]*GavelResultsSummary, 0, len(out))
-	for _, summary := range out {
-		if summary != nil {
-			usable = append(usable, summary)
-		}
-	}
-	return usable
+	return prwatch.FetchGavelArtifacts(opts, artifacts)
 }
 
 // artifactCache caches downloaded artifact servers keyed by artifact ID.

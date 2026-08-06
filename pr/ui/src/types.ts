@@ -1,4 +1,10 @@
 import type { AISpecRuntimeValue, SessionUIMessage } from '@flanksource/clicky-ui/ai';
+import type { Test, LinterResult } from '@flanksource/gavel/testrunner';
+
+// Gavel artifact details ride the wire in gavel's own shapes so the dashboard
+// renders them with the testrunner's TestNode / LintView rather than a parallel
+// set of row components.
+export type { Test, LinterResult, Violation } from '@flanksource/gavel/testrunner';
 
 export interface FailedCheck {
   name: string;
@@ -785,25 +791,12 @@ export interface GavelResultsSummary {
   error?: string;
   exitCode?: number;
   logTail?: string;
-  topFailures?: TestFailure[];
-  topLintViolations?: LintViolation[];
-}
-
-export interface TestFailure {
-  name: string;
-  suite?: string;
-  file?: string;
-  line?: number;
-  message?: string;
-  details?: string;
-}
-
-export interface LintViolation {
-  linter: string;
-  file?: string;
-  line?: number;
-  rule?: string;
-  message?: string;
+  // duration is the summed leaf-test duration in nanoseconds.
+  duration?: number;
+  // failures / lint carry a bounded slice of the run itself (up to 5 failing
+  // tests and 5 violations); the counts above stay exact.
+  failures?: Test[];
+  lint?: LinterResult[];
 }
 
 export interface PRDetail {

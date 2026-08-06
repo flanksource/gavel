@@ -49,6 +49,7 @@ var stickyIDPattern = regexp.MustCompile(`<!-- sticky-comment:(gavel[^\s>]*|[^\s
 // have many of these.
 type GavelArtifact struct {
 	StickyID    string
+	RunID       int64
 	ArtifactID  int64
 	ArtifactURL string
 	CommentID   int64
@@ -78,12 +79,13 @@ func FindGavelArtifacts(comments []PRComment) []GavelArtifact {
 			continue
 		}
 		url := am[1]
-		_, _, id, err := ParseArtifactURL(url)
+		_, runID, id, err := ParseArtifactURL(url)
 		if err != nil {
 			continue
 		}
 		art := GavelArtifact{
 			StickyID:    stickyID,
+			RunID:       runID,
 			ArtifactID:  id,
 			ArtifactURL: url,
 			CommentID:   c.ID,

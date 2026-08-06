@@ -127,6 +127,7 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 		}
 	}
 	result.Runs = filteredRuns
+	result.GavelResults = filterGavelResultsByRun(result.GavelResults, filteredRuns)
 
 	if result.PR == nil {
 		return
@@ -138,6 +139,19 @@ func (f resultFilters) filterActions(result *PRWatchResult) {
 		}
 	}
 	result.PR.StatusCheckRollup = checks
+}
+
+func filterGavelResultsByRun(results []*GavelResultsSummary, runs map[int64]*github.WorkflowRun) []*GavelResultsSummary {
+	filtered := make([]*GavelResultsSummary, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		if _, ok := runs[result.RunID]; ok {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
 }
 
 // matchingJobs returns the jobs whose name matches the action patterns.

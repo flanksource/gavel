@@ -128,4 +128,83 @@ describe('Gavel Results section', () => {
 
     expect(screen.getByText(/No test, lint, or bench data/)).toBeTruthy();
   });
+
+  // The shard detail must render through the testrunner UI's own TestNode /
+  // LintView, so a failing shard reads the same as the results page it links
+  // to. Asserting on the rendered findings is what catches a regression back to
+  // a parallel set of row components.
+  it('renders failing tests and lint findings from the artifact shapes', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [makeGavelShard({
+            testsTotal: 12,
+            testsPassed: 10,
+            testsFailed: 2,
+            lintLinters: 1,
+            lintViolations: 3,
+            failures: [{
+              name: 'saves records',
+              suite: ['storage'],
+              file: 'pkg/store/save_test.go',
+              line: 41,
+              failed: true,
+              message: 'expected record to persist',
+            }],
+            lint: [{
+              linter: 'golangci-lint',
+              success: false,
+              duration: 0,
+              violations: [{
+                rule: { method: 'errcheck' },
+                file: 'pkg/store/save.go',
+                line: 23,
+                message: 'return value is not checked',
+              }],
+            }],
+          })],
+        }}
+        loading={false}
+      />,
+    );
+
+    // The failing leaf appears in the tree row and again in the detail panel
+    // that carries its message — both come from the testrunner UI.
+    expect(screen.getAllByText('saves records').length).toBeGreaterThan(0);
+    expect(screen.getByText(/expected record to persist/)).toBeTruthy();
+    // The lint tree groups linter → rule → file exactly as the results page does.
+    expect(screen.getAllByText('golangci-lint').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('errcheck').length).toBeGreaterThan(0);
+    // Counts stay exact even though the payload carries only a sample.
+    expect(screen.getByText('showing 1 of 2')).toBeTruthy();
+    expect(screen.getByText('showing 1 of 3')).toBeTruthy();
+  });
+
+  // A linter that could not run reports zero violations, so it never reaches
+  // the lint tree. Dropping it would let a broken lint shard read as clean.
+  it('surfaces a linter that failed to run rather than reporting a clean shard', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [makeGavelShard({
+            lintLinters: 1,
+            lint: [{
+              linter: 'golangci-lint',
+              success: false,
+              duration: 0,
+              violations: [],
+              error: 'golangci-lint execution failed: exit status 3',
+            }],
+          })],
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('Linters that failed to run')).toBeTruthy();
+    expect(screen.getByText('golangci-lint')).toBeTruthy();
+    expect(screen.getByText(/exit status 3/)).toBeTruthy();
+  });
 });

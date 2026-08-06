@@ -24,7 +24,7 @@ import { ReactGrabHelp } from './components/ReactGrabHelp';
 import { CommandPalette, SearchTrigger } from './components/CommandPalette';
 import { flattenTodos, type TodoEntry } from './components/todos/todoGroup';
 import { WorkspaceGroup } from './components/ProcessTable';
-import { aggregateDotClass, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
+import { aggregateDotClass, aggregateGavelShards, computeCounts, collectRepos, collectAuthors, filterPRs, flattenProcesses, prKey, emptyProcStatus } from './utils';
 import { useCopyFeedback } from './useCopyFeedback';
 import {
   annotateRoutePaths,
@@ -95,47 +95,6 @@ function useMenubarExternalLinks() {
     document.addEventListener('click', onClick, true);
     return () => document.removeEventListener('click', onClick, true);
   }, []);
-}
-
-// aggregateShards rolls per-shard summaries into one badge for the sidebar,
-// where there is only room for a single number per PR. Returns null if the
-// list is empty.
-function aggregateShards(shards: GavelResultsSummary[]): GavelResultsSummary | null {
-  if (!shards || shards.length === 0) return null;
-  if (shards.length === 1) return shards[0];
-  const agg: GavelResultsSummary = {
-    artifactId: 0,
-    artifactUrl: '',
-    testsPassed: 0,
-    testsFailed: 0,
-    testsSkipped: 0,
-    testsTotal: 0,
-    lintViolations: 0,
-    lintLinters: 0,
-    hasBench: false,
-    benchRegressions: 0,
-    topFailures: [],
-    topLintViolations: [],
-  };
-  for (const s of shards) {
-    agg.testsPassed += s.testsPassed;
-    agg.testsFailed += s.testsFailed;
-    agg.testsSkipped += s.testsSkipped;
-    agg.testsTotal += s.testsTotal;
-    agg.lintViolations += s.lintViolations;
-    agg.lintLinters += s.lintLinters;
-    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
-    if (s.hasBench) agg.hasBench = true;
-    for (const f of s.topFailures ?? []) {
-      if ((agg.topFailures?.length ?? 0) >= 5) break;
-      agg.topFailures!.push(f);
-    }
-    for (const v of s.topLintViolations ?? []) {
-      if ((agg.topLintViolations?.length ?? 0) >= 5) break;
-      agg.topLintViolations!.push(v);
-    }
-  }
-  return agg;
 }
 
 function prFromRoutePath(path: string): PRItem | null {
@@ -428,7 +387,7 @@ export function App() {
 
   useEffect(() => {
     if (!selected || !detail?.gavelResults) return;
-    const aggregate = aggregateShards(detail.gavelResults);
+    const aggregate = aggregateGavelShards(detail.gavelResults);
     if (!aggregate) return;
     const key = prKey(selected);
     updateSnapshot(current => ({
@@ -576,7 +535,7 @@ export function App() {
   }
 
   if (isTodoNewPage) {
-    return <TodoNewPage projects={projects} procStatus={procStatus} />;
+    return <TodoNewPage projects={projects} procStatus={procStatus} projectError={projectError} />;
   }
 
   return (

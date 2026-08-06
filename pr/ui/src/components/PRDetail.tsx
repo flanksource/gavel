@@ -1,11 +1,12 @@
 import { useState, useMemo, useRef, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, TestFailure, LintViolation, Project } from '../types';
-import { stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import type { PRItem, PRDetail, PRComment, PRCommitInfo, PRFileInfo, GavelResultsSummary, Test, Project } from '../types';
+import { aggregateGavelShards, stateColor, reviewColor, severityIcon, extractCommentTitle, isDeploymentComment } from '../utils';
+import { DetailPanel, LintView, TestNode, groupLintByLinterRuleFile } from '@flanksource/gavel/testrunner';
 import { CreateTodoFromPRDialog } from './todos/CreateTodoFromPRDialog';
 import { PRActions, type ExtraAction } from './PRActions';
 import { RelativeTime } from './RelativeTime';
-import { ansiToHtml, stripAnsi } from '../ansi';
+import { stripAnsi } from '../ansi';
 import { Markdown } from './Markdown';
 import { Avatar } from './Avatar';
 import { WorkflowRunView } from './WorkflowView';
@@ -65,6 +66,13 @@ function formatWorkflowsMarkdown(runs: WorkflowRun[]): string {
   }).join('\n\n');
 }
 
+// gavelLocation renders a `file:line` suffix, or nothing when the producer
+// recorded no source location.
+function gavelLocation(file?: string, line?: number): string {
+  if (!file) return '';
+  return line ? `${file}:${line}` : file;
+}
+
 function formatGavelText(g: GavelResultsSummary): string {
   const lines: string[] = [];
   if (g.testsTotal > 0) {
@@ -76,16 +84,19 @@ function formatGavelText(g: GavelResultsSummary): string {
   if (g.hasBench) {
     lines.push(`Bench: ${g.benchRegressions ?? 0} regressions`);
   }
-  if (g.topFailures && g.topFailures.length) {
+  if (g.failures && g.failures.length) {
     lines.push('', 'Top failures:');
-    for (const f of g.topFailures) {
-      lines.push(`- ${f.name}${f.file ? ` (${f.file}${f.line ? ':' + f.line : ''})` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
+    for (const f of g.failures) {
+      const location = gavelLocation(f.file, f.line);
+      lines.push(`- ${f.name}${location ? ` (${location})` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
     }
   }
-  if (g.topLintViolations && g.topLintViolations.length) {
+  if (g.lint && g.lint.length) {
     lines.push('', 'Top lint violations:');
-    for (const v of g.topLintViolations) {
-      lines.push(`- [${v.linter}] ${v.file ?? ''}${v.line ? ':' + v.line : ''}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+    for (const lr of g.lint) {
+      for (const v of lr.violations ?? []) {
+        lines.push(`- [${lr.linter}] ${gavelLocation(v.file, v.line)}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+      }
     }
   }
   return lines.join('\n');
@@ -102,16 +113,19 @@ function formatGavelMarkdown(g: GavelResultsSummary): string {
   if (g.hasBench) {
     lines.push(`- **Bench**: ${g.benchRegressions ?? 0} regressions`);
   }
-  if (g.topFailures && g.topFailures.length) {
+  if (g.failures && g.failures.length) {
     lines.push('', '**Top failures**');
-    for (const f of g.topFailures) {
-      lines.push(`- \`${f.name}\`${f.file ? ` _${f.file}${f.line ? ':' + f.line : ''}_` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
+    for (const f of g.failures) {
+      const location = gavelLocation(f.file, f.line);
+      lines.push(`- \`${f.name}\`${location ? ` _${location}_` : ''}${f.message ? ` — ${stripAnsi(f.message)}` : ''}`);
     }
   }
-  if (g.topLintViolations && g.topLintViolations.length) {
+  if (g.lint && g.lint.length) {
     lines.push('', '**Top lint violations**');
-    for (const v of g.topLintViolations) {
-      lines.push(`- \`${v.linter}\` ${v.file ?? ''}${v.line ? ':' + v.line : ''}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+    for (const lr of g.lint) {
+      for (const v of lr.violations ?? []) {
+        lines.push(`- \`${lr.linter}\` ${gavelLocation(v.file, v.line)}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
+      }
     }
   }
   return lines.join('\n');
@@ -811,51 +825,10 @@ function MetricCard({ href, icon: Icon, label, value, sub, tone }: MetricCardPro
   return href ? <a href={href} className={cls}>{body}</a> : <div className={cls}>{body}</div>;
 }
 
-// aggregateShardsForUI rolls up per-shard summaries for the detail card's
-// header. The artifactId/Url fields are intentionally zeroed because the
-// aggregate has no single artifact to deep-link to — drill-downs should
-// happen via the per-shard rows below it.
-function aggregateShardsForUI(shards: GavelResultsSummary[]): GavelResultsSummary {
-  if (shards.length === 1) return shards[0];
-  const agg: GavelResultsSummary = {
-    artifactId: 0,
-    artifactUrl: '',
-    testsPassed: 0,
-    testsFailed: 0,
-    testsSkipped: 0,
-    testsTotal: 0,
-    lintViolations: 0,
-    lintLinters: 0,
-    hasBench: false,
-    benchRegressions: 0,
-    topFailures: [],
-    topLintViolations: [],
-  };
-  for (const s of shards) {
-    agg.testsPassed += s.testsPassed;
-    agg.testsFailed += s.testsFailed;
-    agg.testsSkipped += s.testsSkipped;
-    agg.testsTotal += s.testsTotal;
-    agg.lintViolations += s.lintViolations;
-    agg.lintLinters += s.lintLinters;
-    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
-    if (s.hasBench) agg.hasBench = true;
-    for (const f of s.topFailures ?? []) {
-      if ((agg.topFailures!.length) >= 5) break;
-      agg.topFailures!.push(f);
-    }
-    for (const v of s.topLintViolations ?? []) {
-      if ((agg.topLintViolations!.length) >= 5) break;
-      agg.topLintViolations!.push(v);
-    }
-  }
-  return agg;
-}
-
 function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr: PRItem }) {
   if (shards.length === 0) return null;
 
-  const agg = useMemo(() => aggregateShardsForUI(shards), [shards]);
+  const agg = useMemo(() => aggregateGavelShards(shards)!, [shards]);
   const multi = shards.length > 1;
   const [breakdownOpen, setBreakdownOpen] = useState(false);
 
@@ -1048,9 +1021,21 @@ function ShardError({ results, href }: { results: GavelResultsSummary; href?: st
   );
 }
 
+// ShardExtras renders the artifact's failing tests and lint findings with the
+// testrunner UI's own components, so a shard row in the PR dashboard looks like
+// the results page it links to instead of a parallel rendering of the same data.
 function ShardExtras({ results }: { results: GavelResultsSummary }) {
-  const failures = results.topFailures ?? [];
-  const lintHits = results.topLintViolations ?? [];
+  const failures = results.failures ?? [];
+  const lint = results.lint ?? [];
+  // The tree rows carry identity only; the message, stdout/stderr and failure
+  // detail live in DetailPanel. Start on the first failure so triage sees the
+  // reason without a click.
+  const [selected, setSelected] = useState<Test | null>(failures[0] ?? null);
+  const lintTree = useMemo(() => groupLintByLinterRuleFile(lint), [lint]);
+  // A linter that crashed or timed out reports no violations, so it never
+  // reaches the lint tree — surface it explicitly or the shard reads as clean.
+  const brokenLinters = lint.filter(lr => lr.timed_out || (!lr.success && !!lr.error));
+  if (failures.length === 0 && lintTree.length === 0 && brokenLinters.length === 0) return null;
   return (
     <>
       {failures.length > 0 && (
@@ -1058,23 +1043,73 @@ function ShardExtras({ results }: { results: GavelResultsSummary }) {
           title="Test failures"
           icon={UiBeaker}
           iconColor="text-red-600"
+          shown={failures.length}
           total={results.testsFailed}
         >
-          {failures.map((f, i) => <TestFailureRow key={i} f={f} />)}
+          {failures.map((t, i) => (
+            <TestNode
+              key={i}
+              test={t}
+              depth={0}
+              expandAll={null}
+              selected={selected}
+              onSelect={setSelected}
+            />
+          ))}
         </FailureList>
       )}
-      {lintHits.length > 0 && (
+      {lintTree.length > 0 && (
         <FailureList
           title="Lint violations"
           icon={UiWarningTriangle}
           iconColor="text-yellow-600"
+          shown={countViolations(lint)}
           total={results.lintViolations}
         >
-          {lintHits.map((v, i) => <LintViolationRow key={i} v={v} />)}
+          <LintView
+            lint={lint}
+            tree={lintTree}
+            expandAll={null}
+            selected={selected}
+            onSelect={setSelected}
+          />
         </FailureList>
+      )}
+      {brokenLinters.length > 0 && (
+        <FailureList
+          title="Linters that failed to run"
+          icon={UiWarningTriangle}
+          iconColor="text-red-600"
+          shown={brokenLinters.length}
+        >
+          {brokenLinters.map((lr, i) => (
+            <div key={i} className="px-2 py-1.5 text-xs">
+              <div className="font-medium text-foreground">
+                {lr.linter}
+                {lr.timed_out && <span className="ml-1 text-muted-foreground">timed out</span>}
+              </div>
+              {lr.error && (
+                <AnsiHtml
+                  as="pre"
+                  text={lr.error}
+                  className="mt-1 max-h-40 overflow-auto rounded bg-black p-2 text-[11px] leading-snug text-gray-100 whitespace-pre-wrap"
+                />
+              )}
+            </div>
+          ))}
+        </FailureList>
+      )}
+      {selected && (
+        <div className="mt-2 border border-border rounded overflow-auto max-h-96">
+          <DetailPanel test={selected} lint={lint} />
+        </div>
       )}
     </>
   );
+}
+
+function countViolations(lint: GavelResultsSummary['lint']): number {
+  return (lint ?? []).reduce((total, lr) => total + (lr.violations?.length ?? 0), 0);
 }
 
 function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
@@ -1097,6 +1132,12 @@ function ShardSummaryBadges({ g }: { g: GavelResultsSummary }) {
   }
   if (g.lintViolations > 0) {
     items.push({ icon: UiWarningTriangle, color: 'text-yellow-600', count: g.lintViolations, title: `${g.lintViolations} lint` });
+  }
+  // A linter that could not run reports zero violations; without its own badge
+  // the row would read clean.
+  const broken = (g.lint ?? []).filter(lr => lr.timed_out || (!lr.success && !!lr.error)).length;
+  if (broken > 0) {
+    items.push({ icon: UiWarningTriangle, color: 'text-red-600', count: broken, title: `${broken} linter${broken !== 1 ? 's' : ''} failed to run` });
   }
   if ((g.benchRegressions ?? 0) > 0) {
     items.push({ icon: UiArrowDown, color: 'text-red-600', count: g.benchRegressions ?? 0, title: `${g.benchRegressions} bench regression` });
@@ -1163,90 +1204,32 @@ function GavelShardRow({ results, pr }: { results: GavelResultsSummary; pr: PRIt
   );
 }
 
-function FailureList({ title, icon: Icon, iconColor, total, children }: {
+function FailureList({ title, icon: Icon, iconColor, shown, total, children }: {
   title: string;
   icon: ComponentType<IconProps>;
   iconColor: string;
-  total: number;
-  children: any;
+  // shown is passed explicitly because a section may render its rows through a
+  // single child component (LintView) rather than one node per finding.
+  shown: number;
+  // total is the artifact's real count. Omit it (or pass the same number) when
+  // nothing was dropped — "showing 2 of 2" is noise.
+  total?: number;
+  children: ReactNode;
 }) {
-  const rows = Array.isArray(children) ? children : [children];
-  const shown = rows.length;
+  const rows = children;
   return (
     <div className="mt-3">
       <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
         <Icon className={iconColor} />
         <span className="font-semibold">{title}</span>
-        <span className="text-muted-foreground normal-case tracking-normal">
-          showing {shown} of {total}
-        </span>
+        {total !== undefined && total > shown && (
+          <span className="text-muted-foreground normal-case tracking-normal">
+            showing {shown} of {total}
+          </span>
+        )}
       </div>
       <div className="divide-y divide-border border border-border rounded">
         {rows}
-      </div>
-    </div>
-  );
-}
-
-function FailureHeader({ f, withChevron }: { f: TestFailure; withChevron: boolean }) {
-  const location = f.file ? (f.line ? `${f.file}:${f.line}` : f.file) : '';
-  const plainMsg = f.message ?? '';
-  const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
-  return (
-    <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
-      {withChevron && (
-        <UiChevronRight className="text-muted-foreground mt-0.5 shrink-0 transition-transform group-open:rotate-90" />
-      )}
-      <UiError className="text-red-600 mt-0.5 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="font-medium text-foreground truncate" title={f.name}>
-          {f.suite ? <span className="text-muted-foreground">{f.suite} › </span> : null}
-          {f.name}
-        </div>
-        <div className="text-[11px] text-muted-foreground truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
-          {location && <span>{location}</span>}
-          {location && plainMsg && <span className="mx-1">·</span>}
-          {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TestFailureRow({ f }: { f: TestFailure }) {
-  const hasDetails = !!(f.details && f.details.trim().length > 0);
-  if (!hasDetails) return <div><FailureHeader f={f} withChevron={false} /></div>;
-  const detailsHtml = ansiToHtml(f.details!);
-  return (
-    <details className="group">
-      <summary className="list-none cursor-pointer hover:bg-muted">
-        <FailureHeader f={f} withChevron={true} />
-      </summary>
-      <pre
-        className="text-[11px] font-mono text-gray-100 bg-black px-3 py-2 overflow-x-auto whitespace-pre-wrap border-t border-border"
-        dangerouslySetInnerHTML={{ __html: detailsHtml }}
-      />
-    </details>
-  );
-}
-
-function LintViolationRow({ v }: { v: LintViolation }) {
-  const location = v.file ? (v.line ? `${v.file}:${v.line}` : v.file) : '';
-  const plainMsg = v.message ?? '';
-  const msgHtml = plainMsg ? ansiToHtml(plainMsg) : '';
-  return (
-    <div className="flex items-start gap-2 py-1.5 px-2 text-xs">
-      <UiWarningTriangle className="text-yellow-600 mt-0.5 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="font-medium text-foreground truncate">
-          <span className="text-muted-foreground">{v.linter}</span>
-          {v.rule && <span className="ml-1 text-muted-foreground">({v.rule})</span>}
-        </div>
-        <div className="text-[11px] text-muted-foreground truncate font-mono" title={`${location}${plainMsg ? ' — ' + plainMsg : ''}`}>
-          {location && <span>{location}</span>}
-          {location && plainMsg && <span className="mx-1">·</span>}
-          {plainMsg && <span dangerouslySetInnerHTML={{ __html: msgHtml }} />}
-        </div>
       </div>
     </div>
   );

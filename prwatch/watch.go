@@ -42,14 +42,20 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			continue
 		}
 
-		// The persistent github cache short-circuits already-completed runs,
-		// so a per-iteration in-memory map is no longer needed.
+		allComments := append(append([]github.PRComment{}, pr.Comments...), pr.ReviewThreads...)
+		artifacts := github.FindGavelArtifacts(allComments)
+		gavelResultsCh := make(chan []*GavelResultsSummary, 1)
+		go func() {
+			gavelResultsCh <- FetchGavelArtifacts(opts.Options, artifacts)
+		}()
+
+		// The persistent github cache short-circuits already-completed runs.
 		runs := fetchRuns(opts, pr)
-
-		// Comments and review threads arrive with the PR in a single GraphQL request.
+		gavelResults := <-gavelResultsCh
 		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
+		comments = removeRenderedArtifactComments(comments, gavelResults)
 
-		result := &PRWatchResult{PR: pr, Runs: runs, Comments: comments}
+		result := &PRWatchResult{PR: pr, Runs: runs, GavelResults: gavelResults, Comments: comments}
 		filters := newResultFilters(opts.Comments, opts.Actions)
 
 		preChecks := len(pr.StatusCheckRollup)

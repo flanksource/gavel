@@ -1,4 +1,4 @@
-import type { PRItem, PRComment, CheckSummary, Project, ProcStatus, ProcProcess } from './types';
+import type { PRItem, PRComment, CheckSummary, GavelResultsSummary, Project, ProcStatus, ProcProcess } from './types';
 
 // prKey mirrors the Go-side poller.prKey() so the unread map keys match.
 export function prKey(pr: { repo: string; number: number }): string {
@@ -229,6 +229,54 @@ export const AUTOMATED_AUTHOR_KEY = '@bots';
 // some legacy integrations just suffix "bot".
 export function isBotAuthor(author: string): boolean {
   return author.endsWith('[bot]') || author.endsWith('bot');
+}
+
+// MAX_GAVEL_DETAIL mirrors prwatch.maxDetailItems — the server caps each shard's
+// failure/lint detail, so the aggregate keeps the same bound.
+const MAX_GAVEL_DETAIL = 5;
+
+// aggregateGavelShards rolls per-shard artifact summaries into one. Used by the
+// sidebar badge and by the detail card header; artifactId/artifactUrl are left
+// empty because an aggregate has no single artifact to deep-link to — that
+// happens through the per-shard rows. Returns null for an empty list.
+export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResultsSummary | null {
+  if (!shards || shards.length === 0) return null;
+  if (shards.length === 1) return shards[0]!;
+  const agg: GavelResultsSummary = {
+    artifactId: 0,
+    artifactUrl: '',
+    testsPassed: 0,
+    testsFailed: 0,
+    testsSkipped: 0,
+    testsTotal: 0,
+    lintViolations: 0,
+    lintLinters: 0,
+    hasBench: false,
+    benchRegressions: 0,
+    duration: 0,
+    failures: [],
+    lint: [],
+  };
+  for (const s of shards) {
+    agg.testsPassed += s.testsPassed;
+    agg.testsFailed += s.testsFailed;
+    agg.testsSkipped += s.testsSkipped;
+    agg.testsTotal += s.testsTotal;
+    agg.lintViolations += s.lintViolations;
+    agg.lintLinters += s.lintLinters;
+    agg.benchRegressions = (agg.benchRegressions ?? 0) + (s.benchRegressions ?? 0);
+    agg.duration = (agg.duration ?? 0) + (s.duration ?? 0);
+    if (s.hasBench) agg.hasBench = true;
+    for (const f of s.failures ?? []) {
+      if (agg.failures!.length >= MAX_GAVEL_DETAIL) break;
+      agg.failures!.push(f);
+    }
+    for (const l of s.lint ?? []) {
+      if (agg.lint!.length >= MAX_GAVEL_DETAIL) break;
+      agg.lint!.push(l);
+    }
+  }
+  return agg;
 }
 
 // isBotPR reports whether a PR is bot-authored, trusting the server's App flag

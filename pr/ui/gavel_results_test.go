@@ -64,18 +64,20 @@ func TestComputeGavelSummary_ObjectFormat(t *testing.T) {
 	if s.LintViolations != 2 {
 		t.Errorf("LintViolations = %d, want 2", s.LintViolations)
 	}
-	if len(s.TopFailures) != 1 || s.TopFailures[0].Name != "TestB" {
-		t.Errorf("TopFailures = %+v, want single TestB failure", s.TopFailures)
+	if len(s.Failures) != 1 || s.Failures[0].Name != "TestB" {
+		t.Errorf("Failures = %+v, want single TestB failure", s.Failures)
 	}
-	if len(s.TopLintViolations) != 2 {
-		t.Errorf("TopLintViolations = %d, want 2", len(s.TopLintViolations))
+	// eslint found nothing and did not error, so only the failing linter is
+	// carried; its violations arrive as-is for the shared lint renderer.
+	if len(s.Lint) != 1 || s.Lint[0].Linter != "golangci-lint" {
+		t.Fatalf("Lint = %+v, want only golangci-lint", s.Lint)
 	}
-	if s.TopLintViolations[0].Linter != "golangci-lint" || s.TopLintViolations[0].File != "a.go" {
-		t.Errorf("first lint violation = %+v", s.TopLintViolations[0])
+	if len(s.Lint[0].Violations) != 2 || s.Lint[0].Violations[0].File != "a.go" {
+		t.Errorf("golangci-lint violations = %+v", s.Lint[0].Violations)
 	}
 }
 
-func TestComputeGavelSummary_TopFailuresCap(t *testing.T) {
+func TestComputeGavelSummary_FailureDetailCap(t *testing.T) {
 	// 7 failing tests — summary must cap at 5 and preserve encounter order.
 	tests := `[
 		{"name": "F1", "failed": true},
@@ -90,12 +92,12 @@ func TestComputeGavelSummary_TopFailuresCap(t *testing.T) {
 	if s.TestsFailed != 7 {
 		t.Errorf("TestsFailed = %d, want 7", s.TestsFailed)
 	}
-	if len(s.TopFailures) != 5 {
-		t.Fatalf("TopFailures length = %d, want 5", len(s.TopFailures))
+	if len(s.Failures) != 5 {
+		t.Fatalf("Failures length = %d, want 5", len(s.Failures))
 	}
 	for i, want := range []string{"F1", "F2", "F3", "F4", "F5"} {
-		if s.TopFailures[i].Name != want {
-			t.Errorf("TopFailures[%d] = %s, want %s", i, s.TopFailures[i].Name, want)
+		if s.Failures[i].Name != want {
+			t.Errorf("Failures[%d] = %s, want %s", i, s.Failures[i].Name, want)
 		}
 	}
 }
