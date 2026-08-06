@@ -91,3 +91,4 @@ go.work.sum
 /gavel
 /node_modules
 .facet/
+!.agents/skills/gavel-fixture-tester/
