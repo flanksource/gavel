@@ -68,6 +68,7 @@ export interface VerificationFixtureResult {
   actual?: unknown;
   cel_result?: boolean;
   cel_expression?: string;
+  cel_trace?: string;
   cel_vars?: Record<string, unknown>;
   command?: string;
   cwd?: string;

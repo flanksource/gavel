@@ -97,16 +97,6 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
   return preferred ?? backendCatalog(context, '', agent);
 }
 
-// The compact picker is intentionally Agent-first. Advanced remembers whichever
-// backend the user chose, but switching provider in the compact flow always
-// lands on that provider's headless Agent backend.
-export function agentBackendForAgent(context: RunContext, agent: RunProvider): RunBackendCatalog {
-  const agentBackend = backendsForAgent(context, agent).find(
-    backend => backend.models.length > 0 && (backend.mechanisms.some(mechanism => mechanism.value === 'agent') || backend.id.endsWith('-agent')),
-  );
-  return agentBackend ?? defaultBackendForAgent(context, agent);
-}
-
 // driverFor composes the TodoRunDriver from the two axes the dialog selects.
 export function driverFor(provider: RunProvider, mechanism: RunMechanism): TodoRunDriver {
   return `${provider}-${mechanism}` as TodoRunDriver;
@@ -116,8 +106,7 @@ export function driverFor(provider: RunProvider, mechanism: RunMechanism): TodoR
 // Family -> Mode picker: one family per provider, with every mode coming from a
 // backend row served by /api/todos/run/context.
 export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
-  const agents = new Set(context.backends.map(backend => backend.agent));
-  return PROVIDERS.filter(provider => agents.has(provider.id)).map((provider) => {
+  return PROVIDERS.flatMap((provider) => {
     const backendModes = backendsForAgent(context, provider.id).filter(item => item.models.length > 0).map((item) => ({
       id: item.id,
       label: item.configured === false ? `${item.label} (not ready)` : item.label,
@@ -125,12 +114,13 @@ export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
       icon: item.driver.endsWith('cmux') ? UiColumns : provider.icon,
       title: item.label,
     }));
-    return {
+    if (backendModes.length === 0) return [];
+    return [{
       id: provider.id,
       label: provider.label,
       provider: provider.provider,
       modes: backendModes,
-    };
+    }];
   });
 }
 

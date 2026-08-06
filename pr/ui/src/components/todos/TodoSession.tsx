@@ -143,7 +143,7 @@ export function useTodoSession(dir: string, sessionId: string | undefined, activ
 export function useSessionStatus(dir: string, sessionId: string | undefined, active: boolean) {
   const queryClient = useQueryClient();
   const enabled = active && !!sessionId;
-  const options = sessionStatsQueryOptions(dir, sessionId ?? '');
+  const options = sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '' });
   const query = useQuery({ ...options, enabled });
   const stats = enabled ? query.data : undefined;
   const approveMutation = useMutation({
@@ -196,6 +196,10 @@ export function TodoSession({
   resumeDisabled,
   onRun,
   onAdvanced,
+  runOptions,
+  planOptions,
+  onRunOptionsChange,
+  onPlanOptionsChange,
   runBusy,
   runDisabled,
 }: {
@@ -212,6 +216,10 @@ export function TodoSession({
   // (TodoSessionStart), wired from the todo detail's run flow.
   onRun?: (options?: TodoRunOptions) => void;
   onAdvanced?: (action: TodoRunAction) => void;
+  runOptions?: TodoRunOptions;
+  planOptions?: TodoRunOptions;
+  onRunOptionsChange?: (options: TodoRunOptions) => void;
+  onPlanOptionsChange?: (options: TodoRunOptions) => void;
   runBusy?: boolean;
   runDisabled?: boolean;
 }) {
@@ -352,7 +360,7 @@ export function TodoSession({
   );
 
   if (!sessionId) {
-    return <TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runBusy={runBusy} runDisabled={runDisabled} />;
+    return <TodoSessionStart dir={dir} todo={todo} onRun={onRun} onAdvanced={onAdvanced} runOptions={runOptions} planOptions={planOptions} onRunOptionsChange={onRunOptionsChange} onPlanOptionsChange={onPlanOptionsChange} runBusy={runBusy} runDisabled={runDisabled} />;
   }
 
   const threadState = detail?.thread?.status || state;

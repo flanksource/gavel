@@ -22,6 +22,8 @@ catalog:
   "@floating-ui/react": ^0.27.19
   '@iconify-icons/codicon': ^1.2.30
   '@iconify-icons/vscode-icons': ^1.2.29
+  '@joplin/turndown': ^4.0.85
+  '@joplin/turndown-plugin-gfm': ^1.0.67
   '@mdxeditor/editor': ^4.0.4
   "@monaco-editor/react": ^4.7.0
   "@oxlint/plugins": ^1.60.0
@@ -53,6 +55,7 @@ catalog:
   "@types/node": ^24
   "@types/react": ^18.3.12
   "@types/react-dom": ^18.3.1
+  '@types/turndown': ^5.0.6
   ai: ^6.0.199
   autoprefixer: ^10.4.20
   class-variance-authority: ^0.7.1
@@ -75,6 +78,7 @@ catalog:
   sonner: ^1.7.1
   storybook: ^8.6.18
   streamdown: ^2.5.0
+  strip-ansi: ^7.2.0
   tailwind-merge: ^2.6.0
   tailwindcss: ^3.4.17
   typescript: ^5.7.2

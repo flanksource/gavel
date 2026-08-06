@@ -8,6 +8,7 @@ import {
   TodoRunContextError,
   TodoRunEffortBadge,
   loadLastTodoRunOptions,
+  reconcileTodoRunOptions,
   todoRunButtonPresentation,
   todoRunModeLabel,
   useTodoRunContext,
@@ -85,6 +86,10 @@ export function TodoSessionStart({
   onAdvanced,
   runBusy,
   runDisabled,
+  runOptions,
+  planOptions,
+  onRunOptionsChange,
+  onPlanOptionsChange,
 }: {
   dir: string;
   todo: TodoItem;
@@ -92,15 +97,23 @@ export function TodoSessionStart({
   onAdvanced?: (action: TodoRunAction) => void;
   runBusy?: boolean;
   runDisabled?: boolean;
+  runOptions?: TodoRunOptions;
+  planOptions?: TodoRunOptions;
+  onRunOptionsChange?: (options: TodoRunOptions) => void;
+  onPlanOptionsChange?: (options: TodoRunOptions) => void;
 }) {
   const { context, loading: contextLoading, error: contextError } = useTodoRunContext();
-  const options = useMemo(() => context ? loadLastTodoRunOptions('run', context) : null, [context]);
+  const options = useMemo(() => context
+    ? reconcileTodoRunOptions('run', runOptions ?? loadLastTodoRunOptions('run', context), context)
+    : null, [context, runOptions]);
+  const selectedPlanOptions = useMemo(() => context
+    ? reconcileTodoRunOptions('plan', planOptions ?? loadLastTodoRunOptions('plan', context), context)
+    : planOptions, [context, planOptions]);
   const presentation = context && options ? todoRunButtonPresentation(options, context) : null;
   const runtime = context && options ? todoRunModeLabel(options, context) : '';
   const { prompt, loading, error } = useRunPromptPreview(dir, todo.ref, options);
-  // provider.icon may be a runtime icon name (string) rather than a component;
-  // only render it directly when it is a component, otherwise fall back
-  // (mirrors iconForRunBackend in run.tsx).
+  // provider.icon may be a runtime icon name rather than a component, so use the
+  // generic agent icon unless it can be rendered directly.
   const providerIcon = presentation?.provider?.icon;
   const ProviderIcon = providerIcon && typeof providerIcon !== 'string' ? (providerIcon as ComponentType<IconProps>) : UiRobotAi;
 
@@ -139,8 +152,8 @@ export function TodoSessionStart({
 
       {onRun && (
         <div className="mt-5 flex items-center justify-center gap-2">
-          <TodoRunActionButton action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
-          <TodoRunActionButton action="plan" disabled={runDisabled || !context || !!contextError} loading={runBusy} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
+          <TodoRunActionButton action="run" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={options ?? undefined} onOptionsChange={onRunOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
+          <TodoRunActionButton action="plan" disabled={runDisabled || !context || !!contextError} loading={runBusy} options={selectedPlanOptions} onOptionsChange={onPlanOptionsChange} onRun={onRun} onAdvanced={onAdvanced ?? (() => {})} />
         </div>
       )}
     </div>

@@ -86,6 +86,7 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 vi.mock('@flanksource/clicky-ui/ai', () => ({
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
+  RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <button type="button" aria-label={ariaLabel}>Runtime</button>,
   promptRuntimeValueToPayload: (value: unknown) => value,
   reconcileModelCapabilities: (value: unknown) => value,
 }));

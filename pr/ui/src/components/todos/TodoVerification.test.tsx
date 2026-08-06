@@ -57,6 +57,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   promptRuntimeValueToPayload: (value: unknown) => ({ spec: value }),
   reconcileModelCapabilities: (value: unknown) => value,
+  RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <button type="button" aria-label={ariaLabel}>Runtime</button>,
   SpecRuntimeEditor: () => <div>Verification runtime editor</div>,
 }));
 
@@ -285,7 +286,7 @@ describe('TodoVerification', () => {
     });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
     act(() => fixtureEditorCalls.props.at(-1)?.onChange('### command: smoke'));
-    fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^run verification$/i }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
     // Results live in the persisted attempt list, not in this view's state, so a
@@ -343,7 +344,7 @@ describe('TodoVerification', () => {
       wrapper: queryTestWrapper(),
     });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
-    fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^run verification$/i }));
 
     await waitFor(() =>
       expect(screen.getByText('no verification fixture, acceptance criteria, or configured checks')).toBeTruthy()
@@ -374,7 +375,7 @@ describe('TodoVerification', () => {
     });
     await waitFor(() => expect(fixtureEditorCalls.props.at(-1)).toBeDefined());
 
-    fireEvent.click(screen.getByRole('button', { name: /^run verification \(/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^run verification$/i }));
 
     expect(await screen.findByText(/verification run failed.*verification is already running/i)).toBeTruthy();
   });

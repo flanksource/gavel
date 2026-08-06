@@ -197,13 +197,28 @@ function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
   }
 }
 
-// InProgressBadge replaces the static "in progress" status pill for a todo with a
-// live agent session: the agent's current state drives the chrome, icon, and
-// elapsed time (plus cost, once known), and a finished run settles to Done/Ended
-// rather than spinning forever. Render it only for a row that has a session so it
-// never polls idle todos.
-function InProgressBadge({ dir, sessionId }: { dir: string; sessionId?: string }) {
-  const { stats, elapsedMs } = useSessionStats(dir, sessionId, true);
+// isLiveRun reports whether a todo's run should still be producing session
+// activity. It reads both axes because they move independently: `status` is the
+// todo's lifecycle (a run can finish and leave the todo in draft/review) while
+// `executionState` is the run's own state.
+function isLiveRun(todo: TodoItem): boolean {
+  return todo.status === 'in_progress' || todo.executionState === 'running';
+}
+
+// SessionBadge replaces the static status icon for a todo that has an agent
+// session: the session's state drives the chrome, icon, and elapsed time (plus
+// cost, once known), and a finished run settles to Done/Ended rather than
+// spinning forever. Until the session resolves there is nothing to report, so a
+// settled todo falls back to its own status icon and only a live run claims to be
+// in progress. Render it only for a row that has a session id.
+function SessionBadge({ dir, sessionId, status, live }: {
+  dir: string;
+  sessionId: string;
+  status: TodoStatus | string;
+  live: boolean;
+}) {
+  const { stats, elapsedMs } = useSessionStats({ dir, sessionId, active: true, expectLive: live });
+  if (!stats?.found && !live) return <StatusIcon status={status} />;
   const view = sessionBadgeView(stats);
   const ViewIcon = view.icon;
   const cost = stats ? formatCost(stats.costUsd) : '';
@@ -367,9 +382,9 @@ function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) 
 // Severity is intentionally only the ListMenu left border; identifiers and
 // severity labels belong in the detail pane.
 //
-// `dir` locates the row's workspace so an in-progress todo's status
-// badge can carry the live agent state + elapsed time; they are omitted by
-// callers (e.g. the menubar) that don't surface it.
+// `dir` locates the row's workspace so a todo with an agent session can swap its
+// status icon for that run's state + elapsed time; they are omitted by callers
+// (e.g. the menubar) that don't surface it.
 export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir }: {
   todo: TodoItem;
   active: boolean;
@@ -382,9 +397,11 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
   dir?: string;
 }) {
   const compact = density === 'compact';
-  // Only running sessions poll for stats, so the sidebar never fires a request
-  // storm across a large list of idle/finished todos.
-  const hasLiveSession = !!dir && todo.status === 'in_progress' && !!todo.sessionId;
+  // Any todo carrying a session shows that run's duration and cost, whatever
+  // lifecycle status it settled into. Only a live run keeps polling (see
+  // sessionStatsQueryOptions), so a long list of finished todos reads its totals
+  // once instead of firing a request storm.
+  const sessionId = dir ? todo.sessionId : undefined;
   return (
     <ListMenuItem
       active={active}
@@ -417,8 +434,8 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
         className={`flex min-w-0 flex-1 flex-col items-stretch justify-start overflow-hidden px-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${compact ? 'py-1' : 'py-2'}`}
       >
         <div className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden">
-          {hasLiveSession ? (
-            <InProgressBadge dir={dir!} sessionId={todo.sessionId} />
+          {sessionId ? (
+            <SessionBadge dir={dir!} sessionId={sessionId} status={todo.status} live={isLiveRun(todo)} />
           ) : (
             <StatusIcon status={todo.status} />
           )}

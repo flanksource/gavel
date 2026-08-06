@@ -67,6 +67,14 @@ describe('VerificationStepOutput', () => {
     expect(screen.getByText('actual').parentElement?.textContent).toBe('actual 3');
   });
 
+  it('prefers the native CEL trace over the plain expression', () => {
+    const trace = 'cel: results.failed == 0\n     │              │\n     │              └─ int(0)\n     └─ int(3)';
+    render(<VerificationStepOutput steps={[{ ...failingExec, cel_trace: trace }]} checklist={[]} />);
+
+    expect(screen.getByText((_, element) => element?.textContent === trace)).toBeTruthy();
+    expect(screen.queryByText('results.failed == 0')).toBeNull();
+  });
+
   // A command step with no CEL assertion records `actual` as the whole command
   // result object — the card already renders every field of it above.
   it('does not re-dump the raw command record a command step stores as actual', () => {

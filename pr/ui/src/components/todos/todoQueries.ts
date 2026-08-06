@@ -125,15 +125,27 @@ async function fetchSessionStats(dir: string, sessionId: string, signal: AbortSi
   return response.json() as Promise<SessionStats>;
 }
 
-export function sessionStatsQueryOptions(dir: string, sessionId: string) {
+// sessionStatsQueryOptions polls one agent session's rolled-up stats. A running
+// session polls fast and a finished one stops for good, because its totals are
+// final. `expectLive` covers the third case — a session that has produced no log
+// or DB row yet. That is only worth retrying while a run is actually expected to
+// start; for a settled todo whose session was pruned it would poll forever, and a
+// list showing many such todos would poll forever in parallel.
+export function sessionStatsQueryOptions({ dir, sessionId, expectLive = true }: {
+  dir: string;
+  sessionId: string;
+  expectLive?: boolean;
+}) {
   return queryOptions({
     queryKey: todoQueryKeys.sessionStats(dir, sessionId),
     queryFn: ({ signal }) => fetchSessionStats(dir, sessionId, signal),
-    staleTime: 1_500,
+    // Settled totals do not move, so a row that only wants the final duration and
+    // cost re-reads them rarely instead of on every remount.
+    staleTime: expectLive ? 1_500 : 300_000,
     refetchInterval: query => {
       const stats = query.state.data;
       if (stats?.inProgress) return 2_000;
-      if (!stats?.found) return 4_000;
+      if (!stats?.found) return expectLive ? 4_000 : false;
       return false;
     },
   });

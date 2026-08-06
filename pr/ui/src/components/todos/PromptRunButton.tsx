@@ -6,7 +6,7 @@ import type { TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import {
   TodoRunContextError,
-  TodoRunDropdownContent,
+  TodoRunRuntimeBar,
   defaultRunOptionsForAction,
   loadLastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,
@@ -159,42 +159,59 @@ export function PromptRunButton({
   const unavailable = contextLoading || !context || !!contextError;
   const PrimaryIcon = loading ? Spinner : icon;
 
-  function run(optionsToRemember: TodoRunOptions, close?: () => void) {
+  function select(optionsToRemember: TodoRunOptions, close?: () => void) {
     if (!context) return;
     close?.();
-    const remembered = rememberPromptRunOptions(scope, optionsToRemember, context);
+    rememberPromptRunOptions(scope, optionsToRemember, context);
     setRevision(value => value + 1);
-    onRun(remembered);
+  }
+
+  function run() {
+    if (!context) return;
+    onRun(rememberPromptRunOptions(scope, options, context));
   }
 
   return (
     <div className="flex flex-col items-start gap-1" data-history-revision={revision}>
-      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+      <div className="inline-flex min-h-8 shrink-0 items-stretch gap-1">
         <Button
           variant="ghost"
           type="button"
           disabled={disabled || unavailable}
-          onClick={() => run(options)}
-          className="inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+          onClick={run}
+          className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
           title={title}
         >
           <PrimaryIcon className="text-xs" />
-          <span>{label}{context ? ` ${runButtonQualifierForOptions(options, context)}` : ''}</span>
+          <span>{label}</span>
         </Button>
+        {context && !contextError ? (
+          <TodoRunRuntimeBar
+            action="run"
+            context={context}
+            options={options}
+            disabled={disabled || unavailable}
+            onChange={selected => select(selected)}
+          />
+        ) : (
+          <Button variant="outline" size="sm" type="button" disabled title={`${label} runtime unavailable`} aria-label={`${label} runtime unavailable`} className="h-8 px-2 text-xs">
+            Runtime
+          </Button>
+        )}
         {context && !contextError ? (
           <DropdownMenu
             align="right"
-            menuLabel={`${label} options`}
-            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
+            menuLabel={`${label} history and advanced options`}
+            menuClassName="max-h-[70vh] w-72 max-w-[calc(100vw-24px)] overflow-y-auto"
             trigger={
               <Button
                 variant="ghost"
                 size="icon"
                 type="button"
                 disabled={disabled || unavailable}
-                title={`${label} options`}
-                aria-label={`${label} options`}
-                className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                title={`${label} history and advanced options`}
+                aria-label={`${label} history and advanced options`}
+                className="h-8 w-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
               >
                 <UiChevronDown className="text-xs" />
               </Button>
@@ -202,15 +219,8 @@ export function PromptRunButton({
           >
             {close => (
               <div>
-                <TodoRunDropdownContent
-                  context={context}
-                  initialAction="run"
-                  closeParent={close}
-                  onSelect={(_action, selected) => run(selected)}
-                  showAdvanced={false}
-                />
                 {recent.length > 0 && (
-                  <div className="border-t border-border p-1 text-xs">
+                  <div className="p-1 text-xs">
                     <div className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <UiHistory className="text-xs" />
                       Recent configs
@@ -220,7 +230,7 @@ export function PromptRunButton({
                         key={optionsKey(item)}
                         variant="ghost"
                         type="button"
-                        onClick={() => run(item, close)}
+                        onClick={() => select(item, close)}
                         className="flex h-8 w-full items-center justify-start rounded px-2 text-left text-xs hover:bg-muted"
                       >
                         {index + 1}. {runButtonQualifierForOptions(item, context)}
@@ -251,7 +261,7 @@ export function PromptRunButton({
             )}
           </DropdownMenu>
         ) : (
-          <Button variant="ghost" size="icon" type="button" disabled title={`${label} options`} aria-label={`${label} options`} className="h-8 w-7 rounded-none">
+          <Button variant="ghost" size="icon" type="button" disabled title={`${label} history and advanced options`} aria-label={`${label} history and advanced options`} className="h-8 w-8 rounded-md">
             <UiChevronDown className="text-xs" />
           </Button>
         )}

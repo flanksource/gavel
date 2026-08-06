@@ -114,8 +114,8 @@
       // !important to win against the host's styles.
       ".gavel-rg-dialog{position:fixed!important;top:50%!important;left:50%!important;" +
       "transform:translate(-50%,-50%)!important;margin:0!important;" +
-      "padding:0;border:none;border-radius:10px;width:min(680px,92vw);" +
-      "height:min(640px,88vh);overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.35);background:#fff;color:#111}" +
+      "padding:0;border:none;border-radius:10px;width:min(960px,94vw);" +
+      "height:min(800px,92vh);overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.35);background:#fff;color:#111}" +
       ".gavel-rg-dialog::backdrop{background:rgba(0,0,0,.45)}" +
       ".gavel-rg-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;" +
       "background:#111;color:#fff;font:600 13px/1.4 system-ui,sans-serif}" +

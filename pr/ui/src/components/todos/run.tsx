@@ -1,20 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, DropdownMenu, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
+import { Button, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
-import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, type AIPromptRunValue, type AISpecRuntimeValue } from "@flanksource/clicky-ui/ai";
-import type { StaticIconComponent } from "@flanksource/clicky-ui/data";
-import { UiChevronDown, UiCloud, UiCog, UiColumns, UiListDashes, UiPlay, UiRobotAi, UiSparkles, UiTerminal, type IconProps } from "@flanksource/clicky-ui/icons";
-import type { TodoRunAgent, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
+import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, RuntimeBar, type AIPromptRunValue, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
+import { UiCog, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
+import type { TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
 import { Spinner } from "../../icons/Spinner";
 import { inputClass, todoQuery } from "./format";
-import { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   PROVIDERS,
-  agentBackendForAgent,
   agentForBackend,
   buildRunFamilies,
   defaultModelForSelection,
@@ -69,23 +66,11 @@ const RUN_ACTION_CONFIG: Record<TodoRunAction, { label: string; detail: string; 
   plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
 };
 
-const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string; icon: StaticIconComponent }> = {
-  cmux: { label: "cmux", icon: UiColumns },
-  agent: { label: "Agent", icon: UiRobotAi },
-  cli: { label: "cli", icon: UiTerminal },
-  api: { label: "API", icon: UiCloud },
-};
-
-export type TodoRunModelChoice = {
-  key: string;
-  action: TodoRunAction;
-  backend: RunBackendCatalog;
-  modelID: string;
-  modelLabel: string;
-  modelShort: string;
-  mechanism: string;
-  icon: ComponentType<IconProps>;
-  options: TodoRunOptions;
+const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
+  cmux: { label: "cmux" },
+  agent: { label: "Agent" },
+  cli: { label: "cli" },
+  api: { label: "API" },
 };
 
 function emptyRunChoiceState(): RunChoiceState {
@@ -226,12 +211,6 @@ function mechanismForBackend(backend: RunBackendCatalog): string {
   return parts.length > 1 ? parts.slice(1).join("-") : backend.driver;
 }
 
-function iconForRunBackend(backend: RunBackendCatalog): ComponentType<IconProps> {
-  const providerIcon = PROVIDERS.find(provider => provider.id === backend.agent)?.icon;
-  if (providerIcon && typeof providerIcon !== "string") return providerIcon as ComponentType<IconProps>;
-  return backend.agent === "claude" ? UiSparkles : UiRobotAi;
-}
-
 function runtimeModeForBackend(backend: RunBackendCatalog): TodoRunRuntimeMode {
   const id = backend.id.toLowerCase();
   if (id.endsWith("-cmux")) return "cmux";
@@ -308,28 +287,6 @@ export function shortTodoRunModelName(id: string | undefined): string {
   return label;
 }
 
-export function todoRunModelFamilyName(value: string | undefined): string {
-  const raw = (value || "").trim();
-  if (!raw) return "Default";
-  const lower = raw.toLowerCase();
-  for (const family of ["fable", "opus", "sonnet", "haiku"]) {
-    if (lower.includes(family)) return `${family[0]!.toUpperCase()}${family.slice(1)}`;
-  }
-  for (const variant of ["sol", "luna", "terra", "spark"]) {
-    if (new RegExp(`(?:^|[-\\s])${variant}(?:$|[-\\s])`).test(lower)) {
-      return `${variant[0]!.toUpperCase()}${variant.slice(1)}`;
-    }
-  }
-  if (lower.includes("gpt") || lower.includes("codex")) return "GPT";
-  if (lower.includes("gemini")) return "Gemini";
-  if (lower.includes("deepseek")) return "DeepSeek";
-
-  const family = raw
-    .split(/[\s/_-]+/)
-    .find(part => part && !/^\d+(?:\.\d+)*$/.test(part) && !["claude", "agent", "code", "openai", "anthropic"].includes(part.toLowerCase()));
-  return family ? `${family[0]!.toUpperCase()}${family.slice(1)}` : raw;
-}
-
 function labelForRunModel(backend: RunBackendCatalog, modelID: string): string {
   const model = modelsForRunBackend(backend).find(item => item.id === modelID);
   return model?.label || modelID;
@@ -343,34 +300,6 @@ function runOptionsForBackendModel(action: TodoRunAction, backend: RunBackendCat
     ...(action === "run" ? AUTO_COMMIT : {}),
   } satisfies AISpecRuntimeValue, modelForRunBackend(backend, modelID), ALL_EFFORTS);
   return normalizeRunOptions(action, { driver: backend.driver, spec });
-}
-
-export function runChoicesForAction(context: RunContext, action: TodoRunAction, effort: TodoRunEffort = "medium"): TodoRunModelChoice[] {
-  const config = RUN_ACTION_CONFIG[action];
-  return context.backends.flatMap((backend) => {
-    const mechanism = mechanismForBackend(backend);
-    const Icon = iconForRunBackend(backend);
-    return modelsForRunBackend(backend).map((model) => {
-      const modelID = model.id || backend.defaultModel;
-      const modelLabel = model.label?.trim() || "";
-      const modelShort = shortTodoRunModelName(modelID);
-      return {
-        key: `${action}:${backend.id}:${modelID}`,
-        action,
-        backend,
-        modelID,
-        modelLabel,
-        modelShort,
-        mechanism,
-        icon: Icon,
-        options: runOptionsForBackendModel(action, backend, modelID, effort),
-      } satisfies TodoRunModelChoice;
-    });
-  }).filter(choice => !!choice.modelID && !!config);
-}
-
-export function runChoicesForRuntimeMode(context: RunContext, action: TodoRunAction, runtimeMode: TodoRunRuntimeMode, effort: TodoRunEffort = "medium"): TodoRunModelChoice[] {
-  return runChoicesForAction(context, action, effort).filter((choice) => runtimeModeForBackend(choice.backend) === runtimeMode);
 }
 
 export function runButtonQualifierForOptions(options: TodoRunOptions, context: RunContext): string {
@@ -521,264 +450,51 @@ export function useTodoRunPreview(dir: string) {
   });
 }
 
-type TodoRunDropdownSelect = (action: TodoRunAction, options: TodoRunOptions, advanced?: boolean) => void;
-
-export function TodoRunDropdownContent({
+export function todoRunOptionsForRuntimeChange({
+  action,
   context,
-  initialAction,
-  closeParent,
-  onSelect,
-  onAdvanced,
-  showAdvanced = true,
+  options,
+  runtime,
 }: {
+  action: TodoRunAction;
   context: RunContext;
-  initialAction: TodoRunAction;
-  closeParent: () => void;
-  onSelect: TodoRunDropdownSelect;
-  onAdvanced?: (action: TodoRunAction) => void;
-  showAdvanced?: boolean;
-}) {
-  const initialOptions = loadLastTodoRunOptions(initialAction, context);
-  const initialBackend = backendForOptions(context, initialOptions);
-  const [selectedAgent, setSelectedAgent] = useState<TodoRunAgent>(initialBackend.agent);
-  const [effort, setEffort] = useState<TodoRunEffort>((runSpec(initialOptions).effort as TodoRunEffort | undefined) ?? "medium");
-  const backend = agentBackendForAgent(context, selectedAgent);
-  const rememberedModel = initialBackend.id === backend.id ? runSpec(initialOptions).model : undefined;
-  const effortModel = modelForRunBackend(backend, rememberedModel || backend.defaultModel);
-  const choices = runChoicesForAction(context, initialAction, effort).filter(choice => choice.backend.id === backend.id);
-
-  useEffect(() => {
-    const nextOptions = loadLastTodoRunOptions(initialAction, context);
-    setSelectedAgent(backendForOptions(context, nextOptions).agent);
-    setEffort((runSpec(nextOptions).effort as TodoRunEffort | undefined) ?? "medium");
-  }, [initialAction, context.backends, context.defaultBackend]);
-
-  return (
-    <div className="p-1 text-xs">
-      <div className="space-y-2 border-b border-border px-2 pb-3 pt-2">
-        <TodoRunProviderSegments
-          context={context}
-          value={selectedAgent}
-          onChange={(nextAgent) => {
-            const nextBackend = agentBackendForAgent(context, nextAgent);
-            const nextModel = modelForRunBackend(nextBackend, nextBackend.defaultModel);
-            const reconciled = reconcileModelCapabilities({ effort }, nextModel, contextEfforts(context));
-            setSelectedAgent(nextAgent);
-            setEffort((reconciled.effort as TodoRunEffort | undefined) ?? effort);
-          }}
-        />
-        <TodoRunEffortSlider model={effortModel} fallbackEfforts={contextEfforts(context)} value={effort} onChange={setEffort} />
-      </div>
-
-      <div className="space-y-0.5 py-1">
-        {choices.map(choice => {
-          const provider = PROVIDERS.find(item => item.id === choice.backend.agent);
-          const ProviderIcon = provider?.icon ?? choice.icon;
-          const fullModelName = choice.modelLabel || choice.modelID;
-          return (
-            <Button
-              key={choice.key}
-              variant="ghost"
-              type="button"
-              title={fullModelName}
-              onClick={() => {
-                closeParent();
-                onSelect(initialAction, runOptionsForBackendModel(initialAction, backend, choice.modelID, effort));
-              }}
-              className="group flex h-9 w-full items-center justify-start gap-2 rounded-md px-2 text-left hover:bg-muted"
-            >
-              <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md bg-muted/70 ring-1 ring-border/60 group-hover:bg-background">
-                <ProviderIcon className="size-3.5" style={{ color: provider?.iconColor }} />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{fullModelName}</span>
-            </Button>
-          );
-        })}
-      </div>
-
-      {showAdvanced && onAdvanced && (
-        <>
-          <div className="my-1 border-t border-border" />
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => {
-              closeParent();
-              onAdvanced(initialAction);
-            }}
-            className="flex h-auto w-full items-center justify-start gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
-          >
-            <UiCog className="shrink-0 text-sm text-muted-foreground" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium text-foreground">Advanced</span>
-              <span className="block truncate text-[11px] text-muted-foreground">model, effort, timeout, limits</span>
-            </span>
-          </Button>
-        </>
-      )}
-    </div>
-  );
+  options: TodoRunOptions;
+  runtime: RuntimeBarValue;
+}): TodoRunOptions {
+  return reconcileTodoRunOptions(action, {
+    ...options,
+    spec: { ...runSpec(options), ...runtime },
+  }, context);
 }
 
-function TodoRunProviderSegments({
+export function TodoRunRuntimeBar({
+  action,
   context,
-  value,
-  onChange,
-}: {
-  context: RunContext;
-  value: TodoRunAgent;
-  onChange: (value: TodoRunAgent) => void;
-}) {
-  const availableAgents = new Set(
-    context.backends.filter(backend => backend.models.length > 0).map(backend => backend.agent),
-  );
-  return (
-    <SegmentedControl<TodoRunAgent>
-      aria-label="Provider"
-      size="sm"
-      value={value}
-      onChange={onChange}
-      className="w-full"
-      options={PROVIDERS.filter(provider => availableAgents.has(provider.id)).map(provider => {
-        const ProviderIcon = provider.icon;
-        return {
-          id: provider.id,
-          label: <span className="inline-flex items-center gap-1.5"><ProviderIcon className="size-3.5" style={{ color: provider.iconColor }} />{provider.label}</span>,
-        };
-      })}
-    />
-  );
-}
-
-function effortIconColor(effort: TodoRunEffort | undefined): string {
-  switch (effort) {
-    case "low": return "text-sky-500";
-    case "medium": return "text-emerald-500";
-    case "high": return "text-amber-500";
-    case "xhigh": return "text-orange-500";
-    case "max": return "text-rose-500";
-    case "ultra": return "text-fuchsia-500";
-    default: return "text-muted-foreground";
-  }
-}
-
-function TodoRunEffortSlider({
-  model,
-  fallbackEfforts,
-  value,
-  onChange,
-}: {
-  model: ChatModel | undefined;
-  fallbackEfforts: readonly TodoRunEffort[];
-  value: TodoRunEffort;
-  onChange: (value: TodoRunEffort) => void;
-}) {
-  const efforts = effortOptionsForModel(model, fallbackEfforts) as TodoRunEffort[];
-  const reconciled = reconcileModelCapabilities({ effort: value }, model, fallbackEfforts);
-  const selected = (reconciled.effort as TodoRunEffort | undefined) ?? efforts[0];
-  const index = Math.max(0, efforts.indexOf(selected!));
-
-  if (efforts.length === 0) {
-    return <div className="flex h-8 items-center justify-center text-[11px] text-muted-foreground">Fixed effort for this model</div>;
-  }
-  if (efforts.length === 1) {
-    return <div className="flex h-8 items-center justify-center text-[11px] font-medium capitalize text-muted-foreground">{efforts[0]}</div>;
-  }
-
-  const percent = (index / (efforts.length - 1)) * 100;
-  const SelectedLowIcon = todoRunEffortPresentation(efforts[0]).icon;
-  const SelectedHighIcon = todoRunEffortPresentation(efforts[efforts.length - 1]).icon;
-  return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-1.5" aria-label="Model effort">
-      <SelectedLowIcon className={`mt-3 size-3.5 ${effortIconColor(efforts[0])}`} aria-hidden="true" />
-      <div className="relative h-11 pt-1">
-        <input
-          type="range"
-          min={0}
-          max={efforts.length - 1}
-          step={1}
-          value={index}
-          aria-label="Effort"
-          aria-valuetext={selected}
-          onChange={event => onChange(efforts[Number(event.currentTarget.value)]!)}
-          className="h-1 w-full cursor-pointer appearance-none rounded-full bg-muted accent-foreground [&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-background [&::-moz-range-thumb]:bg-foreground [&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-background [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:shadow-sm"
-        />
-        <span aria-hidden="true" className="pointer-events-none absolute top-7 -translate-x-1/2" style={{ left: `${percent}%` }}>
-          <TodoRunEffortBadge effort={selected} />
-        </span>
-      </div>
-      <SelectedHighIcon className={`mt-3 size-3.5 ${effortIconColor(efforts[efforts.length - 1])}`} aria-hidden="true" />
-    </div>
-  );
-}
-
-export function TodoRunSplitButton({
+  options,
   disabled,
-  loading,
-  label = "Run",
-  icon = UiPlay,
-  tone = "default",
-  title = "Run todo",
-  onRun,
-  onAdvanced,
+  onChange,
 }: {
+  action: TodoRunAction;
+  context: RunContext;
+  options: TodoRunOptions;
   disabled?: boolean;
-  loading?: boolean;
-  label?: string;
-  icon?: ComponentType<IconProps>;
-  tone?: "default" | "danger";
-  title?: string;
-  onRun: (options?: TodoRunOptions) => void;
-  onAdvanced: () => void;
+  onChange: (options: TodoRunOptions) => void;
 }) {
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
-  const primaryOptions = loadLastTodoRunOptions("run", context);
-  const unavailable = contextLoading || !context || !!contextError;
-  const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
-  const PrimaryIcon = loading ? Spinner : icon;
+  const spec = runSpec(options);
+  const agent = agentForBackend(context, spec.backend);
   return (
-    <div className="flex flex-col items-start gap-1">
-      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={() => onRun(primaryOptions)}
-          disabled={disabled || unavailable}
-          title={title}
-          className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
-        >
-          <PrimaryIcon className="text-xs" />
-          <span>{label}</span>
-        </Button>
-        {context && !contextError ? (
-          <DropdownMenu
-            align="right"
-            menuLabel="Run todo"
-            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-            trigger={
-              <Button variant="ghost" size="icon" type="button" disabled={disabled || unavailable} title="Run options" aria-label="Run options" className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
-                <UiChevronDown className="text-xs" />
-              </Button>
-            }
-          >
-            {close => (
-              <TodoRunDropdownContent
-                context={context}
-                initialAction="run"
-                closeParent={close}
-                onSelect={(selectedAction, options) => onRun(rememberTodoRunOptions(selectedAction, options))}
-                onAdvanced={() => onAdvanced()}
-              />
-            )}
-          </DropdownMenu>
-        ) : (
-          <Button variant="ghost" size="icon" type="button" disabled title="Run options" aria-label="Run options" className="h-8 w-7 rounded-none">
-            <UiChevronDown className="text-xs" />
-          </Button>
-        )}
-      </div>
-      <TodoRunContextError error={contextError} />
-    </div>
+    <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
+      <RuntimeBar<AISpecRuntimeValue>
+        value={spec}
+        variant="combo"
+        families={buildRunFamilies(context)}
+        models={modelsForSelection(context, agent, spec.backend)}
+        reasoningEfforts={context.efforts}
+        ariaLabel={`${RUN_ACTION_CONFIG[action].label} runtime`}
+        className="min-w-0"
+        onChange={runtime => onChange(todoRunOptionsForRuntimeChange({ action, context, options, runtime }))}
+      />
+    </fieldset>
   );
 }
 
@@ -790,6 +506,8 @@ export function TodoRunActionButton({
   icon,
   tone = "default",
   title,
+  options: controlledOptions,
+  onOptionsChange,
   onRun,
   onAdvanced,
 }: {
@@ -800,81 +518,73 @@ export function TodoRunActionButton({
   icon?: ComponentType<IconProps>;
   tone?: "default" | "danger";
   title?: string;
+  options?: TodoRunOptions;
+  onOptionsChange?: (options: TodoRunOptions) => void;
   onRun: (options?: TodoRunOptions) => void;
   onAdvanced: (action: TodoRunAction) => void;
 }) {
   const config = RUN_ACTION_CONFIG[action];
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(!disabled);
+  const { context, loading: contextLoading, error: contextError } = useTodoRunContext();
   const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
   useEffect(() => {
     setSelectedOptions(null);
-  }, [action]);
+  }, [action, context]);
   const unavailable = contextLoading || !context || !!contextError;
-  const lastOptions = selectedOptions ?? loadLastTodoRunOptions(action, context);
+  const candidateOptions = controlledOptions ?? selectedOptions ?? loadLastTodoRunOptions(action, context);
+  const currentOptions = context ? reconcileTodoRunOptions(action, candidateOptions, context) : candidateOptions;
   const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
   const PrimaryIcon = loading ? Spinner : icon ?? config.icon;
-  const presentation = context ? todoRunButtonPresentation(lastOptions, context) : null;
-  const ProviderIcon = presentation?.provider?.icon
-    ?? (context ? iconForRunBackend(backendForOptions(context, lastOptions)) : PrimaryIcon);
-  const effortPresentation = presentation?.effort ? todoRunEffortPresentation(presentation.effort) : null;
-  const EffortIcon = effortPresentation?.icon;
-  const showSelection = !label && !loading;
 
-  function runWith(selectedAction: TodoRunAction, options: TodoRunOptions, advanced = false) {
-    const remembered = rememberTodoRunOptions(selectedAction, options, advanced);
-    if (selectedAction === action) setSelectedOptions(remembered);
+  function selectOptions(options: TodoRunOptions) {
+    const remembered = rememberTodoRunOptions(action, options);
+    setSelectedOptions(remembered);
+    onOptionsChange?.(remembered);
+  }
+
+  function runWith(options: TodoRunOptions) {
+    const remembered = rememberTodoRunOptions(action, options);
     onRun(remembered);
   }
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <div className="inline-flex h-8 shrink-0 items-stretch rounded-md border border-border bg-background">
+      <div className="inline-flex min-h-8 shrink-0 items-stretch gap-1">
         <Button
           variant="ghost"
           type="button"
-          onClick={() => runWith(action, lastOptions)}
+          onClick={() => runWith(currentOptions)}
           disabled={disabled || unavailable}
           title={title ?? config.title}
-          className={`inline-flex h-8 items-center gap-1 rounded-none border-r border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
+          className={`inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
         >
-          {showSelection && presentation ? (
-            <ProviderIcon className="text-xs" style={{ color: presentation.provider?.iconColor }} />
-          ) : (
-            <PrimaryIcon className="text-xs" />
-          )}
-          <span>{label ?? (presentation ? `${config.label} (${presentation.model})` : config.label)}</span>
-          {showSelection && EffortIcon && effortPresentation && presentation && (
-            <span className="inline-flex" title={`Effort: ${effortPresentation.label}`} aria-label={`Effort: ${effortPresentation.label}`}>
-              <EffortIcon className={`size-3.5 ${effortIconColor(presentation.effort)}`} aria-hidden="true" />
-            </span>
-          )}
+          <PrimaryIcon className="text-xs" />
+          <span>{label ?? config.label}</span>
         </Button>
         {context && !contextError ? (
-          <DropdownMenu
-            align="right"
-            menuLabel={`${config.label} todo options`}
-            menuClassName="max-h-[70vh] w-[320px] max-w-[calc(100vw-24px)] overflow-y-auto"
-            trigger={
-              <Button variant="ghost" size="icon" type="button" disabled={disabled || unavailable} title={`${config.label} options`} aria-label={`${config.label} options`} className="h-8 w-7 rounded-none text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50">
-                <UiChevronDown className="text-xs" />
-              </Button>
-            }
-          >
-            {close => (
-              <TodoRunDropdownContent
-                context={context}
-                initialAction={action}
-                closeParent={close}
-                onSelect={runWith}
-                onAdvanced={onAdvanced}
-              />
-            )}
-          </DropdownMenu>
+          <TodoRunRuntimeBar
+            action={action}
+            context={context}
+            options={currentOptions}
+            disabled={disabled || unavailable}
+            onChange={selectOptions}
+          />
         ) : (
-          <Button variant="ghost" size="icon" type="button" disabled title={`${config.label} options`} aria-label={`${config.label} options`} className="h-8 w-7 rounded-none">
-            <UiChevronDown className="text-xs" />
+          <Button variant="outline" size="sm" type="button" disabled title={`${config.label} runtime unavailable`} aria-label={`${config.label} runtime unavailable`} className="h-8 px-2 text-xs">
+            Runtime
           </Button>
         )}
+        <Button
+          variant="outline"
+          size="icon"
+          type="button"
+          disabled={disabled || unavailable}
+          title={`Advanced ${config.label.toLowerCase()} options`}
+          aria-label={`Advanced ${config.label.toLowerCase()} options`}
+          onClick={() => onAdvanced(action)}
+          className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+        >
+          <UiCog className="text-sm" />
+        </Button>
       </div>
       <TodoRunContextError error={contextError} />
     </div>

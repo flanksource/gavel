@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { buildRunFamilies, type RunContext } from './providers';
 import {
+	defaultRunOptionsForAction,
 	runButtonLabelForOptions,
-	runChoicesForAction,
-	runChoicesForRuntimeMode,
 	reconcileTodoRunOptions,
+	runSpec,
 	shortTodoRunModelName,
+	todoRunOptionsForRuntimeChange,
 	todoRunButtonPresentation,
 	todoRunEffortPresentation,
-	todoRunModelFamilyName,
 } from './run';
 
 const context: RunContext = {
@@ -56,7 +56,7 @@ const context: RunContext = {
   ],
 };
 
-describe('todo run model choices', () => {
+describe('todo run runtime adapter', () => {
   it('does not invent providers or models missing from the Captain context', () => {
     const captainContext: RunContext = {
       defaultBackend: 'codex-agent',
@@ -76,37 +76,69 @@ describe('todo run model choices', () => {
       }],
     };
 
-    expect(runChoicesForAction(captainContext, 'run')).toEqual([]);
-    expect(buildRunFamilies(captainContext).map(family => family.id)).toEqual(['codex']);
+    expect(buildRunFamilies(captainContext)).toEqual([]);
   });
 
-  it('builds plan choices for every backend from run context', () => {
-    const choices = runChoicesForAction(context, 'plan');
+  it('maps RuntimeBar edits back to nested run options without losing advanced fields', () => {
+    const initial = {
+      ...defaultRunOptionsForAction('run', context),
+      spec: {
+        ...runSpec(defaultRunOptionsForAction('run', context)),
+        budget: { timeout: '45m', maxTurns: 12 },
+        setup: { cwd: '/workspace' },
+        permissions: { mode: 'dontAsk' as const },
+        prompt: { appendSystem: 'Keep the adapter seam.' },
+        temperature: 0.7,
+      },
+    };
 
-    expect(choices.map(choice => `${choice.backend.id}:${choice.modelID}`)).toEqual([
-      'codex-cmux:gpt-5.5',
-      'codex-cmux:gpt-5.4',
-      'claude-agent:claude-opus-4-8',
-    ]);
-    expect(choices.find(choice => choice.backend.id === 'claude-agent')?.options).toMatchObject({
+    const options = todoRunOptionsForRuntimeChange({
+      action: 'run',
+      context,
+      options: initial,
+      runtime: {
+        ...runSpec(initial),
+        backend: 'claude-agent',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+      },
+    });
+
+    expect(options).toMatchObject({
+      driver: 'claude-headless',
+      runMode: 'run',
+      spec: {
+        backend: 'claude-agent',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+        budget: { timeout: '45m', maxTurns: 12 },
+        setup: { cwd: '/workspace' },
+        permissions: { mode: 'dontAsk' },
+        prompt: { appendSystem: 'Keep the adapter seam.' },
+        workflow: { commits: [{ on: 'run', gates: 'full' }] },
+      },
+    });
+    expect(options.spec).not.toHaveProperty('temperature');
+  });
+
+  it('keeps plan lifecycle fields when RuntimeBar changes backend, model, and effort', () => {
+    const initial = defaultRunOptionsForAction('plan', context);
+    expect(todoRunOptionsForRuntimeChange({
+      action: 'plan',
+      context,
+      options: initial,
+      runtime: {
+        ...runSpec(initial),
+        backend: 'claude-agent',
+        model: 'claude-opus-4-8',
+        effort: 'high',
+      },
+    })).toMatchObject({
       driver: 'claude-headless',
       runMode: 'plan',
       plan: true,
-      spec: { backend: 'claude-agent', model: 'claude-opus-4-8' },
+      spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
     });
-
-    expect(runChoicesForAction(context, 'run', 'high')[0]?.options).toMatchObject({
-      runMode: 'run',
-      spec: { effort: 'high', workflow: { commits: [{ on: 'run', gates: 'full' }] } },
-    });
-
-    expect(runChoicesForRuntimeMode(context, 'run', 'cmux').map(choice => choice.backend.id)).toEqual([
-      'codex-cmux',
-      'codex-cmux',
-    ]);
-    expect(runChoicesForRuntimeMode(context, 'run', 'agent').map(choice => choice.backend.id)).toEqual([
-      'claude-agent',
-    ]);
   });
 
 	it('labels primary buttons with mechanism and short model', () => {
@@ -196,10 +228,6 @@ describe('todo run model choices', () => {
     expect(shortTodoRunModelName('Claude Opus 4.8')).toBe('opus-4.8');
     expect(shortTodoRunModelName('claude-sonnet-5')).toBe('sonnet-5');
     expect(shortTodoRunModelName('gpt-5.5')).toBe('gpt-5.5');
-    expect(todoRunModelFamilyName('Claude Opus 4.8')).toBe('Opus');
-    expect(todoRunModelFamilyName('claude-fable-5')).toBe('Fable');
-    expect(todoRunModelFamilyName('gpt-5.6-sol')).toBe('Sol');
-    expect(todoRunModelFamilyName('gpt-5.5')).toBe('GPT');
   });
 
   it('gives every effort tier a distinct tone and makes ultra rainbow', () => {

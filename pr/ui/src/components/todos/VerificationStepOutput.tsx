@@ -104,15 +104,16 @@ function StreamBlock({ label, text }: { label: string; text: string }) {
 // it saw are what explain the verdict.
 function CelDetails({ step }: { step: VerificationFixtureResult }) {
   const vars = Object.entries(step.cel_vars ?? {});
+  const expression = step.cel_trace || step.cel_expression;
   const expected = comparisonValue(step, step.expected);
   const actual = comparisonValue(step, step.actual);
-  if (!step.cel_expression && vars.length === 0 && expected === undefined && actual === undefined) return null;
+  if (!expression && vars.length === 0 && expected === undefined && actual === undefined) return null;
   return (
     <div className="space-y-1 rounded border border-border bg-muted/30 px-2 py-1.5">
-      {step.cel_expression && (
+      {expression && (
         <div>
           <span className="text-[10px] uppercase text-muted-foreground">expression</span>
-          <code className="block overflow-x-auto whitespace-pre text-[11px]">{step.cel_expression}</code>
+          <code className="block overflow-x-auto whitespace-pre text-[11px]">{expression}</code>
         </div>
       )}
       {vars.length > 0 && (
@@ -149,7 +150,7 @@ function CelDetails({ step }: { step: VerificationFixtureResult }) {
 // compared is shown as-is, structured values included.
 function comparisonValue(step: VerificationFixtureResult, value: unknown): unknown {
   if (value === undefined) return undefined;
-  if (step.cel_expression) return value;
+  if (step.cel_expression || step.cel_trace) return value;
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) return undefined;
   return value;
 }

@@ -76,6 +76,22 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 vi.mock('@flanksource/clicky-ui/ai', () => ({
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
+  RuntimeBar: ({ value, onChange, ariaLabel, className }: {
+    value: Record<string, unknown>;
+    onChange: (value: Record<string, unknown>) => void;
+    ariaLabel?: string;
+    className?: string;
+  }) => (
+    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for RuntimeBar itself.
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      className={className}
+      onClick={() => onChange({ ...value, backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' })}
+    >
+      Select Claude runtime
+    </button>
+  ),
   SpecRuntimeEditor: () => <div>Advanced runtime editor</div>,
   promptRuntimeValueToPayload: (value: unknown) => value,
   reconcileModelCapabilities: (value: unknown) => value,
@@ -235,7 +251,8 @@ describe('PlanApproveButtons', () => {
 
     render(<PlanApproveButtons onApprove={onApprove} />);
 
-    const approveRun = await screen.findByRole('button', { name: /Approve & Run \(Agent:opus-4\.8\)/ });
+    const approveRun = await screen.findByRole('button', { name: 'Approve & Run' });
+    await waitFor(() => expect((approveRun as HTMLButtonElement).disabled).toBe(false));
     expect(approveRun.className).toContain('h-8');
     expect(approveRun.className).toContain('px-2');
     expect(approveRun.className).toContain('text-xs');
@@ -257,19 +274,17 @@ describe('PlanApproveButtons', () => {
     }));
   });
 
-  it('selects model and effort from the run dropdown before approving', async () => {
+  it('selects a runtime without approving until the primary action is pressed', async () => {
     mockRunContext();
     const onApprove = vi.fn();
 
     render(<PlanApproveButtons onApprove={onApprove} />);
 
-    await screen.findByRole('button', { name: /Approve & Run \(Agent:gpt-5\.5\)/ });
-    fireEvent.click(screen.getByRole('button', { name: 'Claude' }));
-    fireEvent.change(screen.getByRole('slider', { name: 'Effort' }), { target: { value: '2' } });
-    const opusButton = screen.getByRole('button', { name: 'Claude Opus 4.8' });
-    expect(opusButton.textContent).toBe('Claude Opus 4.8');
-    expect(opusButton.className).toContain('px-2');
-    fireEvent.click(opusButton);
+    const approveRun = await screen.findByRole('button', { name: 'Approve & Run' });
+    await waitFor(() => expect((approveRun as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Run runtime' }));
+    expect(onApprove).not.toHaveBeenCalled();
+    fireEvent.click(approveRun);
 
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith(true, expect.objectContaining({
@@ -306,7 +321,9 @@ describe('PlanApproveButtons', () => {
     render(<PlanApproveButtons onApprove={onApprove} />);
 
     expect(await screen.findByText('Recent configs')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Agent:opus-4\.8/ })).toBeTruthy();
+    const recent = screen.getByRole('button', { name: /Agent:opus-4\.8/ });
+    fireEvent.click(recent);
+    expect(onApprove).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
     });

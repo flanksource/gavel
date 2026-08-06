@@ -10,23 +10,29 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/react": "catalog:",
     "@flanksource/clicky-ui": "^0.3.5",
     "@flanksource/gavel": "^0.1.2",
     "@iconify-icons/ph": "^1.2.5",
     "@iconify-icons/vscode-icons": "catalog:",
     "@iconify/react": "^6.0.2",
+    "@joplin/turndown": "catalog:",
+    "@joplin/turndown-plugin-gfm": "catalog:",
     "@mdxeditor/editor": "catalog:",
     "@tanstack/react-query": "catalog:",
+    "ai": "catalog:",
     "marked": "^15.0.12",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "streamdown": "catalog:"
+    "streamdown": "catalog:",
+    "strip-ansi": "catalog:"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/turndown": "catalog:",
     "@vitejs/plugin-react": "^4.7.0",
     "jsdom": "^25.0.1",
     "oxlint": "catalog:",

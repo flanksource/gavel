@@ -11,7 +11,7 @@ import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel } from './format';
-import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun } from './run';
+import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
 import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
@@ -46,6 +46,7 @@ export function TodoDetail({
   onTransferred?: (toDir: string, todo: TodoItem) => void;
 }) {
   const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
+  const [runSelections, setRunSelections] = useState<Partial<Record<TodoRunAction, TodoRunOptions>>>({});
   const [error, setError] = useState('');
   const [tab, setTab] = useState<TodoDetailTabKey>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
@@ -54,6 +55,7 @@ export function TodoDetail({
   const [draftBody, setDraftBody] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const { runBusy, runMessage, runError, reset: resetRun, run } = useTodoRun(dir);
+  const { context: runContext } = useTodoRunContext();
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
   const deleteTodo = useDeleteTodoMutation(dir);
   const transferTodo = useTransferTodoMutation();
@@ -78,7 +80,7 @@ export function TodoDetail({
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
   const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
-  const { stats: headerSessionStats } = useSessionStats(dir, todo?.sessionId, !!todo?.sessionId);
+  const { stats: headerSessionStats } = useSessionStats({ dir, sessionId: todo?.sessionId, active: !!todo?.sessionId });
   const sessionInProgress = !!todo && !!todo.sessionId && (headerSessionStats?.inProgress || (!headerSessionStats?.found && todo.status === 'in_progress'));
   // A todo awaiting a human decision (plan review or a blocking question) must
   // route through TodoReviewBanner's approve/reject/answer flow, not have its
@@ -94,6 +96,17 @@ export function TodoDetail({
     setEditingBody(false);
     setCopyState('idle');
   }, [todo?.ref, todo?.lookupSessionId, resetRun]);
+
+  useEffect(() => {
+    if (!todo || !runContext) {
+      setRunSelections({});
+      return;
+    }
+    setRunSelections({
+      run: loadLastTodoRunOptions('run', runContext),
+      plan: loadLastTodoRunOptions('plan', runContext),
+    });
+  }, [todo?.ref, runContext]);
 
   useEffect(() => {
     if (copyState === 'idle') return;
@@ -317,8 +330,8 @@ export function TodoDetail({
               onPriority={priority => patch({ priority })}
               onTransfer={transferTo}
               onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
-              onRun={() => runTodo(defaultRunOptions)}
-              onPlan={() => runTodo(loadLastTodoRunOptions('plan'))}
+              onRun={() => runTodo(runSelections.run ?? loadLastTodoRunOptions('run', runContext))}
+              onPlan={() => runTodo(runSelections.plan ?? loadLastTodoRunOptions('plan', runContext))}
               onAdvanced={setAdvancedMode}
               onVerify={() => patch({ status: 'verified' })}
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
@@ -345,6 +358,8 @@ export function TodoDetail({
                 disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
                 loading={runBusy}
                 title={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                options={runSelections.plan}
+                onOptionsChange={options => setRunSelections(previous => ({ ...previous, plan: options }))}
                 onRun={runTodo}
                 onAdvanced={setAdvancedMode}
               />
@@ -356,6 +371,8 @@ export function TodoDetail({
                 icon={sessionInProgress ? UiStop : UiPlay}
                 tone={sessionInProgress ? 'danger' : 'default'}
                 title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : 'Run todo'}
+                options={runSelections.run}
+                onOptionsChange={options => setRunSelections(previous => ({ ...previous, run: options }))}
                 onRun={runTodo}
                 onAdvanced={setAdvancedMode}
               />
@@ -379,8 +396,8 @@ export function TodoDetail({
                 onPriority={priority => patch({ priority })}
                 onTransfer={transferTo}
                 onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
-                onRun={() => runTodo(defaultRunOptions)}
-                onPlan={() => runTodo(loadLastTodoRunOptions('plan'))}
+                onRun={() => runTodo(runSelections.run ?? loadLastTodoRunOptions('run', runContext))}
+                onPlan={() => runTodo(runSelections.plan ?? loadLastTodoRunOptions('plan', runContext))}
                 onAdvanced={setAdvancedMode}
                 onVerify={() => patch({ status: 'verified' })}
                 onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
@@ -431,8 +448,11 @@ export function TodoDetail({
         open={advancedMode !== null}
         onClose={() => setAdvancedMode(null)}
         onRun={options => {
+          const action = advancedMode ?? (options.plan || options.runMode === 'plan' ? 'plan' : 'run');
+          const remembered = rememberTodoRunOptionsForMode(options, true);
+          setRunSelections(previous => ({ ...previous, [action]: remembered }));
           setAdvancedMode(null);
-          runTodo(rememberTodoRunOptionsForMode(options, true));
+          runTodo(remembered);
         }}
         loading={runBusy}
         initialMode={advancedMode ?? 'run'}
@@ -454,6 +474,10 @@ export function TodoDetail({
             resumeDisabled={busy || runBusy || sessionInProgress || viewingHistoricalSession}
             onRun={runTodo}
             onAdvanced={setAdvancedMode}
+            runOptions={runSelections.run}
+            planOptions={runSelections.plan}
+            onRunOptionsChange={options => setRunSelections(previous => ({ ...previous, run: options }))}
+            onPlanOptionsChange={options => setRunSelections(previous => ({ ...previous, plan: options }))}
             runBusy={runBusy}
             runDisabled={busy || runBusy || awaitingHumanAction}
           />

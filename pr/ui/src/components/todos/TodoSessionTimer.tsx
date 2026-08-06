@@ -15,11 +15,19 @@ import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 // while a run is in progress, slower while waiting for the log to appear, and it
 // stops once a finished session's totals are final. Between polls of a running
 // session the displayed clock ticks locally so the timer advances smoothly.
-export function useSessionStats(dir: string, sessionId: string | undefined, active: boolean) {
+export function useSessionStats({ dir, sessionId, active, expectLive = true }: {
+  dir: string;
+  sessionId: string | undefined;
+  active: boolean;
+  // expectLive marks a run that should still produce a session, so the stats
+  // request keeps retrying until it appears. Settled callers (a list row reading
+  // a finished run's totals) pass false and look exactly once.
+  expectLive?: boolean;
+}) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const enabled = active && !!sessionId;
   const query = useQuery({
-    ...sessionStatsQueryOptions(dir, sessionId ?? ''),
+    ...sessionStatsQueryOptions({ dir, sessionId: sessionId ?? '', expectLive }),
     enabled,
   });
   const stats = enabled && !query.error ? query.data ?? null : null;
@@ -95,7 +103,7 @@ export function TodoSessionTimer({ dir, sessionId, active = true, onResume, resu
   onResume?: () => void;
   resumeDisabled?: boolean;
 }) {
-  const { stats, elapsedMs } = useSessionStats(dir, sessionId, active);
+  const { stats, elapsedMs } = useSessionStats({ dir, sessionId, active });
 
   if (!sessionId || !stats?.found) return null;
 

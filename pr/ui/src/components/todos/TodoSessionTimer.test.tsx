@@ -83,7 +83,7 @@ describe('useSessionStats', () => {
       }),
     }));
 
-    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-1', true), {
+    const { result, unmount } = renderHook(() => useSessionStats({ dir: '/repo', sessionId: 'session-1', active: true }), {
       wrapper: queryTestWrapper(),
     });
 
@@ -120,7 +120,7 @@ describe('useSessionStats', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result, unmount } = renderHook(() => useSessionStats('/repo', 'session-clock', true), {
+    const { result, unmount } = renderHook(() => useSessionStats({ dir: '/repo', sessionId: 'session-clock', active: true }), {
       wrapper: queryTestWrapper(),
     });
     await act(async () => {

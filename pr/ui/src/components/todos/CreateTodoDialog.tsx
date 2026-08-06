@@ -3,6 +3,7 @@ import { Modal, Field, Button, Select } from '@flanksource/clicky-ui/components'
 import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
+import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation } from './todoMutations';
 
 // initialDir picks the workspace to preselect: the current todo's workspace when
@@ -77,7 +78,7 @@ export function CreateTodoDialog({
       open
       onClose={onClose}
       title="New todo"
-      size="md"
+      size="xl"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -117,14 +118,13 @@ export function CreateTodoDialog({
             </Field>
           </div>
         </div>
-        <Field label="Body">
-          <textarea
-            className={`${inputClass} h-28 resize-none`}
-            value={body}
-            placeholder="Details (optional)"
-            onChange={e => setBody(e.currentTarget.value)}
-          />
-        </Field>
+        <TodoBodyField
+          label="Body"
+          value={body}
+          onChange={setBody}
+          placeholder="Details (optional)"
+          disabled={busy}
+        />
         <Field label="Screenshot">
           <ScreenshotPicker previews={previews} onAdd={add} onRemove={remove} disabled={busy} />
         </Field>

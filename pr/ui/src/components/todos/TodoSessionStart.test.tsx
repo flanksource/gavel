@@ -1,17 +1,19 @@
-import type React from 'react';
+import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TodoSessionStart } from './TodoSessionStart';
-import type { TodoItem } from '../../types';
+import type { TodoItem, TodoRunOptions } from '../../types';
 
-const RESOLVED_OPTIONS = { driver: 'claude-headless', backend: 'claude-agent', model: 'claude-sonnet-5', effort: 'medium' };
+const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'claude-headless', runMode: 'run', spec: { backend: 'claude-agent', model: 'claude-sonnet-5', effort: 'medium' } };
+const UPDATED_OPTIONS: TodoRunOptions = { driver: 'codex-cmux', runMode: 'run', spec: { backend: 'codex-cmux', model: 'gpt-5.6-sol', effort: 'high' } };
 
 vi.mock('./run', () => ({
   useTodoRunContext: () => ({ context: { backends: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
   TodoRunContextError: ({ error }: { error: string }) => error ? <div role="alert">{error}</div> : null,
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
-  todoRunButtonPresentation: () => ({ provider: undefined, model: 'sonnet-5', effort: 'medium' }),
-  todoRunModeLabel: () => 'Agent',
+  reconcileTodoRunOptions: (_action: string, options: unknown) => options,
+  todoRunButtonPresentation: (options: TodoRunOptions) => ({ provider: undefined, model: options.spec?.model?.replace(/^claude-/, ''), effort: options.spec?.effort }),
+  todoRunModeLabel: (options: TodoRunOptions) => options.spec?.backend === 'codex-cmux' ? 'cmux' : 'Agent',
   useTodoRunPreview: () => ({
     isPending: false,
     mutate: (
@@ -28,11 +30,13 @@ vi.mock('./run', () => ({
     },
   }),
   TodoRunEffortBadge: ({ effort }: { effort?: string }) => <span data-testid="effort-badge">{effort}</span>,
-  TodoRunActionButton: ({ action, onRun }: { action: string; onRun?: (options?: unknown) => void }) => (
-    // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stub for the run button.
-    <button type="button" onClick={() => onRun?.({ action })}>
-      {action}
-    </button>
+  TodoRunActionButton: ({ action, onRun, onOptionsChange }: { action: string; onRun?: (options?: unknown) => void; onOptionsChange?: (options: TodoRunOptions) => void }) => (
+    <>
+      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stub for the run button. */}
+      <button type="button" onClick={() => onRun?.({ action })}>{action}</button>
+      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stub for the RuntimeBar change path. */}
+      <button type="button" aria-label={`change ${action} runtime`} onClick={() => onOptionsChange?.(UPDATED_OPTIONS)}>change</button>
+    </>
   ),
 }));
 
@@ -73,10 +77,9 @@ describe('TodoSessionStart', () => {
     stubPreviewFetch('## Implement thing');
     render(<TodoSessionStart dir="/repo" todo={todo} onRun={vi.fn()} />);
 
-    expect(screen.getByText('sonnet-5')).toBeTruthy();
+    expect(await screen.findByText('sonnet-5')).toBeTruthy();
     expect(screen.getByText('Agent')).toBeTruthy();
     expect(screen.getByTestId('effort-badge').textContent).toBe('medium');
-    // Flush the async preview so its state update settles inside act().
     await screen.findByText('## Implement thing');
   });
 
@@ -97,6 +100,30 @@ describe('TodoSessionStart', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'run' }));
     await waitFor(() => expect(onRun).toHaveBeenCalledWith({ action: 'run' }));
+  });
+
+  it('updates controlled Run chips and refetches the preview without starting a run', async () => {
+    const fetchMock = stubPreviewFetch('## Implement thing');
+    const onRun = vi.fn();
+    function Harness() {
+      const [runOptions, setRunOptions] = React.useState<TodoRunOptions>(RESOLVED_OPTIONS);
+      return <TodoSessionStart dir="/repo" todo={todo} runOptions={runOptions} onRunOptionsChange={setRunOptions} onRun={onRun} />;
+    }
+    render(<Harness />);
+    await screen.findByText('## Implement thing');
+
+    fireEvent.click(screen.getByRole('button', { name: 'change run runtime' }));
+
+    expect(onRun).not.toHaveBeenCalled();
+    expect(await screen.findByText('gpt-5.6-sol')).toBeTruthy();
+    expect(screen.getByText('cmux')).toBeTruthy();
+    expect(screen.getByTestId('effort-badge').textContent).toBe('high');
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const lastRequest = fetchMock.mock.calls.at(-1)?.[1];
+    expect(JSON.parse(String(lastRequest?.body))).toMatchObject({
+      driver: 'codex-cmux',
+      spec: { backend: 'codex-cmux', model: 'gpt-5.6-sol', effort: 'high' },
+    });
   });
 
   it('surfaces a preview error but still offers the run actions', async () => {

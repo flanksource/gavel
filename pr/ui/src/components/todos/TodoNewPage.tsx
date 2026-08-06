@@ -5,6 +5,7 @@ import { UiClose } from '@flanksource/clicky-ui/icons';
 import type { ProcStatus, Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ScreenshotPicker, todoCommentFormData, todoFormData, useAttachments } from './attachments';
 import { inputClass, priorities, statuses, statusLabel } from './format';
+import { TodoBodyField } from './TodoBodyField';
 import { useCreateTodoMutation, useUpdateTodoMutation } from './todoMutations';
 import { todoListQueryOptions } from './todoQueries';
 
@@ -321,7 +322,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
         </a>
       </header>
 
-      <main className="mx-auto w-full max-w-2xl px-4 py-6">
+      <main className="mx-auto w-full max-w-4xl px-4 py-6">
         <form
           className="space-y-4"
           onSubmit={e => {
@@ -333,14 +334,16 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
           {showModeSwitch && (
             <div className="grid grid-cols-2 rounded-md border border-border bg-muted p-1">
               {(['new', 'existing'] as const).map(next => (
-                <button
+                <Button
                   key={next}
                   type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setMode(next)}
                   className={`h-8 rounded px-3 text-sm font-medium ${mode === next ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                 >
                   {next === 'new' ? 'New issue' : 'Existing issue'}
-                </button>
+                </Button>
               ))}
             </div>
           )}
@@ -376,14 +379,13 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
                   </Select>
                 </div>
               </Field>
-              <Field label="Comment">
-                <textarea
-                  className={`${inputClass} h-40 resize-none`}
-                  value={body}
-                  placeholder="Comment"
-                  onChange={e => setBody(e.currentTarget.value)}
-                />
-              </Field>
+              <TodoBodyField
+                label="Comment"
+                value={body}
+                onChange={setBody}
+                placeholder="Comment"
+                disabled={busy}
+              />
             </>
           ) : (
             <>
@@ -412,14 +414,13 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
                   </Field>
                 </div>
               </div>
-              <Field label="Body">
-                <textarea
-                  className={`${inputClass} h-40 resize-none`}
-                  value={body}
-                  placeholder="Details (optional)"
-                  onChange={e => setBody(e.currentTarget.value)}
-                />
-              </Field>
+              <TodoBodyField
+                label="Body"
+                value={body}
+                onChange={setBody}
+                placeholder="Details (optional)"
+                disabled={busy}
+              />
             </>
           )}
           <Field label="Screenshot">
