@@ -33,6 +33,12 @@ catalogs:
     '@iconify-icons/vscode-icons':
       specifier: ^1.2.29
       version: 1.2.29
+    '@joplin/turndown':
+      specifier: ^4.0.85
+      version: 4.0.85
+    '@joplin/turndown-plugin-gfm':
+      specifier: ^1.0.67
+      version: 1.0.67
     '@mdxeditor/editor':
       specifier: ^4.0.4
       version: 4.0.4
@@ -45,6 +51,9 @@ catalogs:
     '@tanstack/react-query':
       specifier: ^5.101.1
       version: 5.101.1
+    '@types/turndown':
+      specifier: ^5.0.6
+      version: 5.0.6
     ai:
       specifier: ^6.0.199
       version: 6.0.206
@@ -66,6 +75,9 @@ catalogs:
     streamdown:
       specifier: ^2.5.0
       version: 2.5.0
+    strip-ansi:
+      specifier: ^7.2.0
+      version: 7.2.0
     yaml:
       specifier: ^2.8.3
       version: 2.9.0
@@ -78,6 +90,9 @@ importers:
 
   .:
     dependencies:
+      '@ai-sdk/react':
+        specifier: 'catalog:'
+        version: 3.0.208(react@19.2.7)(zod@4.4.3)
       '@flanksource/clicky-ui':
         specifier: ^0.3.5
         version: link:../../../clicky-ui/packages/ui
@@ -93,12 +108,21 @@ importers:
       '@iconify/react':
         specifier: ^6.0.2
         version: 6.0.2(react@19.2.7)
+      '@joplin/turndown':
+        specifier: 'catalog:'
+        version: 4.0.85
+      '@joplin/turndown-plugin-gfm':
+        specifier: 'catalog:'
+        version: 1.0.67
       '@mdxeditor/editor':
         specifier: 'catalog:'
         version: 4.0.4(@codemirror/language@6.12.4)(@lezer/highlight@1.2.3)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(yjs@13.6.31)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.101.1(react@19.2.7)
+      ai:
+        specifier: 'catalog:'
+        version: 6.0.206(zod@4.4.3)
       marked:
         specifier: ^15.0.12
         version: 15.0.12
@@ -111,6 +135,9 @@ importers:
       streamdown:
         specifier: 'catalog:'
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      strip-ansi:
+        specifier: 'catalog:'
+        version: 7.2.0
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.3.1
@@ -124,6 +151,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      '@types/turndown':
+        specifier: 'catalog:'
+        version: 5.0.6
       '@vitejs/plugin-react':
         specifier: ^4.7.0
         version: 4.7.0(vite@6.4.3(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -347,6 +377,9 @@ importers:
         version: 2.1.9(jsdom@25.0.1)(lightningcss@1.32.0)
 
 packages:
+
+  '@adobe/css-tools@4.4.4':
+    resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
 
   '@adobe/css-tools@4.5.0':
     resolution: {integrity: sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==}
@@ -1323,6 +1356,12 @@ packages:
   '@iconify/utils@3.1.3':
     resolution: {integrity: sha512-LPKOXPn/zV+zis1oOfGWogaXVpqUybF3ZS6SCZIsz8vg0ivVp9+fVqyYB7xq0aiST/VhUQYGO1qo6uoYSiEJqw==}
 
+  '@joplin/turndown-plugin-gfm@1.0.67':
+    resolution: {integrity: sha512-FZfW5EZfidhzd1IaY1uxHnIZPTVOxAdleMZ4/1U6Nt5b7+Qj5JThDnaIomuJtetnUBzuRNbe9FWMuqD4B3dlWA==}
+
+  '@joplin/turndown@4.0.85':
+    resolution: {integrity: sha512-JB/I1LSBtaS8EVveZPZU8CE4ypg79fPKYmVqDTvtOvQkPKk79nXkwtHeJQoitdivJRoxkpL4dCRUd4OmfFMVGg==}
+
   '@joshwooding/vite-plugin-react-docgen-typescript@0.7.0':
     resolution: {integrity: sha512-qvsTEwEFefhdirGOPnu9Wp6ChfIwy2dBCRuETU3uE+4cC+PFoxMSiiEhxk4lOluA34eARHA0OxqsEUYDqRMgeQ==}
     peerDependencies:
@@ -1502,6 +1541,9 @@ packages:
 
   '@microsoft/tsdoc@0.16.0':
     resolution: {integrity: sha512-xgAyonlVVS+q7Vc7qLW0UrJU7rSFcETRWsqdXZtjzRU8dF+6CkozTK4V4y1LwOX7j8r/vHphjDeMeGI4tNGeGA==}
+
+  '@mixmark-io/domino@2.2.0':
+    resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
 
   '@monaco-editor/loader@1.7.0':
     resolution: {integrity: sha512-gIwR1HrJrrx+vfyOhYmCZ0/JcWqG5kbfG7+d3f/C1LXk2EvzAbHSg3MQ5lO2sMlo9izoAZ04shohfKLVT6crVA==}
@@ -2962,6 +3004,9 @@ packages:
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
 
+  '@types/turndown@5.0.6':
+    resolution: {integrity: sha512-ru00MoyeeouE5BX4gRL+6m/BsDfbRayOskWqUvh7CLGW+UXxHQItqALa38kKnOiZPqJrtzJUgAC2+F0rL1S4Pg==}
+
   '@types/unist@2.0.11':
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
 
@@ -3871,6 +3916,9 @@ packages:
   html-encoding-sniffer@4.0.0:
     resolution: {integrity: sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==}
     engines: {node: '>=18'}
+
+  html-entities@1.4.0:
+    resolution: {integrity: sha512-8nxjcBcd8wovbeKx7h3wTji4e6+rhaVuPNpMqwWgnHh+N9ToqsCs6XztWRBPQ+UtzsoMAdKZtUENoVzU/EMtZA==}
 
   html-url-attributes@3.0.1:
     resolution: {integrity: sha512-ol6UPyBWqsrO6EJySPz2O7ZSr856WDrEzM5zMqp+FJJLGMW35cLYmmZnl0vztAZxRUoNZJFTCohfjuIJ8I4QBQ==}
@@ -5460,6 +5508,8 @@ packages:
 
 snapshots:
 
+  '@adobe/css-tools@4.4.4': {}
+
   '@adobe/css-tools@4.5.0': {}
 
   '@ai-sdk/gateway@3.0.132(zod@4.4.3)':
@@ -5486,6 +5536,16 @@ snapshots:
       ai: 6.0.206(zod@4.4.3)
       react: 18.3.1
       swr: 2.4.1(react@18.3.1)
+      throttleit: 2.1.0
+    transitivePeerDependencies:
+      - zod
+
+  '@ai-sdk/react@3.0.208(react@19.2.7)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider-utils': 4.0.29(zod@4.4.3)
+      ai: 6.0.206(zod@4.4.3)
+      react: 19.2.7
+      swr: 2.4.1(react@19.2.7)
       throttleit: 2.1.0
     transitivePeerDependencies:
       - zod
@@ -6355,6 +6415,14 @@ snapshots:
       '@iconify/types': 2.0.0
       import-meta-resolve: 4.2.0
 
+  '@joplin/turndown-plugin-gfm@1.0.67': {}
+
+  '@joplin/turndown@4.0.85':
+    dependencies:
+      '@adobe/css-tools': 4.4.4
+      '@mixmark-io/domino': 2.2.0
+      html-entities: 1.4.0
+
   '@joshwooding/vite-plugin-react-docgen-typescript@0.7.0(typescript@5.9.3)(vite@6.4.3(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0))':
     dependencies:
       glob: 13.0.6
@@ -6841,6 +6909,8 @@ snapshots:
       resolve: 1.22.12
 
   '@microsoft/tsdoc@0.16.0': {}
+
+  '@mixmark-io/domino@2.2.0': {}
 
   '@monaco-editor/loader@1.7.0':
     dependencies:
@@ -8471,6 +8541,8 @@ snapshots:
   '@types/trusted-types@2.0.7':
     optional: true
 
+  '@types/turndown@5.0.6': {}
+
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
@@ -9545,6 +9617,8 @@ snapshots:
   html-encoding-sniffer@4.0.0:
     dependencies:
       whatwg-encoding: 3.1.1
+
+  html-entities@1.4.0: {}
 
   html-url-attributes@3.0.1: {}
 
@@ -11147,6 +11221,12 @@ snapshots:
       react: 18.3.1
       use-sync-external-store: 1.6.0(react@18.3.1)
 
+  swr@2.4.1(react@19.2.7):
+    dependencies:
+      dequal: 2.0.3
+      react: 19.2.7
+      use-sync-external-store: 1.6.0(react@19.2.7)
+
   symbol-tree@3.2.4: {}
 
   tabbable@6.4.0: {}
@@ -11317,6 +11397,10 @@ snapshots:
   use-sync-external-store@1.6.0(react@18.3.1):
     dependencies:
       react: 18.3.1
+
+  use-sync-external-store@1.6.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
 
   uuid@14.0.0: {}
 
