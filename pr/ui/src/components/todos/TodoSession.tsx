@@ -10,7 +10,7 @@ import { TodoSessionStart } from './TodoSessionStart';
 import { SessionErrorDetails, type SessionError } from './SessionErrorDetails';
 import { CopyAllDetailsButton, SessionDiagnostics, ThreadInspector, useTodoSessionDetail } from './TodoSessionDetail';
 import type { TodoRunAction } from './run';
-import { invalidateTodoCollections, setTodoCaches, todoMutationJSON } from './todoMutations';
+import { setTodoCaches, todoMutationJSON, useTodoSessionStop } from './todoMutations';
 import { sessionStatsQueryOptions, todoQueryKeys } from './todoQueries';
 
 interface SessionStateView {
@@ -266,26 +266,7 @@ export function TodoSession({
       ]);
     },
   });
-  const stopMutation = useMutation({
-    mutationKey: ['todos', 'session', 'stop', { dir: dir.trim(), ref: todo.ref }],
-    mutationFn: (attempt: TodoSessionAttempt) => todoMutationJSON<{ status: string; promptRunId: string }>(
-      `/api/todos/session/stop?${todoQuery(dir)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: todo.ref, promptRunId: attempt.promptRunId }),
-      },
-      'Could not stop the attempt',
-    ),
-    onSuccess: async () => {
-      await Promise.all([
-        invalidateTodoCollections(queryClient, dir),
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, followedSessionId ?? '') }),
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, sessionId, false) }),
-        queryClient.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, undefined, true) }),
-      ]);
-    },
-  });
+  const stopMutation = useTodoSessionStop(dir, todo.ref, followedSessionId ?? sessionId);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -355,7 +336,7 @@ export function TodoSession({
   );
 
   const stopAttempt = useCallback(
-    (attempt: TodoSessionAttempt) => stopMutation.mutateAsync(attempt).then(() => undefined),
+    (attempt: TodoSessionAttempt) => stopMutation.mutateAsync(attempt.promptRunId).then(() => undefined),
     [stopMutation.mutateAsync]
   );
 

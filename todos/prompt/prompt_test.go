@@ -251,7 +251,7 @@ func TestRenderRejectsVerifyMode(t *testing.T) {
 	}
 }
 
-func TestPlanEnvelopeSchemaIsCodexCompatible(t *testing.T) {
+func TestPlanEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 	raw, err := EnvelopeSchemaJSON(types.ModePlan)
 	if err != nil {
 		t.Fatalf("EnvelopeSchemaJSON: %v", err)
@@ -277,12 +277,17 @@ func TestPlanEnvelopeSchemaIsCodexCompatible(t *testing.T) {
 	if !ok {
 		t.Fatalf("PlanEnvelope has no properties: %#v", planEnvelope)
 	}
-	plan, ok := properties["plan"].(map[string]any)
-	if !ok {
-		t.Fatalf("PlanEnvelope.plan is %T, want schema object", properties["plan"])
+	for _, field := range []string{"summary", "endStatus", "planStatus", "planPath", "planContent"} {
+		property, ok := properties[field].(map[string]any)
+		if !ok {
+			t.Fatalf("PlanEnvelope.%s is %T, want schema object", field, properties[field])
+		}
+		if property["$ref"] != nil {
+			t.Fatalf("PlanEnvelope.%s = %#v, want a top-level scalar", field, property)
+		}
 	}
-	if len(plan) != 1 || plan["$ref"] == nil {
-		t.Fatalf("PlanEnvelope.plan = %#v, want a standalone $ref", plan)
+	if properties["plan"] != nil {
+		t.Fatalf("PlanEnvelope.plan = %#v, want no nested plan object", properties["plan"])
 	}
 }
 

@@ -16,7 +16,7 @@ import {
   verificationSpec,
 } from './PromptRunButton';
 import { defaultRunOptions, runSpec } from './run';
-import { setTodoCaches, todoMutationJSON } from './todoMutations';
+import { setTodoCaches, todoMutationJSON, useTodoVerificationRun } from './todoMutations';
 import { todoQueryKeys } from './todoQueries';
 
 const GAVEL_FIXTURE_FENCES = [
@@ -26,15 +26,6 @@ const GAVEL_FIXTURE_FENCES = [
   { info: 'exec', label: 'exec', description: 'Shell command or script' },
   { info: 'bash', label: 'bash', description: 'Bash command block' },
 ] satisfies readonly FixtureFenceOption[];
-
-// The response of POST /api/todos/verification/run. Only the parts this view
-// acts on are modelled: the recorded results are read back from the attempt
-// list, not from this payload.
-interface VerificationRunResponse {
-  todo?: TodoItem;
-  verification?: { allPassed?: boolean; error?: string };
-  error?: string;
-}
 
 // TodoVerification renders the Verification tab: a FixtureEditor over the
 // todo's "## Verification" fixture markdown (explicit Save, since the editor
@@ -88,28 +79,7 @@ export function TodoVerification({
       onChanged(updated);
     },
   });
-  const runMutation = useMutation({
-    mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref: todo.ref }],
-    mutationFn: ({ current, options }: { current: TodoItem; options: TodoRunOptions }) => todoMutationJSON<VerificationRunResponse>(
-      `/api/todos/verification/run?${todoQuery(dir)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: current.ref, spec: verificationSpec(runSpec(options)) }),
-      },
-      'Verification run failed',
-    ),
-    onSuccess: async (data) => {
-      setVerificationError(data.verification?.error ?? '');
-      if (data.todo) {
-        await setTodoCaches(queryClient, dir, data.todo);
-        onChanged(data.todo);
-      }
-      await queryClient.invalidateQueries({
-        queryKey: todoQueryKeys.sessionDetail(dir, todo.ref, undefined, true),
-      });
-    },
-  });
+  const runMutation = useTodoVerificationRun(dir, todo.ref);
   const busy = fixtureMutation.isPending;
   const runBusy = runMutation.isPending;
 
@@ -142,7 +112,9 @@ export function TodoVerification({
     try {
       const current = dirty ? await save() : todo;
       if (!current) return;
-      await runMutation.mutateAsync({ current, options });
+      const data = await runMutation.mutateAsync({ ref: current.ref, spec: verificationSpec(runSpec(options)) });
+      setVerificationError(data.verification?.error ?? '');
+      if (data.todo) onChanged(data.todo);
     } catch {
       // The owning mutation exposes its contextual error below.
     }

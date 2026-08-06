@@ -137,11 +137,11 @@ func TestPlanEnvelopeSchema(t *testing.T) {
 	root := resolveRef(t, schema, schema)
 
 	props, required := schemaProps(t, root)
-	for _, field := range []string{"summary", "endStatus", "plan"} {
+	for _, field := range []string{"summary", "endStatus", "planStatus", "planPath", "planContent"} {
 		if _, ok := props[field]; !ok {
 			t.Errorf("schema properties missing %q (have %v)", field, keys(props))
 		}
-		if !contains(required, field) {
+		if (field == "summary" || field == "endStatus" || field == "planStatus") && !contains(required, field) {
 			t.Errorf("schema required missing %q (have %v)", field, required)
 		}
 	}
@@ -150,22 +150,15 @@ func TestPlanEnvelopeSchema(t *testing.T) {
 		t.Errorf("endStatus enum = %v, want ask/completed/failed", got)
 	}
 
-	plan, ok := props["plan"].(map[string]any)
-	if !ok {
-		t.Fatalf("plan property is %T, want object", props["plan"])
+	if got := enumValues(t, props, "planStatus"); !equalStrings(got, []string{"new", "unchanged", "updated"}) {
+		t.Errorf("planStatus enum = %v, want new/unchanged/updated", got)
 	}
-	planProps, planRequired := schemaProps(t, resolveRef(t, schema, plan))
-	if !contains(planRequired, "status") {
-		t.Errorf("plan.status not required (required=%v)", planRequired)
+	if _, ok := props["plan"]; ok {
+		t.Errorf("plan schema must not contain nested plan property (have %v)", keys(props))
 	}
-	if got := enumValues(t, planProps, "status"); !equalStrings(got, []string{"new", "unchanged", "updated"}) {
-		t.Errorf("plan.status enum = %v, want new/unchanged/updated", got)
-	}
-	if _, ok := planProps["path"]; !ok {
-		t.Errorf("plan schema missing path property (have %v)", keys(planProps))
-	}
-	if _, ok := planProps["content"]; !ok {
-		t.Errorf("plan schema missing content property (have %v)", keys(planProps))
+	summary := props["summary"].(map[string]any)
+	if summary["maxLength"] != float64(1000) {
+		t.Errorf("summary maxLength = %v, want 1000", summary["maxLength"])
 	}
 }
 

@@ -1,5 +1,5 @@
 import { stripAnsi } from '../../ansi';
-import type { PRDetail, PRItem } from '../../types';
+import type { PRDetail, PRItem, Violation } from '../../types';
 import { extractCommentTitle, isDeploymentComment } from '../../utils';
 
 export type PRTodoSourceGroup = 'tests' | 'lint' | 'checks' | 'comments';
@@ -40,45 +40,55 @@ function sourceLocation(file?: string, line?: number): string {
   return line ? `${file}:${line}` : file;
 }
 
+// violationRule mirrors gavel's own precedence: the linter's own code when it
+// has one, otherwise the matched rule.
+function violationRule(violation: Violation): string {
+  return violation.code || violation.rule?.method || '';
+}
+
 export function buildPRTodoCandidates(pr: PRItem, detail: PRDetail | null): PRTodoCandidate[] {
   const candidates: PRTodoCandidate[] = [];
   const shards = detail?.gavelResults ?? [];
 
   shards.forEach((shard, shardIndex) => {
-    (shard.topFailures ?? []).forEach((failure, failureIndex) => {
-      const name = failure.suite ? `${failure.suite} › ${failure.name}` : failure.name;
+    (shard.failures ?? []).forEach((failure, failureIndex) => {
+      const suite = failure.suite?.join(' › ');
+      const name = suite ? `${suite} › ${failure.name}` : failure.name;
       const location = sourceLocation(failure.file, failure.line);
       candidates.push({
         key: `test:${shardIndex}:${failureIndex}:${failure.name}`,
         group: 'tests',
         text: `Test \`${name}\` passes`,
         primary: failure.name,
-        secondary: location || failure.suite,
+        secondary: location || suite,
         detail: {
           heading: name,
           location,
           message: failure.message,
-          log: failure.details,
+          log: failure.stderr || failure.stdout,
         },
       });
     });
   });
 
   shards.forEach((shard, shardIndex) => {
-    (shard.topLintViolations ?? []).forEach((violation, violationIndex) => {
-      const location = sourceLocation(violation.file, violation.line);
-      const rule = violation.rule ? ` (${violation.rule})` : '';
-      candidates.push({
-        key: `lint:${shardIndex}:${violationIndex}:${violation.file ?? ''}:${violation.line ?? ''}:${violation.rule ?? ''}`,
-        group: 'lint',
-        text: `Resolve ${violation.linter}${rule} violation${location ? ` at ${location}` : ''}`,
-        primary: `${violation.linter}${rule}`,
-        secondary: location || violation.message,
-        detail: {
-          heading: `${violation.linter}${rule}`,
-          location,
-          message: violation.message,
-        },
+    (shard.lint ?? []).forEach(result => {
+      (result.violations ?? []).forEach((violation, violationIndex) => {
+        const location = sourceLocation(violation.file, violation.line);
+        const ruleName = violationRule(violation);
+        const rule = ruleName ? ` (${ruleName})` : '';
+        candidates.push({
+          key: `lint:${shardIndex}:${result.linter}:${violationIndex}:${violation.file ?? ''}:${violation.line ?? ''}:${ruleName}`,
+          group: 'lint',
+          text: `Resolve ${result.linter}${rule} violation${location ? ` at ${location}` : ''}`,
+          primary: `${result.linter}${rule}`,
+          secondary: location || violation.message,
+          detail: {
+            heading: `${result.linter}${rule}`,
+            location,
+            message: violation.message,
+          },
+        });
       });
     });
   });

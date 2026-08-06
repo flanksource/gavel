@@ -161,6 +161,73 @@ export function useDeleteTodoMutation(dir: string) {
   });
 }
 
+// The response of POST /api/todos/verification/run. Only the parts a caller
+// acts on are modelled: recorded results are read back from the attempt list,
+// never from this payload.
+export interface VerificationRunResponse {
+  todo?: TodoItem;
+  verification?: { allPassed?: boolean; error?: string };
+  error?: string;
+}
+
+/**
+ * Run the definition-of-done fixture.
+ *
+ * Shared by the Verification tab and the header's Verify phase so both post the
+ * same body and invalidate the same caches — a check started from the header
+ * has to land in the attempt list the tab reads, or the tab would show stale
+ * evidence for a run that just happened.
+ */
+export function useTodoVerificationRun(dir: string, ref: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'verification', 'run', { dir: dir.trim(), ref }],
+    mutationFn: ({ ref: target, spec }: { ref: string; spec: unknown }) => todoMutationJSON<VerificationRunResponse>(
+      `/api/todos/verification/run?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: target, spec }),
+      },
+      'Verification run failed',
+    ),
+    onSuccess: async (data) => {
+      if (data.todo) await setTodoCaches(client, dir, data.todo);
+      await client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) });
+    },
+  });
+}
+
+/**
+ * Interrupt one in-flight attempt.
+ *
+ * Keyed on the attempt's promptRunId rather than the todo, because a todo can
+ * have several attempts and only the running one is stoppable.
+ */
+export function useTodoSessionStop(dir: string, ref: string, sessionId?: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'session', 'stop', { dir: dir.trim(), ref }],
+    mutationFn: (promptRunId: string) => todoMutationJSON<{ status: string; promptRunId: string }>(
+      `/api/todos/session/stop?${todoQuery(dir)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref, promptRunId }),
+      },
+      'Could not stop the attempt',
+    ),
+    onSuccess: async () => {
+      await Promise.all([
+        invalidateTodoCollections(client, dir),
+        client.invalidateQueries({ queryKey: todoQueryKeys.sessionStats(dir, sessionId ?? '') }),
+        client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, sessionId, false) }),
+        client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) }),
+      ]);
+    },
+  });
+}
+
 export function useTransferTodoMutation() {
   const client = useQueryClient();
   return useMutation({

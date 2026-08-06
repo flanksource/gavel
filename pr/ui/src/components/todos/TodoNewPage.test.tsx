@@ -50,4 +50,25 @@ describe('TodoNewPage', () => {
     expect(comment.className).toContain('resize-y');
     expect(screen.getByText(/multiline.*code block/i)).toBeTruthy();
   });
+
+  // A rejected projects payload leaves this page with an empty catalog, which is
+  // indistinguishable from "no workspaces are configured" unless the failure is
+  // shown: without it the form silently offers the server's own work dir and
+  // files the todo against the wrong project.
+  it('reports a failed project catalog instead of offering the default workspace', () => {
+    render(<TodoNewPage projects={[]} projectError="Load projects: invalid project" />);
+
+    expect(screen.getByText('Load projects: invalid project')).toBeTruthy();
+    const workspace = screen.getByLabelText('Workspace') as HTMLSelectElement;
+    expect(workspace.disabled).toBe(true);
+    expect(workspace.options[0].text).toBe('Workspaces unavailable');
+  });
+
+  it('offers the default workspace when no projects are configured', () => {
+    render(<TodoNewPage projects={[]} />);
+
+    const workspace = screen.getByLabelText('Workspace') as HTMLSelectElement;
+    expect(workspace.disabled).toBe(false);
+    expect(workspace.options[0].text).toBe('Default workspace');
+  });
 });

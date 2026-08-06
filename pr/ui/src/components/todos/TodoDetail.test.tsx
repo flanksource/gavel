@@ -24,7 +24,12 @@ vi.mock('./TodoCompose', () => ({
 }));
 vi.mock('./planActions', () => ({ TodoReviewBanner: () => null }));
 
-vi.mock('./TodoSessionTimer', () => ({ useSessionStats: vi.fn(() => ({ stats: null })) }));
+// Only the polling hook is stubbed; the formatters stay real so the running
+// strip renders the same elapsed/cost/context strings the session header does.
+vi.mock('./TodoSessionTimer', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useSessionStats: vi.fn(() => ({ stats: null, elapsedMs: 0, error: '' })),
+}));
 
 vi.mock('@flanksource/clicky-ui/components', () => ({
   Button: ({
@@ -52,6 +57,34 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
       {children(() => {})}
     </div>
   ),
+  // The primary renders as a button and every menu item as a sibling button, so
+  // a test can assert on both halves of the split without opening a real menu.
+  SplitButton: ({
+    label,
+    items = [],
+    onClick,
+    disabled,
+    title,
+  }: {
+    label: React.ReactNode;
+    items?: Array<{ label: React.ReactNode; onSelect?: () => void }>;
+    onClick?: () => void;
+    disabled?: boolean;
+    title?: string;
+  }) => (
+    <div>
+      {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky SplitButton itself. */}
+      <button type="button" onClick={onClick} disabled={disabled} title={title}>
+        {label}
+      </button>
+      {items.map((item, index) => (
+        // oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test mock for the Clicky SplitButton itself.
+        <button key={index} type="button" onClick={item.onSelect}>
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ),
   Combobox: () => null,
   Field: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Modal: ({ children, open }: { children?: React.ReactNode; open?: boolean }) => (open === false ? null : <div>{children}</div>),
@@ -73,7 +106,10 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
 }));
 
-vi.mock('@flanksource/clicky-ui/data', () => ({
+// Markdown is stubbed to keep the heavy renderer out of these tests; `Icon` and
+// the rest stay real, because the phase controls render library glyphs.
+vi.mock('@flanksource/clicky-ui/data', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   Markdown: ({ text }: { text: string }) => <div>{text}</div>,
 }));
 
@@ -83,7 +119,11 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
   ProviderSelector: () => null,
 }));
 
-vi.mock('@flanksource/clicky-ui/ai', () => ({
+// Partial mock: only the heavy editor surfaces are stubbed. The phase machine
+// reads its glyphs and tones from this module's real Agent Action Icons set, so
+// replacing the module wholesale would leave the header with no phases at all.
+vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
   RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <button type="button" aria-label={ariaLabel}>Runtime</button>,
@@ -225,15 +265,29 @@ describe('TodoDetail Resume/Run/Plan guard', () => {
     expect(screen.getAllByText(RESOLVE_MESSAGE).length).toBeGreaterThan(0);
   });
 
-  it('disables Run via the existing sessionInProgress path, not the review/ask copy, while a session is live', async () => {
+  // While a session is live the header offers Stop and nothing else — not the
+  // review/ask copy, and not a phase to start on top of the running one.
+  it('offers Stop, not a phase, while a session is live', async () => {
     vi.mocked(useSessionStats).mockReturnValue({ stats: { inProgress: true, found: true } } as ReturnType<typeof useSessionStats>);
 
     await renderDetail({ ...baseTodo, status: 'in_progress' });
 
-    const runItem = screen.getByText('Stop unavailable').closest('button');
-    expect((runItem as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Session interrupt is not supported yet')).toBeTruthy();
+    expect(screen.getAllByText('Stop').length).toBeGreaterThan(0);
     expect(screen.queryByText(RESOLVE_MESSAGE)).toBeNull();
+  });
+
+  // The attempt list decides whether Stop is real. With nothing interruptible
+  // the control is disabled and says so, rather than claiming — as the header
+  // used to — that session interrupt is unimplemented. It is implemented.
+  it('disables Stop when no attempt reports it can be interrupted', async () => {
+    vi.mocked(useSessionStats).mockReturnValue({ stats: { inProgress: true, found: true } } as ReturnType<typeof useSessionStats>);
+
+    await renderDetail({ ...baseTodo, status: 'in_progress' });
+
+    const stop = screen.getAllByText('Stop')[0].closest('button');
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
+    expect(stop?.getAttribute('title')).toBe('This run cannot be interrupted');
+    expect(screen.queryByText('Session interrupt is not supported yet')).toBeNull();
   });
 });
 

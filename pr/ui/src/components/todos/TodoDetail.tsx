@@ -11,14 +11,18 @@ import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
 import { priorities, statusClass, statuses, statusLabel } from './format';
-import { TodoRunActionButton, TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptionsForMode, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
+import { TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
+import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
+import { PHASES, phaseSignals, phaseState, type PhaseId, type PhaseState } from './phaseMachine';
+import { TodoPhaseButton, TodoPhaseTicks, type PhaseRunOptions } from './TodoPhaseButton';
+import { TodoRunStatusStrip } from './TodoRunStatusStrip';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
 import { TodoVerification } from './TodoVerification';
 import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationAttempts';
 import { TodoReviewBanner } from './planActions';
-import { useDeleteTodoMutation, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import { useDeleteTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 
 export function TodoDetail({
   todo,
@@ -47,6 +51,10 @@ export function TodoDetail({
 }) {
   const [advancedMode, setAdvancedMode] = useState<TodoRunAction | null>(null);
   const [runSelections, setRunSelections] = useState<Partial<Record<TodoRunAction, TodoRunOptions>>>({});
+  // Verify's runtime is stored apart from plan/run because it is a different
+  // kind of run: a bare spec posted to the verification endpoint, with its own
+  // persisted history (PromptRunScope 'verification'), not a driver + runMode.
+  const [verifySelection, setVerifySelection] = useState<TodoRunOptions | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState<TodoDetailTabKey>('overview');
   const [editingTitle, setEditingTitle] = useState(false);
@@ -76,6 +84,12 @@ export function TodoDetail({
     { attemptsOnly: true, intervalMs: tab === 'verification' ? 1500 : 15000 }
   );
   const verification = verificationBadge(verificationAttempts(verificationDetail));
+  const verificationRun = useTodoVerificationRun(dir, todo?.ref ?? '');
+  const sessionStop = useTodoSessionStop(dir, todo?.ref ?? '', todo?.sessionId);
+  // The attempt the Stop control acts on. Only a live attempt the server says it
+  // can interrupt qualifies; without one the header offers a disabled Stop that
+  // says why, rather than one that looks live and does nothing.
+  const stoppableAttempt = (verificationDetail?.attempts ?? []).find(attempt => attempt.processActive && attempt.canStop);
   const fullTodoId = todo ? todoFullId(todo) : '';
   const visibleLabels = todo ? todoHeaderLabels(todo) : [];
   const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
@@ -86,6 +100,36 @@ export function TodoDetail({
   // route through TodoReviewBanner's approve/reject/answer flow, not have its
   // review/ask state silently bypassed by re-triggering a run from here.
   const awaitingHumanAction = todo?.status === 'review' || todo?.status === 'ask';
+  // Where the todo stands in plan -> run -> verify. This is what decides the
+  // header's one primary action, replacing the old pair of peer buttons that
+  // offered Plan and Run identically in every state.
+  const machineState: PhaseState = todo
+    ? phaseState(phaseSignals(todo, {
+      sessionInProgress,
+      verificationFailing: verification.failing,
+      verificationAttempted: verification.count > 0,
+    }))
+    : 'draft';
+  const phaseOptions: PhaseRunOptions = {
+    plan: runSelections.plan,
+    run: runSelections.run,
+    verify: verifySelection ?? undefined,
+  };
+  // The running attempt names its own step, so the strip can say "Verify" rather
+  // than a generic "Running" when a check is what is in flight.
+  const runningPhaseLabel = stoppableAttempt?.step
+    ? PHASES.find(entry => entry.id === stoppableAttempt.step)?.label
+    : undefined;
+
+  function changePhaseOptions(id: PhaseId, options: TodoRunOptions) {
+    if (!runContext) return;
+    if (id === 'verify') {
+      setVerifySelection(rememberPromptRunOptions('verification', options, runContext));
+      return;
+    }
+    const remembered = rememberTodoRunOptions(id, options);
+    setRunSelections(previous => ({ ...previous, [id]: remembered }));
+  }
 
   useEffect(() => {
     setError('');
@@ -100,12 +144,14 @@ export function TodoDetail({
   useEffect(() => {
     if (!todo || !runContext) {
       setRunSelections({});
+      setVerifySelection(null);
       return;
     }
     setRunSelections({
       run: loadLastTodoRunOptions('run', runContext),
       plan: loadLastTodoRunOptions('plan', runContext),
     });
+    setVerifySelection(loadPromptRunOptions('verification', runContext));
   }, [todo?.ref, runContext]);
 
   useEffect(() => {
@@ -205,6 +251,39 @@ export function TodoDetail({
       setCopyState('copied');
     } catch {
       setCopyState('error');
+    }
+  }
+
+  // Enter a phase. plan/run dispatch an agent run; verify posts the
+  // definition-of-done fixture, which is a different endpoint entirely — the
+  // machine hides that split from the header, it does not erase it.
+  async function runPhase(id: PhaseId) {
+    if (!todo) return;
+    if (id === 'verify') {
+      setError('');
+      try {
+        const options = phaseOptions.verify;
+        const data = await verificationRun.mutateAsync({
+          ref: todo.ref,
+          spec: verificationSpec(options ? runSpec(options) : {}),
+        });
+        if (data.todo) onChanged(data.todo);
+        setTab('verification');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Verification run failed');
+      }
+      return;
+    }
+    await runTodo(phaseOptions[id] ?? loadLastTodoRunOptions(id, runContext));
+  }
+
+  async function stopRun() {
+    if (!stoppableAttempt) return;
+    setError('');
+    try {
+      await sessionStop.mutateAsync(stoppableAttempt.promptRunId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not stop the attempt');
     }
   }
 
@@ -332,6 +411,8 @@ export function TodoDetail({
               onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
               onRun={() => runTodo(runSelections.run ?? loadLastTodoRunOptions('run', runContext))}
               onPlan={() => runTodo(runSelections.plan ?? loadLastTodoRunOptions('plan', runContext))}
+
+              onStop={stoppableAttempt ? stopRun : undefined}
               onAdvanced={setAdvancedMode}
               onVerify={() => patch({ status: 'verified' })}
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
@@ -339,43 +420,34 @@ export function TodoDetail({
             />
 
             <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
-              {todo.sessionId && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  type="button"
-                  onClick={() => runTodo({ ...defaultRunOptions, resume: true })}
-                  disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
-                  title={sessionInProgress ? 'Session is already running' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : 'Resume prior agent session'}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                  aria-label="Resume prior agent session"
-                >
-                  {runBusy ? <Spinner className="text-sm" /> : <UiDebugStepOver className="text-sm" />}
-                </Button>
+              {/* While a run is live the cluster becomes what is true right now —
+                  which phase, which model, how long, how much context — plus the
+                  one action that applies. Otherwise: where the todo stands, and
+                  the single control for the step that comes next. */}
+              {sessionInProgress ? (
+                <TodoRunStatusStrip
+                  dir={dir}
+                  sessionId={todo.sessionId}
+                  phaseLabel={runningPhaseLabel}
+                  stopping={sessionStop.isPending || stoppableAttempt?.stopping}
+                  onStop={stoppableAttempt ? stopRun : undefined}
+                />
+              ) : (
+                <>
+                  <TodoPhaseTicks state={machineState} />
+                  <TodoPhaseButton
+                    state={machineState}
+                    context={runContext}
+                    options={phaseOptions}
+                    disabled={busy || !runContext}
+                    busy={runBusy || verificationRun.isPending}
+                    onRunPhase={runPhase}
+                    onReview={() => setTab('overview')}
+                    onOptionsChange={changePhaseOptions}
+                    onAdvanced={id => setAdvancedMode(id === 'verify' ? 'run' : id)}
+                  />
+                </>
               )}
-              <TodoRunActionButton
-                action="plan"
-                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
-                loading={runBusy}
-                title={awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
-                options={runSelections.plan}
-                onOptionsChange={options => setRunSelections(previous => ({ ...previous, plan: options }))}
-                onRun={runTodo}
-                onAdvanced={setAdvancedMode}
-              />
-              <TodoRunActionButton
-                action="run"
-                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
-                loading={runBusy}
-                label={sessionInProgress ? 'Stop' : undefined}
-                icon={sessionInProgress ? UiStop : UiPlay}
-                tone={sessionInProgress ? 'danger' : 'default'}
-                title={sessionInProgress ? 'Stop is unavailable until session interrupt is supported' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : 'Run todo'}
-                options={runSelections.run}
-                onOptionsChange={options => setRunSelections(previous => ({ ...previous, run: options }))}
-                onRun={runTodo}
-                onAdvanced={setAdvancedMode}
-              />
               <HeaderActionsMenu
                 todo={todo}
                 busy={busy}
@@ -398,6 +470,8 @@ export function TodoDetail({
                 onResume={() => runTodo({ ...defaultRunOptions, resume: true })}
                 onRun={() => runTodo(runSelections.run ?? loadLastTodoRunOptions('run', runContext))}
                 onPlan={() => runTodo(runSelections.plan ?? loadLastTodoRunOptions('plan', runContext))}
+
+                onStop={stoppableAttempt ? stopRun : undefined}
                 onAdvanced={setAdvancedMode}
                 onVerify={() => patch({ status: 'verified' })}
                 onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
@@ -744,6 +818,7 @@ function HeaderActionsMenu({
   onResume,
   onRun,
   onPlan,
+  onStop,
   onAdvanced,
   onVerify,
   onToggleClosed,
@@ -771,6 +846,8 @@ function HeaderActionsMenu({
   onResume: () => void;
   onRun: () => void;
   onPlan: () => void;
+  /** Interrupt the run in flight. Absent when nothing is stoppable. */
+  onStop?: (() => void) | undefined;
   onAdvanced: (action: TodoRunAction) => void;
   onVerify: () => void;
   onToggleClosed: () => void;
@@ -832,14 +909,21 @@ function HeaderActionsMenu({
                   }}
                 />
               )}
+              {/* Stop is a real action — /api/todos/session/stop — whenever the
+                  running attempt reports it can be interrupted. It stays
+                  disabled without one, and says why, rather than claiming the
+                  feature does not exist. */}
               <MobileMenuItem
                 icon={sessionInProgress ? UiStop : runBusy ? Spinner : UiPlay}
-                label={sessionInProgress ? 'Stop unavailable' : 'Run todo'}
-                detail={sessionInProgress ? 'Session interrupt is not supported yet' : awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
-                disabled={busy || runBusy || sessionInProgress || awaitingHumanAction}
+                label={sessionInProgress ? 'Stop run' : 'Run todo'}
+                detail={sessionInProgress
+                  ? (onStop ? undefined : 'This run cannot be interrupted')
+                  : awaitingHumanAction ? 'Resolve the pending plan review or question first' : undefined}
+                disabled={busy || runBusy || awaitingHumanAction || (sessionInProgress ? !onStop : false)}
                 onClick={() => {
                   close();
-                  onRun();
+                  if (sessionInProgress) onStop?.();
+                  else onRun();
                 }}
               />
               <MobileMenuItem

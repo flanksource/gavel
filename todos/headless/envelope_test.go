@@ -35,7 +35,7 @@ func (s *scriptedStream) fn(ctx context.Context, req captainai.Request, _ captai
 }
 
 const runEnvelopeJSON = `{"summary":"implemented the fix","endStatus":"completed"}`
-const planEnvelopeJSON = `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/home/u/.claude/plans/p.md"}}`
+const planEnvelopeJSON = `{"summary":"planned","endStatus":"completed","planStatus":"new","planPath":"/home/u/.claude/plans/p.md"}`
 
 func TestEnvelopePrefersStructuredResult(t *testing.T) {
 	stream := &scriptedStream{episodes: [][]captainai.Event{{

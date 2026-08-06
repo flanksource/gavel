@@ -134,20 +134,25 @@ const detail: PRDetail = {
     lintViolations: 1,
     lintLinters: 1,
     hasBench: false,
-    topFailures: [{
-      suite: 'storage',
+    failures: [{
+      suite: ['storage'],
       name: 'saves records',
       file: 'pkg/store/save_test.go',
       line: 41,
+      failed: true,
       message: 'expected record to persist',
-      details: 'stderr: persistence failed',
+      stderr: 'stderr: persistence failed',
     }],
-    topLintViolations: [{
+    lint: [{
       linter: 'golangci-lint',
-      rule: 'errcheck',
-      file: 'pkg/store/save.go',
-      line: 23,
-      message: 'return value is not checked',
+      success: false,
+      duration: 0,
+      violations: [{
+        rule: { method: 'errcheck' },
+        file: 'pkg/store/save.go',
+        line: 23,
+        message: 'return value is not checked',
+      }],
     }],
   }],
   comments: [{
@@ -211,7 +216,7 @@ describe('CreateTodoFromPRDialog', () => {
     fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Keep the public API stable.' } });
     fireEvent.change(screen.getByLabelText('Priority'), { target: { value: 'high' } });
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'review' } });
-    fireEvent.click(screen.getByLabelText('Include lint:0:0:pkg/store/save.go:23:errcheck'));
+    fireEvent.click(screen.getByLabelText('Include lint:0:golangci-lint:0:pkg/store/save.go:23:errcheck'));
     fireEvent.click(screen.getByRole('button', { name: /^saves records/ }));
     fireEvent.click(screen.getByRole('button', { name: 'New project' }));
 
@@ -240,7 +245,7 @@ describe('CreateTodoFromPRDialog', () => {
     expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('Keep the public API stable.');
     expect((screen.getByLabelText('Priority') as HTMLSelectElement).value).toBe('high');
     expect((screen.getByLabelText('Status') as HTMLSelectElement).value).toBe('review');
-    expect((screen.getByLabelText('Include lint:0:0:pkg/store/save.go:23:errcheck') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('Include lint:0:golangci-lint:0:pkg/store/save.go:23:errcheck') as HTMLInputElement).checked).toBe(false);
     expect(screen.getByText('expected record to persist')).toBeTruthy();
     expect((addTodo as HTMLButtonElement).disabled).toBe(false);
 
@@ -414,7 +419,7 @@ describe('CreateTodoFromPRDialog', () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText('Include lint:0:0:pkg/store/save.go:23:errcheck'));
+    fireEvent.click(screen.getByLabelText('Include lint:0:golangci-lint:0:pkg/store/save.go:23:errcheck'));
     fireEvent.click(screen.getByRole('button', { name: 'Add todo' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));

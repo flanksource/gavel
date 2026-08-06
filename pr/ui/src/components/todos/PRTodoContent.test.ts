@@ -45,30 +45,36 @@ const detail: PRDetail = {
       lintViolations: 1,
       lintLinters: 1,
       hasBench: false,
-      topFailures: [
+      failures: [
         {
-          suite: 'storage',
+          suite: ['storage'],
           name: 'saves Unicode café',
           file: 'pkg/store/save_test.go',
           line: 41,
+          failed: true,
           message: 'expected record to persist',
-          details: '\u001b[31mstderr: persistence failed\u001b[0m\nstdout: retry exhausted',
+          stderr: '\u001b[31mstderr: persistence failed\u001b[0m\nstdout: retry exhausted',
         },
         {
-          suite: 'storage',
+          suite: ['storage'],
           name: 'deselected linux failure',
           file: 'pkg/store/delete_test.go',
           line: 52,
+          failed: true,
           message: 'must not be copied',
-          details: 'deselected test log',
+          stderr: 'deselected test log',
         },
       ],
-      topLintViolations: [{
+      lint: [{
         linter: 'golangci-lint',
-        rule: 'errcheck',
-        file: 'pkg/store/save.go',
-        line: 23,
-        message: 'return value is not checked',
+        success: false,
+        duration: 0,
+        violations: [{
+          rule: { method: 'errcheck' },
+          file: 'pkg/store/save.go',
+          line: 23,
+          message: 'return value is not checked',
+        }],
       }],
     },
     {
@@ -82,22 +88,27 @@ const detail: PRDetail = {
       lintViolations: 1,
       lintLinters: 1,
       hasBench: false,
-      topFailures: [
+      failures: [
         {
-          suite: 'storage',
+          suite: ['storage'],
           name: 'saves Unicode café',
           file: 'pkg/store/save_test.go',
           line: 41,
+          failed: true,
           message: 'macOS shard failed independently',
-          details: 'distinct shard output',
+          stderr: 'distinct shard output',
         },
       ],
-      topLintViolations: [{
+      lint: [{
         linter: 'staticcheck',
-        rule: 'SA4006',
-        file: 'pkg/store/delete.go',
-        line: 19,
-        message: 'deselected lint violation',
+        success: false,
+        duration: 0,
+        violations: [{
+          rule: { method: 'SA4006' },
+          file: 'pkg/store/delete.go',
+          line: 19,
+          message: 'deselected lint violation',
+        }],
       }],
     },
   ],
@@ -120,8 +131,8 @@ describe('PRTodoContent', () => {
       'test:0:0:saves Unicode café',
       'test:0:1:deselected linux failure',
       'test:1:0:saves Unicode café',
-      'lint:0:0:pkg/store/save.go:23:errcheck',
-      'lint:1:0:pkg/store/delete.go:19:SA4006',
+      'lint:0:golangci-lint:0:pkg/store/save.go:23:errcheck',
+      'lint:1:staticcheck:0:pkg/store/delete.go:19:SA4006',
       'check:0:unit-tests',
       'comment:901:0',
     ]);
@@ -133,7 +144,7 @@ describe('PRTodoContent', () => {
     const selectedKeys = new Set([
       'test:0:0:saves Unicode café',
       'test:1:0:saves Unicode café',
-      'lint:0:0:pkg/store/save.go:23:errcheck',
+      'lint:0:golangci-lint:0:pkg/store/save.go:23:errcheck',
     ]);
     const body = buildPRTodoBody(pr, 'Keep the public API stable.', candidates.filter(candidate => selectedKeys.has(candidate.key)));
 

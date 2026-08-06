@@ -117,7 +117,7 @@ function compareRecentTodos(a: TodoItem, b: TodoItem): number {
 // menubar, a bookmarklet, or another app): every field can be pre-filled from
 // query params and, on submit or cancel, it navigates back to the referer (or an
 // explicit ?return= path), falling back to the newly-created todo otherwise.
-export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]; procStatus?: Record<string, ProcStatus> }) {
+export function TodoNewPage({ projects, procStatus = {}, projectError = '' }: { projects: Project[]; procStatus?: Record<string, ProcStatus>; projectError?: string }) {
   const workspaces = useMemo(() => projects.filter(p => !!p.dir), [projects]);
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const back = useMemo(() => returnTarget(params), [params]);
@@ -138,15 +138,17 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
 
   // The workspace options are every configured workspace plus an explicit ?dir=
   // that isn't one of them (so external links can target any directory). An
-  // empty value means the server's own work dir.
+  // empty value means the server's own work dir — but only when the catalog
+  // actually loaded: a failed projects request looks exactly like "nothing is
+  // configured", so it says so instead of quietly filing the todo elsewhere.
   const dirOptions = useMemo(() => {
     const opts = workspaces.map(w => ({ value: w.dir, label: w.name }));
     if (queryDir && !workspaces.some(w => w.dir === queryDir)) {
       opts.unshift({ value: queryDir, label: queryDir });
     }
-    if (opts.length === 0) opts.push({ value: '', label: 'Default workspace' });
+    if (opts.length === 0) opts.push({ value: '', label: projectError ? 'Workspaces unavailable' : 'Default workspace' });
     return opts;
-  }, [workspaces, queryDir]);
+  }, [workspaces, queryDir, projectError]);
 
   const [mode, setMode] = useState<TodoNewMode>(initialMode);
   const [dir, setDirState] = useState(() => preferredDir);
@@ -169,7 +171,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
   const existingTodos = existingTodosQuery.data?.items ?? [];
   const loadingTodos = existingTodosQuery.isFetching;
   const busy = createTodo.isPending || commentTodo.isPending;
-  const visibleError = error || (existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
+  const visibleError = error || projectError || (existingTodosQuery.error instanceof Error ? existingTodosQuery.error.message : '');
   const showModeSwitch = embed || initialMode === 'existing';
 
   const setDir = useCallback((next: string) => {
@@ -348,7 +350,7 @@ export function TodoNewPage({ projects, procStatus = {} }: { projects: Project[]
             </div>
           )}
           <Field label="Workspace">
-            <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace">
+            <Select value={dir} onChange={e => setDir(e.currentTarget.value)} className={inputClass} aria-label="Workspace" disabled={!!projectError}>
               {dirOptions.map(o => <option key={o.value || '(default)'} value={o.value}>{o.label}</option>)}
             </Select>
           </Field>
