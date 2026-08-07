@@ -3,14 +3,14 @@ module github.com/flanksource/gavel
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.7
-	github.com/flanksource/clicky v1.21.53
-	github.com/flanksource/commons v1.53.1
-	github.com/flanksource/commons-db v0.1.8
-	github.com/flanksource/gomplate/v3 v3.24.84
+	github.com/flanksource/captain v0.0.26
+	github.com/flanksource/clicky v1.21.54
+	github.com/flanksource/commons v1.55.0
+	github.com/flanksource/commons-db v0.1.27
+	github.com/flanksource/gomplate/v3 v3.24.86
 	github.com/flanksource/is-healthy v1.0.88 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
-	github.com/flanksource/repomap v0.0.1
+	github.com/flanksource/repomap v0.3.1
 )
 
 require (
@@ -23,7 +23,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
-	github.com/flanksource/deps v1.0.28
+	github.com/flanksource/deps v1.0.38
 	github.com/ghodss/yaml v1.0.0
 	github.com/glebarez/sqlite v0.0.0-00010101000000-000000000000
 	github.com/gliderlabs/ssh v0.3.8
