@@ -1,5 +1,7 @@
 ---
 model: claude
+prompt:
+  schemaStrictness: retry
 permissions:
   # A plan run is read-only investigation, so it states its whole posture here
   # rather than leaving it to Go: an unstated posture is filled in with the edit
@@ -21,15 +23,17 @@ You are running in your native plan mode: investigate the codebase (read-only) a
 
 1. Explore the code paths the todo touches; understand the root cause or design before planning.
 2. Write a step-by-step implementation plan into your plan file: the files to change, new types/functions and their signatures, what gets deleted, the testing strategy, and risks.
-3. Report the plan file's ABSOLUTE path in the final result's plan.path — gavel records it on the todo and renders the plan from that file for human review.
+3. Report the plan file's ABSOLUTE path in the final StructuredOutput call's top-level `planPath` field — gavel records it on the todo and renders the plan from that file for human review.
 {{#if existingPlan}}
-4. An earlier plan for this todo already exists (below). Re-evaluate it against the current code: if it still stands as written, report plan.status "unchanged" (no rewrite needed); if it needs revision, write the revised plan and report plan.status "updated".
+4. An earlier plan for this todo already exists (below). Re-evaluate it against the current code: if it still stands as written, report top-level `planStatus` "unchanged" (no rewrite needed); if it needs revision, write the revised plan and report `planStatus` "updated".
 
 ## Existing Plan
 
 {{{existingPlan}}}
 {{else}}
-4. This todo has no prior plan; author one and report plan.status "new".
+4. This todo has no prior plan; author one and report top-level `planStatus` "new".
 {{/if}}
+
+The final StructuredOutput call carries `summary`, `endStatus`, `planStatus`, and `planPath` (or `planContent`) as separate top-level fields. Never JSON-encode an object or another field value into a string.
 
 If you are blocked on a decision only a human can make, stop and report endStatus "ask" with your questions in the final result instead of guessing.

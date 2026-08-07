@@ -60,37 +60,39 @@ func TestPlanEnvelopeValidate(t *testing.T) {
 			name: "new plan with path is valid",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
-				Plan:           PlanResult{Status: PlanNew, Path: planPath},
+				PlanStatus:     PlanNew,
+				PlanPath:       planPath,
 			},
 		},
 		{
 			name: "new inline plan content is valid",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
-				Plan:           PlanResult{Status: PlanNew, Content: "- [x] inspect\n- [ ] implement"},
+				PlanStatus:     PlanNew,
+				PlanContent:    "- [x] inspect\n- [ ] implement",
 			},
 		},
 		{
 			name: "unchanged plan needs no path",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
-				Plan:           PlanResult{Status: PlanUnchanged},
+				PlanStatus:     PlanUnchanged,
 			},
 		},
 		{
 			name: "new plan without path or content rejected",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
-				Plan:           PlanResult{Status: PlanNew},
+				PlanStatus:     PlanNew,
 			},
-			wantErr: "plan.path or plan.content",
+			wantErr: "planPath or planContent",
 		},
 		{
 			name: "completed without plan status rejected",
 			env: PlanEnvelope{
 				ResultEnvelope: validEnvelope(),
 			},
-			wantErr: "plan.status",
+			wantErr: "planStatus",
 		},
 		{
 			name: "ask needs no plan",

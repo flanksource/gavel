@@ -1,5 +1,7 @@
 ---
 model: claude
+prompt:
+  schemaStrictness: retry
 ---
 {{#if multiple}}You are implementing the {{count}} todo items listed below. Each is a separate task — implement ALL of them.{{else}}You are implementing the todo item below in a codebase.{{/if}}
 
@@ -19,6 +21,7 @@ re-derive a different approach. If a step is wrong or blocked, report `endStatus
 2. Investigate the codebase to understand the root cause of each issue
 3. Implement fixes that address the underlying issues
 4. Do NOT run git add or git commit — gavel manages commits automatically
+5. In the final StructuredOutput call, send `summary` and `endStatus` as separate top-level fields. Never JSON-encode an object or another field value into a string.
 
 Your fixes should:
 - Address root causes, not mask symptoms

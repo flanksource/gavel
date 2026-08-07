@@ -73,6 +73,9 @@ func TestRenderRunGroup(t *testing.T) {
 	if !strings.Contains(string(req.Prompt.SchemaJSON), `"endStatus"`) {
 		t.Errorf("run envelope schema missing endStatus: %s", req.Prompt.SchemaJSON)
 	}
+	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
+		t.Errorf("run schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
+	}
 	if strings.Contains(req.Prompt.User, "conforms to this JSON Schema") {
 		t.Error("schema instruction text must not be appended to the prompt body")
 	}
@@ -105,8 +108,11 @@ func TestRenderFoldsFrontmatter(t *testing.T) {
 	if req.Model.Name != "claude" {
 		t.Errorf("plan template Model.Name = %q, want claude", req.Model.Name)
 	}
-	if !strings.Contains(string(req.Prompt.SchemaJSON), `"plan"`) || !strings.Contains(string(req.Prompt.SchemaJSON), `"path"`) {
-		t.Errorf("plan envelope schema missing plan/path: %s", req.Prompt.SchemaJSON)
+	if !strings.Contains(string(req.Prompt.SchemaJSON), `"planStatus"`) || !strings.Contains(string(req.Prompt.SchemaJSON), `"planPath"`) {
+		t.Errorf("plan envelope schema missing planStatus/planPath: %s", req.Prompt.SchemaJSON)
+	}
+	if req.Prompt.SchemaStrictness != api.SchemaStrictnessRetry {
+		t.Errorf("plan schema strictness = %q, want retry", req.Prompt.SchemaStrictness)
 	}
 	if req.Prompt.Source != "todos.plan" {
 		t.Errorf("Source = %q, want todos.plan", req.Prompt.Source)

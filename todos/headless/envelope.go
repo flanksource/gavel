@@ -147,7 +147,9 @@ func (e *Executor) parseEnvelope(text string) (*envelope, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Plan: &parsed.Plan}, nil
+		return &envelope{ResultEnvelope: parsed.ResultEnvelope, Plan: &types.PlanResult{
+			Status: parsed.PlanStatus, Path: parsed.PlanPath, Content: parsed.PlanContent,
+		}}, nil
 	}
 	parsed, err := captainai.ParseStructured(text, (*types.ResultEnvelope).Validate)
 	if err != nil {

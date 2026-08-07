@@ -50,7 +50,7 @@ type PlanResult struct {
 // ResultEnvelope is the structured final result every run-mode agent session
 // must emit.
 type ResultEnvelope struct {
-	Summary   string          `json:"summary" jsonschema:"required" jsonschema_description:"What was done, found, or attempted — a few sentences"`
+	Summary   string          `json:"summary" jsonschema:"required,maxLength=1000" jsonschema_description:"What was done, found, or attempted in 2–4 sentences"`
 	EndStatus EndStatus       `json:"endStatus" jsonschema:"required,enum=completed,enum=failed,enum=ask"`
 	Questions []AgentQuestion `json:"questions,omitempty" jsonschema_description:"Required when endStatus is ask"`
 }
@@ -75,7 +75,9 @@ func (e *ResultEnvelope) Validate() error {
 // required plan definition.
 type PlanEnvelope struct {
 	ResultEnvelope
-	Plan PlanResult `json:"plan" jsonschema:"required" jsonschema_description:"The plan this session produced; required when endStatus is completed"`
+	PlanStatus  PlanStatus `json:"planStatus" jsonschema:"required,enum=new,enum=updated,enum=unchanged" jsonschema_description:"new = first plan, updated = revised, unchanged = existing plan still stands"`
+	PlanPath    string     `json:"planPath,omitempty" jsonschema_description:"Absolute path of the native plan-mode file this session wrote, when available"`
+	PlanContent string     `json:"planContent,omitempty" jsonschema_description:"Inline markdown plan content for backends that do not write a native plan file"`
 }
 
 // Validate extends ResultEnvelope.Validate with the plan contract: a completed
@@ -90,13 +92,13 @@ func (e *PlanEnvelope) Validate() error {
 	if e.EndStatus != EndCompleted {
 		return nil
 	}
-	switch e.Plan.Status {
+	switch e.PlanStatus {
 	case PlanNew, PlanUpdated, PlanUnchanged:
 	default:
-		return fmt.Errorf("plan.status %q is not one of new, updated, unchanged", e.Plan.Status)
+		return fmt.Errorf("planStatus %q is not one of new, updated, unchanged", e.PlanStatus)
 	}
-	if e.Plan.Status != PlanUnchanged && strings.TrimSpace(e.Plan.Path) == "" && strings.TrimSpace(e.Plan.Content) == "" {
-		return fmt.Errorf("plan.status %q requires plan.path or plan.content", e.Plan.Status)
+	if e.PlanStatus != PlanUnchanged && strings.TrimSpace(e.PlanPath) == "" && strings.TrimSpace(e.PlanContent) == "" {
+		return fmt.Errorf("planStatus %q requires planPath or planContent", e.PlanStatus)
 	}
 	return nil
 }
