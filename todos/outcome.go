@@ -108,7 +108,11 @@ func (e *TODOExecutor) applyPlanOutcome(todo *types.TODO, result *ExecutionResul
 		if err := ValidatePlanFile(path); err != nil {
 			// The agent misreported its plan file; captain's session plan
 			// resolver is the canonical fallback before failing the run.
-			resolvedPath, resolvedContent := ResolveSessionPlan(todo)
+			sessionID := ""
+			if todo != nil && todo.LLM != nil {
+				sessionID = todo.LLM.SessionId
+			}
+			resolvedPath, resolvedContent := ResolveSessionPlan(sessionID)
 			switch {
 			case resolvedPath != "" && ValidatePlanFile(resolvedPath) == nil:
 				path = resolvedPath

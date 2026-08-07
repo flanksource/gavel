@@ -18,14 +18,16 @@ var (
 
 var todosPlanCmd = &cobra.Command{
 	Use:   "plan",
-	Short: "Act on a reviewed plan (approve, reject or revise) — the CLI side of the dashboard plan-review actions",
+	Short: "Act on or recover a todo plan",
 	Long: `Act on a plan produced by 'gavel todos run --mode plan' that is awaiting review.
 Subcommands: approve (the plan becomes the one a run implements, optionally
 chaining that run with --run), reject (todo returns to pending, plan cleared) and
-revise (agent folds your --feedback into the plan and returns it to review).`,
+revise (agent folds your --feedback into the plan and returns it to review).
+Recover backfills the plan file from the todo's latest terminal plan-step run.`,
 	Example: `  gavel todos plan approve 3f2a1b --run
   gavel todos plan reject 3f2a1b
-  gavel todos plan revise 3f2a1b --feedback "split the migration into two steps"`,
+  gavel todos plan revise 3f2a1b --feedback "split the migration into two steps"
+  gavel todos plan recover 3f2a1b`,
 }
 
 var todosPlanApproveCmd = &cobra.Command{
@@ -49,18 +51,24 @@ var todosPlanReviseCmd = &cobra.Command{
 	RunE:  runTodosPlanRevise,
 }
 
+var todosPlanRecoverCmd = &cobra.Command{
+	Use:   "recover <todo>",
+	Short: "Recover and select the plan from the todo's latest terminal plan-step run",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runTodosPlanRecover,
+}
+
 func init() {
 	todosCmd.AddCommand(todosPlanCmd)
 	todosPlanCmd.AddCommand(todosPlanApproveCmd)
 	todosPlanCmd.AddCommand(todosPlanRejectCmd)
 	todosPlanCmd.AddCommand(todosPlanReviseCmd)
+	todosPlanCmd.AddCommand(todosPlanRecoverCmd)
 	todosPlanApproveCmd.Flags().BoolVar(&planApproveRun, "run", false, "Implement the approved plan immediately, as 'gavel todos run' would")
 	todosPlanReviseCmd.Flags().StringVar(&planReviseFeedback, "feedback", "", "The change request for the agent to fold into the plan (required)")
 }
 
-// resolveReviewTODO loads the single todo named by args and confirms it is in
-// review — the precondition for both plan actions.
-func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provider, *types.TODO, error) {
+func resolvePlanTODO(ctx context.Context, args []string) (string, todos.Provider, *types.TODO, error) {
 	workDir, err := getWorkingDir()
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("failed to get working directory: %w", err)
@@ -76,11 +84,38 @@ func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provid
 	if len(todoList) != 1 {
 		return "", nil, nil, fmt.Errorf("expected exactly one TODO matching %q, found %d", args[0], len(todoList))
 	}
-	todo := todoList[0]
+	return workDir, provider, todoList[0], nil
+}
+
+// resolveReviewTODO loads the single todo named by args and confirms it is in
+// review — the precondition for both plan actions.
+func resolveReviewTODO(ctx context.Context, args []string) (string, todos.Provider, *types.TODO, error) {
+	workDir, provider, todo, err := resolvePlanTODO(ctx, args)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	if todo.Status != types.StatusReview {
 		return "", nil, nil, fmt.Errorf("todo is not awaiting plan review (status: %s)", todo.Status)
 	}
 	return workDir, provider, todo, nil
+}
+
+func runTodosPlanRecover(_ *cobra.Command, args []string) error {
+	ctx := context.Background()
+	_, provider, todo, err := resolvePlanTODO(ctx, args)
+	if err != nil {
+		return err
+	}
+	recovery, ok := provider.(todos.PlanRecoveryProvider)
+	if !ok {
+		return fmt.Errorf("native PostgreSQL TODO provider does not support durable plan recovery")
+	}
+	todo, err = recovery.RecoverPlan(ctx, todo)
+	if err != nil {
+		return err
+	}
+	logger.Infof("Recovered plan for %s — %s", todo.Filename(), todo.Status.Pretty().ANSI())
+	return nil
 }
 
 // runApprovedTODO dispatches the implement run that --run chains; a var so the

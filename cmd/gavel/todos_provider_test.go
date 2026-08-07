@@ -144,7 +144,7 @@ func TestRunTodosCreateRuntimeProvider(t *testing.T) {
 	}
 }
 
-func TestTodosPlanCommandsRegistered(t *testing.T) {
+func TestTodosPlanReviewCommandFlagsRegistered(t *testing.T) {
 	if todosPlanRejectCmd.Flags().Lookup("dir") != nil {
 		t.Error("unexpected retired plan reject --dir flag")
 	}
@@ -191,8 +191,14 @@ func TestTodosPlanRejectReturnsToPending(t *testing.T) {
 
 type testPlanReviewProvider struct {
 	*testTODOProvider
-	lastPlan  string
-	planActor string
+	lastPlan    string
+	planActor   string
+	recoveredID string
+}
+
+func (p *testPlanReviewProvider) RecoverPlan(_ context.Context, todo *types.TODO) (*types.TODO, error) {
+	p.recoveredID = todo.ID
+	return todo, nil
 }
 
 func (p *testPlanReviewProvider) SavePlanRevision(_ context.Context, todo *types.TODO, markdown, actor string) (*types.TODO, error) {

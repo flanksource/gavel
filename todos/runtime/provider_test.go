@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
@@ -20,15 +21,43 @@ func TestPlanResultContentPrefersReferencedPlanFile(t *testing.T) {
 	const detailed = "# Detailed plan\n\n1. Inspect the parser.\n2. Add regression coverage.\n"
 	require.NoError(t, os.WriteFile(path, []byte(detailed), 0o600))
 
-	content, gotPath, err := planResultContent(&types.TODO{}, &todos.ExecutionResult{
+	content, gotPath, err := planResultContent(&todos.ExecutionResult{
 		Plan: &types.PlanResult{
 			Path:    path,
 			Content: "The existing plan remains correct.",
 		},
-	})
+	}, "")
 	require.NoError(t, err)
 	assert.Equal(t, path, gotPath)
 	assert.Equal(t, strings.TrimSpace(detailed), content)
+}
+
+func TestPlanResultContentRecoversWithoutEnvelope(t *testing.T) {
+	const (
+		sessionID = "986dccbf-fe4a-4572-9702-7b36a53af63e"
+		path      = "/home/user/.claude/plans/recovered.md"
+		markdown  = "# Recovered plan\n\n1. Persist the transcript plan."
+	)
+	original := resolveSessionPlan
+	resolveSessionPlan = func(got string) (string, string) {
+		assert.Equal(t, sessionID, got)
+		return path, markdown
+	}
+	t.Cleanup(func() { resolveSessionPlan = original })
+
+	content, gotPath, err := planResultContent(nil, sessionID)
+
+	require.NoError(t, err)
+	assert.Equal(t, path, gotPath)
+	assert.Equal(t, markdown, content)
+}
+
+func TestPlanResolutionSessionIDPrefersExecutionSession(t *testing.T) {
+	executionID := uuid.New()
+	run := &captaindb.PromptRun{SessionID: uuid.New(), ExecutionSessionID: &executionID}
+	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{SessionId: "provider-session-id"}}}
+
+	assert.Equal(t, executionID.String(), planResolutionSessionID(todo, run))
 }
 
 func TestTodoStatusKeepsDurableAndExecutionStateSeparate(t *testing.T) {

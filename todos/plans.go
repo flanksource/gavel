@@ -17,8 +17,9 @@ import (
 // uses), for when the envelope's reported path/content is missing or wrong.
 // File-backed sessions return path+content; inline-only sessions return content
 // with an empty path.
-func ResolveSessionPlan(todo *types.TODO) (path string, content string) {
-	if todo == nil || todo.LLM == nil || todo.LLM.SessionId == "" {
+func ResolveSessionPlan(sessionID string) (path string, content string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
 		return "", ""
 	}
 	// Configure Captain with Gavel's process-owned pool only when a path that
@@ -27,7 +28,7 @@ func ResolveSessionPlan(todo *types.TODO) (path string, content string) {
 	if _, err := database.Shared(context.Background()); err != nil {
 		return "", ""
 	}
-	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: todo.LLM.SessionId})
+	res, err := captaincli.RunPlan(captaincli.PlanOptions{SessionID: sessionID})
 	if err != nil {
 		return "", ""
 	}
@@ -35,13 +36,6 @@ func ResolveSessionPlan(todo *types.TODO) (path string, content string) {
 		path = res.Path
 	}
 	return path, res.Content
-}
-
-// ResolveSessionPlanPath recovers the native plan file from the todo's agent
-// session. Empty when the todo has no session or the session has no on-disk plan.
-func ResolveSessionPlanPath(todo *types.TODO) string {
-	path, _ := ResolveSessionPlan(todo)
-	return path
 }
 
 // ValidatePlanFile verifies the agent-reported native plan file exists and is

@@ -404,7 +404,7 @@ func (r *Repository) GetIssue(ctx context.Context, id uuid.UUID) (*Issue, error)
 	return getIssue(r.db.WithContext(ctx), `id = ?`, id)
 }
 
-// CountIssuesByStatus groups a workspace's issues by the three columns the
+// CountIssuesByStatus groups a workspace's issues by the four columns the
 // derived TODO status is a function of. Callers fold the groups through the
 // same derivation List uses, so counting never has to materialize issue bodies.
 func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceID uuid.UUID) ([]IssueStatusCount, error) {
@@ -412,12 +412,16 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceID uuid.U
 	result := r.db.WithContext(ctx).Raw(`
 		SELECT issue.status,
 		       COALESCE(runtime.execution_state, 'idle') AS execution_state,
+		       COALESCE(active_link.step_kind::text, '') AS step_kind,
 		       COALESCE(plan.approval_state::text, '')   AS approval_state,
 		       COUNT(*)                                  AS count
 		FROM `+issueFrom+`
+		LEFT JOIN todo_issue_prompt_runs AS active_link
+		  ON active_link.issue_id = issue.id
+		 AND active_link.prompt_run_id = issue.active_prompt_run_id
 		LEFT JOIN captain_plans AS plan ON plan.id = issue.selected_plan_id
 		WHERE issue.workspace_id = ?
-		GROUP BY 1, 2, 3`,
+		GROUP BY 1, 2, 3, 4`,
 		workspaceID,
 	).Scan(&counts)
 	if result.Error != nil {

@@ -19,6 +19,9 @@ var (
 	_ todos.RunLifecycleProvider = (*Provider)(nil)
 	_ todos.RunProgressProvider  = (*Provider)(nil)
 	_ todos.PlanContentProvider  = (*Provider)(nil)
+
+	errPlanContentMissing = errors.New("plan run produced no durable markdown content")
+	resolveSessionPlan    = todos.ResolveSessionPlan
 )
 
 type activeRun struct {
@@ -346,48 +349,73 @@ func (p *Provider) finishAttempt(ctx context.Context, todo *types.TODO, result *
 		return false, err
 	}
 
-	if active.link.StepKind == native.StepPlan && successfulPlanAttempt(result) && result.Plan != nil {
-		switch result.Plan.Status {
-		case types.PlanNew, types.PlanUpdated:
-			if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
-				_ = p.failPromptRun(ctx, active, err.Error())
-				p.clearPrepared(active.issue.ID, active.run.ID)
-				return true, err
-			}
-			active, err = p.loadActiveRun(ctx, todo)
-			if err != nil {
-				return true, err
-			}
-		case types.PlanUnchanged:
-			if active.issue.SelectedPlanID == nil {
-				return true, fmt.Errorf("plan run reported unchanged but issue %s has no selected Captain plan", active.issue.ID)
-			}
-			// Codex plan mode keeps the full Markdown in its native plan file and
-			// may return only a short summary in plan.content. An "unchanged"
-			// result therefore still needs to reconcile Captain when an earlier
-			// attempt persisted that summary instead of the referenced file.
-			path := strings.TrimSpace(result.Plan.Path)
-			if path != "" {
-				fileMarkdown, _, exists, readErr := todos.ReadPlanFile(path)
-				if readErr != nil {
-					return true, readErr
+	if active.link.StepKind == native.StepPlan {
+		switch {
+		case successfulPlanAttempt(result) && result.Plan != nil:
+			switch result.Plan.Status {
+			case types.PlanNew, types.PlanUpdated:
+				if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
+					_ = p.failPromptRun(ctx, active, err.Error())
+					p.clearPrepared(active.issue.ID, active.run.ID)
+					return true, err
 				}
-				if exists && strings.TrimSpace(fileMarkdown) != "" {
-					plan, getErr := p.captain.GetPlan(ctx, *active.issue.SelectedPlanID)
-					if getErr != nil {
-						return true, getErr
+				active, err = p.loadActiveRun(ctx, todo)
+				if err != nil {
+					return true, err
+				}
+			case types.PlanUnchanged:
+				if active.issue.SelectedPlanID == nil {
+					return true, fmt.Errorf("plan run reported unchanged but issue %s has no selected Captain plan", active.issue.ID)
+				}
+				// Codex plan mode keeps the full Markdown in its native plan file and
+				// may return only a short summary in plan.content. An "unchanged"
+				// result therefore still needs to reconcile Captain when an earlier
+				// attempt persisted that summary instead of the referenced file.
+				path := strings.TrimSpace(result.Plan.Path)
+				if path != "" {
+					fileMarkdown, _, exists, readErr := todos.ReadPlanFile(path)
+					if readErr != nil {
+						return true, readErr
 					}
-					if plan.LatestRevision == nil || normalizePlanResultMarkdown(plan.LatestRevision.PlanMarkdown) != normalizePlanResultMarkdown(fileMarkdown) {
-						if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
-							_ = p.failPromptRun(ctx, active, err.Error())
-							p.clearPrepared(active.issue.ID, active.run.ID)
-							return true, err
+					if exists && strings.TrimSpace(fileMarkdown) != "" {
+						plan, getErr := p.captain.GetPlan(ctx, *active.issue.SelectedPlanID)
+						if getErr != nil {
+							return true, getErr
 						}
-						active, err = p.loadActiveRun(ctx, todo)
-						if err != nil {
-							return true, err
+						if plan.LatestRevision == nil || normalizePlanResultMarkdown(plan.LatestRevision.PlanMarkdown) != normalizePlanResultMarkdown(fileMarkdown) {
+							if err := p.persistPlanResult(ctx, todo, active, result); err != nil {
+								_ = p.failPromptRun(ctx, active, err.Error())
+								p.clearPrepared(active.issue.ID, active.run.ID)
+								return true, err
+							}
+							active, err = p.loadActiveRun(ctx, todo)
+							if err != nil {
+								return true, err
+							}
 						}
 					}
+				}
+			}
+		default:
+			status := types.PlanUpdated
+			if active.issue.SelectedPlanID == nil {
+				status = types.PlanNew
+			}
+			recovered := &todos.ExecutionResult{
+				ExecutorName: active.run.Runtime.Driver,
+				Plan:         &types.PlanResult{Status: status},
+			}
+			if result != nil && strings.TrimSpace(result.ExecutorName) != "" {
+				recovered.ExecutorName = result.ExecutorName
+			}
+			if err := p.persistPlanResult(ctx, todo, active, recovered); err != nil {
+				if !errors.Is(err, errPlanContentMissing) {
+					return true, err
+				}
+			} else {
+				active, err = p.loadActiveRun(ctx, todo)
+				if err != nil {
+					return true, err
 				}
 			}
 		}
@@ -551,7 +579,7 @@ func (p *Provider) ensureAgentSession(ctx context.Context, admission *captaindb.
 }
 
 func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, active *activeRun, result *todos.ExecutionResult) error {
-	markdown, path, err := planResultContent(todo, result)
+	markdown, path, err := planResultContent(result, planResolutionSessionID(todo, active.run))
 	if err != nil {
 		return err
 	}
@@ -601,11 +629,10 @@ func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, acti
 	return p.replaceTODO(ctx, todo, persisted.Issue, todo.CWD)
 }
 
-func planResultContent(todo *types.TODO, result *todos.ExecutionResult) (content, path string, err error) {
-	if result == nil || result.Plan == nil {
-		return "", "", fmt.Errorf("plan result is missing")
+func planResultContent(result *todos.ExecutionResult, sessionID string) (content, path string, err error) {
+	if result != nil && result.Plan != nil {
+		path = strings.TrimSpace(result.Plan.Path)
 	}
-	path = strings.TrimSpace(result.Plan.Path)
 	// The native plan file is authoritative when the agent supplies one.
 	// Codex commonly puts the detailed plan there while plan.content is only a
 	// short completion summary, so preferring inline content truncates the
@@ -619,17 +646,32 @@ func planResultContent(todo *types.TODO, result *todos.ExecutionResult) (content
 			return strings.TrimSpace(read), path, nil
 		}
 	}
-	if content = strings.TrimSpace(result.Plan.Content); content != "" {
-		return content, path, nil
+	if result != nil && result.Plan != nil {
+		if content = strings.TrimSpace(result.Plan.Content); content != "" {
+			return content, path, nil
+		}
 	}
-	resolvedPath, resolved := todos.ResolveSessionPlan(todo)
+	resolvedPath, resolved := resolveSessionPlan(sessionID)
 	if strings.TrimSpace(resolved) != "" {
 		if path == "" {
 			path = resolvedPath
 		}
 		return strings.TrimSpace(resolved), path, nil
 	}
-	return "", path, fmt.Errorf("plan run produced no durable markdown content")
+	return "", path, fmt.Errorf("%w for session %q", errPlanContentMissing, strings.TrimSpace(sessionID))
+}
+
+func planResolutionSessionID(todo *types.TODO, run *captaindb.PromptRun) string {
+	if run != nil && run.ExecutionSessionID != nil {
+		return run.ExecutionSessionID.String()
+	}
+	if todo != nil && todo.LLM != nil && strings.TrimSpace(todo.LLM.SessionId) != "" {
+		return strings.TrimSpace(todo.LLM.SessionId)
+	}
+	if run != nil {
+		return run.SessionID.String()
+	}
+	return ""
 }
 
 func normalizePlanResultMarkdown(markdown string) string {
@@ -673,6 +715,7 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 	if p == nil || p.captain == nil || p.repository == nil || issue == nil || todo == nil {
 		return nil
 	}
+	activeStep := native.StepKind("")
 	if issue.ActivePromptRunID != nil {
 		run, err := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
 		if err != nil {
@@ -715,6 +758,7 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 			if link.PromptRunID != run.ID {
 				continue
 			}
+			activeStep = link.StepKind
 			switch link.StepKind {
 			case native.StepPlan:
 				todo.RunMode = types.ModePlan
@@ -743,17 +787,19 @@ func (p *Provider) decorateExecution(ctx context.Context, issue *native.Issue, t
 	}
 	// Plan paths are source metadata only in native storage.
 	todo.PlanPath = ""
-	todo.Status = todoStatusWithPlan(issue.Status, issue.ExecutionState, plan.ApprovalState)
+	todo.Status = todoStatusWithPlan(issue.Status, issue.ExecutionState, activeStep, plan.ApprovalState)
 	return nil
 }
 
 func todoStatusWithPlan(
 	status native.IssueStatus,
 	execution native.ExecutionState,
+	step native.StepKind,
 	approval captaindb.PlanApprovalState,
 ) types.Status {
 	projected := todoStatus(status, execution)
-	if (status != native.StatusOpen && status != native.StatusDraft) || execution != native.ExecutionIdle {
+	planReviewable := execution == native.ExecutionIdle || (execution == native.ExecutionFailed && step == native.StepPlan)
+	if (status != native.StatusOpen && status != native.StatusDraft) || !planReviewable {
 		return projected
 	}
 	switch approval {

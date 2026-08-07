@@ -105,12 +105,13 @@ type Issue struct {
 }
 
 // IssueStatusCount is one group of CountIssuesByStatus: the durable status, the
-// projected execution state and the selected plan's approval state — the three
-// inputs the derived TODO status is computed from — plus how many issues share
-// them. ApprovalState is empty when the issue has no selected plan.
+// projected execution state, active step and selected plan's approval state —
+// the inputs the derived TODO status is computed from — plus how many issues
+// share them. ApprovalState is empty when the issue has no selected plan.
 type IssueStatusCount struct {
 	Status         IssueStatus    `json:"status"`
 	ExecutionState ExecutionState `json:"executionState"`
+	StepKind       StepKind       `json:"stepKind"`
 	ApprovalState  string         `json:"approvalState"`
 	Count          int            `json:"count"`
 }

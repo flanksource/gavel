@@ -50,18 +50,34 @@ func stubApprovedRun(t *testing.T) *types.TODOS {
 	return &dispatched
 }
 
-func TestTodosPlanApproveCommandRegistered(t *testing.T) {
-	var approve bool
+func TestTodosPlanCommandsRegistered(t *testing.T) {
+	registered := map[string]bool{}
 	for _, command := range todosPlanCmd.Commands() {
-		if command.Name() == "approve" {
-			approve = true
-		}
+		registered[command.Name()] = true
 	}
-	if !approve {
-		t.Fatal("expected todos plan approve to be registered — a CLI user can plan, reject and revise but not run")
+	for _, name := range []string{"approve", "reject", "revise", "recover"} {
+		if !registered[name] {
+			t.Errorf("expected todos plan %s to be registered", name)
+		}
 	}
 	if todosPlanApproveCmd.Flags().Lookup("run") == nil {
 		t.Error("expected plan approve --run flag")
+	}
+}
+
+func TestTodosPlanRecoverCallsProviderOutsideReviewState(t *testing.T) {
+	workDir := t.TempDir()
+	provider, created := seedCLIReviewTodo(t, workDir, "Recoverable plan")
+	failed := types.StatusFailed
+	if err := provider.UpdateState(t.Context(), created, todos.StateUpdate{Status: &failed}); err != nil {
+		t.Fatalf("seed failed state: %v", err)
+	}
+
+	if err := runTodosPlanRecover(todosPlanRecoverCmd, []string{"Recoverable plan"}); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if provider.recoveredID != created.ID {
+		t.Errorf("recovered ID = %q, want %q", provider.recoveredID, created.ID)
 	}
 }
 

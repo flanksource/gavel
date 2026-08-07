@@ -134,6 +134,12 @@ type PlanReviewProvider interface {
 	RequestPlanRevision(ctx context.Context, todo *types.TODO, actor, feedback string) (*types.TODO, error)
 }
 
+// PlanRecoveryProvider backfills the durable Captain plan selected by a TODO
+// from its most recent plan-step session without changing that run's outcome.
+type PlanRecoveryProvider interface {
+	RecoverPlan(ctx context.Context, todo *types.TODO) (*types.TODO, error)
+}
+
 // PlanContentProvider resolves the durable Captain plan content that should be
 // fed to an agent. Plan mode receives the latest selected revision so it can
 // revise it; run mode receives only the explicitly approved revision.

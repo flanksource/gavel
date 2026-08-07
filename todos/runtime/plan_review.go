@@ -13,8 +13,56 @@ import (
 
 var (
 	_ todos.PlanReviewProvider   = (*Provider)(nil)
+	_ todos.PlanRecoveryProvider = (*Provider)(nil)
 	_ todos.PlanRevisionProvider = (*Provider)(nil)
 )
+
+func (p *Provider) RecoverPlan(ctx context.Context, todo *types.TODO) (*types.TODO, error) {
+	issueID, err := p.todoID(todo)
+	if err != nil {
+		return nil, err
+	}
+	issue, err := p.repository.GetIssue(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	links, err := p.repository.ListPromptRuns(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	var latest *native.PromptRunLink
+	for i := range links {
+		link := &links[i]
+		if link.StepKind != native.StepPlan {
+			continue
+		}
+		if latest == nil || link.Ordinal > latest.Ordinal || (link.Ordinal == latest.Ordinal && link.CreatedAt.After(latest.CreatedAt)) {
+			latest = link
+		}
+	}
+	if latest == nil {
+		return nil, fmt.Errorf("native TODO %s has no plan-step run to recover", issueID)
+	}
+	run, err := p.captain.GetPromptRun(ctx, latest.PromptRunID)
+	if err != nil {
+		return nil, err
+	}
+	if !terminalPromptRun(run.State) {
+		return nil, fmt.Errorf("Captain plan run %s is still %s", run.ID, run.State)
+	}
+	status := types.PlanUpdated
+	if issue.SelectedPlanID == nil {
+		status = types.PlanNew
+	}
+	result := &todos.ExecutionResult{
+		ExecutorName: run.Runtime.Driver,
+		Plan:         &types.PlanResult{Status: status},
+	}
+	if err := p.persistPlanResult(ctx, todo, &activeRun{issue: issue, link: latest, run: run}, result); err != nil {
+		return nil, err
+	}
+	return todo, nil
+}
 
 func (p *Provider) SavePlanRevision(ctx context.Context, todo *types.TODO, markdown, actor string) (*types.TODO, error) {
 	markdown = strings.TrimSpace(markdown)
