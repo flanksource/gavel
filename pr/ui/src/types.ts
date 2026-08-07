@@ -797,6 +797,10 @@ export interface GavelResultsSummary {
   // tests and 5 violations); the counts above stay exact.
   failures?: Test[];
   lint?: LinterResult[];
+  // commands are the local `gavel test --pr` / `gavel lint --pr` invocations
+  // that re-run this shard's failures. PR-scoped, not shard-scoped. Absent on
+  // a shard with nothing to reproduce.
+  commands?: string[];
 }
 
 export interface PRDetail {

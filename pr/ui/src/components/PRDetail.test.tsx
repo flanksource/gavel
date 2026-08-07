@@ -207,4 +207,38 @@ describe('Gavel Results section', () => {
     expect(screen.getByText('golangci-lint')).toBeTruthy();
     expect(screen.getByText(/exit status 3/)).toBeTruthy();
   });
+
+  // The commands are the whole point of the section for someone triaging a red
+  // PR: they turn "these two tests failed in CI" into something runnable.
+  it('shows the gavel commands that re-run the PR failures', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{
+          gavelResults: [makeGavelShard({
+            testsTotal: 12,
+            testsFailed: 2,
+            commands: ['gavel test --pr 57', 'gavel lint --pr 57'],
+          })],
+        }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.getByText('Reproduce locally')).toBeTruthy();
+    expect(screen.getByText('gavel test --pr 57')).toBeTruthy();
+    expect(screen.getByText('gavel lint --pr 57')).toBeTruthy();
+  });
+
+  it('omits the reproduce block for a shard with nothing to re-run', () => {
+    renderPRDetail(
+      <PRDetailPanel
+        pr={makePR()}
+        detail={{ gavelResults: [makeGavelShard({ testsTotal: 4, testsPassed: 4 })] }}
+        loading={false}
+      />,
+    );
+
+    expect(screen.queryByText('Reproduce locally')).toBeNull();
+  });
 });

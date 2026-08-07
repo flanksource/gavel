@@ -52,6 +52,7 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		// The persistent github cache short-circuits already-completed runs.
 		runs := fetchRuns(opts, pr)
 		gavelResults := <-gavelResultsCh
+		annotateReproduceCommands(gavelResults, opts.Repo, pr.Number)
 		comments := MergeAndFilter(pr.Comments, pr.ReviewThreads)
 		comments = removeRenderedArtifactComments(comments, gavelResults)
 

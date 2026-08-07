@@ -52,6 +52,14 @@ func runLint(opts LintOptions) (any, error) {
 		}
 		opts.Failed = resolved
 	}
+	if opts.PR != "" {
+		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowLint)
+		if err != nil {
+			return nil, err
+		}
+		opts.Failed = resolved
+		opts.PR = ""
+	}
 	clicky.ClearGlobalTasks()
 	runCtx, cancelRun := newStopContext(opts.Context, 0)
 	defer cancelRun()

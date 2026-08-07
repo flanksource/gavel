@@ -12,7 +12,6 @@ import (
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/prwatch"
-	"github.com/flanksource/gavel/report"
 	testui "github.com/flanksource/gavel/testrunner/ui"
 )
 
@@ -78,23 +77,12 @@ func (s *Server) getOrCreateArtifact(artifactID int64, repo string) (*artifactEn
 
 	summary := computeGavelSummary(jsonBytes, artifactID, "")
 
-	srv := testui.NewServer()
-	var snap testui.Snapshot
-	if err := json.Unmarshal(jsonBytes, &snap); err != nil {
-		logger.Warnf("artifact %d: unmarshal as snapshot: %v, trying legacy format", artifactID, err)
-		var data report.ResultFile
-		if err := json.Unmarshal(jsonBytes, &data); err != nil {
-			return nil, fmt.Errorf("parse artifact %d: %w", artifactID, err)
-		}
-		snap = testui.Snapshot{
-			Tests: data.Tests,
-			Lint:  data.Lint,
-			Bench: data.Bench,
-			Status: testui.SnapshotStatus{
-				LintRun: len(data.Lint) > 0,
-			},
-		}
+	snap, err := prwatch.DecodeArtifactSnapshot(jsonBytes)
+	if err != nil {
+		return nil, fmt.Errorf("artifact %d: %w", artifactID, err)
 	}
+
+	srv := testui.NewServer()
 	srv.LoadSnapshot(snap)
 	srv.MarkDone()
 

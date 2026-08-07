@@ -86,6 +86,14 @@ func runTests(opts testrunner.RunOptions) (any, error) {
 		}
 		opts.Failed = resolved
 	}
+	if opts.PR != "" {
+		resolved, err := resolvePRFailed(opts.PR, opts.WorkDir, opts.Failed, opts.Baseline, prNarrowTests)
+		if err != nil {
+			return nil, err
+		}
+		opts.Failed = resolved
+		opts.PR = ""
+	}
 	runStarted := time.Now().UTC()
 	gitInfo := snapshotGitInfo(opts.WorkDir)
 
@@ -849,6 +857,9 @@ func bindTestCommandFlags(cmd *cobra.Command, flags *testCommandFlags) {
 	if failed := cmd.Flags().Lookup("failed"); failed != nil {
 		failed.NoOptDefVal = failedAutoSentinel
 		failed.Usage = "Path to previous results JSON; re-run only failed tests. Pass without a value to use --baseline when set, otherwise .gavel/last.json."
+	}
+	if pr := cmd.Flags().Lookup("pr"); pr != nil {
+		pr.Usage = "PR reference (12, #12, owner/repo#12, or a PR URL); re-run only the tests that failed in that PR's gavel CI artifacts."
 	}
 }
 

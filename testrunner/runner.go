@@ -146,6 +146,7 @@ type RunOptions struct {
 	Frameworks    []string              `json:"frameworks,omitempty" yaml:"framework,omitempty" flag:"framework"`                          // Restrict execution to these frameworks (e.g. jest, vitest, playwright, go, ginkgo). Empty = run every detected framework. Unknown names hard-fail.
 	Baseline      string                `json:"baseline,omitempty" yaml:"baseline,omitempty" flag:"baseline"`                              // Path to previous results JSON; only report NEW failures not in baseline
 	Failed        string                `json:"failed,omitempty" yaml:"failed,omitempty" flag:"failed"`                                    // Path to previous results JSON; re-run only failed tests
+	PR            string                `json:"-" yaml:"-" flag:"pr"`                                                                      // PR reference (12, #12, owner/repo#12, or a PR URL); re-run only the tests that failed in that PR's gavel CI artifacts. CLI-only: the command resolves it into Failed before the run starts.
 	Updates       chan<- []parsers.Test `json:"-" yaml:"-"`                                                                                // Channel for streaming test result updates to UI
 	OutputTee     io.Writer             `json:"-" yaml:"-"`                                                                                // Optional writer that receives a copy of raw process stdout/stderr
 	RunKind       string                `json:"run_kind,omitempty" yaml:"run-kind,omitempty"`                                              // "initial" (default) or "rerun" — tagged onto each TestAttempt produced
@@ -248,6 +249,7 @@ Examples:
   gavel test --lint                                # tests + linters in parallel
   gavel test --changed                             # only changed packages
   gavel test --failed                              # re-run last run's failures (.gavel/last.json)
+  gavel test --pr 12                               # re-run the tests that failed on PR #12 in CI
   gavel test --framework go,ginkgo                 # restrict frameworks
   gavel test go ./pkg/integration --tags integration # enable Go build tags
   gavel test ./pkg/testrunner -- -run "TestName"     # focus Go test + Ginkgo

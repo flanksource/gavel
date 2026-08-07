@@ -99,6 +99,12 @@ function formatGavelText(g: GavelResultsSummary): string {
       }
     }
   }
+  if (g.commands && g.commands.length) {
+    lines.push('', 'Reproduce locally:');
+    for (const command of g.commands) {
+      lines.push(`$ ${command}`);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -127,6 +133,9 @@ function formatGavelMarkdown(g: GavelResultsSummary): string {
         lines.push(`- \`${lr.linter}\` ${gavelLocation(v.file, v.line)}${v.message ? ` — ${stripAnsi(v.message)}` : ''}`);
       }
     }
+  }
+  if (g.commands && g.commands.length) {
+    lines.push('', '**Reproduce locally**', '', '```sh', ...g.commands, '```');
   }
   return lines.join('\n');
 }
@@ -876,6 +885,8 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         </div>
       )}
 
+      <ReproduceCommands commands={agg.commands ?? []} />
+
       {!multi && (
         <ShardExtras results={shards[0]} />
       )}
@@ -907,6 +918,42 @@ function GavelResultsSection({ shards, pr }: { shards: GavelResultsSummary[]; pr
         </div>
       )}
     </Section>
+  );
+}
+
+// ReproduceCommands shows the `gavel test --pr` / `gavel lint --pr` invocations
+// that re-run the PR's failures locally. Each is one click from the clipboard —
+// the whole point is to paste it into a terminal.
+function ReproduceCommands({ commands }: { commands: string[] }) {
+  const [flash, setFlash] = useTimeoutFlash<string | null>(null, 1200);
+  if (commands.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground mb-1">
+        Reproduce locally
+      </div>
+      <div className="divide-y divide-border border border-border rounded">
+        {commands.map(command => (
+          <div key={command} className="flex items-center justify-between gap-2 px-2 py-1.5">
+            <code className="font-mono text-xs text-foreground truncate">
+              <span className="text-muted-foreground select-none">$ </span>
+              {command}
+            </code>
+            <Button
+              type="button"
+              variant="ghost"
+              title={flash === command ? 'Copied!' : `Copy \`${command}\``}
+              className="p-0.5 rounded hover:bg-muted hover:text-foreground h-auto shrink-0"
+              onClick={() => copyText(command).then(() => setFlash(command)).catch(() => setFlash(null))}
+            >
+              {flash === command
+                ? <UiCheck className="text-sm text-green-600" />
+                : <UiCopy className="text-sm text-muted-foreground" />}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

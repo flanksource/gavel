@@ -85,6 +85,45 @@ var _ = Describe("Gavel artifact results", func() {
 		Expect(plain).To(ContainSubstring("View full results"))
 	})
 
+	It("prints the gavel commands that re-run a failing shard", func() {
+		results := []*GavelResultsSummary{
+			{StickyID: "gavel-test", TestsFailed: 2, TestsTotal: 11},
+			{StickyID: "gavel-lint", LintViolations: 3, LintLinters: 1},
+			{StickyID: "gavel-e2e", TestsPassed: 4, TestsTotal: 4},
+		}
+
+		annotateReproduceCommands(results, "", 57)
+
+		Expect(results[0].Commands).To(Equal([]string{"gavel test --pr 57"}))
+		Expect(results[1].Commands).To(Equal([]string{"gavel lint --pr 57"}))
+		Expect(results[2].Commands).To(BeEmpty())
+
+		plain := PRWatchResult{PR: &github.PRInfo{Number: 57}, GavelResults: results}.Pretty().String()
+		Expect(plain).To(ContainSubstring("Reproduce locally"))
+		Expect(plain).To(ContainSubstring("$ gavel test --pr 57"))
+		Expect(plain).To(ContainSubstring("$ gavel lint --pr 57"))
+	})
+
+	It("suggests both commands when one shard runs tests and lint", func() {
+		// A broken linter reports no violations, so the lint command must be
+		// driven by the same signal statusIcon uses, not by the count alone.
+		results := []*GavelResultsSummary{{
+			StickyID:    "gavel",
+			TestsFailed: 1,
+			Lint: []*linters.LinterResult{{
+				Linter: "golangci-lint", Success: false,
+				Error: "golangci-lint execution failed: exit status 3",
+			}},
+		}}
+
+		annotateReproduceCommands(results, "acme/widgets", 12)
+
+		Expect(results[0].Commands).To(Equal([]string{
+			"gavel test --pr acme/widgets#12",
+			"gavel lint --pr acme/widgets#12",
+		}))
+	})
+
 	It("renders lint findings through the shared gavel lint summary tree", func() {
 		result := PRWatchResult{
 			PR: &github.PRInfo{Number: 57},

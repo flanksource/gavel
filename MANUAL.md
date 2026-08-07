@@ -282,6 +282,7 @@ Reach for it when you want one of these flows:
 - Run only packages affected by local changes.
 - Open a live dashboard while tests run.
 - Re-run from a previous JSON baseline or only rerun failed targets.
+- Re-run the failures a pull request hit in CI, without re-running the whole suite.
 
 Common workflows:
 
@@ -290,6 +291,8 @@ gavel test
 gavel test ./pkg/...
 gavel test --lint --format "json=gavel-results.json,html=gavel-results.html"
 gavel test --changed
+gavel test --failed
+gavel test --pr 42
 gavel test --ui
 gavel test --ui --detach --auto-stop=30m --idle-timeout=5m
 gavel test --bench .
@@ -608,6 +611,21 @@ This is the fastest command for:
 - Checking whether a PR is green
 - Following checks until completion
 - Pulling failed log tails into the CLI
+- Getting the exact command that re-runs the PR's failures locally
+
+When the PR published gavel results, each failing shard renders its failing tests and lint violations plus a **Reproduce locally** block:
+
+```
+└─ ✖ gavel-test  passed: 41 failed: 2  total: 43
+   ├─ Test failures (2)
+   ├─ Lint summary: 3 of 47 violations
+   ├─ Reproduce locally
+   │  $ gavel test --pr 42
+   │  $ gavel lint --pr 42
+   └─ View full results: https://github.com/owner/repo/actions/runs/…
+```
+
+`--pr` downloads every gavel artifact on the PR, merges the shards into `.gavel/pr-<n>.json`, and narrows the run to those failures — the same narrowing `--failed` applies to a local run. It accepts `42`, `#42`, `owner/repo#42`, or a PR URL, and cannot be combined with `--failed` or `--baseline`.
 
 Common workflows:
 
@@ -617,6 +635,8 @@ gavel pr status 42
 gavel pr status https://github.com/owner/repo/pull/123
 gavel pr status --follow --interval 30s
 gavel pr status --logs --tail-logs 50
+gavel test --pr 42        # re-run just the tests that failed on PR #42
+gavel lint --pr 42        # re-run just the linters that flagged PR #42
 ```
 
 ### `gavel pr list`

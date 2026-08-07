@@ -33,6 +33,7 @@ type Options struct {
 	DryRun       bool            `flag:"dry-run" yaml:"dry-run,omitempty" help:"Print the linter commands that would run without executing them"`
 	Baseline     string          `flag:"baseline" yaml:"baseline,omitempty" help:"Path to previous results JSON; only report NEW violations not in baseline"`
 	Failed       string          `flag:"failed" yaml:"failed,omitempty" help:"Path to previous results JSON; re-run only linters/files that had violations"`
+	PR           string          `flag:"pr" yaml:"-" help:"PR reference (12, #12, owner/repo#12, or a PR URL); re-run only the linters/files that had violations in that PR's gavel CI artifacts"`
 	Summary      bool            `flag:"summary" yaml:"summary,omitempty" help:"Collapse output: group by linter -> rule, show count and the first --summary-limit locations"`
 	SummaryLimit int             `flag:"summary-limit" yaml:"summary-limit,omitempty" help:"Max example locations shown per rule in --summary mode" default:"5"`
 	Files        []string        `args:"true" yaml:"files,omitempty"`
@@ -95,6 +96,7 @@ Examples:
   gavel lint --linters=golangci-lint,ruff
   gavel lint --fix
   gavel lint --triage
+  gavel lint --pr 12                 # re-run the linters that flagged PR #12 in CI
   gavel lint -y                      # auto-AI-fix violations (implies --ai-fix)
   gavel lint ./pkg/...`
 }

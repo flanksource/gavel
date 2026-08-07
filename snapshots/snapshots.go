@@ -258,6 +258,16 @@ func writePointer(workDir, name string, p *Pointer) error {
 	return writeJSON(path, p)
 }
 
+// WriteSnapshot writes snap to an explicit path, without the git-sha naming
+// and pointer bookkeeping Save performs. Used for snapshots that are not a
+// local run — e.g. the merged CI results `--pr` caches at .gavel/pr-<n>.json.
+func WriteSnapshot(path string, snap *testui.Snapshot) error {
+	if snap == nil {
+		return errors.New("snapshots.WriteSnapshot: snapshot is nil")
+	}
+	return writeJSON(path, snap)
+}
+
 func writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

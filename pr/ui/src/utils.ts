@@ -256,6 +256,7 @@ export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResult
     duration: 0,
     failures: [],
     lint: [],
+    commands: [],
   };
   for (const s of shards) {
     agg.testsPassed += s.testsPassed;
@@ -274,6 +275,10 @@ export function aggregateGavelShards(shards: GavelResultsSummary[]): GavelResult
     for (const l of s.lint ?? []) {
       if (agg.lint!.length >= MAX_GAVEL_DETAIL) break;
       agg.lint!.push(l);
+    }
+    // Commands are PR-scoped, so shards repeat them — union rather than sum.
+    for (const c of s.commands ?? []) {
+      if (!agg.commands!.includes(c)) agg.commands!.push(c);
     }
   }
   return agg;

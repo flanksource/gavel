@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,11 @@ type GavelResultsSummary struct {
 	// Lint holds the linters that found violations or errored, with their
 	// violations trimmed to maxDetailItems in total across linters.
 	Lint []*linters.LinterResult `json:"lint,omitempty"`
+
+	// Commands are the local `gavel` invocations that re-run this shard's
+	// failures. They are PR-scoped rather than shard-scoped: `--pr` merges
+	// every shard's artifact into one snapshot before narrowing.
+	Commands []string `json:"commands,omitempty"`
 }
 
 func ComputeGavelSummary(jsonBytes []byte, artifact github.GavelArtifact) *GavelResultsSummary {
@@ -194,6 +200,28 @@ func aggregateGavelSummary(aggregate, shard *GavelResultsSummary) {
 	for _, result := range shard.Lint {
 		if len(aggregate.Lint) < maxDetailItems {
 			aggregate.Lint = append(aggregate.Lint, result)
+		}
+	}
+}
+
+// annotateReproduceCommands attaches the `gavel test --pr` / `gavel lint --pr`
+// invocations that re-run what the shard failed on. Only failing shards get
+// them — a green shard has nothing to reproduce.
+func annotateReproduceCommands(summaries []*GavelResultsSummary, repo string, prNumber int) {
+	ref := strconv.Itoa(prNumber)
+	if repo != "" {
+		ref = fmt.Sprintf("%s#%d", repo, prNumber)
+	}
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		summary.Commands = nil
+		if summary.TestsFailed > 0 {
+			summary.Commands = append(summary.Commands, "gavel test --pr "+ref)
+		}
+		if summary.LintViolations > 0 || summary.hasLintFailure() {
+			summary.Commands = append(summary.Commands, "gavel lint --pr "+ref)
 		}
 	}
 }

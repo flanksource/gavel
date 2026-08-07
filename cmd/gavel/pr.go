@@ -68,6 +68,10 @@ every workflow step for the PR. With no argument it resolves the current branch'
 PR (falling back to your most recent PR). Accepts a PR number, owner/repo + number,
 or a full PR URL.
 
+When the PR published gavel results, each failing shard shows the failing tests and
+lint violations, plus a "Reproduce locally" block with the exact gavel commands that
+re-run them here: gavel test --pr <n> / gavel lint --pr <n>.
+
 Key flags:
   --follow          Poll until all checks finish (--interval sets the cadence, default 30s)
   --logs            Also fetch failing-job logs (--tail-logs lines per step; extra API quota)
@@ -172,14 +176,7 @@ func parseStatusArgs(args []string) (repo string, prNumber int, err error) {
 	case 0:
 		return "", 0, nil
 	case 1:
-		if n, err := strconv.Atoi(args[0]); err == nil {
-			return "", n, nil
-		}
-		repo, pr, err := github.ParsePRURL(args[0])
-		if err == nil {
-			return repo, pr, nil
-		}
-		return "", 0, fmt.Errorf("expected PR number or URL, got %q", args[0])
+		return parsePRRef(args[0])
 	case 2:
 		prNumber, err = strconv.Atoi(args[1])
 		if err != nil {

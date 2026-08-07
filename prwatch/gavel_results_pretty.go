@@ -66,6 +66,9 @@ func (s GavelResultsSummary) GetChildren() []api.TreeNode {
 	if len(s.Lint) > 0 {
 		children = append(children, s.lintSection())
 	}
+	if len(s.Commands) > 0 {
+		children = append(children, &reproduceNode{commands: s.Commands})
+	}
 	if s.ArtifactURL != "" {
 		children = append(children, &artifactLinkNode{url: s.ArtifactURL})
 	}
@@ -151,6 +154,34 @@ func (n *moreNode) Pretty() api.Text {
 }
 
 func (n *moreNode) GetChildren() []api.TreeNode { return nil }
+
+// reproduceNode renders the commands that re-run the shard's failures locally,
+// in the `$ cmd` shape `gavel lint` already uses for a linter's own argv.
+type reproduceNode struct {
+	commands []string
+}
+
+func (n *reproduceNode) Pretty() api.Text {
+	return clicky.Text("Reproduce locally", "font-bold")
+}
+
+func (n *reproduceNode) GetChildren() []api.TreeNode {
+	children := make([]api.TreeNode, 0, len(n.commands))
+	for _, command := range n.commands {
+		children = append(children, &commandNode{command: command})
+	}
+	return children
+}
+
+type commandNode struct {
+	command string
+}
+
+func (n *commandNode) Pretty() api.Text {
+	return clicky.Text("$ ", "text-muted").Append(n.command, "text-blue-400")
+}
+
+func (n *commandNode) GetChildren() []api.TreeNode { return nil }
 
 type artifactLinkNode struct {
 	url string
