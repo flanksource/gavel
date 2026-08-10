@@ -106,8 +106,26 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 	}
 }
 
+// statusExitCode weighs every failure signal the status view renders, not just
+// the head commit's rollup. A repo that reports gavel results through artifact
+// comments rather than a required check has no failing rollup context at all,
+// so a rollup-only exit code false-greens the whole run.
+//
+// Called after filters.apply, so --actions scopes the exit code to the checks,
+// runs, and gavel artifacts the user asked to see.
 func statusExitCode(result *PRWatchResult) int {
-	if result != nil && result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
+	if result == nil {
+		return 0
+	}
+	if result.PR != nil && result.PR.StatusCheckRollup.HasFailure() {
+		return 1
+	}
+	for _, summary := range result.GavelResults {
+		if summary != nil && summary.HasFailure() {
+			return 1
+		}
+	}
+	if result.HasFailedRun() {
 		return 1
 	}
 	return 0

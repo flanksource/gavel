@@ -19,6 +19,18 @@ type PRWatchResult struct {
 	Comments     []github.PRComment            `json:"comments,omitempty"`
 }
 
+// HasFailedRun reports whether any workflow run has a failed job. A run can
+// carry a failed job while its rollup context still reports success, so this is
+// an independent failure signal rather than a restatement of the rollup.
+func (r PRWatchResult) HasFailedRun() bool {
+	for _, run := range r.Runs {
+		if run != nil && github.RunHasFailedJob(run) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r PRWatchResult) Pretty() api.Text {
 	text := r.PR.Pretty()
 	text = text.NewLine().NewLine().Add(r.prettyWorkflows())

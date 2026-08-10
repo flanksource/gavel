@@ -138,7 +138,7 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 	if result == nil {
 		return nil, nil
 	}
-	if opts.Logs && !resultHasFailedRun(result) {
+	if opts.Logs && !result.HasFailedRun() {
 		logger.Infof("--logs had no effect: no failed jobs found (logs are only shown for failed jobs)")
 	}
 	if opts.AIFix {
@@ -156,19 +156,15 @@ func runPRStatus(opts PRStatusOptions) (any, error) {
 		if aiErr := runPRStatusAIFix(ctx, opts, result); aiErr != nil {
 			return nil, fmt.Errorf("ai-fix: %w", aiErr)
 		}
+		// The exit code captured above describes the pre-fix PR, which the fix
+		// has just invalidated. --ai-fix's definition of done is its own
+		// workflow.verify.commands gate, and reaching here means that gate
+		// passed; a failure would have returned an error above.
+		exitCode = 0
 		return nil, nil
 	}
 
 	return result, nil
-}
-
-func resultHasFailedRun(result *prwatch.PRWatchResult) bool {
-	for _, run := range result.Runs {
-		if github.RunHasFailedJob(run) {
-			return true
-		}
-	}
-	return false
 }
 
 func parseStatusArgs(args []string) (repo string, prNumber int, err error) {

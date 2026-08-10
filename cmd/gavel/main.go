@@ -219,12 +219,19 @@ func gavelMCPFormatIgnoredParams() []string {
 }
 
 func main() {
+	// os.Exit skips deferred functions, so the hooks have to be drained here
+	// rather than via a defer in execute — otherwise every non-zero exit leaves
+	// hooks unrun and the terminal unrestored.
+	code := execute()
+	shutdown.Shutdown()
+	os.Exit(code)
+}
+
+func execute() int {
 	defer shutdown.RecoverAndShutdown()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
+	return exitCode
 }

@@ -60,6 +60,17 @@ type GavelResultsSummary struct {
 	Commands []string `json:"commands,omitempty"`
 }
 
+// HasFailure reports whether this artifact should fail the caller's exit code.
+// It is deliberately broader than statusIcon's Fail branch: a shard whose
+// results could not be read (Error) or whose linter died (hasLintFailure)
+// renders amber, because a warning must never flip a parent node red in the
+// tree — but it is still an unverified shard, and an unverified shard must not
+// exit 0. Lint violations alone are excluded: they are Warned in gavel's result
+// model, and Warned never fails.
+func (s GavelResultsSummary) HasFailure() bool {
+	return s.Error != "" || s.TestsFailed > 0 || s.BenchRegressions > 0 || s.hasLintFailure()
+}
+
 func ComputeGavelSummary(jsonBytes []byte, artifact github.GavelArtifact) *GavelResultsSummary {
 	summary := newGavelSummary(artifact)
 	var data report.ResultFile
