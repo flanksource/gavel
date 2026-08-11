@@ -4,9 +4,11 @@ import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiAdd, UiBeaker, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
+import type { FacetModes } from '../../utils';
 import { Spinner } from '../../icons/Spinner';
 import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusUnverified, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
+import { isStatusShown } from './todoFilter';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
@@ -234,13 +236,13 @@ function SessionBadge({ dir, sessionId, status, live }: {
   );
 }
 
-function CountBadge({ icon: Icon, value, label, className = 'text-muted-foreground', status, hidden, onToggle }: {
+function CountBadge({ icon: Icon, value, label, className = 'text-muted-foreground', status, statusFilter, onToggle }: {
   icon: ComponentType<IconProps>;
   value: number;
   label: string;
   className?: string;
   status?: TodoStatus;
-  hidden?: Set<TodoStatus>;
+  statusFilter?: FacetModes;
   onToggle?: (status: TodoStatus) => void;
 }) {
   if (!value) return null;
@@ -251,10 +253,11 @@ function CountBadge({ icon: Icon, value, label, className = 'text-muted-foregrou
     </>
   );
   // A status-mapped badge in a wired counts bar doubles as a filter pill: clicking
-  // it toggles that status into/out of the shared hidden set, dimming when the
-  // status is hidden. Aggregate badges (open/total) and unwired bars stay static.
+  // it excludes that status from the shared status facet (or clears the
+  // exclusion), dimming while it is filtered out. Aggregate badges (open/total)
+  // and unwired bars stay static.
   if (status && onToggle) {
-    const active = !hidden?.has(status);
+    const active = isStatusShown(statusFilter ?? {}, status);
     return (
       <Button
         variant="ghost"
@@ -275,26 +278,26 @@ function CountBadge({ icon: Icon, value, label, className = 'text-muted-foregrou
   );
 }
 
-// TodoCountsBar renders a workspace/bucket header's status summary. When `hidden`
-// and `onToggle` are supplied, each status-mapped badge becomes a filter pill
-// (toggling that status in the shared hidden set); without them the badges are
-// static counts (e.g. the aggregate bar in the action header).
-export function TodoCountsBar({ counts, hidden, onToggle }: {
+// TodoCountsBar renders a workspace/bucket header's status summary. When
+// `statusFilter` and `onToggle` are supplied, each status-mapped badge becomes a
+// filter pill over the shared status facet; without them the badges are static
+// counts (e.g. the aggregate bar in the action header).
+export function TodoCountsBar({ counts, statusFilter, onToggle }: {
   counts: TodoCounts;
-  hidden?: Set<TodoStatus>;
+  statusFilter?: FacetModes;
   onToggle?: (status: TodoStatus) => void;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-1.5 text-xs font-normal tabular-nums">
       <CountBadge icon={UiCheck} value={counts.open} label="Open todos" className="text-blue-600" />
-      <CountBadge icon={UiClock} value={counts.draft} label="Draft" status="draft" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiPlay} value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiEye} value={counts.review} label="Review" className="text-amber-600" status="review" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiQuestion} value={counts.ask} label="Ask" className="text-purple-600" status="ask" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiError} value={counts.failed} label="Failed" className="text-red-600" status="failed" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiWarningTriangle} value={counts.unverified} label="Unverified" className="text-orange-600" status="unverified" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiCheckFilled} value={counts.verified} label="Verified" className="text-emerald-600" status="verified" hidden={hidden} onToggle={onToggle} />
-      <CountBadge icon={UiPass} value={counts.completed} label="Completed" className="text-green-600" status="completed" hidden={hidden} onToggle={onToggle} />
+      <CountBadge icon={UiClock} value={counts.draft} label="Draft" status="draft" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiPlay} value={counts.inProgress} label="In progress" className="text-blue-600" status="in_progress" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiEye} value={counts.review} label="Review" className="text-amber-600" status="review" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiQuestion} value={counts.ask} label="Ask" className="text-purple-600" status="ask" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiError} value={counts.failed} label="Failed" className="text-red-600" status="failed" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiWarningTriangle} value={counts.unverified} label="Unverified" className="text-orange-600" status="unverified" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiCheckFilled} value={counts.verified} label="Verified" className="text-emerald-600" status="verified" statusFilter={statusFilter} onToggle={onToggle} />
+      <CountBadge icon={UiPass} value={counts.completed} label="Completed" className="text-green-600" status="completed" statusFilter={statusFilter} onToggle={onToggle} />
       <span className="text-muted-foreground tabular-nums" title="Total todos">{counts.total}</span>
     </div>
   );

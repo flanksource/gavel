@@ -6,8 +6,7 @@ import { useWorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { TodoDetail } from './todos/TodoDetail';
-import { TodoGroupByMenu } from './todos/TodoGroupByMenu';
-import { TodoFilterMenu } from './todos/TodoFilterMenu';
+import { TodoToolbar } from './todos/TodoToolbar';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
 
@@ -16,10 +15,10 @@ import { bucketTodos, flattenTodos } from './todos/todoGroup';
 // tapping a todo swaps in its detail behind a back button. It shares the data
 // layer with the dashboard TodoView via useWorkspaceTodos, so both stay in sync.
 //
-// A thin tab strip above the list carries the same grouping/filter controls as
-// the dashboard (folded into dropdowns to fit the narrow popover) plus a New
-// control, so todos can be regrouped, filtered, and created without leaving the
-// menubar.
+// The row above the list is the same TodoToolbar the dashboard renders: it is
+// responsive and never wraps, so the narrow popover gets the full set of
+// grouping, sorting, status/priority/issue filters and time filtering rather
+// than a weaker menubar-only variant.
 // The workspace list is derived from /api/projects, so an empty `projects` means
 // one of three things and this view must not conflate them: projectsLoaded is
 // false while the first fetch is in flight, projectError holds the reason it
@@ -29,12 +28,11 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   projectsLoaded: boolean;
   projectError?: string;
 }) {
+  const todos = useWorkspaceTodos(projects);
   const {
-    workspaces, byDir, loadingList, aggregate,
-    selected, select, detail, loadingDetail, detailError, error,
-    updateItem, deleted, hiddenStatuses, toggleStatus,
-    groupBy, setGroupBy, showCreate, setShowCreate, created,
-  } = useWorkspaceTodos(projects);
+    workspaces, byDir, loadingList, selected, select, detail, loadingDetail, detailError, error,
+    updateItem, deleted, filters, toggleStatus, groupBy, showCreate, setShowCreate, created,
+  } = todos;
 
   if (selected) {
     return (
@@ -64,19 +62,16 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {workspaces.length > 0 && (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2 py-1.5">
-          {aggregate.total > 0 && (
-            <>
-              <TodoGroupByMenu groupBy={groupBy} onChange={setGroupBy} />
-              <TodoFilterMenu counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
-            </>
-          )}
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2">
+          <div className="min-w-0 flex-1">
+            <TodoToolbar todos={todos} />
+          </div>
           <Button
             variant="ghost"
             type="button"
             onClick={() => setShowCreate(true)}
             title="New todo"
-            className="ml-auto inline-flex h-8 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="inline-flex h-8 shrink-0 items-center justify-start gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <UiAdd className="text-xs" />
             New
@@ -108,7 +103,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   bucket={bucket}
                   selected={selected}
                   onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
-                  hiddenStatuses={hiddenStatuses}
+                  filters={filters}
                 />
               ))}
             </ListMenu>
@@ -122,7 +117,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 key={ws.dir}
                 workspace={ws}
                 data={byDir[ws.dir]}
-                hiddenStatuses={hiddenStatuses}
+                filters={filters}
                 onToggleStatus={toggleStatus}
                 selectedRef=""
                 onSelect={ref => select({ dir: ws.dir, ref })}

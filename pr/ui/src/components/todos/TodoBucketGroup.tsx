@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Button, ListMenuHeader, ListMenuSection } from '@flanksource/clicky-ui/components';
-import type { TodoDensity, TodoStatus } from '../../types';
+import type { TodoDensity } from '../../types';
 import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
 import { countsFromItems, TodoCountsBar, TodoRow } from './format';
-import { defaultHiddenStatuses, isTodoVisible } from './todoFilter';
+import { defaultTodoFilters, isTodoVisible, type TodoFilters } from './todoFilter';
 import type { ResolvedRange } from './todoTimeRange';
 import type { SelectedTodo } from './useWorkspaceTodos';
 import type { TodoBucket, TodoEntry } from './todoGroup';
@@ -25,17 +25,17 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // owning workspace and there is no batch-run control (a run targets a single
 // workspace directory). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
-export function TodoBucketGroup({ bucket, selected, onSelect, hiddenStatuses, range, density = 'comfortable' }: {
+export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, density = 'comfortable' }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
   onSelect: (entry: TodoEntry) => void;
-  hiddenStatuses?: Set<TodoStatus>;
+  filters?: TodoFilters;
   range?: ResolvedRange | null;
   density?: TodoDensity;
 }) {
   const [open, setOpen] = useState(true);
-  const hidden = hiddenStatuses ?? defaultHiddenStatuses();
-  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, hidden, range));
+  const active = filters ?? defaultTodoFilters();
+  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, active, range));
   const hiddenCount = bucket.entries.length - visible.length;
   const counts = countsFromItems(bucket.entries.map(e => e.todo));
   const ChevronIcon = open ? UiChevronDown : UiChevronRight;
