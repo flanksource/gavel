@@ -483,6 +483,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/todos/plan/revise", s.handleTodoPlanRevise)
 	mux.HandleFunc("POST /api/todos/answer", s.handleTodoAnswer)
 	mux.HandleFunc("/api/todos/transfer", s.handleTodoTransfer)
+	mux.HandleFunc("POST /api/todos/github", s.handleTodoGitHubPush)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/favicon.svg", handleFavicon)
 	mux.HandleFunc("/react-grab-plugin.js", handleReactGrabPlugin)

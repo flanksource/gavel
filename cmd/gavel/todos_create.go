@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/gavel/github"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +19,7 @@ var (
 	todoCreateVerification string
 	todoCreatePriority     string
 	todoCreateStatus       string
+	todoCreateGitHub       bool
 )
 
 var todosCreateCmd = &cobra.Command{
@@ -37,6 +40,9 @@ func init() {
 	todosCreateCmd.Flags().StringVar(&todoCreateVerification, "verification", "", "Verification fixture markdown or @path")
 	todosCreateCmd.Flags().StringVar(&todoCreatePriority, "priority", string(types.PriorityMedium), "TODO priority: high, medium, or low")
 	todosCreateCmd.Flags().StringVar(&todoCreateStatus, "status", string(types.StatusPending), "TODO status, or approved for a reviewed plan ready to run")
+	todosCreateCmd.Flags().BoolVar(&todoCreateGitHub, "github", false, "After creating it, push the TODO to GitHub as a new issue (see `gavel todos push`)")
+	todosCreateCmd.Flags().StringVar(&todoPushBaseURL, "base-url", "", "With --github: absolute origin attachment links resolve against")
+	todosCreateCmd.Flags().StringVar(&todoPushRepo, "repo", "", "With --github: target owner/repo (default: the workspace's origin remote)")
 	todosCreateCmd.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
 		fmt.Fprintln(cmd.ErrOrStderr(), todosCreateHelp(cmd).ANSI())
 	})
@@ -94,7 +100,25 @@ func runTodosCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Print before pushing: the TODO exists either way, so a push failure must
+	// not hide the record it was created against.
 	fmt.Println(todo.PrettyDetailed().ANSI())
+	if !todoCreateGitHub {
+		return nil
+	}
+	baseURL, err := resolveTodoPushBaseURL(workDir)
+	if err != nil {
+		return err
+	}
+	result, err := githubpush.Push(context.Background(), provider, todo.ID, githubpush.Options{
+		GitHub:  github.Options{WorkDir: workDir, Repo: todoPushRepo},
+		BaseURL: baseURL,
+		Labels:  true,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s → %s\n", todo.DisplayID(), result.URL)
 	return nil
 }
 

@@ -344,13 +344,7 @@ func exportMarkdown(issue native.Issue) (string, error) {
 	if verification == "" {
 		verification = bodyVerification
 	}
-	if verification != "" {
-		body = strings.TrimSpace(body)
-		if body != "" {
-			body += "\n\n"
-		}
-		body += "# Verification\n\n" + verification
-	}
+	body = todos.ComposeIssueMarkdown(body, verification)
 	frontmatter := types.TODOFrontmatter{
 		Title:    issue.Title,
 		Priority: priority,

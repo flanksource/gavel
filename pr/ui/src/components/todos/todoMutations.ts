@@ -42,12 +42,23 @@ export async function todoMutationJSON<T>(url: string, init: RequestInit, contex
   }
 }
 
+/** Carries the HTTP status so a caller can react to a specific rejection —
+ *  a 409 already-linked push offers to rewrite the issue instead. */
+export class TodoMutationError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'TodoMutationError';
+  }
+}
+
 async function todoMutationResponseError(response: Response, context: string) {
   const jsonResponse = typeof response.clone === 'function' ? response.clone() : response;
   const payload = await jsonResponse.json().catch(() => null) as { error?: unknown } | null;
-  if (typeof payload?.error === 'string' && payload.error.trim()) return new Error(`${context}: ${payload.error.trim()}`);
+  if (typeof payload?.error === 'string' && payload.error.trim()) {
+    return new TodoMutationError(`${context}: ${payload.error.trim()}`, response.status);
+  }
   const detail = typeof response.text === 'function' ? (await response.text().catch(() => '')).trim() : '';
-  return new Error(detail ? `${context}: ${detail}` : `${context} (${response.status})`);
+  return new TodoMutationError(detail ? `${context}: ${detail}` : `${context} (${response.status})`, response.status);
 }
 
 export async function invalidateTodoCollections(client: QueryClient, dir: string) {
@@ -224,6 +235,45 @@ export function useTodoSessionStop(dir: string, ref: string, sessionId?: string)
         client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, sessionId, false) }),
         client.invalidateQueries({ queryKey: todoQueryKeys.sessionDetail(dir, ref, undefined, true) }),
       ]);
+    },
+  });
+}
+
+export interface GithubPushResponse {
+  todo: TodoItem;
+  repo: string;
+  number: number;
+  url: string;
+  alias: string;
+  /** True when the push rewrote an existing issue instead of opening one. */
+  updated: boolean;
+}
+
+export interface GithubPushRequest {
+  ref: string;
+  /** Opens a second issue for an already-linked todo. */
+  force?: boolean;
+  /** Rewrites the issue the todo is already linked to. */
+  update?: boolean;
+  /** Rewrites and links one specific issue: 123, owner/repo#123, or its URL. */
+  issue?: string;
+}
+
+export function useGithubPushTodoMutation(dir: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'github', 'push', { dir: dir.trim() }],
+    mutationFn: ({ ref, force, update, issue }: GithubPushRequest) => todoMutationJSON<GithubPushResponse>(
+      '/api/todos/github',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref, dir, force, update, issue }),
+      },
+      update || issue ? `Failed to update todo ${ref} on GitHub` : `Failed to push todo ${ref} to GitHub`,
+    ),
+    onSuccess: async ({ todo }) => {
+      await setTodoCaches(client, dir, todo);
     },
   });
 }

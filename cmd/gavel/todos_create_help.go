@@ -68,12 +68,19 @@ func todosCreateHelp(cmd *cobra.Command) api.Text {
 		Append(todoVerificationExample, code).NewLine().NewLine().
 		Append("  Use it with ", muted).Append(`--verification @verification.md`, code).Append("; it is also runnable on its own.", muted).NewLine().
 		Append("  See ", muted).Append("gavel fixtures --help", code).Append(" for frontmatter, checklists, command blocks, tables, CEL assertions, and every runner key.", muted).NewLine().NewLine().
+		Append("GITHUB", heading).NewLine().
+		Append("  ").Append("--github", flag).Append(" opens a GitHub issue for the new TODO and links the two, exactly as ", muted).
+		Append("gavel todos push", code).Append(" does.", muted).NewLine().
+		Append("  ").Append("--repo", flag).Append(" targets a repo other than the workspace's origin remote; ", muted).Append("--base-url", flag).
+		Append(" supplies the origin", muted).NewLine().
+		Append("  attachment links resolve against (GitHub cannot fetch dashboard-relative links).", muted).NewLine().NewLine().
 		Append("EXAMPLES", heading).NewLine().
 		Append("  ").Append(`gavel todos create "Fix flaky parser"`, code).Append("  create a pending TODO", muted).NewLine().
 		Append("  ").Append(`gavel todos create --title "Fix parser" --body @description.md`, code).Append("  read the body from --cwd", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix parser" --plan @plan.md`, code).Append("  create a plan awaiting review", muted).NewLine().
 		Append("  ").Append(`gavel todos create "Fix parser" --plan @plan.md --status approved`, code).Append("  create a runnable approved plan", muted).NewLine().
-		Append("  ").Append(`gavel todos create "Fix parser" --verification @verification.md`, code).Append("  attach a definition of done", muted).NewLine().NewLine().
+		Append("  ").Append(`gavel todos create "Fix parser" --verification @verification.md`, code).Append("  attach a definition of done", muted).NewLine().
+		Append("  ").Append(`gavel todos create "Fix parser" --github`, code).Append("  create it and open a linked GitHub issue", muted).NewLine().NewLine().
 		Add(renderHelpFlags("FLAGS", cmd.NonInheritedFlags())).
 		Add(renderHelpFlags("GLOBAL FLAGS", cmd.InheritedFlags()))
 

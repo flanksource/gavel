@@ -72,6 +72,7 @@ Subcommands:
   create    Create a TODO
   run       Have a coding agent implement TODOs (--mode run|plan)
   check     Run a TODO's fixture-backed definition of done
+  push      Open a GitHub issue for a TODO and link the two
   edit / comment / reopen / criteria / sync / plan / transfer
 
 Examples:

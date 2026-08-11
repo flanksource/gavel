@@ -375,6 +375,11 @@ type TodosConfig struct {
 	// block forever, so enabling it there is a loud error rather than a hang.
 	// Unset defaults to the entrypoint's own capability (dashboard on, CLI off).
 	Approvals *bool `yaml:"approvals,omitempty" json:"approvals,omitempty"`
+	// BaseURL is the absolute origin this gavel dashboard is reachable at, e.g.
+	// https://gavel.example.com. Todo bodies store attachments as server-relative
+	// links, so pushing a todo to an external tracker rewrites them against this
+	// origin. A loopback origin only renders for viewers on the same machine.
+	BaseURL string `yaml:"baseUrl,omitempty" json:"baseUrl,omitempty"`
 }
 
 // ProcfileConfig configures `gavel proc` — global defaults for the processes

@@ -97,6 +97,14 @@ type RunProgressProvider interface {
 	RecordRunProgress(ctx context.Context, todo *types.TODO, snapshot fixtures.ExecutionSnapshot) error
 }
 
+// RunNoticeProvider persists what a run's lifecycle hooks did — the commits they
+// cut between turns — into the session transcript. Flushed once the run is over,
+// because a hook firing mid-turn cannot yet know the transcript session's id:
+// that row only exists after the provider's log has been ingested.
+type RunNoticeProvider interface {
+	RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error
+}
+
 // GroupExecutionPolicy lets a persistence boundary reject execution shapes
 // that its data model cannot represent. Native prompt runs are single-issue.
 type GroupExecutionPolicy interface {
@@ -124,6 +132,22 @@ type GlobalSessionReferenceProvider interface {
 // between database workspaces.
 type TransferProvider interface {
 	MoveTo(ctx context.Context, todo *types.TODO, target Provider) (*types.TODO, error)
+}
+
+// TodoAlias is one workspace-scoped reference that resolves to a TODO. Kind
+// names the system the reference belongs to, e.g. "github" for an issue pushed
+// to a GitHub tracker.
+type TodoAlias struct {
+	Alias string `json:"alias"`
+	Kind  string `json:"kind,omitempty"`
+}
+
+// AliasProvider exposes a TODO's external references and appends new ones.
+// AddAlias must preserve the aliases already recorded — the underlying storage
+// replaces the whole set, so implementations read before they write.
+type AliasProvider interface {
+	Aliases(ctx context.Context, todo *types.TODO) ([]TodoAlias, error)
+	AddAlias(ctx context.Context, todo *types.TODO, alias TodoAlias) error
 }
 
 // PlanReviewProvider persists review decisions against Captain's durable plan

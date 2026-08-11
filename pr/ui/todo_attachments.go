@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gavel/todos"
 	"github.com/google/uuid"
 )
 
@@ -25,7 +26,8 @@ var attachmentsDir = filepath.Join(os.Getenv("HOME"), ".config", "gavel", "attac
 
 // attachmentURLPrefix is the path the dashboard loads stored attachments from; the
 // markdown body embeds <prefix>/<id> and handler.go serves it from attachmentsDir.
-const attachmentURLPrefix = "/api/todos/attachments/"
+// The rewriting helpers live in package todos so the CLI shares them.
+const attachmentURLPrefix = todos.AttachmentURLPrefix
 
 type todoAttachmentUploadResponse struct {
 	Attachments []todoAttachmentSummary `json:"attachments"`
@@ -192,18 +194,4 @@ func todoBodyWithAttachments(body string, attachments []todoAttachmentSummary) s
 		}
 	}
 	return strings.TrimSpace(sb.String())
-}
-
-// absolutizeAttachmentURLs rewrites the relative attachment links stored in a
-// todo body (`/api/todos/attachments/<id>`) to absolute URLs rooted at origin,
-// so an agent prompt — which runs outside the browser and has no base URL to
-// resolve against — can fetch the stored screenshots. It matches only markdown
-// link/image targets (`](<prefix>`) and is idempotent: once rewritten the link
-// no longer carries the relative marker, so a second pass leaves it untouched.
-func absolutizeAttachmentURLs(body, origin string) string {
-	marker := "](" + attachmentURLPrefix
-	if origin == "" || !strings.Contains(body, marker) {
-		return body
-	}
-	return strings.ReplaceAll(body, marker, "]("+origin+attachmentURLPrefix)
 }

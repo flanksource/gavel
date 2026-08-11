@@ -341,6 +341,11 @@ func todosSchema(specSchema map[string]any) map[string]any {
 				"Gate Bash behind a human approval prompt. Unset means the entrypoint decides: the " +
 					"dashboard can answer approvals, `gavel todos run` cannot. Enabling it where nothing " +
 					"can answer is an error rather than a run that blocks forever."),
+			"baseUrl": stringProp(
+				"Absolute origin this gavel dashboard is reachable at (e.g. https://gavel.example.com). " +
+					"Todo bodies store attachments as server-relative links, so pushing a todo to an " +
+					"external tracker rewrites them against this origin. A loopback origin only renders " +
+					"for viewers on the same machine."),
 		},
 	)
 }
