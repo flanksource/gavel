@@ -1,40 +1,26 @@
 package fixtures
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestANSIDetection(t *testing.T) {
-	tests := []struct {
-		name       string
-		input      string
-		hasAny     bool
-		hasColor   bool
-		hasUpdates bool
+func TestHasAltScreen(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
 	}{
-		{name: "plain text", input: "Hello, world!"},
-		{name: "bold only", input: "\x1b[1mBold\x1b[0m", hasAny: true},
-		{name: "foreground color 8-color", input: "\x1b[31mRed\x1b[0m", hasAny: true, hasColor: true},
-		{name: "foreground 24-bit RGB", input: "\x1b[38;2;239;68;68mRed\x1b[0m", hasAny: true, hasColor: true},
-		{name: "foreground 256-color", input: "\x1b[38;5;196mRed\x1b[0m", hasAny: true, hasColor: true},
-		{name: "background color", input: "\x1b[42mGreen BG\x1b[0m", hasAny: true, hasColor: true},
-		{name: "cursor up", input: "\x1b[2A", hasAny: true, hasUpdates: true},
-		{name: "clear screen", input: "\x1b[2J", hasAny: true, hasUpdates: true},
-		{name: "erase line", input: "\x1b[K", hasAny: true, hasUpdates: true},
-		{name: "hide cursor", input: "\x1b[?25l", hasAny: true, hasUpdates: true},
-		{name: "mixed color and cursor", input: "\x1b[31mRed\x1b[0m\x1b[2J", hasAny: true, hasColor: true, hasUpdates: true},
+		{"enter alt screen", "before\x1b[?1049hafter", true},
+		{"leave alt screen", "report\x1b[?1049l\x1b[?25h", true},
+		{"plain text", "no escapes here", false},
+		{"colour only", "\x1b[38;2;1;2;3mgreen\x1b[0m", false},
+		{"cursor show is not alt screen", "\x1b[?25h", false},
+		{"cursor hide is not alt screen", "\x1b[?25l", false},
+		// The digits matter: ?1049 is the alt screen, ?104 is not a prefix of it.
+		{"unrelated private mode", "\x1b[?104h", false},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasAnyANSI(tt.input); got != tt.hasAny {
-				t.Errorf("hasAnyANSI: got %v, want %v", got, tt.hasAny)
-			}
-			if got := hasColorCodes(tt.input); got != tt.hasColor {
-				t.Errorf("hasColorCodes: got %v, want %v", got, tt.hasColor)
-			}
-			if got := hasCursorUpdates(tt.input); got != tt.hasUpdates {
-				t.Errorf("hasCursorUpdates: got %v, want %v", got, tt.hasUpdates)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := hasAltScreen(c.in); got != c.want {
+				t.Errorf("hasAltScreen(%q) = %v, want %v", c.in, got, c.want)
 			}
 		})
 	}

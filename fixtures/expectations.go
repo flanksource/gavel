@@ -108,6 +108,7 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 			"has_cursor_hide": hasCursorHide(combined),
 			"has_cursor_show": hasCursorShow(combined),
 			"has_reset":       hasSGRReset(combined),
+			"alt_screen":      hasAltScreen(combined),
 			"stray_controls":  hasStrayControls(combined),
 			"final_text":      finalText(combined, 0),
 			"duplicate_lines": dupList,

@@ -276,8 +276,10 @@ func (s Step) Pretty() api.Text {
 func (j Job) Pretty() api.Text {
 	text := clicky.Text("    ", "").
 		Add(StatusIcon(strings.ToUpper(j.Status), strings.ToUpper(j.Conclusion))).
-		Append(" "+j.Name, "").
-		Append(" "+FormatDuration(j), "text-gray-500")
+		Append(" "+j.Name, "")
+	if duration := FormatDuration(j); duration != "" {
+		text = text.Append(" "+duration, "text-gray-500")
+	}
 
 	if !IsFailureConclusion(j.Conclusion) {
 		return text
@@ -306,9 +308,15 @@ func prettyLogTail(logTail string) api.Text {
 }
 
 func (r WorkflowRun) Pretty() api.Text {
+	return r.PrettyAs(r.Name)
+}
+
+// PrettyAs renders the run under a caller-supplied heading, so a workflow that
+// ran more than once on the same PR can be disambiguated at the call site.
+func (r WorkflowRun) PrettyAs(label string) api.Text {
 	text := clicky.Text("  ", "").
 		Add(StatusIcon(strings.ToUpper(r.Status), strings.ToUpper(r.Conclusion))).
-		Append(" "+r.Name, "")
+		Append(" "+label, "")
 	for _, job := range r.Jobs {
 		text = text.NewLine().Add(job.Pretty())
 	}
@@ -336,8 +344,11 @@ func (pr PRInfo) Pretty() api.Text {
 		meta = meta.Append(" | Review: ", "text-gray-500").
 			Append(pr.ReviewDecision, ReviewStyle(pr.ReviewDecision))
 	}
-	if pr.Mergeable != "" {
-		meta = meta.Append(" | ", "text-gray-500").
+	// Mergeability only means something while the PR is open, and GitHub
+	// reports UNKNOWN once it is merged or closed — an unlabelled "UNKNOWN"
+	// beside the state reads as an error rather than an absent answer.
+	if pr.Mergeable != "" && pr.Mergeable != "UNKNOWN" && pr.State == "OPEN" {
+		meta = meta.Append(" | Mergeable: ", "text-gray-500").
 			Append(pr.Mergeable, MergeableStyle(pr.Mergeable))
 	}
 
@@ -355,6 +366,11 @@ func FormatDuration(job Job) string {
 	if end.IsZero() {
 		end = time.Now()
 		return fmt.Sprintf("(running %s...)", end.Sub(job.StartedAt).Truncate(time.Second))
+	}
+	// A job that never ran (skipped, or cancelled before it started) reports
+	// equal start and end times; "(0s)" reads as a real measurement.
+	if !end.After(job.StartedAt) {
+		return ""
 	}
 	d := end.Sub(job.StartedAt).Truncate(time.Second)
 	if d < time.Minute {

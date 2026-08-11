@@ -194,17 +194,23 @@ func resolveOrFallbackPR(ghOpts github.Options) int {
 	}
 
 	logger.Infof("No PR found for current branch, checking most recent PR...")
-	results, _, searchErr := github.SearchPRs(ghOpts, github.PRSearchOptions{
-		Author: "@me",
-		State:  "all",
-		Limit:  1,
-	})
-	if searchErr != nil || len(results) == 0 {
-		return 0
+	// Search open PRs first. Searching every state picks the most recent PR
+	// regardless of age, so a repo with no open work resolves to something
+	// merged months ago and reports its long-stale checks as if they were live.
+	for _, state := range []string{"open", "all"} {
+		results, _, searchErr := github.SearchPRs(ghOpts, github.PRSearchOptions{
+			Author: "@me",
+			State:  state,
+			Limit:  1,
+		})
+		if searchErr != nil || len(results) == 0 {
+			continue
+		}
+		logger.Infof("Using most recent %s PR #%d: %s", state, results[0].Number, results[0].Title)
+		return results[0].Number
 	}
 
-	logger.Infof("Using most recent PR #%d: %s", results[0].Number, results[0].Title)
-	return results[0].Number
+	return 0
 }
 
 func init() {

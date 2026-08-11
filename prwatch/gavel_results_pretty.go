@@ -40,11 +40,13 @@ func treeText(node api.TreeNode) api.TextTree {
 // roll-up `gavel test` prints at the end of a run.
 func (s GavelResultsSummary) Pretty() api.Text {
 	text := clicky.Text("").Add(s.statusIcon()).Space().Append(s.label(), "font-bold")
+	// TestSummary.Pretty and the KeyValue keys below already lead with a
+	// space, so an extra Space() here renders a double gap before every key.
 	if s.TestsTotal > 0 {
-		text = text.Space().Add(s.testSummary().Pretty())
+		text = text.Add(s.testSummary().Pretty())
 	}
 	if s.BenchRegressions > 0 {
-		text = text.Space().Add(clicky.KeyValue(" benchmark regressions", s.BenchRegressions, "text-red-500"))
+		text = text.Add(clicky.KeyValue(" benchmark regressions", s.BenchRegressions, "text-red-500"))
 	}
 	if s.Error != "" {
 		text = text.NewLine().Append(s.Error, "text-yellow-600")

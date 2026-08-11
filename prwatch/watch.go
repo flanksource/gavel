@@ -82,13 +82,24 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 		}
 
 		done := filters.actionFilteredNoChecks(result) || result.PR.StatusCheckRollup.AllComplete()
+		if done {
+			// The caller prints the completed report to stdout. Painting the
+			// final frame to stderr as well would show it twice to anyone
+			// merging the two streams; on a TTY it also has to be erased so
+			// the stdout copy does not stack under the last live frame.
+			if isTTY {
+				if err := render.Clear(os.Stderr); err != nil {
+					logger.Warnf("render: %v", err)
+				}
+			}
+			return result, statusExitCode(result)
+		}
+
 		frame := result.Pretty().ANSI()
 		if !strings.HasSuffix(frame, "\n") {
 			frame += "\n"
 		}
-		if !done {
-			frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
-		}
+		frame += fmt.Sprintf("Polling in %s...\n\n", opts.Interval)
 
 		if isTTY {
 			if err := render.Write(os.Stderr, frame); err != nil {
@@ -96,10 +107,6 @@ func Run(opts WatchOptions) (*PRWatchResult, int) {
 			}
 		} else {
 			fmt.Fprint(os.Stderr, frame)
-		}
-
-		if done {
-			return result, statusExitCode(result)
 		}
 
 		time.Sleep(opts.Interval)
@@ -233,5 +240,20 @@ func isNoiseComment(body string) bool {
 	if strings.HasPrefix(body, "Actionable comments posted:") {
 		return true
 	}
-	return false
+	return reportsPullRequestClosed(body)
+}
+
+// reportsPullRequestClosed matches bot comments whose entire content is "this
+// PR is closed, so I did nothing". They carry no action, but they arrive as
+// ordinary top-level comments and would otherwise dominate the comment count
+// on any merged PR.
+func reportsPullRequestClosed(body string) bool {
+	// CodeRabbit posts its closed-PR skip behind a failure marker; a review
+	// that failed for any other reason stays visible.
+	if strings.Contains(body, "auto-generated comment: failure by coderabbit.ai") &&
+		strings.Contains(body, "The pull request is closed.") {
+		return true
+	}
+	// rossjrw/pr-preview-action tear-down notice.
+	return strings.Contains(body, "Preview removed because the pull request was closed.")
 }
