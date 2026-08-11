@@ -4,7 +4,7 @@ import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoListR
 import { addCounts, emptyCounts } from './format';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
-import { loadHiddenStatuses, saveHiddenStatuses, toggleHiddenStatus } from './todoFilter';
+import { loadTodoFilters, saveTodoFilters, toggleStatusFilter, type TodoFilters } from './todoFilter';
 import type { TodoSort } from './todoSort';
 import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
@@ -156,9 +156,9 @@ export function useWorkspaceTodos(
   const loadingList = listQuery.isFetching;
   const [selected, setSelected] = useState<SelectedTodo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  // Closed/Status filter: the set of statuses hidden from the lists. Defaults to
-  // hiding completed (closed) and persists the user's choice across reloads.
-  const [hiddenStatuses, setHiddenStatuses] = useState<Set<TodoStatus>>(loadHiddenStatuses);
+  // Status / priority / external-issue facets applied to the lists. Defaults to
+  // excluding completed (closed) and persists the user's choice across reloads.
+  const [filters, setFiltersState] = useState<TodoFilters>(loadTodoFilters);
   // Row density (comfortable/compact) for the lists, persisted across reloads.
   const [density, setDensityState] = useState<TodoDensity>(loadDensity);
   // Grouping dimension (workspace/severity/age) for the lists, persisted too.
@@ -168,10 +168,18 @@ export function useWorkspaceTodos(
   // Activity time-range filter (clicky-ui TimeRange tokens); null shows all.
   const [timeRange, setTimeRangeState] = useState<TodoTimeRange | null>(loadTimeRange);
 
+  const setFilters = useCallback((next: TodoFilters) => {
+    setFiltersState(next);
+    saveTodoFilters(next);
+  }, []);
+
+  // toggleStatus is the per-workspace count badge's click: hide this status, or
+  // un-hide it. The FilterBar's own chips drive the full tri-state through
+  // setFilters.
   const toggleStatus = useCallback((status: TodoStatus) => {
-    setHiddenStatuses(prev => {
-      const next = toggleHiddenStatus(prev, status);
-      saveHiddenStatuses(next);
+    setFiltersState(prev => {
+      const next = { ...prev, statuses: toggleStatusFilter(prev.statuses, status) };
+      saveTodoFilters(next);
       return next;
     });
   }, []);
@@ -323,7 +331,8 @@ export function useWorkspaceTodos(
     updateItem,
     deleted,
     transferred,
-    hiddenStatuses,
+    filters,
+    setFilters,
     toggleStatus,
     density,
     setDensity,

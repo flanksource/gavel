@@ -1,9 +1,14 @@
-import type { TodoCounts, TodoItem, TodoStatus } from '../../types';
+import type { TodoCounts, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { FacetModes } from '../../utils';
+import { passFacet } from '../../utils';
 import { withinActivityRange, type ResolvedRange } from './todoTimeRange';
 
-// The todos list hides "closed" (completed) todos by default; the Closed/Status
-// pills toggle a status into or out of this hidden set. Filtering is done client
-// side so the per-workspace counts stay computed over the full list.
+// The todos list filters on three tri-state facets — status, priority, and
+// whether the todo is linked to an external tracker issue. Each is the same
+// include/exclude/neutral shape clicky-ui's FilterBar `kind:"multi"` binds to,
+// and the same shape the PRs tab's facets use, so one rule (passFacet) covers
+// all of them. Filtering stays client side so the per-workspace counts remain
+// computed over the full list.
 export const CLOSED_STATUS: TodoStatus = 'completed';
 
 // Each pill maps a status to its label and the count field that feeds its badge.
@@ -22,10 +27,37 @@ export const STATUS_FILTER_DEFS: { status: TodoStatus; label: string; countKey: 
   { status: 'completed', label: 'Closed', countKey: 'completed' },
 ];
 
-const STORAGE_KEY = 'gavel.pr-ui.todoFilter.v1';
+// Priority options, ordered most severe first so the facet reads the way the
+// severity buckets do.
+export const PRIORITY_FILTER_DEFS: { priority: TodoPriority; label: string }[] = [
+  { priority: 'high', label: 'High' },
+  { priority: 'medium', label: 'Medium' },
+  { priority: 'low', label: 'Low' },
+];
 
-export function defaultHiddenStatuses(): Set<TodoStatus> {
-  return new Set<TodoStatus>([CLOSED_STATUS]);
+// TodoExternalKey splits todos on whether they have been pushed to an external
+// tracker. When the upstream issue's own state is fetched some day it becomes a
+// third dimension on TodoItem.externalIssue.state, not another key here.
+export type TodoExternalKey = 'linked' | 'unlinked';
+
+export const EXTERNAL_FILTER_DEFS: { key: TodoExternalKey; label: string }[] = [
+  { key: 'linked', label: 'Linked' },
+  { key: 'unlinked', label: 'Not linked' },
+];
+
+export interface TodoFilters {
+  statuses: FacetModes;
+  priorities: FacetModes;
+  external: FacetModes;
+}
+
+export const TODO_FILTERS_KEY = 'gavel.pr-ui.todoFilters.v2';
+// The v1 key held a bare array of hidden statuses. It is read once, migrated
+// into excludes, and removed.
+export const LEGACY_HIDDEN_STATUS_KEY = 'gavel.pr-ui.todoFilter.v1';
+
+export function defaultTodoFilters(): TodoFilters {
+  return { statuses: { [CLOSED_STATUS]: 'exclude' }, priorities: {}, external: {} };
 }
 
 // todoMatchesQuery is the free-text search over a todo's identity fields — title,
@@ -44,39 +76,87 @@ export function todoMatchesQuery(item: TodoItem, query: string): boolean {
   );
 }
 
-// isTodoVisible applies the status filter and, when an activity range is active,
-// the time filter: a row shows only when its status is not hidden and its
-// activity falls within the range.
-export function isTodoVisible(item: TodoItem, hidden: Set<TodoStatus>, range?: ResolvedRange | null): boolean {
-  if (hidden.has(item.status)) return false;
+// priorityKey defaults an unknown or missing priority to medium, the same way
+// the providers and the severity buckets do.
+export function priorityKey(item: TodoItem): TodoPriority {
+  return item.priority === 'high' || item.priority === 'low' ? item.priority : 'medium';
+}
+
+export function externalKey(item: TodoItem): TodoExternalKey {
+  return item.externalIssue ? 'linked' : 'unlinked';
+}
+
+// isTodoVisible applies all three facets and, when an activity range is active,
+// the time filter. Every facet must pass — they narrow together.
+export function isTodoVisible(item: TodoItem, filters: TodoFilters, range?: ResolvedRange | null): boolean {
+  if (!passFacet(filters.statuses, [item.status])) return false;
+  if (!passFacet(filters.priorities, [priorityKey(item)])) return false;
+  if (!passFacet(filters.external, [externalKey(item)])) return false;
   if (range && !withinActivityRange(item, range)) return false;
   return true;
 }
 
-export function toggleHiddenStatus(hidden: Set<TodoStatus>, status: TodoStatus): Set<TodoStatus> {
-  const next = new Set(hidden);
-  if (next.has(status)) next.delete(status);
-  else next.add(status);
+// isStatusShown answers the one question the per-workspace count badges ask:
+// would a todo of this status survive the status facet? It is passFacet over a
+// single category, named for the caller's intent.
+export function isStatusShown(statuses: FacetModes, status: TodoStatus): boolean {
+  return passFacet(statuses, [status]);
+}
+
+// toggleStatusFilter flips one status between neutral and excluded — the badge
+// click, which is a "hide this" control rather than the full tri-state cycle the
+// FilterBar chips offer.
+export function toggleStatusFilter(statuses: FacetModes, status: TodoStatus): FacetModes {
+  const next = { ...statuses };
+  if (next[status] === 'exclude') delete next[status];
+  else next[status] = 'exclude';
   return next;
 }
 
+function isFacetModes(value: unknown): value is FacetModes {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value).every(mode => mode === 'include' || mode === 'exclude');
+}
+
+// migrateHiddenStatuses reads the v1 array of hidden statuses, if it is still
+// there, as the equivalent set of excludes.
+function migrateHiddenStatuses(): TodoFilters | null {
+  const raw = localStorage.getItem(LEGACY_HIDDEN_STATUS_KEY);
+  if (!raw) return null;
+  localStorage.removeItem(LEGACY_HIDDEN_STATUS_KEY);
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return null;
+  const statuses: FacetModes = {};
+  for (const status of parsed) {
+    if (typeof status === 'string') statuses[status] = 'exclude';
+  }
+  return { statuses, priorities: {}, external: {} };
+}
+
 // Persistence is best-effort: localStorage can throw (private mode / disabled),
-// so a failure falls back to the default of hiding closed rather than breaking.
-export function loadHiddenStatuses(): Set<TodoStatus> {
+// so a failure falls back to the defaults rather than breaking the list.
+export function loadTodoFilters(): TodoFilters {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultHiddenStatuses();
-    const parsed = JSON.parse(raw) as TodoStatus[];
-    if (!Array.isArray(parsed)) return defaultHiddenStatuses();
-    return new Set(parsed);
+    const raw = localStorage.getItem(TODO_FILTERS_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const { statuses, priorities, external } = parsed as Partial<TodoFilters>;
+        if (isFacetModes(statuses) && isFacetModes(priorities) && isFacetModes(external)) {
+          return { statuses, priorities, external };
+        }
+      }
+      return defaultTodoFilters();
+    }
+    return migrateHiddenStatuses() ?? defaultTodoFilters();
   } catch {
-    return defaultHiddenStatuses();
+    return defaultTodoFilters();
   }
 }
 
-export function saveHiddenStatuses(hidden: Set<TodoStatus>): void {
+export function saveTodoFilters(filters: TodoFilters): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...hidden]));
+    localStorage.setItem(TODO_FILTERS_KEY, JSON.stringify(filters));
   } catch {
     // best-effort: storage unavailable — skip persisting.
   }

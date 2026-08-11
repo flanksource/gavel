@@ -29,7 +29,7 @@ export function TodoSortByMenu({ sortBy, onChange }: {
   const directionLabel = sortBy.dir === 'desc' ? 'Sort descending' : 'Sort ascending';
 
   return (
-    <div className="relative inline-flex items-center" ref={rootRef}>
+    <div className="relative inline-flex shrink-0 items-center" ref={rootRef}>
       <div className="inline-flex overflow-hidden rounded-md border border-border">
         <Button
           variant="ghost"
@@ -37,10 +37,13 @@ export function TodoSortByMenu({ sortBy, onChange }: {
           onClick={() => setOpen(o => !o)}
           aria-haspopup="menu"
           aria-expanded={open}
-          className="inline-flex h-8 items-center gap-1.5 rounded-none border-r border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title={`Sort todos by ${active.label}`}
+          className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-none border-r border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ActiveIcon className="text-xs" />
-          <span className="font-medium">Sort: {active.label}</span>
+          {/* Hidden below `sm` for the same reason as TodoGroupByMenu: the bar
+              never wraps, so the label is what gives way first. */}
+          <span className="font-medium max-sm:hidden">Sort: {active.label}</span>
           <UiChevronDown className="text-[10px]" />
         </Button>
         <Button

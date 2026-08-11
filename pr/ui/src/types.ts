@@ -138,6 +138,9 @@ export interface TodoItem {
   // Aggregated git diff footprint of the todo's commits (those carrying its
   // Gavel-Issue-Id trailer); absent when no commit references the todo.
   diff?: TodoDiffStat;
+  // The external tracker issue this todo was pushed to; absent when it has
+  // never been pushed. Present on list responses so the list can filter on it.
+  externalIssue?: TodoExternalIssue;
   // hasPlan/hasVerification are lightweight availability flags for the list
   // row's indicators — present on both list and detail responses (unlike
   // planPath/verificationMarkdown, which carry full content and are detail-only).
@@ -162,6 +165,18 @@ export interface TodoItem {
   // Questions blocking an `ask` todo — the agent needs a human decision before
   // it can continue. Answered via /api/todos/answer, which resumes the session.
   questions?: TodoQuestion[];
+}
+
+// TodoExternalIssue is the tracker issue a todo has been pushed to, mirroring
+// the server's types.ExternalIssue. `state` carries the upstream issue's own
+// status once something fetches it — it is absent today and must be read as
+// "unknown", never as open.
+export interface TodoExternalIssue {
+  kind: string;
+  repo: string;
+  number: number;
+  url: string;
+  state?: string;
 }
 
 // TodoPlanStatus is how a plan run classified its plan relative to any prior one.

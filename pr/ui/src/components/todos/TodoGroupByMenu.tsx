@@ -39,11 +39,15 @@ export function TodoGroupByMenu({ groupBy, onChange }: {
         onClick={() => setOpen(o => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Group todos by"
-        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        title={`Group todos by ${active.label}`}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
       >
         <ActiveIcon className="text-xs" />
-        <span className="font-medium">Group: {active.label}</span>
+        {/* The bar never wraps, so below `sm` the label drops and the icon
+            carries the control; the title attribute keeps it identifiable.
+            `max-sm:hidden` rather than `hidden sm:inline` — the app's `.hidden`
+            is ordered after the responsive utilities, so it would win. */}
+        <span className="font-medium max-sm:hidden">Group: {active.label}</span>
         <UiChevronDown className="text-[10px]" />
       </Button>
 

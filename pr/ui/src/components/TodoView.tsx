@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { Button, ListMenu, TimeRange } from '@flanksource/clicky-ui/components';
-import { UiAdd, UiCheck, UiClose, UiRefresh } from '@flanksource/clicky-ui/icons';
+import { Button, ListMenu } from '@flanksource/clicky-ui/components';
+import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
 import { TodoDensityPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
@@ -9,9 +9,7 @@ import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
-import { TodoFilterBar } from './todos/TodoFilterBar';
-import { TodoGroupByMenu } from './todos/TodoGroupByMenu';
-import { TodoSortByMenu } from './todos/TodoSortByMenu';
+import { TodoToolbar } from './todos/TodoToolbar';
 
 // The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
 // actions and an independently-scrolling bodySidebar (the workspace list) beside
@@ -47,63 +45,11 @@ export function TodoNavbarDensityPicker({ todos }: { todos: WorkspaceTodos }) {
   return <TodoDensityPicker density={density} onChange={setDensity} />;
 }
 
-// TodoSidebarActions sits above the todo tree in the AppShell bodySidebar. The
-// filter pills are also the count surface, so the sidebar has one compact row:
-// grouping, status filters, time filtering, and refresh.
+// TodoSidebarActions sits above the todo tree in the AppShell bodySidebar. It is
+// the shared TodoToolbar — the same row the menubar and mobile layouts render —
+// so there is one filter surface rather than a weaker duplicate per layout.
 export function TodoSidebarActions({ todos }: { todos: WorkspaceTodos }) {
-  const { aggregate, hiddenStatuses, toggleStatus, groupBy, setGroupBy, sortBy, setSortBy, timeRange, setTimeRange, loadingList, refresh } = todos;
-  const RefreshIcon = loadingList ? Spinner : UiRefresh;
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-card px-2 py-1.5">
-      {aggregate.total > 0 && (
-        <>
-          <TodoGroupByMenu groupBy={groupBy} onChange={setGroupBy} />
-          <TodoSortByMenu sortBy={sortBy} onChange={setSortBy} />
-          <TodoFilterBar counts={aggregate} hidden={hiddenStatuses} onToggle={toggleStatus} />
-        </>
-      )}
-      <div className="min-w-0 flex-1" />
-      {aggregate.total > 0 && (
-        <div className="flex items-center gap-1.5">
-          <TimeRange
-            kind="date"
-            label="Active"
-            emptyLabel="Any time"
-            from={timeRange?.from}
-            to={timeRange?.to}
-            onApply={(from, to) => setTimeRange({ from, to })}
-            presets={['hr', 'day', 'wk+']}
-            align="right"
-          />
-          {timeRange && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => setTimeRange(null)}
-              title="Clear time filter"
-              aria-label="Clear time filter"
-              className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <UiClose className="text-xs" />
-            </Button>
-          )}
-        </div>
-      )}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={refresh}
-        disabled={loadingList}
-        title="Refresh todos"
-        className="h-8 w-8 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-        aria-label="Refresh todos"
-      >
-        <RefreshIcon className="text-sm" />
-      </Button>
-    </div>
-  );
+  return <TodoToolbar todos={todos} />;
 }
 
 // TodoWorkspaceList is the AppShell bodySidebar: every configured workspace's
@@ -120,7 +66,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   projectsLoaded: boolean;
   projectError?: string;
 }) {
-  const { workspaces, byDir, hiddenStatuses, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList, error } = todos;
+  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList, error } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -146,7 +92,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             key={ws.dir}
             workspace={ws}
             data={byDir[ws.dir]}
-            hiddenStatuses={hiddenStatuses}
+            filters={filters}
             onToggleStatus={toggleStatus}
             range={range}
             density={density}
@@ -172,7 +118,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             bucket={bucket}
             selected={selected}
             onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
-            hiddenStatuses={hiddenStatuses}
+            filters={filters}
             range={range}
             density={density}
           />

@@ -915,6 +915,27 @@ func (r *Repository) ListAliases(ctx context.Context, issueID uuid.UUID) ([]Alia
 	return aliases, result.Error
 }
 
+// ListAliasesByKind reads one kind of alias for a whole workspace in a single
+// query, keyed by issue. Listing decorates every issue with its external links,
+// so the per-issue ListAliases would be an N+1 across the entire backlog.
+func (r *Repository) ListAliasesByKind(ctx context.Context, workspaceID uuid.UUID, kind string) (map[uuid.UUID][]Alias, error) {
+	var aliases []Alias
+	result := r.db.WithContext(ctx).Raw(`
+		SELECT workspace_id, alias, issue_id, COALESCE(kind, '') AS kind, created_at
+		FROM todo_issue_aliases
+		WHERE workspace_id = ? AND lower(COALESCE(kind, '')) = lower(?)
+		ORDER BY alias`, workspaceID, kind,
+	).Scan(&aliases)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	byIssue := make(map[uuid.UUID][]Alias, len(aliases))
+	for _, alias := range aliases {
+		byIssue[alias.IssueID] = append(byIssue[alias.IssueID], alias)
+	}
+	return byIssue, nil
+}
+
 func (r *Repository) AppendEvent(ctx context.Context, issueID uuid.UUID, expectedVersion int64, input EventInput) (*Event, error) {
 	var event *Event
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

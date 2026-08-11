@@ -16,6 +16,7 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/githubpush"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -255,12 +256,18 @@ func (p *Provider) List(ctx context.Context, filters todos.DiscoveryFilters) (ty
 	if err != nil {
 		return nil, err
 	}
+	// One query for the whole workspace's GitHub links, not one per issue.
+	links, err := p.repository.ListAliasesByKind(ctx, p.workspace.ID, githubpush.AliasKind)
+	if err != nil {
+		return nil, err
+	}
 	result := make(types.TODOS, 0, len(issues))
 	for index := range issues {
 		todo, err := p.todoFromIssue(ctx, &issues[index], p.workDir, false)
 		if err != nil {
 			return nil, fmt.Errorf("decode native TODO %s: %w", issues[index].ID, err)
 		}
+		todo.ExternalIssue = externalIssueFrom(links[issues[index].ID])
 		if filters.Matches(todo) {
 			result = append(result, todo)
 		}
@@ -274,7 +281,16 @@ func (p *Provider) Get(ctx context.Context, ref string) (*types.TODO, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.todoFromIssue(ctx, issue, p.workDir, true)
+	todo, err := p.todoFromIssue(ctx, issue, p.workDir, true)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := p.repository.ListAliases(ctx, issue.ID)
+	if err != nil {
+		return nil, err
+	}
+	todo.ExternalIssue = externalIssueFrom(aliases)
+	return todo, nil
 }
 
 // GlobalGet resolves a UUID, short UUID, or legacy alias without a caller

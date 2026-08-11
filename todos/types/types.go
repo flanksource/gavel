@@ -103,6 +103,9 @@ type TODO struct {
 	ProviderState  string                `json:"provider_state,omitempty"`
 	Labels         []string              `json:"labels,omitempty"`
 	ProviderEvents []ProviderEvent       `json:"provider_events,omitempty"`
+	// ExternalIssue is the external tracker issue this TODO is linked to, or
+	// nil when it has never been pushed to one.
+	ExternalIssue *ExternalIssue `json:"external_issue,omitempty"`
 
 	TODOFrontmatter `json:",inline"`
 
@@ -118,6 +121,17 @@ type TODO struct {
 	// AcceptanceCriteria are the editable done-ness criteria parsed from the
 	// "## Acceptance Criteria" section, scored by issue-aware verification.
 	AcceptanceCriteria []AcceptanceCriterion `json:"acceptance_criteria,omitempty"`
+}
+
+// ExternalIssue is the tracker issue a TODO has been pushed to. State carries
+// the upstream issue's own status once something fetches it; it is empty until
+// then and must be read as "unknown", never as open.
+type ExternalIssue struct {
+	Kind   string `json:"kind"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	State  string `json:"state,omitempty"`
 }
 
 // AcceptanceCriterion is one editable done-ness criterion for a TODO. CheckID is

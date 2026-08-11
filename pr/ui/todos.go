@@ -83,6 +83,10 @@ type todoSummary struct {
 	// Diff is the aggregated git diff footprint of the todo's commits (those
 	// carrying its Gavel-Issue-Id trailer); nil when no commits reference it.
 	Diff *todoDiffStat `json:"diff,omitempty"`
+	// ExternalIssue is the tracker issue this todo was pushed to; nil when it
+	// has never been pushed. Populated on list responses too, so the dashboard
+	// can filter linked from unlinked work without a second request.
+	ExternalIssue *types.ExternalIssue `json:"externalIssue,omitempty"`
 	// HasPlan/HasVerification are lightweight availability flags for the list
 	// row's indicators — unlike PlanPath/VerificationMarkdown they're populated
 	// on both list and detail responses since they cost no extra parsing.
@@ -871,7 +875,7 @@ func (s *Server) resolveTodoRunRequest(r *http.Request) (todos.Provider, todoSou
 		}
 	}
 	for _, todo := range todoList {
-		todo.MarkdownBody = absolutizeAttachmentURLs(todo.MarkdownBody, origin)
+		todo.MarkdownBody = todos.AbsolutizeAttachmentURLs(todo.MarkdownBody, origin)
 	}
 
 	opts, err := normalizeTodoRunOptions(source.Dir, todoList, payload)
@@ -1099,6 +1103,7 @@ func summarizeTodo(todo *types.TODO, detail bool) todoSummary {
 		Attempts:       todo.Attempts,
 		Created:        todo.Created,
 		LastRun:        todo.LastRun,
+		ExternalIssue:  todo.ExternalIssue,
 	}
 	if todo.LLM != nil {
 		out.SessionID = todo.LLM.SessionId

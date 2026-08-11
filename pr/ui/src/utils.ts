@@ -327,7 +327,7 @@ export type FacetModes = Record<string, 'include' | 'exclude'>;
 // passFacet applies tri-state include/exclude semantics to the category set a PR
 // belongs to for one facet: any matching exclude rejects; if any include is set,
 // at least one must match.
-function passFacet(modes: FacetModes, cats: string[]): boolean {
+export function passFacet(modes: FacetModes, cats: string[]): boolean {
   let hasInclude = false;
   let included = false;
   for (const key in modes) {

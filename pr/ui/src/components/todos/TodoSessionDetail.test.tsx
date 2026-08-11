@@ -22,9 +22,12 @@ vi.mock('@flanksource/clicky-ui/components', () => ({
   ),
 }));
 
-vi.mock('@flanksource/clicky-ui/icons', () => {
+// Partial, like TodoSession.test.tsx: an exhaustive icon mock breaks whenever
+// the module graph grows an icon this suite never renders.
+vi.mock('@flanksource/clicky-ui/icons', async (importOriginal) => {
   const Icon = (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />;
   return {
+    ...(await importOriginal<object>()),
     UiCheck: Icon,
     UiChevronDown: Icon,
     UiChevronRight: Icon,

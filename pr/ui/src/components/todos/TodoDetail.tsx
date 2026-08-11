@@ -2,9 +2,10 @@ import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiArrowLeft, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiCog, UiComment, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiEye, UiFolder, UiListDashes, UiListFlat, UiMarkdown, UiPass, UiPlay, UiQuestion, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
-import type { Project, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
+import { UiArrowLeft, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiCog, UiComment, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiEye, UiFolder, UiLinkExternal, UiListDashes, UiListFlat, UiMarkdown, UiPass, UiPlay, UiQuestion, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
+import type { Project, TodoExternalIssue, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import { Spinner } from '../../icons/Spinner';
+import { RepoIcon } from '../RepoIcon';
 import { TodoTimeline } from './TodoTimeline';
 import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
@@ -22,7 +23,7 @@ import { TodoDetailTabs, type TodoDetailTabKey } from './TodoDetailTabs';
 import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationAttempts';
 import { TodoReviewBanner } from './planActions';
-import { useDeleteTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
 
 export function TodoDetail({
   todo,
@@ -67,7 +68,8 @@ export function TodoDetail({
   const updateTodo = useUpdateTodoMutation(dir, `Failed to update todo ${todo?.ref || ''}`.trim());
   const deleteTodo = useDeleteTodoMutation(dir);
   const transferTodo = useTransferTodoMutation();
-  const busy = updateTodo.isPending || deleteTodo.isPending || transferTodo.isPending;
+  const githubPushTodo = useGithubPushTodoMutation(dir);
+  const busy = updateTodo.isPending || deleteTodo.isPending || transferTodo.isPending || githubPushTodo.isPending;
   // Projects this todo can move to: every configured workspace except its own.
   const transferTargets = workspaces.filter(ws => !!ws.dir && ws.dir !== dir);
   const closed = todo?.status === 'completed';
@@ -217,6 +219,27 @@ export function TodoDetail({
       onTransferred(toDir, moved);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to move todo');
+    }
+  }
+
+  // A todo that was already pushed comes back as a 409 rather than silently
+  // opening a duplicate; the retry rewrites that issue from the todo as it
+  // stands now, overwriting whatever the issue body says.
+  async function pushToGithub(update = false) {
+    if (!todo || (busy && !update)) return;
+    setError('');
+    try {
+      const { url } = await githubPushTodo.mutateAsync({ ref: todo.ref, update });
+      window.open(url, '_blank', 'noopener');
+    } catch (err) {
+      if (!update && err instanceof TodoMutationError && err.status === 409) {
+        if (window.confirm('This todo is already linked to a GitHub issue.\n\n'
+          + "Rewrite that issue with the todo's current title, body, plan and verification?")) {
+          await pushToGithub(true);
+        }
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Failed to push todo to GitHub');
     }
   }
 
@@ -417,6 +440,7 @@ export function TodoDetail({
               onVerify={() => patch({ status: 'verified' })}
               onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
               onArchive={archiveTodo}
+              onPushToGithub={pushToGithub}
             />
 
             <div className="hidden min-w-0 flex-wrap items-center justify-end gap-1.5 md:flex">
@@ -476,6 +500,7 @@ export function TodoDetail({
                 onVerify={() => patch({ status: 'verified' })}
                 onToggleClosed={() => patch({ status: closed ? 'pending' : 'completed' })}
                 onArchive={archiveTodo}
+                onPushToGithub={pushToGithub}
               />
             </div>
 
@@ -508,6 +533,7 @@ export function TodoDetail({
                 )}
                 <span className="min-w-0 truncate">{fullTodoId}</span>
               </Button>
+              {todo.externalIssue && <ExternalIssueLink issue={todo.externalIssue} />}
               <span className="hidden items-center gap-2 md:flex">
                 <HeaderTags labels={visibleLabels} />
               </span>
@@ -771,6 +797,25 @@ function PriorityMenu({
   );
 }
 
+// ExternalIssueLink names the tracker issue this todo was pushed to. It is what
+// makes the list's Linked/Not-linked filter legible: the filter says a link
+// exists, this says which issue.
+function ExternalIssueLink({ issue }: { issue: TodoExternalIssue }) {
+  return (
+    <a
+      href={issue.url}
+      target="_blank"
+      rel="noreferrer"
+      title={`Open ${issue.repo}#${issue.number} on GitHub`}
+      className="inline-flex h-auto min-w-0 items-center gap-1.5 rounded border border-border bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+    >
+      <RepoIcon repo={issue.repo} size={12} />
+      <span className="min-w-0 truncate">{issue.repo}#{issue.number}</span>
+      <UiLinkExternal className="shrink-0 text-[10px]" />
+    </a>
+  );
+}
+
 function HeaderTags({ labels }: { labels: string[] }) {
   if (labels.length === 0) return null;
   const visible = labels.slice(0, 6);
@@ -823,6 +868,7 @@ function HeaderActionsMenu({
   onVerify,
   onToggleClosed,
   onArchive,
+  onPushToGithub,
 }: {
   todo: TodoItem;
   busy: boolean;
@@ -852,6 +898,8 @@ function HeaderActionsMenu({
   onVerify: () => void;
   onToggleClosed: () => void;
   onArchive: () => void;
+  /** Open a GitHub issue for this todo and link the two. */
+  onPushToGithub: () => void;
 }) {
   return (
     <DropdownMenu
@@ -1010,6 +1058,15 @@ function HeaderActionsMenu({
               onClick={() => {
                 close();
                 onToggleClosed();
+              }}
+            />
+            <MobileMenuItem
+              icon={UiLinkExternal}
+              label="Push to GitHub"
+              disabled={busy}
+              onClick={() => {
+                close();
+                onPushToGithub();
               }}
             />
             <MobileMenuItem

@@ -356,6 +356,66 @@ func TestRepositoryConcurrentInvariants(t *testing.T) {
 	})
 }
 
+// ListAliasesByKind is the one query that decorates a whole workspace's issues
+// with their external links, so it must group by issue, match the kind
+// case-insensitively, and ignore other kinds and other workspaces entirely.
+func TestRepositoryListAliasesByKind(t *testing.T) {
+	repo, _ := openRepository(t)
+	ctx := t.Context()
+
+	workspace, err := repo.CreateWorkspace(ctx, native.CreateWorkspaceInput{
+		RepoKey: "github.com/example/links", RootPath: "/workspace/links",
+	})
+	require.NoError(t, err)
+	other, err := repo.CreateWorkspace(ctx, native.CreateWorkspaceInput{
+		RepoKey: "github.com/example/elsewhere", RootPath: "/workspace/elsewhere",
+	})
+	require.NoError(t, err)
+
+	// Two links on one issue (a --force push opens a second issue), one on
+	// another, plus an import alias and a link in a different workspace that
+	// must not leak into the result.
+	twoLinks, err := repo.CreateIssue(ctx, native.CreateIssueInput{
+		WorkspaceID: workspace.ID, Title: "Two links",
+		Aliases: []native.AliasInput{
+			{Alias: "example/links#7", Kind: "GitHub"},
+			{Alias: "example/links#9", Kind: "github"},
+			{Alias: "legacy-1", Kind: "import"},
+		},
+	})
+	require.NoError(t, err)
+	oneLink, err := repo.CreateIssue(ctx, native.CreateIssueInput{
+		WorkspaceID: workspace.ID, Title: "One link",
+		Aliases: []native.AliasInput{{Alias: "example/links#3", Kind: "github"}},
+	})
+	require.NoError(t, err)
+	unlinked, err := repo.CreateIssue(ctx, native.CreateIssueInput{
+		WorkspaceID: workspace.ID, Title: "Unlinked",
+		Aliases: []native.AliasInput{{Alias: "legacy-2", Kind: "import"}},
+	})
+	require.NoError(t, err)
+	_, err = repo.CreateIssue(ctx, native.CreateIssueInput{
+		WorkspaceID: other.ID, Title: "Other workspace",
+		Aliases: []native.AliasInput{{Alias: "example/elsewhere#1", Kind: "github"}},
+	})
+	require.NoError(t, err)
+
+	byIssue, err := repo.ListAliasesByKind(ctx, workspace.ID, "github")
+	require.NoError(t, err)
+
+	names := map[uuid.UUID][]string{}
+	for id, aliases := range byIssue {
+		for _, alias := range aliases {
+			names[id] = append(names[id], alias.Alias)
+		}
+	}
+	assert.Equal(t, map[uuid.UUID][]string{
+		twoLinks.ID: {"example/links#7", "example/links#9"},
+		oneLink.ID:  {"example/links#3"},
+	}, names)
+	assert.NotContains(t, byIssue, unlinked.ID)
+}
+
 func openRepository(t *testing.T) (*native.Repository, *gorm.DB) {
 	t.Helper()
 	if os.Getenv("GAVEL_DB_EMBEDDED_TEST") == "" {
