@@ -62,7 +62,7 @@ func init() {
 	todosCmd.AddCommand(todosEditCmd)
 	todosEditCmd.Flags().StringVar(&todoEditTitle, "title", "", "New title")
 	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body, path, or @path")
-	todosEditCmd.Flags().StringVar(&todoEditPlan, "plan", "", "New plan revision, path, or @path")
+	todosEditCmd.Flags().StringVar(&todoEditPlan, "plan", "", "Set or replace the todo's plan (markdown, path, or @path); the todo returns to review for approval")
 	todosEditCmd.Flags().StringVar(&todoEditVerification, "verification", "", "New verification fixture, path, or @path")
 	todosEditCmd.Flags().StringVar(&todoEditStatus, "status", "",
 		"New status ("+joinStrings(types.AssignableStatuses())+")")

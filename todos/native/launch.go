@@ -57,6 +57,22 @@ type PersistedPlan struct {
 	Issue    *Issue
 }
 
+// PersistPlanInput is one plan persistence: the Captain plan identity, its new
+// immutable content, and the Gavel-owned selection.
+//
+// RootSession/Session are required exactly when Plan.SourceSessionID is unset —
+// a plan an agent run produced already has its run's session, while a
+// human-authored first plan has no session yet and Captain refuses to create a
+// plan without one. They are created inside the same transaction so a failed
+// revision leaves no orphaned session behind.
+type PersistPlanInput struct {
+	Plan        captaindb.CreatePlanInput
+	Revision    captaindb.AppendPlanRevisionInput
+	Attachment  PlanSelectionAttachment
+	RootSession *captaindb.CreateSessionInput
+	Session     *captaindb.CreateSessionInput
+}
+
 // ApprovedPlanSelection is the cross-owner approval result. Captain remains
 // authoritative for approval while Gavel stores only the selected plan link.
 type ApprovedPlanSelection struct {
@@ -173,17 +189,17 @@ func (c *LaunchCoordinator) LaunchPromptRun(
 
 // PersistAndSelectPlan creates (or resolves) a Captain plan, appends its
 // immutable content revision, and links/selects the plan on one native issue in
-// a single transaction. A filesystem path in planInput remains optional source
-// metadata; revisionInput.PlanMarkdown is the durable content.
-func (c *LaunchCoordinator) PersistAndSelectPlan(
-	ctx context.Context,
-	planInput captaindb.CreatePlanInput,
-	revisionInput captaindb.AppendPlanRevisionInput,
-	attachment PlanSelectionAttachment,
-) (*PersistedPlan, error) {
+// a single transaction. A filesystem path in input.Plan remains optional source
+// metadata; input.Revision.PlanMarkdown is the durable content.
+func (c *LaunchCoordinator) PersistAndSelectPlan(ctx context.Context, input PersistPlanInput) (*PersistedPlan, error) {
+	attachment := input.Attachment
 	if attachment.IssueID == uuid.Nil {
 		return nil, fmt.Errorf("%w: issue ID is required", ErrInvalidInput)
 	}
+	if err := validatePlanSessionBootstrap(input); err != nil {
+		return nil, err
+	}
+	planInput, revisionInput := input.Plan, input.Revision
 	requestedPlanID := revisionInput.PlanID
 	result := &PersistedPlan{}
 	err := c.captain.Transaction(ctx, func(captainTx *captaindb.DB) error {
@@ -191,6 +207,12 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(
 		issue, err := lockExecutionIssue(tx, attachment.IssueID)
 		if err != nil {
 			return err
+		}
+		if planInput.SourceSessionID == uuid.Nil {
+			planInput.SourceSessionID, err = createPlanSessions(ctx, captainTx, input)
+			if err != nil {
+				return err
+			}
 		}
 		priorPlan, err := existingPlanForCreate(ctx, captainTx, planInput)
 		if err != nil {
@@ -308,6 +330,42 @@ func (c *LaunchCoordinator) PersistAndSelectPlan(
 		return nil, err
 	}
 	return result, nil
+}
+
+// validatePlanSessionBootstrap rejects the two states Captain cannot resolve: a
+// plan with neither a source session nor sessions to create one from, and
+// session inputs that would hang the plan off the wrong TODO.
+func validatePlanSessionBootstrap(input PersistPlanInput) error {
+	if input.Plan.SourceSessionID != uuid.Nil {
+		return nil
+	}
+	if input.RootSession == nil || input.Session == nil {
+		return fmt.Errorf("%w: a plan without a source session requires root and operation session inputs", ErrInvalidInput)
+	}
+	if input.RootSession.ID != input.Attachment.IssueID {
+		return fmt.Errorf("%w: issue and root session must share a non-empty ID", ErrInvalidInput)
+	}
+	if input.RootSession.ParentSessionID != nil || input.RootSession.RootSessionID != nil {
+		return fmt.Errorf("%w: TODO root session must be canonical", ErrInvalidInput)
+	}
+	if input.Session.ParentSessionID != nil && *input.Session.ParentSessionID != input.Attachment.IssueID {
+		return fmt.Errorf("%w: plan session parent must be the TODO root", ErrInvalidInput)
+	}
+	return nil
+}
+
+func createPlanSessions(ctx context.Context, db *captaindb.DB, input PersistPlanInput) (uuid.UUID, error) {
+	root, err := db.CreateOrGetSession(ctx, *input.RootSession)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	sessionInput := *input.Session
+	sessionInput.ParentSessionID = &root.ID
+	session, err := db.CreateOrGetSession(ctx, sessionInput)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return session.ID, nil
 }
 
 // ApproveAndSelectPlan updates Captain's approval state and links/selects that

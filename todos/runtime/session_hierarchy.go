@@ -56,6 +56,26 @@ func (p *Provider) todoOperationSessionInput(issue *native.Issue, options todoOp
 	}
 }
 
+// suppliedPlanSessions builds the session pair a human-supplied plan hangs off:
+// the TODO root, and one deterministic per-issue "plan supplied" session so
+// `todos create --plan` and every later `todos edit --plan` reuse a single row
+// instead of accumulating one per edit.
+func (p *Provider) suppliedPlanSessions(issue *native.Issue) (*captaindb.CreateSessionInput, *captaindb.CreateSessionInput) {
+	root := p.todoRootSessionInput(native.CreateIssueInput{ID: issue.ID, Title: issue.Title, Body: issue.Body})
+	session := p.todoOperationSessionInput(issue, todoOperationSessionOptions{
+		ID:        suppliedPlanSessionID(issue.ID),
+		Operation: string(native.StepPlan),
+		Provider:  "human",
+		CWD:       p.workDir,
+		Prompt:    issue.Body,
+	})
+	return &root, &session
+}
+
+func suppliedPlanSessionID(issueID uuid.UUID) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-plan:"+issueID.String()+":supplied"))
+}
+
 func todoSessionMetadata(issueID uuid.UUID, operation string) map[string]any {
 	tags := []string{todoSessionType}
 	if operation = strings.TrimSpace(operation); operation != "" {

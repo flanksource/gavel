@@ -8,7 +8,6 @@ import (
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/native"
-	"github.com/google/uuid"
 )
 
 func (p *Provider) createIssueWithPlan(
@@ -26,7 +25,7 @@ func (p *Provider) createIssueWithPlan(
 		Session: p.todoOperationSessionInput(&native.Issue{
 			ID: issueInput.ID, Title: issueInput.Title,
 		}, todoOperationSessionOptions{
-			ID:        uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-plan:"+issueInput.ID.String()+":supplied")),
+			ID:        suppliedPlanSessionID(issueInput.ID),
 			Operation: string(native.StepPlan), Provider: "human", CWD: p.workDir, Prompt: issueInput.Body,
 		}),
 		Plan: captaindb.CreatePlanInput{

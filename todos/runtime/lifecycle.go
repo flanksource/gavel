@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos"
@@ -18,6 +19,7 @@ import (
 var (
 	_ todos.RunLifecycleProvider = (*Provider)(nil)
 	_ todos.RunProgressProvider  = (*Provider)(nil)
+	_ todos.RunNoticeProvider    = (*Provider)(nil)
 	_ todos.PlanContentProvider  = (*Provider)(nil)
 
 	errPlanContentMissing = errors.New("plan run produced no durable markdown content")
@@ -278,6 +280,35 @@ func (p *Provider) RecordRunProgress(ctx context.Context, todo *types.TODO, snap
 		return fmt.Errorf("record Captain verification progress: %w", err)
 	}
 	return nil
+}
+
+// RecordRunNotices writes the run's lifecycle notices into the transcript of the
+// session the agent actually ran in.
+//
+// sessionID is the provider's own id, which names several rows here: the gavel
+// admission root, and the claude/codex transcript the monitor ingested from the
+// on-disk log. The notices belong on the transcript — that is the row the
+// dashboard streams messages from — so a run whose log has not been ingested yet
+// has nowhere to put them, and says so rather than writing them somewhere they
+// would never be read.
+func (p *Provider) RecordRunNotices(ctx context.Context, sessionID string, notices []api.Notice) error {
+	if len(notices) == 0 {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("record run notices: session ID is required")
+	}
+	for _, source := range []string{"claude", "codex"} {
+		transcript, err := p.captain.GetSessionByIdentity(ctx, sessionID, source, "", "")
+		if err == nil {
+			return p.captain.PutSessionNotices(ctx, transcript.ID, notices)
+		}
+		if !errors.Is(err, captaindb.ErrSessionNotFound) {
+			return fmt.Errorf("resolve transcript session %s: %w", sessionID, err)
+		}
+	}
+	return fmt.Errorf("record run notices: no ingested transcript for session %s", sessionID)
 }
 
 func cloneResultJSON(source map[string]any) map[string]any {
@@ -616,12 +647,16 @@ func (p *Provider) persistPlanResult(ctx context.Context, todo *types.TODO, acti
 			}
 		}
 	}
-	persisted, err := p.coordinator.PersistAndSelectPlan(ctx, planInput, captaindb.AppendPlanRevisionInput{
-		PlanMarkdown: markdown,
-		CreatedBy:    strings.TrimSpace(result.ExecutorName),
-	}, native.PlanSelectionAttachment{
-		IssueID: currentIssue.ID, Ordinal: ordinal,
-		ExpectedIssueVersion: currentIssue.Version, Actor: mutationActor,
+	persisted, err := p.coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{
+		Plan: planInput,
+		Revision: captaindb.AppendPlanRevisionInput{
+			PlanMarkdown: markdown,
+			CreatedBy:    strings.TrimSpace(result.ExecutorName),
+		},
+		Attachment: native.PlanSelectionAttachment{
+			IssueID: currentIssue.ID, Ordinal: ordinal,
+			ExpectedIssueVersion: currentIssue.Version, Actor: mutationActor,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("persist Captain plan revision: %w", err)

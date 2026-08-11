@@ -116,9 +116,9 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-// todoRejectPayload rejects a reviewed plan: the todo returns to pending and its
-// recorded plan pointer is cleared, so a later run re-plans from scratch rather
-// than following the discarded plan.
+// todoRejectPayload rejects a reviewed plan: the todo returns to pending and the
+// plan stays selected as rejected, so no run can follow it until a new revision
+// or an approval supersedes that decision.
 type todoRejectPayload struct {
 	Dir string `json:"dir,omitempty"`
 	Ref string `json:"ref"`

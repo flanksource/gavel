@@ -226,7 +226,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		ExpectedIssueVersion: launch.Issue.Version,
 		Actor:                "execution-test",
 	}
-	persisted, err := coordinator.PersistAndSelectPlan(ctx, planInput, revisionInput, planAttachment)
+	persisted, err := coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: planInput, Revision: revisionInput, Attachment: planAttachment})
 	require.NoError(t, err)
 	require.NotNil(t, persisted.Plan)
 	require.NotNil(t, persisted.Revision)
@@ -240,7 +240,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 	// Both Captain's content hash and Gavel's exact-selection guard are
 	// idempotent with the original issue version.
-	persistedReplay, err := coordinator.PersistAndSelectPlan(ctx, planInput, revisionInput, planAttachment)
+	persistedReplay, err := coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: planInput, Revision: revisionInput, Attachment: planAttachment})
 	require.NoError(t, err)
 	assert.Equal(t, persisted.Plan.ID, persistedReplay.Plan.ID)
 	assert.Equal(t, persisted.Revision.ID, persistedReplay.Revision.ID)
@@ -248,18 +248,18 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 	wrongSessionPlan := planInput
 	wrongSessionPlan.SourceSessionID = uuid.New()
-	_, err = coordinator.PersistAndSelectPlan(ctx, wrongSessionPlan, revisionInput, planAttachment)
+	_, err = coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: wrongSessionPlan, Revision: revisionInput, Attachment: planAttachment})
 	require.ErrorIs(t, err, captaindb.ErrPlanConflict, "stale exact replay must still validate immutable session identity")
 	wrongIDPlan := planInput
 	wrongIDPlan.ID = uuid.New()
-	_, err = coordinator.PersistAndSelectPlan(ctx, wrongIDPlan, revisionInput, planAttachment)
+	_, err = coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: wrongIDPlan, Revision: revisionInput, Attachment: planAttachment})
 	require.ErrorIs(t, err, captaindb.ErrPlanConflict, "stale exact replay must still validate a supplied plan ID")
 
 	secondRevisionInput := captaindb.AppendPlanRevisionInput{
 		PlanMarkdown: "# Durable plan v2\n\n2. Record same-plan changes in Gavel.",
 		CreatedBy:    "execution-test",
 	}
-	_, err = coordinator.PersistAndSelectPlan(ctx, planInput, secondRevisionInput, planAttachment)
+	_, err = coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: planInput, Revision: secondRevisionInput, Attachment: planAttachment})
 	require.ErrorIs(t, err, native.ErrVersionConflict, "a stale caller cannot append to the selected plan")
 	revisionsAfterStale, err := captain.ListPlanRevisions(ctx, persisted.Plan.ID)
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 	secondRevisionAttachment := planAttachment
 	secondRevisionAttachment.ExpectedIssueVersion = persisted.Issue.Version
-	secondRevision, err := coordinator.PersistAndSelectPlan(ctx, planInput, secondRevisionInput, secondRevisionAttachment)
+	secondRevision, err := coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: planInput, Revision: secondRevisionInput, Attachment: secondRevisionAttachment})
 	require.NoError(t, err)
 	assert.Equal(t, persisted.Plan.ID, secondRevision.Plan.ID)
 	assert.NotEqual(t, persisted.Revision.ID, secondRevision.Revision.ID)
@@ -282,7 +282,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 	require.NotEmpty(t, secondRevisionEvents)
 	assert.Equal(t, "plan_revision_persisted", secondRevisionEvents[len(secondRevisionEvents)-1].Kind)
 
-	secondRevisionReplay, err := coordinator.PersistAndSelectPlan(ctx, planInput, secondRevisionInput, secondRevisionAttachment)
+	secondRevisionReplay, err := coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{Plan: planInput, Revision: secondRevisionInput, Attachment: secondRevisionAttachment})
 	require.NoError(t, err)
 	assert.Equal(t, secondRevision.Revision.ID, secondRevisionReplay.Revision.ID)
 	assert.Equal(t, secondRevision.Issue.Version, secondRevisionReplay.Issue.Version)
@@ -332,11 +332,15 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		err    error
 	}, 1)
 	go func() {
-		result, persistErr := coordinator.PersistAndSelectPlan(ctx, planInput, independentRevisionInput, native.PlanSelectionAttachment{
-			IssueID:              coordinatedIssue.ID,
-			Ordinal:              0,
-			ExpectedIssueVersion: revisionRaceIssueBefore.Version,
-			Actor:                "execution-test",
+		result, persistErr := coordinator.PersistAndSelectPlan(ctx, native.PersistPlanInput{
+			Plan:     planInput,
+			Revision: independentRevisionInput,
+			Attachment: native.PlanSelectionAttachment{
+				IssueID:              coordinatedIssue.ID,
+				Ordinal:              0,
+				ExpectedIssueVersion: revisionRaceIssueBefore.Version,
+				Actor:                "execution-test",
+			},
 		})
 		revisionCoordinatorDone <- struct {
 			result *native.PersistedPlan
