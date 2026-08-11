@@ -24,6 +24,7 @@ type ExecutorContext struct {
 	transcript  *ExecutionTranscript
 	onSessionID func(sessionID string)
 	onRunStart  func(RunStartMetadata)
+	onNotices   func(sessionID string, notices []api.Notice)
 }
 
 // RunStartMetadata is the human-facing run identity recorded on a TODO issue
@@ -261,6 +262,21 @@ func (ctx *ExecutorContext) RecordRunStart(meta RunStartMetadata) {
 		return
 	}
 	ctx.onRunStart(meta)
+}
+
+// SetNoticesHook registers a callback an executor invokes (via RecordNotices)
+// once the run is over, with everything its lifecycle hooks reported doing.
+func (ctx *ExecutorContext) SetNoticesHook(fn func(sessionID string, notices []api.Notice)) {
+	ctx.onNotices = fn
+}
+
+// RecordNotices reports the run's lifecycle notices to the registered hook (if
+// any). Executors call it after the run, when the session id is settled.
+func (ctx *ExecutorContext) RecordNotices(sessionID string, notices []api.Notice) {
+	if len(notices) == 0 || ctx.onNotices == nil {
+		return
+	}
+	ctx.onNotices(sessionID, notices)
 }
 
 // ExecutionTranscript records the complete interaction history during TODO execution.

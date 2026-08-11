@@ -203,6 +203,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 	}
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	ctx.SetRunStartHook(e.runStartPersister(ctx, []*types.TODO{todo}))
+	ctx.SetNoticesHook(e.noticesPersister(ctx))
 	var progress *progressPersister
 	if provider, ok := e.activeProvider().(RunProgressProvider); ok {
 		progress = newProgressPersister(ctx, provider, todo)
@@ -318,6 +319,7 @@ func (e *TODOExecutor) ExecuteGroup(ctx *ExecutorContext, todosInGroup []*types.
 		var err error
 		ctx.SetSessionIDHook(e.sessionIDPersister(ctx, needsExecution))
 		ctx.SetRunStartHook(e.runStartPersister(ctx, needsExecution))
+		ctx.SetNoticesHook(e.noticesPersister(ctx))
 		groupResult, err = groupExec.ExecuteGroup(ctx, needsExecution)
 		// The group executor may generate a session id per todo (e.g. cmux's
 		// claude --session-id); persist it now that it is known.
@@ -465,6 +467,27 @@ func (e *TODOExecutor) sessionIDPersister(ctx context.Context, todoList []*types
 			}
 			todo.LLM.SessionId = sessionID
 			e.updateProviderState(ctx, todo, StateUpdate{SessionID: &sessionID})
+		}
+	}
+}
+
+// noticesPersister builds the RecordNotices callback: it folds the run's
+// lifecycle notices into the session transcript so the commits cut between two
+// turns are readable there, not only in whatever scrolled past in the terminal.
+//
+// A failure to persist is reported and dropped rather than failing the run — the
+// work itself is already committed, and losing the narration of it is not worth
+// turning a green run red.
+func (e *TODOExecutor) noticesPersister(ctx context.Context) func(string, []captainapi.Notice) {
+	return func(sessionID string, notices []captainapi.Notice) {
+		provider, ok := e.activeProvider().(RunNoticeProvider)
+		if !ok {
+			return
+		}
+		persistCtx, cancel := providerPersistenceContext(ctx)
+		defer cancel()
+		if err := provider.RecordRunNotices(persistCtx, sessionID, notices); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to record run notices: %v\n", err)
 		}
 	}
 }

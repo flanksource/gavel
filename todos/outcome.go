@@ -158,6 +158,7 @@ func (e *TODOExecutor) Resume(ctx *ExecutorContext, todosInGroup []*types.TODO, 
 	// the executor, once it has resolved the runtime it is actually using.
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, todosInGroup))
 	ctx.SetRunStartHook(e.runStartPersister(ctx, todosInGroup))
+	ctx.SetNoticesHook(e.noticesPersister(ctx))
 	now := time.Now()
 	for _, todo := range todosInGroup {
 		todo.Status = types.StatusInProgress

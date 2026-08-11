@@ -284,6 +284,14 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 
 	rres, runErr := runner.Run(streamCtx)
 	result.Duration = time.Since(start)
+	// Flushed here rather than from the hooks that produced them: a hook firing
+	// mid-turn cannot know the transcript session's id, because that row only
+	// exists once the monitor has ingested the provider's log. Before the
+	// cancellation and error returns below — a run's commits are just as worth
+	// narrating when it failed.
+	if rres.Response != nil && rres.Response.Workspace != nil {
+		ctx.RecordNotices(runMeta.SessionID, rres.Response.Workspace.Notices)
+	}
 	if errors.Is(context.Cause(streamCtx), todopkg.ErrExecutionCancelled) {
 		result.Cancelled = true
 		result.ErrorMessage = todopkg.ErrExecutionCancelled.Error()
@@ -388,6 +396,14 @@ func (e *Executor) handleEvent(ctx *todopkg.ExecutorContext, ev captainai.Event,
 			runMeta.SessionID = ev.SessionID
 			result.Runtime.SessionID = ev.SessionID
 			ctx.RecordRunStart(runMeta)
+		}
+		// A lifecycle hook narrating what it did between turns — the commit it
+		// cut, the chain it squashed. Recorded in the run's own voice so the
+		// attempt transcript shows why the tree changed between two turns that
+		// never mention it.
+		if ev.Text != "" {
+			transcript.AddExecutorMessage(ev.Text, todopkg.EntryAction, map[string]any{"role": "system"})
+			ctx.Notify(todopkg.Notification{Type: todopkg.NotifyAction, Message: ev.Text})
 		}
 	case captainai.EventResult:
 		*sawResult = true
