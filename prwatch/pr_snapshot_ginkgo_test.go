@@ -1,10 +1,13 @@
 package prwatch
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/flanksource/gavel/github"
+	"github.com/flanksource/gavel/testrunner/parsers"
+	testui "github.com/flanksource/gavel/testrunner/ui"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -56,6 +59,93 @@ var _ = Describe("PR snapshot download", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snap.Tests).To(HaveLen(1))
 		Expect(snap.Tests[0].Name).To(Equal("Alpha"))
+	})
+
+	DescribeTable("rebases matrix shard packages to the repository root before merging",
+		func(gitRoot, shardWorkDir string) {
+			payload, err := json.Marshal(testui.Snapshot{
+				Git: &testui.SnapshotGit{Repo: "widgets", Root: gitRoot, SHA: "abc123"},
+				Tests: []parsers.Test{{
+					Name:        "./",
+					PackagePath: "./.",
+					WorkDir:     shardWorkDir,
+					Failed:      true,
+					Children: []parsers.Test{{
+						Name:        "fails in the shard root",
+						PackagePath: "./.",
+						WorkDir:     shardWorkDir,
+						File:        "external_entities_test.go",
+						Framework:   parsers.Ginkgo,
+						Failed:      true,
+					}},
+				}},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			snap, err := downloadPRSnapshot(github.Options{}, 12,
+				prWith(stickyComment(10, "gavel-scrapers", 1)),
+				func(github.Options, int64) ([]byte, error) { return payload, nil })
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(snap.Git).To(Equal(&testui.SnapshotGit{Repo: "widgets", Root: gitRoot, SHA: "abc123"}))
+			Expect(snap.Tests).To(HaveLen(1))
+			Expect(snap.Tests[0].PackagePath).To(Equal("./scrapers"))
+			Expect(snap.Tests[0].WorkDir).To(Equal(gitRoot))
+			Expect(snap.Tests[0].Children).To(HaveLen(1))
+			Expect(snap.Tests[0].Children[0].PackagePath).To(Equal("./scrapers"))
+			Expect(snap.Tests[0].Children[0].WorkDir).To(Equal(gitRoot))
+			Expect(snap.Tests[0].Children[0].File).To(Equal("scrapers/external_entities_test.go"))
+		},
+		Entry("unix paths", "/home/runner/work/widgets/widgets", "/home/runner/work/widgets/widgets/scrapers"),
+		Entry("windows paths", `D:\a\widgets\widgets`, `D:\a\widgets\widgets\scrapers`),
+	)
+
+	It("rejects artifact test paths outside the repository", func() {
+		payload, err := json.Marshal(testui.Snapshot{
+			Git: &testui.SnapshotGit{Repo: "widgets", Root: "/repo/widgets"},
+			Tests: []parsers.Test{{
+				Name:        "outside",
+				PackagePath: "./.",
+				WorkDir:     "/repo/other",
+				Failed:      true,
+			}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = downloadPRSnapshot(github.Options{}, 12,
+			prWith(stickyComment(10, "gavel", 1)),
+			func(github.Options, int64) ([]byte, error) { return payload, nil })
+
+		Expect(err).To(MatchError(ContainSubstring("outside git root")))
+	})
+
+	It("merges sticky shards from different commits without claiming one SHA", func() {
+		download := func(_ github.Options, artifactID int64) ([]byte, error) {
+			payload, err := json.Marshal(testui.Snapshot{
+				Git: &testui.SnapshotGit{
+					Repo: "widgets",
+					Root: fmt.Sprintf("/runner/%d/widgets", artifactID),
+					SHA:  fmt.Sprintf("sha-%d", artifactID),
+				},
+				Tests: []parsers.Test{{
+					Name:        fmt.Sprintf("shard-%d", artifactID),
+					PackagePath: "./.",
+					WorkDir:     fmt.Sprintf("/runner/%d/widgets", artifactID),
+					Passed:      true,
+				}},
+			})
+			return payload, err
+		}
+
+		snap, err := downloadPRSnapshot(github.Options{}, 12,
+			prWith(stickyComment(10, "gavel-core", 1), stickyComment(20, "gavel-scrapers", 2)),
+			download)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snap.Tests).To(HaveLen(2))
+		Expect(snap.Git).NotTo(BeNil())
+		Expect(snap.Git.Repo).To(Equal("widgets"))
+		Expect(snap.Git.SHA).To(BeEmpty())
 	})
 
 	It("fails loudly when the PR published no gavel artifacts", func() {

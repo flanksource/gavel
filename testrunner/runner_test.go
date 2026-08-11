@@ -1,6 +1,7 @@
 package testrunner
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -615,19 +616,44 @@ func TestRunSingleRootPreservesPassingStdout(t *testing.T) {
 func TestRunnerNoTests(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// A directory with no detectable test frameworks is a successful no-op,
-	// not an error: a multi-root run where one root has no tests must not fail
-	// the whole run (see refactor 6686a89). Run returns an empty test tree.
 	result, err := Run(RunOptions{WorkDir: tmpDir})
+	if !errors.Is(err, ErrNoTestsExecuted) {
+		t.Fatalf("expected no-tests error, got %v", err)
+	}
+	tests, ok := result.([]parsers.Test)
+	if !ok || len(tests) != 0 {
+		t.Fatalf("expected empty test results with the error, got %T %+v", result, result)
+	}
+}
+
+func TestRunnerDryRunAllowsNoTests(t *testing.T) {
+	if _, err := Run(RunOptions{WorkDir: t.TempDir(), DryRun: true}); err != nil {
+		t.Fatalf("dry-run should not require executed tests, got %v", err)
+	}
+}
+
+func TestRunMultiRootAllowsAnEmptyRootWhenAnotherRootExecutesTests(t *testing.T) {
+	parent := t.TempDir()
+	emptyRepo := filepath.Join(parent, "empty")
+	testedRepo := filepath.Join(parent, "tested")
+	if err := os.MkdirAll(filepath.Join(emptyRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("create empty repo: %v", err)
+	}
+	writeGoTestPackage(t, testedRepo, "pkg", "example.com/tested")
+
+	result, err := Run(RunOptions{
+		WorkDir:       parent,
+		StartingPaths: []string{emptyRepo, filepath.Join(testedRepo, "pkg")},
+	})
 	if err != nil {
-		t.Fatalf("no-tests dir should not error, got %v", err)
+		t.Fatalf("Run returned error: %v", err)
 	}
 	tests, ok := result.([]parsers.Test)
 	if !ok {
-		t.Fatalf("expected []parsers.Test, got %T", result)
+		t.Fatalf("Run returned %T, want []parsers.Test", result)
 	}
-	if len(tests) != 0 {
-		t.Errorf("expected no tests, got %d", len(tests))
+	if summary := parsers.Tests(tests).Sum(); summary.Total == 0 || summary.Passed == 0 {
+		t.Fatalf("expected executed tests from non-empty root, got %+v", summary)
 	}
 }
 

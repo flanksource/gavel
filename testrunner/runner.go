@@ -36,7 +36,11 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-var exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
+var (
+	exitStatusRe = regexp.MustCompile(`(?m)^exit status \d+\s*$`)
+	// ErrNoTestsExecuted reports a completed non-dry run with no test results.
+	ErrNoTestsExecuted = errors.New("no tests were executed")
+)
 
 func stripExitStatus(s string) string {
 	return strings.TrimSpace(exitStatusRe.ReplaceAllString(s, ""))
@@ -417,7 +421,8 @@ func Run(opts RunOptions) (any, error) {
 	}
 	if opts.FixturesOnly {
 		opts.WorkDir, _ = filepath.Abs(opts.WorkDir)
-		return runSingleRoot(opts)
+		result, err := runSingleRoot(opts)
+		return requireExecutedTests(result, err, opts.DryRun)
 	}
 
 	// Split starting paths by execution root so each group runs with the
@@ -426,18 +431,29 @@ func Run(opts RunOptions) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var result any
 	if len(groups) > 1 {
-		return runMultiRoot(opts, groups)
-	}
-
-	// Single-root fast path: update WorkDir/StartingPaths from the (possibly
-	// rebased) group so the rest of the function sees normalised values.
-	if len(groups) == 1 {
+		result, err = runMultiRoot(opts, groups)
+	} else if len(groups) == 1 {
+		// Single-root fast path: update WorkDir/StartingPaths from the
+		// (possibly rebased) group so the rest of the function sees
+		// normalised values.
 		opts.WorkDir = groups[0].workDir
 		opts.StartingPaths = groups[0].paths
+		result, err = runSingleRoot(opts)
 	}
+	return requireExecutedTests(result, err, opts.DryRun)
+}
 
-	return runSingleRoot(opts)
+func requireExecutedTests(result any, err error, dryRun bool) (any, error) {
+	if err != nil || dryRun {
+		return result, err
+	}
+	tests, ok := result.([]parsers.Test)
+	if ok && parsers.Tests(tests).Sum().Total == 0 {
+		return result, ErrNoTestsExecuted
+	}
+	return result, nil
 }
 
 // runMultiRoot handles the case where starting paths span multiple git roots
@@ -697,11 +713,14 @@ func (o *TestOrchestrator) Run() (parsers.TestSuiteResults, error) {
 	}
 
 	results, err := o.detectAndRun(frameworks, o.StartingPaths, o.ExtraArgs)
-	failed := results.Failed()
 	// Safe as Info again: clicky's task renderer installs a serializing
 	// logger writer while active, so this line waits on the same mutex
 	// as tick renders and can't interleave mid-frame.
-	logger.Infof("Test run completed. %d total failures.", len(failed))
+	if results.All().Sum().Total == 0 {
+		logger.Infof("No framework tests executed.")
+	} else {
+		logger.Infof("Test run completed. %d total failures.", len(results.Failed()))
+	}
 
 	if err != nil {
 		return results, err
@@ -903,24 +922,25 @@ func applyFailedFilter(packagesByFramework map[Framework][]string, failedPath st
 
 	filtered := make(map[Framework][]string)
 	namesByFramework := make(map[Framework][]string)
+	failedPackageCount := 0
+	for _, packages := range failedPkgs {
+		failedPackageCount += len(packages)
+	}
 
 	for fw, pkgs := range packagesByFramework {
 		failedForFW, ok := failedPkgs[parsers.Framework(fw)]
 		if !ok {
 			continue
 		}
-		pkgSet := make(map[string]bool, len(failedForFW))
-		for pkgPath := range failedForFW {
-			pkgSet[pkgPath] = true
-		}
 		for _, pkg := range pkgs {
-			if pkgSet[pkg] {
+			if names, exists := failedForFW[pkg]; exists {
 				filtered[fw] = append(filtered[fw], pkg)
+				namesByFramework[fw] = append(namesByFramework[fw], names...)
 			}
 		}
-		for _, names := range failedForFW {
-			namesByFramework[fw] = append(namesByFramework[fw], names...)
-		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil, fmt.Errorf("--failed: %d failed test packages in %s did not match any detected packages", failedPackageCount, failedPath)
 	}
 
 	focusByFramework := make(map[Framework]string)

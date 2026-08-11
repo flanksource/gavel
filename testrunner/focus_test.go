@@ -144,3 +144,27 @@ func TestApplyFailedFilterReturnsPerFrameworkFocusPatterns(t *testing.T) {
 		t.Fatalf("ginkgo focus = %q, want %q", got, want)
 	}
 }
+
+func TestApplyFailedFilterRejectsFailedPackagesMissingFromDiscovery(t *testing.T) {
+	snapshot := testui.Snapshot{Tests: []parsers.Test{{
+		Name:        "fails in CI",
+		PackagePath: "./ci-only",
+		Framework:   parsers.Ginkgo,
+		Failed:      true,
+	}}}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	failedPath := filepath.Join(t.TempDir(), "failed.json")
+	if err := os.WriteFile(failedPath, data, 0o644); err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+
+	_, _, err = applyFailedFilter(map[Framework][]string{
+		parsers.Ginkgo: {"./local"},
+	}, failedPath)
+	if err == nil || !strings.Contains(err.Error(), "did not match any detected packages") {
+		t.Fatalf("expected unmatched failed-package error, got %v", err)
+	}
+}
