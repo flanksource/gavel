@@ -632,6 +632,47 @@
       },
       "type": "object"
     },
+    "SandboxRef": {
+      "description": "Sandbox the run executes under: a backend name, or an object with overrides",
+      "oneOf": [
+        {
+          "description": "Backend name or adapter kind (none, srt, container, git-agent)",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "agent": {
+              "description": "Pin one enrolled agent of a git-agent backend",
+              "type": "string"
+            },
+            "backend": {
+              "description": "Configured sandbox backend from ~/.captain.yaml, or a bare adapter kind",
+              "type": "string"
+            },
+            "policy": {
+              "additionalProperties": false,
+              "properties": {
+                "maxAttempts": {
+                  "description": "Bound on submit cycles per task",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "paths": {
+                  "description": "Path allow/deny list, gitignore syntax with ! negating",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "SecretKeySelector": {
       "additionalProperties": false,
       "properties": {
@@ -749,6 +790,9 @@
         "resume": {
           "type": "boolean"
         },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxRef"
+        },
         "sessionId": {
           "type": "string"
         },
@@ -795,6 +839,9 @@
       "additionalProperties": false,
       "properties": {
         "action": {
+          "type": "string"
+        },
+        "approvalId": {
           "type": "string"
         },
         "input": true,
@@ -911,6 +958,12 @@
         "maxIterations": {
           "minimum": 0,
           "type": "integer"
+        },
+        "prompts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "scope": {
           "enum": [
@@ -1070,6 +1123,9 @@
         },
         "resume": {
           "type": "boolean"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxRef"
         },
         "sessionId": {
           "type": "string"
@@ -2110,6 +2166,10 @@
           "description": "Gate Bash behind a human approval prompt. Unset means the entrypoint decides: the dashboard can answer approvals, `gavel todos run` cannot. Enabling it where nothing can answer is an error rather than a run that blocks forever.",
           "type": "boolean"
         },
+        "baseUrl": {
+          "description": "Absolute origin this gavel dashboard is reachable at (e.g. https://gavel.example.com). Todo bodies store attachments as server-relative links, so pushing a todo to an external tracker rewrites them against this origin. A loopback origin only renders for viewers on the same machine.",
+          "type": "string"
+        },
         "driver": {
           "description": "Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from the model. Last-write-wins across layers.",
           "type": "string"
@@ -2353,6 +2413,9 @@
             },
             "resume": {
               "type": "boolean"
+            },
+            "sandbox": {
+              "$ref": "#/$defs/SandboxRef"
             },
             "sessionId": {
               "type": "string"
