@@ -73,12 +73,14 @@ func selectProjectDiffFiles(target string, files []status.FileStatus) (string, [
 
 func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.FileStatus) (string, bool, error) {
 	var patches []string
+	covered := 0
 	allBinary := true
 	for _, file := range files {
-		filePatches, err := projectFilePatches(ctx, workDir, file)
+		filePatches, fileCovered, err := projectFilePatches(ctx, workDir, file)
 		if err != nil {
 			return "", false, err
 		}
+		covered += fileCovered
 		for _, patch := range filePatches {
 			if strings.TrimSpace(patch) == "" {
 				continue
@@ -89,25 +91,26 @@ func projectWorkingTreeDiff(ctx context.Context, workDir string, files []status.
 			}
 		}
 	}
-	return strings.Join(patches, "\n"), len(files) == 1 && len(patches) > 0 && allBinary, nil
+	return strings.Join(patches, "\n"), covered == 1 && len(patches) > 0 && allBinary, nil
 }
 
-func projectFilePatches(ctx context.Context, workDir string, file status.FileStatus) ([]string, error) {
+// projectFilePatches renders one status entry as unified-diff patches and
+// reports how many working-tree files those patches covered — git status
+// collapses a wholly untracked directory into a single entry.
+func projectFilePatches(ctx context.Context, workDir string, file status.FileStatus) (patches []string, covered int, err error) {
 	if file.State == status.StateUntracked {
-		stopFile := rpchttp.Track(ctx, "file")
-		info, err := os.Lstat(filepath.Join(workDir, filepath.FromSlash(file.Path)))
-		stopFile()
+		targets, err := untrackedDiffTargets(ctx, workDir, file.Path)
 		if err != nil {
-			return nil, fmt.Errorf("inspect untracked file %q: %w", file.Path, err)
+			return nil, 0, err
 		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("untracked diff target %q is not a regular file", file.Path)
+		for _, target := range targets {
+			patch, err := runProjectGitDiff(ctx, workDir, true, "--no-index", "--no-color", "--", "/dev/null", target)
+			if err != nil {
+				return nil, 0, fmt.Errorf("diff untracked file %q: %w", target, err)
+			}
+			patches = append(patches, patch)
 		}
-		patch, err := runProjectGitDiff(ctx, workDir, true, "--no-index", "--no-color", "--", "/dev/null", file.Path)
-		if err != nil {
-			return nil, fmt.Errorf("diff untracked file %q: %w", file.Path, err)
-		}
-		return []string{patch}, nil
+		return patches, len(targets), nil
 	}
 
 	paths := []string{"--"}
@@ -118,14 +121,53 @@ func projectFilePatches(ctx context.Context, workDir string, file status.FileSta
 	stagedArgs := append([]string{"--cached", "--find-renames", "--no-color"}, paths...)
 	staged, err := runProjectGitDiff(ctx, workDir, false, stagedArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("diff staged file %q: %w", file.Path, err)
+		return nil, 0, fmt.Errorf("diff staged file %q: %w", file.Path, err)
 	}
 	workArgs := append([]string{"--find-renames", "--no-color"}, paths...)
 	unstaged, err := runProjectGitDiff(ctx, workDir, false, workArgs...)
 	if err != nil {
-		return nil, fmt.Errorf("diff unstaged file %q: %w", file.Path, err)
+		return nil, 0, fmt.Errorf("diff unstaged file %q: %w", file.Path, err)
 	}
-	return []string{staged, unstaged}, nil
+	return []string{staged, unstaged}, 1, nil
+}
+
+// untrackedDiffTargets resolves an untracked status entry to the working-tree
+// files it stands for. A directory entry is expanded through git so nested
+// .gitignore rules keep applying to what the diff shows.
+func untrackedDiffTargets(ctx context.Context, workDir, path string) ([]string, error) {
+	stopFile := rpchttp.Track(ctx, "file")
+	info, err := os.Lstat(filepath.Join(workDir, filepath.FromSlash(path)))
+	stopFile()
+	if err != nil {
+		return nil, fmt.Errorf("inspect untracked path %q: %w", path, err)
+	}
+	if info.Mode().IsRegular() {
+		return []string{path}, nil
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("untracked diff target %q is not a regular file", path)
+	}
+
+	stopGit := rpchttp.Track(ctx, "git")
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--others", "--exclude-standard", "-z", "--", path)
+	cmd.Dir = workDir
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	stopGit()
+	if err != nil {
+		return nil, fmt.Errorf("list untracked files under %q: %w\nOutput: %s", path, err, strings.TrimSpace(stderr.String()))
+	}
+	var targets []string
+	for _, target := range strings.Split(string(output), "\x00") {
+		if target != "" {
+			targets = append(targets, target)
+		}
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("untracked directory %q holds no diffable files", path)
+	}
+	return targets, nil
 }
 
 func runProjectGitDiff(ctx context.Context, workDir string, allowChanges bool, args ...string) (string, error) {

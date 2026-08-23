@@ -56,6 +56,24 @@ var _ = Describe("project working-tree diff", func() {
 		Expect(strings.Index(response.Diff, "src/new.go")).To(BeNumerically("<", strings.Index(response.Diff, "src/staged.go")))
 	})
 
+	It("expands a wholly untracked directory into a patch per file", func() {
+		dir := createDiffRepository()
+		writeDiffFile(dir, "src/devtools/.gitignore", "*.log\n")
+		writeDiffFile(dir, "src/devtools/panel.ts", "export const panel = true;\n")
+		writeDiffFile(dir, "src/devtools/nested/inspector.ts", "export const inspector = true;\n")
+		writeDiffFile(dir, "src/devtools/noise.log", "ignored output\n")
+		Expect(SaveProjects([]Project{{Name: "gavel", Dir: dir}})).To(Succeed())
+
+		response := requestProjectDiff("gavel", "src/devtools")
+
+		Expect(response.Path).To(Equal("src/devtools"))
+		Expect(response.Diff).To(ContainSubstring("export const panel = true;"))
+		Expect(response.Diff).To(ContainSubstring("src/devtools/nested/inspector.ts"))
+		Expect(response.Diff).To(ContainSubstring("export const inspector = true;"))
+		Expect(response.Diff).NotTo(ContainSubstring("noise.log"))
+		Expect(response.Binary).To(BeFalse())
+	})
+
 	It("marks a selected binary file without hiding text from folder aggregates", func() {
 		dir := createDiffRepository()
 		Expect(os.WriteFile(filepath.Join(dir, "src", "image.bin"), []byte{0, 1, 2, 3}, 0o600)).To(Succeed())
