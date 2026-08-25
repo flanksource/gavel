@@ -27,6 +27,10 @@ type FixtureTest struct {
 
 	// Name of the test to be displayed in reports
 	Name string `json:"name,omitempty"`
+	// Repeat overrides the file-level repeat for this logical row.
+	Repeat *int `json:"repeat,omitempty"`
+	// Metrics overrides file-level metric extraction for command blocks.
+	Metrics []MetricSpec `json:"metrics,omitempty"`
 	// The working directory for executing the test
 	SourceDir string       `json:"source_dir,omitempty"`
 	Query     string       `json:"query,omitempty"`
@@ -325,6 +329,10 @@ type FrontMatter struct {
 	ExecFixtureBase `yaml:",inline" json:",inline"`
 
 	Files string `yaml:"files,omitempty" json:"files,omitempty"` // Glob pattern to match files
+	// Repeat is the default number of samples for each logical row.
+	Repeat *int `yaml:"repeat,omitempty" json:"repeat,omitempty"`
+	// Metrics are CEL expressions extracted independently from each sample.
+	Metrics []MetricSpec `yaml:"metrics,omitempty" json:"metrics,omitempty"`
 
 	// CodeBlocks specifies which code block languages to execute (defaults to ["bash"])
 	CodeBlocks []string `yaml:"codeBlocks,omitempty" json:"codeBlocks,omitempty"`
@@ -361,6 +369,8 @@ func (f *FrontMatter) CleanMetadata() {
 	delete(f.Metadata, "terminal")
 	// Keys from FrontMatter itself
 	delete(f.Metadata, "files")
+	delete(f.Metadata, "repeat")
+	delete(f.Metadata, "metrics")
 	delete(f.Metadata, "codeBlocks")
 	delete(f.Metadata, "timeout")
 	delete(f.Metadata, "os")
@@ -421,6 +431,84 @@ func (nt NodeType) Pretty() api.Text {
 	return clicky.Text(nt.String(), "text-gray-500")
 }
 
+// OutcomeStatus separates the command, assertion, and metric verdicts that
+// contribute to a logical fixture row's final task status.
+type OutcomeStatus string
+
+const (
+	OutcomePASS         OutcomeStatus = "pass"
+	OutcomeFAIL         OutcomeStatus = "fail"
+	OutcomeERR          OutcomeStatus = "error"
+	OutcomeNotEvaluated OutcomeStatus = "not_evaluated"
+)
+
+// FixtureOutcome is one independently reported part of a fixture verdict.
+type FixtureOutcome struct {
+	Status OutcomeStatus `json:"status"`
+	Error  string        `json:"error,omitempty"`
+}
+
+// AssertionOutcome records one sample's CEL evaluation without discarding
+// command or metric evidence from the same process execution.
+type AssertionOutcome struct {
+	FixtureOutcome
+	Expression string `json:"expression,omitempty"`
+	Result     *bool  `json:"result,omitempty"`
+}
+
+// MetricSample records the extraction result for one configured metric.
+type MetricSample struct {
+	Status OutcomeStatus `json:"status"`
+	Value  *float64      `json:"value,omitempty"`
+	Error  string        `json:"error,omitempty"`
+}
+
+// FixtureSample retains process evidence and independent evaluation outcomes
+// for one execution of a logical Markdown row.
+type FixtureSample struct {
+	Index    int                     `json:"index"`
+	Duration time.Duration           `json:"duration,omitempty"`
+	Command  string                  `json:"command,omitempty"`
+	CWD      string                  `json:"cwd,omitempty"`
+	ExitCode int                     `json:"exit_code"`
+	Stdout   string                  `json:"stdout,omitempty"`
+	Stderr   string                  `json:"stderr,omitempty"`
+	Error    string                  `json:"error,omitempty"`
+	Outcome  FixtureOutcome          `json:"command_outcome"`
+	CEL      *AssertionOutcome       `json:"cel,omitempty"`
+	Metrics  map[string]MetricSample `json:"metrics,omitempty"`
+}
+
+// FixtureOutcomes summarizes the independently evaluated parts of a logical row.
+type FixtureOutcomes struct {
+	Command    FixtureOutcome  `json:"command"`
+	Assertions *FixtureOutcome `json:"assertions,omitempty"`
+	Metrics    *FixtureOutcome `json:"metrics,omitempty"`
+}
+
+// MetricComparison records the finalized comparison to another logical row.
+type MetricComparison struct {
+	Baseline          string        `json:"baseline"`
+	BaselineValue     float64       `json:"baseline_value"`
+	RegressionPercent float64       `json:"regression_percent"`
+	Status            OutcomeStatus `json:"status"`
+	Error             string        `json:"error,omitempty"`
+}
+
+// MetricSummary contains valid raw samples, the selected aggregate, and any
+// absolute or baseline threshold verdict for one metric.
+type MetricSummary struct {
+	Unit       string            `json:"unit"`
+	Aggregate  string            `json:"aggregate"`
+	Direction  string            `json:"direction"`
+	Samples    []float64         `json:"samples"`
+	Value      *float64          `json:"value,omitempty"`
+	Threshold  *MetricThreshold  `json:"threshold,omitempty"`
+	Comparison *MetricComparison `json:"comparison,omitempty"`
+	Status     OutcomeStatus     `json:"status"`
+	Error      string            `json:"error,omitempty"`
+}
+
 // FixtureResult represents the outcome of executing a single fixture test.
 // It contains core information, execution results, and metadata about the test run.
 type FixtureResult struct {
@@ -440,6 +528,11 @@ type FixtureResult struct {
 	// CEL failure details
 	CELExpression string         `json:"cel_expression,omitempty"`
 	CELVars       map[string]any `json:"cel_vars,omitempty"`
+
+	// Additive logical-row evidence. These fields remain nil for legacy fixtures.
+	Samples  []FixtureSample          `json:"samples,omitempty"`
+	Metrics  map[string]MetricSummary `json:"metrics,omitempty"`
+	Outcomes *FixtureOutcomes         `json:"outcomes,omitempty"`
 
 	// Execution metadata
 	Command  string                 `json:"command,omitempty" pretty:"label=Command,style=text-cyan-600,omitempty"`
@@ -508,10 +601,29 @@ func (f FixtureResult) Pretty() api.Text {
 		t = t.Space().Append(fmt.Sprintf("(%s)", f.Duration), "text-muted")
 	}
 
-	if f.CELExpression != "" {
+	if f.Outcomes != nil && f.Error != "" {
+		t = t.Space().Append(f.Error, "text-red-600")
+	} else if f.CELExpression != "" {
 		t = t.Space().Append(f.CELExpression, "font-mono text-red-500")
 	} else if f.Error != "" {
 		t = t.Space().Append(f.Error, "text-red-600")
+	}
+
+	if len(f.Metrics) > 0 {
+		names := make([]string, 0, len(f.Metrics))
+		for name := range f.Metrics {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			t = t.NewLine().Append(formatMetricSummary(name, f.Metrics[name]), "font-mono text-xs")
+		}
+	}
+	if len(f.Samples) > 0 && isFailureStatus(f.Status) {
+		t = t.NewLine().Add(api.Collapsed{
+			Label:   fmt.Sprintf("samples (%d)", len(f.Samples)),
+			Content: clicky.Text(formatSampleSummaries(f.Samples), "font-mono text-xs whitespace-pre-wrap"),
+		})
 	}
 
 	if len(f.CELVars) > 0 && f.showCELVars() {
@@ -549,6 +661,47 @@ func (f FixtureResult) Pretty() api.Text {
 	}
 
 	return t
+}
+
+func formatMetricSummary(name string, metric MetricSummary) string {
+	value := "incomplete"
+	if metric.Value != nil {
+		value = fmt.Sprintf("%.6g %s", *metric.Value, metric.Unit)
+	}
+	text := fmt.Sprintf("metric %s: %s (%s, %s)", name, value, metric.Aggregate, metric.Status)
+	if metric.Comparison != nil {
+		text += fmt.Sprintf(", baseline %s %.6g %s, regression %.2f%%", metric.Comparison.Baseline, metric.Comparison.BaselineValue, metric.Unit, metric.Comparison.RegressionPercent)
+	}
+	return text
+}
+
+func formatSampleSummaries(samples []FixtureSample) string {
+	lines := make([]string, 0, len(samples))
+	for _, sample := range samples {
+		line := fmt.Sprintf("sample %d: command=%s", sample.Index, sample.Outcome.Status)
+		if sample.CEL != nil {
+			line += fmt.Sprintf(" assertions=%s", sample.CEL.Status)
+		}
+		if len(sample.Metrics) > 0 {
+			metricStatus := OutcomePASS
+			for _, metric := range sample.Metrics {
+				if metric.Status == OutcomeERR {
+					metricStatus = OutcomeERR
+					break
+				}
+				if metric.Status == OutcomeNotEvaluated {
+					metricStatus = OutcomeNotEvaluated
+				}
+			}
+			line += fmt.Sprintf(" metrics=%s", metricStatus)
+		}
+		line += fmt.Sprintf(" exit=%d duration=%s", sample.ExitCode, sample.Duration)
+		if sample.Error != "" {
+			line += " error=" + firstNonBlankFixtureLine(sample.Error)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (f FixtureResult) showCommand() bool {

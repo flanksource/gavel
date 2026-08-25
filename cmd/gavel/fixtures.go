@@ -61,6 +61,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(code("  files: \"**/*.go\"")).Add(dim("                   # Glob pattern: replicate tests per matching file")).NewLine().
 		Add(code("  codeBlocks: [bash, python]")).Add(dim("         # Languages to execute (default: [bash])")).NewLine().
 		Add(code("  timeout: 30s")).Add(dim("                       # Total timeout for test execution")).NewLine().
+		Add(code("  repeat: 3")).Add(dim("                          # Serial samples per logical row (default: 1)")).NewLine().
+		Add(code("  metrics: []")).Add(dim("                        # Numeric CEL extraction and threshold policy")).NewLine().
 		Add(code("  os: linux")).Add(dim("                          # Skip on other OSes (prefix ! to negate: !darwin)")).NewLine().
 		Add(code("  arch: amd64")).Add(dim("                        # Skip on other architectures")).NewLine().
 		Add(code("  skip: \"! command -v docker\"")).Add(dim("        # Skip if command exits 0")).NewLine().
@@ -78,6 +80,8 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("cli args, args", "Arguments (space-separated)")).
 		Add(kv("cwd, working directory", "Working directory")).
 		Add(kv("terminal, term", "Terminal mode (\"pty\" for pseudo-terminal)")).
+		Add(kv("repeat", "Override the file-level sample count for this logical row")).
+		Add(kv("timeout", "Total timeout shared by all repeated samples")).
 		Add(kv("os", "OS constraint (e.g. \"linux\", \"!darwin\")")).
 		Add(kv("arch", "Architecture constraint (e.g. \"amd64\")")).
 		Add(kv("skip", "Bash command; exit 0 = skip test")).
@@ -94,7 +98,7 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 	t = t.Add(h("FORMAT 2: COMMAND BLOCKS")).
 		Append("  Use heading ").Add(code("### command: <test name>")).Append(" followed by code blocks:").NewLine().NewLine().
 		Add(code("  ### command: my test\n  ```yaml\n  cwd: ./testdir\n  exitCode: 0\n  terminal: pty\n  os: linux\n  env:\n    KEY: value\n  ```\n  ```bash\n  echo \"hello world\"\n  ```")).NewLine().NewLine().
-		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, terminal, os, arch, skip")).NewLine().NewLine().
+		Append("  YAML fields: ", "text-muted").Add(code("cwd, exitCode, env, timeout, repeat, metrics, terminal, os, arch, skip")).NewLine().NewLine().
 		Add(sh("Validations")).
 		Append("    ").Add(code("* cel: stdout.contains(\"hello\")")).NewLine().
 		Append("    ").Add(code("* contains: hello")).NewLine().
@@ -127,6 +131,14 @@ func fixturesHelp(cmd *cobra.Command) api.Text {
 		Add(kv("regex: <pattern>", "stdout.matches(\"<pattern>\")")).
 		Add(kv("not: contains: <text>", "!stdout.contains(\"<text>\")")).
 		Add(kv("not: <expr>", "!(<expr>)")).NewLine()
+
+	// Repeated samples and metrics
+	t = t.Add(h("REPEATED SAMPLES AND METRICS")).
+		Append("  Set ").Add(code("repeat")).Append(" in file/command YAML or use a table ").Add(code("Repeat")).Append(" override.").NewLine().
+		Append("  Repeats run serially inside one logical-row timeout and retain per-sample evidence.").NewLine().NewLine().
+		Add(code("  metrics:\n    - name: duration_ms\n      extract: json.metrics.durationMs.value\n      unit: ms\n      aggregate: median\n      direction: lower\n      baseline: API baseline\n      threshold:\n        max: 120000\n        regressionPercent: 25")).NewLine().NewLine().
+		Append("  Aggregates: ").Add(code("mean, median, min, max, p95")).Append(". Directions: ").Add(code("lower, higher, none")).Append(".").NewLine().
+		Append("  Baselines must uniquely name another row with a matching metric specification.").NewLine()
 
 	// CEL Validation
 	t = t.Add(h("CEL VALIDATION")).
