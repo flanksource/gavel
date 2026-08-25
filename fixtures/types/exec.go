@@ -9,7 +9,6 @@ import (
 	osExec "os/exec"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -175,10 +174,7 @@ func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir 
 	cmd.Dir = workDir
 	cmd.Env = commandEnv(execBase.Env)
 	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return cancelPTYProcess(cmd.Process)
 	}
 	cmd.WaitDelay = time.Second
 
