@@ -243,6 +243,31 @@ flags: "-s"
 | get health | /health | json.status == "ok"      |
 ```
 
+Rows can be sampled repeatedly without increasing the fixture count. `Repeat`
+overrides the file or command-block default, and metrics extract one finite
+number from every command-successful sample using the same CEL context as
+assertions:
+
+```yaml
+repeat: 5
+metrics:
+  - name: duration_ms
+    extract: json.metrics.durationMs.value
+    unit: ms
+    aggregate: median       # mean (default), median, min, max, or p95
+    direction: lower        # lower, higher, or none
+    baseline: API baseline
+    threshold:
+      max: 120000
+      regressionPercent: 25
+```
+
+`threshold.min` and `threshold.max` apply to the selected aggregate. Relative
+regressions compare a row to the uniquely named baseline row using matching
+metric name, unit, aggregate, and direction. Repeats run serially within one
+shared row timeout; JSON results retain every sample and report command, CEL,
+and metric outcomes separately.
+
 **Command blocks** — use when commands are multi-line or need per-test setup:
 
 ````markdown
@@ -289,6 +314,8 @@ terminal: pty                      # † pseudo-terminal mode (merges stdout/std
 files: "**/*.go"                   # glob: replicate tests per matching file
 codeBlocks: [bash, python]         # languages to execute (default: [bash])
 timeout: 30s                       # † total timeout
+repeat: 3                          # † serial samples per logical row (default: 1)
+metrics: []                        # † numeric CEL extraction and threshold policy
 os: linux                          # † skip on other OSes (prefix ! to negate: !darwin)
 arch: amd64                        # † skip on other architectures
 skip: "! command -v docker"        # † skip if command exits 0

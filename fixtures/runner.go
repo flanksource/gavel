@@ -112,6 +112,9 @@ func (r *Runner) prepareFixtureTree() (*FixtureNode, error) {
 	if len(r.fixtures) == 0 {
 		return nil, fmt.Errorf("no fixtures found")
 	}
+	if err := validateFixtureConfiguration(r.fixtures); err != nil {
+		return nil, fmt.Errorf("invalid fixture configuration: %w", err)
+	}
 
 	return r.tree, nil
 }
@@ -245,12 +248,8 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	r.tree.Walk(func(node *FixtureNode) {
 		if node.Test != nil {
 			typedTask := fixtureGroup.Add(node.Test.String(), func(ctx flanksourceContext.Context, t *task.Task) (FixtureResult, error) {
-				result, err := r.executeFixture(ctx, *node.Test)
-				if r.options.OnResult != nil {
-					r.options.OnResult(result)
-				}
-				return result, err
-			}, clicky.WithTaskTimeout(2*time.Minute))
+				return r.executeLogicalFixture(ctx, *node.Test), nil
+			}, clicky.WithTaskTimeout(fixtureTimeout(*node.Test)))
 			taskToNodeMap[typedTask] = node
 		}
 	})
@@ -267,20 +266,36 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 		return nil, fmt.Errorf("failed to get fixture results: %w", err)
 	}
 
+	finalized := make(map[task.TypedTask[FixtureResult]]*FixtureResult, len(fixtureResults))
+	allResults := make([]*FixtureResult, 0, len(fixtureResults))
 	for typedTask, result := range fixtureResults {
+		result := result
+		finalized[typedTask] = &result
+		allResults = append(allResults, &result)
+	}
+	finalizeMetricComparisons(allResults)
+
+	for typedTask, result := range finalized {
+		// The task initially completes before cross-row comparisons are possible.
+		// Replace its stored value so subsequent Clicky renders use the finalized
+		// baseline-aware verdict rather than the pre-comparison result.
+		typedTask.SetResult(*result)
 		// Create a FixtureNode for the result
 		resultNode := FixtureNode{
 			Name:    result.Name,
 			Type:    TestNode,
-			Results: &result,
+			Results: result,
 		}
 		results.Tests = append(results.Tests, resultNode)
 
 		// Update the corresponding tree node with results
 		if testNode, exists := taskToNodeMap[typedTask]; exists {
-			testNode.Results = &result
+			testNode.Results = result
 		} else {
 			logger.Warnf("No tree node found for task: %s", typedTask.Name())
+		}
+		if r.options.OnResult != nil {
+			r.options.OnResult(*result)
 		}
 	}
 
@@ -295,6 +310,206 @@ func (r *Runner) executeFixtures() (*FixtureGroup, error) {
 	r.tree.PruneEmptySections()
 
 	return results, nil
+}
+
+func fixtureTimeout(fixture FixtureTest) time.Duration {
+	if fixture.Expected.Timeout != nil {
+		return *fixture.Expected.Timeout
+	}
+	if fixture.FrontMatter.Timeout != nil {
+		return *fixture.FrontMatter.Timeout
+	}
+	return 2 * time.Minute
+}
+
+// executeLogicalFixture preserves one task/result per Markdown row while
+// collecting serial samples within the row's shared task deadline.
+func (r *Runner) executeLogicalFixture(ctx flanksourceContext.Context, fixture FixtureTest) FixtureResult {
+	if !fixture.hasSampleConfiguration() {
+		result, _ := r.executeFixture(ctx, fixture)
+		return result
+	}
+	if reason := fixture.ShouldSkip(); reason != "" {
+		return FixtureResult{
+			Name:   fixture.Name,
+			Status: task.StatusSKIP,
+			Test:   fixture,
+			Error:  reason,
+		}
+	}
+
+	started := time.Now()
+	result := FixtureResult{
+		Name:    fixture.Name,
+		Test:    fixture,
+		Samples: make([]FixtureSample, 0, fixture.repeatCount()),
+		Outcomes: &FixtureOutcomes{
+			Command: FixtureOutcome{Status: OutcomePASS},
+		},
+	}
+	if fixture.Expected.CEL != "" {
+		result.Outcomes.Assertions = &FixtureOutcome{Status: OutcomeNotEvaluated}
+	}
+
+	var rowError string
+	for index := 1; index <= fixture.repeatCount(); index++ {
+		if err := ctx.Err(); err != nil {
+			rowError = fmt.Sprintf("fixture timeout exhausted before sample %d: %v", index, err)
+			break
+		}
+
+		sampleFixture := fixture
+		sampleFixture.Expected.CEL = ""
+		sampleResult, _ := r.executeFixture(ctx, sampleFixture)
+		if sampleResult.Status == task.StatusSKIP {
+			return sampleResult
+		}
+		sampleResult.Test = fixture
+		sample := FixtureSample{
+			Index:    index,
+			Duration: sampleResult.Duration,
+			Command:  sampleResult.Command,
+			CWD:      sampleResult.CWD,
+			ExitCode: sampleResult.ExitCode,
+			Stdout:   sampleResult.Stdout,
+			Stderr:   sampleResult.Stderr,
+			Outcome:  outcomeFromTaskStatus(sampleResult.Status, sampleResult.Error),
+		}
+		if sample.Outcome.Status != OutcomePASS {
+			sample.Error = sampleResult.Error
+		}
+
+		result.Type = sampleResult.Type
+		result.Command = sampleResult.Command
+		result.CWD = sampleResult.CWD
+		result.Stdout = sampleResult.Stdout
+		result.Stderr = sampleResult.Stderr
+		result.ExitCode = sampleResult.ExitCode
+
+		metrics := fixture.metricSpecs()
+		if len(metrics) > 0 {
+			sample.Metrics = make(map[string]MetricSample, len(metrics))
+		}
+		if sample.Outcome.Status == OutcomePASS {
+			variables := EvaluationContext(&sampleResult)
+			if fixture.Expected.CEL != "" || len(metrics) > 0 {
+				result.Metadata = sampleResult.Metadata
+			}
+			if fixture.Expected.CEL != "" {
+				assertionResult := EvaluateCEL(sampleResult, fixture.Expected.CEL, variables)
+				celOutcome := AssertionOutcome{FixtureOutcome: outcomeFromTaskStatus(assertionResult.Status, assertionResult.Error)}
+				celOutcome.Expression = fixture.Expected.CEL
+				passed := assertionResult.Status == task.StatusPASS
+				celOutcome.Result = &passed
+				sample.CEL = &celOutcome
+				if assertionResult.Status != task.StatusPASS && result.CELExpression == "" {
+					result.CELExpression = fixture.Expected.CEL
+					result.CELVars = variables
+				}
+			}
+			for _, metric := range metrics {
+				value, err := extractMetric(metric, variables)
+				if err != nil {
+					sample.Metrics[metric.Name] = MetricSample{Status: OutcomeERR, Error: err.Error()}
+				} else {
+					sample.Metrics[metric.Name] = MetricSample{Status: OutcomePASS, Value: value}
+				}
+			}
+		} else {
+			if fixture.Expected.CEL != "" {
+				sample.CEL = &AssertionOutcome{
+					FixtureOutcome: FixtureOutcome{Status: OutcomeNotEvaluated},
+					Expression:     fixture.Expected.CEL,
+				}
+			}
+			for _, metric := range metrics {
+				sample.Metrics[metric.Name] = MetricSample{Status: OutcomeNotEvaluated}
+			}
+		}
+
+		result.Samples = append(result.Samples, sample)
+		if sampleHasError(sample) {
+			break
+		}
+	}
+
+	result.Duration = time.Since(started)
+	result.Outcomes.Command = aggregateCommandOutcome(result.Samples)
+	if rowError != "" {
+		result.Outcomes.Command.Status = OutcomeERR
+		result.Outcomes.Command.Error = joinErrors(result.Outcomes.Command.Error, rowError)
+	}
+	if fixture.Expected.CEL != "" {
+		result.Outcomes.Assertions = aggregateAssertionOutcome(result.Samples)
+	}
+	summarizeMetrics(&result)
+	finalizeLogicalResult(&result)
+	return result
+}
+
+func outcomeFromTaskStatus(status task.Status, err string) FixtureOutcome {
+	outcome := FixtureOutcome{Error: err}
+	switch status {
+	case task.StatusPASS, task.StatusSuccess:
+		outcome.Status = OutcomePASS
+	case task.StatusFAIL, task.StatusFailed:
+		outcome.Status = OutcomeFAIL
+	default:
+		outcome.Status = OutcomeERR
+	}
+	return outcome
+}
+
+func sampleHasError(sample FixtureSample) bool {
+	if sample.Outcome.Status == OutcomeERR || (sample.CEL != nil && sample.CEL.Status == OutcomeERR) {
+		return true
+	}
+	for _, metric := range sample.Metrics {
+		if metric.Status == OutcomeERR {
+			return true
+		}
+	}
+	return false
+}
+
+func aggregateCommandOutcome(samples []FixtureSample) FixtureOutcome {
+	outcome := FixtureOutcome{Status: OutcomePASS}
+	for _, sample := range samples {
+		if sample.Outcome.Status == OutcomeERR {
+			outcome.Status = OutcomeERR
+		} else if sample.Outcome.Status == OutcomeFAIL && outcome.Status != OutcomeERR {
+			outcome.Status = OutcomeFAIL
+		}
+		if sample.Outcome.Error != "" {
+			outcome.Error = joinErrors(outcome.Error, fmt.Sprintf("sample %d: %s", sample.Index, sample.Outcome.Error))
+		}
+	}
+	return outcome
+}
+
+func aggregateAssertionOutcome(samples []FixtureSample) *FixtureOutcome {
+	outcome := &FixtureOutcome{Status: OutcomeNotEvaluated}
+	evaluated := false
+	for _, sample := range samples {
+		if sample.CEL == nil || sample.CEL.Status == OutcomeNotEvaluated {
+			continue
+		}
+		evaluated = true
+		if sample.CEL.Status == OutcomeERR {
+			outcome.Status = OutcomeERR
+		} else if sample.CEL.Status == OutcomeFAIL && outcome.Status != OutcomeERR {
+			outcome.Status = OutcomeFAIL
+		} else if outcome.Status == OutcomeNotEvaluated {
+			outcome.Status = OutcomePASS
+		}
+		if sample.CEL.Error != "" {
+			outcome.Error = joinErrors(outcome.Error, fmt.Sprintf("sample %d: %s", sample.Index, sample.CEL.Error))
+		}
+	}
+	if !evaluated {
+		outcome.Status = OutcomeNotEvaluated
+	}
+	return outcome
 }
 
 // getBuildCommand extracts build command from first fixture that has one

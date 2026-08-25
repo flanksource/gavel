@@ -45,6 +45,17 @@ type EvaluateOptions struct {
 }
 
 func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
+	fixture = e.EvaluateCommand(fixture, p, opts)
+	if fixture.Status != task.StatusPASS || e.CEL == "" {
+		return fixture
+	}
+
+	return EvaluateCEL(fixture, e.CEL, EvaluationContext(&fixture))
+}
+
+// EvaluateCommand captures process evidence and evaluates only exit and stream
+// expectations, leaving CEL and metrics available as independent outcomes.
+func (e Expectations) EvaluateCommand(fixture FixtureResult, p exec.ExecResult, opts EvaluateOptions) FixtureResult {
 
 	fixture.Stdout = p.Stdout
 	fixture.Stderr = p.Stderr
@@ -56,6 +67,9 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 		} else {
 			fixture.Command = p.Command
 		}
+	}
+	if p.Error != nil && p.ExitCode < 0 {
+		return fixture.Errorf(p.Error, "command execution failed")
 	}
 	// Default exit code expectation to 0 if not specified
 	expectedExitCode := 0
@@ -80,66 +94,78 @@ func (e Expectations) Evaluate(fixture FixtureResult, p exec.ExecResult, opts Ev
 	} else if updated {
 		fixture.Metadata["golden_updated_stderr"] = true
 	}
-	if e.CEL != "" {
-		// Use RunExpression for CEL expressions, not RunTemplate
-		t := fixture.Test.AsMap()
-		t["output"] = p.Stdout
-		t["stdout"] = p.Stdout
-		t["stderr"] = p.Stderr
-		t["exitCode"] = p.ExitCode
-		combined := p.Stdout + p.Stderr
-		dups := duplicateLines(combined)
-		dupList := make([]map[string]any, 0, len(dups))
-		for _, d := range dups {
-			dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
-		}
-		t["ansi"] = map[string]any{
-			"has_any":         hasAnyANSI(combined),
-			"has_color":       hasColorCodes(combined),
-			"has_updates":     hasCursorUpdates(combined),
-			"has_cursor_hide": hasCursorHide(combined),
-			"has_cursor_show": hasCursorShow(combined),
-			"has_reset":       hasSGRReset(combined),
-			"stray_controls":  hasStrayControls(combined),
-			"final_text":      finalText(combined),
-			"duplicate_lines": dupList,
-			"has_duplicates":  len(dups) > 0,
-		}
-		// Try to parse JSON output if it looks like JSON
-		if strings.HasPrefix(strings.TrimSpace(p.Stdout), "{") || strings.HasPrefix(strings.TrimSpace(p.Stdout), "[") {
-			var jsonData interface{}
-			if err := json.Unmarshal([]byte(p.Stdout), &jsonData); err == nil {
-				t["json"] = jsonData
-				fixture.Metadata["json"] = jsonData
-			}
-		}
+	fixture.Status = task.StatusPASS
+	return fixture
+}
 
-		// Add temp file data to CEL context
-		for name, tempFile := range fixture.Test.TempFiles {
-			t[name] = tempFile.GetCELData()
-		}
-		output, err := gomplate.RunExpression(t, gomplate.Template{
-			Expression: e.CEL,
-			CelEnvs:    ANSICelFunctions(),
-		})
-		if err != nil {
-			return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
-		}
+// EvaluationContext builds the shared CEL environment for assertions and
+// metric extraction, parsing JSON regardless of whether an assertion exists.
+func EvaluationContext(fixture *FixtureResult) map[string]any {
+	t := fixture.Test.AsMap()
+	t["output"] = fixture.Stdout
+	t["stdout"] = fixture.Stdout
+	t["stderr"] = fixture.Stderr
+	t["exitCode"] = fixture.ExitCode
+	combined := fixture.Stdout + fixture.Stderr
+	dups := duplicateLines(combined)
+	dupList := make([]map[string]any, 0, len(dups))
+	for _, d := range dups {
+		dupList = append(dupList, map[string]any{"text": d.Text, "count": d.Count})
+	}
+	t["ansi"] = map[string]any{
+		"has_any":         hasAnyANSI(combined),
+		"has_color":       hasColorCodes(combined),
+		"has_updates":     hasCursorUpdates(combined),
+		"has_cursor_hide": hasCursorHide(combined),
+		"has_cursor_show": hasCursorShow(combined),
+		"has_reset":       hasSGRReset(combined),
+		"stray_controls":  hasStrayControls(combined),
+		"final_text":      finalText(combined),
+		"duplicate_lines": dupList,
+		"has_duplicates":  len(dups) > 0,
+	}
 
-		switch v := output.(type) {
-		case bool:
-			if !v {
-				fixture.CELExpression = e.CEL
-				fixture.CELVars = t
-				return fixture.Failf("CEL expression evaluated to false")
+	trimmed := strings.TrimSpace(fixture.Stdout)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var jsonData interface{}
+		if err := json.Unmarshal([]byte(fixture.Stdout), &jsonData); err == nil {
+			t["json"] = jsonData
+			if fixture.Metadata == nil {
+				fixture.Metadata = map[string]interface{}{}
 			}
-		case string:
-			if strings.ToLower(strings.TrimSpace(v)) != "true" {
-				return fixture.Failf("%s != true", v)
-			}
-		default:
-			return fixture.Failf("CEL expression did not return a boolean: got %T(%v)", output, output)
+			fixture.Metadata["json"] = jsonData
 		}
+	}
+
+	for name, tempFile := range fixture.Test.TempFiles {
+		t[name] = tempFile.GetCELData()
+	}
+	return t
+}
+
+// EvaluateCEL evaluates one assertion against a prepared sample context.
+func EvaluateCEL(fixture FixtureResult, expression string, variables map[string]any) FixtureResult {
+	output, err := gomplate.RunExpression(variables, gomplate.Template{
+		Expression: expression,
+		CelEnvs:    ANSICelFunctions(),
+	})
+	if err != nil {
+		return fixture.Errorf(err, "failed to evaluate CEL expression with gomplate")
+	}
+
+	switch v := output.(type) {
+	case bool:
+		if !v {
+			fixture.CELExpression = expression
+			fixture.CELVars = variables
+			return fixture.Failf("CEL expression evaluated to false")
+		}
+	case string:
+		if strings.ToLower(strings.TrimSpace(v)) != "true" {
+			return fixture.Failf("%s != true", v)
+		}
+	default:
+		return fixture.Failf("CEL expression did not return a boolean: got %T(%v)", output, output)
 	}
 	fixture.Status = task.StatusPASS
 	return fixture
