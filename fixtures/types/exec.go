@@ -188,10 +188,11 @@ func runWithPTY(ctx context.Context, execBase fixtures.ExecFixtureBase, workDir 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		return &clickyExec.ExecResult{
-			Stdout:  "",
-			Stderr:  "",
-			Error:   fmt.Errorf("failed to start PTY: %w", err),
-			Started: &now,
+			Stdout:   "",
+			Stderr:   "",
+			ExitCode: -1,
+			Error:    fmt.Errorf("failed to start PTY: %w", err),
+			Started:  &now,
 		}
 	}
 	defer ptmx.Close()

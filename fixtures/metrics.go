@@ -247,6 +247,24 @@ func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
+func meanMetric(values []float64) float64 {
+	var scale float64
+	for _, value := range values {
+		if absolute := math.Abs(value); absolute > scale {
+			scale = absolute
+		}
+	}
+	if scale == 0 {
+		return 0
+	}
+
+	var total float64
+	for _, value := range values {
+		total += value / scale
+	}
+	return scale * (total / float64(len(values)))
+}
+
 func aggregateMetric(values []float64, aggregate string) float64 {
 	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
@@ -254,7 +272,7 @@ func aggregateMetric(values []float64, aggregate string) float64 {
 	case metricMedian:
 		middle := len(sorted) / 2
 		if len(sorted)%2 == 0 {
-			return (sorted[middle-1] + sorted[middle]) / 2
+			return meanMetric(sorted[middle-1 : middle+1])
 		}
 		return sorted[middle]
 	case metricMin:
@@ -264,11 +282,7 @@ func aggregateMetric(values []float64, aggregate string) float64 {
 	case metricP95:
 		return sorted[int(math.Ceil(float64(len(sorted))*0.95))-1]
 	default:
-		var total float64
-		for _, value := range values {
-			total += value
-		}
-		return total / float64(len(values))
+		return meanMetric(values)
 	}
 }
 
@@ -309,6 +323,12 @@ func summarizeMetrics(result *FixtureResult) {
 		}
 
 		value := aggregateMetric(summary.Samples, summary.Aggregate)
+		if !finite(value) {
+			summary.Status = OutcomeERR
+			summary.Error = fmt.Sprintf("%s aggregate produced a non-finite number", summary.Aggregate)
+			result.Metrics[metric.Name] = summary
+			continue
+		}
 		summary.Value = &value
 		summary.Status = OutcomePASS
 		if metric.Threshold != nil {
@@ -366,11 +386,24 @@ func finalizeMetricComparisons(results []*FixtureResult) {
 				continue
 			}
 
+			currentRatio := *summary.Value / math.Abs(*baseline.Value)
+			baselineRatio := *baseline.Value / math.Abs(*baseline.Value)
+			var regressionPercent float64
 			if metric.normalizedDirection() == directionLower {
-				comparison.RegressionPercent = (*summary.Value - *baseline.Value) / math.Abs(*baseline.Value) * 100
+				regressionPercent = (currentRatio - baselineRatio) * 100
 			} else {
-				comparison.RegressionPercent = (*baseline.Value - *summary.Value) / math.Abs(*baseline.Value) * 100
+				regressionPercent = (baselineRatio - currentRatio) * 100
 			}
+			if !finite(regressionPercent) {
+				comparison.Status = OutcomeERR
+				comparison.Error = "relative comparison produced a non-finite regression percentage"
+				summary.Status = OutcomeERR
+				summary.Error = joinErrors(summary.Error, comparison.Error)
+				summary.Comparison = comparison
+				result.Metrics[metric.Name] = summary
+				continue
+			}
+			comparison.RegressionPercent = regressionPercent
 			if metric.Threshold != nil && metric.Threshold.RegressionPercent != nil && comparison.RegressionPercent > *metric.Threshold.RegressionPercent {
 				comparison.Status = OutcomeFAIL
 				comparison.Error = fmt.Sprintf("regression %.2f%% exceeds maximum %.2f%%", comparison.RegressionPercent, *metric.Threshold.RegressionPercent)
