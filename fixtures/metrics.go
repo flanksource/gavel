@@ -90,7 +90,7 @@ func validateFixtureConfiguration(fixtures []FixtureTest) error {
 		if fixture.Expected.Timeout != nil && *fixture.Expected.Timeout <= 0 {
 			return fmt.Errorf("fixture %q: timeout must be greater than zero", fixture.Name)
 		}
-		if fixture.FrontMatter.Timeout != nil && *fixture.FrontMatter.Timeout <= 0 {
+		if fixture.Timeout != nil && *fixture.Timeout <= 0 {
 			return fmt.Errorf("fixture %q: frontmatter timeout must be greater than zero", fixture.Name)
 		}
 		if err := validateMetricSpecs(fixture); err != nil {

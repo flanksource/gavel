@@ -316,8 +316,8 @@ func fixtureTimeout(fixture FixtureTest) time.Duration {
 	if fixture.Expected.Timeout != nil {
 		return *fixture.Expected.Timeout
 	}
-	if fixture.FrontMatter.Timeout != nil {
-		return *fixture.FrontMatter.Timeout
+	if fixture.Timeout != nil {
+		return *fixture.Timeout
 	}
 	return 2 * time.Minute
 }
