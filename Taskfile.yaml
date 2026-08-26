@@ -11,6 +11,7 @@ tasks:
       - task --list
 
   clicky-ui:build:
+    run: once
     desc: |
       Rebuild the local @flanksource/clicky-ui sibling when it is checked out
       next to gavel, so its dist/ reflects local edits before a UI bundle links
@@ -33,6 +34,7 @@ tasks:
           fi
 
   ui-install:
+    run: once
     desc: |
       Install UI deps serially. Both pr/ui and testrunner/ui link the sibling
       clicky-ui as a workspace package, so each install writes into the SHARED

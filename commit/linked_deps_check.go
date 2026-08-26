@@ -464,7 +464,7 @@ func evaluatePnpmLockBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolatio
 		return nil, fmt.Errorf("parse %s: %w", rel, err)
 	}
 
-	manifestDir := filepath.Join(gitRoot, filepath.Dir(rel))
+	lockDir := filepath.Join(gitRoot, filepath.Dir(rel))
 	seen := map[linkedDepViolationKey]struct{}{}
 	var out []LinkedDepViolation
 	walkPnpmLockNode(&doc, nil, func(raw string, path []string) {
@@ -472,7 +472,7 @@ func evaluatePnpmLockBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolatio
 		if !ok {
 			return
 		}
-		resolved := resolveFrom(manifestDir, refPath)
+		resolved := resolveFrom(pnpmLockRefBaseDir(lockDir, kind, path), refPath)
 		if utils.IsWithin(resolved, gitRoot) {
 			return
 		}
@@ -496,6 +496,38 @@ func evaluatePnpmLockBlob(gitRoot, rel string, blob []byte) ([]LinkedDepViolatio
 		out = append(out, v)
 	})
 	return out, nil
+}
+
+// pnpmLockRefBaseDir returns the directory a pnpm-lock reference resolves
+// against. Verified against pnpm 10 output: within `importers.<dir>` the
+// `specifier` is copied verbatim from that package.json and `link:`/`portal:`
+// versions stay importer-relative, while `file:` versions are rewritten
+// relative to the lockfile because they double as keys into the global
+// `packages` map. Everything outside `importers` — `packages`/`snapshots` keys
+// and `resolution.directory` — is lockfile-relative.
+func pnpmLockRefBaseDir(lockDir string, kind LinkedDepKind, path []string) string {
+	importerDir, ok := pnpmLockImporterDir(path)
+	if !ok {
+		return lockDir
+	}
+	if kind == LinkedDepKindPnpmLockFile && path[len(path)-1] == "version" {
+		return lockDir
+	}
+	return filepath.Join(lockDir, importerDir)
+}
+
+// pnpmLockImporterDir reports the importer directory owning a `specifier` or
+// `version` scalar, e.g. ["importers", "apps/web", "dependencies", "x",
+// "version"] yields "apps/web".
+func pnpmLockImporterDir(path []string) (string, bool) {
+	if len(path) < 3 || path[0] != "importers" {
+		return "", false
+	}
+	switch path[len(path)-1] {
+	case "specifier", "version":
+		return path[1], true
+	}
+	return "", false
 }
 
 func walkPnpmLockNode(node *yaml.Node, path []string, visit func(raw string, path []string)) {

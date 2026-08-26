@@ -299,6 +299,101 @@ importers:
 		assert.Empty(t, vs)
 	})
 
+	// pnpm 10 resolves an importer's `link:`/`portal:` version and its
+	// `specifier` against the importer directory, but rewrites a `file:`
+	// version relative to the lockfile. The cases below pin each base against
+	// output captured from `pnpm install --lockfile-only`.
+	t.Run("nested importer link resolves against the importer, not the lockfile", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFileInDir(t, repo, "web/packages/lang/package.json", `{"name":"@acme/lang"}`)
+		writeFileInDir(t, repo, "web/pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  apps/playground:
+    dependencies:
+      '@acme/lang':
+        specifier: workspace:*
+        version: link:../../packages/lang
+`)
+		gitRun(t, repo, "add", "web/pnpm-lock.yaml", "web/packages/lang/package.json")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"web/pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		assert.Empty(t, vs, "link: is relative to web/apps/playground, so it lands on web/packages/lang")
+	})
+
+	t.Run("nested importer link escaping the repo is still a violation", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFileInDir(t, repo, "web/pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  apps/playground:
+    dependencies:
+      '@acme/lang':
+        specifier: workspace:*
+        version: link:../../../../sibling/lang
+`)
+		gitRun(t, repo, "add", "web/pnpm-lock.yaml")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"web/pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		require.Len(t, vs, 1)
+		assert.Equal(t, LinkedDepKindPnpmLockLink, vs[0].Kind)
+		assert.Equal(t, "@acme/lang", vs[0].Name)
+		assert.Equal(t, filepath.Join(filepath.Dir(repo), "sibling/lang"), vs[0].Resolved)
+	})
+
+	t.Run("nested importer file version resolves against the lockfile", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		writeFileInDir(t, repo, "web/vendor/z/package.json", `{"name":"z"}`)
+		writeFileInDir(t, repo, "web/pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  apps/web:
+    dependencies:
+      z:
+        specifier: file:../../vendor/z
+        version: file:vendor/z
+
+packages:
+  z@file:vendor/z:
+    resolution: {directory: vendor/z, type: directory}
+`)
+		gitRun(t, repo, "add", "web/pnpm-lock.yaml", "web/vendor/z/package.json")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"web/pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		assert.Empty(t, vs, "specifier is importer-relative and version is lockfile-relative; both land on web/vendor/z")
+	})
+
+	t.Run("nested importer file version escaping the repo is a violation", func(t *testing.T) {
+		repo := initCommitRepo(t)
+		// Shapes taken from pnpm 10 output for an importer at apps/web
+		// depending on a directory one level above the workspace root: the
+		// specifier keeps the importer-relative path, the version is rewritten
+		// lockfile-relative. Both must land on <parent of repo>/outsidedep.
+		writeFileInDir(t, repo, "web/pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+  apps/web:
+    dependencies:
+      outside:
+        specifier: file:../../../../outsidedep
+        version: file:../../outsidedep
+`)
+		gitRun(t, repo, "add", "web/pnpm-lock.yaml")
+
+		vs, err := EvaluateLinkedDeps(repo, repo, []string{"web/pnpm-lock.yaml"}, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, vs)
+		want := filepath.Join(filepath.Dir(repo), "outsidedep")
+		for _, v := range vs {
+			assert.Equal(t, LinkedDepKindPnpmLockFile, v.Kind)
+			assert.Equal(t, "outside", v.Name)
+			assert.Equal(t, want, v.Resolved)
+		}
+	})
+
 	t.Run("registry versions are clean", func(t *testing.T) {
 		repo := initCommitRepo(t)
 		writeFile(t, repo, "pnpm-lock.yaml", `lockfileVersion: '9.0'
