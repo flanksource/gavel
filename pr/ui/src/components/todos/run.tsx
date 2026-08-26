@@ -1,23 +1,15 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from "react";
+import { useCallback, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Field, Modal, SegmentedControl } from "@flanksource/clicky-ui/components";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
-import { effortOptionsForModel, PromptRunEditor, promptRuntimeValueToPayload, reconcileModelCapabilities, RuntimeBar, type AIPromptRunValue, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
-import { UiCog, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
-import type { TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
-import { Spinner } from "../../icons/Spinner";
-import { inputClass, todoQuery } from "./format";
+import { effortOptionsForModel, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
+import { UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
+import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
+import { todoQuery } from "./format";
 import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   PROVIDERS,
-  agentForBackend,
-  buildRunFamilies,
-  defaultModelForSelection,
-  driverForSelection,
-  isCmuxBackend,
-  modelsForSelection,
   type RunBackendCatalog,
   type RunContext,
 } from "./providers";
@@ -29,12 +21,6 @@ export type RunMode = "run" | "plan";
 export type TodoRunAction = "run" | "plan";
 export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
-// The spec editor exposes exactly what gavel's dispatch reads: model/effort/budget,
-// the prompt override, tool/permission posture, plus the run's Workspace (dirty
-// worktree), Verify (definition-of-done checks), and Commit (auto-commit / dry-run). The last three
-// replace the old loose checkboxes now that those options live on the api.Spec.
-const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
-
 // Runs auto-commit by default — the old commit=true default, now expressed as a
 // single commit policy on the spec's Workflow.Commits. `on: "run"` keeps the
 // dashboard's existing shape (one commit once the run finishes) rather than the
@@ -42,11 +28,6 @@ const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verif
 // user's live working tree. The advanced dialog's Commit section can turn it off;
 // a plan-only run never commits because the plan action omits this workflow.
 const AUTO_COMMIT: Pick<AISpecRuntimeValue, "workflow"> = { workflow: { commits: [{ on: "run", gates: "full" }] } };
-
-// MdxEditorField is the same markdown editor field JsonSchemaForm uses for its
-// markdown fields. It lazily pulls in the heavy @mdxeditor/editor, so it is
-// code-split and rendered under Suspense with a plain-textarea fallback.
-const MdxEditorField = lazy(() => import("@flanksource/clicky-ui/mdx-editor").then((m) => ({ default: m.MdxEditorField })));
 
 export const defaultRunOptions: TodoRunOptions = { driver: "cli", spec: { effort: "medium", ...AUTO_COMMIT } };
 
@@ -61,7 +42,7 @@ type RunChoiceState = {
 // is bumped to discard it instead.
 const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v2";
 
-const RUN_ACTION_CONFIG: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
+export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
   plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
 };
@@ -150,7 +131,7 @@ function sortForKey(value: unknown): unknown {
   );
 }
 
-function runOptionsKey(options: TodoRunOptions): string {
+export function runOptionsKey(options: TodoRunOptions): string {
   return JSON.stringify(sortForKey(options));
 }
 
@@ -316,7 +297,7 @@ export function todoRunModeLabel(options: TodoRunOptions, context: RunContext): 
 }
 
 export function runButtonLabelForOptions(action: TodoRunAction, options: TodoRunOptions, context: RunContext): string {
-  return `${RUN_ACTION_CONFIG[action].label} ${runButtonQualifierForOptions(options, context)}`;
+  return `${runActionConfig[action].label} ${runButtonQualifierForOptions(options, context)}`;
 }
 
 export function todoRunButtonPresentation(options: TodoRunOptions, context: RunContext) {
@@ -437,7 +418,7 @@ export function useTodoRun(dir: string) {
 export function useTodoRunPreview(dir: string) {
   return useMutation({
     mutationKey: ["todos", "run", "preview", { dir: dir.trim() }],
-    mutationFn: ({ body, signal }: { body: Record<string, unknown>; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
+    mutationFn: ({ body, signal }: { body: TodoRunOptions & { ref: string }; signal?: AbortSignal }) => todoMutationJSON<TodoRunPreviewResponse>(
       `/api/todos/run/preview?${todoQuery(dir)}`,
       {
         method: "POST",
@@ -467,131 +448,7 @@ export function todoRunOptionsForRuntimeChange({
   }, context);
 }
 
-export function TodoRunRuntimeBar({
-  action,
-  context,
-  options,
-  disabled,
-  onChange,
-}: {
-  action: TodoRunAction;
-  context: RunContext;
-  options: TodoRunOptions;
-  disabled?: boolean;
-  onChange: (options: TodoRunOptions) => void;
-}) {
-  const spec = runSpec(options);
-  const agent = agentForBackend(context, spec.backend);
-  return (
-    <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
-      <RuntimeBar<AISpecRuntimeValue>
-        value={spec}
-        variant="combo"
-        families={buildRunFamilies(context)}
-        models={modelsForSelection(context, agent, spec.backend)}
-        reasoningEfforts={context.efforts}
-        ariaLabel={`${RUN_ACTION_CONFIG[action].label} runtime`}
-        className="min-w-0"
-        onChange={runtime => onChange(todoRunOptionsForRuntimeChange({ action, context, options, runtime }))}
-      />
-    </fieldset>
-  );
-}
-
-export function TodoRunActionButton({
-  action,
-  disabled,
-  loading,
-  label,
-  icon,
-  tone = "default",
-  title,
-  options: controlledOptions,
-  onOptionsChange,
-  onRun,
-  onAdvanced,
-}: {
-  action: TodoRunAction;
-  disabled?: boolean;
-  loading?: boolean;
-  label?: string;
-  icon?: ComponentType<IconProps>;
-  tone?: "default" | "danger";
-  title?: string;
-  options?: TodoRunOptions;
-  onOptionsChange?: (options: TodoRunOptions) => void;
-  onRun: (options?: TodoRunOptions) => void;
-  onAdvanced: (action: TodoRunAction) => void;
-}) {
-  const config = RUN_ACTION_CONFIG[action];
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext();
-  const [selectedOptions, setSelectedOptions] = useState<TodoRunOptions | null>(null);
-  useEffect(() => {
-    setSelectedOptions(null);
-  }, [action, context]);
-  const unavailable = contextLoading || !context || !!contextError;
-  const candidateOptions = controlledOptions ?? selectedOptions ?? loadLastTodoRunOptions(action, context);
-  const currentOptions = context ? reconcileTodoRunOptions(action, candidateOptions, context) : candidateOptions;
-  const primaryTone = tone === "danger" ? "text-red-600 hover:bg-red-500/10 hover:text-red-700" : "text-foreground hover:bg-muted";
-  const PrimaryIcon = loading ? Spinner : icon ?? config.icon;
-
-  function selectOptions(options: TodoRunOptions) {
-    const remembered = rememberTodoRunOptions(action, options);
-    setSelectedOptions(remembered);
-    onOptionsChange?.(remembered);
-  }
-
-  function runWith(options: TodoRunOptions) {
-    const remembered = rememberTodoRunOptions(action, options);
-    onRun(remembered);
-  }
-
-  return (
-    <div className="flex flex-col items-start gap-1">
-      <div className="inline-flex min-h-8 shrink-0 items-stretch gap-1">
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={() => runWith(currentOptions)}
-          disabled={disabled || unavailable}
-          title={title ?? config.title}
-          className={`inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium disabled:opacity-50 ${primaryTone}`}
-        >
-          <PrimaryIcon className="text-xs" />
-          <span>{label ?? config.label}</span>
-        </Button>
-        {context && !contextError ? (
-          <TodoRunRuntimeBar
-            action={action}
-            context={context}
-            options={currentOptions}
-            disabled={disabled || unavailable}
-            onChange={selectOptions}
-          />
-        ) : (
-          <Button variant="outline" size="sm" type="button" disabled title={`${config.label} runtime unavailable`} aria-label={`${config.label} runtime unavailable`} className="h-8 px-2 text-xs">
-            Runtime
-          </Button>
-        )}
-        <Button
-          variant="outline"
-          size="icon"
-          type="button"
-          disabled={disabled || unavailable}
-          title={`Advanced ${config.label.toLowerCase()} options`}
-          aria-label={`Advanced ${config.label.toLowerCase()} options`}
-          onClick={() => onAdvanced(action)}
-          className="h-8 w-8 shrink-0 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-        >
-          <UiCog className="text-sm" />
-        </Button>
-      </div>
-      <TodoRunContextError error={contextError} />
-    </div>
-  );
-}
-
-function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
+export function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: RunContext | null): string {
   if (!context) return fallback;
   const backend = backendForOptions(context, options);
   const spec = runSpec(options);
@@ -602,273 +459,37 @@ function runChoiceDetail(options: TodoRunOptions, fallback: string, context?: Ru
   return `${mode} · ${model}${effort}`;
 }
 
-const INITIAL_RUNTIME_VALUE: AISpecRuntimeValue = { effort: "medium", ...AUTO_COMMIT };
-
-export function TodoRunAdvancedDialog({
-  open,
-  onClose,
-  onRun,
-  loading,
-  title = "Run todo",
-  initialMode = "run",
-  dir,
-  refID,
+export function buildTodoRunPayload({
+  ref,
+  driver,
+  runBackend,
+  runtime,
+  mode,
+  resume,
+  promptDraft,
+  promptDirty,
 }: {
-  open: boolean;
-  onClose: () => void;
-  onRun: (options: TodoRunOptions) => void;
-  loading?: boolean;
-  title?: string;
-  initialMode?: RunMode;
-  // dir/refID identify the TODO this dialog will run, so it can fetch
-  // a live preview of the prompt that will be sent as the options change.
-  dir: string;
-  refID: string;
-}) {
-  const [runRequest, setRunRequest] = useState<AIPromptRunValue>({
-    spec: INITIAL_RUNTIME_VALUE,
-  });
-  const runtimeValue = runRequest.spec ?? {};
-  const [mode, setMode] = useState<RunMode>("run");
-  // Resume stays a discrete toggle (session-identity decision, cmux only); dirty,
-  // auto-commit, dry-run, and checks now live on runtimeValue's spec (Workspace/
-  // Commit/Verify sections), not as parallel booleans.
-  const [resume, setResume] = useState(false);
-  // promptDraft is the editable prompt body sent as the verbatim override;
-  // promptDirty stops the live preview from clobbering the user's edits.
-  const [promptDraft, setPromptDraft] = useState("");
-  const [promptDirty, setPromptDirty] = useState(false);
-  const [previewError, setPreviewError] = useState("");
-  const [regenNonce, setRegenNonce] = useState(0);
-  const { context, loading: contextLoading, error: contextError } = useTodoRunContext(open);
-  const previewMutation = useTodoRunPreview(dir);
-  const previewLoading = previewMutation.isPending;
-  // Ref mirror of promptDirty so the preview effect can read it without
-  // refetching on every keystroke.
-  const promptDirtyRef = useRef(false);
-
-  const families = context ? buildRunFamilies(context) : [];
-  const agent = context ? agentForBackend(context, runtimeValue.backend) : undefined;
-  const isCmux = !!agent && isCmuxBackend(agent, runtimeValue.backend);
-  const activeModels = context && agent ? modelsForSelection(context, agent, runtimeValue.backend) : [];
-  const modelFallback = context && agent ? defaultModelForSelection(context, agent, runtimeValue.backend) : "";
-  const selection = context && agent ? driverForSelection(context, agent, runtimeValue.backend) : null;
-  const driver = selection?.driver;
-  const runBackend = selection?.runBackend;
-  const plan = mode === "plan";
-  const advancedAction: TodoRunAction = plan ? "plan" : "run";
-  const recentAdvanced = context
-    ? loadRecentAdvancedTodoRunOptions(advancedAction, context)
-    : [];
-
-  function changeMode(next: RunMode) {
-    setMode(next);
-    setPromptDirty(false);
-    promptDirtyRef.current = false;
-  }
-
-  function editPrompt(v: string) {
-    setPromptDraft(v);
-    setPromptDirty(true);
-    promptDirtyRef.current = true;
-  }
-
-  function regeneratePrompt() {
-    setPromptDirty(false);
-    promptDirtyRef.current = false;
-    setRegenNonce((n) => n + 1);
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    setRunRequest({ spec: INITIAL_RUNTIME_VALUE });
-    setMode(initialMode);
-    setResume(false);
-    setPromptDraft("");
-    setPromptDirty(false);
-    promptDirtyRef.current = false;
-  }, [open, initialMode]);
-
-  useEffect(() => {
-    if (!open || !context) return;
-    const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
-    setRunRequest({
-      spec: runSpec(
-        reconcileTodoRunOptions(
-          action,
-          loadLastTodoRunOptions(action, context),
-          context,
-        ),
-      ),
-    });
-  }, [open, initialMode, context]);
-
-  const previewModel = runtimeValue.model?.trim() || modelFallback;
-  const previewBackend = runBackend;
-
-  // Fetch the prompt that will be sent whenever the dialog is open and a
-  // prompt-affecting option changes (driver/model/effort/plan/resume). The
-  // server builds it from the same code path the run uses, so it matches exactly.
-  // Fetch the generated Run/Plan prompt body and seed the editor unless the
-  // user has edited it. The server uses the same rendering path as dispatch.
-  useEffect(() => {
-    if (!open) {
-      setPreviewError("");
-      return;
-    }
-    if (!context || contextError || !refID || !driver) {
-      setPreviewError("");
-      return;
-    }
-    // Same payload shape as the run POST — the preview handler decodes it with
-    // the same todoRunPayload — so the spec half is nested, not inlined.
-    const body = {
-      ref: refID,
-      driver,
-      runMode: plan ? "plan" : "run",
-      resume: isCmux ? resume : undefined,
-      spec: { backend: previewBackend, model: previewModel, effort: runtimeValue.effort },
-    };
-
-    let cancelled = false;
-    const controller = new AbortController();
-    setPreviewError("");
-    previewMutation.mutate({ body, signal: controller.signal }, {
-      onSuccess: data => {
-        if (!cancelled && !promptDirtyRef.current) setPromptDraft(data.prompt ?? "");
-      },
-      onError: err => {
-        if (!cancelled && !(err instanceof DOMException && err.name === "AbortError")) setPreviewError(err.message);
-      },
-    });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [open, context, contextError, dir, refID, driver, previewBackend, previewModel, runtimeValue.effort, plan, resume, isCmux, regenNonce, previewMutation.mutate]);
-
-  if (!open) return null;
-
-  function submit() {
-    if (!context || !driver) return;
-    // spec carries the model/effort/permissions plus the run's setup (dirty),
-    // workflow.verify (checks) and workflow.commits (auto-commit / dry-run) — all
-    // edited via the spec editor's Workspace/Verify/Commit sections. Plan-only runs
-    // never commit or verify; the server suppresses both for run mode plan.
-    const { spec } = promptRuntimeValueToPayload(runtimeValue);
-    onRun({
-      driver,
-      runMode: plan ? "plan" : "run",
-      plan: plan ? true : undefined,
-      resume: isCmux ? resume : undefined,
-      spec: {
-        ...spec,
-        backend: runBackend,
-        prompt: {
-          // The edited prompt body is sent verbatim as the override.
-          user: promptDraft.trim() ? promptDraft : undefined,
-        },
-      },
-    });
-  }
-
-  const modeOptions: { id: RunMode; label: string }[] = [{ id: "run", label: "Run" }];
-  modeOptions.push({ id: "plan", label: "Plan" });
-
-  // Shared regenerate/error/editor/dirty-note block passed to PromptRunEditor.
-  const promptEditorNode = (
-    <div className="space-y-1">
-      <div className="flex items-center justify-end gap-2">
-        {previewLoading && <Spinner className="text-xs text-muted-foreground" />}
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={regeneratePrompt}
-          disabled={previewLoading}
-          title="Discard edits and regenerate from the options above"
-          className="h-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          Regenerate
-        </Button>
-      </div>
-      {previewError && <div className="text-xs text-red-600">{previewError}</div>}
-      <Suspense fallback={<textarea className={`${inputClass} h-auto min-h-[16rem] resize-y font-mono`} value={promptDraft} onChange={(e) => editPrompt(e.currentTarget.value)} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} />}>
-        <MdxEditorField value={promptDraft} onChange={editPrompt} placeholder={previewLoading ? "Loading prompt…" : "Prompt"} className="min-h-[16rem]" />
-      </Suspense>
-      {promptDirty && <div className="text-[11px] text-muted-foreground">Edited — sent verbatim as the prompt.</div>}
-    </div>
-  );
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title={title}
-      size="2xl"
-      footer={
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} loading={loading} disabled={contextLoading || !context || !!contextError}>
-            {plan ? "Plan" : "Run"}
-          </Button>
-        </div>
-      }
-    >
-      <div className="space-y-3">
-        <TodoRunContextError error={contextError} />
-        {contextLoading && <div className="text-xs text-muted-foreground">Loading Captain run providers…</div>}
-        {context && !contextError && (
-          <>
-            <Field label="Mode">
-              <SegmentedControl aria-label="Mode" value={mode} onChange={(v) => changeMode(v as RunMode)} options={modeOptions} />
-            </Field>
-            <PromptRunEditor
-              value={runRequest}
-              onChange={setRunRequest}
-              models={activeModels}
-              families={families}
-              tools={context.tools}
-              specSections={RUN_SPEC_SECTIONS}
-              promptEditor={promptEditorNode}
-              promptLabel="Prompt"
-            >
-              <>
-                {isCmux && (
-                  <label className="inline-flex items-center gap-2 text-xs">
-                    <input type="checkbox" checked={resume} onChange={(e) => setResume(e.currentTarget.checked)} />
-                    <span>Resume session</span>
-                  </label>
-                )}
-                {recentAdvanced.length > 0 && (
-                  <div className="space-y-1 border-t border-border pt-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Recent advanced</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {recentAdvanced.map((options, index) => (
-                        <Button
-                          key={runOptionsKey(options)}
-                          variant="outline"
-                          size="sm"
-                          type="button"
-                          onClick={() =>
-                            setRunRequest((current) => ({
-                              ...current,
-                              spec: runSpec(reconcileTodoRunOptions(advancedAction, options, context)),
-                            }))
-                          }
-                        >
-                          {index + 1}. {runChoiceDetail(options, "advanced", context)}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            </PromptRunEditor>
-          </>
-        )}
-      </div>
-    </Modal>
-  );
+  ref: string;
+  driver: TodoRunDriver;
+  runBackend?: string;
+  runtime: AISpecRuntimeValue;
+  mode: RunMode;
+  resume: boolean;
+  promptDraft: string;
+  promptDirty: boolean;
+}): TodoRunOptions & { ref: string } {
+  const { spec } = promptRuntimeValueToPayload(runtime);
+  const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
+  return {
+    ref,
+    driver,
+    runMode: mode,
+    plan: mode === "plan" ? true : undefined,
+    resume: resume || undefined,
+    spec: {
+      ...spec,
+      backend: runBackend,
+      prompt,
+    },
+  };
 }

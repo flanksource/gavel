@@ -69,9 +69,11 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 				Title: "Track the " + tag + " operation", Status: types.StatusPending,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(provider.PrepareRun(ctx, created, todos.RunPreparation{
+			preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
 				Mode: mode, ExecutorName: "codex",
-			})).To(Succeed())
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(preparation.SessionID).NotTo(BeEmpty())
 
 			issue, err := provider.Repository().GetIssue(ctx, uuid.MustParse(created.ID))
 			Expect(err).NotTo(HaveOccurred())
@@ -119,9 +121,11 @@ var _ = Describe("TODO Captain session hierarchy", Ordered, func() {
 			Title: "Nest the provider transcript", Status: types.StatusPending,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(provider.PrepareRun(ctx, created, todos.RunPreparation{
+		preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
 			Mode: types.ModeRun, ExecutorName: "codex",
-		})).To(Succeed())
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preparation.SessionID).NotTo(BeEmpty())
 		Expect(provider.RecordRunStart(ctx, created, todos.RunStartMetadata{
 			SessionID: "todo-hierarchy-provider", Provider: "openai",
 			Backend: "codex-agent", Mode: "run",

@@ -56,7 +56,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 			Setup:  &shell.Setup{Cwd: "/previous/worktree"},
 			Permissions: api.Permissions{
 				Mode:  api.PermissionPlan,
-				Tools: api.Tools{Allow: []string{"Read", "Glob", "Grep"}},
+				Tools: api.ToolsFromLists([]string{"Read", "Glob", "Grep"}, nil),
 			},
 		}),
 	}
@@ -207,7 +207,10 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error { got = req; return nil }
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
+		got = req
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
+	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoApprovePayload{Ref: todos.TODOReference(created), Run: true})

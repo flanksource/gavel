@@ -5,6 +5,7 @@ import type { FilterBarFilter } from '@flanksource/clicky-ui/components';
 import type { Project, TodoItem, TodoListResponse } from '../../types';
 import { emptyCounts } from './format';
 import { defaultTodoFilters } from './todoFilter';
+import type { TodoSelection } from './todoSelection';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
 
 // clicky-ui's FilterBar drags in @floating-ui/react, which is unstable under
@@ -57,7 +58,23 @@ function toolbarProps(items: TodoItem[], filters = defaultTodoFilters()): Worksp
     setTimeRange: vi.fn(),
     loadingList: false,
     refresh: vi.fn(),
+    selection: idleSelection(),
   } as unknown as WorkspaceTodos;
+}
+
+// Bulk-edit mode off: the toolbar's contract here is the filter descriptors, and
+// TodoBulkBar renders nothing (and mounts no mutation) while bulkMode is false.
+function idleSelection(): TodoSelection {
+  return {
+    bulkMode: false,
+    setBulkMode: vi.fn(),
+    selection: new Set<string>(),
+    isSelected: () => false,
+    toggleSelected: vi.fn(),
+    setGroupSelected: vi.fn(),
+    clearSelection: vi.fn(),
+    targets: [],
+  };
 }
 
 function renderToolbar(items: TodoItem[], filters = defaultTodoFilters()) {

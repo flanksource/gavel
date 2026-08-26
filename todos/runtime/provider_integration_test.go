@@ -208,10 +208,12 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime no-fixture run", Body: "Implement the runtime cutover", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
+	preparation, err := provider.PrepareRun(t.Context(), runTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
 		Requested: captaindb.PromptRunRuntimeSelection{Provider: "openai", Backend: "codex-agent", Model: "gpt-requested", Effort: "high"},
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	assert.Equal(t, types.StatusInProgress, runTodo.Status)
 	assert.Equal(t, string(native.ExecutionRunning), runTodo.ExecutionState)
 	require.NoError(t, provider.RecordRunStart(t.Context(), runTodo, todos.RunStartMetadata{
@@ -263,9 +265,11 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime cancelled run", Body: "Stop without recording a failure", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), cancelledTodo, todos.RunPreparation{
+	preparation, err = provider.PrepareRun(t.Context(), cancelledTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), cancelledTodo, todos.RunStartMetadata{
 		SessionID: "runtime-cancelled-1", Mode: "run", Driver: "headless-codex", Provider: "openai",
 		Backend: "codex-agent", ResolvedModel: "gpt-runtime", Effort: "high",
@@ -316,11 +320,13 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	raceErrors := make(chan error, 2)
 	go func() {
 		<-startRace
-		raceErrors <- provider.PrepareRun(t.Context(), raceA, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
+		_, prepareErr := provider.PrepareRun(t.Context(), raceA, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
+		raceErrors <- prepareErr
 	}()
 	go func() {
 		<-startRace
-		raceErrors <- contenderProvider.PrepareRun(t.Context(), raceB, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
+		_, prepareErr := contenderProvider.PrepareRun(t.Context(), raceB, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "codex"})
+		raceErrors <- prepareErr
 	}()
 	close(startRace)
 	firstRaceErr, secondRaceErr := <-raceErrors, <-raceErrors
@@ -334,10 +340,12 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime resume mode", Body: "Do not cross step kinds", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"}))
+	preparation, err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	resumeBefore, err := repository.GetIssue(t.Context(), mustUUID(t, resumeTodo.ID))
 	require.NoError(t, err)
-	err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "claude", Resume: true})
+	_, err = provider.PrepareRun(t.Context(), resumeTodo, todos.RunPreparation{Mode: types.ModeRun, ExecutorName: "claude", Resume: true})
 	require.ErrorIs(t, err, todos.ErrRunResumeModeMismatch)
 	resumeAfter, err := repository.GetIssue(t.Context(), mustUUID(t, resumeTodo.ID))
 	require.NoError(t, err)
@@ -347,7 +355,9 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime failed plan", Body: "A failed result must not become executable", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), failedPlanTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"}))
+	preparation, err = provider.PrepareRun(t.Context(), failedPlanTodo, todos.RunPreparation{Mode: types.ModePlan, ExecutorName: "claude"})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.SaveAttempt(t.Context(), failedPlanTodo, &todos.ExecutionResult{
 		Success: false, ExecutorName: "claude", EndStatus: types.EndFailed, ErrorMessage: "planning failed",
 		Plan: &types.PlanResult{Status: types.PlanNew, Content: "# Partial and invalid plan"},
@@ -363,9 +373,11 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 		Title: "Runtime plan review", Body: "Design and implement the database plan flow", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
+	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
 		Mode: types.ModePlan, ExecutorName: "claude",
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), planTodo, todos.RunStartMetadata{
 		SessionID: "runtime-plan-1", Mode: "plan", ResolvedModel: "sonnet-runtime",
 	}))
@@ -392,9 +404,11 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	planTodo, err = provider.RequestPlanRevision(t.Context(), planTodo, "reviewer", "add rollback steps")
 	require.NoError(t, err)
 	assert.Equal(t, types.StatusReview, planTodo.Status)
-	require.NoError(t, provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
+	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
 		Mode: types.ModePlan, ExecutorName: "claude", Resume: true,
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	revisedPlanIssue, err := repository.GetIssue(t.Context(), mustUUID(t, planTodo.ID))
 	require.NoError(t, err)
 	require.NotNil(t, revisedPlanIssue.ActivePromptRunID)
@@ -430,9 +444,11 @@ func TestProviderNativeLifecycleIntegration(t *testing.T) {
 	approvedPlan, err = provider.PlanMarkdown(t.Context(), planTodo, types.ModeRun)
 	require.NoError(t, err)
 	assert.Equal(t, humanEditedMarkdown, approvedPlan)
-	require.NoError(t, provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
+	preparation, err = provider.PrepareRun(t.Context(), planTodo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "claude",
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	currentPlanIssue, err := repository.GetIssue(t.Context(), mustUUID(t, planTodo.ID))
 	require.NoError(t, err)
 	require.NotNil(t, currentPlanIssue.ActivePromptRunID)

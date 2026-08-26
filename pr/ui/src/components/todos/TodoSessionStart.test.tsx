@@ -30,6 +30,9 @@ vi.mock('./run', () => ({
     },
   }),
   TodoRunEffortBadge: ({ effort }: { effort?: string }) => <span data-testid="effort-badge">{effort}</span>,
+}));
+
+vi.mock('./TodoRunActionButton', () => ({
   TodoRunActionButton: ({ action, onRun, onOptionsChange }: { action: string; onRun?: (options?: unknown) => void; onOptionsChange?: (options: TodoRunOptions) => void }) => (
     <>
       {/* oxlint-disable-next-line clicky-ui/prefer-clicky-components -- test stub for the run button. */}

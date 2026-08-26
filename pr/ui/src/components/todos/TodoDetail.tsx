@@ -2,7 +2,7 @@ import { useEffect, useState, type ComponentType, type ReactNode } from 'react';
 import { Button, DropdownMenu } from '@flanksource/clicky-ui/components';
 import { Markdown } from '@flanksource/clicky-ui/data';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiArrowLeft, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiCog, UiComment, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiEye, UiFolder, UiLinkExternal, UiListDashes, UiListFlat, UiMarkdown, UiPass, UiPlay, UiQuestion, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
+import { UiArrowLeft, UiCheck, UiCheckFilled, UiChevronDown, UiChevronRight, UiCog, UiCopy, UiDebugStepOver, UiDotsVertical, UiEdit, UiError, UiFolder, UiLinkExternal, UiListDashes, UiMarkdown, UiPass, UiPlay, UiRestart, UiStop, UiTrash } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoExternalIssue, TodoItem, TodoPriority, TodoRunOptions, TodoStatus } from '../../types';
 import { Spinner } from '../../icons/Spinner';
 import { RepoIcon } from '../RepoIcon';
@@ -11,8 +11,9 @@ import { TodoCommits } from './TodoCommits';
 import { TodoSession } from './TodoSession';
 import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
-import { priorities, statusClass, statuses, statusLabel } from './format';
-import { TodoRunAdvancedDialog, defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
+import { priorities, priorityBadgeClass, priorityIcon, statusClass, statusIcon, statuses, statusLabel } from './format';
+import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
+import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
 import { PHASES, phaseSignals, phaseState, type PhaseId, type PhaseState } from './phaseMachine';
 import { TodoPhaseButton, TodoPhaseTicks, type PhaseRunOptions } from './TodoPhaseButton';
@@ -1208,51 +1209,6 @@ function MoveSubmenu({
       )}
     </DropdownMenu>
   );
-}
-
-function statusIcon(status: TodoStatus | string): ComponentType<IconProps> {
-  switch (status) {
-    case 'draft':
-      return UiCircleOutline;
-    case 'in_progress':
-      return Spinner;
-    case 'review':
-      return UiEye;
-    case 'ask':
-      return UiQuestion;
-    case 'failed':
-      return UiCircleXFilled;
-    case 'verified':
-      return UiCheckFilled;
-    case 'completed':
-      return UiPass;
-    case 'skipped':
-      return UiCancel;
-    default:
-      return UiCircleOutline;
-  }
-}
-
-function priorityIcon(priority: TodoPriority | string): ComponentType<IconProps> {
-  switch (priority) {
-    case 'high':
-      return UiChevronUp;
-    case 'low':
-      return UiChevronDown;
-    default:
-      return UiCircleOutline;
-  }
-}
-
-function priorityBadgeClass(priority: TodoPriority | string): string {
-  switch (priority) {
-    case 'high':
-      return 'border-red-500/25 bg-red-500/10 text-red-600';
-    case 'low':
-      return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
-    default:
-      return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
-  }
 }
 
 function EditPencil({ label, onClick, disabled }: { label: string; onClick: () => void; disabled?: boolean }) {

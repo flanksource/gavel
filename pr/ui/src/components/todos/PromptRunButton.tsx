@@ -4,9 +4,9 @@ import { Button, DropdownMenu, Modal } from '@flanksource/clicky-ui/components';
 import { UiChevronDown, UiCog, UiHistory, UiPlay, type IconProps } from '@flanksource/clicky-ui/icons';
 import type { TodoRunOptions } from '../../types';
 import { Spinner } from '../../icons/Spinner';
+import { TodoRunRuntimeBar } from './TodoRunActionButton';
 import {
   TodoRunContextError,
-  TodoRunRuntimeBar,
   defaultRunOptionsForAction,
   loadLastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,

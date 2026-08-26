@@ -38,10 +38,10 @@ type activeRun struct {
 // can be dispatched. The issue version is part of the deterministic admission
 // identity, so an exact retry resolves the same launch while a later attempt
 // receives a new identity.
-func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation todos.RunPreparation) error {
+func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation todos.RunPreparation) (todos.RunPreparationResult, error) {
 	issueID, err := p.todoID(todo)
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	mode := preparation.Mode
 	if mode == "" {
@@ -49,14 +49,14 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	}
 	step, err := stepForMode(mode)
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	issue, err := p.repository.GetIssue(ctx, issueID)
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	if issue.WorkspaceID != p.workspace.ID {
-		return fmt.Errorf("%w: TODO %s belongs to workspace %s, provider owns %s", native.ErrCrossWorkspace, issue.ID, issue.WorkspaceID, p.workspace.ID)
+		return todos.RunPreparationResult{}, fmt.Errorf("%w: TODO %s belongs to workspace %s, provider owns %s", native.ErrCrossWorkspace, issue.ID, issue.WorkspaceID, p.workspace.ID)
 	}
 	seed := fmt.Sprintf("%s:%s:%d", issue.ID, step, todo.Version)
 	sessionID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-session:"+seed))
@@ -68,23 +68,23 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		if issue.ActivePromptRunID != nil && *issue.ActivePromptRunID == promptRunID {
 			links, linkErr := p.repository.ListPromptRuns(ctx, issue.ID)
 			if linkErr != nil {
-				return linkErr
+				return todos.RunPreparationResult{}, linkErr
 			}
 			for _, link := range links {
 				if link.PromptRunID == promptRunID && link.StepKind == step {
-					return fmt.Errorf(
+					return todos.RunPreparationResult{}, fmt.Errorf(
 						"%w: Captain prompt run %s for issue %s already has an external dispatcher",
 						todos.ErrRunDispatchAlreadyClaimed, promptRunID, issue.ID,
 					)
 				}
 			}
 		}
-		return fmt.Errorf("%w: issue %s expected version %d, current version %d", native.ErrVersionConflict, issue.ID, todo.Version, issue.Version)
+		return todos.RunPreparationResult{}, fmt.Errorf("%w: issue %s expected version %d, current version %d", native.ErrVersionConflict, issue.ID, todo.Version, issue.Version)
 	}
 
 	ordinal, err := p.nextPromptOrdinal(ctx, issue.ID, step)
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	executorName := strings.TrimSpace(preparation.ExecutorName)
 	if executorName == "" {
@@ -104,16 +104,16 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if preparation.Resume && issue.ActivePromptRunID != nil {
 		previousRun, runErr := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
 		if runErr != nil {
-			return runErr
+			return todos.RunPreparationResult{}, runErr
 		}
 		previousSession, sessionErr := p.captain.GetSession(ctx, previousRun.SessionID)
 		if sessionErr != nil {
-			return sessionErr
+			return todos.RunPreparationResult{}, sessionErr
 		}
 		if !terminalPromptRun(previousRun.State) {
 			links, linkErr := p.repository.ListPromptRuns(ctx, issue.ID)
 			if linkErr != nil {
-				return linkErr
+				return todos.RunPreparationResult{}, linkErr
 			}
 			activeStep := native.StepKind("")
 			for _, link := range links {
@@ -123,10 +123,10 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 				}
 			}
 			if activeStep == "" {
-				return fmt.Errorf("%w: active prompt run %s is not linked to issue %s", native.ErrLinkConflict, previousRun.ID, issue.ID)
+				return todos.RunPreparationResult{}, fmt.Errorf("%w: active prompt run %s is not linked to issue %s", native.ErrLinkConflict, previousRun.ID, issue.ID)
 			}
 			if activeStep != step {
-				return fmt.Errorf(
+				return todos.RunPreparationResult{}, fmt.Errorf(
 					"%w: active Captain prompt run %s is step %q and cannot resume as %q",
 					todos.ErrRunResumeModeMismatch, previousRun.ID, activeStep, step,
 				)
@@ -134,7 +134,10 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 			// A waiting/running prompt run is one interactive operation. Resume it
 			// in place rather than manufacturing a second active root operation.
 			p.markPrepared(issue.ID, previousRun.ID)
-			return p.replaceTODO(ctx, todo, issue, cwd)
+			if err := p.replaceTODO(ctx, todo, issue, cwd); err != nil {
+				return todos.RunPreparationResult{}, err
+			}
+			return todos.RunPreparationResult{SessionID: previousSession.ID.String()}, nil
 		}
 		// A terminal operation gets a new prompt run, but continuation keeps the
 		// authoritative Captain/provider session identity.
@@ -152,7 +155,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 
 	rendered, err := renderedSpec(preparation.Spec, issue.Verification)
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	promptInput := captaindb.CreatePromptRunInput{
 		ID:           promptRunID,
@@ -167,7 +170,7 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		VerificationMarkdown: issue.Verification,
 	}
 	if err := p.attachInputPlan(ctx, issue, mode, &promptInput); err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	launch, err := p.coordinator.LaunchPromptRun(ctx, native.PromptRunLaunchInput{
 		RootSession: p.todoRootSessionInput(native.CreateIssueInput{
@@ -184,16 +187,19 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		},
 	})
 	if err != nil {
-		return err
+		return todos.RunPreparationResult{}, err
 	}
 	if !launch.DispatchOwned {
-		return fmt.Errorf(
+		return todos.RunPreparationResult{}, fmt.Errorf(
 			"%w: Captain prompt run %s for issue %s already has an external dispatcher",
 			todos.ErrRunDispatchAlreadyClaimed, launch.PromptRun.ID, issue.ID,
 		)
 	}
 	p.markPrepared(issue.ID, launch.PromptRun.ID)
-	return p.replaceTODO(ctx, todo, launch.Issue, cwd)
+	if err := p.replaceTODO(ctx, todo, launch.Issue, cwd); err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	return todos.RunPreparationResult{SessionID: launch.Session.ID.String()}, nil
 }
 
 // RecordRunStart binds the external provider identity and execution thread to

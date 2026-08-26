@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildRunFamilies, type RunContext } from './providers';
 import {
-	defaultRunOptionsForAction,
+  buildTodoRunPayload,
+  defaultRunOptionsForAction,
 	runButtonLabelForOptions,
 	reconcileTodoRunOptions,
 	runSpec,
@@ -57,6 +58,58 @@ const context: RunContext = {
 };
 
 describe('todo run runtime adapter', () => {
+  it('uses one complete payload for preview and submit without resending a generated prompt', () => {
+    const runtime = {
+      backend: 'codex-cmux',
+      model: 'gpt-5.5',
+      effort: 'high' as const,
+      budget: { timeout: '45m', maxTurns: 12 },
+      permissions: { mode: 'dontAsk' as const },
+      setup: { cwd: '/workspace' },
+      workflow: { commits: [{ on: 'run' as const, gates: 'full' as const }] },
+    };
+
+    expect(buildTodoRunPayload({
+      ref: 'todo-123',
+      driver: 'codex-cmux',
+      runBackend: 'codex-cmux',
+      runtime,
+      mode: 'run',
+      resume: true,
+      promptDraft: 'Generated prompt with effort directive',
+      promptDirty: false,
+    })).toEqual({
+      ref: 'todo-123',
+      driver: 'codex-cmux',
+      runMode: 'run',
+      resume: true,
+      spec: {
+        ...runtime,
+        backend: 'codex-cmux',
+      },
+    });
+
+    expect(buildTodoRunPayload({
+      ref: 'todo-123',
+      driver: 'codex-cmux',
+      runBackend: 'codex-cmux',
+      runtime,
+      mode: 'plan',
+      resume: false,
+      promptDraft: 'Use this edited prompt',
+      promptDirty: true,
+    })).toMatchObject({
+      runMode: 'plan',
+      plan: true,
+      spec: {
+        budget: { timeout: '45m', maxTurns: 12 },
+        permissions: { mode: 'dontAsk' },
+        setup: { cwd: '/workspace' },
+        prompt: { user: 'Use this edited prompt' },
+      },
+    });
+  });
+
   it('does not invent providers or models missing from the Captain context', () => {
     const captainContext: RunContext = {
       defaultBackend: 'codex-agent',

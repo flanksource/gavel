@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiAdd, UiBeaker, UiCheck, UiCheckFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import type { FacetModes } from '../../utils';
@@ -15,6 +15,11 @@ export const inputClass = 'w-full rounded-md border border-input bg-background p
 
 export const statuses: TodoStatus[] = ['draft', 'pending', 'in_progress', 'review', 'ask', 'failed', 'unverified', 'verified', 'completed', 'skipped'];
 export const priorities: TodoPriority[] = ['high', 'medium', 'low'];
+
+// The statuses a caller may write directly, mirroring the server's
+// types.AssignableStatuses(). The rest (in_progress/review/ask/failed/unverified)
+// are projected from the last run, so offering them would be a guaranteed 400.
+export const assignableStatuses: TodoStatus[] = ['draft', 'pending', 'verified', 'completed', 'skipped'];
 
 export const emptyCounts: TodoCounts = {
   total: 0,
@@ -106,6 +111,54 @@ export function statusClass(status: TodoStatus | string) {
       return 'text-yellow-700 dark:text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
     default:
       return 'text-muted-foreground bg-muted border-border';
+  }
+}
+
+// statusIcon/priorityIcon/priorityBadgeClass are the glyph + badge vocabulary the
+// status and priority menus render, shared by the detail header and the bulk-edit
+// bar so a status reads identically wherever it is being set.
+export function statusIcon(status: TodoStatus | string): ComponentType<IconProps> {
+  switch (status) {
+    case 'draft':
+      return UiCircleOutline;
+    case 'in_progress':
+      return Spinner;
+    case 'review':
+      return UiEye;
+    case 'ask':
+      return UiQuestion;
+    case 'failed':
+      return UiCircleXFilled;
+    case 'verified':
+      return UiCheckFilled;
+    case 'completed':
+      return UiPass;
+    case 'skipped':
+      return UiCancel;
+    default:
+      return UiCircleOutline;
+  }
+}
+
+export function priorityIcon(priority: TodoPriority | string): ComponentType<IconProps> {
+  switch (priority) {
+    case 'high':
+      return UiChevronUp;
+    case 'low':
+      return UiChevronDown;
+    default:
+      return UiCircleOutline;
+  }
+}
+
+export function priorityBadgeClass(priority: TodoPriority | string): string {
+  switch (priority) {
+    case 'high':
+      return 'border-red-500/25 bg-red-500/10 text-red-600';
+    case 'low':
+      return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
+    default:
+      return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400';
   }
 }
 

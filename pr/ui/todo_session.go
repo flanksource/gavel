@@ -150,7 +150,7 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 				writeTodoError(w, http.StatusInternalServerError, err)
 				return
 			}
-			if req, ok := todos.GlobalApprovals().Pending(sessionID); ok {
+			if req, ok := todos.GlobalApprovals().Pending(captainApprovalSessionID(sessionID, resolved)); ok {
 				resp.State = "approval"
 				pending := req
 				resp.Approval = &pending
@@ -179,6 +179,16 @@ func (s *Server) handleTodoSessionStats(w http.ResponseWriter, r *http.Request) 
 		resp.Approval = &pending
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+func captainApprovalSessionID(requested string, resolved captainSessionResolution) string {
+	if resolved.transcript != nil && strings.TrimSpace(resolved.transcript.ProviderSessionID) != "" {
+		return strings.TrimSpace(resolved.transcript.ProviderSessionID)
+	}
+	if resolved.run != nil && strings.TrimSpace(resolved.run.ProviderSessionID) != "" {
+		return strings.TrimSpace(resolved.run.ProviderSessionID)
+	}
+	return requested
 }
 
 // todoSessionStatsResponse is the session-stats payload plus any pending
@@ -295,6 +305,17 @@ func (s *Server) handleTodoSessionApprove(w http.ResponseWriter, r *http.Request
 	if sessionID == "" {
 		writeTodoError(w, http.StatusBadRequest, fmt.Errorf("sessionId is required"))
 		return
+	}
+	dir := s.resolveTodoDir(strings.TrimSpace(r.URL.Query().Get("dir")))
+	if store, ok := todoCaptainSessionStore(r.Context(), dir); ok {
+		resolved, err := resolveCaptainSession(r.Context(), store, sessionID)
+		if err != nil {
+			writeTodoError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if resolved.known {
+			sessionID = captainApprovalSessionID(sessionID, resolved)
+		}
 	}
 	if err := todos.GlobalApprovals().Resolve(sessionID, todos.ApprovalDecision{
 		Allow:        payload.Allow,

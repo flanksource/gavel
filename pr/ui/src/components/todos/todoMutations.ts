@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { TodoItem, TodoListResponse } from '../../types';
+import type { TodoItem, TodoListResponse, TodoPriority, TodoStatus } from '../../types';
 import { todoQuery } from './format';
 import { setTodoQueryData, todoQueryKeys } from './todoQueries';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
@@ -156,6 +156,61 @@ export function useUpdateTodoMutation(dir: string, context = 'Failed to update t
       context,
     ),
     onSuccess: todo => setTodoCaches(client, dir, todo),
+  });
+}
+
+export interface BulkTodoTarget {
+  dir: string;
+  ref: string;
+}
+
+export interface BulkTodoUpdate {
+  items: BulkTodoTarget[];
+  status?: TodoStatus;
+  priority?: TodoPriority;
+  comment?: string;
+}
+
+export interface BulkTodoItemResult extends BulkTodoTarget {
+  todo?: TodoItem;
+  error?: string;
+}
+
+export interface BulkTodoResponse {
+  updated: number;
+  failed: number;
+  results: BulkTodoItemResult[];
+}
+
+/**
+ * Apply one status/priority/comment to many TODOs.
+ *
+ * The server edits each target independently and answers 200 with per-item
+ * outcomes, so a partial batch is a success with `failed > 0` rather than a
+ * thrown error — only a rejected request (unassignable status, malformed
+ * target) throws. Every touched workspace is invalidated, not just the caller's,
+ * because a selection can span workspaces.
+ */
+export function useBulkUpdateTodosMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationKey: ['todos', 'bulk'],
+    mutationFn: (update: BulkTodoUpdate) => todoMutationJSON<BulkTodoResponse>(
+      '/api/todos/bulk',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(update),
+      },
+      `Failed to update ${update.items.length} todo${update.items.length === 1 ? '' : 's'}`,
+    ),
+    onSuccess: async ({ results }) => {
+      const dirs = new Set(results.filter(result => result.todo).map(result => result.dir));
+      await Promise.all([...dirs].map(dir => invalidateTodoCollections(client, dir)));
+      for (const result of results) {
+        if (result.todo) setTodoQueryData(client, result.dir, result.todo);
+      }
+    },
   });
 }
 

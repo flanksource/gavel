@@ -500,7 +500,7 @@ export interface TodoRunOptions {
 }
 
 export interface TodoRunResponse {
-  status: 'started' | 'dry_run';
+  status: 'started' | 'skipped' | 'dry_run';
   ref: string;
   dir: string;
   agent: TodoRunAgent;
@@ -525,6 +525,7 @@ export interface TodoRunResponse {
 // dialog before the user starts the run.
 export interface TodoRunPreviewResponse {
   prompt: string;
+  specYaml: string;
   mode: TodoRunMode;
   agent: TodoRunAgent;
   backend?: string;

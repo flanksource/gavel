@@ -91,7 +91,8 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req := todoRunRequest{Provider: provider, Registry: &s.todoRuns, Todos: []*types.TODO{todo}, Source: source, Backend: todos.ProviderDB, Options: opts}
-		if err := startTodoRun(req); err != nil {
+		started, err := startTodoRun(req)
+		if err != nil {
 			writeTodoError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -107,7 +108,7 @@ func (s *Server) handleTodoPlanApprove(w http.ResponseWriter, r *http.Request) {
 			Model:     opts.Spec.Name,
 			Effort:    string(opts.Spec.Effort),
 			RunMode:   string(opts.RunMode),
-			SessionID: opts.Spec.SessionID,
+			SessionID: started.SessionID,
 			Timeout:   opts.Timeout.String(),
 			Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
 			Message:   "Approved plan — implementing",
@@ -226,7 +227,11 @@ func (s *Server) handleTodoPlanRevise(w http.ResponseWriter, r *http.Request) {
 		err = startTodoAnswer(req, feedback)
 	} else {
 		todo.Prompt = "Revise the existing plan using this reviewer feedback:\n\n" + feedback
-		err = startTodoRun(req)
+		var started todoRunStartResult
+		started, err = startTodoRun(req)
+		if err == nil {
+			sessionID = started.SessionID
+		}
 	}
 	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)

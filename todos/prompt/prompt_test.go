@@ -213,7 +213,7 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 		Memory: api.Memory{Skills: []string{"gavel-todos"}},
 		Permissions: api.Permissions{
 			Mode:    api.PermissionAcceptEdits,
-			Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk}},
+			Tools:   api.Tools{"Bash": api.ToolPolicyAsk},
 			MCP:     api.MCP{Servers: []string{"postgres"}},
 			Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
 			Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},

@@ -153,7 +153,7 @@ export function useSessionStatus(dir: string, sessionId: string | undefined, act
       message?: string;
       updatedInput?: Record<string, unknown>;
     }) => todoMutationJSON<{ resolved: boolean; allow: boolean }>(
-      '/api/todos/session/approve',
+      `/api/todos/session/approve?${todoQuery(dir)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

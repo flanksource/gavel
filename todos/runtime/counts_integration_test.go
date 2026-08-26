@@ -86,9 +86,11 @@ func TestCountByStatusMatchesListIntegration(t *testing.T) {
 		Title: "Has an admitted prompt run", Body: "Body", Status: types.StatusPending,
 	})
 	require.NoError(t, err)
-	require.NoError(t, provider.PrepareRun(t.Context(), running, todos.RunPreparation{
+	preparation, err := provider.PrepareRun(t.Context(), running, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "codex",
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 
 	awaitingReview, err := provider.Create(t.Context(), todos.CreateRequest{
 		Title: "Has a plan awaiting review", Body: "Body", Status: types.StatusPending,

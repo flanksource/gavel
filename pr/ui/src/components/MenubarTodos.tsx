@@ -31,7 +31,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   const todos = useWorkspaceTodos(projects);
   const {
     workspaces, byDir, loadingList, selected, select, detail, loadingDetail, detailError, error,
-    updateItem, deleted, filters, toggleStatus, groupBy, showCreate, setShowCreate, created,
+    updateItem, deleted, filters, toggleStatus, groupBy, showCreate, setShowCreate, created, selection,
   } = todos;
 
   if (selected) {
@@ -104,6 +104,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   selected={selected}
                   onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
                   filters={filters}
+                  selection={selection}
                 />
               ))}
             </ListMenu>
@@ -121,6 +122,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 onToggleStatus={toggleStatus}
                 selectedRef=""
                 onSelect={ref => select({ dir: ws.dir, ref })}
+                selection={selection}
               />
             ))}
           </ListMenu>

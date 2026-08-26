@@ -71,12 +71,14 @@ func TestRecordRunStartResumeKeepsExecutionSession(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
+	preparation, err := provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex",
 		Requested: captaindb.PromptRunRuntimeSelection{
 			Provider: "openai", Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high",
 		},
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), todo, todos.RunStartMetadata{
 		SessionID: providerSessionID, Mode: "run", Driver: "headless-codex", Agent: "codex",
 		Provider: "openai", Backend: "codex-agent", ResolvedModel: "gpt-5.6-sol", Effort: "high",
@@ -105,10 +107,12 @@ func TestRecordRunStartResumeKeepsExecutionSession(t *testing.T) {
 	// The user answers. A resumed turn continues an already-resolved thread, so
 	// it reports only the session and the mode — driver, provider, backend, model
 	// and effort are all blank.
-	require.NoError(t, provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
+	preparation, err = provider.PrepareRun(t.Context(), todo, todos.RunPreparation{
 		Mode: types.ModeRun, ExecutorName: "headless-codex", Resume: true,
 		Spec: api.Spec{Prompt: api.Prompt{User: "Target the staging database."}},
-	}))
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, preparation.SessionID)
 	require.NoError(t, provider.RecordRunStart(t.Context(), todo, todos.RunStartMetadata{
 		SessionID: providerSessionID, Mode: "run",
 	}), "a resumed turn must not be rejected for failing to re-name its provider")

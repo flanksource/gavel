@@ -330,9 +330,9 @@ type lifecycleRecorder struct {
 	comments    []string
 }
 
-func (r *lifecycleRecorder) PrepareRun(_ context.Context, _ *types.TODO, prep RunPreparation) error {
+func (r *lifecycleRecorder) PrepareRun(_ context.Context, _ *types.TODO, prep RunPreparation) (RunPreparationResult, error) {
 	r.prepared = append(r.prepared, prep)
-	return nil
+	return RunPreparationResult{SessionID: "admission-session"}, nil
 }
 
 func (r *lifecycleRecorder) RecordRunStart(_ context.Context, _ *types.TODO, meta RunStartMetadata) error {

@@ -67,9 +67,9 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -159,9 +159,9 @@ func TestTodoAPIPlanRevise(t *testing.T) {
 		gotFeedback = feedback
 		return nil
 	}
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		gotFreshReq = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() {
 		startTodoAnswer = oldStart

@@ -66,7 +66,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   projectsLoaded: boolean;
   projectError?: string;
 }) {
-  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, refresh, loadingList, error } = todos;
+  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -99,6 +99,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             sortBy={sortBy}
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={ref => select({ dir: ws.dir, ref })}
+            selection={selection}
           />
         ))}
       </ListMenu>
@@ -121,6 +122,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             filters={filters}
             range={range}
             density={density}
+            selection={selection}
           />
         ))}
       </ListMenu>

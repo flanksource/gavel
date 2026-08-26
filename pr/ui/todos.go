@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flanksource/captain/pkg/ai/agent"
@@ -23,10 +24,10 @@ import (
 	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/native"
-	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
 	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/ghodss/yaml"
 	"github.com/google/uuid"
 )
 
@@ -250,14 +251,21 @@ type todoRunResponse struct {
 }
 
 type todoRunPreviewResponse struct {
-	Prompt  string `json:"prompt"`
-	Mode    string `json:"mode"`
-	Agent   string `json:"agent"`
-	Backend string `json:"backend,omitempty"`
-	Effort  string `json:"effort,omitempty"`
-	RunMode string `json:"runMode,omitempty"`
-	Plan    bool   `json:"plan,omitempty"`
-	Count   int    `json:"count"`
+	Prompt   string `json:"prompt"`
+	SpecYAML string `json:"specYaml"`
+	Mode     string `json:"mode"`
+	Agent    string `json:"agent"`
+	Backend  string `json:"backend,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	RunMode  string `json:"runMode,omitempty"`
+	Plan     bool   `json:"plan,omitempty"`
+	Count    int    `json:"count"`
+}
+
+type todoRunStartResult struct {
+	Status    string
+	SessionID string
+	Message   string
 }
 
 type todoRunRequest struct {
@@ -921,7 +929,6 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := todoRunResponse{
-		Status:    "started",
 		Ref:       todos.TODOReference(todoList[0]),
 		Refs:      todoRunRefs(todoList),
 		Count:     len(todoList),
@@ -935,18 +942,27 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		RunMode:   string(opts.RunMode),
 		Plan:      opts.RunMode == types.ModePlan,
 		Resume:    opts.Resume,
-		SessionID: opts.Spec.SessionID,
 		Timeout:   opts.Timeout.String(),
 		MaxBudget: opts.Spec.Budget.Cost,
 		MaxTurns:  opts.Spec.Budget.MaxTurns,
 		Commit:    specCommit(opts.Spec) && !specDryRun(opts.Spec),
-		Message:   todoRunStartedMessage(len(todoList)),
 	}
 	// A dry run still executes the agent; Captain's commit hook reports rather
 	// than cuts the declared commit. Prompt-only inspection uses the preview API.
-	if err := startTodoRun(req); err != nil {
+	started, err := startTodoRun(req)
+	if err != nil {
 		writeTodoError(w, http.StatusBadRequest, err)
 		return
+	}
+	if started.Status == "started" && strings.TrimSpace(started.SessionID) == "" {
+		writeTodoError(w, http.StatusInternalServerError, errors.New("todo run was admitted without a Captain session id"))
+		return
+	}
+	resp.Status = started.Status
+	resp.SessionID = started.SessionID
+	resp.Message = started.Message
+	if resp.Message == "" && started.Status == "started" {
+		resp.Message = todoRunStartedMessage(len(todoList))
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
@@ -965,20 +981,21 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 		writeTodoError(w, status, err)
 		return
 	}
-	previewPrompt, err := buildTodoRunPromptPreview(r.Context(), provider, source.Dir, todoList, opts)
+	renderedSpec, specYAML, err := buildTodoRunSpecPreview(r.Context(), provider, source, todoList, opts)
 	if err != nil {
 		writeTodoError(w, http.StatusInternalServerError, err)
 		return
 	}
 	resp := todoRunPreviewResponse{
-		Prompt:  previewPrompt,
-		Mode:    opts.legacyMode(),
-		Agent:   opts.agent(),
-		Backend: string(opts.Spec.Backend),
-		Effort:  string(opts.Spec.Effort),
-		RunMode: string(opts.RunMode),
-		Plan:    opts.RunMode == types.ModePlan,
-		Count:   len(todoList),
+		Prompt:   renderedSpec.Prompt.User,
+		SpecYAML: specYAML,
+		Mode:     opts.legacyMode(),
+		Agent:    opts.agent(),
+		Backend:  string(opts.Spec.Backend),
+		Effort:   string(opts.Spec.Effort),
+		RunMode:  string(opts.RunMode),
+		Plan:     opts.RunMode == types.ModePlan,
+		Count:    len(todoList),
 	}
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
@@ -988,20 +1005,30 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 // schema instruction. The editable prompt override replaces the body but the
 // schema instruction is always re-appended, so the preview shows the full
 // contract the agent receives.
-func buildTodoRunPromptPreview(ctx context.Context, provider todos.Provider, dir string, todoList []*types.TODO, opts todoRunOptions) (string, error) {
-	existingPlan, err := todoPlanMarkdown(ctx, provider, todoList, opts.RunMode)
-	if err != nil {
-		return "", err
-	}
-	// opts.Template is the override the spec was resolved from; re-reading
-	// .gavel.yaml here could preview a different prompt than the run dispatches.
-	req, _, err := todoprompt.Render(todoList, todoprompt.Options{
-		WorkDir: dir, Mode: opts.RunMode, Spec: opts.Spec, Template: opts.Template, ExistingPlan: existingPlan,
+func buildTodoRunSpecPreview(ctx context.Context, provider todos.Provider, source todoSource, todoList []*types.TODO, opts todoRunOptions) (api.Spec, string, error) {
+	executor, _, err := newTodoRunExecutorContext(ctx, todoRunRequest{
+		Provider: provider,
+		Todos:    todoList,
+		Source:   source,
+		Backend:  todos.ProviderDB,
+		Options:  opts,
 	})
 	if err != nil {
-		return "", err
+		return api.Spec{}, "", err
 	}
-	return req.Prompt.User, nil
+	renderer, ok := executor.(todos.RunSpecProvider)
+	if !ok {
+		return api.Spec{}, "", fmt.Errorf("todo run driver %q cannot render its Captain spec", opts.Driver)
+	}
+	rendered, err := renderer.RenderRunSpec(todos.NewExecutorContext(ctx, logger.StandardLogger(), nil), todoList[0])
+	if err != nil {
+		return api.Spec{}, "", err
+	}
+	encoded, err := yaml.Marshal(rendered)
+	if err != nil {
+		return api.Spec{}, "", fmt.Errorf("marshal rendered Captain spec as YAML: %w", err)
+	}
+	return rendered, string(encoded), nil
 }
 
 // resolveTodoDir turns a request's dir param into an absolute workspace path,
@@ -1541,26 +1568,38 @@ func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRun
 	}, nil
 }
 
-func defaultStartTodoRun(req todoRunRequest) error {
+func defaultStartTodoRun(req todoRunRequest) (todoRunStartResult, error) {
 	if req.Registry == nil {
-		return errors.New("todo run registry is required")
+		return todoRunStartResult{}, errors.New("todo run registry is required")
 	}
 	executor, sessionID, err := newTodoRunExecutor(req)
 	if err != nil {
-		return err
+		return todoRunStartResult{}, err
 	}
 	ctx, timeoutCancel := context.WithTimeout(context.Background(), req.Options.Timeout)
 	runCtx, stop := context.WithCancelCause(ctx)
 	cleanup, err := req.Registry.register(todoRunIssueIDs(req.Todos), runIsStoppable(req.Options), stop)
 	if err != nil {
 		timeoutCancel()
-		return err
+		return todoRunStartResult{}, err
+	}
+	type startOutcome struct {
+		result todoRunStartResult
+		err    error
+	}
+	started := make(chan startOutcome, 1)
+	var notifyOnce sync.Once
+	notify := func(result todoRunStartResult, err error) {
+		notifyOnce.Do(func() { started <- startOutcome{result: result, err: err} })
 	}
 	go func() {
 		defer timeoutCancel()
 		defer cleanup()
 
 		execCtx := todos.NewExecutorContext(runCtx, logger.StandardLogger(), nil)
+		execCtx.SetRunPreparedHook(func(preparation todos.RunPreparationResult) {
+			notify(todoRunStartResult{Status: "started", SessionID: preparation.SessionID}, nil)
+		})
 		runner := todos.NewTODOExecutor(req.Source.Dir, executor, sessionID, req.Provider)
 		runner.SetMode(req.Options.RunMode)
 		runner.SetResume(req.Options.Resume)
@@ -1580,8 +1619,17 @@ func defaultStartTodoRun(req todoRunRequest) error {
 		if runErr != nil && (result == nil || !result.Cancelled) {
 			logger.Warnf("todo run %s failed: %v", todoRunLabel(req.Todos), runErr)
 		}
+		switch {
+		case runErr != nil:
+			notify(todoRunStartResult{}, runErr)
+		case result != nil && result.Skipped:
+			notify(todoRunStartResult{Status: "skipped", Message: "TODO already passes; run skipped"}, nil)
+		default:
+			notify(todoRunStartResult{}, errors.New("todo run completed before Captain admission"))
+		}
 	}()
-	return nil
+	outcome := <-started
+	return outcome.result, outcome.err
 }
 
 // payloadDriver reads the driver mechanism the payload names: the explicit

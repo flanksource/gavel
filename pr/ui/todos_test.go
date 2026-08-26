@@ -827,9 +827,9 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -1014,9 +1014,9 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		payload := base
 		payload.Spec.Permissions = api.Permissions{
 			Mode: api.PermissionAcceptEdits,
-			Tools: api.Tools{Modes: map[string]api.ToolMode{
-				"Bash": api.ToolModeAsk, "Write": api.ToolModeOff, "Read": api.ToolModeOn, "Glob": api.ToolModeAuto,
-			}},
+			Tools: api.Tools{
+				"Bash": api.ToolPolicyAsk, "Write": api.ToolPolicyDeny, "Read": api.ToolPolicyAuto, "Glob": api.ToolPolicyAuto,
+			},
 		}
 		opts, err := normalizeTodoRunOptions(dir, nil, payload)
 		if err != nil {
@@ -1029,8 +1029,11 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		if policies["Bash"] != api.ToolPolicyAsk || policies["Write"] != api.ToolPolicyDeny || policies["Read"] != api.ToolPolicyAuto {
 			t.Fatalf("tool policies = %v, want Bash=ask Write=deny Read=auto", policies)
 		}
-		if _, ok := policies["Glob"]; ok {
-			t.Fatalf("tool policies = %v, want Glob omitted", policies)
+		// auto is carried rather than dropped now that Tools is the policy map.
+		// It means the same thing either way — an absent tool inherits the posture
+		// and auto defers to it — but the map now says what was configured.
+		if policies["Glob"] != api.ToolPolicyAuto {
+			t.Fatalf("tool policies = %v, want Glob carried as auto", policies)
 		}
 	})
 
@@ -1044,11 +1047,11 @@ func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid tool mode fails loud", func(t *testing.T) {
+	t.Run("invalid tool policy fails loud", func(t *testing.T) {
 		payload := base
-		payload.Spec.Permissions = api.Permissions{Tools: api.Tools{Modes: map[string]api.ToolMode{"Bash": "maybe"}}}
+		payload.Spec.Permissions = api.Permissions{Tools: api.Tools{"Bash": "maybe"}}
 		if _, err := normalizeTodoRunOptions(dir, nil, payload); err == nil {
-			t.Fatal("expected error for invalid tool mode, got nil")
+			t.Fatal("expected error for invalid tool policy, got nil")
 		}
 	})
 
@@ -1085,7 +1088,7 @@ func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 			Memory: api.Memory{Skills: []string{"gavel-todos"}},
 			Permissions: api.Permissions{
 				Mode:    api.PermissionAcceptEdits,
-				Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk}},
+				Tools:   api.Tools{"Bash": api.ToolPolicyAsk},
 				MCP:     api.MCP{Servers: []string{"postgres"}},
 				Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
 				Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},
@@ -1133,9 +1136,9 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 
 			oldStart := startTodoRun
 			var got todoRunRequest
-			startTodoRun = func(req todoRunRequest) error {
+			startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 				got = req
-				return nil
+				return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 			}
 			t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -1182,7 +1185,10 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 
 	oldStart := startTodoRun
 	started := false
-	startTodoRun = func(todoRunRequest) error { started = true; return nil }
+	startTodoRun = func(todoRunRequest) (todoRunStartResult, error) {
+		started = true
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
+	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	payload := todoRunPayload{
@@ -1235,9 +1241,9 @@ func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 	}
 
 	oldStart := startTodoRun
-	startTodoRun = func(todoRunRequest) error {
+	startTodoRun = func(todoRunRequest) (todoRunStartResult, error) {
 		t.Fatal("grouped native run must be rejected before dispatch")
-		return nil
+		return todoRunStartResult{}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -1297,9 +1303,9 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -1343,9 +1349,9 @@ func TestTodoAPIRunModeField(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -1585,9 +1591,9 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
-	startTodoRun = func(req todoRunRequest) error {
+	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return nil
+		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 

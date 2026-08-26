@@ -19,12 +19,13 @@ import (
 // UserInteraction is for user-facing notifications and clarifying questions.
 type ExecutorContext struct {
 	context.Context
-	Logger      logger.Logger // For executor internal logging
-	interaction *UserInteraction
-	transcript  *ExecutionTranscript
-	onSessionID func(sessionID string)
-	onRunStart  func(RunStartMetadata)
-	onNotices   func(sessionID string, notices []api.Notice)
+	Logger        logger.Logger // For executor internal logging
+	interaction   *UserInteraction
+	transcript    *ExecutionTranscript
+	onSessionID   func(sessionID string)
+	onRunPrepared func(RunPreparationResult)
+	onRunStart    func(RunStartMetadata)
+	onNotices     func(sessionID string, notices []api.Notice)
 }
 
 // RunStartMetadata is the human-facing run identity recorded on a TODO issue
@@ -246,6 +247,20 @@ func (ctx *ExecutorContext) RecordSessionID(sessionID string) {
 		return
 	}
 	ctx.onSessionID(sessionID)
+}
+
+// SetRunPreparedHook registers a callback invoked after Captain has admitted
+// the run and before the external agent starts.
+func (ctx *ExecutorContext) SetRunPreparedHook(fn func(RunPreparationResult)) {
+	ctx.onRunPrepared = fn
+}
+
+// RecordRunPrepared reports Captain's durable admission identity.
+func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
+	if result.SessionID == "" || ctx.onRunPrepared == nil {
+		return
+	}
+	ctx.onRunPrepared(result)
 }
 
 // SetRunStartHook registers a callback an executor invokes with the resolved

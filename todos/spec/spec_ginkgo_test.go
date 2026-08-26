@@ -324,10 +324,10 @@ todos:
 				WorkDir: workspace(""),
 				Mode:    types.ModeRun,
 				Override: api.Spec{Permissions: api.Permissions{
-					Tools: api.Tools{Modes: map[string]api.ToolMode{"Bash": "sometimes"}},
+					Tools: api.Tools{"Bash": "sometimes"},
 				}},
 			})
-			Expect(err).To(MatchError(ContainSubstring(`invalid tool mode "sometimes" for tool "Bash"`)))
+			Expect(err).To(MatchError(ContainSubstring(`invalid tool policy "sometimes" for tool "Bash"`)))
 		})
 
 		It("names the offending model rather than running with a default", func() {

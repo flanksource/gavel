@@ -28,9 +28,9 @@ var _ = Describe("todo plan review", func() {
 		var request todoRunRequest
 		previousStartRun := startTodoRun
 		previousStartAnswer := startTodoAnswer
-		startTodoRun = func(got todoRunRequest) error {
+		startTodoRun = func(got todoRunRequest) (todoRunStartResult, error) {
 			request = got
-			return nil
+			return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
 		}
 		startTodoAnswer = func(todoRunRequest, string) error {
 			Fail("a plan without an agent session cannot use the resume path")

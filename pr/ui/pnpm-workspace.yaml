@@ -11,6 +11,9 @@ packages:
   - "."
   - "../../testrunner/ui"
   - "../../../clicky-ui/packages/ui"
+allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
 catalog:
   "@ai-sdk/react": ^3.0.201
   "@codemirror/autocomplete": ^6.20.3
@@ -61,6 +64,7 @@ catalog:
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   cmdk: ^1.0.4
+  country-flag-icons: ^1.6.20
   dompurify: ^3.4.7
   jotai: ^2.20.1
   jsdom: ^26.0.0

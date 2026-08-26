@@ -112,9 +112,11 @@ body fixture`,
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(provider.PrepareRun(ctx, created, todos.RunPreparation{
+		preparation, err := provider.PrepareRun(ctx, created, todos.RunPreparation{
 			Mode: types.ModePlan, ExecutorName: "claude",
-		})).To(Succeed())
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(preparation.SessionID).NotTo(BeEmpty())
 		Expect(provider.SaveAttempt(ctx, created, &todos.ExecutionResult{
 			Success: true, ExecutorName: "claude", EndStatus: types.EndCompleted,
 			Plan: &types.PlanResult{Status: types.PlanNew, Content: planMarkdown},

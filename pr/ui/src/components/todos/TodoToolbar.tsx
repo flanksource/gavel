@@ -8,6 +8,7 @@ import { Spinner } from '../../icons/Spinner';
 import type { FacetModes } from '../../utils';
 import { flattenTodos } from './todoGroup';
 import { EXTERNAL_FILTER_DEFS, PRIORITY_FILTER_DEFS, STATUS_FILTER_DEFS, externalKey, priorityKey } from './todoFilter';
+import { TodoBulkBar, TodoBulkToggle } from './TodoBulkBar';
 import { TodoGroupByMenu } from './TodoGroupByMenu';
 import { TodoSortByMenu } from './TodoSortByMenu';
 import type { WorkspaceTodos } from './useWorkspaceTodos';
@@ -26,7 +27,7 @@ import type { WorkspaceTodos } from './useWorkspaceTodos';
 export function TodoToolbar({ todos }: { todos: WorkspaceTodos }) {
   const {
     workspaces, byDir, aggregate, filters, setFilters,
-    groupBy, setGroupBy, sortBy, setSortBy, timeRange, setTimeRange, loadingList, refresh,
+    groupBy, setGroupBy, sortBy, setSortBy, timeRange, setTimeRange, loadingList, refresh, selection,
   } = todos;
 
   // Priority and external-link counts are derived from the loaded items — the
@@ -94,6 +95,7 @@ export function TodoToolbar({ todos }: { todos: WorkspaceTodos }) {
   const RefreshIcon = loadingList ? Spinner : UiRefresh;
 
   return (
+    <>
     <FilterBar
       className="shrink-0 flex-nowrap border-b border-border bg-card px-2"
       filters={bar}
@@ -101,6 +103,7 @@ export function TodoToolbar({ todos }: { todos: WorkspaceTodos }) {
         <>
           <TodoGroupByMenu groupBy={groupBy} onChange={setGroupBy} />
           <TodoSortByMenu sortBy={sortBy} onChange={setSortBy} />
+          <TodoBulkToggle selection={selection} />
         </>
       }
       trailing={
@@ -133,5 +136,7 @@ export function TodoToolbar({ todos }: { todos: WorkspaceTodos }) {
         </>
       }
     />
+    <TodoBulkBar selection={selection} onApplied={refresh} />
+    </>
   );
 }

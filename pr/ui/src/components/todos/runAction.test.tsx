@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TodoRunActionButton } from './run';
+import { TodoRunActionButton } from './TodoRunActionButton';
 import type { RunContext } from './providers';
 import { queryTestWrapper } from './queryTestWrapper';
 

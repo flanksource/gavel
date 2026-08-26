@@ -9,7 +9,10 @@ import type { TodoSort } from './todoSort';
 import { loadTodoSort, saveTodoSort } from './todoSort';
 import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRange';
 import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys } from './todoQueries';
+import { useTodoSelection, type SelectedTodo } from './todoSelection';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
+
+export type { SelectedTodo };
 
 const activeTodoDetailPollInterval = 1000;
 
@@ -99,10 +102,6 @@ async function fetchWorkspaceTodoBatch(dirs: string[], signal: AbortSignal): Pro
   return workspaceTodoBatchState(dirs, payload);
 }
 
-export interface SelectedTodo {
-  dir: string;
-  ref: string;
-}
 
 // useWorkspaceTodos drives the shared todos data layer: it lists every
 // configured workspace's todos in one batch, loads the selected todo's detail,
@@ -167,6 +166,10 @@ export function useWorkspaceTodos(
   const [sortBy, setSortByState] = useState<TodoSort>(loadTodoSort);
   // Activity time-range filter (clicky-ui TimeRange tokens); null shows all.
   const [timeRange, setTimeRangeState] = useState<TodoTimeRange | null>(loadTimeRange);
+  // Bulk-edit mode and its checked set. Deliberately not persisted: a selection
+  // restored from a previous session would apply an edit to todos the user has
+  // long forgotten checking.
+  const selection = useTodoSelection();
 
   const setFilters = useCallback((next: TodoFilters) => {
     setFiltersState(next);
@@ -342,6 +345,7 @@ export function useWorkspaceTodos(
     setSortBy,
     timeRange,
     setTimeRange,
+    selection,
   };
 }
 

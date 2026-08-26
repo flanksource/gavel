@@ -32,10 +32,8 @@ func (e *Executor) buildRequest(ctx *todopkg.ExecutorContext, todosInGroup []*ty
 	explicitPolicies := req.Permissions.Tools.Policies()
 	req.Permissions = permissionDefaults(req.Permissions, isCmux)
 	if e.config.Approvals && !isCmux && len(explicitPolicies) == 0 {
-		req.Permissions.Tools = api.Tools{
-			Allow: withoutBash(todopkg.DefaultAgentTools()),
-			Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk},
-		}
+		req.Permissions.Tools = api.ToolsFromLists(withoutBash(todopkg.DefaultAgentTools()), nil)
+		req.Permissions.Tools["Bash"] = api.ToolPolicyAsk
 	}
 
 	// providerSessionID is the fresh claude session id handed to the cmux provider
@@ -103,7 +101,7 @@ func permissionDefaults(permissions api.Permissions, cmux bool) api.Permissions 
 		return permissions
 	}
 	permissions.Presets = []api.Preset{api.PresetEdit}
-	permissions.Tools = api.Tools{Allow: todopkg.DefaultAgentTools()}
+	permissions.Tools = api.ToolsFromLists(todopkg.DefaultAgentTools(), nil)
 	return permissions
 }
 

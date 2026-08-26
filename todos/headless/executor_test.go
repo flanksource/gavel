@@ -60,19 +60,19 @@ func newTestExecutor(config Config) *Executor {
 	}
 	permissions := api.Permissions{Mode: testPermissionMode(config.PermissionMode)}
 	if len(config.Tools) > 0 {
-		permissions.Tools.Allow = config.Tools
+		permissions.Tools = api.ToolsFromLists(config.Tools, nil)
 	}
 	for tool, mode := range config.ToolModes {
+		if permissions.Tools == nil {
+			permissions.Tools = api.Tools{}
+		}
 		switch mode {
 		case "enabled":
-			permissions.Tools.Allow = append(permissions.Tools.Allow, tool)
+			permissions.Tools[tool] = api.ToolPolicyAllow
 		case "disabled":
-			permissions.Tools.Deny = append(permissions.Tools.Deny, tool)
+			permissions.Tools[tool] = api.ToolPolicyDeny
 		case "ask":
-			if permissions.Tools.Modes == nil {
-				permissions.Tools.Modes = map[string]api.ToolMode{}
-			}
-			permissions.Tools.Modes[tool] = api.ToolModeAsk
+			permissions.Tools[tool] = api.ToolPolicyAsk
 		}
 	}
 	budget := api.Budget{Cost: config.MaxBudgetUsd, MaxTurns: config.MaxTurns}
@@ -328,7 +328,7 @@ func TestHeadlessPreservesCanonicalSpecAndRunsNativeWorkflow(t *testing.T) {
 		Memory: api.Memory{Skills: []string{"gavel-todos"}},
 		Permissions: api.Permissions{
 			Mode:    api.PermissionAcceptEdits,
-			Tools:   api.Tools{Modes: map[string]api.ToolMode{"Bash": api.ToolModeAsk, "Read": api.ToolModeOn}},
+			Tools:   api.Tools{"Bash": api.ToolPolicyAsk, "Read": api.ToolPolicyAllow},
 			MCP:     api.MCP{Servers: []string{"postgres"}},
 			Plugins: api.ResourcePolicies{"review": api.ResourceEnabled},
 			Skills:  api.ResourcePolicies{"gavel-todos": api.ResourceEnabled},
@@ -580,8 +580,8 @@ func TestHeadlessNoApprovalCallbackByDefault(t *testing.T) {
 	if canUseTool != nil {
 		t.Fatal("CanUseTool must be nil when approvals are disabled (CLI runs have no resolver)")
 	}
-	if !contains(captured.Permissions.Tools.Allow, "Bash") {
-		t.Errorf("Bash should stay allow-listed when approvals are off: %v", captured.Permissions.Tools.Allow)
+	if !contains(captured.Permissions.Tools.AllowList(), "Bash") {
+		t.Errorf("Bash should stay allow-listed when approvals are off: %v", captured.Permissions.Tools.AllowList())
 	}
 }
 
@@ -599,8 +599,8 @@ func TestHeadlessApprovalRoutesToRegistry(t *testing.T) {
 	if canUseTool == nil {
 		t.Fatal("expected CanUseTool to be set when Approvals is enabled")
 	}
-	if contains(captured.Permissions.Tools.Allow, "Bash") {
-		t.Errorf("Bash must be removed from the allowlist so it routes through approval: %v", captured.Permissions.Tools.Allow)
+	if contains(captured.Permissions.Tools.AllowList(), "Bash") {
+		t.Errorf("Bash must be removed from the allowlist so it routes through approval: %v", captured.Permissions.Tools.AllowList())
 	}
 
 	type outcome struct {
@@ -643,10 +643,13 @@ func TestHeadlessApprovalUsesCanonicalToolPolicies(t *testing.T) {
 	executor := NewExecutor(todopkg.AgentRunConfig{
 		Spec: api.Spec{
 			Model: api.Model{Name: "claude"},
-			Permissions: api.Permissions{Tools: api.Tools{Modes: map[string]api.ToolMode{
-				"Read":  api.ToolModeOn,
-				"Write": api.ToolModeOff,
-			}}},
+			// auto, not allow: this is what a legacy `modes: {Read: on}` resolves to,
+			// and buildCanUseTool must treat it as "run it" rather than falling
+			// through to the approval registry.
+			Permissions: api.Permissions{Tools: api.Tools{
+				"Read":  api.ToolPolicyAuto,
+				"Write": api.ToolPolicyDeny,
+			}},
 		},
 		WorkDir:   t.TempDir(),
 		Approvals: true,
@@ -789,10 +792,10 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		if _, err := e.Execute(newTestCtx(), &types.TODO{}); err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
-		if got := strings.Join(req.Permissions.Tools.Allow, ","); got != "Read" {
+		if got := strings.Join(req.Permissions.Tools.AllowList(), ","); got != "Read" {
 			t.Errorf("allow = %q, want Read", got)
 		}
-		if got := strings.Join(req.Permissions.Tools.Deny, ","); got != "Write" {
+		if got := strings.Join(req.Permissions.Tools.DenyList(), ","); got != "Write" {
 			t.Errorf("deny = %q, want Write", got)
 		}
 		if req.Permissions.Mode != api.PermissionAcceptEdits {
@@ -898,12 +901,12 @@ func TestHeadlessPlanRunIsReadOnly(t *testing.T) {
 				t.Errorf("presets = %v, want no edit preset on a plan run", req.Permissions.Presets)
 			}
 			for _, tool := range []string{"Write", "Edit", "Bash"} {
-				if contains(req.Permissions.Tools.Allow, tool) {
-					t.Errorf("%s is allow-listed on a plan run: %v", tool, req.Permissions.Tools.Allow)
+				if contains(req.Permissions.Tools.AllowList(), tool) {
+					t.Errorf("%s is allow-listed on a plan run: %v", tool, req.Permissions.Tools.AllowList())
 				}
 			}
-			if !contains(req.Permissions.Tools.Allow, "Read") {
-				t.Errorf("allow = %v, want the template's read-only tools", req.Permissions.Tools.Allow)
+			if !contains(req.Permissions.Tools.AllowList(), "Read") {
+				t.Errorf("allow = %v, want the template's read-only tools", req.Permissions.Tools.AllowList())
 			}
 		})
 	}
@@ -918,7 +921,7 @@ func TestHeadlessPlanRunIsReadOnly(t *testing.T) {
 // still leave here with a mode, or narrowing the tools would silently widen the
 // mode.
 func TestPermissionDefaults(t *testing.T) {
-	readOnly := api.Tools{Allow: []string{"Read"}}
+	readOnly := api.ToolsFromLists([]string{"Read"}, nil)
 
 	for _, tc := range []struct {
 		name     string
@@ -941,11 +944,11 @@ func TestPermissionDefaults(t *testing.T) {
 			if got.HasPreset(api.PresetEdit) != tc.wantEdit {
 				t.Errorf("presets = %v, want edit preset stamped = %v", got.Presets, tc.wantEdit)
 			}
-			if tc.wantEdit && !contains(got.Tools.Allow, "Write") {
-				t.Errorf("allow = %v, want the default edit toolset", got.Tools.Allow)
+			if tc.wantEdit && !contains(got.Tools.AllowList(), "Write") {
+				t.Errorf("allow = %v, want the default edit toolset", got.Tools.AllowList())
 			}
-			if !tc.wantEdit && contains(got.Tools.Allow, "Write") {
-				t.Errorf("allow = %v, want the stated toolset left alone", got.Tools.Allow)
+			if !tc.wantEdit && contains(got.Tools.AllowList(), "Write") {
+				t.Errorf("allow = %v, want the stated toolset left alone", got.Tools.AllowList())
 			}
 		})
 	}

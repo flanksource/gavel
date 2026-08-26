@@ -60,6 +60,13 @@ type RunPreparation struct {
 	Spec api.Spec
 }
 
+// RunPreparationResult is the durable Captain identity allocated before an
+// external agent is dispatched. SessionID is Captain's admission session UUID,
+// not the provider-specific session identity reported after launch.
+type RunPreparationResult struct {
+	SessionID string
+}
+
 // RunRuntimeProvider exposes the configuration known before dispatch.
 type RunRuntimeProvider interface {
 	RunRuntimeSelection() captaindb.PromptRunRuntimeSelection
@@ -89,7 +96,7 @@ type RunSpecProvider interface {
 // RunLifecycleProvider is implemented by the native PostgreSQL runtime. Native
 // execution state is owned by Captain and projected into issues.
 type RunLifecycleProvider interface {
-	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) error
+	PrepareRun(ctx context.Context, todo *types.TODO, preparation RunPreparation) (RunPreparationResult, error)
 	RecordRunStart(ctx context.Context, todo *types.TODO, metadata RunStartMetadata) error
 }
 

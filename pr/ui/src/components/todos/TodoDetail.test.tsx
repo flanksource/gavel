@@ -1,5 +1,5 @@
 import type React from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunContext } from './providers';
 import type { TodoItem } from '../../types';
@@ -205,6 +205,44 @@ afterEach(() => {
 });
 
 describe('TodoDetail Resume/Run/Plan guard', () => {
+  it('adopts the admitted Captain session id as soon as a run starts', async () => {
+    const admissionSession = '11111111-1111-4111-8111-111111111111';
+    const onChanged = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/todos/run?') && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'started',
+            ref: baseTodo.ref,
+            dir: '/repo',
+            agent: 'claude',
+            mode: 'cmux',
+            sessionId: admissionSession,
+            timeout: '30m0s',
+            message: 'Todo run started',
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => RUN_CONTEXT } as Response;
+    }));
+
+    render(
+      <TodoDetail todo={{ ...baseTodo, sessionId: undefined }} loading={false} dir="/repo" onChanged={onChanged} onDeleted={() => {}} />,
+      { wrapper: queryTestWrapper() },
+    );
+    await act(async () => {});
+    const runButton = screen.getAllByRole('button').find(button => button.textContent?.trim() === 'Run' && !(button as HTMLButtonElement).disabled);
+    expect(runButton).toBeTruthy();
+    fireEvent.click(runButton!);
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'in_progress',
+      sessionId: admissionSession,
+    })));
+  });
+
   it('renders a deep-link database error with a menubar back action', () => {
     render(
       <TodoDetail

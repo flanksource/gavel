@@ -143,15 +143,17 @@ func (e *TODOExecutor) Resume(ctx *ExecutorContext, todosInGroup []*types.TODO, 
 	}
 	if lifecycle, ok := e.activeProvider().(RunLifecycleProvider); ok {
 		for _, todo := range todosInGroup {
-			if err := lifecycle.PrepareRun(ctx, todo, RunPreparation{
+			preparation, err := lifecycle.PrepareRun(ctx, todo, RunPreparation{
 				Mode: e.Mode(), ExecutorName: e.executor.Name(), Resume: true,
 				// A resumed turn dispatches the answer as its user prompt; the rest
 				// of the spec is the session's, already persisted by the run that
 				// opened it.
 				Spec: api.Spec{Prompt: api.Prompt{User: message}},
-			}); err != nil {
+			})
+			if err != nil {
 				return nil, fmt.Errorf("prepare resumed native TODO run: %w", err)
 			}
+			ctx.RecordRunPrepared(preparation)
 		}
 	}
 	// A resumed turn records its run start the same way a fresh one does: from

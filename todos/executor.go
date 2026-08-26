@@ -192,7 +192,8 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 
 	// Execute with the configured driver. The driver logs its resolved agent,
 	// backend, model, and effort after Captain constructs the provider.
-	if err := e.prepareRun(ctx, todo); err != nil {
+	preparation, err := e.prepareRun(ctx, todo)
+	if err != nil {
 		if errors.Is(err, ErrRunDispatchAlreadyClaimed) || errors.Is(err, ErrRunResumeModeMismatch) {
 			return nil, fmt.Errorf("prepare native TODO run: %w", err)
 		}
@@ -201,6 +202,7 @@ func (e *TODOExecutor) Execute(ctx *ExecutorContext, todo *types.TODO) (*Executi
 		e.updateProviderState(ctx, todo, StateUpdate{Status: &todo.Status, Attempts: &todo.Attempts})
 		return nil, fmt.Errorf("prepare native TODO run: %w", err)
 	}
+	ctx.RecordRunPrepared(preparation)
 	ctx.SetSessionIDHook(e.sessionIDPersister(ctx, []*types.TODO{todo}))
 	ctx.SetRunStartHook(e.runStartPersister(ctx, []*types.TODO{todo}))
 	ctx.SetNoticesHook(e.noticesPersister(ctx))
@@ -415,10 +417,10 @@ func (e *TODOExecutor) saveAttempt(ctx context.Context, todo *types.TODO, result
 	return provider.SaveAttempt(persistCtx, todo, result)
 }
 
-func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error {
+func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) (RunPreparationResult, error) {
 	lifecycle, ok := e.activeProvider().(RunLifecycleProvider)
 	if !ok {
-		return nil
+		return RunPreparationResult{}, nil
 	}
 	persistCtx, cancel := providerPersistenceContext(ctx)
 	defer cancel()
@@ -433,7 +435,7 @@ func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) error 
 	if renderer, ok := e.executor.(RunSpecProvider); ok {
 		spec, err := renderer.RenderRunSpec(ctx, todo)
 		if err != nil {
-			return fmt.Errorf("render native TODO spec: %w", err)
+			return RunPreparationResult{}, fmt.Errorf("render native TODO spec: %w", err)
 		}
 		preparation.Spec = spec
 	}

@@ -453,6 +453,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tests/run", s.handleTestRun)
 	mux.HandleFunc("/api/todos", s.handleTodos)
 	mux.HandleFunc("POST /api/todos/batch", s.handleTodoBatch)
+	mux.HandleFunc("POST /api/todos/bulk", s.handleTodoBulk)
 	mux.HandleFunc("POST /api/todos/new", s.handleTodoNew)
 	mux.HandleFunc("POST /todos/new", s.handleTodoNew)
 	mux.HandleFunc("/api/todos/attachments", s.handleTodoAttachmentUpload)
