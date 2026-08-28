@@ -9,6 +9,7 @@ import { settingsRunContextQuery } from "../settings/queries";
 import { invalidateTodoCaches, todoMutationJSON } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
+  agentForRuntime,
   PROVIDERS,
   type RunBackendCatalog,
   type RunContext,
@@ -146,6 +147,7 @@ export interface TodoRunContextState {
 }
 
 function unavailableRunContextError(context: RunContext): string {
+  if (!context.runtimes || context.runtimes.length === 0) return "Captain returned no runtime catalog";
   if (context.backends.some(backend => backend.models.length > 0)) return "";
   const details = context.backends.map(backend => backend.modelError?.trim()).filter(Boolean);
   return details[0] || "Captain returned no run models";
@@ -158,7 +160,13 @@ export function useTodoRunContext(enabled = true): TodoRunContextState {
     return { context: null, loading: query.isFetching, error: query.error instanceof Error ? query.error.message : "Failed to load run context" };
   }
   const context = query.data ?? null;
-  if (context && (!Array.isArray(context.backends) || !Array.isArray(context.efforts) || !Array.isArray(context.tools))) {
+  if (context && (
+    !Array.isArray(context.backends) ||
+    !Array.isArray(context.runtimes) ||
+    !Array.isArray(context.models) ||
+    !Array.isArray(context.efforts) ||
+    !Array.isArray(context.tools)
+  )) {
     return { context: null, loading: false, error: "Captain returned an invalid run context" };
   }
   return { context, loading: query.isFetching, error: context ? unavailableRunContextError(context) : "" };
@@ -169,46 +177,32 @@ export function TodoRunContextError({ error }: { error: string }) {
   return <div role="alert" className="max-w-sm text-xs text-red-600">{error}</div>;
 }
 
+function backendById(context: RunContext, id: string | undefined, model?: string): RunBackendCatalog | undefined {
+  if (!id) return undefined;
+  const agent = agentForRuntime(context, id, model);
+  return context.backends.find(backend => backend.id === id && backend.agent === agent && backend.models.length > 0);
+}
+
 function primaryBackendForAction(context: RunContext): RunBackendCatalog {
-  return context.backends.find(backend => backend.id === context.defaultBackend && backend.models.length > 0)
+  return backendById(context, context.defaultBackend)
     ?? context.backends.find(backend => backend.models.length > 0)
     ?? (() => { throw new Error("Captain returned no run models"); })();
 }
 
 function backendForOptions(context: RunContext, options: TodoRunOptions): RunBackendCatalog {
-  const requested = runSpec(options).backend || options.driver || options.mode || "";
+  const spec = runSpec(options);
+  const requested = spec.backend || options.driver || "";
   return (
-    context.backends.find(backend => backend.models.length > 0 && (backend.id === requested || backend.driver === requested)) ??
-    (context.defaultBackend ? context.backends.find(backend => backend.models.length > 0 && backend.id === context.defaultBackend) : undefined) ??
+    backendById(context, requested, spec.model) ??
+    backendById(context, context.defaultBackend) ??
     context.backends.find(backend => backend.models.length > 0) ??
     (() => { throw new Error("Captain returned no run models"); })()
   );
 }
 
-function mechanismForBackend(backend: RunBackendCatalog): string {
-  const value = backend.mechanisms[0]?.value;
-  if (value) return value;
-  const parts = backend.driver.split("-");
-  return parts.length > 1 ? parts.slice(1).join("-") : backend.driver;
-}
-
 function runtimeModeForBackend(backend: RunBackendCatalog): TodoRunRuntimeMode {
-  const id = backend.id.toLowerCase();
-  if (id.endsWith("-cmux")) return "cmux";
-  if (id.endsWith("-agent")) return "agent";
-  if (id.endsWith("-cli")) return "cli";
-  if (backend.type === "api" || ["anthropic", "openai", "gemini", "deepseek"].includes(id)) return "api";
-
-  switch (mechanismForBackend(backend).toLowerCase()) {
-    case "cmux":
-      return "cmux";
-    case "api":
-      return "api";
-    case "cli":
-      return "cli";
-    default:
-      return "agent";
-  }
+	if (backend.id in RUNTIME_MODE_CONFIG) return backend.id as TodoRunRuntimeMode;
+	throw new Error(`Invalid run backend ${JSON.stringify(backend.id)}`);
 }
 
 function runtimeModeLabel(mode: TodoRunRuntimeMode): string {

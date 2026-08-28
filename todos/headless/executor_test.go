@@ -54,6 +54,9 @@ func newTestExecutor(config Config) *Executor {
 	}
 	if config.Backend != "" {
 		model.Backend = captainai.Backend(config.Backend)
+		model.Mode = model.Backend.Mode()
+	} else if model.Mode == "" {
+		model.Mode = api.ModeAgent
 	}
 	if config.Effort != "" {
 		model.Effort = api.Effort(config.Effort)
@@ -178,7 +181,7 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 	if len(starts) != 3 {
 		t.Fatalf("run starts = %d, want pre-dispatch, post-setup and session-bound metadata: %#v", len(starts), starts)
 	}
-	if starts[0].SessionID != "" || starts[0].Driver != "cli" || starts[0].Agent != "claude" || starts[0].ResolvedModel != "claude-agent-sonnet" {
+	if starts[0].SessionID != "" || starts[0].Driver != "agent" || starts[0].Agent != "claude" || starts[0].ResolvedModel != "claude-agent-sonnet" {
 		t.Fatalf("pre-dispatch run metadata = %+v", starts[0])
 	}
 	if starts[0].Spec != nil {
@@ -198,7 +201,7 @@ func TestHeadlessCompletesOnResult(t *testing.T) {
 		messages = append(messages, entry.Message)
 	}
 	if got := strings.Join(messages, "\n"); !strings.Contains(got,
-		"Resolved TODO runtime: driver=cli agent=claude provider=anthropic backend=claude-agent model=claude-agent-sonnet effort=high model_source=run-option") {
+		"Resolved TODO runtime: driver=agent agent=claude provider=anthropic backend=claude-agent model=claude-agent-sonnet effort=high model_source=run-option") {
 		t.Fatalf("resolved runtime log missing selection details:\n%s", got)
 	}
 }
@@ -219,7 +222,7 @@ func TestHeadlessLogsPromptDefaultModelSource(t *testing.T) {
 		messages = append(messages, entry.Message)
 	}
 	if got := strings.Join(messages, "\n"); !strings.Contains(got,
-		"driver=cli agent=claude provider=unknown backend=default model=claude effort=default model_source=todos.run-prompt") {
+		"driver=agent agent=claude provider=unknown backend=default model=claude effort=default model_source=todos.run-prompt") {
 		t.Fatalf("prompt-default runtime log missing selection source:\n%s", got)
 	}
 }
@@ -779,7 +782,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		}
 	}
 
-	t.Run("sdk backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
+	t.Run("agent backend maps modes to allow/deny and honours permission mode", func(t *testing.T) {
 		var req captainai.Request
 		e := newTestExecutor(Config{
 			WorkDir:        t.TempDir(),
@@ -821,7 +824,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 		e.stream = func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 			req = r
 			ch := make(chan captainai.Event, 2)
-			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/tmp/plan.md"}}`}
+			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","planStatus":"new","planPath":"/tmp/plan.md"}`}
 			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 			close(ch)
 			return ch, nil
@@ -845,7 +848,7 @@ func TestHeadlessBuildsPermissionsFromToolModes(t *testing.T) {
 			Stream: func(_ context.Context, r captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 				req = r
 				ch := make(chan captainai.Event, 2)
-				ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/tmp/plan.md"}}`}
+				ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","planStatus":"new","planPath":"/tmp/plan.md"}`}
 				ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 				close(ch)
 				return ch, nil
@@ -874,7 +877,7 @@ func TestHeadlessPlanRunIsReadOnly(t *testing.T) {
 		return func(_ context.Context, req captainai.Request, _ captainai.PermissionFunc) (<-chan captainai.Event, error) {
 			*out = req
 			ch := make(chan captainai.Event, 2)
-			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","plan":{"status":"new","path":"/plan.md"}}`}
+			ch <- captainai.Event{Kind: captainai.EventText, Text: `{"summary":"planned","endStatus":"completed","planStatus":"new","planPath":"/plan.md"}`}
 			ch <- captainai.Event{Kind: captainai.EventResult, Success: true}
 			close(ch)
 			return ch, nil

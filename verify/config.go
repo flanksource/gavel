@@ -363,7 +363,7 @@ type TodosConfig struct {
 	// grader built from it inherited the session it was grading, along with the
 	// coding agent's model, backend and budget.
 	Verify api.Spec `yaml:"verify,omitempty" json:"verify,omitempty"`
-	// Driver is the execution mechanism: cmux | cli | sdk | api.
+	// Driver is the execution mechanism: api | agent | cli | cmux.
 	Driver string `yaml:"driver,omitempty" json:"driver,omitempty"`
 	// Timeout caps a run's wall-clock duration (e.g. "30m"); empty = default.
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`

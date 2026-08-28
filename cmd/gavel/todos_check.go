@@ -258,7 +258,7 @@ func init() {
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
 	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
 	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Todo operation: run (implement) or plan (propose a reviewable plan)")
-	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Execution mechanism: cmux, cli, sdk, or api (default: cmux). The coding agent is derived from --model")
+	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Execution mechanism: api, agent, cli, or cmux (default: cmux). The coding agent is derived from --model")
 	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution (empty: the mode's .prompt frontmatter default)")
 	// Empty, not "medium": the flag is the highest resolution layer, so a non-zero
 	// default would beat the .prompt frontmatter it claims to defer to. todos/spec

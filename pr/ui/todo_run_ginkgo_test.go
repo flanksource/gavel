@@ -29,10 +29,10 @@ var _ = Describe("todo run admission contract", func() {
 
 		body, err := json.Marshal(todoRunPayload{
 			Ref:     todos.TODOReference(created),
-			Driver:  "codex-headless",
+			Driver:  "agent",
 			RunMode: "run",
 			Spec: api.Spec{
-				Model:  api.Model{Backend: "codex-agent", Name: "gpt-5.5", Effort: api.EffortHigh},
+				Model:  api.Model{Mode: api.ModeAgent, Name: "gpt-5.5", Effort: api.EffortHigh},
 				Budget: api.Budget{Timeout: "45m", MaxTurns: 12},
 				Prompt: api.Prompt{AppendSystem: "Keep the contract visible."},
 			},
@@ -51,7 +51,7 @@ var _ = Describe("todo run admission contract", func() {
 		Expect(rendered.Prompt.User).To(Equal(response.Prompt))
 		Expect(rendered.Prompt.AppendSystem).To(Equal("Keep the contract visible."))
 		Expect(rendered.Budget).To(Equal(api.Budget{Timeout: "45m0s", MaxTurns: 12}))
-		Expect(rendered.Backend).To(Equal(api.Backend("codex-agent")))
+		Expect(rendered.Mode).To(Equal(api.ModeAgent))
 		Expect(rendered.Name).To(Equal("gpt-5.5"))
 	})
 
@@ -72,7 +72,7 @@ var _ = Describe("todo run admission contract", func() {
 
 		body, err := json.Marshal(todoRunPayload{
 			Ref:    todos.TODOReference(created),
-			Driver: "codex-headless",
+			Driver: "agent",
 			Spec:   specPayload("gpt-5.5", "high"),
 		})
 		Expect(err).NotTo(HaveOccurred())

@@ -47,18 +47,18 @@ func isolatedTodosRun(t *testing.T, cfg string) string {
 // fallback. Guards the fallback-drop bug where only the model name flowed end to
 // end and the fallback chain was silently discarded.
 func TestTodosSpecResolvesModelFallbacks(t *testing.T) {
-	dir := isolatedTodosRun(t, "todos:\n  run:\n    model: \"opus:high\"\n    fallbacks:\n      - sonnet\n")
+	dir := isolatedTodosRun(t, "todos:\n  run:\n    model: \"agent:opus:high\"\n    fallbacks:\n      - sonnet\n")
 
 	resolved, err := todosSpec(dir, nil)
 	if err != nil {
 		t.Fatalf("todosSpec: %v", err)
 	}
-	if resolved.Spec.Name != "opus" || resolved.Spec.Effort != api.EffortHigh {
-		t.Fatalf("resolved model = %+v, want opus/high", resolved.Spec.Model)
+	if resolved.Spec.Name != "claude-opus-5" || resolved.Spec.Effort != api.EffortHigh {
+		t.Fatalf("resolved model = %+v, want claude-opus-5/high", resolved.Spec.Model)
 	}
 	cands := resolved.Spec.Model.Candidates()
-	if len(cands) != 2 || cands[0].Name != "opus" || cands[1].Name != "sonnet" {
-		t.Fatalf("Candidates() = %+v, want [opus sonnet]", cands)
+	if len(cands) != 2 || cands[0].Name != "claude-opus-5" || cands[1].Name != "claude-sonnet-5" {
+		t.Fatalf("Candidates() = %+v, want [claude-opus-5 claude-sonnet-5]", cands)
 	}
 }
 

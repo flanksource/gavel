@@ -2171,7 +2171,7 @@
           "type": "string"
         },
         "driver": {
-          "description": "Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from the model. Last-write-wins across layers.",
+          "description": "Execution mechanism for a run: api, agent, cli, or cmux. The coding agent is derived from the model. Last-write-wins across layers.",
           "type": "string"
         },
         "groupBy": {

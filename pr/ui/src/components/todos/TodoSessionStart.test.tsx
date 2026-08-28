@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TodoSessionStart } from './TodoSessionStart';
 import type { TodoItem, TodoRunOptions } from '../../types';
 
-const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'claude-headless', runMode: 'run', spec: { backend: 'claude-agent', model: 'claude-sonnet-5', effort: 'medium' } };
-const UPDATED_OPTIONS: TodoRunOptions = { driver: 'codex-cmux', runMode: 'run', spec: { backend: 'codex-cmux', model: 'gpt-5.6-sol', effort: 'high' } };
+const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'agent', runMode: 'run', spec: { backend: 'agent', model: 'claude-sonnet-5', effort: 'medium' } };
+const UPDATED_OPTIONS: TodoRunOptions = { driver: 'cmux', runMode: 'run', spec: { backend: 'cmux', model: 'gpt-5.6-sol', effort: 'high' } };
 
 vi.mock('./run', () => ({
   useTodoRunContext: () => ({ context: { backends: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
@@ -13,7 +13,7 @@ vi.mock('./run', () => ({
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   reconcileTodoRunOptions: (_action: string, options: unknown) => options,
   todoRunButtonPresentation: (options: TodoRunOptions) => ({ provider: undefined, model: options.spec?.model?.replace(/^claude-/, ''), effort: options.spec?.effort }),
-  todoRunModeLabel: (options: TodoRunOptions) => options.spec?.backend === 'codex-cmux' ? 'cmux' : 'Agent',
+  todoRunModeLabel: (options: TodoRunOptions) => options.spec?.backend === 'cmux' ? 'cmux' : 'Agent',
   useTodoRunPreview: () => ({
     isPending: false,
     mutate: (
@@ -124,8 +124,8 @@ describe('TodoSessionStart', () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     const lastRequest = fetchMock.mock.calls.at(-1)?.[1];
     expect(JSON.parse(String(lastRequest?.body))).toMatchObject({
-      driver: 'codex-cmux',
-      spec: { backend: 'codex-cmux', model: 'gpt-5.6-sol', effort: 'high' },
+      driver: 'cmux',
+      spec: { backend: 'cmux', model: 'gpt-5.6-sol', effort: 'high' },
     });
   });
 

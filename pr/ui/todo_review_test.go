@@ -77,8 +77,8 @@ func TestTodoAPIPlanApproveAndRun(t *testing.T) {
 		Ref: todos.TODOReference(created),
 		Run: true,
 		Options: &todoRunPayload{
-			Driver: "claude-headless",
-			Spec:   api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}},
+			Driver: "agent",
+			Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
 			// Even a stale plan runMode is forced back to run for the chained run.
 			RunMode: "plan",
 		},
@@ -237,7 +237,7 @@ func TestTodoAPIAnswer(t *testing.T) {
 	body, _ := json.Marshal(todoAnswerPayload{
 		Ref:     todos.TODOReference(created),
 		Answer:  "use postgres",
-		Options: &todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Name: "claude", Effort: "medium"}}},
+		Options: &todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoAnswer(rec, httptest.NewRequest(http.MethodPost, "/api/todos/answer", strings.NewReader(string(body))))
@@ -325,7 +325,7 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
 			Mode:   "run",
-			Driver: "headless-codex",
+			Driver: "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{
 				Provider: "openai", Backend: "codex-agent", Model: codexModel, Effort: "high",
 			},
@@ -342,14 +342,17 @@ func TestTodoAPIAnswerInheritsAskingRunRuntime(t *testing.T) {
 	if !*called {
 		t.Fatal("resume was never dispatched")
 	}
-	if gotReq.Options.Driver != string(drivers.Cli) {
-		t.Errorf("driver = %q, want %q (the asking run's headless mechanism)", gotReq.Options.Driver, drivers.Cli)
+	if gotReq.Options.Driver != string(drivers.Agent) {
+		t.Errorf("driver = %q, want %q (the asking run's backend)", gotReq.Options.Driver, drivers.Agent)
 	}
-	if gotReq.Options.agent() != "codex" {
-		t.Errorf("agent = %q, want codex — a codex session must not resume under claude", gotReq.Options.agent())
+	if gotReq.Options.Spec.Backend.Family() != "codex" {
+		t.Errorf("family = %q, want codex — a codex session must not resume under claude", gotReq.Options.Spec.Backend.Family())
 	}
 	if string(gotReq.Options.Spec.Backend) != "codex-agent" {
 		t.Errorf("backend = %q, want codex-agent", gotReq.Options.Spec.Backend)
+	}
+	if gotReq.Options.Spec.Mode != api.ModeAgent {
+		t.Errorf("authored backend = %q, want agent", gotReq.Options.Spec.Mode)
 	}
 	if gotReq.Options.Spec.Name != codexModel {
 		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, codexModel)
@@ -369,7 +372,7 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 	created := seedAskTodoWithRun(t, workDir, "sess-answer-override", types.ModeRun, &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Driver:   "headless-codex",
+			Driver:   "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})
@@ -380,7 +383,7 @@ func TestTodoAPIAnswerOptionsOverrideInheritedRuntime(t *testing.T) {
 		Answer: "use postgres",
 		Options: &todoRunPayload{
 			Driver: "cmux",
-			Spec:   api.Spec{Model: api.Model{Name: "claude-sonnet-5", Backend: "claude-cmux", Effort: "medium"}},
+			Spec:   api.Spec{Model: api.Model{Name: "claude-sonnet-5", Mode: api.ModeCmux, Effort: "medium"}},
 		},
 	})
 	if err != nil {
@@ -406,7 +409,7 @@ func TestTodoAPIAnswerRejectsLiveRun(t *testing.T) {
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created := seedAskTodoWithRun(t, workDir, "sess-answer-live", types.ModeRun, &captaindb.PromptRun{
 		State:   captaindb.PromptRunStateRunning,
-		Runtime: captaindb.PromptRunRuntime{Driver: "headless-codex"},
+		Runtime: captaindb.PromptRunRuntime{Driver: "agent"},
 	})
 	_, called := stubTodoAnswer(t)
 
@@ -432,7 +435,7 @@ func TestTodoAPIAnswerPreflightFailureLeavesNoComment(t *testing.T) {
 	created := seedAskTodoWithRun(t, workDir, "sess-answer-preflight", types.ModeRun, &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Driver:   "headless-codex",
+			Driver:   "agent",
 			Resolved: captaindb.PromptRunRuntimeSelection{Backend: "codex-agent", Model: "gpt-5.6-sol", Effort: "high"},
 		},
 	})

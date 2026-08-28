@@ -20,12 +20,11 @@ import {
   useTodoRunPreview,
 } from "./run";
 import {
-  agentForBackend,
+  agentForRuntime,
   buildRunFamilies,
   defaultModelForSelection,
   driverForSelection,
   isCmuxBackend,
-  modelsForSelection,
 } from "./providers";
 
 const RUN_SPEC_SECTIONS = ["model", "prompt", "permissions", "workspace", "verify", "commit"] as const;
@@ -67,9 +66,9 @@ export function TodoRunAdvancedDialog({
   const promptDirtyRef = useRef(false);
 
   const families = context ? buildRunFamilies(context) : [];
-  const agent = context ? agentForBackend(context, runtimeValue.backend) : undefined;
-  const isCmux = !!agent && isCmuxBackend(agent, runtimeValue.backend);
-  const activeModels = context && agent ? modelsForSelection(context, agent, runtimeValue.backend) : [];
+  const agent = context ? agentForRuntime(context, runtimeValue.backend, runtimeValue.model) : undefined;
+  const isCmux = isCmuxBackend(runtimeValue.backend);
+  const activeModels = context?.models ?? [];
   const modelFallback = context && agent ? defaultModelForSelection(context, agent, runtimeValue.backend) : "";
   const selection = context && agent ? driverForSelection(context, agent, runtimeValue.backend) : null;
   const driver = selection?.driver;

@@ -446,25 +446,14 @@ export type TodoRunAgent = 'claude' | 'codex';
 export type TodoRunMode = 'cmux' | 'inline';
 export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 // TodoRunDriver selects the execution mechanism: cmux drives the interactive TUI;
-// cli drives a headless `-p --output-format stream-json` CLI; sdk drives the
-// vendor Agent SDK bridge; api drives the direct provider API. The driver is
-// mechanism-only — the coding agent (claude/codex) is derived from the model.
-// The legacy composite `<agent>-<mechanism>` values are still accepted by the
-// server (drivers.Parse keeps only the mechanism part) so persisted runs keep
-// working.
+// agent uses Captain's local agent bridge; cli drives a supervised CLI; api
+// drives the direct provider API. The driver is mechanism-only — the coding
+// agent (claude/codex) is derived from the model.
 export type TodoRunDriver =
-  // Mechanism-only enum (current):
   | 'cmux'
+  | 'agent'
   | 'cli'
-  | 'sdk'
-  | 'api'
-  // Legacy composite values, still parsed by the server:
-  | 'claude-cmux'
-  | 'claude-headless'
-  | 'claude-sdk'
-  | 'claude-api'
-  | 'codex-cmux'
-  | 'codex-headless';
+  | 'api';
 
 // TodoRunOptions is the run POST body's options: the api.Spec under its own
 // `spec` key plus the run-orchestration extras below. Dirty worktree,
@@ -503,8 +492,7 @@ export interface TodoRunResponse {
   status: 'started' | 'skipped' | 'dry_run';
   ref: string;
   dir: string;
-  agent: TodoRunAgent;
-  mode: TodoRunMode;
+  provider?: string;
   driver?: TodoRunDriver;
   backend?: string;
   model?: string;
@@ -526,8 +514,7 @@ export interface TodoRunResponse {
 export interface TodoRunPreviewResponse {
   prompt: string;
   specYaml: string;
-  mode: TodoRunMode;
-  agent: TodoRunAgent;
+  provider?: string;
   backend?: string;
   effort?: TodoRunEffort;
   plan?: boolean;

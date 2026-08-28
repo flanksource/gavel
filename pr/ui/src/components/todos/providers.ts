@@ -1,7 +1,7 @@
 import { providerIcon, type ChatModel, type ToolMeta } from '@flanksource/clicky-ui/chat';
 import type { StaticIconComponent } from '@flanksource/clicky-ui/data';
-import type { SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
-import { UiColumns, UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
+import { familiesFromRuntimeCatalog, type RuntimeCatalogFamily, type SpecRuntimeFamily } from '@flanksource/clicky-ui/ai';
+import { UiRobotAi, UiSparkles } from '@flanksource/clicky-ui/icons';
 import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
 
 // Captain's run context owns every selectable backend and model. This module
@@ -12,8 +12,7 @@ import type { TodoRunAgent, TodoRunDriver, TodoRunEffort } from '../../types';
 // driver's agent half (claude or codex).
 export type RunProvider = TodoRunAgent;
 
-// RunMechanism is the user-facing runtime mode. The driver string still carries
-// implementation detail such as claude-headless; the picker presents agent/cli/API.
+// RunMechanism is the canonical authored backend and execution driver.
 export type RunMechanism = 'cmux' | 'agent' | 'cli' | 'api';
 
 export interface ProviderCatalog {
@@ -53,8 +52,17 @@ export interface RunBackendCatalog {
 
 export interface RunContext {
   backends: RunBackendCatalog[];
+  runtimes?: RuntimeCatalogFamily[];
+  models?: ChatModel[];
   efforts: TodoRunEffort[];
   defaultBackend?: string;
+  defaultProvider?: string;
+  // promptDefaults is the (backend, model) each named prompt resolves to,
+  // keyed by prompt name — the server running todos/spec.Resolve, the same
+  // resolution the run performs. Seeding a prompt's dialog from defaultBackend
+  // instead sends an account-wide default as if the operator had chosen it,
+  // which outranks the frontmatter that prompt pins.
+  promptDefaults?: Record<string, { backend?: string; model?: string }>;
   // tools is the agent tool catalog the run dialog's tool-permissions control
   // renders; served by /api/todos/run/context (gavel drivers.DefaultTools).
   tools: ToolMeta[];
@@ -97,48 +105,29 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
   return preferred ?? backendCatalog(context, '', agent);
 }
 
-// driverFor composes the TodoRunDriver from the two axes the dialog selects.
-export function driverFor(provider: RunProvider, mechanism: RunMechanism): TodoRunDriver {
-  return `${provider}-${mechanism}` as TodoRunDriver;
-}
-
-// buildRunFamilies maps the whoami-backed RunContext onto clicky's two-axis
-// Family -> Mode picker: one family per provider, with every mode coming from a
-// backend row served by /api/todos/run/context.
+// buildRunFamilies forwards Captain's runtime catalog through Clicky's display
+// projection; Gavel never reconstructs provider/backend pairs.
 export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
-  return PROVIDERS.flatMap((provider) => {
-    const backendModes = backendsForAgent(context, provider.id).filter(item => item.models.length > 0).map((item) => ({
-      id: item.id,
-      label: item.configured === false ? `${item.label} (not ready)` : item.label,
-      backend: item.id,
-      icon: item.driver.endsWith('cmux') ? UiColumns : provider.icon,
-      title: item.label,
-    }));
-    if (backendModes.length === 0) return [];
-    return [{
-      id: provider.id,
-      label: provider.label,
-      provider: provider.provider,
-      modes: backendModes,
-    }];
-  });
+	if (!context.runtimes || context.runtimes.length === 0) {
+		throw new Error('Captain returned no runtime catalog');
+	}
+  return familiesFromRuntimeCatalog(context.runtimes);
 }
 
-// isCmuxBackend reports whether `backend` is the provider's cmux mode, as
-// opposed to one of its captain (headless) backends.
-export function isCmuxBackend(agent: RunProvider, backend: string | undefined): boolean {
-  return (backend ?? '') === driverFor(agent, 'cmux');
+export function isCmuxBackend(backend: string | undefined): boolean {
+  return backend === 'cmux';
 }
 
-// agentForBackend recovers which provider a `spec.backend` value belongs to,
-// so the dialog can derive provider-scoped state (models, driver) from the
-// single backend string the two-axis picker writes.
-export function agentForBackend(context: RunContext, backend: string | undefined): RunProvider {
+// agentForRuntime selects the provider axis from the model catalog. Backend is
+// intentionally insufficient because api/agent/cli/cmux are shared by families.
+export function agentForRuntime(context: RunContext, backend: string | undefined, model: string | undefined): RunProvider {
   const value = backend ?? '';
-  for (const provider of PROVIDERS) {
-    if (value === driverFor(provider.id, 'cmux')) return provider.id;
-  }
-  return context.backends.find((item) => item.id === value && item.models.length > 0)?.agent
+  const byModel = context.backends.find(item =>
+    item.id === value && item.models.some(entry => entry.id === model),
+  )?.agent;
+  if (byModel) return byModel;
+  const defaultAgent = PROVIDERS.find(item => item.provider === context.defaultProvider)?.id;
+  return defaultAgent
     ?? context.backends.find(item => item.id === context.defaultBackend && item.models.length > 0)?.agent
     ?? context.backends.find(item => item.models.length > 0)?.agent
     ?? context.backends[0]?.agent
@@ -156,15 +145,12 @@ export function defaultModelForSelection(context: RunContext, agent: RunProvider
   return backendCatalog(context, backend ?? '', agent).defaultModel;
 }
 
-// driverForSelection composes the TodoRunDriver + optional captain backend id
-// the run/preview/submit payloads need from the two-axis picker's single
-// `backend` selection.
+// driverForSelection returns the canonical mechanism unchanged on both fields.
 export function driverForSelection(
   context: RunContext,
   agent: RunProvider,
   backend: string | undefined,
 ): { driver: TodoRunDriver; runBackend?: string } {
   const cat = backendCatalog(context, backend ?? '', agent);
-  if (isCmuxBackend(agent, cat.id)) return { driver: cat.driver };
   return { driver: cat.driver, runBackend: cat.id };
 }

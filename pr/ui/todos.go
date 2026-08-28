@@ -21,7 +21,6 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/prwatch"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/native"
 	todoruntime "github.com/flanksource/gavel/todos/runtime"
@@ -188,14 +187,14 @@ type todoTransferResponse struct {
 }
 
 type todoRunPayload struct {
-	Dir   string   `json:"dir,omitempty"`
-	Ref   string   `json:"ref,omitempty"`
-	Refs  []string `json:"refs,omitempty"`
-	Agent string   `json:"agent,omitempty"`
-	Mode  string   `json:"mode,omitempty"`
-	// Driver selects the agent driver (claude-cmux, claude-headless, claude-sdk,
-	// claude-api, codex-cmux, codex-headless). When empty it is derived from the
-	// legacy agent+mode pair for backward compatibility.
+	Dir  string   `json:"dir,omitempty"`
+	Ref  string   `json:"ref,omitempty"`
+	Refs []string `json:"refs,omitempty"`
+	// Agent and Mode are retained only to reject the removed legacy payload shape
+	// with a useful boundary error.
+	Agent string `json:"agent,omitempty"`
+	Mode  string `json:"mode,omitempty"`
+	// Driver is the canonical execution backend: api, agent, cli, or cmux.
 	Driver string `json:"driver,omitempty"`
 
 	// Spec carries the model/backend/effort/prompt/budget/permissions/session
@@ -233,8 +232,7 @@ type todoRunResponse struct {
 	Refs      []string `json:"refs,omitempty"`
 	Count     int      `json:"count"`
 	Dir       string   `json:"dir"`
-	Agent     string   `json:"agent"`
-	Mode      string   `json:"mode"`
+	Provider  string   `json:"provider,omitempty"`
 	Model     string   `json:"model,omitempty"`
 	Backend   string   `json:"backend,omitempty"`
 	Effort    string   `json:"effort,omitempty"`
@@ -253,8 +251,7 @@ type todoRunResponse struct {
 type todoRunPreviewResponse struct {
 	Prompt   string `json:"prompt"`
 	SpecYAML string `json:"specYaml"`
-	Mode     string `json:"mode"`
-	Agent    string `json:"agent"`
+	Provider string `json:"provider,omitempty"`
 	Backend  string `json:"backend,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 	RunMode  string `json:"runMode,omitempty"`
@@ -303,19 +300,6 @@ type todoRunOptions struct {
 	// Timeout is Spec.Budget.Timeout already parsed by the resolution seam, so no
 	// consumer re-parses a string it cannot fail on.
 	Timeout time.Duration
-}
-
-func (o todoRunOptions) agent() string {
-	agent, _ := claude.ResolveAgent(o.Spec.Name)
-	return agent
-}
-
-func (o todoRunOptions) legacyMode() string {
-	kind, err := drivers.Parse(o.Driver)
-	if err == nil && kind == drivers.Cmux {
-		return "cmux"
-	}
-	return "inline"
 }
 
 // specCommits returns the run's commit policies (nil when the spec asks for
@@ -933,10 +917,9 @@ func (s *Server) handleTodoRun(w http.ResponseWriter, r *http.Request) {
 		Refs:      todoRunRefs(todoList),
 		Count:     len(todoList),
 		Dir:       source.Dir,
-		Agent:     opts.agent(),
-		Mode:      opts.legacyMode(),
+		Provider:  string(opts.Spec.Backend.Provider()),
 		Driver:    opts.Driver,
-		Backend:   string(opts.Spec.Backend),
+		Backend:   string(opts.Spec.Mode),
 		Model:     opts.Spec.Name,
 		Effort:    string(opts.Spec.Effort),
 		RunMode:   string(opts.RunMode),
@@ -989,9 +972,8 @@ func (s *Server) handleTodoRunPreview(w http.ResponseWriter, r *http.Request) {
 	resp := todoRunPreviewResponse{
 		Prompt:   renderedSpec.Prompt.User,
 		SpecYAML: specYAML,
-		Mode:     opts.legacyMode(),
-		Agent:    opts.agent(),
-		Backend:  string(opts.Spec.Backend),
+		Provider: string(opts.Spec.Backend.Provider()),
+		Backend:  string(opts.Spec.Mode),
 		Effort:   string(opts.Spec.Effort),
 		RunMode:  string(opts.RunMode),
 		Plan:     opts.RunMode == types.ModePlan,
@@ -1550,12 +1532,12 @@ func normalizeTodoRunOptions(dir string, todoList []*types.TODO, payload todoRun
 	// resolved model rather than the payload's, so a model that arrived from
 	// .gavel.yaml gets the same treatment as one the dialog picked.
 	spec := resolved.Spec
-	backend, model, err := resolveTodoRunBackendModel(resolved.Driver, string(spec.Backend), spec.Name)
+	backend, model, err := resolveTodoRunBackendModel(resolved.Driver, string(spec.Mode), spec.Name)
 	if err != nil {
 		return todoRunOptions{}, err
 	}
 	spec.Name = model
-	spec.Backend = api.Backend(backend)
+	spec.Mode = api.RuntimeMode(backend)
 
 	return todoRunOptions{
 		Spec:      spec,
@@ -1632,43 +1614,21 @@ func defaultStartTodoRun(req todoRunRequest) (todoRunStartResult, error) {
 	return outcome.result, outcome.err
 }
 
-// payloadDriver reads the driver mechanism the payload names: the explicit
-// Driver field when set, otherwise the legacy agent+mode pair (mode cmux →
-// cmux, mode inline → cli; codex was never an inline agent). The driver is
-// mechanism-only; the coding agent is derived from the model downstream.
-//
-// A payload naming neither returns "" rather than a hardcoded default, so
-// `.gavel.yaml` todos.driver reaches the dashboard. Only todos/spec.Resolve
-// falls back to drivers.Default.
+// payloadDriver validates the canonical mechanism-only driver. Provider and
+// model identity live in Spec.Model and are resolved by Captain.
 func payloadDriver(p todoRunPayload) (string, error) {
-	if s := strings.TrimSpace(p.Driver); s != "" {
-		kind, err := drivers.Parse(s)
-		if err != nil {
-			return "", err
-		}
-		return string(kind), nil
+	if strings.TrimSpace(p.Agent) != "" || strings.TrimSpace(p.Mode) != "" {
+		return "", fmt.Errorf("invalid run configuration: agent and mode are not supported; use driver api, agent, cli, or cmux")
 	}
-	mode := strings.ToLower(strings.TrimSpace(p.Mode))
-	switch mode {
-	case "":
+	s := strings.TrimSpace(p.Driver)
+	if s == "" {
 		return "", nil
-	case "cmux":
-		return string(drivers.Cmux), nil
-	case "inline":
-		agent := strings.ToLower(strings.TrimSpace(p.Agent))
-		if agent == "" {
-			agent, _ = claude.ResolveAgent(strings.TrimSpace(p.Spec.Name))
-		}
-		if agent == "codex" {
-			return "", fmt.Errorf("codex runs require a cmux driver")
-		}
-		// Cli, not Sdk: every agent-mode entry in supportedTodoRunBackends maps to
-		// Cli, so validateBackendForDriver rejects Sdk for all of them and an inline
-		// run could never start.
-		return string(drivers.Cli), nil
-	default:
-		return "", fmt.Errorf("invalid mode %q", p.Mode)
 	}
+	kind, err := drivers.Parse(s)
+	if err != nil {
+		return "", err
+	}
+	return string(kind), nil
 }
 
 func newTodoRunExecutor(req todoRunRequest) (todos.Executor, string, error) {
@@ -1755,10 +1715,10 @@ func resolveRunSessionID(opts todoRunOptions, todoList []*types.TODO) string {
 			return sid
 		}
 	}
-	switch opts.legacyMode() {
-	case "cmux":
+	switch opts.Driver {
+	case string(drivers.Cmux):
 		return uuid.NewString()
-	case "inline":
+	default:
 		if len(todoList) == 1 {
 			return firstTodoSessionID(todoList)
 		}

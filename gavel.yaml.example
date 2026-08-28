@@ -34,7 +34,7 @@ ai:
   # A compact model can include a mechanism and effort: cli:model-name:high.
   model: claude-haiku-4-5
   fallbacks:
-    - codex-mini-latest:medium
+    - agent:codex-mini-latest:medium
   effort: medium
   prompt:
     system: Follow repository instructions and report verification evidence.
@@ -176,7 +176,7 @@ todos:
         Produce a read-only implementation plan for:
         {{{body}}}
 
-  # Execution mechanism: cmux, cli, sdk, or api.
+  # Execution mechanism: api, agent, cli, or cmux.
   driver: cli
   timeout: 45m
   # Group values: file, directory, repo, all, or none.

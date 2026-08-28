@@ -331,7 +331,7 @@ func todosSchema(specSchema map[string]any) map[string]any {
 					"grader is told to inspect the change with its own tools, and an API model returns "+
 					"confident verdicts without reading the diff."),
 			"driver": stringProp(
-				"Execution mechanism for a run: cmux, cli, sdk, or api. The coding agent is derived from " +
+				"Execution mechanism for a run: api, agent, cli, or cmux. The coding agent is derived from " +
 					"the model. Last-write-wins across layers."),
 			"timeout": stringProp(
 				"Wall-clock timeout for a run (e.g. 30m). Last-write-wins across layers."),

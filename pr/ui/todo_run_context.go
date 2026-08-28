@@ -4,20 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
-	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
 )
 
 type todoRunContextResponse struct {
-	Backends       []todoRunBackendOption `json:"backends"`
-	Efforts        []string               `json:"efforts"`
-	DefaultBackend string                 `json:"defaultBackend,omitempty"`
+	Backends        []todoRunBackendOption `json:"backends"`
+	Runtimes        []api.RuntimeFamily    `json:"runtimes"`
+	Models          []todoRunModelOption   `json:"models"`
+	Efforts         []string               `json:"efforts"`
+	DefaultBackend  string                 `json:"defaultBackend,omitempty"`
+	DefaultProvider string                 `json:"defaultProvider,omitempty"`
 	// Tools is the catalog the run dialog's tool-permissions control renders, so
 	// the per-tool Auto/Ask/Off choices map to real agent tools.
 	Tools []todoRunToolOption `json:"tools"`
@@ -52,67 +55,9 @@ type todoRunMechanismItem struct {
 	Driver string `json:"driver"`
 }
 
-type todoRunModelOption struct {
-	ID                string   `json:"id"`
-	Provider          string   `json:"provider"`
-	Label             string   `json:"label"`
-	CapabilitiesKnown bool     `json:"capabilitiesKnown,omitempty"`
-	Reasoning         bool     `json:"reasoning"`
-	Temperature       *bool    `json:"temperature,omitempty"`
-	SupportedEfforts  []string `json:"supportedEfforts,omitempty"`
-	DefaultEffort     string   `json:"defaultEffort,omitempty"`
-	Configured        bool     `json:"configured"`
-}
-
-type runBackendSpec struct {
-	Backend  captainai.Backend
-	Label    string
-	Provider string
-	Agent    string
-	Driver   drivers.Kind
-}
+type todoRunModelOption = captaincli.PromptModelCatalogEntry
 
 var runCaptainWhoami = captaincli.RunWhoami
-
-func supportedTodoRunBackends() []runBackendSpec {
-	return []runBackendSpec{
-		{
-			Backend:  captainai.BackendClaudeCmux,
-			Label:    "Claude cmux",
-			Provider: "anthropic",
-			Agent:    "claude",
-			Driver:   drivers.Cmux,
-		},
-		{
-			Backend:  captainai.BackendClaudeAgent,
-			Label:    "Claude Agent",
-			Provider: "anthropic",
-			Agent:    "claude",
-			Driver:   drivers.Cli,
-		},
-		{
-			Backend:  captainai.BackendClaudeCLI,
-			Label:    "Claude CLI",
-			Provider: "anthropic",
-			Agent:    "claude",
-			Driver:   drivers.Cli,
-		},
-		{
-			Backend:  captainai.BackendCodexCmux,
-			Label:    "Codex cmux",
-			Provider: "openai",
-			Agent:    "codex",
-			Driver:   drivers.Cmux,
-		},
-		{
-			Backend:  captainai.BackendCodexAgent,
-			Label:    "Codex Agent",
-			Provider: "openai",
-			Agent:    "codex",
-			Driver:   drivers.Cli,
-		},
-	}
-}
 
 func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -129,52 +74,62 @@ func (s *Server) handleTodoRunContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func todoRunContext() (todoRunContextResponse, error) {
-	specs := supportedTodoRunBackends()
 	who, err := todoRunWhoami()
 	if err != nil {
 		return todoRunContextResponse{}, err
 	}
-	specsByBackend := make(map[captainai.Backend]runBackendSpec, len(specs))
-	for _, spec := range specs {
-		specsByBackend[spec.Backend] = spec
-	}
+	models := captaincli.PromptModelCatalog(who.Adapters)
 	backends := make([]todoRunBackendOption, 0, len(who.Adapters))
 	for _, status := range who.Adapters {
 		backend := captainai.Backend(strings.TrimSpace(status.Backend))
-		spec, ok := specsByBackend[backend]
-		if !ok {
+		provider := backend.ModelProvider()
+		mode := backend.Mode()
+		if provider == nil || !supportedTodoRunFamily(provider.AgentName) {
 			continue
 		}
-		backends = append(backends, todoRunBackendOptionFor(spec, status, who.ProviderDefaults[spec.Provider].Model))
+		if _, err := drivers.Parse(string(mode)); err != nil {
+			continue
+		}
+		backends = append(backends, todoRunBackendOptionFor(backend, status, who.ProviderDefaults[provider.Name].Model, models))
 	}
 	if len(backends) == 0 {
 		return todoRunContextResponse{}, fmt.Errorf("captain returned no supported TODO run providers")
 	}
-	defaultBackend, err := defaultTodoRunBackend(who, backends)
-	if err != nil {
-		return todoRunContextResponse{}, err
-	}
+	defaultBackend := defaultTodoRunBackend(who, backends)
 	return todoRunContextResponse{
-		Backends:       backends,
-		Efforts:        todoRunEfforts(),
-		DefaultBackend: defaultBackend,
-		Tools:          todoRunToolCatalog(),
-		InputSchemas:   todoRunInputSchemas(),
+		Backends:        backends,
+		Runtimes:        who.Runtimes,
+		Models:          models,
+		Efforts:         todoRunEfforts(),
+		DefaultBackend:  defaultBackend,
+		DefaultProvider: who.DefaultProvider,
+		Tools:           todoRunToolCatalog(),
+		InputSchemas:    todoRunInputSchemas(),
 	}, nil
 }
 
-func todoRunBackendOptionFor(spec runBackendSpec, status captaincli.AdapterStatus, captainDefaultModel string) todoRunBackendOption {
+func todoRunBackendOptionFor(
+	backend captainai.Backend,
+	status captaincli.AdapterStatus,
+	captainDefaultModel string,
+	catalog []captaincli.PromptModelCatalogEntry,
+) todoRunBackendOption {
+	provider := backend.ModelProvider()
+	if provider == nil {
+		panic(fmt.Sprintf("Captain returned invalid backend %q", backend))
+	}
 	configured := status.Ready()
-	models := todoRunModelsFromWhoami(spec, status)
-	mode := runtimeModeForTodoBackend(spec.Backend, spec.Driver)
+	mode := string(backend.Mode())
+	models := todoRunModelsForBackend(catalog, provider.Name, mode, configured)
+	label := strings.ToUpper(provider.AgentName[:1]) + provider.AgentName[1:] + " " + mechanismLabel(mode)
 	return todoRunBackendOption{
-		ID:            string(spec.Backend),
-		Label:         spec.Label,
-		Provider:      spec.Provider,
-		Agent:         spec.Agent,
+		ID:            mode,
+		Label:         label,
+		Provider:      provider.Name,
+		Agent:         provider.AgentName,
 		DefaultModel:  defaultModelFromCatalog(models, captainDefaultModel),
-		Driver:        string(spec.Driver),
-		Mechanisms:    []todoRunMechanismItem{{Value: mode, Label: mechanismLabel(mode), Driver: string(spec.Driver)}},
+		Driver:        mode,
+		Mechanisms:    []todoRunMechanismItem{{Value: mode, Label: mechanismLabel(mode), Driver: mode}},
 		Models:        models,
 		Configured:    configured,
 		Type:          status.Type,
@@ -184,6 +139,10 @@ func todoRunBackendOptionFor(spec runBackendSpec, status captaincli.AdapterStatu
 		BinaryMissing: status.BinaryMissing,
 		ModelError:    status.ModelError,
 	}
+}
+
+func supportedTodoRunFamily(family string) bool {
+	return family == "claude" || family == "codex"
 }
 
 func todoRunWhoami() (captaincli.WhoamiResult, error) {
@@ -200,58 +159,18 @@ func todoRunWhoami() (captaincli.WhoamiResult, error) {
 	return who, nil
 }
 
-func todoRunModelsFromWhoami(spec runBackendSpec, status captaincli.AdapterStatus) []todoRunModelOption {
-	candidates := make([]todoRunModelOption, 0, len(status.Models)+len(status.ModelDetails))
-	if len(status.ModelDetails) > 0 {
-		for _, model := range status.ModelDetails {
-			reasoning := true
-			var temperature *bool
-			if model.CapabilitiesKnown {
-				reasoning = model.Reasoning
-				value := model.Temperature
-				temperature = &value
-			}
-			efforts := make([]string, 0, len(model.SupportedEfforts))
-			for _, effort := range model.SupportedEfforts {
-				efforts = append(efforts, string(effort))
-			}
-			candidates = append(candidates, todoRunModelOption{
-				ID:                model.ID,
-				Provider:          spec.Provider,
-				Label:             firstNonEmpty(model.Name, modelLabel(model.ID)),
-				CapabilitiesKnown: model.CapabilitiesKnown,
-				Reasoning:         reasoning,
-				Temperature:       temperature,
-				SupportedEfforts:  efforts,
-				DefaultEffort:     string(model.DefaultEffort),
-				Configured:        true,
-			})
-		}
-	} else {
-		for _, id := range status.Models {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				continue
-			}
-			candidates = append(candidates, todoRunModelOption{
-				ID:         id,
-				Provider:   spec.Provider,
-				Label:      modelLabel(id),
-				Reasoning:  true,
-				Configured: true,
-			})
-		}
-	}
-
-	out := make([]todoRunModelOption, 0, len(candidates))
-	seen := map[string]bool{}
-	for _, model := range candidates {
-		model.ID = strings.TrimSpace(model.ID)
-		if model.ID == "" || seen[model.ID] {
+func todoRunModelsForBackend(
+	catalog []captaincli.PromptModelCatalogEntry,
+	provider string,
+	backend string,
+	configured bool,
+) []todoRunModelOption {
+	out := make([]todoRunModelOption, 0)
+	for _, model := range catalog {
+		if model.Provider != provider || !slices.Contains(model.Backends, backend) {
 			continue
 		}
-		seen[model.ID] = true
-		model.Label = firstNonEmpty(model.Label, modelLabel(model.ID))
+		model.Configured = configured
 		out = append(out, model)
 	}
 	return out
@@ -374,91 +293,17 @@ func validTodoRunEffort(effort string) bool {
 func resolveTodoRunBackendModel(kind drivers.Kind, backend, model string) (string, string, error) {
 	backend = strings.TrimSpace(backend)
 	model = strings.TrimSpace(model)
-	// The coding agent is derived from the model (empty → claude); the driver is
-	// mechanism-only. With no explicit backend, pick the (agent, mechanism) backend.
-	agent, _ := claude.ResolveAgent(model)
 	if backend == "" {
-		backend = defaultBackendForDriver(kind, agent)
+		backend = string(kind)
 	}
-	if backend != "" {
-		if err := validateBackendForDriver(kind, backend); err != nil {
-			return "", "", err
-		}
-		if model == "" {
-			provider, _, ok := registry.ProviderFor(captainai.Backend(backend))
-			if !ok {
-				return "", "", fmt.Errorf("captain has no provider for backend %q", backend)
-			}
-			model = provider.AgentName
-		}
-		model = normalizeTodoRunModelForBackend(backend, model)
-		if err := validateModelForBackend(backend, model); err != nil {
-			return "", "", err
-		}
-	} else if model == "" {
-		model = agent
+	if model == "" {
+		model = "claude"
 	}
-	return backend, model, nil
-}
-
-func normalizeTodoRunModelForBackend(backend, model string) string {
-	return captainai.NormalizeModelForBackend(captainai.Backend(backend), model)
-}
-
-// defaultBackendForDriver is the default captain backend for a (mechanism, agent)
-// pair. The (agent, mechanism) → backend mapping is captain's Provider.BackendFor,
-// reached here through drivers.BackendFor; the driver's cli mechanism resolves to
-// the agent-SDK backend, matching the catalog's "Agent wins" default.
-func defaultBackendForDriver(kind drivers.Kind, agent string) string {
-	backend, err := drivers.BackendFor(agent, kind)
+	resolved, err := registry.ResolveModel(api.Model{Name: model, Mode: registry.RuntimeMode(backend)})
 	if err != nil {
-		return ""
+		return "", "", err
 	}
-	return string(backend)
-}
-
-func validateBackendForDriver(kind drivers.Kind, backend string) error {
-	b := captainai.Backend(backend)
-	if !b.Valid() {
-		return fmt.Errorf("invalid backend %q (valid: %s)", backend, captainai.BackendList())
-	}
-	for _, spec := range supportedTodoRunBackends() {
-		if spec.Backend == b && spec.Driver == kind {
-			return nil
-		}
-	}
-	return fmt.Errorf("backend %q is not supported by driver %q", backend, kind)
-}
-
-// validateModelForBackend checks the model belongs to the backend's provider
-// family. The family classification is captain's — a model's provider (its
-// registry descriptor) and the backend's provider must be the same — rather than
-// a local strings.HasPrefix(lower, "gpt-") heuristic that duplicated it.
-func validateModelForBackend(backend, model string) error {
-	b := captainai.Backend(backend)
-	want, _, ok := registry.ProviderFor(b)
-	if !ok {
-		return fmt.Errorf("invalid backend %q (valid: %s)", backend, captainai.BackendList())
-	}
-	// A bare agent sentinel ("claude"/"codex") is valid for its own family.
-	if model == "" || strings.EqualFold(strings.TrimSpace(model), want.AgentName) {
-		return nil
-	}
-	got, _, _, claimed := registry.ProviderForToken(normalizeTodoRunModelForBackend(backend, model))
-	if claimed && got == want {
-		return nil
-	}
-	return fmt.Errorf("model %q is not valid for backend %q", model, backend)
-}
-
-func runtimeModeForTodoBackend(backend captainai.Backend, driver drivers.Kind) string {
-	if mode := backend.Mode(); mode != "" {
-		return string(mode)
-	}
-	if mechanism := driver.Mechanism(); mechanism != "" {
-		return mechanism
-	}
-	return string(backend)
+	return string(resolved.Mode), resolved.Name, nil
 }
 
 func mechanismLabel(mechanism string) string {
@@ -469,8 +314,6 @@ func mechanismLabel(mechanism string) string {
 		return "agent"
 	case "cli":
 		return "cli"
-	case "sdk":
-		return "SDK"
 	case "api":
 		return "API"
 	default:

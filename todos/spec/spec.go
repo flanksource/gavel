@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/captain/pkg/api/registry"
 	"github.com/flanksource/gavel/todos/drivers"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	"github.com/flanksource/gavel/todos/types"
@@ -127,6 +128,14 @@ func Resolve(in Input) (Resolved, error) {
 	layers = append(layers, Layer{Name: "request", Spec: in.Override})
 
 	folded, provenance := fold(layers)
+	driver, err := resolveDriver(in.Driver, cfg.Todos.Driver)
+	if err != nil {
+		return Resolved{}, err
+	}
+	if folded.Mode == "" {
+		mode, _ := driver.RuntimeMode()
+		folded.Mode = mode
+	}
 
 	if err := applyModel(&folded, in.Override.Effort); err != nil {
 		return Resolved{}, err
@@ -140,11 +149,10 @@ func Resolve(in Input) (Resolved, error) {
 		return Resolved{}, err
 	}
 
-	driver, err := resolveDriver(in.Driver, cfg.Todos.Driver, folded.Backend)
+	driver, err = drivers.Parse(string(folded.Mode))
 	if err != nil {
-		return Resolved{}, err
+		return Resolved{}, fmt.Errorf("resolved model backend: %w", err)
 	}
-	reconcileBackend(&folded, driver, in)
 	approvals, err := resolveApprovals(cfg.Todos.Approvals, in.CanApprove)
 	if err != nil {
 		return Resolved{}, err
@@ -276,14 +284,15 @@ func todoName(todo *types.TODO) string {
 	return todo.ID
 }
 
-// applyModel expands the (possibly compact) model so drivers see a plain name
-// with the fallback chain alongside, and reconciles the requested effort.
+// applyModel resolves the canonical compact model grammar once in Captain. The
+// resolved adapter remains internal; the portable backend stays api, agent,
+// cli, or cmux.
 //
 // An explicit effort that the expanded model overrides is an error, not a
 // silent drop: `--effort high` against a model pinned to `:low` means the user
 // asked for two different things and only one can happen.
 func applyModel(s *api.Spec, requestedEffort api.Effort) error {
-	expanded, err := s.Expand()
+	expanded, err := registry.ResolveModel(s.Model)
 	if err != nil {
 		return fmt.Errorf("invalid todos model %q: %w", s.Name, err)
 	}
@@ -333,49 +342,17 @@ func validate(s api.Spec) error {
 	return nil
 }
 
-// resolveDriver selects the execution mechanism: the request's driver when set,
-// otherwise .gavel.yaml todos.driver, otherwise the mechanism the resolved
-// backend already names, otherwise drivers.Default. The mechanism combines with
-// the model — which alone determines the coding agent — inside drivers.New.
-//
-// The backend step matters because a captain backend IS a (provider, mechanism)
-// pair: `ai.backend: codex-agent` has already said "agent SDK". Falling through
-// to Default there would pair it with cmux and reject a coherent config for
-// disagreeing with a driver nobody asked for.
-func resolveDriver(request, configured string, backend api.Backend) (drivers.Kind, error) {
+// resolveDriver selects a default only when the prompt itself did not select a
+// backend. Captain's compact model prefix then outranks both the sibling backend
+// field and this Gavel default during ResolveModel.
+func resolveDriver(request, configured string) (drivers.Kind, error) {
 	if s := strings.TrimSpace(request); s != "" {
 		return drivers.Parse(s)
 	}
 	if s := strings.TrimSpace(configured); s != "" {
 		return drivers.Parse(s)
 	}
-	if backend != "" {
-		return drivers.ForBackend(backend)
-	}
 	return drivers.Default, nil
-}
-
-// reconcileBackend drops an inherited backend that the layers above it have
-// since contradicted. A backend is a (provider, mechanism) pair, so `ai.backend:
-// codex-agent` states both halves at once — and either can go stale underneath
-// it: the mode's .prompt frontmatter outranks `ai:` and may name a model from a
-// different provider, and a request may name a different driver. Left in place,
-// the stale half is validated against the fresh one downstream and rejects a run
-// nobody configured incoherently.
-//
-// Clearing is the right verb rather than overwriting: an empty backend already
-// means "infer it", so the inference happens once, downstream, from the model
-// and the mechanism that actually won. A backend the request itself supplied is
-// left alone — a contradiction the caller stated outright should fail loud, not
-// be quietly rewritten.
-func reconcileBackend(s *api.Spec, driver drivers.Kind, in Input) {
-	if in.Override.Backend != "" || s.Backend == "" {
-		return
-	}
-	if implied, err := drivers.BackendFor(s.Name, driver); err == nil && implied == s.Backend {
-		return
-	}
-	s.Backend = ""
 }
 
 // resolveApprovals decides the Bash-approval posture. It defaults to whatever

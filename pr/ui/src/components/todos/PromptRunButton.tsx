@@ -15,7 +15,7 @@ import {
   runSpec,
   useTodoRunContext,
 } from './run';
-import { agentForBackend, buildRunFamilies, driverForSelection, type RunContext } from './providers';
+import { agentForRuntime, buildRunFamilies, driverForSelection, type RunContext } from './providers';
 
 export type PromptRunScope = 'approval' | 'verification';
 
@@ -301,7 +301,7 @@ export function PromptRunAdvancedDialog({
   }, [open, initial, scope]);
 
   if (!open) return null;
-  const models = context?.backends.flatMap(backend => backend.models) ?? [];
+  const models = context?.models ?? [];
   const verification = scope === 'verification';
 
   return (
@@ -325,7 +325,7 @@ export function PromptRunAdvancedDialog({
             onRun(rememberPromptRunOptions(scope, { spec: verificationSpec(runtimeSpec) }, context));
             return;
           }
-          const agent = agentForBackend(context, runtimeSpec.backend);
+          const agent = agentForRuntime(context, runtimeSpec.backend, runtimeSpec.model);
           const selection = driverForSelection(context, agent, runtimeSpec.backend);
           onRun(rememberPromptRunOptions(scope, {
             driver: selection.driver,

@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/captain/pkg/ai/agent"
 	capsetup "github.com/flanksource/captain/pkg/ai/agent/setup"
 	capverify "github.com/flanksource/captain/pkg/ai/agent/verify"
+	captainapi "github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	gavelai "github.com/flanksource/gavel/ai"
 	todopkg "github.com/flanksource/gavel/todos"
@@ -61,6 +62,9 @@ func NewExecutor(config todopkg.AgentRunConfig, options ...option) *Executor {
 	if config.Mode == "" {
 		config.Mode = types.ModeRun
 	}
+	if config.Spec.Mode == "" && config.Spec.Backend.Valid() {
+		config.Spec.Mode = config.Spec.Backend.Mode()
+	}
 	agentName, _ := claude.ResolveAgent(config.Spec.Name)
 	executor := &Executor{config: config, agent: agentName}
 	for _, option := range options {
@@ -74,15 +78,12 @@ func (e *Executor) Name() string {
 }
 
 func (e *Executor) driver() string {
-	if e.isCmuxBackend() {
-		return "cmux"
-	}
-	return "cli"
+	return string(e.config.Spec.Mode)
 }
 
 func (e *Executor) RunRuntimeSelection() captaindb.PromptRunRuntimeSelection {
 	return captaindb.PromptRunRuntimeSelection{
-		Provider: todopkg.RuntimeProviderForBackend(string(e.config.Spec.Backend)),
+		Provider: string(captainapi.Backend(e.config.Spec.Backend).Provider()),
 		Backend:  string(e.config.Spec.Backend),
 		Model:    e.config.Spec.Name,
 		Effort:   string(e.config.Spec.Effort),
@@ -192,7 +193,7 @@ func (e *Executor) run(ctx *todopkg.ExecutorContext, start time.Time, req captai
 		Mode:          string(e.config.Mode),
 		Driver:        e.driver(),
 		Agent:         e.agent,
-		Provider:      todopkg.RuntimeProviderForBackend(string(provider.GetBackend())),
+		Provider:      string(captainapi.Backend(provider.GetBackend()).Provider()),
 		Backend:       string(provider.GetBackend()),
 		ResolvedModel: provider.GetModel(),
 		Effort:        string(req.Effort),

@@ -20,7 +20,6 @@ import (
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/internal/prompting"
 	"github.com/flanksource/gavel/todos"
-	"github.com/flanksource/gavel/todos/claude"
 	"github.com/flanksource/gavel/todos/drivers"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
 	todospec "github.com/flanksource/gavel/todos/spec"
@@ -236,7 +235,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	if dryRun {
-		return dryRunTODOs(groups, workDir, resolved.Driver, provider)
+		return dryRunTODOs(groups, workDir, resolved, provider)
 	}
 
 	interaction := newInteraction()
@@ -353,7 +352,7 @@ func todosSpecForMode(workDir string, mode types.RunMode, todoList []*types.TODO
 // newAgentRunConfig assembles Captain's canonical Spec plus Gavel-only
 // orchestration state from the resolved seam and the todos being run.
 // cmux mints and manages its own --session-id (reading any prior session from
-// the todo itself), so SessionID stays empty for it; the sdk/headless/api paths
+// the todo itself), so SessionID stays empty for it; the agent/cli/api paths
 // resume by carrying the prior session id explicitly.
 func newAgentRunConfig(ctx context.Context, workDir string, todoList []*types.TODO, provider todos.Provider) (todos.AgentRunConfig, todospec.Resolved, error) {
 	resolved, err := todosSpec(workDir, todoList)
@@ -613,7 +612,7 @@ func safeResult(results []*todos.ExecutionResult, i int) *todos.ExecutionResult 
 	return nil
 }
 
-func dryRunTODOs(groups []todos.TODOGroup, workDir string, kind drivers.Kind, provider todos.Provider) error {
+func dryRunTODOs(groups []todos.TODOGroup, workDir string, resolved todospec.Resolved, provider todos.Provider) error {
 	isGrouped := len(groups) > 1 || (len(groups) == 1 && groups[0].Name != "")
 
 	for _, group := range groups {
@@ -621,8 +620,8 @@ func dryRunTODOs(groups []todos.TODOGroup, workDir string, kind drivers.Kind, pr
 			continue
 		}
 
-		if kind.Mechanism() == "cmux" {
-			if err := printCmuxDryRun(group, workDir, provider); err != nil {
+		if resolved.Driver.Mechanism() == "cmux" {
+			if err := printCmuxDryRun(group, workDir, resolved.Spec.Model, provider); err != nil {
 				return err
 			}
 			continue
@@ -674,17 +673,20 @@ func validateTodosRunOptions() error {
 	return nil
 }
 
-func printCmuxDryRun(group todos.TODOGroup, workDir string, provider todos.Provider) error {
+func printCmuxDryRun(group todos.TODOGroup, workDir string, model api.Model, provider todos.Provider) error {
 	groupWorkDir := workDir
 	if group.Name != "" && group.Name != todos.UngroupedLabel && filepath.IsAbs(group.Name) {
 		groupWorkDir = group.Name
 	}
-	agent, model := resolveTodoAgent(todoModel)
+	if model.Provider == nil {
+		return fmt.Errorf("resolved model %q is missing its Captain provider", model.Name)
+	}
+	agent := model.Provider.AgentName
 	sessionID := ""
 	if agent == "claude" {
 		sessionID = "<session-id>"
 	}
-	agentCmd := cmuxprov.AgentCommand(cmuxprov.AgentCommandOpts{Agent: agent, Model: model, SessionID: sessionID})
+	agentCmd := cmuxprov.AgentCommand(cmuxprov.AgentCommandOpts{Agent: agent, Model: model.Name, SessionID: sessionID})
 	name := cmuxprov.AgentWorkspaceName(groupWorkDir, agent)
 
 	fmt.Printf("=== cmux Group: %s (%d TODOs) ===\n\n", group.Name, len(group.TODOs))
@@ -738,10 +740,6 @@ func buildTodoRunPrompt(todoList []*types.TODO, workDir string, provider todos.P
 
 func effortDirective(effort string) string {
 	return todoprompt.EffortDirective(effort)
-}
-
-func resolveTodoAgent(model string) (agent string, modelFlag string) {
-	return claude.ResolveAgent(model)
 }
 
 func printSectionCommands(header string, todoList []*types.TODO, getNodes func(*types.TODO) []*fixtures.FixtureNode) {

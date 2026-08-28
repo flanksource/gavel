@@ -58,13 +58,20 @@ var _ = Describe("todo run context catalog", func() {
 		context, err := todoRunContext()
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultBackend).To(Equal("codex-agent"))
+		Expect(context.DefaultBackend).To(Equal("agent"))
+		Expect(context.DefaultProvider).To(Equal("openai"))
 		Expect(context.Backends).To(HaveLen(1))
-		Expect(context.Backends[0].ID).To(Equal("codex-agent"))
+		Expect(context.Backends[0].ID).To(Equal("agent"))
+		Expect(context.Backends[0].Driver).To(Equal("agent"))
 		Expect(context.Backends[0].DefaultModel).To(Equal("gpt-captain-default"))
 		Expect(context.Backends[0].Models).To(HaveExactElements(
 			HaveField("ID", "gpt-captain-default"),
 			HaveField("ID", "gpt-captain-other"),
+		))
+		Expect(context.Models[0]).To(SatisfyAll(
+			HaveField("Provider", "openai"),
+			HaveField("Backends", []string{"agent"}),
+			HaveField("Runtime", api.Model{Name: "gpt-captain-default"}),
 		))
 	})
 
@@ -85,7 +92,8 @@ var _ = Describe("todo run context catalog", func() {
 		context, err := todoRunContext()
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(context.DefaultBackend).To(Equal("claude-agent"))
+		Expect(context.DefaultBackend).To(Equal("agent"))
+		Expect(context.DefaultProvider).To(Equal("anthropic"))
 	})
 
 	It("does not synthesize a model when Captain returns an empty adapter catalog", func() {

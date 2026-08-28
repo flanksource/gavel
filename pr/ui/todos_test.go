@@ -834,11 +834,10 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:   todos.TODOReference(created),
-		Agent: "codex",
-		Mode:  "cmux",
+		Ref:    todos.TODOReference(created),
+		Driver: "cmux",
 		Spec: api.Spec{
-			Model:  api.Model{Name: "codex", Effort: "high"},
+			Model:  api.Model{Name: "codex", Mode: api.ModeCmux, Effort: "high"},
 			Budget: api.Budget{Cost: 1.25, MaxTurns: 12, Timeout: "45m"},
 			// Dirty-worktree now rides the spec's
 			// Setup.Checkout.Worktree.Uncommitted (Workspace section) instead of a
@@ -857,7 +856,7 @@ func TestTodoAPIRunStartsSelectedTodo(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	if resp.Status != "started" || resp.Agent != "codex" || resp.Mode != "cmux" {
+	if resp.Status != "started" || resp.Provider != "openai" || resp.Backend != "cmux" {
 		t.Fatalf("unexpected run response: %+v", resp)
 	}
 	if resp.Count != 1 {
@@ -903,8 +902,8 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		return resp
 	}
 
-	cmuxResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "high")})
-	if cmuxResp.Count != 1 || cmuxResp.Mode != "cmux" {
+	cmuxResp := preview(todoRunPayload{Ref: ref, Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "high"}}})
+	if cmuxResp.Count != 1 || cmuxResp.Provider != "anthropic" || cmuxResp.Backend != "cmux" {
 		t.Fatalf("unexpected preview meta: %+v", cmuxResp)
 	}
 	if !strings.Contains(cmuxResp.Prompt, "## Fix the parser") {
@@ -920,17 +919,17 @@ func TestTodoAPIRunPreviewReturnsPrompt(t *testing.T) {
 		t.Fatalf("cmux preview should include the instructions section: %q", cmuxResp.Prompt)
 	}
 
-	planResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium"), Plan: true})
+	planResp := preview(todoRunPayload{Ref: ref, Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}, Plan: true})
 	if !strings.Contains(planResp.Prompt, "## Fix the parser") {
 		t.Fatalf("plan preview should contain the title: %q", planResp.Prompt)
 	}
 
-	inlineResp := preview(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Spec: specPayload("claude", "medium")})
-	if strings.HasPrefix(inlineResp.Prompt, "# Fix the parser") {
-		t.Fatalf("inline preview should be the bare claude prompt, not the cmux instruction: %q", inlineResp.Prompt)
+	agentResp := preview(todoRunPayload{Ref: ref, Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}}})
+	if strings.HasPrefix(agentResp.Prompt, "# Fix the parser") {
+		t.Fatalf("agent preview should be the bare claude prompt, not the cmux instruction: %q", agentResp.Prompt)
 	}
-	if !strings.Contains(inlineResp.Prompt, "The parser drops trailing commas.") {
-		t.Fatalf("inline preview should include the body: %q", inlineResp.Prompt)
+	if !strings.Contains(agentResp.Prompt, "The parser drops trailing commas.") {
+		t.Fatalf("agent preview should include the body: %q", agentResp.Prompt)
 	}
 }
 
@@ -947,7 +946,7 @@ func TestTodoRunPreviewAbsolutizesAttachmentURLs(t *testing.T) {
 	}
 	ref := todos.TODOReference(created)
 
-	body, _ := json.Marshal(todoRunPayload{Ref: ref, Agent: "claude", Mode: "inline", Spec: api.Spec{Model: api.Model{Name: "claude"}}})
+	body, _ := json.Marshal(todoRunPayload{Ref: ref, Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent}}})
 	rec := httptest.NewRecorder()
 	s.handleTodoRunPreview(rec, httptest.NewRequest(http.MethodPost, "http://gavel.example:9092/api/todos/run/preview", strings.NewReader(string(body))))
 	if rec.Code != http.StatusOK {
@@ -977,7 +976,7 @@ func isolatedTodoWorkspace(t *testing.T) string {
 
 func TestNormalizeTodoRunOptionsCommitFromWorkflow(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
+	base := todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
 
 	// Auto-commit is sourced from Workflow.Commits — no server-side default. The
 	// run dialog seeds one `{on: run}` stanza so a default dashboard run commits;
@@ -1008,7 +1007,7 @@ func TestNormalizeTodoRunOptionsCommitFromWorkflow(t *testing.T) {
 
 func TestNormalizeTodoRunOptionsToolPreferences(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	base := todoRunPayload{Agent: "claude", Mode: "cmux", Spec: specPayload("claude", "medium")}
+	base := todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}}}
 
 	t.Run("valid prefs and permission mode are threaded", func(t *testing.T) {
 		payload := base
@@ -1075,14 +1074,12 @@ func TestTodoRunPayloadRoundTripsSpecAndSiblings(t *testing.T) {
 		Dir:     "/repos/gavel",
 		Ref:     "todo-1",
 		Refs:    []string{"todo-1", "todo-2"},
-		Agent:   "claude",
-		Mode:    "cmux",
-		Driver:  "claude-headless",
+		Driver:  "cmux",
 		RunMode: string(types.ModePlan),
 		Plan:    true,
 		Resume:  true,
 		Spec: api.Spec{
-			Model:  api.Model{Name: "claude", Backend: "claude-agent", Effort: "medium", Fallbacks: api.ModelList{{Name: "claude-sonnet-5"}}},
+			Model:  api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium", Fallbacks: api.ModelList{{Name: "claude-sonnet-5"}}},
 			Prompt: api.Prompt{User: "Implement the reviewed plan.", System: "Keep the patch narrow."},
 			Budget: api.Budget{Cost: 2.5, MaxTurns: 8, Timeout: "20m"},
 			Memory: api.Memory{Skills: []string{"gavel-todos"}},
@@ -1143,10 +1140,9 @@ func TestTodoAPIRunThreadsCommitOption(t *testing.T) {
 			t.Cleanup(func() { startTodoRun = oldStart })
 
 			payload := todoRunPayload{
-				Ref:   todos.TODOReference(created),
-				Agent: "claude",
-				Mode:  "cmux",
-				Spec:  specPayload("claude", "medium"),
+				Ref:    todos.TODOReference(created),
+				Driver: "cmux",
+				Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
 			}
 			payload.Spec.Workflow = tc.workflow
 			body, _ := json.Marshal(payload)
@@ -1192,10 +1188,9 @@ func TestTodoAPIRunDryRunStartsButSkipsCommit(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	payload := todoRunPayload{
-		Ref:   todos.TODOReference(created),
-		Agent: "claude",
-		Mode:  "cmux",
-		Spec:  specPayload("claude", "medium"),
+		Ref:    todos.TODOReference(created),
+		Driver: "cmux",
+		Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
 	}
 	// A commit policy is declared but marked dryRun: the run executes, the commit
 	// is reported rather than cut.
@@ -1248,10 +1243,9 @@ func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Refs:  []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
-		Agent: "claude",
-		Mode:  "cmux",
-		Spec:  specPayload("sonnet", "medium"),
+		Refs:   []string{todos.TODOReference(first), todos.TODOReference(second), todos.TODOReference(first)},
+		Driver: "cmux",
+		Spec:   api.Spec{Model: api.Model{Name: "sonnet", Mode: api.ModeCmux, Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1263,7 +1257,7 @@ func TestTodoAPIRunRejectsMultipleTodos(t *testing.T) {
 	}
 }
 
-func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
+func TestTodoAPIRunRejectsLegacyCompositeDriver(t *testing.T) {
 	workDir := t.TempDir()
 	s := &Server{ghOpts: github.Options{WorkDir: workDir}}
 	created, err := uiTestProviderFor(workDir).Create(t.Context(), todos.CreateRequest{
@@ -1275,17 +1269,16 @@ func TestTodoAPIRunRejectsUnsupportedInlineCodex(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:   todos.TODOReference(created),
-		Agent: "codex",
-		Mode:  "inline",
-		Spec:  specPayload("codex", "medium"),
+		Ref:    todos.TODOReference(created),
+		Driver: "codex-headless",
+		Spec:   api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeAgent, Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("run status = %d, want 400; body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "codex runs require a cmux driver") {
+	if !strings.Contains(rec.Body.String(), "invalid driver") {
 		t.Fatalf("unexpected error body: %q", rec.Body.String())
 	}
 }
@@ -1310,11 +1303,10 @@ func TestTodoAPIRunPlanThreadsPlanOption(t *testing.T) {
 	t.Cleanup(func() { startTodoRun = oldStart })
 
 	body, _ := json.Marshal(todoRunPayload{
-		Ref:   todos.TODOReference(created),
-		Agent: "claude",
-		Mode:  "cmux",
-		Spec:  specPayload("claude", "medium"),
-		Plan:  true,
+		Ref:    todos.TODOReference(created),
+		Driver: "cmux",
+		Spec:   api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeCmux, Effort: "medium"}},
+		Plan:   true,
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1357,8 +1349,8 @@ func TestTodoAPIRunModeField(t *testing.T) {
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:     todos.TODOReference(created),
-		Driver:  "claude-headless",
-		Spec:    specPayload("claude", "medium"),
+		Driver:  "agent",
+		Spec:    api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAgent, Effort: "medium"}},
 		RunMode: "plan",
 	})
 	rec := httptest.NewRecorder()
@@ -1373,7 +1365,7 @@ func TestTodoAPIRunModeField(t *testing.T) {
 	// verify routes through its own endpoint, not the run endpoint.
 	body, _ = json.Marshal(todoRunPayload{
 		Ref:     todos.TODOReference(created),
-		Driver:  "claude-headless",
+		Driver:  "agent",
 		RunMode: "verify",
 	})
 	rec = httptest.NewRecorder()
@@ -1385,26 +1377,23 @@ func TestTodoAPIRunModeField(t *testing.T) {
 
 func TestNormalizeTodoRunOptionsDriverField(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	// Explicit driver wins and sets the legacy mode label for downstream paths.
-	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Effort: "medium"}}})
+	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Effort: "medium"}}})
 	if err != nil {
-		t.Fatalf("claude-headless driver: %v", err)
+		t.Fatalf("agent driver: %v", err)
 	}
-	if opts.Driver != "cli" || opts.agent() != "claude" || opts.legacyMode() != "inline" {
-		t.Fatalf("got driver=%q agent=%q mode=%q", opts.Driver, opts.agent(), opts.legacyMode())
+	if opts.Driver != "agent" || opts.Spec.Backend.Family() != "claude" || opts.Spec.Mode != api.ModeAgent {
+		t.Fatalf("got driver=%q family=%q backend=%q", opts.Driver, opts.Spec.Backend.Family(), opts.Spec.Mode)
 	}
 
-	// The legacy codex-cmux driver contributes only the cmux mechanism; the
-	// model selects the codex agent and resolves its cmux backend.
 	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{
-		Driver: "codex-cmux",
-		Spec:   api.Spec{Model: api.Model{Name: "codex"}},
+		Driver: "cmux",
+		Spec:   api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeCmux}},
 	})
 	if err != nil {
-		t.Fatalf("codex-cmux driver: %v", err)
+		t.Fatalf("codex cmux runtime: %v", err)
 	}
-	if opts.agent() != "codex" || opts.Spec.Backend != "codex-cmux" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendCodexCmux, "codex") || opts.legacyMode() != "cmux" {
-		t.Fatalf("got agent=%q backend=%q model=%q mode=%q", opts.agent(), opts.Spec.Backend, opts.Spec.Name, opts.legacyMode())
+	if opts.Spec.Backend.Family() != "codex" || opts.Spec.Backend != "codex-cmux" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendCodexCmux, "codex") || opts.Spec.Mode != api.ModeCmux {
+		t.Fatalf("got family=%q resolved=%q model=%q backend=%q", opts.Spec.Backend.Family(), opts.Spec.Backend, opts.Spec.Name, opts.Spec.Mode)
 	}
 
 	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-tui"}); err == nil {
@@ -1454,6 +1443,7 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 		}
 		return captaincli.WhoamiResult{
 			Adapters:        adapters,
+			Runtimes:        api.RuntimeCatalog(),
 			DefaultProvider: "anthropic",
 			ProviderDefaults: map[string]captaincli.ProviderDefaultView{
 				"anthropic": {Agent: "claude-agent", Model: "claude-sonnet-5"},
@@ -1473,84 +1463,91 @@ func TestTodoRunContextListsCaptainBackends(t *testing.T) {
 	if !stringSliceContains(resp.Efforts, "xhigh") {
 		t.Fatalf("efforts = %v, want captain xhigh effort", resp.Efforts)
 	}
-	if resp.DefaultBackend != "claude-agent" {
-		t.Fatalf("default backend = %q, want claude-agent", resp.DefaultBackend)
+	if resp.DefaultBackend != "agent" {
+		t.Fatalf("default backend = %q, want agent", resp.DefaultBackend)
 	}
-	backends := map[string]todoRunBackendOption{}
-	for _, backend := range resp.Backends {
-		backends[backend.ID] = backend
-	}
-	for _, id := range []string{"claude-cmux", "claude-agent", "claude-cli", "codex-cmux", "codex-agent"} {
-		if backends[id].ID == "" {
-			t.Fatalf("missing backend %q in %+v", id, resp.Backends)
+	backendFor := func(provider, id string) todoRunBackendOption {
+		t.Helper()
+		for _, backend := range resp.Backends {
+			if backend.Provider == provider && backend.ID == id {
+				return backend
+			}
 		}
-		if len(backends[id].Models) == 0 {
-			t.Fatalf("backend %q has no model list: %+v", id, backends[id])
+		t.Fatalf("missing %s %s backend in %+v", provider, id, resp.Backends)
+		return todoRunBackendOption{}
+	}
+	claudeCmux := backendFor("anthropic", "cmux")
+	claudeAgent := backendFor("anthropic", "agent")
+	claudeCLI := backendFor("anthropic", "cli")
+	codexCmux := backendFor("openai", "cmux")
+	codexAgent := backendFor("openai", "agent")
+	for _, backend := range []todoRunBackendOption{claudeCmux, claudeAgent, claudeCLI, codexCmux, codexAgent} {
+		if len(backend.Models) == 0 {
+			t.Fatalf("backend %s/%s has no model list: %+v", backend.Provider, backend.ID, backend)
 		}
 	}
-	if backends["codex-cli"].ID != "" {
-		t.Fatalf("unexpected codex-cli backend in %+v", resp.Backends)
+	if claudeCmux.Driver != "cmux" || claudeAgent.Driver != "agent" || codexAgent.Driver != "agent" {
+		t.Fatalf("unexpected backend drivers: claude cmux=%q claude agent=%q codex agent=%q", claudeCmux.Driver, claudeAgent.Driver, codexAgent.Driver)
 	}
-	// Driver is a drivers.Kind — the bare mechanism (cmux|cli|sdk|api), not the
-	// agent-prefixed alias the payload's `driver` field also accepts.
-	if backends["claude-cmux"].Driver != "cmux" || backends["claude-agent"].Driver != "cli" || backends["codex-agent"].Driver != "cli" {
-		t.Fatalf("unexpected backend drivers: claude-cmux=%q claude-agent=%q codex-agent=%q", backends["claude-cmux"].Driver, backends["claude-agent"].Driver, backends["codex-agent"].Driver)
+	if !todoRunModelsContain(claudeCmux.Models, "claude-sonnet-5") {
+		t.Fatalf("claude cmux models = %+v, want claude-sonnet-5 from captain whoami", claudeCmux.Models)
 	}
-	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-sonnet-5") {
-		t.Fatalf("claude-cmux models = %+v, want claude-sonnet-5 from captain whoami", backends["claude-cmux"].Models)
+	if !todoRunModelsContain(claudeCmux.Models, "claude-opus-4-8") {
+		t.Fatalf("claude cmux models = %+v, want claude-opus-4-8 from captain whoami", claudeCmux.Models)
 	}
-	if !todoRunModelsContain(backends["claude-cmux"].Models, "claude-opus-4-8") {
-		t.Fatalf("claude-cmux models = %+v, want claude-opus-4-8 from captain whoami", backends["claude-cmux"].Models)
+	if !todoRunModelsContain(claudeAgent.Models, "claude-fable-5") {
+		t.Fatalf("claude agent models = %+v, want Fable from captain whoami", claudeAgent.Models)
 	}
-	if !todoRunModelsContain(backends["claude-agent"].Models, "claude-fable-5") {
-		t.Fatalf("claude-agent models = %+v, want Fable from captain whoami", backends["claude-agent"].Models)
+	if len(claudeCmux.Models) != 3 || claudeCmux.Models[0].ID != "claude-sonnet-5" || claudeCmux.Models[1].ID != "claude-fable-5" || claudeCmux.Models[2].ID != "claude-opus-4-8" {
+		t.Fatalf("claude cmux models = %+v, want Captain model-detail order", claudeCmux.Models)
 	}
-	if len(backends["claude-cmux"].Models) != 3 || backends["claude-cmux"].Models[0].ID != "claude-sonnet-5" || backends["claude-cmux"].Models[1].ID != "claude-fable-5" || backends["claude-cmux"].Models[2].ID != "claude-opus-4-8" {
-		t.Fatalf("claude-cmux models = %+v, want Captain model-detail order", backends["claude-cmux"].Models)
+	if todoRunModelsContain(claudeCmux.Models, "claude-agent-sonnet") {
+		t.Fatalf("claude cmux models = %+v, should not expose synthetic aliases", claudeCmux.Models)
 	}
-	if todoRunModelsContain(backends["claude-cmux"].Models, "claude-agent-sonnet") {
-		t.Fatalf("claude-cmux models = %+v, should not expose synthetic claude-agent aliases", backends["claude-cmux"].Models)
-	}
-	if !todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5.5") {
-		t.Fatalf("codex-cmux models = %+v, want gpt-5.5 from captain whoami", backends["codex-cmux"].Models)
+	if !todoRunModelsContain(codexCmux.Models, "gpt-5.5") {
+		t.Fatalf("codex cmux models = %+v, want gpt-5.5 from captain whoami", codexCmux.Models)
 	}
 	for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"} {
-		if !todoRunModelsContain(backends["codex-agent"].Models, id) {
-			t.Fatalf("codex-agent models = %+v, want %s from captain whoami", backends["codex-agent"].Models, id)
+		if !todoRunModelsContain(codexAgent.Models, id) {
+			t.Fatalf("codex agent models = %+v, want %s from captain whoami", codexAgent.Models, id)
 		}
 	}
-	sol := todoRunModelByID(backends["codex-agent"].Models, "gpt-5.6-sol")
+	sol := todoRunModelByID(codexAgent.Models, "gpt-5.6-sol")
 	if !sol.CapabilitiesKnown || !sol.Reasoning || sol.DefaultEffort != "medium" || !stringSliceContains(sol.SupportedEfforts, "ultra") || sol.Temperature == nil || *sol.Temperature {
 		t.Fatalf("gpt-5.6-sol capabilities = %+v, want exact effort and temperature metadata", sol)
 	}
-	if todoRunModelsContain(backends["codex-cmux"].Models, "gpt-5-codex") {
-		t.Fatalf("codex-cmux models = %+v, should not include code variant gpt-5-codex", backends["codex-cmux"].Models)
+	if todoRunModelsContain(codexCmux.Models, "gpt-5-codex") {
+		t.Fatalf("codex cmux models = %+v, should not include code variant gpt-5-codex", codexCmux.Models)
 	}
 }
 
 func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 	dir := isolatedTodoWorkspace(t)
-	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-cli", Effort: "xhigh"}}})
+	opts, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "cli", Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Effort: "xhigh"}}})
 	if err != nil {
-		t.Fatalf("claude-cli backend: %v", err)
+		t.Fatalf("claude CLI backend: %v", err)
 	}
-	if opts.Spec.Backend != "claude-cli" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendClaudeCLI, "claude") || opts.Spec.Effort != "xhigh" {
+	if opts.Driver != "cli" || opts.Spec.Mode != api.ModeCLI || opts.Spec.Backend != "claude-cli" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendClaudeCLI, "claude") || opts.Spec.Effort != "xhigh" {
 		t.Fatalf("unexpected claude backend options: %+v", opts)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Name: "codex"}}})
+	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Name: "codex", Mode: api.ModeAgent}}})
 	if err != nil {
 		t.Fatalf("default codex backend: %v", err)
 	}
-	if opts.Spec.Backend != "codex-agent" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendCodexAgent, "codex") {
+	if opts.Driver != "agent" || opts.Spec.Mode != api.ModeAgent || opts.Spec.Backend != "codex-agent" || opts.Spec.Name != captainai.NormalizeModelForBackend(captainai.BackendCodexAgent, "codex") {
 		t.Fatalf("unexpected codex backend defaults: %+v", opts)
 	}
 
-	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "codex-cli", Name: "gpt-5.5"}}}); err == nil {
-		t.Fatal("codex-cli backend should be rejected for codex-headless")
+	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeCLI, Name: "gpt-5.5"}}})
+	if err != nil {
+		t.Fatalf("model backend should override driver: %v", err)
+	}
+	if opts.Driver != "cli" || opts.Spec.Mode != api.ModeCLI || opts.Spec.Backend != "codex-cli" {
+		t.Fatalf("model backend did not take precedence: %+v", opts)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-cmux", Spec: api.Spec{Model: api.Model{Name: "sonnet-4-6"}}})
+	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "cmux", Spec: api.Spec{Model: api.Model{Name: "sonnet-4-6", Mode: api.ModeCmux}}})
 	if err != nil {
 		t.Fatalf("versioned claude cmux model: %v", err)
 	}
@@ -1558,23 +1555,16 @@ func TestNormalizeTodoRunOptionsCaptainBackend(t *testing.T) {
 		t.Fatalf("unexpected versioned claude model options: %+v", opts)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "opus-4-8"}}})
+	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "opus-4-8"}}})
 	if err != nil {
-		t.Fatalf("stale claude agent opus model: %v", err)
+		t.Fatalf("claude agent opus model: %v", err)
 	}
 	if opts.Spec.Backend != "claude-agent" || opts.Spec.Name != "claude-opus-4-8" {
 		t.Fatalf("unexpected normalized opus model options: %+v", opts)
 	}
 
-	opts, err = normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "codex-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5"}}})
-	if err != nil {
-		t.Fatalf("legacy composite driver should preserve only the cli mechanism: %v", err)
-	}
-	if opts.Driver != "cli" || opts.agent() != "claude" || opts.Spec.Backend != "claude-agent" {
-		t.Fatalf("unexpected mechanism-only driver options: %+v", opts)
-	}
-	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "claude-headless", Spec: api.Spec{Model: api.Model{Backend: "claude-agent", Name: "gpt-5-codex"}}}); err == nil {
-		t.Fatal("mismatched backend and model should be rejected")
+	if _, err := normalizeTodoRunOptions(dir, nil, todoRunPayload{Driver: "agent", Spec: api.Spec{Model: api.Model{Mode: "claude-agent", Name: "claude-sonnet-5"}}}); err == nil {
+		t.Fatal("legacy composite backend should be rejected")
 	}
 }
 
@@ -1599,8 +1589,8 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 
 	body, _ := json.Marshal(todoRunPayload{
 		Ref:    todos.TODOReference(created),
-		Driver: "claude-headless",
-		Spec:   api.Spec{Model: api.Model{Backend: "claude-agent", Name: "claude-sonnet-5", Effort: "medium"}},
+		Driver: "agent",
+		Spec:   api.Spec{Model: api.Model{Mode: api.ModeAgent, Name: "claude-sonnet-5", Effort: "medium"}},
 	})
 	rec := httptest.NewRecorder()
 	s.handleTodoRun(rec, httptest.NewRequest(http.MethodPost, "/api/todos/run", strings.NewReader(string(body))))
@@ -1611,9 +1601,7 @@ func TestTodoAPIRunThreadsCaptainBackend(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal run response: %v", err)
 	}
-	// The request names the driver by its agent-prefixed alias; the response
-	// reports the resolved drivers.Kind it parsed to.
-	if resp.Driver != "cli" || resp.Backend != "claude-agent" || resp.Model != "claude-sonnet-5" {
+	if resp.Driver != "agent" || resp.Backend != "agent" || resp.Model != "claude-sonnet-5" {
 		t.Fatalf("response did not thread backend/model: %+v", resp)
 	}
 	if got.Options.Spec.Backend != "claude-agent" || got.Options.Spec.Name != "claude-sonnet-5" {

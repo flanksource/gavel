@@ -2,10 +2,10 @@ package ui
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	captainai "github.com/flanksource/captain/pkg/ai"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/captain/pkg/api/registry"
 	captaincli "github.com/flanksource/captain/pkg/cli"
 	"github.com/flanksource/commons/logger"
@@ -63,33 +63,28 @@ func todoRunInputSchemas() map[string]json.RawMessage {
 	return out
 }
 
-func defaultTodoRunBackend(who captaincli.WhoamiResult, backends []todoRunBackendOption) (string, error) {
+func defaultTodoRunBackend(who captaincli.WhoamiResult, backends []todoRunBackendOption) string {
 	defaults, ok := who.ProviderDefaults[who.DefaultProvider]
 	if !ok {
-		return "", nil
+		return ""
 	}
 	preferred := captainai.Backend(strings.TrimSpace(defaults.Agent))
-	provider, mode, known := registry.ProviderFor(preferred)
+	_, mode, known := registry.ProviderFor(preferred)
+	provider := api.CatalogPrefixFor(preferred)
 	if known && mode == registry.ModeCLI {
-		agentBackend, err := provider.BackendFor(registry.ModeAgent)
-		if err != nil {
-			return "", fmt.Errorf("resolve agent backend for default %q: %w", preferred, err)
-		}
-		if todoRunBackendHasModels(backends, string(agentBackend)) {
-			return string(agentBackend), nil
+		if todoRunBackendHasModels(backends, provider, string(registry.ModeAgent)) {
+			return string(registry.ModeAgent)
 		}
 	}
-	for _, backend := range backends {
-		if backend.ID == string(preferred) {
-			return backend.ID, nil
-		}
+	if known && todoRunBackendHasModels(backends, provider, string(mode)) {
+		return string(mode)
 	}
-	return "", nil
+	return ""
 }
 
-func todoRunBackendHasModels(backends []todoRunBackendOption, id string) bool {
+func todoRunBackendHasModels(backends []todoRunBackendOption, provider, id string) bool {
 	for _, backend := range backends {
-		if backend.ID == id {
+		if backend.Provider == provider && backend.ID == id {
 			return len(backend.Models) > 0
 		}
 	}

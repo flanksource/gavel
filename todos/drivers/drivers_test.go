@@ -1,7 +1,6 @@
 package drivers
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/flanksource/captain/pkg/api"
@@ -17,18 +16,8 @@ func TestParse(t *testing.T) {
 		// Canonical mechanisms, case-insensitive with surrounding space.
 		{"  CMUX ", Cmux},
 		{"cli", Cli},
-		{"sdk", Sdk},
+		{"agent", Agent},
 		{"api", Api},
-		// Legacy mechanism names normalize onto the current enum.
-		{"headless", Cli},
-		{"agent", Sdk},
-		// Legacy composite "<agent>-<mechanism>" keeps only the mechanism part so a
-		// TODO persisted with an old driver value still resolves.
-		{"claude-cmux", Cmux},
-		{"codex-headless", Cli},
-		{"claude-sdk", Sdk},
-		{"claude-api", Api},
-		{"Claude-CMUX", Cmux},
 	}
 	for _, tc := range cases {
 		got, err := Parse(tc.in)
@@ -36,11 +25,10 @@ func TestParse(t *testing.T) {
 			t.Errorf("Parse(%q) = %q, %v; want %q, nil", tc.in, got, err, tc.want)
 		}
 	}
-	if _, err := Parse("claude-tui"); err == nil {
-		t.Fatal("Parse(claude-tui) should fail for an unknown mechanism")
-	}
-	if _, err := Parse("tui"); err == nil {
-		t.Fatal("Parse(tui) should fail for an unknown mechanism")
+	for _, invalid := range []string{"sdk", "headless", "anthropic", "claude-agent", "codex-cli", "tui"} {
+		if _, err := Parse(invalid); err == nil {
+			t.Errorf("Parse(%q) should fail for a non-canonical backend", invalid)
+		}
 	}
 }
 
@@ -96,6 +84,42 @@ func TestNewCliDerivesAgentFromModel(t *testing.T) {
 	}
 }
 
+func TestNewAgentDerivesAgentFromModel(t *testing.T) {
+	exec, _, err := New(Agent, todos.AgentRunConfig{
+		WorkDir: "/repo",
+		Spec:    api.Spec{Model: api.Model{Name: "codex"}},
+	})
+	if err != nil {
+		t.Fatalf("New(agent): %v", err)
+	}
+	if got := exec.Name(); got != "agent-codex" {
+		t.Errorf("agent Name() = %q, want agent-codex", got)
+	}
+}
+
+func TestNewUsesTheModelBackendAsTheCanonicalDriver(t *testing.T) {
+	cases := []struct {
+		name  string
+		kind  Kind
+		model api.Model
+		want  string
+	}{
+		{name: "structured backend", kind: Agent, model: api.Model{Name: "claude", Mode: api.ModeCLI}, want: "cli-claude"},
+		{name: "compact prefix", kind: Cmux, model: api.Model{Name: "agent:opus", Mode: api.ModeAPI}, want: "agent-claude"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, _, err := New(tc.kind, todos.AgentRunConfig{WorkDir: "/repo", Spec: api.Spec{Model: tc.model}})
+			if err != nil {
+				t.Fatalf("New(%s): %v", tc.kind, err)
+			}
+			if got := exec.Name(); got != tc.want {
+				t.Errorf("Name() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewRejectsVerifyMode(t *testing.T) {
 	if _, _, err := New(Cli, todos.AgentRunConfig{WorkDir: "/repo", Mode: types.ModeVerify}); err == nil {
 		t.Fatal("New(mode=verify) must error — verify runs through the verify engine")
@@ -117,19 +141,18 @@ func TestNewRejectsExecutorIdentityAsModel(t *testing.T) {
 	}
 }
 
-func TestNewUnimplementedDriversFailClearly(t *testing.T) {
-	if Sdk.Implemented() {
-		t.Error("sdk reported Implemented(), expected not yet")
+func TestNewAPIDriverUsesCaptainRuntime(t *testing.T) {
+	if !Api.Implemented() {
+		t.Fatal("api must be a first-class implemented backend")
 	}
-	if _, _, err := New(Sdk, todos.AgentRunConfig{WorkDir: "/repo"}); err == nil {
-		t.Error("New(sdk) should return a not-implemented error")
-	} else if !strings.Contains(err.Error(), "cli") {
-		t.Errorf("New(sdk) error = %v, want it to name the cli replacement", err)
+	exec, _, err := New(Api, todos.AgentRunConfig{
+		WorkDir: "/repo",
+		Spec:    api.Spec{Model: api.Model{Name: "claude", Mode: api.ModeAPI}},
+	})
+	if err != nil {
+		t.Fatalf("New(api): %v", err)
 	}
-	if Api.Implemented() {
-		t.Error("api reported Implemented(), expected not yet")
-	}
-	if _, _, err := New(Api, todos.AgentRunConfig{WorkDir: "/repo"}); err == nil {
-		t.Error("New(api) should return a not-implemented error")
+	if got := exec.Name(); got != "api-claude" {
+		t.Errorf("api Name() = %q, want api-claude", got)
 	}
 }

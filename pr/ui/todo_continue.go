@@ -120,10 +120,11 @@ func priorRunRuntime(prior *captaindb.PromptRun) api.Spec {
 		return api.Spec{}
 	}
 	resolved := prior.Runtime.Resolved
+	backend := api.Backend(strings.TrimSpace(resolved.Backend))
 	return api.Spec{Model: api.Model{
-		Name:    strings.TrimSpace(resolved.Model),
-		Backend: api.Backend(strings.TrimSpace(resolved.Backend)),
-		Effort:  api.Effort(strings.TrimSpace(resolved.Effort)),
+		Name:   strings.TrimSpace(resolved.Model),
+		Mode:   backend.Mode(),
+		Effort: api.Effort(strings.TrimSpace(resolved.Effort)),
 	}}
 }
 
@@ -132,7 +133,7 @@ func priorRunRuntime(prior *captaindb.PromptRun) api.Spec {
 // also carries non-driver runner labels (a verify step's "gavel-fixtures"),
 // which fall through to `.gavel.yaml` todos.driver rather than erroring.
 func continuationDriver(payload todoRunPayload, prior *captaindb.PromptRun) string {
-	if strings.TrimSpace(payload.Driver) != "" || strings.TrimSpace(payload.Mode) != "" {
+	if strings.TrimSpace(payload.Driver) != "" {
 		return payload.Driver
 	}
 	if prior == nil {

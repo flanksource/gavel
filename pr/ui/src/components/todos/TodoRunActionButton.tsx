@@ -15,7 +15,7 @@ import {
   type TodoRunAction,
   useTodoRunContext,
 } from "./run";
-import { agentForBackend, buildRunFamilies, modelsForSelection, type RunContext } from "./providers";
+import { buildRunFamilies, type RunContext } from "./providers";
 
 export function TodoRunRuntimeBar({
   action,
@@ -31,14 +31,13 @@ export function TodoRunRuntimeBar({
   onChange: (options: TodoRunOptions) => void;
 }) {
   const spec = runSpec(options);
-  const agent = agentForBackend(context, spec.backend);
   return (
     <fieldset disabled={disabled} className="min-w-0 border-0 p-0 disabled:opacity-50">
       <RuntimeBar<AISpecRuntimeValue>
         value={spec}
         variant="combo"
         families={buildRunFamilies(context)}
-        models={modelsForSelection(context, agent, spec.backend)}
+        models={context.models ?? []}
         reasoningEfforts={context.efforts}
         ariaLabel={`${runActionConfig[action].label} runtime`}
         className="min-w-0"

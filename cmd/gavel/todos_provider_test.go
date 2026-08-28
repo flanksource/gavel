@@ -278,7 +278,7 @@ func TestCleanupTODOStatusKeepsReviewAndAsk(t *testing.T) {
 // todo's recorded model in the canonical Spec.
 func TestNewAgentRunConfigModelOverride(t *testing.T) {
 	dir := isolatedTodosRun(t, "")
-	todoModel = "opus"
+	todoModel = "agent:opus"
 	todo := &types.TODO{TODOFrontmatter: types.TODOFrontmatter{LLM: &types.LLM{Model: "sonnet"}}}
 
 	cfg, _, err := newAgentRunConfig(context.Background(), dir, []*types.TODO{todo}, nil)
@@ -286,7 +286,7 @@ func TestNewAgentRunConfigModelOverride(t *testing.T) {
 		t.Fatalf("newAgentRunConfig: %v", err)
 	}
 
-	if cfg.Spec.Name != "opus" {
+	if cfg.Spec.Name != "claude-opus-5" {
 		t.Fatalf("expected CLI model override, got %q", cfg.Spec.Name)
 	}
 }

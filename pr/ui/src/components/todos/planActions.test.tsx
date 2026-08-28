@@ -73,7 +73,8 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
   ProviderSelector: () => null,
 }));
 
-vi.mock('@flanksource/clicky-ui/ai', () => ({
+vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@flanksource/clicky-ui/ai')>(),
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
   RuntimeBar: ({ value, onChange, ariaLabel, className }: {
@@ -87,7 +88,7 @@ vi.mock('@flanksource/clicky-ui/ai', () => ({
       type="button"
       aria-label={ariaLabel}
       className={className}
-      onClick={() => onChange({ ...value, backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' })}
+      onClick={() => onChange({ ...value, backend: 'agent', model: 'claude-opus-4-8', effort: 'high' })}
     >
       Select Claude runtime
     </button>
@@ -139,44 +140,53 @@ vi.mock('@flanksource/clicky-ui/icons', () => {
 });
 
 const context: RunContext = {
-  defaultBackend: 'codex-agent',
+  defaultBackend: 'agent',
+  defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
+  runtimes: [
+    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ backend: 'agent', schema: { type: 'object' } }, { backend: 'cmux', schema: { type: 'object' } }] },
+    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'agent', schema: { type: 'object' } }] },
+  ],
+  models: [
+    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, backends: ['agent', 'cmux'], runtime: { model: 'gpt-5.5' } },
+    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true, backends: ['agent'], runtime: { model: 'claude-opus-4-8' } },
+  ],
   backends: [
     {
-      id: 'codex-cmux',
+      id: 'cmux',
       label: 'Codex cmux',
       provider: 'openai',
       agent: 'codex',
       defaultModel: 'gpt-5.5',
-      driver: 'codex-cmux',
-      mechanisms: [{ value: 'cmux', label: 'cmux (TUI)', driver: 'codex-cmux' }],
+      driver: 'cmux',
+      mechanisms: [{ value: 'cmux', label: 'cmux (TUI)', driver: 'cmux' }],
       models: [
         { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true },
       ],
       configured: true,
     },
     {
-      id: 'codex-agent',
+      id: 'agent',
       label: 'Codex Agent',
       provider: 'openai',
       agent: 'codex',
       defaultModel: 'gpt-5.5',
-      driver: 'codex-headless',
-      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'codex-headless' }],
+      driver: 'agent',
+      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'agent' }],
       models: [
         { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true },
       ],
       configured: true,
     },
     {
-      id: 'claude-agent',
+      id: 'agent',
       label: 'Claude Agent',
       provider: 'anthropic',
       agent: 'claude',
       defaultModel: 'claude-opus-4-8',
-      driver: 'claude-headless',
-      mechanisms: [{ value: 'agent', label: 'agent', driver: 'claude-headless' }],
+      driver: 'agent',
+      mechanisms: [{ value: 'agent', label: 'agent', driver: 'agent' }],
       models: [
         { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', reasoning: true, configured: true },
       ],
@@ -239,9 +249,9 @@ describe('PlanApproveButtons', () => {
       JSON.stringify({
         last: {
           run: {
-            driver: 'claude-headless',
+            driver: 'agent',
             runMode: 'run',
-            spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
+            spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
           },
         },
         recentAdvanced: {},
@@ -264,10 +274,10 @@ describe('PlanApproveButtons', () => {
     fireEvent.click(approveRun);
 
     expect(onApprove).toHaveBeenCalledWith(true, expect.objectContaining({
-      driver: 'claude-headless',
+      driver: 'agent',
       runMode: 'run',
       spec: expect.objectContaining({
-        backend: 'claude-agent',
+        backend: 'agent',
         model: 'claude-opus-4-8',
         effort: 'high',
       }),
@@ -288,10 +298,10 @@ describe('PlanApproveButtons', () => {
 
     await waitFor(() =>
       expect(onApprove).toHaveBeenCalledWith(true, expect.objectContaining({
-        driver: 'claude-headless',
+        driver: 'agent',
         runMode: 'run',
         spec: expect.objectContaining({
-          backend: 'claude-agent',
+          backend: 'agent',
           model: 'claude-opus-4-8',
           effort: 'high',
         }),
@@ -299,7 +309,7 @@ describe('PlanApproveButtons', () => {
     );
     expect(JSON.parse(localStorage.getItem('gavel.pr-ui.promptRunChoices.v2') || '{}').approval.last).toMatchObject({
       runMode: 'run',
-      spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' },
+      spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' },
     });
   });
 
@@ -309,9 +319,9 @@ describe('PlanApproveButtons', () => {
       'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         approval: {
-          last: { spec: { backend: 'codex-agent', model: 'gpt-5.5', effort: 'medium' } },
+          last: { spec: { backend: 'agent', model: 'gpt-5.5', effort: 'medium' } },
           recent: [
-            { spec: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' } },
+            { spec: { backend: 'agent', model: 'claude-opus-4-8', effort: 'high' } },
           ],
         },
       }),

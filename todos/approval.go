@@ -9,7 +9,7 @@ import (
 // ApprovalRequest is a tool-permission request a driver surfaces for human
 // review when an agent wants to use a tool that is not pre-approved. It is
 // driver-agnostic: the cmux driver detects it on the terminal surface, the
-// sdk/headless drivers receive it over the stream-json control protocol.
+// agent/cli drivers receive it over the stream-json control protocol.
 type ApprovalRequest struct {
 	SessionID string         `json:"sessionId"`
 	ToolUseID string         `json:"toolUseId,omitempty"`

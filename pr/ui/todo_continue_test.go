@@ -40,7 +40,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 	return &captaindb.PromptRun{
 		State: captaindb.PromptRunStateWaiting,
 		Runtime: captaindb.PromptRunRuntime{
-			Mode: string(types.ModePlan), Driver: "headless-codex",
+			Mode: string(types.ModePlan), Driver: string(drivers.Agent),
 			Resolved: captaindb.PromptRunRuntimeSelection{
 				Provider: "openai", Backend: "codex-agent", Model: priorCodexModel, Effort: "high",
 			},
@@ -49,7 +49,7 @@ func codexPlanRun(t *testing.T, sessionID string) *captaindb.PromptRun {
 			SessionID: sessionID,
 			// The family alias the run was requested with; Runtime.Resolved carries
 			// the concrete model it became.
-			Model:  api.Model{Name: "codex", Backend: "codex-agent"},
+			Model:  api.Model{Name: "codex", Mode: api.ModeAgent},
 			Budget: api.Budget{Cost: 4.5, MaxTurns: 12},
 			// The turn that ran, and the tree it ran in — neither is configuration.
 			Prompt: api.Prompt{User: "the previous turn's instructions"},
@@ -79,14 +79,17 @@ func TestContinueRunInheritsTheDispatchedSpecWithinAMode(t *testing.T) {
 		t.Fatalf("continueRun: %v", err)
 	}
 
-	if opts.Driver != string(drivers.Cli) {
-		t.Errorf("driver = %q, want %q (the prior run's headless mechanism)", opts.Driver, drivers.Cli)
+	if opts.Driver != string(drivers.Agent) {
+		t.Errorf("driver = %q, want %q (the prior run's backend)", opts.Driver, drivers.Agent)
 	}
 	if opts.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want the prior run's resolved %q", opts.Spec.Name, priorCodexModel)
 	}
 	if string(opts.Spec.Backend) != "codex-agent" {
 		t.Errorf("backend = %q, want codex-agent", opts.Spec.Backend)
+	}
+	if opts.Spec.Mode != api.ModeAgent {
+		t.Errorf("authored backend = %q, want agent", opts.Spec.Mode)
 	}
 	if string(opts.Spec.Effort) != "high" {
 		t.Errorf("effort = %q, want high", opts.Spec.Effort)
@@ -176,11 +179,11 @@ func TestTodoAPIPlanReviseInheritsPlanRunRuntime(t *testing.T) {
 	if !*called {
 		t.Fatal("revise never dispatched a resume")
 	}
-	if gotReq.Options.Driver != string(drivers.Cli) {
-		t.Errorf("driver = %q, want %q (the plan run's headless mechanism)", gotReq.Options.Driver, drivers.Cli)
+	if gotReq.Options.Driver != string(drivers.Agent) {
+		t.Errorf("driver = %q, want %q (the plan run's backend)", gotReq.Options.Driver, drivers.Agent)
 	}
-	if gotReq.Options.agent() != "codex" {
-		t.Errorf("agent = %q, want codex — a codex plan must not be revised by claude", gotReq.Options.agent())
+	if gotReq.Options.Spec.Backend.Family() != "codex" {
+		t.Errorf("family = %q, want codex — a codex plan must not be revised by claude", gotReq.Options.Spec.Backend.Family())
 	}
 	if gotReq.Options.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want %q", gotReq.Options.Spec.Name, priorCodexModel)
@@ -207,9 +210,12 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 
 	oldStart := startTodoRun
 	var got todoRunRequest
+	// The stub answers with the session it was handed, as the real dispatcher
+	// does. Returning an unrelated literal would make the report-matches-dispatch
+	// assertion below compare a constant against a derived value.
 	startTodoRun = func(req todoRunRequest) (todoRunStartResult, error) {
 		got = req
-		return todoRunStartResult{Status: "started", SessionID: "11111111-1111-4111-8111-111111111111"}, nil
+		return todoRunStartResult{Status: "started", SessionID: req.Options.Spec.SessionID}, nil
 	}
 	t.Cleanup(func() { startTodoRun = oldStart })
 
@@ -222,11 +228,11 @@ func TestTodoAPIPlanApproveAndRunInheritsPlanRunRuntime(t *testing.T) {
 	if got.Options.RunMode != types.ModeRun {
 		t.Errorf("chained run mode = %q, want run", got.Options.RunMode)
 	}
-	if got.Options.Driver != string(drivers.Cli) {
-		t.Errorf("driver = %q, want %q (the plan run's headless mechanism)", got.Options.Driver, drivers.Cli)
+	if got.Options.Driver != string(drivers.Agent) {
+		t.Errorf("driver = %q, want %q (the plan run's backend)", got.Options.Driver, drivers.Agent)
 	}
-	if got.Options.agent() != "codex" {
-		t.Errorf("agent = %q, want codex — a codex plan must not be implemented by claude", got.Options.agent())
+	if got.Options.Spec.Backend.Family() != "codex" {
+		t.Errorf("family = %q, want codex — a codex plan must not be implemented by claude", got.Options.Spec.Backend.Family())
 	}
 	if got.Options.Spec.Name != priorCodexModel {
 		t.Errorf("model = %q, want %q", got.Options.Spec.Name, priorCodexModel)

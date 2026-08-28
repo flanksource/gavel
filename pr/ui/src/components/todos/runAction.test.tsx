@@ -5,29 +5,38 @@ import type { RunContext } from './providers';
 import { queryTestWrapper } from './queryTestWrapper';
 
 const context: RunContext = {
-  defaultBackend: 'codex-agent',
+  defaultBackend: 'agent',
+  defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high', 'xhigh'],
   tools: [],
+  runtimes: [
+    { family: 'codex', provider: 'openai', catalogPrefix: 'openai', modes: [{ backend: 'agent', schema: { type: 'object' } }] },
+    { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'agent', schema: { type: 'object' } }, { backend: 'cli', schema: { type: 'object' } }] },
+  ],
+  models: [
+    { id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true, backends: ['agent'], runtime: { model: 'gpt-5.5' } },
+    { id: 'claude-opus-4-8', provider: 'anthropic', label: 'Claude Opus 4.8', capabilitiesKnown: true, reasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', configured: true, backends: ['agent', 'cli'], runtime: { model: 'claude-opus-4-8' } },
+  ],
   backends: [
     {
-      id: 'codex-agent',
+      id: 'agent',
       label: 'Codex Agent',
       provider: 'openai',
       agent: 'codex',
       defaultModel: 'gpt-5.5',
-      driver: 'codex-headless',
-      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'codex-headless' }],
+      driver: 'agent',
+      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'agent' }],
       models: [{ id: 'gpt-5.5', provider: 'openai', label: 'GPT-5.5', reasoning: true, configured: true }],
       configured: true,
     },
     {
-      id: 'claude-agent',
+      id: 'agent',
       label: 'Claude Agent',
       provider: 'anthropic',
       agent: 'claude',
       defaultModel: 'claude-opus-4-8',
-      driver: 'claude-headless',
-      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'claude-headless' }],
+      driver: 'agent',
+      mechanisms: [{ value: 'agent', label: 'Agent', driver: 'agent' }],
       models: [{
         id: 'claude-opus-4-8',
         provider: 'anthropic',
@@ -41,7 +50,7 @@ const context: RunContext = {
       configured: true,
     },
     {
-      id: 'claude-cli',
+      id: 'cli',
       label: 'Claude CLI',
       provider: 'anthropic',
       agent: 'claude',
@@ -96,13 +105,13 @@ describe('TodoRunActionButton RuntimeBar', () => {
     const primary = screen.getByRole('button', { name: 'Run' });
     await waitFor(() => expect((primary as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(await screen.findByRole('button', {
-      name: 'Run runtime: OpenAI, Codex Agent, GPT-5.5, effort Medium',
+      name: 'Run runtime: Codex, Agent, GPT-5.5, effort Medium',
     }));
 
     let menu = screen.getByRole('menu');
     fireEvent.click(within(menu).getByRole('radio', { name: 'Claude' }));
     menu = screen.getByRole('menu');
-    fireEvent.click(within(menu).getByRole('radio', { name: 'Claude CLI' }));
+    fireEvent.click(within(menu).getByRole('radio', { name: 'CLI' }));
     menu = screen.getByRole('menu');
     fireEvent.click(within(menu).getByRole('button', { name: 'Claude Opus 4.8' }));
     menu = screen.getByRole('menu');
@@ -115,7 +124,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
           driver: 'cli',
           runMode: 'run',
           spec: {
-            backend: 'claude-cli',
+            backend: 'cli',
             model: 'claude-opus-4-8',
             effort: 'high',
             workflow: { commits: [{ on: 'run', gates: 'full' }] },
@@ -128,7 +137,7 @@ describe('TodoRunActionButton RuntimeBar', () => {
     expect(onRun).toHaveBeenCalledWith(expect.objectContaining({
       driver: 'cli',
       runMode: 'run',
-      spec: expect.objectContaining({ backend: 'claude-cli', model: 'claude-opus-4-8', effort: 'high' }),
+      spec: expect.objectContaining({ backend: 'cli', model: 'claude-opus-4-8', effort: 'high' }),
     }));
   });
 

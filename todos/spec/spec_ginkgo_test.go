@@ -10,7 +10,6 @@ import (
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/todos/drivers"
 	"github.com/flanksource/gavel/todos/types"
-	"github.com/flanksource/gavel/verify"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -113,23 +112,23 @@ todos:
   model: claude-haiku-4-5
 todos:
   verify:
-    model: claude-code-opus
+    model: agent:opus
     budget:
       maxTurns: 7
 `)
 			resolved, err := Resolve(Input{WorkDir: dir, Mode: types.ModeVerify})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Name).To(Equal("claude-code-opus"))
+			Expect(resolved.Spec.Name).To(Equal("claude-opus-5"))
 			Expect(resolved.Spec.Budget.MaxTurns).To(Equal(7))
 			Expect(resolved.Provenance["model"]).To(Equal(".gavel.yaml todos.verify"))
 
 			overridden, err := Resolve(Input{
 				WorkDir:  dir,
 				Mode:     types.ModeVerify,
-				Override: api.Spec{Model: api.Model{Name: "claude-code-sonnet"}},
+				Override: api.Spec{Model: api.Model{Name: "agent:sonnet"}},
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(overridden.Spec.Name).To(Equal("claude-code-sonnet"), "the request outranks todos.verify")
+			Expect(overridden.Spec.Name).To(Equal("claude-sonnet-5"), "the request outranks todos.verify")
 			Expect(overridden.Spec.Budget.MaxTurns).To(Equal(7), "and overrides only what it names")
 		})
 
@@ -143,7 +142,7 @@ todos:
 				Mode:    types.ModeVerify,
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Name).To(Equal(verify.DefaultVerifyModel))
+			Expect(resolved.Spec.Name).To(Equal("claude-sonnet-5"))
 			Expect(resolved.Spec.Name).ToNot(Equal("claude-haiku-4-5"))
 		})
 
@@ -194,6 +193,18 @@ todos:
 	})
 
 	Describe("driver", func() {
+		It("uses the compact model backend over the sibling backend field", func() {
+			resolved, err := Resolve(Input{
+				WorkDir: workspace("todos:\n  run:\n    model: agent:opus\n    backend: api\n"),
+				Mode:    types.ModeRun,
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Spec.Mode).To(Equal(api.ModeAgent))
+			Expect(resolved.Spec.Backend).To(Equal(api.BackendClaudeAgent))
+			Expect(resolved.Driver).To(Equal(drivers.Agent))
+		})
+
 		It("resolves request over config over the built-in default", func() {
 			configured := workspace("todos:\n  driver: cli\n")
 
@@ -210,47 +221,35 @@ todos:
 			Expect(resolved.Driver).To(Equal(drivers.Default))
 		})
 
-		// A captain backend is a (provider, mechanism) pair, so `ai.backend:
-		// codex-agent` has already chosen the agent SDK. Pairing it with the
-		// built-in cmux default would reject a coherent config for disagreeing
-		// with a driver nobody asked for. The model sits at todos.run because
-		// the mode's .prompt frontmatter outranks `ai:` — see the sibling spec.
-		It("takes the mechanism a configured backend already names", func() {
+		It("uses a configured canonical backend as the execution driver", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: codex-agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  backend: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Driver).To(Equal(drivers.Cli))
-			Expect(resolved.Spec.Backend).To(BeEquivalentTo("codex-agent"))
+			Expect(resolved.Driver).To(Equal(drivers.Agent))
+			Expect(resolved.Spec.Mode).To(Equal(api.ModeAgent))
 		})
 
-		It("still lets an explicit driver outrank the backend's mechanism", func() {
+		It("keeps the canonical spec backend ahead of a duplicate driver field", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: codex-agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  backend: agent\ntodos:\n  run:\n    model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 				Driver:  "api",
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Driver).To(Equal(drivers.Api))
+			Expect(resolved.Driver).To(Equal(drivers.Agent))
 		})
 
-		// The other half of the same pair going stale. `ai:` sits below the
-		// mode's .prompt frontmatter, so `ai.backend: codex-agent` survives
-		// under a frontmatter that pins `model: claude` — and the two halves
-		// then name different providers. Left alone that pair is rejected
-		// downstream, which would mean nobody with a codex `ai.backend` could
-		// run a todo at all. The stale half is dropped so it is re-derived
-		// from the model that actually won.
-		It("drops a configured backend whose provider a higher layer overrode", func() {
+		It("keeps a provider-independent backend when a higher layer changes model family", func() {
 			resolved, err := Resolve(Input{
-				WorkDir: workspace("ai:\n  backend: codex-agent\n  model: gpt-5.6-sol\n"),
+				WorkDir: workspace("ai:\n  backend: agent\n  model: gpt-5.6-sol\n"),
 				Mode:    types.ModeRun,
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resolved.Spec.Name).To(Equal("claude"), "todos-run.prompt frontmatter outranks ai.model")
-			Expect(resolved.Spec.Backend).To(BeEmpty())
-			Expect(resolved.Driver).To(Equal(drivers.Cli), "the mechanism half is still what ai.backend said")
+			Expect(resolved.Spec.Name).To(Equal("claude-opus-5"), "todos-run.prompt frontmatter outranks ai.model")
+			Expect(resolved.Spec.Mode).To(Equal(api.ModeAgent))
+			Expect(resolved.Driver).To(Equal(drivers.Agent))
 		})
 	})
 
@@ -290,9 +289,22 @@ todos:
 	})
 
 	Describe("failing loud", func() {
+		DescribeTable("rejects legacy backend values instead of translating them",
+			func(backend string) {
+				_, err := Resolve(Input{
+					WorkDir: workspace("ai:\n  model: opus\n  backend: " + backend + "\n"),
+					Mode:    types.ModeRun,
+				})
+
+				Expect(err).To(MatchError(ContainSubstring("invalid model configuration")))
+			},
+			Entry("provider", "anthropic"),
+			Entry("composite adapter", "claude-agent"),
+		)
+
 		It("rejects an effort the resolved model contradicts", func() {
 			_, err := Resolve(Input{
-				WorkDir:  workspace("todos:\n  run:\n    model: \"opus:low\"\n"),
+				WorkDir:  workspace("todos:\n  run:\n    model: \"agent:opus:low\"\n"),
 				Mode:     types.ModeRun,
 				Override: api.Spec{Model: api.Model{Effort: api.EffortHigh}},
 			})
