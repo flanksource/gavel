@@ -65,7 +65,7 @@ func Resolve(trace verify.GavelConfigTrace) ([]ResolvedPrompt, error) {
 	all := All()
 	resolved := make([]ResolvedPrompt, 0, len(all))
 	for _, desc := range all {
-		item, err := resolveOne(trace, desc)
+		item, err := ResolveOne(trace, desc)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s (%s): %w", desc.ID, desc.ConfigPath, err)
 		}
@@ -74,7 +74,7 @@ func Resolve(trace verify.GavelConfigTrace) ([]ResolvedPrompt, error) {
 	return resolved, nil
 }
 
-func resolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPrompt, error) {
+func ResolveOne(trace verify.GavelConfigTrace, desc prompts.Prompt) (ResolvedPrompt, error) {
 	override, err := promptSpecAt(trace.Merged, desc.ConfigPath)
 	if err != nil {
 		return ResolvedPrompt{}, err

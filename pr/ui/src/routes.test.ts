@@ -51,6 +51,35 @@ describe('project routes', () => {
   });
 });
 
+describe('prompt routes', () => {
+  it('round-trips a selected prompt with its scope project', () => {
+    const location = new URL('http://localhost:9092/prompts/commit.message?project=Clicky%20UI');
+
+    const parsed = parseRoute(location as unknown as Location);
+
+    expect(parsed).toEqual({
+      ...emptyRouteState(),
+      tab: 'prompts',
+      selectedPath: 'commit.message',
+      promptScope: 'Clicky UI',
+    });
+    expect(buildRoute(parsed)).toBe('/prompts/commit.message?project=Clicky+UI');
+  });
+
+  it('keeps the prompts table at the global scope without a query', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/prompts') as unknown as Location);
+
+    expect(parsed).toEqual({ ...emptyRouteState(), tab: 'prompts' });
+    expect(buildRoute(parsed)).toBe('/prompts');
+  });
+
+  it('ignores a prompt scope on other tabs', () => {
+    const parsed = parseRoute(new URL('http://localhost:9092/todos?project=x') as unknown as Location);
+
+    expect(parsed.promptScope).toBe('');
+  });
+});
+
 describe('task routes', () => {
   it('round-trips a selected task generation', () => {
     const location = new URL('http://localhost:9092/tasks/run-123');

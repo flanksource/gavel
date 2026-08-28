@@ -25,6 +25,7 @@ func Prompts() []prompts.Prompt {
 		Description: "Fixes failing checks and unresolved comments for `gavel pr status --ai-fix`, and declares its own verify/commit workflow.",
 		ConfigPath:  prompts.PRFix,
 		Default:     prStatusFixPrompt,
+		UsedBy:      []string{"gavel pr status --ai-fix"},
 	}}
 }
 

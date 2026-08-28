@@ -4,8 +4,11 @@ import { emptyFilters, type Filters, type FilterMode } from './components/Filter
 export type ExportFormat = 'json' | 'md';
 
 // Tab is the top-level view, encoded as the first path segment. PRs, projects,
-// todos, and tasks carry their selection in the path; filters only apply to PRs.
-export type Tab = 'prs' | 'projects' | 'todos' | 'activity' | 'tasks';
+// todos, tasks, and prompts carry their selection in the path; filters only
+// apply to PRs.
+export type Tab = 'prs' | 'projects' | 'todos' | 'activity' | 'tasks' | 'prompts';
+
+const SPA_TABS: readonly Tab[] = ['projects', 'todos', 'activity', 'tasks', 'prompts'];
 
 export interface RouteState {
   tab: Tab;
@@ -14,6 +17,9 @@ export interface RouteState {
   projectRunId: string;
   projectHistory: boolean;
   projectResults: boolean;
+  // promptScope is the project whose config chain the prompts tab resolves
+  // against (?project=<name>); empty means the global scope.
+  promptScope: string;
   filters: Filters;
 }
 
@@ -42,16 +48,14 @@ function buildFacet(modes: Record<string, FilterMode>): string {
 export function parseRoute(location: Location): RouteState {
   const trimmed = location.pathname.replace(/^\/+|\/+$/g, '');
   const segments = trimmed ? trimmed.split('/').map(decodeURIComponent) : [];
-  const tab: Tab =
-    segments[0] === 'projects' || segments[0] === 'todos' || segments[0] === 'activity' || segments[0] === 'tasks'
-      ? segments[0]
-      : 'prs';
+  const first = segments[0];
+  const tab: Tab = SPA_TABS.find(candidate => candidate === first) ?? 'prs';
   let selectedPath = '';
   let projectRunId = '';
   if (tab === 'projects' && segments.length > 1) {
     selectedPath = segments[1];
     if (segments.length === 4 && segments[2] === 'runs') projectRunId = segments[3];
-  } else if ((tab === 'prs' || tab === 'todos' || tab === 'tasks') && segments.length > 1) {
+  } else if ((tab === 'prs' || tab === 'todos' || tab === 'tasks' || tab === 'prompts') && segments.length > 1) {
     selectedPath = segments.slice(1).join('/');
   }
 
@@ -63,6 +67,7 @@ export function parseRoute(location: Location): RouteState {
     projectRunId,
     projectHistory: tab === 'projects' && (projectRunId !== '' || params.get('history') === 'true'),
     projectResults: tab === 'projects' && params.get('results') === 'true',
+    promptScope: tab === 'prompts' ? params.get('project') ?? '' : '',
     filters: {
       state: parseFacet(params.get('state')),
       checks: parseFacet(params.get('checks')),
@@ -77,14 +82,16 @@ export function buildRoute(state: RouteState): string {
   if (state.tab === 'projects' && state.selectedPath) {
     segments.push(encodeURIComponent(state.selectedPath));
     if (state.projectRunId) segments.push('runs', encodeURIComponent(state.projectRunId));
-  } else if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'tasks') && state.selectedPath) {
+  } else if ((state.tab === 'prs' || state.tab === 'todos' || state.tab === 'tasks' || state.tab === 'prompts') && state.selectedPath) {
     segments.push(...state.selectedPath.split('/').map(encodeURIComponent));
   }
 
   // PR selection and filters only apply to the prs tab; todos/activity are
-  // plain /todos and /activity routes.
+  // plain /todos and /activity routes; prompts carry their scope project.
   const params = new URLSearchParams();
-  if (state.tab === 'prs') {
+  if (state.tab === 'prompts') {
+    if (state.promptScope) params.set('project', state.promptScope);
+  } else if (state.tab === 'prs') {
     const { state: st, checks, repos, authors } = state.filters;
     if (Object.keys(st).length) params.set('state', buildFacet(st));
     if (Object.keys(checks).length) params.set('checks', buildFacet(checks));
@@ -126,6 +133,7 @@ export function emptyRouteState(): RouteState {
     projectRunId: '',
     projectHistory: false,
     projectResults: false,
+    promptScope: '',
     filters: emptyFilters(),
   };
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/captain/pkg/api"
 	"github.com/flanksource/gavel/prompts"
+	promptregistry "github.com/flanksource/gavel/prompts/registry"
 	"github.com/flanksource/gavel/verify"
 )
 
@@ -120,21 +121,53 @@ func TestHandleSettingsPromptDetail_UnknownID(t *testing.T) {
 	}
 }
 
+// defaultPromptBody is the built-in body of a registered prompt: an inline edit
+// that keeps it stores only the spec keys it changes.
+func defaultPromptBody(t *testing.T, id string) string {
+	t.Helper()
+	desc, ok := findRegisteredPrompt(id)
+	if !ok {
+		t.Fatalf("unknown prompt %s", id)
+	}
+	_, body, _, err := promptregistry.ParsePromptSource(desc.Default)
+	if err != nil {
+		t.Fatalf("parse default %s: %v", id, err)
+	}
+	return body
+}
+
+// An inline override with its own body would run that body without the
+// default's output schema, so it is refused and steered to a file; keeping the
+// default body stores a model-only override that leaves the default template
+// (schema included) running.
 func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 	dir := withProject(t, "gavel", "flanksource/gavel", "")
+	defaultBody := defaultPromptBody(t, prompts.CommitMessage)
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", putBody(t, promptDetailRequest{
+		Source: "inline", Spec: ptr(map[string]any{"model": "claude-test"}), Body: ptr("Write a message for {{diff}}."),
+	})))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "as a file") {
+		t.Fatalf("inline body edit status = %d, want 400 steering to a file; body = %q", rec.Code, rec.Body.String())
+	}
 
 	body := putBody(t, promptDetailRequest{
 		Source: "inline",
 		Spec:   ptr(map[string]any{"model": "claude-test"}),
-		Body:   ptr("Write a message for {{diff}}."),
+		Body:   ptr(defaultBody),
 	})
-	rec := httptest.NewRecorder()
+	rec = httptest.NewRecorder()
 	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body = %q", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gavel.yaml")); err != nil {
+	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(dir, ".gavel.yaml"))
+	if err != nil {
 		t.Fatalf(".gavel.yaml was not written: %v", err)
+	}
+	if cfg.Commit.Message.Spec.Name != "claude-test" || cfg.Commit.Message.Spec.Prompt.User != "" {
+		t.Errorf("stored override = %+v, want model-only (no prompt.user)", cfg.Commit.Message.Spec)
 	}
 
 	rec = httptest.NewRecorder()
@@ -152,8 +185,11 @@ func TestHandleSettingsPromptDetail_PutInlineRoundTrip(t *testing.T) {
 	if got.Spec == nil || (*got.Spec)["model"] != "claude-test" {
 		t.Errorf("spec.model = %v, want claude-test", got.Spec)
 	}
-	if got.Body == nil || !strings.Contains(*got.Body, "Write a message") {
-		t.Errorf("body not persisted: %v", got.Body)
+	if got.Body == nil || strings.TrimSpace(*got.Body) != strings.TrimSpace(defaultBody) {
+		t.Errorf("body = %v, want the default body", got.Body)
+	}
+	if !strings.Contains(got.Raw, "output:") {
+		t.Errorf("effective inline document lost the default's output schema:\n%s", got.Raw)
 	}
 }
 
@@ -163,7 +199,7 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 	body := putBody(t, promptDetailRequest{
 		Source: "inline",
 		Spec:   ptr(map[string]any{"model": "claude-test"}),
-		Body:   ptr("Custom message body."),
+		Body:   ptr(defaultPromptBody(t, prompts.CommitMessage)),
 	})
 	rec := httptest.NewRecorder()
 	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
@@ -186,7 +222,7 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 	if got.Source != "default" {
 		t.Errorf("source = %q, want default", got.Source)
 	}
-	if strings.Contains(got.Raw, "Custom message body.") {
+	if strings.Contains(got.Raw, "claude-test") {
 		t.Errorf("default response still contains old override:\n%s", got.Raw)
 	}
 	cfg, err := verify.LoadSingleGavelConfig(filepath.Join(dir, ".gavel.yaml"))
@@ -202,12 +238,20 @@ func TestHandleSettingsPromptDetail_PutDefaultClearsOverride(t *testing.T) {
 // unmodeled frontmatter block (output.schema) the base document carried. Only a
 // file override retains dotprompt-only keys, so this exercises the file source.
 func TestHandleSettingsPromptDetail_RoundTripPreservesUnmodeledKey(t *testing.T) {
-	withProject(t, "gavel", "flanksource/gavel", "")
+	dir := withProject(t, "gavel", "flanksource/gavel", "")
 
 	baseRaw := "---\n" +
 		"model: old-model\n" +
 		"output:\n  schema:\n    type: object\n    properties:\n      title:\n        type: string\n" +
 		"---\nWrite {{topic}}.\n"
+	if err := os.WriteFile(filepath.Join(dir, "commit-message.prompt"), []byte(baseRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seeded := verify.GavelConfig{}
+	seeded.Commit.Message = verify.PromptSpec{File: "commit-message.prompt"}
+	if err := verify.SaveGavelConfig(dir, seeded); err != nil {
+		t.Fatal(err)
+	}
 	body := putBody(t, promptDetailRequest{
 		Source:  "file",
 		Path:    "commit-message.prompt",
@@ -238,7 +282,9 @@ func TestHandleSettingsPromptDetail_ScopeIsolation(t *testing.T) {
 	t.Setenv("HOME", home)
 	withProject(t, "gavel", "flanksource/gavel", "")
 
-	body := putBody(t, promptDetailRequest{Source: "inline", Spec: ptr(map[string]any{"model": "proj-model"}), Body: ptr("project body")})
+	body := putBody(t, promptDetailRequest{
+		Source: "inline", Spec: ptr(map[string]any{"model": "proj-model"}), Body: ptr(defaultPromptBody(t, prompts.CommitMessage)),
+	})
 	rec := httptest.NewRecorder()
 	(&Server{}).handleSettingsPromptDetail(rec, promptReq("PUT", prompts.CommitMessage, "project=gavel", body))
 	if rec.Code != http.StatusOK {

@@ -31,6 +31,7 @@ func Prompts() []prompts.Prompt {
 		Description: "Repairs violations for `gavel lint --ai-fix` and the `gavel commit` lint gate.",
 		ConfigPath:  prompts.LintFix,
 		Default:     lintAIFixPrompt,
+		UsedBy:      []string{"gavel lint --ai-fix", "gavel commit (lint gate)"},
 	}}
 }
 

@@ -132,10 +132,10 @@ var _ = Describe("settings prompt override repair and round-trip", func() {
 		seedFileOverride(dir, "bad.prompt", malformedPrompt)
 		fixed := "---\nmodel: fixed-model\n---\nFixed body {{diff}}.\n"
 
-		rec := promptDetailCall("PUT", scope, mustJSON(promptDetailRequest{Source: "inline", Raw: ptr(fixed)}))
+		rec := promptDetailCall("PUT", scope, mustJSON(promptDetailRequest{Source: "file", Path: "bad.prompt", Raw: ptr(fixed)}))
 		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
 		got := decodePromptDetail(rec)
-		Expect(got.Source).To(Equal("inline"))
+		Expect(got.Source).To(Equal("file"))
 		Expect(got.ParseError).To(BeEmpty())
 		Expect(got.Spec).NotTo(BeNil())
 		Expect((*got.Spec)["model"]).To(Equal("fixed-model"))

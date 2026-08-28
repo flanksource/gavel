@@ -20,6 +20,7 @@ const (
 	viewTabTodos    = "todos"
 	viewTabActivity = "activity"
 	viewTabTasks    = "tasks"
+	viewTabPrompts  = "prompts"
 )
 
 type routeRequest struct {
@@ -227,10 +228,10 @@ func parseRouteRequest(r *http.Request) (routeRequest, bool) {
 		pathFormat = format
 	}
 
-	// projects/todos/activity/tasks are client-rendered SPA tabs with no server-side node
-	// path or export; accept them and any deeper selected-node segments so a hard
-	// load such as /projects/{project}/runs/{runId} serves the app.
-	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks {
+	// projects/todos/activity/tasks/prompts are client-rendered SPA tabs with no
+	// server-side node path or export; accept them and any deeper selected-node
+	// segments so a hard load such as /projects/{project}/runs/{runId} serves the app.
+	if tabSeg == viewTabProjects || tabSeg == viewTabTodos || tabSeg == viewTabActivity || tabSeg == viewTabTasks || tabSeg == viewTabPrompts {
 		req.Tab = tabSeg
 		return req, true
 	}

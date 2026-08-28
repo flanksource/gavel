@@ -41,7 +41,7 @@ export async function responseError(response: Response, fallback: string): Promi
   return new Error(`${fallback} (${response.status})`);
 }
 
-async function fetchJSON<T>(url: string, signal: AbortSignal, context: string): Promise<T> {
+export async function fetchJSON<T>(url: string, signal: AbortSignal, context: string): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, { signal });

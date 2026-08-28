@@ -183,6 +183,7 @@ func Prompts() []prompts.Prompt {
 			Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
 			ConfigPath:  "todos.run",
 			Default:     runTemplate,
+			UsedBy:      []string{"gavel todos run"},
 		},
 		{
 			ID:          prompts.TodosPlan,
@@ -190,6 +191,7 @@ func Prompts() []prompts.Prompt {
 			Description: "The agent prompt for plan-mode runs: read-only investigation that produces a reviewable implementation plan.",
 			ConfigPath:  "todos.plan",
 			Default:     planTemplate,
+			UsedBy:      []string{"gavel todos run --mode plan", "gavel todos plan"},
 		},
 	}
 }

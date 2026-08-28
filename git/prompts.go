@@ -17,6 +17,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Generates the conventional-commit message for `gavel commit`.",
 			ConfigPath:  prompts.CommitMessage,
 			Default:     commitMessagePrompt,
+			UsedBy:      []string{"gavel commit"},
 		},
 		{
 			ID:          prompts.CommitSummary,
@@ -24,6 +25,7 @@ func Prompts() []prompts.Prompt {
 			Description: "Names and summarises a group of commits (`gavel git analyze --summary`).",
 			ConfigPath:  prompts.CommitSummary,
 			Default:     summaryGroupPrompt,
+			UsedBy:      []string{"gavel git analyze --summary --ai"},
 		},
 	}
 }

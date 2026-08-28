@@ -17,6 +17,14 @@ import (
 	"github.com/flanksource/gavel/verify"
 )
 
+// promptWrite is a validated override ready to persist for one layer. Default
+// is the built-in .prompt: an inline write whose body matches it stores no
+// prompt.user, so the override carries only the spec keys it changes and the
+// default template — dotprompt-only frontmatter included — keeps running.
+type promptWrite struct {
+	Dir, Source, Path, Text, Default string
+}
+
 // promptDetailResponse is the resolved view of one registered prompt for a
 // config layer: its source (default/inline/file) and the raw .prompt text
 // (echoed back by the editor as the merge base on PUT). When the frontmatter
@@ -24,14 +32,16 @@ import (
 // carries the parser message and Spec/Body are absent — the raw text is the
 // only repair source, so it is always retained.
 type promptDetailResponse struct {
-	ID         string          `json:"id"`
-	Scope      string          `json:"scope"`
-	Source     string          `json:"source"` // default | inline | file
-	Path       string          `json:"path,omitempty"`
-	Spec       *map[string]any `json:"spec,omitempty"`
-	Body       *string         `json:"body,omitempty"`
-	Raw        string          `json:"raw"`
-	ParseError string          `json:"parseError,omitempty"`
+	ID         string           `json:"id"`
+	Scope      string           `json:"scope"`
+	Source     string           `json:"source"` // default | inline | file
+	Path       string           `json:"path,omitempty"`
+	Spec       *map[string]any  `json:"spec,omitempty"`
+	Body       *string          `json:"body,omitempty"`
+	Raw        string           `json:"raw"`
+	Version    string           `json:"version"`
+	ParseError string           `json:"parseError,omitempty"`
+	Effective  *promptEffective `json:"effective,omitempty"`
 }
 
 // promptDetailRequest is the editor's save payload, a strict union keyed by
@@ -54,6 +64,7 @@ type promptDetailRequest struct {
 // promptDetailInput is the resolved raw prompt for one layer, before parsing.
 type promptDetailInput struct {
 	ID, Scope, Source, Path, Raw string
+	Effective                    *promptEffective
 }
 
 // buildPromptDetailResponse parses the resolved raw text into a detail. Raw is
@@ -63,6 +74,7 @@ type promptDetailInput struct {
 func buildPromptDetailResponse(input promptDetailInput) promptDetailResponse {
 	resp := promptDetailResponse{
 		ID: input.ID, Scope: input.Scope, Source: input.Source, Path: input.Path, Raw: input.Raw,
+		Version: promptSourceVersion(input.Raw), Effective: input.Effective,
 	}
 	promptSpec, body, _, err := promptregistry.ParsePromptSource(input.Raw)
 	if err != nil {
@@ -114,8 +126,13 @@ func (s *Server) getPromptDetail(w http.ResponseWriter, desc prompts.Prompt, sco
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	effective, err := effectivePromptView(desc, dir)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	respondJSON(w, http.StatusOK, buildPromptDetailResponse(promptDetailInput{
-		ID: desc.ID, Scope: scope, Source: overrideSource(ov), Path: ov.File, Raw: text,
+		ID: desc.ID, Scope: scope, Source: overrideSource(ov), Path: ov.File, Raw: text, Effective: effective,
 	}))
 }
 
@@ -138,6 +155,10 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 	ov, err := promptOverridePtr(&cfg, desc.ConfigPath)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if status, err := checkPromptBaseRaw(ov, dir, desc, req.BaseRaw); err != nil {
+		respondError(w, status, err.Error())
 		return
 	}
 
@@ -171,12 +192,24 @@ func (s *Server) putPromptDetail(w http.ResponseWriter, r *http.Request, desc pr
 		respondError(w, status, err.Error())
 		return
 	}
-	if err := persistPromptOverride(dir, &cfg, ov, req.Source, req.Path, newText); err != nil {
+	if req.Source == "inline" {
+		if err := rejectLossyInline(newText, desc.Default); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	write := promptWrite{Dir: dir, Source: req.Source, Path: req.Path, Text: newText, Default: desc.Default}
+	if err := persistPromptOverride(&cfg, ov, write); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	effective, err := effectivePromptView(desc, dir)
+	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	respondJSON(w, http.StatusOK, buildPromptDetailResponse(promptDetailInput{
-		ID: desc.ID, Scope: scope, Source: req.Source, Path: ov.File, Raw: newText,
+		ID: desc.ID, Scope: scope, Source: req.Source, Path: ov.File, Raw: newText, Effective: effective,
 	}))
 }
 
@@ -233,33 +266,6 @@ func mergeStructuredPrompt(dir string, desc prompts.Prompt, ov *verify.PromptSpe
 	return newText, http.StatusOK, nil
 }
 
-// persistPromptOverride writes the validated text by source: inline stores the
-// parsed api.Spec structurally in the layer's .gavel.yaml; file writes the
-// referenced .prompt file with the config pointing at it. Called only after
-// validation, so it never persists bad text. cfg is taken by pointer because ov
-// points into it: mutating *ov and then saving *cfg must reflect the same
-// struct, not a copy.
-func persistPromptOverride(dir string, cfg *verify.GavelConfig, ov *verify.PromptSpec, source, path, newText string) error {
-	switch source {
-	case "inline":
-		spec, err := promptTextToSpec(newText)
-		if err != nil {
-			return err
-		}
-		*ov = verify.PromptSpec{Spec: spec}
-	case "file":
-		target := path
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(dir, target)
-		}
-		if err := os.WriteFile(target, []byte(newText), 0o644); err != nil {
-			return err
-		}
-		*ov = verify.PromptSpec{File: path}
-	}
-	return verify.SaveGavelConfig(dir, *cfg)
-}
-
 // findRegisteredPrompt looks up a prompt descriptor by its stable id.
 func findRegisteredPrompt(id string) (prompts.Prompt, bool) {
 	for _, p := range registeredPrompts() {
@@ -288,59 +294,6 @@ func loadSingleConfig(dir string) (verify.GavelConfig, error) {
 		return verify.GavelConfig{}, err
 	}
 	return cfg, nil
-}
-
-// promptSpecRaw returns the full .prompt document for one layer's override: the
-// built-in default when unset, the file's contents for a file override, or the
-// inline spec reserialized to a .prompt document (frontmatter carries
-// model/budget/effort/…, the body carries prompt.user) for an inline override.
-func promptSpecRaw(ov *verify.PromptSpec, dir, def string) (string, error) {
-	switch {
-	case ov.IsEmpty():
-		return def, nil
-	case ov.File != "":
-		return ov.TemplateSource(dir, def)
-	default:
-		return specToPromptText(ov.Spec)
-	}
-}
-
-// specToPromptText serializes an inline api.Spec back into a .prompt document so
-// the editor round-trips it: the body carries prompt.user and the remaining spec
-// fields (model, budget, effort, prompt.system, …) become the frontmatter.
-func specToPromptText(spec api.Spec) (string, error) {
-	body := spec.Prompt.User
-	fm := specToMap(spec)
-	if p, ok := fm["prompt"].(map[string]any); ok {
-		delete(p, "user")
-		if len(p) == 0 {
-			delete(fm, "prompt")
-		} else {
-			fm["prompt"] = p
-		}
-	}
-	if m, ok := fm["model"].(string); ok && m == "" {
-		delete(fm, "model")
-	}
-	if len(fm) == 0 {
-		return body, nil
-	}
-	return (&dotprompt.Document{Frontmatter: fm, Body: body}).String()
-}
-
-// promptTextToSpec parses a validated .prompt document into the api.Spec stored
-// as an inline override: frontmatter → spec, body → prompt.user when the
-// frontmatter does not set it.
-func promptTextToSpec(text string) (api.Spec, error) {
-	doc, err := dotprompt.Parse(text)
-	if err != nil {
-		return api.Spec{}, err
-	}
-	spec := doc.Spec
-	if spec.Prompt.User == "" {
-		spec.Prompt.User = doc.Body
-	}
-	return spec, nil
 }
 
 // overrideSource classifies an override for the row's source badge.

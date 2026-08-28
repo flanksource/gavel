@@ -170,7 +170,7 @@ func TestParseRouteRequestAcceptHeader(t *testing.T) {
 }
 
 func TestParseRouteRequestTabs(t *testing.T) {
-	for _, path := range []string{"/projects/gavel", "/projects/gavel/runs/run-2026-07-21T10-59-33Z", "/todos", "/activity", "/tasks", "/tasks/run-123"} {
+	for _, path := range []string{"/projects/gavel", "/projects/gavel/runs/run-2026-07-21T10-59-33Z", "/todos", "/activity", "/tasks", "/tasks/run-123", "/prompts", "/prompts/commit.message"} {
 		t.Run(path, func(t *testing.T) {
 			req, ok := parseRouteRequest(httptest.NewRequest(http.MethodGet, path, nil))
 			if !ok || req.IsExport {
@@ -192,7 +192,7 @@ func TestParseRouteRequestTabs(t *testing.T) {
 
 func TestHandleRouteTabsServeShell(t *testing.T) {
 	s := NewServer(0, github.Options{}, SearchConfig{})
-	for _, path := range []string{"/prs", "/projects/gavel/runs/run-2026-07-21T10-59-33Z", "/todos", "/activity"} {
+	for _, path := range []string{"/prs", "/projects/gavel/runs/run-2026-07-21T10-59-33Z", "/todos", "/activity", "/prompts/commit.message"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.handleRoute(rec, httptest.NewRequest(http.MethodGet, path, nil))

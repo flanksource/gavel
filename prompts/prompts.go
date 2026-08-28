@@ -42,4 +42,7 @@ type Prompt struct {
 	// Default is the embedded .prompt source used when the override is unset; the
 	// UI shows it as the built-in default.
 	Default string `json:"default"`
+	// UsedBy lists the gavel commands that run this prompt, so a catalog can say
+	// what a tweak affects.
+	UsedBy []string `json:"usedBy,omitempty"`
 }
