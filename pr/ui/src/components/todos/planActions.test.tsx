@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { TodoItem, TodoQuestion } from '../../types';
 import type { RunContext } from './providers';
 import {
@@ -73,8 +74,9 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
   ProviderSelector: () => null,
 }));
 
-vi.mock('@flanksource/clicky-ui/ai', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@flanksource/clicky-ui/ai')>(),
+vi.mock('@flanksource/clicky-ui/ai', async importOriginal => ({
+  ...(await importOriginal<typeof import('@flanksource/clicky-ui/ai')>()),
+  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
   PromptRunEditor: () => null,
   RuntimeBar: ({ value, onChange, ariaLabel, className }: {
@@ -111,6 +113,8 @@ vi.mock('@flanksource/clicky-ui/icons', () => {
     UiBatteryVerticalMedium: Icon,
     UiCheck: Icon,
     UiCheckFilled: Icon,
+    UiCircleOutline: Icon,
+    UiCircleXFilled: Icon,
     UiChevronDown: Icon,
     UiChevronRight: Icon,
     UiClock: Icon,
@@ -126,15 +130,19 @@ vi.mock('@flanksource/clicky-ui/icons', () => {
     UiHistory: Icon,
     UiLightbulb: Icon,
     UiListFlat: Icon,
+    UiListChecks: Icon,
     UiListDashes: Icon,
     UiLoader: Icon,
     UiPass: Icon,
     UiPlay: Icon,
+    UiProhibit: Icon,
     UiQuestion: Icon,
     UiRobotAi: Icon,
     UiRows: Icon,
     UiSparkles: Icon,
     UiTerminal: Icon,
+    UiSidebar: Icon,
+    UiTable: Icon,
     UiWarningTriangle: Icon,
   };
 });

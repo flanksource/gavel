@@ -52,6 +52,17 @@ const counts = {
   skipped: 0,
 };
 
+// The hook also loads the tag taxonomy (one cached request per workspace), so
+// these assertions scope themselves to the batch endpoint rather than counting
+// every fetch — the behaviour under test is the batch query, not the total.
+function isTagRequest(input: RequestInfo | URL): boolean {
+  return String(input).startsWith('/api/todos/labels');
+}
+
+function batchCalls(mock: { mock: { calls: [RequestInfo | URL, RequestInit?][] } }) {
+  return mock.mock.calls.filter(([input]) => String(input) === '/api/todos/batch');
+}
+
 function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 500): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -234,6 +245,7 @@ describe('useWorkspaceTodos', () => {
       status: 'pending', priority: 'high',
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (isTagRequest(input)) return jsonResponse({ definitions: [] });
       if (String(input) !== '/api/todos/batch') throw new Error(`unexpected request: ${String(input)}`);
       return jsonResponse({ results: [
         { dir: '/work/first', counts: { ...counts, total: 1, open: 1, pending: 1 }, items: [firstTodo] },
@@ -246,8 +258,8 @@ describe('useWorkspaceTodos', () => {
 
     await waitFor(() => expect(result.current.byDir['/work/first']?.items).toEqual([firstTodo]));
     expect(result.current.workspaces.map(workspace => workspace.dir)).toEqual(['/work/second', '/work/first']);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0];
+    expect(batchCalls(fetchMock)).toHaveLength(1);
+    const [, init] = batchCalls(fetchMock)[0];
     expect(init).toMatchObject({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -279,17 +291,19 @@ describe('useWorkspaceTodos', () => {
   });
 
   it('refetches the active normalized batch query on explicit refresh', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
-      results: [{ dir: '/work/gavel', counts, items: [] }],
-    }));
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => (
+      isTagRequest(input)
+        ? jsonResponse({ definitions: [] })
+        : jsonResponse({ results: [{ dir: '/work/gavel', counts, items: [] }] })
+    ));
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useWorkspaceTodos(projects), { wrapper: queryTestWrapper() });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(batchCalls(fetchMock)).toHaveLength(1));
 
     act(() => result.current.refresh());
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+    await waitFor(() => expect(batchCalls(fetchMock)).toHaveLength(2));
+    expect(batchCalls(fetchMock).map(([input]) => String(input))).toEqual([
       '/api/todos/batch',
       '/api/todos/batch',
     ]);
@@ -348,5 +362,19 @@ describe('useWorkspaceTodos', () => {
 
     await waitFor(() => expect(result.current.detail?.status).toBe('review'), { timeout: 1_500 });
     expect(result.current.detail?.hasPlan).toBe(true);
+  });
+
+  // Layout is a view preference like density and grouping: owned by the hook so
+  // the navbar toggle and the body slots read one value, and written through to
+  // storage so the choice survives a reload.
+  it('defaults the layout to split and persists a change', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: [] })));
+
+    const { result } = renderHook(() => useWorkspaceTodos([]), { wrapper: queryTestWrapper() });
+    expect(result.current.layout).toBe('split');
+
+    act(() => result.current.setLayout('full'));
+    await waitFor(() => expect(result.current.layout).toBe('full'));
+    expect(localStorage.getItem('gavel.pr-ui.todoLayout.v1')).toBe('full');
   });
 });

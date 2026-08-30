@@ -1,12 +1,14 @@
 import type { TodoCounts, TodoItem, TodoPriority, TodoStatus } from '../../types';
 import type { FacetModes } from '../../utils';
 import { passFacet } from '../../utils';
+import type { TodoEntry } from './todoGroup';
 import { withinActivityRange, type ResolvedRange } from './todoTimeRange';
+import { todoTagTokens } from './tagResolve';
 
-// The todos list filters on three tri-state facets — status, priority, and
-// whether the todo is linked to an external tracker issue. Each is the same
-// include/exclude/neutral shape clicky-ui's FilterBar `kind:"multi"` binds to,
-// and the same shape the PRs tab's facets use, so one rule (passFacet) covers
+// The todos list filters on five tri-state facets — workspace, status, priority,
+// tags, and whether the todo is linked to an external tracker issue. Each is the
+// same include/exclude/neutral shape clicky-ui's FilterBar `kind:"multi"` binds
+// to, and the same shape the PRs tab's facets use, so one rule (passFacet) covers
 // all of them. Filtering stays client side so the per-workspace counts remain
 // computed over the full list.
 export const CLOSED_STATUS: TodoStatus = 'completed';
@@ -49,15 +51,26 @@ export interface TodoFilters {
   statuses: FacetModes;
   priorities: FacetModes;
   external: FacetModes;
+  // Keyed by the tokens todoTagTokens emits: each full label plus, for a
+  // namespaced label, its bare key — so "only area:ui" and "exclude every
+  // area:*" are both expressible from one facet.
+  tags: FacetModes;
+  // Keyed by normalized workspace directory — the same key byDir and the batch
+  // API use. Not the display name: two checkouts of the same repo share a name
+  // but are separate workspaces.
+  workspaces: FacetModes;
 }
 
-export const TODO_FILTERS_KEY = 'gavel.pr-ui.todoFilters.v2';
+export const TODO_FILTERS_KEY = 'gavel.pr-ui.todoFilters.v3';
+// The v2 key held the three facets without tags. It is read once, widened, and
+// removed — the same one-shot migration the v1 key gets below.
+export const LEGACY_TODO_FILTERS_V2_KEY = 'gavel.pr-ui.todoFilters.v2';
 // The v1 key held a bare array of hidden statuses. It is read once, migrated
 // into excludes, and removed.
 export const LEGACY_HIDDEN_STATUS_KEY = 'gavel.pr-ui.todoFilter.v1';
 
 export function defaultTodoFilters(): TodoFilters {
-  return { statuses: { [CLOSED_STATUS]: 'exclude' }, priorities: {}, external: {} };
+  return { statuses: { [CLOSED_STATUS]: 'exclude' }, priorities: {}, external: {}, tags: {}, workspaces: {} };
 }
 
 // todoMatchesQuery is the free-text search over a todo's identity fields — title,
@@ -86,14 +99,31 @@ export function externalKey(item: TodoItem): TodoExternalKey {
   return item.externalIssue ? 'linked' : 'unlinked';
 }
 
-// isTodoVisible applies all three facets and, when an activity range is active,
-// the time filter. Every facet must pass — they narrow together.
+// isTodoVisible applies the four facets carried by the todo itself and, when an
+// activity range is active, the time filter. Every facet must pass — they narrow
+// together. The workspace facet is deliberately not here: it is keyed on where a
+// todo lives, which only its TodoEntry knows (see isEntryVisible).
 export function isTodoVisible(item: TodoItem, filters: TodoFilters, range?: ResolvedRange | null): boolean {
   if (!passFacet(filters.statuses, [item.status])) return false;
   if (!passFacet(filters.priorities, [priorityKey(item)])) return false;
   if (!passFacet(filters.external, [externalKey(item)])) return false;
+  if (!passFacet(filters.tags ?? {}, todoTagTokens(item))) return false;
   if (range && !withinActivityRange(item, range)) return false;
   return true;
+}
+
+// isWorkspaceShown answers the workspace facet on its own, which is what the
+// per-workspace sections ask: an excluded workspace drops out whole — header,
+// counts and all — rather than rendering as an empty section.
+export function isWorkspaceShown(filters: TodoFilters, dir: string): boolean {
+  return passFacet(filters.workspaces ?? {}, [dir]);
+}
+
+// isEntryVisible is the full rule for a flattened list, where rows from every
+// workspace sit side by side: the workspace facet plus everything isTodoVisible
+// checks.
+export function isEntryVisible(entry: TodoEntry, filters: TodoFilters, range?: ResolvedRange | null): boolean {
+  return isWorkspaceShown(filters, entry.workspace.dir) && isTodoVisible(entry.todo, filters, range);
 }
 
 // isStatusShown answers the one question the per-workspace count badges ask:
@@ -130,7 +160,21 @@ function migrateHiddenStatuses(): TodoFilters | null {
   for (const status of parsed) {
     if (typeof status === 'string') statuses[status] = 'exclude';
   }
-  return { statuses, priorities: {}, external: {} };
+  return { statuses, priorities: {}, external: {}, tags: {}, workspaces: {} };
+}
+
+// migrateV2Filters widens a stored v2 payload — the same three facets, before
+// tags existed — into v3. A v2 value is a structural subset of v3, so the
+// migration is total: nothing the user had selected is lost.
+function migrateV2Filters(): TodoFilters | null {
+  const raw = localStorage.getItem(LEGACY_TODO_FILTERS_V2_KEY);
+  if (!raw) return null;
+  localStorage.removeItem(LEGACY_TODO_FILTERS_V2_KEY);
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object') return null;
+  const { statuses, priorities, external } = parsed as Partial<TodoFilters>;
+  if (!isFacetModes(statuses) || !isFacetModes(priorities) || !isFacetModes(external)) return null;
+  return { statuses, priorities, external, tags: {}, workspaces: {} };
 }
 
 // Persistence is best-effort: localStorage can throw (private mode / disabled),
@@ -141,14 +185,23 @@ export function loadTodoFilters(): TodoFilters {
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
-        const { statuses, priorities, external } = parsed as Partial<TodoFilters>;
+        const { statuses, priorities, external, tags, workspaces } = parsed as Partial<TodoFilters>;
         if (isFacetModes(statuses) && isFacetModes(priorities) && isFacetModes(external)) {
-          return { statuses, priorities, external };
+          // tags and workspaces widen in place rather than behind a key bump: a
+          // payload written before either facet existed simply has no such key,
+          // and reading it as neutral loses nothing the user had selected.
+          return {
+            statuses,
+            priorities,
+            external,
+            tags: isFacetModes(tags) ? tags : {},
+            workspaces: isFacetModes(workspaces) ? workspaces : {},
+          };
         }
       }
       return defaultTodoFilters();
     }
-    return migrateHiddenStatuses() ?? defaultTodoFilters();
+    return migrateV2Filters() ?? migrateHiddenStatuses() ?? defaultTodoFilters();
   } catch {
     return defaultTodoFilters();
   }

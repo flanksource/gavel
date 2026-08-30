@@ -2,14 +2,19 @@ import type { ComponentType } from 'react';
 import { Button, ListMenuItem } from '@flanksource/clicky-ui/components';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
 import { UiAdd, UiBeaker, UiCancel, UiCheck, UiCheckFilled, UiChevronDown, UiChevronUp, UiCircleOutline, UiCircleXFilled, UiClock, UiComment, UiError, UiEye, UiFolder, UiGitGraph, UiHistory, UiLightbulb, UiListDashes, UiPass, UiPlay, UiQuestion, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
-import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { SessionStats, TodoCounts, TodoDensity, TodoDiffStat, TodoItem, TodoLayout, TodoPriority, TodoStatus } from '../../types';
+import { TODO_PHASES } from '../../types';
 import { ageShort, timeAgo } from '../../utils';
 import type { FacetModes } from '../../utils';
 import { Spinner } from '../../icons/Spinner';
 import { ISSUE_ICONS, StatusAsk, StatusBlocked, StatusClosed, StatusInProgress, StatusOpen, StatusResolved, StatusReview, StatusTriage, StatusUnverified, StatusWontFix } from '../../icons/issues';
 import { DENSITY_OPTIONS } from './todoDensity';
+import { LAYOUT_OPTIONS } from './todoLayout';
+import { TodoPhaseStrip } from './TodoPhaseCell';
 import { isStatusShown } from './todoFilter';
 import { formatCost, formatDuration, useSessionStats } from './TodoSessionTimer';
+import { TodoTagRow } from './TodoTag';
+import { todoVisibleLabels, type TagIndex } from './tagResolve';
 
 export const inputClass = 'w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
@@ -173,7 +178,7 @@ export function priorityClass(priority: TodoPriority | string) {
   }
 }
 
-function StatusIcon({ status }: { status: TodoStatus | string }) {
+export function StatusIcon({ status }: { status: TodoStatus | string }) {
   const label = statusLabel(status);
   const Icon = (() => {
     switch (status) {
@@ -256,7 +261,7 @@ function sessionBadgeView(stats: SessionStats | null): SessionBadgeView {
 // activity. It reads both axes because they move independently: `status` is the
 // todo's lifecycle (a run can finish and leave the todo in draft/review) while
 // `executionState` is the run's own state.
-function isLiveRun(todo: TodoItem): boolean {
+export function isLiveRun(todo: TodoItem): boolean {
   return todo.status === 'in_progress' || todo.executionState === 'running';
 }
 
@@ -266,7 +271,7 @@ function isLiveRun(todo: TodoItem): boolean {
 // spinning forever. Until the session resolves there is nothing to report, so a
 // settled todo falls back to its own status icon and only a live run claims to be
 // in progress. Render it only for a row that has a session id.
-function SessionBadge({ dir, sessionId, status, live }: {
+export function SessionBadge({ dir, sessionId, status, live }: {
   dir: string;
   sessionId: string;
   status: TodoStatus | string;
@@ -359,7 +364,7 @@ export function TodoCountsBar({ counts, statusFilter, onToggle }: {
 // TodoDiffBadge shows the aggregated change footprint of a todo's linked commits
 // as `+adds`/`-dels`, with the commit/file totals in the tooltip. Rendered only
 // when the todo has commits, so todos with no work attached stay uncluttered.
-function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
+export function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
   return (
     <span
       className="inline-flex shrink-0 items-center gap-1 tabular-nums"
@@ -377,7 +382,7 @@ function TodoDiffBadge({ diff }: { diff: TodoDiffStat }) {
 // has a plan worth opening or a verification fixture defined, without opening
 // the detail pane's Plan/Verification tabs. Icons match those tabs' own icons
 // (UiListDashes for Plan, UiBeaker for the Verification tab's fixture editor).
-function TodoPlanIndicator() {
+export function TodoPlanIndicator() {
   return (
     <span className="inline-flex shrink-0 items-center" title="Plan available">
       <UiListDashes className="text-[11px]" />
@@ -385,7 +390,7 @@ function TodoPlanIndicator() {
   );
 }
 
-function TodoVerificationIndicator() {
+export function TodoVerificationIndicator() {
   return (
     <span className="inline-flex shrink-0 items-center" title="Verification fixture defined">
       <UiBeaker className="text-[11px]" />
@@ -397,7 +402,7 @@ function TodoVerificationIndicator() {
 // age. Absolute times sit in the tooltips. A todo with neither timestamp (some
 // incomplete records) renders nothing. `short` collapses both ages into a single
 // compact 'X' token (no "ago") for the single-line compact density.
-function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
+export function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) {
   if (short) {
     const anchor = todo.created ?? todo.lastRun;
     if (!anchor) return null;
@@ -436,12 +441,16 @@ function TodoAges({ todo, short = false }: { todo: TodoItem; short?: boolean }) 
 // opens the todo. `density` controls the layout: 'comfortable' (default) stacks
 // secondary metadata on a second line; 'compact' keeps the row to one title line.
 // Severity is intentionally only the ListMenu left border; identifiers and
-// severity labels belong in the detail pane.
+// severity labels belong in the detail pane. Tags are the deliberate exception:
+// they are the one cross-cutting dimension a row cannot otherwise surface
+// (workspace, age, plan/verify flags and diff are all already here), so a
+// comfortable row carries value-only chips and a compact row carries glyphs
+// alone, keeping its single-line contract.
 //
 // `dir` locates the row's workspace so a todo with an agent session can swap its
 // status icon for that run's state + elapsed time; they are omitted by callers
 // (e.g. the menubar) that don't surface it.
-export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir }: {
+export function TodoRow({ todo, active, onClick, density = 'comfortable', selectable = false, selected = false, onToggleSelect, workspace, dir, tags }: {
   todo: TodoItem;
   active: boolean;
   onClick: () => void;
@@ -451,8 +460,12 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
   onToggleSelect?: () => void;
   workspace?: string;
   dir?: string;
+  // Resolved from the row's own workspace by the list. Optional so a caller that
+  // has not wired the taxonomy renders exactly as before.
+  tags?: TagIndex;
 }) {
   const compact = density === 'compact';
+  const tagLabels = tags ? todoVisibleLabels(todo) : [];
   // Any todo carrying a session shows that run's duration and cost, whatever
   // lifecycle status it settled into. Only a live run keeps polling (see
   // sessionStatsQueryOptions), so a long list of finished todos reads its totals
@@ -500,9 +513,13 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
             <span className="flex min-w-0 max-w-[55%] items-center gap-2 overflow-hidden text-xs text-muted-foreground">
               <TodoAges todo={todo} short />
               {workspace && <span className="min-w-0 max-w-[8rem] truncate" title={workspace}>{workspace}</span>}
-              {todo.hasPlan && <TodoPlanIndicator />}
-              {todo.hasVerification && <TodoVerificationIndicator />}
+              <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
+              {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
+              {todo.hasVerification && !todo.phases?.verify && <TodoVerificationIndicator />}
               {todo.diff && <TodoDiffBadge diff={todo.diff} />}
+              {tags && tagLabels.length > 0 && (
+                <TodoTagRow labels={tagLabels} index={tags} max={3} glyphOnly />
+              )}
             </span>
           )}
         </div>
@@ -515,9 +532,13 @@ export function TodoRow({ todo, active, onClick, density = 'comfortable', select
               </span>
             )}
             <TodoAges todo={todo} />
-            {todo.hasPlan && <TodoPlanIndicator />}
-            {todo.hasVerification && <TodoVerificationIndicator />}
+            <TodoPhaseStrip todo={todo} phases={TODO_PHASES} />
+            {todo.hasPlan && !todo.phases?.plan && <TodoPlanIndicator />}
+            {todo.hasVerification && !todo.phases?.verify && <TodoVerificationIndicator />}
             {todo.diff && <TodoDiffBadge diff={todo.diff} />}
+            {tags && tagLabels.length > 0 && (
+              <TodoTagRow labels={tagLabels} index={tags} max={3} size="xxs" showKey={false} />
+            )}
           </div>
         )}
       </button>
@@ -547,6 +568,41 @@ export function TodoDensityPicker({ density, onChange }: {
             aria-pressed={active}
             title={`${opt.label} rows`}
             aria-label={`${opt.label} rows`}
+            className={`h-6 w-7 rounded transition-colors ${
+              active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            <OptIcon className="text-sm" />
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+// TodoLayoutPicker is the segmented toggle that switches the Todos tab between
+// the split (master-detail) layout and the full-width table. Same shape and
+// same home as TodoDensityPicker — both are display preferences rather than
+// list filters, so they sit together in the navbar rather than in the toolbar.
+export function TodoLayoutPicker({ layout, onChange }: {
+  layout: TodoLayout;
+  onChange: (layout: TodoLayout) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5" role="group" aria-label="Layout">
+      {LAYOUT_OPTIONS.map(opt => {
+        const active = layout === opt.value;
+        const OptIcon = opt.icon;
+        return (
+          <Button
+            key={opt.value}
+            variant="ghost"
+            size="icon"
+            type="button"
+            onClick={() => onChange(opt.value)}
+            aria-pressed={active}
+            title={`${opt.label} layout`}
+            aria-label={`${opt.label} layout`}
             className={`h-6 w-7 rounded transition-colors ${
               active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}

@@ -2,6 +2,7 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { SessionToolDecision } from '@flanksource/clicky-ui/ai';
 import type { TodoItem, TodoSessionAttempt } from '../../types';
 import { TodoSession, useSessionStatus } from './TodoSession';
@@ -28,6 +29,7 @@ const sessionDetailMock = vi.hoisted(() => ({
 }));
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
+  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   SessionInspector: () => <div data-testid="session-inspector" />,
   SessionViewer: () => <div data-testid="session-viewer" />,
 }));

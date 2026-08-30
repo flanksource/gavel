@@ -6,7 +6,7 @@ import { FilterBar, emptyFilters, type Filters } from './components/FilterBar';
 import { AppShell, Button } from '@flanksource/clicky-ui/components';
 import { TaskManager, TaskManagerButton } from '@flanksource/clicky-ui/data';
 import { ActivityView } from './components/ActivityView';
-import { TodoNewButton, TodoNavbarDensityPicker, TodoWorkspaceList, TodoDetailPane } from './components/TodoView';
+import { TodoNewButton, TodoNavbarDensityPicker, TodoNavbarLayoutPicker, TodoWorkspaceList, TodoDetailPane, TodoFullPane } from './components/TodoView';
 import { useWorkspaceTodos } from './components/todos/useWorkspaceTodos';
 import { PlanReviewBar, TodoReviewButton, useReviewMode } from './components/todos/PlanReview';
 import { CreateTodoDialog } from './components/todos/CreateTodoDialog';
@@ -304,6 +304,8 @@ export function App() {
     });
   }, [commitRoute, filters, projectDiffPath, projectResults, projectRunId, selectedPath]);
 
+  // Selecting a prompt encodes its id in the path (/prompts/{id}) and the scope
+  // project as a query so a prompt page is deep-linkable per scope.
   const navigatePrompt = useCallback((id: string, scope: string) => {
     commitRoute({ tab: 'prompts', selectedPath: id, projectDiffPath: '', projectRunId: '', projectHistory: false, projectResults: false, promptScope: scope, filters });
   }, [commitRoute, filters]);
@@ -315,7 +317,12 @@ export function App() {
   const onTodosTab = activeTab === 'todos' && !isTodoNewPage;
   const todos = useWorkspaceTodos(projects, onTodosTab ? selectedPath : '', navigateTodo, onTodosTab || paletteOpen);
   const review = useReviewMode(todos);
-
+  // The full-width todos layout is a body-sidebar toggle, not a bodySplit tweak:
+  // SplitPane seeds its width from defaultSplit once and never re-reads the
+  // prop, so a percentage change would do nothing to a mounted pane. Dropping
+  // the sidebar is also the only way to reach contentWidth — AppShell forces
+  // "full" whenever a body sidebar is present.
+  const todosFullWidth = onTodosTab && todos.layout === 'full';
   // ⌘K / Ctrl+K toggles the global search palette from anywhere (even while a
   // field is focused — it isn't a text-editing shortcut).
   useEffect(() => {
@@ -556,6 +563,7 @@ export function App() {
         actions={
           <>
             {activeTab === 'todos' && <TodoReviewButton review={review} />}
+            {activeTab === 'todos' && <TodoNavbarLayoutPicker todos={todos} />}
             {activeTab === 'todos' && <TodoNavbarDensityPicker todos={todos} />}
             {activeTab === 'todos' && <ReactGrabHelp />}
             {activeTab === 'todos' && <TodoNewButton todos={todos} />}
@@ -626,11 +634,16 @@ export function App() {
               onAdd={openAdd}
               onSettings={openProjectSettings}
             />
-          ) : activeTab === 'todos' ? (
+          ) : activeTab === 'todos' && !todosFullWidth ? (
             <TodoWorkspaceList todos={todos} projectsLoaded={projectsLoaded} projectError={projectError} />
           ) : undefined
         }
         bodySplit={bodySplitByTab[activeTab] ?? 38}
+        // Only the full-width todos layout opts out of AppShell's default: the
+        // table wants the whole viewport, but the detail wants the contained
+        // measure so markdown and session logs stay readable. Every other tab
+        // passes a body sidebar, which AppShell already forces to full width.
+        contentWidth={todosFullWidth ? (todos.selected ? 'contained' : 'full') : undefined}
         contentClassName="overflow-hidden"
       >
         {activeTab === 'prs' ? (
@@ -663,7 +676,11 @@ export function App() {
             )}
             <PlanReviewBar review={review} todos={todos} />
             <div className="min-h-0 flex-1">
-              <TodoDetailPane todos={todos} />
+              {todosFullWidth ? (
+                <TodoFullPane todos={todos} projectsLoaded={projectsLoaded} />
+              ) : (
+                <TodoDetailPane todos={todos} />
+              )}
             </div>
           </div>
         ) : activeTab === 'tasks' ? (

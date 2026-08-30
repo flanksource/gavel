@@ -180,6 +180,42 @@ describe('todo run runtime adapter', () => {
     expect(options.spec).not.toHaveProperty('temperature');
   });
 
+  // Seeding every action from defaultBackend sent that backend as if the
+  // operator had chosen it, which outranks the frontmatter the prompt pins.
+  // todos-triage.prompt pins `model: claude` and allows only Read/Glob/Grep, so
+  // under a codex default Captain refused the run outright: "backend
+  // codex-agent cannot enforce a per-tool policy (Glob, Grep, Read)".
+  it('seeds a prompt from its own resolved runtime, not the account default', () => {
+    const withPromptDefaults: RunContext = {
+      ...context,
+      promptDefaults: {
+        triage: { backend: 'agent', model: 'claude-opus-4-8' },
+      },
+    };
+
+    expect(runSpec(defaultRunOptionsForAction('triage', withPromptDefaults))).toMatchObject({
+      backend: 'agent',
+      model: 'claude-opus-4-8',
+    });
+    // An action the server reported no default for still falls back to it.
+    expect(runSpec(defaultRunOptionsForAction('run', withPromptDefaults))).toMatchObject({
+      backend: 'cmux',
+    });
+  });
+
+  it('keeps a remembered backend that disagrees with the prompt default', () => {
+    const withPromptDefaults: RunContext = {
+      ...context,
+      promptDefaults: { triage: { backend: 'agent', model: 'claude-opus-4-8' } },
+    };
+
+    expect(runSpec(reconcileTodoRunOptions('triage', {
+      prompt: 'triage',
+      driver: 'cmux',
+      spec: { backend: 'cmux', model: 'gpt-5.5' },
+    }, withPromptDefaults))).toMatchObject({ backend: 'cmux' });
+  });
+
   it('keeps plan lifecycle fields when RuntimeBar changes backend, model, and effort', () => {
     const initial = defaultRunOptionsForAction('plan', context);
     expect(todoRunOptionsForRuntimeChange({
@@ -218,7 +254,7 @@ describe('todo run runtime adapter', () => {
 
     const fixedEffortContext: RunContext = {
       ...context,
-      backends: context.backends.map(backend => backend.id !== 'agent' ? backend : {
+      backends: context.backends.map(backend => backend.agent !== 'claude' ? backend : {
         ...backend,
         models: backend.models.map(model => ({
           ...model,

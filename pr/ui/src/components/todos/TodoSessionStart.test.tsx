@@ -8,7 +8,7 @@ const RESOLVED_OPTIONS: TodoRunOptions = { driver: 'agent', runMode: 'run', spec
 const UPDATED_OPTIONS: TodoRunOptions = { driver: 'cmux', runMode: 'run', spec: { backend: 'cmux', model: 'gpt-5.6-sol', effort: 'high' } };
 
 vi.mock('./run', () => ({
-  useTodoRunContext: () => ({ context: { backends: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
+  useTodoRunContext: () => ({ context: { backends: [], runtimes: [], models: [], efforts: [], defaultBackend: '', tools: [] }, loading: false, error: '' }),
   TodoRunContextError: ({ error }: { error: string }) => error ? <div role="alert">{error}</div> : null,
   loadLastTodoRunOptions: () => ({ ...RESOLVED_OPTIONS }),
   reconcileTodoRunOptions: (_action: string, options: unknown) => options,
@@ -69,7 +69,7 @@ afterEach(() => {
 function stubPreviewFetch(prompt: string) {
   const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
     ok: true,
-    json: async () => ({ prompt, mode: 'inline', agent: 'claude', count: 1 }),
+    json: async () => ({ prompt, provider: 'anthropic', backend: 'agent', count: 1 }),
   }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;

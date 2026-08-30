@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { Project, TodoItem, TodoPriority, TodoStatus } from '../../types';
+import type { TodoEntry } from './todoGroup';
 import {
   defaultTodoFilters,
   externalKey,
+  isEntryVisible,
   isStatusShown,
   isTodoVisible,
+  isWorkspaceShown,
   loadTodoFilters,
   priorityKey,
   todoMatchesQuery,
   toggleStatusFilter,
   LEGACY_HIDDEN_STATUS_KEY,
+  LEGACY_TODO_FILTERS_V2_KEY,
   TODO_FILTERS_KEY,
 } from './todoFilter';
 
@@ -77,6 +81,26 @@ describe('isTodoVisible', () => {
     expect(isTodoVisible(item({ ref: 'mid' }), filters)).toBe(true);
   });
 
+  it('includes only todos carrying an included label', () => {
+    const labeled = item({ ref: 'labeled', labels: ['area:ui', 'bug'] });
+    const unlabeled = item({ ref: 'unlabeled' });
+    const filters = { ...defaultTodoFilters(), tags: { bug: 'include' as const } };
+
+    expect(isTodoVisible(labeled, filters)).toBe(true);
+    expect(isTodoVisible(unlabeled, filters)).toBe(false);
+  });
+
+  it('excludes matching labels without narrowing other todos', () => {
+    const ui = item({ ref: 'ui', labels: ['area:ui'] });
+    const api = item({ ref: 'api', labels: ['area:api'] });
+    const unrelated = item({ ref: 'unrelated', labels: ['bug'] });
+    const filters = { ...defaultTodoFilters(), tags: { area: 'exclude' as const } };
+
+    expect(isTodoVisible(ui, filters)).toBe(false);
+    expect(isTodoVisible(api, filters)).toBe(false);
+    expect(isTodoVisible(unrelated, filters)).toBe(true);
+  });
+
   it('filters on whether a todo is linked to an external issue', () => {
     const onlyLinked = { ...defaultTodoFilters(), external: { linked: 'include' as const } };
     expect(isTodoVisible(linked, onlyLinked)).toBe(true);
@@ -92,6 +116,8 @@ describe('isTodoVisible', () => {
       statuses: {},
       priorities: { high: 'include' as const },
       external: { unlinked: 'include' as const },
+      tags: {},
+      workspaces: {},
     };
     // linked is high priority but linked; unlinked is unlinked but low priority.
     expect(isTodoVisible(linked, filters)).toBe(false);
@@ -105,6 +131,48 @@ describe('isTodoVisible', () => {
     const stale = { from: Date.parse('2026-01-01T00:00:00Z'), to: Date.parse('2026-01-02T00:00:00Z') };
     expect(isTodoVisible(recent, defaultTodoFilters(), range)).toBe(true);
     expect(isTodoVisible(recent, defaultTodoFilters(), stale)).toBe(false);
+  });
+});
+
+describe('the workspace facet', () => {
+  const gavel: Project = { name: 'gavel', dir: '/repos/gavel', repos: [] };
+  const captain: Project = { name: 'captain', dir: '/repos/captain', repos: [] };
+  const inGavel: TodoEntry = { todo: item({ ref: 'g1' }), workspace: gavel };
+  const inCaptain: TodoEntry = { todo: item({ ref: 'c1' }), workspace: captain };
+
+  it('shows every workspace while the facet is neutral', () => {
+    expect(isWorkspaceShown(defaultTodoFilters(), gavel.dir)).toBe(true);
+    expect(isWorkspaceShown(defaultTodoFilters(), captain.dir)).toBe(true);
+  });
+
+  it('narrows to the included workspace and hides the rest', () => {
+    const filters = { ...defaultTodoFilters(), workspaces: { [gavel.dir]: 'include' as const } };
+    expect(isWorkspaceShown(filters, gavel.dir)).toBe(true);
+    expect(isWorkspaceShown(filters, captain.dir)).toBe(false);
+  });
+
+  it('excludes one workspace without narrowing the others', () => {
+    const filters = { ...defaultTodoFilters(), workspaces: { [captain.dir]: 'exclude' as const } };
+    expect(isWorkspaceShown(filters, gavel.dir)).toBe(true);
+    expect(isWorkspaceShown(filters, captain.dir)).toBe(false);
+  });
+
+  // Keyed on the directory, not the display name: two checkouts of the same repo
+  // share a name, and selecting one must not drag in the other.
+  it('keys on the directory rather than the workspace name', () => {
+    const fork: Project = { name: 'gavel', dir: '/repos/gavel-fork', repos: [] };
+    const filters = { ...defaultTodoFilters(), workspaces: { [gavel.dir]: 'include' as const } };
+    expect(isWorkspaceShown(filters, fork.dir)).toBe(false);
+  });
+
+  it('applies alongside the todo facets in a flattened list', () => {
+    const onlyGavel = { ...defaultTodoFilters(), workspaces: { [gavel.dir]: 'include' as const } };
+    expect(isEntryVisible(inGavel, onlyGavel)).toBe(true);
+    expect(isEntryVisible(inCaptain, onlyGavel)).toBe(false);
+
+    // The workspace matches but the status facet does not: both must pass.
+    const closedInGavel: TodoEntry = { todo: item({ ref: 'g2', status: 'completed' }), workspace: gavel };
+    expect(isEntryVisible(closedInGavel, onlyGavel)).toBe(false);
   });
 });
 
@@ -130,7 +198,9 @@ describe('loadTodoFilters', () => {
   beforeEach(() => localStorage.clear());
 
   it('defaults to hiding closed todos', () => {
-    expect(loadTodoFilters()).toEqual({ statuses: { completed: 'exclude' }, priorities: {}, external: {} });
+    expect(loadTodoFilters()).toEqual({
+      statuses: { completed: 'exclude' }, priorities: {}, external: {}, tags: {}, workspaces: {},
+    });
   });
 
   it('migrates the v1 hidden-status array into excludes and drops the old key', () => {
@@ -139,14 +209,60 @@ describe('loadTodoFilters', () => {
       statuses: { completed: 'exclude', skipped: 'exclude' },
       priorities: {},
       external: {},
+      tags: {},
+      workspaces: {},
     });
     expect(localStorage.getItem(LEGACY_HIDDEN_STATUS_KEY)).toBeNull();
   });
 
-  it('prefers stored v2 filters over the legacy key', () => {
+  it('prefers stored v3 filters over the legacy keys', () => {
     localStorage.setItem(LEGACY_HIDDEN_STATUS_KEY, JSON.stringify(['completed']));
-    localStorage.setItem(TODO_FILTERS_KEY, JSON.stringify({ statuses: {}, priorities: { high: 'include' }, external: {} }));
-    expect(loadTodoFilters()).toEqual({ statuses: {}, priorities: { high: 'include' }, external: {} });
+    localStorage.setItem(TODO_FILTERS_KEY, JSON.stringify({
+      statuses: {}, priorities: { high: 'include' }, external: {}, tags: { bug: 'include' },
+      workspaces: { '/repos/gavel': 'include' },
+    }));
+    expect(loadTodoFilters()).toEqual({
+      statuses: {}, priorities: { high: 'include' }, external: {}, tags: { bug: 'include' },
+      workspaces: { '/repos/gavel': 'include' },
+    });
+  });
+
+  // v2 predates the tag facet. Widening it must keep every selection the user
+  // already had, not reset them to the defaults.
+  it('widens a stored v2 payload into v3 and drops the v2 key', () => {
+    localStorage.setItem(LEGACY_TODO_FILTERS_V2_KEY, JSON.stringify({
+      statuses: { failed: 'include' }, priorities: { high: 'exclude' }, external: { linked: 'include' },
+    }));
+    expect(loadTodoFilters()).toEqual({
+      statuses: { failed: 'include' },
+      priorities: { high: 'exclude' },
+      external: { linked: 'include' },
+      tags: {},
+      workspaces: {},
+    });
+    expect(localStorage.getItem(LEGACY_TODO_FILTERS_V2_KEY)).toBeNull();
+  });
+
+  it('prefers a v3 payload over a still-present v2 one', () => {
+    localStorage.setItem(LEGACY_TODO_FILTERS_V2_KEY, JSON.stringify({
+      statuses: { failed: 'include' }, priorities: {}, external: {},
+    }));
+    localStorage.setItem(TODO_FILTERS_KEY, JSON.stringify({
+      statuses: { draft: 'include' }, priorities: {}, external: {}, tags: {},
+    }));
+    expect(loadTodoFilters().statuses).toEqual({ draft: 'include' });
+  });
+
+  // A payload written before either facet existed has no tags/workspaces key; it
+  // must widen rather than be rejected as malformed, keeping the selections it
+  // does carry.
+  it('tolerates a stored payload with no tags or workspaces key', () => {
+    localStorage.setItem(TODO_FILTERS_KEY, JSON.stringify({
+      statuses: { draft: 'include' }, priorities: {}, external: {},
+    }));
+    expect(loadTodoFilters()).toEqual({
+      statuses: { draft: 'include' }, priorities: {}, external: {}, tags: {}, workspaces: {},
+    });
   });
 
   it('falls back to the defaults when the stored value is malformed', () => {

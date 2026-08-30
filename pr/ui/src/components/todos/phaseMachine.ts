@@ -1,5 +1,6 @@
 import { WORKFLOW_PHASES, type SessionTone } from '@flanksource/clicky-ui/ai';
 import type { StaticIconComponent } from '@flanksource/clicky-ui';
+import { UiListChecks } from '@flanksource/clicky-ui/icons';
 import type { TodoItem, TodoStatus } from '../../types';
 
 /**
@@ -14,14 +15,17 @@ import type { TodoItem, TodoStatus } from '../../types';
  * The machine *ranks* phases, it never withholds one — every phase stays
  * runnable from the dropdown regardless of state.
  *
- * Only the three phases gavel can actually execute are modelled: `plan` and
- * `run` are agent runs (`POST /api/todos/run`), `verify` is the fixture-backed
- * definition-of-done check (`POST /api/todos/verification/run`). There is
- * deliberately no `audit` phase — that needs the named-prompt axis from TODO
- * ff053357, which does not exist yet.
+ * Four phases are executable: `plan`, `run` and `triage` are agent runs
+ * (`POST /api/todos/run`), and `verify` is the fixture-backed definition-of-done
+ * check (`POST /api/todos/verification/run`).
+ *
+ * Only the first three form the *pipeline* — the progress strip in the header.
+ * Triage is auxiliary: it reshapes what the TODO says rather than advancing it
+ * toward done, so it is always offered and never ticked. That is the difference
+ * between `PHASES` (the strip) and `ALL_PHASES` (everything runnable).
  */
 
-export type PhaseId = 'plan' | 'run' | 'verify';
+export type PhaseId = 'plan' | 'run' | 'verify' | 'triage';
 
 export type Phase = {
   id: PhaseId;
@@ -60,8 +64,23 @@ export const PHASES: Phase[] = [
   },
 ];
 
+// Triage's glyph and tone are chosen here rather than taken from
+// `WORKFLOW_PHASES`, which models only the plan/run/verify pipeline. A checklist
+// reads as the per-TODO verdict triage produces, and is distinct from the plan
+// phase's list-dashes.
+export const TRIAGE_PHASE: Phase = {
+  id: 'triage',
+  label: 'Triage',
+  icon: UiListChecks,
+  tone: 'slate',
+  title: 'Compact the description and review the verification fixture',
+};
+
+/** Every runnable phase: the pipeline plus the auxiliary ones. */
+export const ALL_PHASES: Phase[] = [...PHASES, TRIAGE_PHASE];
+
 export function phase(id: PhaseId): Phase {
-  const match = PHASES.find(entry => entry.id === id);
+  const match = ALL_PHASES.find(entry => entry.id === id);
   if (!match) throw new Error(`Unknown phase: ${id}`);
   return match;
 }
@@ -227,7 +246,7 @@ export function stateNote(state: PhaseState): string {
 export function otherPhases(state: PhaseState): Phase[] {
   const suggested = FLOW[state].primary;
   const skip = suggested.kind === 'phase' ? suggested.phase : undefined;
-  return PHASES.filter(entry => entry.id !== skip);
+  return ALL_PHASES.filter(entry => entry.id !== skip);
 }
 
 /**
@@ -236,6 +255,8 @@ export function otherPhases(state: PhaseState): Phase[] {
  */
 export function phaseVerb(state: PhaseState, id: PhaseId): string {
   const target = phase(id);
+  // Triage is never in `completedPhases` — it is not a pipeline step — so it
+  // keeps its plain verb however many times it has run.
   if (!completedPhases(state).includes(id)) return target.label;
   return id === 'plan' ? 'Replan' : `Re-${target.label.toLowerCase()}`;
 }

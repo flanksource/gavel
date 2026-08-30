@@ -144,7 +144,7 @@ const RUN_CONTEXT: RunContext = {
     { family: 'claude', provider: 'anthropic', catalogPrefix: 'anthropic', modes: [{ backend: 'cmux', schema: { type: 'object' } }] },
   ],
   models: [
-    { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Claude Sonnet 5', reasoning: true, configured: true, backends: ['cmux'], runtime: { model: 'claude-sonnet-5' } },
+    { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Sonnet 5', reasoning: true, configured: true, backends: ['cmux'], runtime: { model: 'claude-sonnet-5' } },
   ],
   backends: [
     {

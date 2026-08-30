@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 import type { IconProps } from '@flanksource/clicky-ui/icons';
-import { UiFolder, UiHistory, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
+import { UiFolder, UiHistory, UiListFlat, UiWarningTriangle } from '@flanksource/clicky-ui/icons';
 import type { Project, TodoGroupBy, TodoItem, TodoListResponse } from '../../types';
 import type { TodoSort } from './todoSort';
 import { defaultTodoSort, todoComparator } from './todoSort';
@@ -8,11 +8,14 @@ import { defaultTodoSort, todoComparator } from './todoSort';
 // Group-by is a per-user view preference for the todo lists, persisted alongside
 // density and the status filter so it survives reloads. 'workspace' keeps the
 // per-workspace grouping (the default, the only mode that supports batch runs);
-// 'severity' and 'age' re-bucket todos across every workspace.
+// 'severity' and 'age' re-bucket todos across every workspace, and 'none' is one
+// flat list. The full-width table drives the same preference through DataTable's
+// native grouping picker, so both layouts group by the same dimension.
 export const GROUP_BY_OPTIONS: { value: TodoGroupBy; label: string; icon: ComponentType<IconProps> }[] = [
   { value: 'workspace', label: 'Workspace', icon: UiFolder },
   { value: 'severity', label: 'Severity', icon: UiWarningTriangle },
   { value: 'age', label: 'Age', icon: UiHistory },
+  { value: 'none', label: 'None', icon: UiListFlat },
 ];
 
 const STORAGE_KEY = 'gavel.pr-ui.todoGroupBy.v1';
@@ -26,7 +29,7 @@ export function defaultGroupBy(): TodoGroupBy {
 export function loadGroupBy(): TodoGroupBy {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw === 'workspace' || raw === 'severity' || raw === 'age' ? raw : defaultGroupBy();
+    return raw === 'workspace' || raw === 'severity' || raw === 'age' || raw === 'none' ? raw : defaultGroupBy();
   } catch {
     return defaultGroupBy();
   }
@@ -80,7 +83,9 @@ export function flattenTodos(workspaces: Project[], byDir: Record<string, TodoLi
   return entries;
 }
 
-const SEVERITY_BUCKETS: { key: string; label: string; tone: string }[] = [
+// Exported so the full-width table's DataTable grouping modes bucket with the
+// same definitions the list uses, rather than a parallel copy that can drift.
+export const SEVERITY_BUCKETS: { key: string; label: string; tone: string }[] = [
   { key: 'high', label: 'High priority', tone: 'text-red-600' },
   { key: 'medium', label: 'Medium priority', tone: 'text-yellow-600' },
   { key: 'low', label: 'Low priority', tone: 'text-green-600' },
@@ -88,12 +93,12 @@ const SEVERITY_BUCKETS: { key: string; label: string; tone: string }[] = [
 
 // severityKey maps an entry's priority onto a bucket, defaulting unknown values
 // to medium the same way the providers do.
-function severityKey(entry: TodoEntry): string {
+export function severityKey(entry: TodoEntry): string {
   const priority = entry.todo.priority;
   return priority === 'high' || priority === 'low' ? priority : 'medium';
 }
 
-const AGE_BUCKETS: { key: string; label: string; maxDays: number }[] = [
+export const AGE_BUCKETS: { key: string; label: string; maxDays: number }[] = [
   { key: 'today', label: 'Today', maxDays: 1 },
   { key: 'week', label: 'This week', maxDays: 7 },
   { key: 'month', label: 'This month', maxDays: 30 },
@@ -110,7 +115,7 @@ function lastActivityMs(todo: TodoItem): number | null {
 
 // ageKey buckets an item by how long ago it was last active; todos with no
 // recorded activity sort into a trailing "no activity" bucket.
-function ageKey(item: TodoEntry, now: number): string {
+export function ageKey(item: TodoEntry, now: number): string {
   const ms = lastActivityMs(item.todo);
   if (ms === null) return 'none';
   const days = (now - ms) / 86_400_000;
@@ -119,10 +124,20 @@ function ageKey(item: TodoEntry, now: number): string {
 
 // bucketTodos splits the flattened entries into ordered, non-empty buckets for
 // the given non-workspace grouping. Severity buckets follow high→medium→low; age
-// buckets run today→older then a trailing "no activity". Rows within each bucket
-// follow the caller's sort preference (defaulting to the priority order).
-export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age', now: number, sort: TodoSort = defaultTodoSort()): TodoBucket[] {
+// buckets run today→older then a trailing "no activity"; 'none' is one bucket
+// holding everything. Rows within each bucket follow the caller's sort
+// preference (defaulting to the priority order).
+export function bucketTodos(entries: TodoEntry[], groupBy: 'severity' | 'age' | 'none', now: number, sort: TodoSort = defaultTodoSort()): TodoBucket[] {
   const cmp = todoComparator(sort);
+  if (groupBy === 'none') {
+    if (entries.length === 0) return [];
+    return [{
+      key: 'all',
+      label: 'All todos',
+      tone: 'text-muted-foreground',
+      entries: [...entries].sort((a, b) => cmp(a.todo, b.todo)),
+    }];
+  }
   if (groupBy === 'severity') {
     return SEVERITY_BUCKETS
       .map(def => ({

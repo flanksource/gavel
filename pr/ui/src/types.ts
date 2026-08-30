@@ -77,8 +77,12 @@ export type TodoPriority = 'high' | 'medium' | 'low';
 export type TodoDensity = 'comfortable' | 'compact';
 // Grouping dimension for the todo lists: 'workspace' is the default per-workspace
 // grouping; 'severity' buckets by priority and 'age' by last activity, both
-// across all workspaces.
-export type TodoGroupBy = 'workspace' | 'severity' | 'age';
+// across all workspaces. 'none' is a single flat list.
+export type TodoGroupBy = 'workspace' | 'severity' | 'age' | 'none';
+// Layout for the dashboard's Todos tab: 'split' is the master-detail default
+// (list in the AppShell body sidebar, detail beside it); 'full' drops the
+// sidebar for a full-width table and a full-page detail.
+export type TodoLayout = 'split' | 'full';
 export interface TodoCounts {
   total: number;
   open: number;
@@ -120,6 +124,9 @@ export interface TodoItem {
   status: TodoStatus;
   priority: TodoPriority;
   cwd?: string;
+  // Raw label tokens. Their colour and icon are NOT here: presentation is
+  // resolved against the separately-cached tag definitions (see tagQueries.ts),
+  // so the dictionary is fetched once instead of repeated on every row.
   labels?: string[];
   attempts?: number;
   // ISO timestamp the native issue was created.
@@ -146,6 +153,12 @@ export interface TodoItem {
   // planPath/verificationMarkdown, which carry full content and are detail-only).
   hasPlan?: boolean;
   hasVerification?: boolean;
+  // Latest run per lifecycle phase, keyed by phase. Present on list responses:
+  // the server reads a whole workspace's phases in one query, so the phase
+  // columns cost no request per row. A phase that has never run is ABSENT
+  // rather than zero-valued, which is what distinguishes "not started" from
+  // "started and produced nothing".
+  phases?: Partial<Record<TodoPhase, TodoPhaseRun>>;
   // Editable acceptance criteria parsed from the todo's "## Acceptance Criteria"
   // section; present on detail responses.
   criteria?: AcceptanceCriterion[];
@@ -165,6 +178,41 @@ export interface TodoItem {
   // Questions blocking an `ask` todo — the agent needs a human decision before
   // it can continue. Answered via /api/todos/answer, which resumes the session.
   questions?: TodoQuestion[];
+}
+
+// TodoPhase is one step of a todo's lifecycle, as recorded rather than as it
+// behaves: triage runs as a plan-class run but records itself separately so a
+// triage pass is distinguishable from a planning pass.
+export type TodoPhase = 'plan' | 'triage' | 'run' | 'verify';
+
+// TODO_PHASES is pipeline order — what you plan, you run; what you run, you
+// verify. Triage sits with plan because it is the other read-only pass.
+export const TODO_PHASES: TodoPhase[] = ['plan', 'triage', 'run', 'verify'];
+
+// TodoPhaseProgress is how far through its own work a phase got. The unit
+// differs by phase and is deliberately not normalised: plan, run and triage
+// count agent iterations, verification counts the checks in its fixture.
+export interface TodoPhaseProgress {
+  done: number;
+  failed?: number;
+  total: number;
+}
+
+// TodoPhaseRun is the latest run a todo has for one phase.
+export interface TodoPhaseRun {
+  phase: TodoPhase;
+  // The run's own outcome — NOT the todo's status, which folds every phase into
+  // one value.
+  state: 'pending' | 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled';
+  progress?: TodoPhaseProgress;
+  started_at?: string;
+  finished_at?: string;
+  // Elapsed at the moment the row was read. A running phase keeps accruing, so
+  // render it by ticking from started_at rather than re-reading this.
+  duration_ms?: number;
+  cost_usd?: number;
+  // The phase executing right now, as opposed to the one that ran most recently.
+  active?: boolean;
 }
 
 // TodoExternalIssue is the tracker issue a todo has been pushed to, mirroring
@@ -443,17 +491,9 @@ export interface TodoSessionApproval {
 }
 
 export type TodoRunAgent = 'claude' | 'codex';
-export type TodoRunMode = 'cmux' | 'inline';
 export type TodoRunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-// TodoRunDriver selects the execution mechanism: cmux drives the interactive TUI;
-// agent uses Captain's local agent bridge; cli drives a supervised CLI; api
-// drives the direct provider API. The driver is mechanism-only — the coding
-// agent (claude/codex) is derived from the model.
-export type TodoRunDriver =
-  | 'cmux'
-  | 'agent'
-  | 'cli'
-  | 'api';
+// TodoRunDriver is the canonical backend. Provider identity comes from model.
+export type TodoRunDriver = 'api' | 'agent' | 'cli' | 'cmux';
 
 // TodoRunOptions is the run POST body's options: the api.Spec under its own
 // `spec` key plus the run-orchestration extras below. Dirty worktree,
@@ -471,14 +511,17 @@ export interface TodoRunOptions {
   // prompt/budget/permissions/setup/workflow/sessionId nested, mirroring
   // clicky's AISpecRuntimeValue.
   spec?: AISpecRuntimeValue;
-  // Driver is the authoritative selection; agent/mode are the legacy pair the
-  // server still accepts and derives a driver from when driver is absent.
+  // Driver is the authoritative canonical backend.
   driver?: TodoRunDriver;
-  agent?: TodoRunAgent;
-  mode?: TodoRunMode;
-  // runMode is the operation the run performs (run/plan). Supersedes the
-  // `plan` bool; the server accepts both (plan:true is treated as runMode:plan).
+  // runMode is the behaviour class the run executes as (run/plan). Supersedes
+  // the `plan` bool; the server accepts both (plan:true is treated as
+  // runMode:plan).
   runMode?: 'run' | 'plan';
+  // prompt names the template to run — run, plan, triage, or a name declared in
+  // .gavel.yaml todos.prompts. It is a separate axis from runMode: each prompt
+  // declares the class it runs as, so several prompts share one. Send one or the
+  // other; asserting a class that disagrees with the prompt is rejected.
+  prompt?: string;
   // Plan-only run: the agent proposes an implementation plan without changing
   // code. Requires cmux mode. Legacy — prefer runMode.
   plan?: boolean;
@@ -486,6 +529,10 @@ export interface TodoRunOptions {
   // fresh one. Stays a sibling flag rather than a spec field: a fresh run also
   // carries a (minted) sessionId, so resume can't be inferred from spec.sessionId.
   resume?: boolean;
+  // Dispatch even though the todo already has a live run owned by a running
+  // process: the two runs proceed in parallel. Set only in answer to the
+  // server's 409 run_owned_elsewhere, never as a default.
+  force?: boolean;
 }
 
 export interface TodoRunResponse {
@@ -525,6 +572,52 @@ export interface TodoListResponse {
   dir?: string;
   counts: TodoCounts;
   items: TodoItem[];
+}
+
+// Where a tag definition came from. 'builtin' is a well-known default that has
+// never been stored — editing one writes a row that shadows it; 'derived' never
+// appears in a listing because nothing is stored for it.
+export type TodoTagScope = 'workspace' | 'global' | 'builtin' | 'derived';
+
+// TodoTagDef is the presentation of one label: which colour and glyph it
+// renders as. Definitions live in the gavel database and are edited in
+// Settings → Tags. They are fetched once and joined client-side against each
+// todo's raw `labels`.
+export interface TodoTagDef {
+  name: string;
+  /** A palette hue token (see TAG_PALETTE), not a hex value. */
+  color: string;
+  /** The stored clicky icon-registry key, e.g. "debug". */
+  icon?: string;
+  /** The Iconify name the server resolved from `icon`, e.g. "ph:bug". */
+  iconify?: string;
+  description?: string;
+  scope: TodoTagScope;
+  /** Set when the definition matched the label's namespace key, not its name. */
+  matchedKey?: string;
+}
+
+export interface TodoTagListResponse {
+  definitions: TodoTagDef[];
+  /** How many todos carry each label, including labels nothing defines. */
+  counts?: Record<string, number>;
+  /** The hues a definition may use, served so the editor cannot offer an invalid one. */
+  palette?: string[];
+  /** Present on a removal: what it actually did. */
+  removed?: TodoTagRemoval;
+}
+
+/**
+ * TodoTagRemoval is the result of removing a tag. Removing one from a project
+ * also strips it from that project's todos; removing a global definition is
+ * presentation only and leaves `todos` at zero.
+ */
+export interface TodoTagRemoval {
+  name: string;
+  /** Whether a stored definition was deleted, as opposed to a built-in default. */
+  definition: boolean;
+  /** How many todos the tag was stripped from. */
+  todos: number;
 }
 
 // One git commit linked to a todo via its Gavel-Issue-Id trailer. url is the

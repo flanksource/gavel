@@ -9,6 +9,7 @@ import { TodoDetail } from './todos/TodoDetail';
 import { TodoToolbar } from './todos/TodoToolbar';
 import { CreateTodoDialog } from './todos/CreateTodoDialog';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
+import { isWorkspaceShown } from './todos/todoFilter';
 
 // MenubarTodos is the compact, single-column todos view for the menubar popover.
 // It mirrors the PRs tab's master-detail idiom: a workspace-grouped list, and
@@ -32,6 +33,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
   const {
     workspaces, byDir, loadingList, selected, select, detail, loadingDetail, detailError, error,
     updateItem, deleted, filters, toggleStatus, groupBy, showCreate, setShowCreate, created, selection,
+    tagsByDir,
   } = todos;
 
   if (selected) {
@@ -105,6 +107,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                   onSelect={entry => select({ dir: entry.workspace.dir, ref: entry.todo.ref })}
                   filters={filters}
                   selection={selection}
+            tagsByDir={tagsByDir}
                 />
               ))}
             </ListMenu>
@@ -113,7 +116,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
           )
         ) : (
           <ListMenu>
-            {workspaces.map(ws => (
+            {workspaces.filter(ws => isWorkspaceShown(filters, ws.dir)).map(ws => (
               <WorkspaceTodoGroup
                 key={ws.dir}
                 workspace={ws}
@@ -123,6 +126,7 @@ export function MenubarTodos({ projects, projectsLoaded, projectError }: {
                 selectedRef=""
                 onSelect={ref => select({ dir: ws.dir, ref })}
                 selection={selection}
+            tags={tagsByDir?.get(ws.dir)}
               />
             ))}
           </ListMenu>

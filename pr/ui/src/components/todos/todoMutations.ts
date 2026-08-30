@@ -53,9 +53,15 @@ export class TodoMutationError extends Error {
 
 async function todoMutationResponseError(response: Response, context: string) {
   const jsonResponse = typeof response.clone === 'function' ? response.clone() : response;
-  const payload = await jsonResponse.json().catch(() => null) as { error?: unknown } | null;
-  if (typeof payload?.error === 'string' && payload.error.trim()) {
-    return new TodoMutationError(`${context}: ${payload.error.trim()}`, response.status);
+  // Two envelopes: the hand-written todo handlers answer `{error}`, while the
+  // generated entity routes answer clicky's `{code, message, trace}`. Reading
+  // only the first would reduce every entity rejection — "status cannot be
+  // assigned", "refs[1] duplicates refs[0]" — to a bare status code.
+  const payload = await jsonResponse.json().catch(() => null) as { error?: unknown; message?: unknown } | null;
+  for (const candidate of [payload?.error, payload?.message]) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return new TodoMutationError(`${context}: ${candidate.trim()}`, response.status);
+    }
   }
   const detail = typeof response.text === 'function' ? (await response.text().catch(() => '')).trim() : '';
   return new TodoMutationError(detail ? `${context}: ${detail}` : `${context} (${response.status})`, response.status);
@@ -156,61 +162,6 @@ export function useUpdateTodoMutation(dir: string, context = 'Failed to update t
       context,
     ),
     onSuccess: todo => setTodoCaches(client, dir, todo),
-  });
-}
-
-export interface BulkTodoTarget {
-  dir: string;
-  ref: string;
-}
-
-export interface BulkTodoUpdate {
-  items: BulkTodoTarget[];
-  status?: TodoStatus;
-  priority?: TodoPriority;
-  comment?: string;
-}
-
-export interface BulkTodoItemResult extends BulkTodoTarget {
-  todo?: TodoItem;
-  error?: string;
-}
-
-export interface BulkTodoResponse {
-  updated: number;
-  failed: number;
-  results: BulkTodoItemResult[];
-}
-
-/**
- * Apply one status/priority/comment to many TODOs.
- *
- * The server edits each target independently and answers 200 with per-item
- * outcomes, so a partial batch is a success with `failed > 0` rather than a
- * thrown error — only a rejected request (unassignable status, malformed
- * target) throws. Every touched workspace is invalidated, not just the caller's,
- * because a selection can span workspaces.
- */
-export function useBulkUpdateTodosMutation() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationKey: ['todos', 'bulk'],
-    mutationFn: (update: BulkTodoUpdate) => todoMutationJSON<BulkTodoResponse>(
-      '/api/todos/bulk',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(update),
-      },
-      `Failed to update ${update.items.length} todo${update.items.length === 1 ? '' : 's'}`,
-    ),
-    onSuccess: async ({ results }) => {
-      const dirs = new Set(results.filter(result => result.todo).map(result => result.dir));
-      await Promise.all([...dirs].map(dir => invalidateTodoCollections(client, dir)));
-      for (const result of results) {
-        if (result.todo) setTodoQueryData(client, result.dir, result.todo);
-      }
-    },
   });
 }
 

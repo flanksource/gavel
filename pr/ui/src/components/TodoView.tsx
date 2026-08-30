@@ -2,13 +2,15 @@ import type { ReactNode } from 'react';
 import { Button, ListMenu } from '@flanksource/clicky-ui/components';
 import { UiAdd, UiCheck } from '@flanksource/clicky-ui/icons';
 import { Spinner } from '../icons/Spinner';
-import { TodoDensityPicker } from './todos/format';
+import { TodoDensityPicker, TodoLayoutPicker } from './todos/format';
 import type { WorkspaceTodos } from './todos/useWorkspaceTodos';
 import { WorkspaceTodoGroup } from './todos/WorkspaceTodoGroup';
 import { TodoBucketGroup } from './todos/TodoBucketGroup';
 import { bucketTodos, flattenTodos } from './todos/todoGroup';
+import { isWorkspaceShown } from './todos/todoFilter';
 import { resolveRange } from './todos/todoTimeRange';
 import { TodoDetail } from './todos/TodoDetail';
+import { TodoTable } from './todos/TodoTable';
 import { TodoToolbar } from './todos/TodoToolbar';
 
 // The Todos tab renders its chrome into the shared AppShell's body slots: top-bar
@@ -45,6 +47,16 @@ export function TodoNavbarDensityPicker({ todos }: { todos: WorkspaceTodos }) {
   return <TodoDensityPicker density={density} onChange={setDensity} />;
 }
 
+// TodoNavbarLayoutPicker switches the tab between the master-detail split and
+// the full-width table. It sits beside the density picker for the same reason:
+// both are display preferences, not list filters. Unlike density it renders
+// even with no todos loaded — the layout is how you look at the tab, so it must
+// not disappear exactly when an empty full-width table would need explaining.
+export function TodoNavbarLayoutPicker({ todos }: { todos: WorkspaceTodos }) {
+  const { layout, setLayout } = todos;
+  return <TodoLayoutPicker layout={layout} onChange={setLayout} />;
+}
+
 // TodoSidebarActions sits above the todo tree in the AppShell bodySidebar. It is
 // the shared TodoToolbar — the same row the menubar and mobile layouts render —
 // so there is one filter surface rather than a weaker duplicate per layout.
@@ -66,7 +78,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   projectsLoaded: boolean;
   projectError?: string;
 }) {
-  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection } = todos;
+  const { workspaces, byDir, filters, toggleStatus, density, groupBy, sortBy, timeRange, selected, select, loadingList, error, selection, tagsByDir } = todos;
   // Resolve the activity range to absolute bounds once per render so every group
   // filters against the same instant.
   const range = resolveRange(timeRange, Date.now());
@@ -85,9 +97,18 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
       </div>
     );
   } else if (groupBy === 'workspace') {
-    content = (
+    // An excluded workspace drops out whole rather than rendering an empty
+    // section: its header carries counts, and a section reading "0 open" would
+    // look like a workspace that had gone quiet rather than one filtered away.
+    const shown = workspaces.filter(ws => isWorkspaceShown(filters, ws.dir));
+    content = shown.length === 0 ? (
+      <div className="p-6 text-center text-sm text-muted-foreground">
+        <EmptyIcon className="mb-2 text-3xl" />
+        <p>{pending ? 'Loading' : 'No workspaces match the filter'}</p>
+      </div>
+    ) : (
       <ListMenu>
-        {workspaces.map(ws => (
+        {shown.map(ws => (
           <WorkspaceTodoGroup
             key={ws.dir}
             workspace={ws}
@@ -100,6 +121,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             selectedRef={selected?.dir === ws.dir ? selected.ref : ''}
             onSelect={ref => select({ dir: ws.dir, ref })}
             selection={selection}
+            tags={tagsByDir?.get(ws.dir)}
           />
         ))}
       </ListMenu>
@@ -123,6 +145,7 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
             range={range}
             density={density}
             selection={selection}
+            tagsByDir={tagsByDir}
           />
         ))}
       </ListMenu>
@@ -144,8 +167,40 @@ export function TodoWorkspaceList({ todos, projectsLoaded, projectError }: {
   );
 }
 
-// TodoDetailPane is the AppShell body-main: the selected todo's detail (or the
-// empty "Select a todo" prompt).
+// TodoFullPane is the AppShell body-main in the full-width layout, where there
+// is no body sidebar to hold the list. It swaps between the two rather than
+// stacking them: the table owns the viewport until a todo is selected, then the
+// detail takes it over behind a back arrow — the same shape MenubarTodos uses.
+// Selection is route-backed (/todos/{ref}), so back/forward and deep links work
+// without either half knowing about the other.
+//
+// Unlike the menubar it keeps passing workspaces/onTransferred, so "Move to
+// project" does not silently vanish when the layout changes.
+export function TodoFullPane({ todos, projectsLoaded }: {
+  todos: WorkspaceTodos;
+  projectsLoaded: boolean;
+}) {
+  const { detail, loadingDetail, detailError, selected, select, updateItem, deleted, workspaces, transferred } = todos;
+  if (!selected) {
+    return <TodoTable todos={todos} projectsLoaded={projectsLoaded} />;
+  }
+  return (
+    <TodoDetail
+      todo={detail}
+      loading={loadingDetail}
+      loadError={detailError}
+      dir={selected.dir}
+      onChanged={updateItem}
+      onDeleted={deleted}
+      onBack={() => select(null)}
+      workspaces={workspaces}
+      onTransferred={transferred}
+    />
+  );
+}
+
+// TodoDetailPane is the AppShell body-main in the split layout: the selected
+// todo's detail (or the empty "Select a todo" prompt).
 export function TodoDetailPane({ todos }: { todos: WorkspaceTodos }) {
   const { detail, loadingDetail, detailError, selected, updateItem, deleted, workspaces, transferred } = todos;
   return (

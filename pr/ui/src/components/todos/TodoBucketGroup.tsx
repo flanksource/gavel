@@ -4,7 +4,8 @@ import type { TodoDensity } from '../../types';
 import { UiChevronDown, UiChevronRight } from '@flanksource/clicky-ui/icons';
 import { MetaDueDate, SeverityHigh, SeverityLow, SeverityMedium } from '../../icons/issues';
 import { countsFromItems, TodoCountsBar, TodoRow } from './format';
-import { defaultTodoFilters, isTodoVisible, type TodoFilters } from './todoFilter';
+import type { TagIndex } from './tagResolve';
+import { defaultTodoFilters, isEntryVisible, type TodoFilters } from './todoFilter';
 import { GroupSelectAll } from './TodoGroupSelectAll';
 import type { TodoSelection } from './todoSelection';
 import type { ResolvedRange } from './todoTimeRange';
@@ -27,7 +28,7 @@ function BucketIcon({ bucket }: { bucket: TodoBucket }) {
 // owning workspace and there is no batch-run control (a run targets a single
 // workspace directory). The Closed/Status filter hides matching rows but
 // leaves the header counts whole, mirroring the workspace grouping.
-export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, density = 'comfortable', selection }: {
+export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, density = 'comfortable', selection, tagsByDir }: {
   bucket: TodoBucket;
   selected: SelectedTodo | null;
   onSelect: (entry: TodoEntry) => void;
@@ -35,23 +36,22 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
   range?: ResolvedRange | null;
   density?: TodoDensity;
   selection?: TodoSelection;
+  tagsByDir?: Map<string, TagIndex>;
 }) {
   const [open, setOpen] = useState(true);
   const active = filters ?? defaultTodoFilters();
-  const visible = bucket.entries.filter(e => isTodoVisible(e.todo, active, range));
+  const visible = bucket.entries.filter(e => isEntryVisible(e, active, range));
   const hiddenCount = bucket.entries.length - visible.length;
   const counts = countsFromItems(bucket.entries.map(e => e.todo));
   const ChevronIcon = open ? UiChevronDown : UiChevronRight;
 
   // A bucket spans workspaces, so each target carries its own row's dir.
-  const bulkTargets = selection?.bulkMode
-    ? visible.map(entry => ({ dir: entry.workspace.dir, ref: entry.todo.ref }))
-    : [];
+  const bulkTargets = visible.map(entry => ({ dir: entry.workspace.dir, ref: entry.todo.ref }));
 
   return (
     <ListMenuSection>
       <ListMenuHeader>
-        {selection?.bulkMode && (
+        {selection && (
           <GroupSelectAll label={bucket.label} targets={bulkTargets} selection={selection} />
         )}
         <Button
@@ -76,9 +76,10 @@ export function TodoBucketGroup({ bucket, selected, onSelect, filters, range, de
             density={density}
             workspace={entry.workspace.name}
             dir={entry.workspace.dir}
-            selectable={selection?.bulkMode}
+            selectable={Boolean(selection)}
             selected={selection?.isSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
             onToggleSelect={() => selection?.toggleSelected({ dir: entry.workspace.dir, ref: entry.todo.ref })}
+            tags={tagsByDir?.get(entry.workspace.dir)}
           />
         ))
       ) : (

@@ -2,11 +2,11 @@ import { useCallback, type ComponentType } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChatModel } from "@flanksource/clicky-ui/chat";
 import { effortOptionsForModel, promptRuntimeValueToPayload, reconcileModelCapabilities, type AISpecRuntimeValue, type RuntimeBarValue } from "@flanksource/clicky-ui/ai";
-import { UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
+import { UiListChecks, UiListDashes, UiPlay, type IconProps } from "@flanksource/clicky-ui/icons";
 import type { TodoRunDriver, TodoRunEffort, TodoRunOptions, TodoRunPreviewResponse, TodoRunResponse } from "../../types";
 import { todoQuery } from "./format";
 import { settingsRunContextQuery } from "../settings/queries";
-import { invalidateTodoCaches, todoMutationJSON } from "./todoMutations";
+import { invalidateTodoCaches, todoMutationJSON, TodoMutationError } from "./todoMutations";
 export { TodoRunEffortBadge, todoRunEffortPresentation } from "./TodoRunEffortBadge";
 import {
   agentForRuntime,
@@ -15,11 +15,15 @@ import {
   type RunContext,
 } from "./providers";
 
-// RunMode is the public agent prompt the dialog runs: Run (implement) or Plan
-// (propose only). Verification is a fixture-backed issue lifecycle action in
+// RunMode is the behaviour class a run executes as: run (implement and commit)
+// or plan (neither). Verification is a fixture-backed issue lifecycle action in
 // the Verification tab, not an agent run mode.
 export type RunMode = "run" | "plan";
-export type TodoRunAction = "run" | "plan";
+// TodoRunAction is the prompt the dialog runs. Triage shares plan's behaviour
+// class but is a different prompt, which is why action and mode are separate
+// types: several prompts map onto one class.
+export type TodoRunAction = "run" | "plan" | "triage";
+export const TODO_RUN_ACTIONS: readonly TodoRunAction[] = ["run", "plan", "triage"] as const;
 export type TodoRunRuntimeMode = "cmux" | "agent" | "cli" | "api";
 
 // Runs auto-commit by default — the old commit=true default, now expressed as a
@@ -46,6 +50,12 @@ const RUN_CHOICE_STORAGE_KEY = "gavel.pr-ui.todoRunChoices.v2";
 export const runActionConfig: Record<TodoRunAction, { label: string; detail: string; icon: ComponentType<IconProps>; title: string }> = {
   run: { label: "Run", detail: "implement", icon: UiPlay, title: "Run todo" },
   plan: { label: "Plan", detail: "plan only", icon: UiListDashes, title: "Plan todo" },
+  triage: {
+    label: "Triage",
+    detail: "compact + review fixture",
+    icon: UiListChecks,
+    title: "Compact the description and review the verification fixture",
+  },
 };
 
 const RUNTIME_MODE_CONFIG: Record<TodoRunRuntimeMode, { label: string }> = {
@@ -72,6 +82,15 @@ export function runSpec(options: TodoRunOptions): AISpecRuntimeValue {
 
 function normalizeRunOptions(action: TodoRunAction, options: TodoRunOptions): TodoRunOptions {
   const next = cloneRunOptions(options);
+  if (action === "triage") {
+    // The prompt name is the whole request: triage declares its own behaviour
+    // class, so asserting a mode alongside it would be rejected as contradictory.
+    next.prompt = "triage";
+    delete next.runMode;
+    delete next.plan;
+    return next;
+  }
+  delete next.prompt;
   if (action === "plan") {
     next.runMode = "plan";
     next.plan = true;
@@ -96,7 +115,7 @@ function readRunChoiceState(): RunChoiceState {
     const state = emptyRunChoiceState();
     const last = parsed.last ?? {};
     const recent = parsed.recentAdvanced ?? {};
-    for (const action of ["run", "plan"] as const) {
+    for (const action of TODO_RUN_ACTIONS) {
       const lastOptions = coerceRunOptions(last[action]);
       if (lastOptions) state.last[action] = normalizeRunOptions(action, lastOptions);
       const recentOptions = Array.isArray(recent[action]) ? recent[action] : [];
@@ -137,6 +156,7 @@ export function runOptionsKey(options: TodoRunOptions): string {
 }
 
 function actionFromRunOptions(options: TodoRunOptions): TodoRunAction {
+  if (options.prompt === "triage") return "triage";
   return options.plan || options.runMode === "plan" ? "plan" : "run";
 }
 
@@ -147,7 +167,7 @@ export interface TodoRunContextState {
 }
 
 function unavailableRunContextError(context: RunContext): string {
-  if (!context.runtimes || context.runtimes.length === 0) return "Captain returned no runtime catalog";
+  if (context.runtimes.length === 0) return "Captain returned no runtime catalog";
   if (context.backends.some(backend => backend.models.length > 0)) return "";
   const details = context.backends.map(backend => backend.modelError?.trim()).filter(Boolean);
   return details[0] || "Captain returned no run models";
@@ -177,14 +197,25 @@ export function TodoRunContextError({ error }: { error: string }) {
   return <div role="alert" className="max-w-sm text-xs text-red-600">{error}</div>;
 }
 
+// promptDefaultFor is the runtime the server resolved for one action's prompt.
+// It outranks defaultBackend because it already accounts for the prompt's own
+// frontmatter — todos-triage.prompt and todos-plan.prompt pin `model: claude`
+// and declare a per-tool policy only the Claude transports carry, so seeding
+// them from a codex account default produced a run Captain refuses.
+function promptDefaultFor(context: RunContext, action: TodoRunAction): { backend?: string; model?: string } {
+  return context.promptDefaults?.[action] ?? {};
+}
+
 function backendById(context: RunContext, id: string | undefined, model?: string): RunBackendCatalog | undefined {
   if (!id) return undefined;
   const agent = agentForRuntime(context, id, model);
   return context.backends.find(backend => backend.id === id && backend.agent === agent && backend.models.length > 0);
 }
 
-function primaryBackendForAction(context: RunContext): RunBackendCatalog {
-  return backendById(context, context.defaultBackend)
+function primaryBackendForAction(context: RunContext, action: TodoRunAction): RunBackendCatalog {
+  const promptDefault = promptDefaultFor(context, action);
+  return backendById(context, promptDefault.backend, promptDefault.model)
+    ?? backendById(context, context.defaultBackend)
     ?? context.backends.find(backend => backend.models.length > 0)
     ?? (() => { throw new Error("Captain returned no run models"); })();
 }
@@ -192,8 +223,10 @@ function primaryBackendForAction(context: RunContext): RunBackendCatalog {
 function backendForOptions(context: RunContext, options: TodoRunOptions): RunBackendCatalog {
   const spec = runSpec(options);
   const requested = spec.backend || options.driver || "";
+  const actionDefault = promptDefaultFor(context, actionFromRunOptions(options));
   return (
     backendById(context, requested, spec.model) ??
+    backendById(context, actionDefault.backend, actionDefault.model) ??
     backendById(context, context.defaultBackend) ??
     context.backends.find(backend => backend.models.length > 0) ??
     (() => { throw new Error("Captain returned no run models"); })()
@@ -201,8 +234,8 @@ function backendForOptions(context: RunContext, options: TodoRunOptions): RunBac
 }
 
 function runtimeModeForBackend(backend: RunBackendCatalog): TodoRunRuntimeMode {
-	if (backend.id in RUNTIME_MODE_CONFIG) return backend.id as TodoRunRuntimeMode;
-	throw new Error(`Invalid run backend ${JSON.stringify(backend.id)}`);
+  if (backend.id in RUNTIME_MODE_CONFIG) return backend.id as TodoRunRuntimeMode;
+  throw new Error(`Invalid run backend ${JSON.stringify(backend.id)}`);
 }
 
 function runtimeModeLabel(mode: TodoRunRuntimeMode): string {
@@ -314,8 +347,8 @@ export function todoRunButtonPresentation(options: TodoRunOptions, context: RunC
 
 export function defaultRunOptionsForAction(action: TodoRunAction, context?: RunContext | null): TodoRunOptions {
   if (context) {
-    const backend = primaryBackendForAction(context);
-    return runOptionsForBackendModel(action, backend, backend.defaultModel);
+    const backend = primaryBackendForAction(context, action);
+    return runOptionsForBackendModel(action, backend, promptDefaultFor(context, action).model || backend.defaultModel);
   }
   return normalizeRunOptions(action, defaultRunOptions);
 }
@@ -392,7 +425,17 @@ export function useTodoRun(dir: string) {
       if (!cleaned || mutation.isPending) return null;
       try {
         return await mutation.mutateAsync({ ref: cleaned, options });
-      } catch {
+      } catch (err) {
+        // The todo already has a live run on a process that is still going. That
+        // is a decision, not a failure: running both is allowed once confirmed.
+        if (!options.force && err instanceof TodoMutationError && err.status === 409) {
+          if (!window.confirm(`${err.message}\n\nStart a second run in parallel?`)) return null;
+          try {
+            return await mutation.mutateAsync({ ref: cleaned, options: { ...options, force: true } });
+          } catch {
+            return null;
+          }
+        }
         return null;
       }
     },
@@ -467,23 +510,25 @@ export function buildTodoRunPayload({
   driver: TodoRunDriver;
   runBackend?: string;
   runtime: AISpecRuntimeValue;
-  mode: RunMode;
+  mode: TodoRunAction;
   resume: boolean;
   promptDraft: string;
   promptDirty: boolean;
 }): TodoRunOptions & { ref: string } {
   const { spec } = promptRuntimeValueToPayload(runtime);
   const prompt = promptDirty ? { ...spec.prompt, user: promptDraft } : spec.prompt;
+  // normalizeRunOptions owns which of runMode/plan/prompt a given action sends,
+  // so the dialog cannot drift from what the phase buttons send.
   return {
     ref,
-    driver,
-    runMode: mode,
-    plan: mode === "plan" ? true : undefined,
-    resume: resume || undefined,
-    spec: {
-      ...spec,
-      backend: runBackend,
-      prompt,
-    },
+    ...normalizeRunOptions(mode, {
+      driver,
+      resume: resume || undefined,
+      spec: {
+        ...spec,
+        backend: runBackend,
+        prompt,
+      },
+    }),
   };
 }

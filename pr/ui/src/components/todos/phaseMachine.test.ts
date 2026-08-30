@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WORKFLOW_PHASES, type WorkflowPhase } from '@flanksource/clicky-ui/ai';
 import type { TodoStatus } from '../../types';
 import {
+  ALL_PHASES,
   PHASES,
   completedPhases,
   otherPhases,
@@ -120,16 +121,35 @@ describe('primaryAction', () => {
 
 describe('otherPhases', () => {
   // The machine ranks phases, it never withholds one: whatever the state, every
-  // phase not already on the primary stays reachable from the dropdown.
+  // RUNNABLE phase not already on the primary stays reachable from the dropdown.
+  // The universe is ALL_PHASES, not PHASES — triage is runnable but is not a
+  // pipeline step, so it is offered without ever appearing in the progress strip.
   it('always covers every phase the primary does not', () => {
     for (const state of ALL_STATES) {
       const suggested = primaryAction(state);
       const offered = otherPhases(state).map(entry => entry.id);
-      const expected = PHASES.map(entry => entry.id).filter(
+      const expected = ALL_PHASES.map(entry => entry.id).filter(
         id => !(suggested.kind === 'phase' && suggested.phase === id),
       );
       expect(offered).toEqual(expected);
     }
+  });
+
+  it('offers triage from every state without ever ticking it as done', () => {
+    for (const state of ALL_STATES) {
+      const suggested = primaryAction(state);
+      // Triage is never a primary suggestion, so it is always in the dropdown.
+      expect(suggested).not.toEqual({ kind: 'phase', phase: 'triage', label: 'Triage' });
+      expect(otherPhases(state).map(entry => entry.id)).toContain('triage');
+      expect(completedPhases(state)).not.toContain('triage');
+      expect(phaseVerb(state, 'triage')).toBe('Triage');
+    }
+  });
+
+  // The progress strip renders PHASES; an auxiliary action in it would read as a
+  // pipeline step the todo has not reached yet.
+  it('keeps triage out of the pipeline strip', () => {
+    expect(PHASES.map(entry => entry.id)).toEqual(['plan', 'run', 'verify']);
   });
 });
 

@@ -41,17 +41,14 @@ export function selectionTargets(state: SelectionState): SelectedTodo[] {
   });
 }
 
-// useTodoSelection owns bulk-edit mode and the checked set. Leaving bulk mode
-// clears the selection: a hidden selection that survives into the next session
-// is how a bulk edit lands on todos the user forgot they had checked.
+// useTodoSelection owns the checked set.
+//
+// There is no bulk-edit mode. A mode was a toggle the user had to find before
+// any bulk action existed for them, and it hid the checkboxes that would have
+// advertised the capability. Checking a row is now the entry point, and the
+// action toolbar appears with the first check.
 export function useTodoSelection() {
-  const [bulkMode, setBulkModeState] = useState(false);
   const [selection, setSelection] = useState<SelectionState>(() => new Set<string>());
-
-  const setBulkMode = useCallback((next: boolean) => {
-    setBulkModeState(next);
-    if (!next) setSelection(new Set<string>());
-  }, []);
 
   const toggleSelected = useCallback((todo: SelectedTodo) => {
     setSelection(state => toggleSelectionKeys(state, selectionKey(todo)));
@@ -63,11 +60,19 @@ export function useTodoSelection() {
 
   const clearSelection = useCallback(() => setSelection(new Set<string>()), []);
 
+  // replaceSelection takes the whole checked set at once, for a host that owns
+  // its own checkboxes and reports the result rather than the change — the
+  // full-width table's DataTable rowSelection, whose select-all would otherwise
+  // mean one state update per row.
+  const replaceSelection = useCallback((keys: readonly string[]) => {
+    setSelection(new Set(keys));
+  }, []);
+
   const isSelected = useCallback((todo: SelectedTodo) => selection.has(selectionKey(todo)), [selection]);
 
   const targets = useMemo(() => selectionTargets(selection), [selection]);
 
-  return { bulkMode, setBulkMode, selection, isSelected, toggleSelected, setGroupSelected, clearSelection, targets };
+  return { selection, isSelected, toggleSelected, setGroupSelected, clearSelection, replaceSelection, targets };
 }
 
 export type TodoSelection = ReturnType<typeof useTodoSelection>;

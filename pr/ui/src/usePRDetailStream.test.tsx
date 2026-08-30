@@ -104,6 +104,41 @@ describe('usePRDetailStream', () => {
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(3));
   });
 
+  it('accepts a PR frame with no comments and stores an empty list', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <Provider client={client}>
+        <Probe selected={firstPR} />
+      </Provider>,
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit('pr', { pr: { title: 'No comments yet' }, comments: null }));
+
+    expect(await screen.findByText('No comments yet')).toBeTruthy();
+    expect(client.getQueryData(queryKeys.prDetail(firstPR.repo, firstPR.number))).toMatchObject({
+      pr: { title: 'No comments yet' },
+      comments: [],
+    });
+    expect(screen.getByTestId('detail').dataset.loading).toBe('false');
+  });
+
+  it('rejects a PR frame whose comments field is not a list', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <Provider client={client}>
+        <Probe selected={firstPR} />
+      </Provider>,
+    );
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit('pr', { pr: { title: 'Broken' }, comments: 'nope' }));
+
+    expect(await screen.findByText('Pull request detail stream received an invalid PR update.')).toBeTruthy();
+  });
+
   it('surfaces a transport failure in the selected cache entry and closes the stream', async () => {
     vi.stubGlobal('EventSource', FakeEventSource);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

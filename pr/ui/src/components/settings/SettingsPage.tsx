@@ -25,6 +25,7 @@ import { buildRunFamilies } from "../todos/providers";
 import {
   TABS,
   WORKSPACE_TAB,
+  TAGS_TAB,
   SECTION_TITLES,
   decorateSchema,
   usesPromptPicker,
@@ -34,6 +35,8 @@ import { buildPre, buildPost } from "./extensions";
 import { LayerSwitch } from "./LayerSwitch";
 import { SettingsSectionCard } from "./SettingsSectionCard";
 import { SaveBar } from "./SaveBar";
+import { TagDefinitionsPanel } from "./tags/TagDefinitionsPanel";
+import { MetaLabel } from "../../icons/issues";
 import type { GavelTrace, SettingsLayer } from "./provenance";
 import {
   settingsConfigQuery,
@@ -91,6 +94,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
 
   const reg = useProjectRegistration({ open: hasProject, project });
   const isWorkspaceTab = hasProject && tab === WORKSPACE_TAB;
+  const isTagsTab = tab === TAGS_TAB;
   const query = scopeQueryFor(layer, project);
   const traceScopeQuery = hasProject
     ? `project=${encodeURIComponent(project.name)}`
@@ -249,6 +253,13 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
     label: t.label,
     icon: sectionIcon[t.sections[0]] as unknown as TabItem["icon"],
   }));
+  // The Tags tab sits beside the config sections but is not one: it edits
+  // database rows, so it renders its own panel and owns its own saving.
+  const tagsTabItem: TabItem = {
+    id: TAGS_TAB,
+    label: "Tags",
+    icon: MetaLabel as unknown as TabItem["icon"],
+  };
   const tabItems: TabItem[] = hasProject
     ? [
         {
@@ -257,8 +268,9 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
           icon: UiFolder as unknown as TabItem["icon"],
         },
         ...sectionTabItems,
+        tagsTabItem,
       ]
-    : sectionTabItems;
+    : [...sectionTabItems, tagsTabItem];
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
@@ -307,7 +319,9 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
             <div role="alert" className="mb-3 text-sm text-destructive">{errorMessage}</div>
           )}
 
-          {isWorkspaceTab ? (
+          {isTagsTab ? (
+            <TagDefinitionsPanel dir={project?.dir ?? ""} />
+          ) : isWorkspaceTab ? (
             <section>
               <ProjectFields reg={reg} repoOptions={repoOptions} />
               <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
@@ -379,7 +393,7 @@ export function SettingsPage({ scope, repoOptions, onClose, onSaved }: Props) {
         </div>
       </div>
 
-      {!isWorkspaceTab && configReady && !loading && (
+      {!isWorkspaceTab && !isTagsTab && configReady && !loading && (
         <SaveBar
           path={path}
           dirty={dirty}

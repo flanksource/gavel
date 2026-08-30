@@ -1,11 +1,13 @@
 import type React from 'react';
 import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { TodoSessionAttempt, TodoSessionDetailResponse, TodoSessionOverview } from '../../types';
 import { attemptSessionCollection, inspectorSession, SessionDiagnostics, useTodoSessionDetail } from './TodoSessionDetail';
 import { queryTestWrapper } from './queryTestWrapper';
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
+  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   SessionInspector: () => <div data-testid="session-inspector" />,
 }));
 

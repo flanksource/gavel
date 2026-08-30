@@ -4,6 +4,7 @@ import { UiChevronDown, UiChevronRight, UiFolder } from '@flanksource/clicky-ui/
 import type { Project, TodoDensity, TodoListResponse, TodoStatus } from '../../types';
 import { RepoIcon } from '../RepoIcon';
 import { emptyCounts, TodoCountsBar, TodoRow } from './format';
+import type { TagIndex } from './tagResolve';
 import { defaultTodoFilters, isTodoVisible, type TodoFilters } from './todoFilter';
 import { GroupSelectAll } from './TodoGroupSelectAll';
 import type { TodoSelection } from './todoSelection';
@@ -15,7 +16,7 @@ import type { ResolvedRange } from './todoTimeRange';
 // tab's per-repo grouping: a sticky header with the workspace name and its
 // open/failed/total counts, with the workspace's todos listed beneath. The
 // Closed/Status filter hides matching rows but leaves the header counts whole.
-export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, filters, onToggleStatus, range, density = 'comfortable', sortBy = defaultTodoSort(), selection }: {
+export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, filters, onToggleStatus, range, density = 'comfortable', sortBy = defaultTodoSort(), selection, tags }: {
   workspace: Project;
   data?: TodoListResponse;
   selectedRef: string;
@@ -26,6 +27,7 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
   density?: TodoDensity;
   sortBy?: TodoSort;
   selection?: TodoSelection;
+  tags?: TagIndex;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -43,12 +45,12 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
   // In bulk-edit mode the header's checkbox checks or clears every row the
   // filters currently show — never the hidden ones, so what is checked is always
   // what is on screen.
-  const bulkTargets = selection?.bulkMode ? items.map(item => ({ dir: workspace.dir, ref: item.ref })) : [];
+  const bulkTargets = items.map(item => ({ dir: workspace.dir, ref: item.ref }));
 
   return (
     <ListMenuSection>
       <ListMenuHeader>
-        {selection?.bulkMode && (
+        {selection && (
           <GroupSelectAll label={workspace.name} targets={bulkTargets} selection={selection} />
         )}
         <Button
@@ -81,9 +83,10 @@ export function WorkspaceTodoGroup({ workspace, data, selectedRef, onSelect, fil
             onClick={() => onSelect(item.ref)}
             density={density}
             dir={workspace.dir}
-            selectable={selection?.bulkMode}
+            selectable={Boolean(selection)}
             selected={selection?.isSelected({ dir: workspace.dir, ref: item.ref })}
             onToggleSelect={() => selection?.toggleSelected({ dir: workspace.dir, ref: item.ref })}
+            tags={tags}
           />
         ))
       ) : (

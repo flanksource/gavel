@@ -10,11 +10,12 @@ import {
   loadLastTodoRunOptions,
   loadRecentAdvancedTodoRunOptions,
   reconcileTodoRunOptions,
+  runActionConfig,
   runChoiceDetail,
   runOptionsKey,
   runSpec,
+  TODO_RUN_ACTIONS,
   TodoRunContextError,
-  type RunMode,
   type TodoRunAction,
   useTodoRunContext,
   useTodoRunPreview,
@@ -47,13 +48,13 @@ export function TodoRunAdvancedDialog({
   onRun: (options: TodoRunOptions) => void;
   loading?: boolean;
   title?: string;
-  initialMode?: RunMode;
+  initialMode?: TodoRunAction;
   dir: string;
   refID: string;
 }) {
   const [runRequest, setRunRequest] = useState<AIPromptRunValue>({ spec: INITIAL_RUNTIME_VALUE });
   const runtimeValue = runRequest.spec ?? {};
-  const [mode, setMode] = useState<RunMode>("run");
+  const [mode, setMode] = useState<TodoRunAction>("run");
   const [resume, setResume] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [promptDirty, setPromptDirty] = useState(false);
@@ -73,11 +74,13 @@ export function TodoRunAdvancedDialog({
   const selection = context && agent ? driverForSelection(context, agent, runtimeValue.backend) : null;
   const driver = selection?.driver;
   const runBackend = selection?.runBackend;
-  const plan = mode === "plan";
-  const advancedAction: TodoRunAction = plan ? "plan" : "run";
+  // Triage neither implements nor commits, so it shares plan's "does not change
+  // code" framing in the dialog's copy while staying its own action.
+  const plan = mode !== "run";
+  const advancedAction: TodoRunAction = mode;
   const recentAdvanced = context ? loadRecentAdvancedTodoRunOptions(advancedAction, context) : [];
 
-  function changeMode(next: RunMode) {
+  function changeMode(next: TodoRunAction) {
     setMode(next);
     setPromptDirty(false);
     promptDirtyRef.current = false;
@@ -109,7 +112,7 @@ export function TodoRunAdvancedDialog({
 
   useEffect(() => {
     if (!open || !context) return;
-    const action: TodoRunAction = initialMode === "plan" ? "plan" : "run";
+    const action: TodoRunAction = initialMode;
     setRunRequest({ spec: runSpec(reconcileTodoRunOptions(action, loadLastTodoRunOptions(action, context), context)) });
   }, [open, initialMode, context]);
 
@@ -194,7 +197,7 @@ export function TodoRunAdvancedDialog({
             <Tabs tabs={[{ id: "form", label: "Form" }, { id: "yaml", label: "YAML" }]} value={view} onChange={value => setView(value as "form" | "yaml")} />
             {view === "form" ? (
               <div role="tabpanel" aria-label="Form" className="space-y-3">
-                <Field label="Mode"><SegmentedControl aria-label="Mode" value={mode} onChange={(value) => changeMode(value as RunMode)} options={[{ id: "run", label: "Run" }, { id: "plan", label: "Plan" }]} /></Field>
+                <Field label="Prompt"><SegmentedControl aria-label="Prompt" value={mode} onChange={(value) => changeMode(value as TodoRunAction)} options={TODO_RUN_ACTIONS.map((action) => ({ id: action, label: runActionConfig[action].label }))} /></Field>
                 <PromptRunEditor value={runRequest} onChange={setRunRequest} models={activeModels} families={families} tools={context.tools} specSections={RUN_SPEC_SECTIONS} promptEditor={promptEditorNode} promptLabel="Prompt">
                   <>
                     {isCmux && <label className="inline-flex items-center gap-2 text-xs"><input type="checkbox" checked={resume} onChange={(event) => setResume(event.currentTarget.checked)} /><span>Resume session</span></label>}

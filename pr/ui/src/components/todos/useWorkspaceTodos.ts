@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoListResponse, TodoStatus } from '../../types';
+import type { Project, TodoCounts, TodoDensity, TodoGroupBy, TodoItem, TodoLayout, TodoListResponse, TodoStatus } from '../../types';
 import { addCounts, emptyCounts } from './format';
 import { loadDensity, saveDensity } from './todoDensity';
 import { loadGroupBy, saveGroupBy } from './todoGroup';
+import { loadLayout, saveLayout } from './todoLayout';
 import { loadTodoFilters, saveTodoFilters, toggleStatusFilter, type TodoFilters } from './todoFilter';
 import type { TodoSort } from './todoSort';
 import { loadTodoSort, saveTodoSort } from './todoSort';
@@ -11,6 +12,7 @@ import { loadTimeRange, saveTimeRange, type TodoTimeRange } from './todoTimeRang
 import { setTodoQueryData, todoGlobalItemQueryOptions, todoItemQueryOptions, todoQueryKeys } from './todoQueries';
 import { useTodoSelection, type SelectedTodo } from './todoSelection';
 import { workspaceTodoBatchKeys } from './workspaceTodoQueries';
+import { useTodoTagIndexes } from './tagQueries';
 
 export type { SelectedTodo };
 
@@ -138,6 +140,10 @@ export function useWorkspaceTodos(
   const workspaceDirsKey = JSON.stringify(workspaces.map(workspace => workspace.dir).sort());
   const workspaceDirs = useMemo(() => JSON.parse(workspaceDirsKey) as string[], [workspaceDirsKey]);
   const listQueryKey = useMemo(() => workspaceTodoBatchKeys.list(workspaceDirs), [workspaceDirs]);
+  // One tag index per workspace, resolved here rather than in the rows: a row
+  // component renders once per todo, and a subscription per row would be
+  // hundreds of them.
+  const tagsByDir = useTodoTagIndexes(workspaceDirs, enabled);
   const queryClient = useQueryClient();
   const listQuery = useQuery({
     queryKey: listQueryKey,
@@ -160,8 +166,11 @@ export function useWorkspaceTodos(
   const [filters, setFiltersState] = useState<TodoFilters>(loadTodoFilters);
   // Row density (comfortable/compact) for the lists, persisted across reloads.
   const [density, setDensityState] = useState<TodoDensity>(loadDensity);
-  // Grouping dimension (workspace/severity/age) for the lists, persisted too.
+  // Grouping dimension (workspace/severity/age/none) for the lists, persisted too.
   const [groupBy, setGroupByState] = useState<TodoGroupBy>(loadGroupBy);
+  // Master-detail (split) vs full-width table, persisted too. Dashboard-only:
+  // the menubar layout is single-column regardless.
+  const [layout, setLayoutState] = useState<TodoLayout>(loadLayout);
   // Sort column and direction for rows within each group, persisted too.
   const [sortBy, setSortByState] = useState<TodoSort>(loadTodoSort);
   // Activity time-range filter (clicky-ui TimeRange tokens); null shows all.
@@ -195,6 +204,11 @@ export function useWorkspaceTodos(
   const setGroupBy = useCallback((next: TodoGroupBy) => {
     setGroupByState(next);
     saveGroupBy(next);
+  }, []);
+
+  const setLayout = useCallback((next: TodoLayout) => {
+    setLayoutState(next);
+    saveLayout(next);
   }, []);
 
   const setSortBy = useCallback((next: TodoSort) => {
@@ -341,11 +355,14 @@ export function useWorkspaceTodos(
     setDensity,
     groupBy,
     setGroupBy,
+    layout,
+    setLayout,
     sortBy,
     setSortBy,
     timeRange,
     setTimeRange,
     selection,
+    tagsByDir,
   };
 }
 

@@ -13,9 +13,9 @@ import { TodoPlan } from './TodoPlan';
 import { useSessionStats } from './TodoSessionTimer';
 import { priorities, priorityBadgeClass, priorityIcon, statusClass, statusIcon, statuses, statusLabel } from './format';
 import { TodoRunAdvancedDialog } from './TodoRunAdvancedDialog';
-import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
+import { defaultRunOptions, loadLastTodoRunOptions, rememberTodoRunOptions, rememberTodoRunOptionsForMode, runActionConfig, runSpec, type TodoRunAction, useTodoRun, useTodoRunContext } from './run';
 import { loadPromptRunOptions, rememberPromptRunOptions, verificationSpec } from './PromptRunButton';
-import { PHASES, phaseSignals, phaseState, type PhaseId, type PhaseState } from './phaseMachine';
+import { ALL_PHASES, phaseSignals, phaseState, type PhaseId, type PhaseState } from './phaseMachine';
 import { TodoPhaseButton, TodoPhaseTicks, type PhaseRunOptions } from './TodoPhaseButton';
 import { TodoRunStatusStrip } from './TodoRunStatusStrip';
 import { TodoBodyEditor, TodoCommentBox, TodoTitleEditor } from './TodoCompose';
@@ -25,6 +25,9 @@ import { useTodoSessionDetail } from './TodoSessionDetail';
 import { verificationAttempts, verificationBadge } from './verificationAttempts';
 import { TodoReviewBanner } from './planActions';
 import { TodoMutationError, useDeleteTodoMutation, useGithubPushTodoMutation, useTodoSessionStop, useTodoVerificationRun, useTransferTodoMutation, useUpdateTodoMutation } from './todoMutations';
+import { TodoTagField, TodoTagRow } from './TodoTag';
+import { useTodoTagCounts, useTodoTagIndex } from './tagQueries';
+import { todoVisibleLabels, type TagIndex } from './tagResolve';
 
 export function TodoDetail({
   todo,
@@ -94,7 +97,11 @@ export function TodoDetail({
   // says why, rather than one that looks live and does nothing.
   const stoppableAttempt = (verificationDetail?.attempts ?? []).find(attempt => attempt.processActive && attempt.canStop);
   const fullTodoId = todo ? todoFullId(todo) : '';
-  const visibleLabels = todo ? todoHeaderLabels(todo) : [];
+  const visibleLabels = todo ? todoVisibleLabels(todo) : [];
+  const tagIndex = useTodoTagIndex(dir);
+  // Same cached query as the index, so the picker can lead with the tags this
+  // project actually uses without a second request.
+  const tagCounts = useTodoTagCounts(dir);
   const viewSessionId = todo?.lookupSessionId || todo?.sessionId;
   const viewingHistoricalSession = !!todo?.lookupSessionId && todo.lookupSessionId !== todo.sessionId;
   const { stats: headerSessionStats } = useSessionStats({ dir, sessionId: todo?.sessionId, active: !!todo?.sessionId });
@@ -121,7 +128,7 @@ export function TodoDetail({
   // The running attempt names its own step, so the strip can say "Verify" rather
   // than a generic "Running" when a check is what is in flight.
   const runningPhaseLabel = stoppableAttempt?.step
-    ? PHASES.find(entry => entry.id === stoppableAttempt.step)?.label
+    ? ALL_PHASES.find(entry => entry.id === stoppableAttempt.step)?.label
     : undefined;
 
   function changePhaseOptions(id: PhaseId, options: TodoRunOptions) {
@@ -172,6 +179,9 @@ export function TodoDetail({
     title?: string;
     body?: string;
     comment?: string;
+    // The complete replacement label set. TodoTagField builds it, reserved
+    // lifecycle labels included, because the API replaces the whole set.
+    labels?: string[];
   }): Promise<boolean> {
     if (!todo || busy) return false;
     setError('');
@@ -278,7 +288,7 @@ export function TodoDetail({
     }
   }
 
-  // Enter a phase. plan/run dispatch an agent run; verify posts the
+  // Enter a phase. plan/run/triage dispatch an agent run; verify posts the
   // definition-of-done fixture, which is a different endpoint entirely — the
   // machine hides that split from the header, it does not erase it.
   async function runPhase(id: PhaseId) {
@@ -424,6 +434,7 @@ export function TodoDetail({
               awaitingHumanAction={awaitingHumanAction}
               fullTodoId={fullTodoId}
               labels={visibleLabels}
+              tags={tagIndex}
               transferTargets={transferTargets}
               canTransfer={!!onTransferred}
               className="md:hidden"
@@ -482,6 +493,7 @@ export function TodoDetail({
                 awaitingHumanAction={awaitingHumanAction}
                 fullTodoId={fullTodoId}
                 labels={visibleLabels}
+                tags={tagIndex}
                 transferTargets={transferTargets}
                 canTransfer={!!onTransferred}
                 showRunActions={false}
@@ -536,7 +548,15 @@ export function TodoDetail({
               </Button>
               {todo.externalIssue && <ExternalIssueLink issue={todo.externalIssue} />}
               <span className="hidden items-center gap-2 md:flex">
-                <HeaderTags labels={visibleLabels} />
+                {todo && (
+                  <TodoTagField
+                    todo={todo}
+                    index={tagIndex}
+                    counts={tagCounts}
+                    disabled={busy}
+                    onChange={labels => void patch({ labels })}
+                  />
+                )}
               </span>
               {copyState === 'error' && <span className="hidden text-red-600 md:block">Copy failed</span>}
             </div>
@@ -549,7 +569,10 @@ export function TodoDetail({
         open={advancedMode !== null}
         onClose={() => setAdvancedMode(null)}
         onRun={options => {
-          const action = advancedMode ?? (options.plan || options.runMode === 'plan' ? 'plan' : 'run');
+          const action = advancedMode
+            ?? (options.prompt === 'triage'
+              ? 'triage'
+              : options.plan || options.runMode === 'plan' ? 'plan' : 'run');
           const remembered = rememberTodoRunOptionsForMode(options, true);
           setRunSelections(previous => ({ ...previous, [action]: remembered }));
           setAdvancedMode(null);
@@ -557,7 +580,7 @@ export function TodoDetail({
         }}
         loading={runBusy}
         initialMode={advancedMode ?? 'run'}
-        title={advancedMode === 'plan' ? 'Plan todo' : 'Run todo'}
+        title={runActionConfig[advancedMode ?? 'run'].title}
         dir={dir}
         refID={todo.ref}
       />
@@ -653,16 +676,6 @@ function todoFullId(todo: TodoItem): string {
   return todo.ref;
 }
 
-function todoHeaderLabels(todo: TodoItem): string[] {
-  return (todo.labels ?? [])
-    .map(label => label.trim())
-    .filter(label =>
-      label &&
-      !label.startsWith('status:') &&
-      !label.startsWith('priority:') &&
-      !label.startsWith('session:'),
-    );
-}
 
 function StatusMenu({
   value,
@@ -817,29 +830,6 @@ function ExternalIssueLink({ issue }: { issue: TodoExternalIssue }) {
   );
 }
 
-function HeaderTags({ labels }: { labels: string[] }) {
-  if (labels.length === 0) return null;
-  const visible = labels.slice(0, 6);
-  const overflow = labels.length - visible.length;
-  return (
-    <>
-      {visible.map(label => (
-        <span
-          key={label}
-          className="inline-flex max-w-[14rem] items-center truncate rounded border border-border bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground"
-          title={label}
-        >
-          <span className="truncate">{label}</span>
-        </span>
-      ))}
-      {overflow > 0 && (
-        <span className="inline-flex items-center rounded border border-border bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground">
-          +{overflow}
-        </span>
-      )}
-    </>
-  );
-}
 
 function HeaderActionsMenu({
   todo,
@@ -850,6 +840,7 @@ function HeaderActionsMenu({
   awaitingHumanAction,
   fullTodoId,
   labels,
+  tags,
   transferTargets,
   canTransfer,
   className,
@@ -879,6 +870,7 @@ function HeaderActionsMenu({
   awaitingHumanAction: boolean;
   fullTodoId: string;
   labels: string[];
+  tags: TagIndex;
   transferTargets: Project[];
   canTransfer: boolean;
   className?: string;
@@ -1084,17 +1076,13 @@ function HeaderActionsMenu({
 
           {showLabels && labels.length > 0 && (
             <MobileMenuSection title="Tags">
-              <div className="flex flex-wrap gap-1 px-2 py-1">
-                {labels.map(label => (
-                  <span
-                    key={label}
-                    className="max-w-full truncate rounded border border-border bg-muted/20 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                    title={label}
-                  >
-                    {label}
-                  </span>
-                ))}
-              </div>
+              <TodoTagRow
+                labels={labels}
+                index={tags}
+                max={12}
+                size="xxs"
+                className="flex-wrap px-2 py-1"
+              />
             </MobileMenuSection>
           )}
         </div>

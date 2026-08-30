@@ -52,8 +52,8 @@ export interface RunBackendCatalog {
 
 export interface RunContext {
   backends: RunBackendCatalog[];
-  runtimes?: RuntimeCatalogFamily[];
-  models?: ChatModel[];
+  runtimes: RuntimeCatalogFamily[];
+  models: ChatModel[];
   efforts: TodoRunEffort[];
   defaultBackend?: string;
   defaultProvider?: string;
@@ -108,9 +108,9 @@ export function defaultBackendForAgent(context: RunContext, agent: RunProvider):
 // buildRunFamilies forwards Captain's runtime catalog through Clicky's display
 // projection; Gavel never reconstructs provider/backend pairs.
 export function buildRunFamilies(context: RunContext): SpecRuntimeFamily[] {
-	if (!context.runtimes || context.runtimes.length === 0) {
-		throw new Error('Captain returned no runtime catalog');
-	}
+  if (context.runtimes.length === 0) {
+    throw new Error('Captain returned no runtime catalog');
+  }
   return familiesFromRuntimeCatalog(context.runtimes);
 }
 

@@ -36,11 +36,14 @@ export function usePRDetailStream(pr: PRItem | null): PRDetailStreamState {
     stream.addEventListener('pr', event => {
       try {
         const data = frame((event as MessageEvent<string>).data);
-        if (!data.pr || typeof data.pr !== 'object' || !Array.isArray(data.comments)) throw new Error('invalid PR frame');
+        if (!data.pr || typeof data.pr !== 'object') throw new Error('invalid PR frame');
+        // A PR with no actionable comments carries no comments at all — only a
+        // present-but-not-a-list value is malformed.
+        if (data.comments != null && !Array.isArray(data.comments)) throw new Error('invalid PR frame');
         queryClient.setQueryData<PRDetail>(key, current => ({
           ...current,
           pr: data.pr as PRInfo | undefined,
-          comments: data.comments as PRComment[] | undefined,
+          comments: (data.comments ?? []) as PRComment[],
         }));
         setLoading(false);
       } catch {

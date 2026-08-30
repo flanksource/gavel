@@ -2,6 +2,7 @@ import type React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WORKFLOW_PHASES_MOCK } from './workflowPhasesMock';
 import type { FixtureEditorProps } from '@flanksource/clicky-ui/data';
 import type { TodoItem, TodoSessionDetailResponse } from '../../types';
 import { TodoVerification } from './TodoVerification';
@@ -54,7 +55,14 @@ vi.mock('@flanksource/clicky-ui/chat', () => ({
 }));
 
 vi.mock('@flanksource/clicky-ui/ai', () => ({
+  WORKFLOW_PHASES: WORKFLOW_PHASES_MOCK,
   effortOptionsForModel: (_model: unknown, fallback: string[]) => fallback,
+  familiesFromRuntimeCatalog: () => [{
+    id: 'codex',
+    label: 'Codex',
+    provider: 'openai',
+    modes: [{ id: 'agent', label: 'Agent', backend: 'agent', defaultModel: 'gpt-5.6-sol' }],
+  }],
   promptRuntimeValueToPayload: (value: unknown) => ({ spec: value }),
   reconcileModelCapabilities: (value: unknown) => value,
   RuntimeBar: ({ ariaLabel }: { ariaLabel?: string }) => <button type="button" aria-label={ariaLabel}>Runtime</button>,
@@ -88,17 +96,33 @@ const todo: TodoItem = {
 const testSchema = { type: 'object' as const, properties: { paths: { type: 'array' } } };
 const lintSchema = { type: 'object' as const, properties: { files: { type: 'array' } } };
 const verificationRunContext = {
-  defaultBackend: 'codex-agent',
+  defaultBackend: 'agent',
+  defaultProvider: 'openai',
   efforts: ['low', 'medium', 'high'],
   tools: [],
+  runtimes: [{
+    family: 'codex',
+    provider: 'openai',
+    catalogPrefix: 'openai',
+    modes: [{ backend: 'agent', schema: { type: 'object' }, defaultModel: 'gpt-5.6-sol' }],
+  }],
+  models: [{
+    id: 'gpt-5.6-sol',
+    provider: 'openai',
+    label: 'GPT-5.6 Sol',
+    reasoning: true,
+    configured: true,
+    backends: ['agent'],
+    runtime: { model: 'gpt-5.6-sol' },
+  }],
   backends: [{
-    id: 'codex-agent',
+    id: 'agent',
     label: 'Codex Agent',
     provider: 'openai',
     agent: 'codex',
     defaultModel: 'gpt-5.6-sol',
-    driver: 'codex-headless',
-    mechanisms: [{ value: 'agent', label: 'Agent', driver: 'codex-headless' }],
+    driver: 'agent',
+    mechanisms: [{ value: 'agent', label: 'Agent', driver: 'agent' }],
     models: [{ id: 'gpt-5.6-sol', provider: 'openai', label: 'GPT-5.6 Sol', reasoning: true, configured: true }],
     configured: true,
   }],
@@ -254,7 +278,7 @@ describe('TodoVerification', () => {
       'gavel.pr-ui.promptRunChoices.v2',
       JSON.stringify({
         verification: {
-          last: { spec: { backend: 'codex-agent', model: 'gpt-5.6-sol', effort: 'high' } },
+          last: { spec: { backend: 'agent', model: 'gpt-5.6-sol', effort: 'high' } },
           recent: [],
         },
       }),

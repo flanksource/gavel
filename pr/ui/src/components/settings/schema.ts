@@ -34,6 +34,11 @@ export const TABS: TabDef[] = [
 // record (dir/repos), not a .gavel.yaml section, so it is handled specially.
 export const WORKSPACE_TAB = "workspace";
 
+// The tag-taxonomy tab. Like WORKSPACE_TAB it is not a .gavel.yaml section —
+// tag definitions are database rows — so it is rendered specially rather than
+// through the schema-driven form, and it owns its own saving.
+export const TAGS_TAB = "tags";
+
 // Human labels for the top-level sections (used as in-form section headings) and
 // for a handful of nested keys the automatic humanizer would render awkwardly.
 export const SECTION_TITLES: Record<string, string> = {
