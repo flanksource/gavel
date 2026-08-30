@@ -15,6 +15,7 @@ import (
 // Process status values recorded in state.json.
 const (
 	StatusStarting   = "starting"
+	StatusCompiling  = "compiling"
 	StatusRunning    = "running"
 	StatusStopped    = "stopped"
 	StatusCrashed    = "crashed"

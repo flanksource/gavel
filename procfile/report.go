@@ -189,7 +189,7 @@ func statusIcon(status string) api.Text {
 	switch status {
 	case StatusRunning:
 		return api.Text{}.Add(icons.Success)
-	case StatusRestarting, StatusStarting:
+	case StatusRestarting, StatusStarting, StatusCompiling:
 		return api.Text{}.Add(icons.Warning)
 	case StatusCrashed:
 		return api.Text{}.Add(icons.Error)

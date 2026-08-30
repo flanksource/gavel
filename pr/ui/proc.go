@@ -200,7 +200,7 @@ func (s *Server) handleProcStatusStream(w http.ResponseWriter, r *http.Request) 
 func anyTransitioning(byKey map[string]procStatus) bool {
 	for _, st := range byKey {
 		for _, p := range st.Processes {
-			if p.Status == procfile.StatusStarting || p.Status == procfile.StatusRestarting {
+			if p.Status == procfile.StatusStarting || p.Status == procfile.StatusCompiling || p.Status == procfile.StatusRestarting {
 				return true
 			}
 		}

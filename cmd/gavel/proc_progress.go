@@ -13,13 +13,27 @@ import (
 
 // Cadence for the start/restart readiness view. A process is "ready" once it is
 // Running with a detected port, or has run portGrace without binding one (a
-// worker), or reaches a terminal state. readyTimeout bounds a process that never
-// leaves "starting".
+// worker), or reaches a terminal state. The stage timeouts bound a process that
+// never leaves a transitional stage.
 const (
-	procReadyPoll    = 300 * time.Millisecond
-	procReadyTimeout = 30 * time.Second
+	procReadyPoll = 300 * time.Millisecond
+	// procCompileTimeout budgets the "compiling" stage, where a cold `go run`
+	// build or a bundler's first pass legitimately runs for many minutes.
+	procCompileTimeout = 900 * time.Second
+	// procReadyTimeout budgets every other stage.
+	procReadyTimeout = 180 * time.Second
 	procPortGrace    = 4 * time.Second
 )
+
+// stageTimeout is how long a process may sit in one stage before its start is
+// declared failed. The clock is per stage, so time spent compiling never eats
+// into the budget of the stage that follows it.
+func stageTimeout(status string) time.Duration {
+	if status == procfile.StatusCompiling {
+		return procCompileTimeout
+	}
+	return procReadyTimeout
+}
 
 // renderProcReadiness renders one live clicky task per tracked process, polling
 // each to readiness and updating its label as it moves starting → running →
@@ -48,7 +62,7 @@ func renderProcReadiness(workDir, pf, groupName string, report *procfile.StatusR
 // task label in sync. A crash or a never-running process fails the task; a clean
 // early exit warns; a running process (with or without a port) succeeds.
 func awaitProcReady(ctx commonsCtx.Context, t *task.Task, workDir, pf, name string) (procfile.ProcState, error) {
-	tr := &procTracker{deadline: time.Now().Add(procReadyTimeout)}
+	tr := &procTracker{}
 	var last procfile.ProcState
 	for {
 		rep, err := procfile.Status(workDir, pf)
@@ -90,12 +104,14 @@ const (
 )
 
 // procTracker classifies one process's progress toward "ready" across repeated
-// status samples, owning the per-process timing (port grace) so the caller only
-// feeds it fresh ProcStates. A process is ready once it is Running with a
-// detected port, or has run procPortGrace without binding one (a worker). A
-// crash, or never leaving "starting" by the deadline, is a start failure.
+// status samples, owning the per-process timing (stage clock, port grace) so the
+// caller only feeds it fresh ProcStates. A process is ready once it is Running
+// with a detected port, or has run procPortGrace without binding one (a worker).
+// A crash, or outlasting its stage's timeout without leaving it, is a start
+// failure.
 type procTracker struct {
-	deadline     time.Time
+	stage        string
+	stageSince   time.Time
 	runningSince time.Time
 }
 
@@ -103,6 +119,11 @@ type procTracker struct {
 // can drive the timing deterministically. The returned error is non-nil only for
 // outcomeFailed and describes why the start failed.
 func (pt *procTracker) observe(ps procfile.ProcState, now time.Time) (readyOutcome, error) {
+	if pt.stageSince.IsZero() || ps.Status != pt.stage {
+		pt.stage = ps.Status
+		pt.stageSince = now
+	}
+
 	switch ps.Status {
 	case procfile.StatusCrashed:
 		return outcomeFailed, fmt.Errorf("%s crashed (exit %s)", ps.Name, exitCodeStr(ps.ExitCode))
@@ -121,13 +142,11 @@ func (pt *procTracker) observe(ps procfile.ProcState, now time.Time) (readyOutco
 		pt.runningSince = time.Time{}
 	}
 
-	if now.After(pt.deadline) {
-		// A process that is up but slow to bind its port is a success, not a
-		// failure; only one still trying to start has failed.
-		if ps.Status == procfile.StatusRunning {
-			return outcomeReady, nil
-		}
-		return outcomeFailed, fmt.Errorf("%s did not become ready within %s (status %q)", ps.Name, procReadyTimeout, ps.Status)
+	// A Running process is never failed here: it settles via the port grace
+	// above, well inside its stage timeout. Only one still stuck in a
+	// transitional stage runs out of budget.
+	if timeout := stageTimeout(ps.Status); now.Sub(pt.stageSince) > timeout {
+		return outcomeFailed, fmt.Errorf("%s did not become ready within %s (status %q)", ps.Name, timeout, ps.Status)
 	}
 	return outcomePending, nil
 }

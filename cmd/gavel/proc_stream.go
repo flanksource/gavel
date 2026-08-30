@@ -91,10 +91,9 @@ func startStreaming(ctx context.Context, workDir, pf string, names []string) <-c
 // non-nil error listing the ones that failed to start. ctx cancellation (e.g. a
 // failed start elsewhere being torn down) ends the wait with no error.
 func awaitTrackedReady(ctx context.Context, workDir, pf string, names []string) error {
-	deadline := time.Now().Add(procReadyTimeout)
 	trackers := make(map[string]*procTracker, len(names))
 	for _, n := range names {
-		trackers[n] = &procTracker{deadline: deadline}
+		trackers[n] = &procTracker{}
 	}
 	var failures []string
 	for len(trackers) > 0 {
@@ -147,7 +146,7 @@ func runningProcNames(procs []procfile.ProcState, names []string) []string {
 			continue
 		}
 		switch p.Status {
-		case procfile.StatusRunning, procfile.StatusStarting, procfile.StatusRestarting:
+		case procfile.StatusRunning, procfile.StatusStarting, procfile.StatusCompiling, procfile.StatusRestarting:
 			out = append(out, p.Name)
 		}
 	}
