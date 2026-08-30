@@ -35,6 +35,8 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 
 	integration, err := native.NewExecutionIntegration(repo)
 	require.NoError(t, err)
+	owner, err := native.LocalOwner()
+	require.NoError(t, err)
 
 	runID := insertCaptainPromptRun(t, db)
 	originalVersion := issue.Version
@@ -45,6 +47,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Ordinal:              0,
 		ExpectedIssueVersion: originalVersion,
 		Actor:                "execution-test",
+		Owner:                &owner,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, issue.ActivePromptRunID)
@@ -61,6 +64,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Ordinal:              0,
 		ExpectedIssueVersion: originalVersion,
 		Actor:                "execution-test",
+		Owner:                &owner,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, issue.Version, replayed.Version)
@@ -76,6 +80,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Ordinal:              0,
 		ExpectedIssueVersion: otherIssue.Version,
 		Actor:                "execution-test",
+		Owner:                &owner,
 	})
 	require.ErrorIs(t, err, native.ErrLinkConflict)
 	otherIssue, err = repo.GetIssue(ctx, otherIssue.ID)
@@ -95,6 +100,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Ordinal:              0,
 		ExpectedIssueVersion: issue.Version,
 		Actor:                "execution-test",
+		Owner:                &owner,
 	})
 	require.ErrorIs(t, err, native.ErrLinkConflict)
 	afterConflict, err := repo.GetIssue(ctx, issue.ID)
@@ -179,6 +185,7 @@ func TestExecutionIntegrationAtomicLinksAndReplay(t *testing.T) {
 		Ordinal:              0,
 		ExpectedIssueVersion: coordinatedIssue.Version,
 		Actor:                "execution-test",
+		Owner:                &owner,
 	}
 	launchInput := native.PromptRunLaunchInput{
 		RootSession: captaindb.CreateSessionInput{

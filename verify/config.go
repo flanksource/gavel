@@ -350,6 +350,21 @@ type TodosConfig struct {
 	// Each overrides the base ai: spec field-wise. See prompts.TodosRun/TodosPlan.
 	Run  PromptSpec `yaml:"run,omitempty" json:"run,omitempty"`
 	Plan PromptSpec `yaml:"plan,omitempty" json:"plan,omitempty"`
+	// Triage is the AI spec for the triage prompt: a read-only pass that compacts
+	// a TODO's description and reviews its verification fixture, reporting the
+	// edits for gavel to apply. See prompts.TodosTriage.
+	Triage PromptSpec `yaml:"triage,omitempty" json:"triage,omitempty"`
+	// Prompts declares additional named prompts, keyed by name. Each entry names
+	// the behaviour class it runs as, so a project can add a security or docs pass
+	// without gavel gaining a run mode. Built-in names (run, plan, triage) may be
+	// re-declared here to override their template wholesale; the typed fields
+	// above remain the ergonomic way to override just one built-in.
+	Prompts map[string]NamedPromptSpec `yaml:"prompts,omitempty" json:"prompts,omitempty"`
+	// CheckConcurrency bounds how many definition-of-done checks run at once
+	// (`gavel todos check`, and the verification phase after a bulk triage).
+	// Zero uses the built-in default; running one test suite per TODO unbounded
+	// thrashes the machine.
+	CheckConcurrency int `yaml:"checkConcurrency,omitempty" json:"checkConcurrency,omitempty"`
 	// Verify is the spec a verification run executes as: `gavel todos check`, the
 	// dashboard's verify action, and the acceptance-criteria grader inside a run's
 	// definition-of-done loop. It overrides the base ai: spec field-wise and is

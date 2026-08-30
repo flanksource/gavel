@@ -38,6 +38,36 @@ type activeRun struct {
 // can be dispatched. The issue version is part of the deterministic admission
 // identity, so an exact retry resolves the same launch while a later attempt
 // receives a new identity.
+// promptNameOrDefault resolves the prompt name a run is dispatched under,
+// defaulting to the one that shares the behaviour class's name.
+func promptNameOrDefault(name string, mode types.RunMode) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		return trimmed
+	}
+	return string(mode)
+}
+
+// promptRunSeed derives the deterministic identity of one dispatch. Two runs
+// with the same seed are the same run — that is what makes a concurrent retry
+// recognisable as an owned dispatch rather than a stale mutation.
+//
+// The prompt name only joins the seed when it differs from the step, so run,
+// plan and verify keep byte-identical session and prompt-run UUIDs to the ones
+// they had before prompts could be named. Without the name, two prompts of the
+// same class dispatched against one issue version would collide and the second
+// would be rejected as already claimed.
+//
+// `step` here is the behaviour CLASS's step (classStepForMode), never the kind
+// the run is recorded under — triage seeds as "plan:triage" exactly as it did
+// before it earned its own step kind, so its identity survived that change.
+func promptRunSeed(issueID uuid.UUID, step native.StepKind, promptName string, version int64) string {
+	seed := fmt.Sprintf("%s:%s:%d", issueID, step, version)
+	if promptName != "" && promptName != string(step) {
+		seed = fmt.Sprintf("%s:%s:%s:%d", issueID, step, promptName, version)
+	}
+	return seed
+}
+
 func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation todos.RunPreparation) (todos.RunPreparationResult, error) {
 	issueID, err := p.todoID(todo)
 	if err != nil {
@@ -47,7 +77,15 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if mode == "" {
 		mode = types.ModeRun
 	}
-	step, err := stepForMode(mode)
+	promptName := promptNameOrDefault(preparation.Prompt, mode)
+	// Two steps, deliberately: classStep seeds the dispatch identity (so triage
+	// keeps the UUIDs it had when it was recorded as a plan run), while step is
+	// what the link row, the ordinal sequence and a resume match against.
+	classStep, err := classStepForMode(mode)
+	if err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	step, err := stepFor(promptName, mode)
 	if err != nil {
 		return todos.RunPreparationResult{}, err
 	}
@@ -58,7 +96,36 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 	if issue.WorkspaceID != p.workspace.ID {
 		return todos.RunPreparationResult{}, fmt.Errorf("%w: TODO %s belongs to workspace %s, provider owns %s", native.ErrCrossWorkspace, issue.ID, issue.WorkspaceID, p.workspace.ID)
 	}
-	seed := fmt.Sprintf("%s:%s:%d", issue.ID, step, todo.Version)
+	owner, err := native.LocalOwner()
+	if err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	seed := promptRunSeed(issue.ID, classStep, promptName, todo.Version)
+	// An unfinished run whose dispatcher is gone would block this TODO forever,
+	// so settle it before allocating any identity: reclaiming it changes which
+	// run is active, and a live incumbent changes what identity this run needs.
+	// The seed's own run id goes along so a contender replaying this exact
+	// dispatch is recognised as such rather than as a second run.
+	ownIdentity, err := p.resolveActiveRunConflict(ctx, issue, preparation,
+		uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-prompt-run:"+seed)))
+	if err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	if issue, err = p.repository.GetIssue(ctx, issueID); err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	ordinal, err := p.nextPromptOrdinal(ctx, issue.ID, step)
+	if err != nil {
+		return todos.RunPreparationResult{}, err
+	}
+	if ownIdentity {
+		// The seed above is deterministic per (issue, step, issue version), which
+		// is what makes an ordinary redispatch idempotent — and what would
+		// otherwise resolve this dispatch onto a run that is already using that
+		// identity. The step ordinal discriminates it, and keeps a retry of this
+		// same dispatch idempotent in turn.
+		seed = fmt.Sprintf("%s:attempt:%d", seed, ordinal)
+	}
 	sessionID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-session:"+seed))
 	promptRunID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("gavel-todo-prompt-run:"+seed))
 	if todo.Version != issue.Version {
@@ -82,10 +149,6 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		return todos.RunPreparationResult{}, fmt.Errorf("%w: issue %s expected version %d, current version %d", native.ErrVersionConflict, issue.ID, todo.Version, issue.Version)
 	}
 
-	ordinal, err := p.nextPromptOrdinal(ctx, issue.ID, step)
-	if err != nil {
-		return todos.RunPreparationResult{}, err
-	}
 	executorName := strings.TrimSpace(preparation.ExecutorName)
 	if executorName == "" {
 		executorName = "unknown"
@@ -134,10 +197,17 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 			// A waiting/running prompt run is one interactive operation. Resume it
 			// in place rather than manufacturing a second active root operation.
 			p.markPrepared(issue.ID, previousRun.ID)
+			// This process now drives the run, so the claim has to name it — the
+			// previous dispatcher's heartbeat stops where it stopped.
+			if err := p.claimRun(ctx, previousRun.ID, owner); err != nil {
+				return todos.RunPreparationResult{}, err
+			}
 			if err := p.replaceTODO(ctx, todo, issue, cwd); err != nil {
 				return todos.RunPreparationResult{}, err
 			}
-			return todos.RunPreparationResult{SessionID: previousSession.ID.String()}, nil
+			return todos.RunPreparationResult{
+				SessionID: previousSession.ID.String(), PromptRunID: previousRun.ID,
+			}, nil
 		}
 		// A terminal operation gets a new prompt run, but continuation keeps the
 		// authoritative Captain/provider session identity.
@@ -158,9 +228,12 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		return todos.RunPreparationResult{}, err
 	}
 	promptInput := captaindb.CreatePromptRunInput{
-		ID:           promptRunID,
-		Origin:       "gavel.todos",
-		SpecProfile:  string(mode),
+		ID:     promptRunID,
+		Origin: "gavel.todos",
+		// SpecProfile records WHICH prompt ran, where Runtime.Mode records how it
+		// behaved. For the built-ins the two are the same string, so stored rows are
+		// unchanged; for any other prompt this is the only place its name survives.
+		SpecProfile:  promptName,
 		AdmissionKey: "gavel-todo:" + seed,
 		RenderedSpec: rendered,
 		Runtime: captaindb.PromptRunRuntime{
@@ -184,11 +257,15 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 			Ordinal:              ordinal,
 			ExpectedIssueVersion: issue.Version,
 			Actor:                mutationActor,
+			Owner:                &owner,
 		},
 	})
 	if err != nil {
 		return todos.RunPreparationResult{}, err
 	}
+	// This dispatch is a new phase run; drop the memo so a read through this
+	// provider sees it rather than the index loaded before the launch.
+	p.dropPhaseRuns(issue.WorkspaceID)
 	if !launch.DispatchOwned {
 		return todos.RunPreparationResult{}, fmt.Errorf(
 			"%w: Captain prompt run %s for issue %s already has an external dispatcher",
@@ -196,10 +273,15 @@ func (p *Provider) PrepareRun(ctx context.Context, todo *types.TODO, preparation
 		)
 	}
 	p.markPrepared(issue.ID, launch.PromptRun.ID)
+	// The claim was written by the launch transaction; start refreshing it so
+	// another process can tell this dispatcher apart from one that has exited.
+	p.ownership.start(p.repository, launch.PromptRun.ID, owner)
 	if err := p.replaceTODO(ctx, todo, launch.Issue, cwd); err != nil {
 		return todos.RunPreparationResult{}, err
 	}
-	return todos.RunPreparationResult{SessionID: launch.Session.ID.String()}, nil
+	return todos.RunPreparationResult{
+		SessionID: launch.Session.ID.String(), PromptRunID: launch.PromptRun.ID,
+	}, nil
 }
 
 // RecordRunStart binds the external provider identity and execution thread to
@@ -498,21 +580,23 @@ func (p *Provider) failPreparedRun(ctx context.Context, todo *types.TODO, reason
 	if err != nil {
 		return err
 	}
-	runID, ok := p.preparedRun(issueID)
-	if !ok {
+	// Only fail a run this process prepared. A TODO this process never
+	// dispatched — or whose run it already finished — is not this caller's to
+	// end, and has no run to look up.
+	if !p.hasPrepared(issueID) {
 		return nil
 	}
 	active, err := p.loadActiveRun(ctx, todo)
 	if err != nil {
 		return err
 	}
-	if active.run.ID != runID {
+	if !p.isPrepared(issueID, active.run.ID) {
 		return nil
 	}
 	if err := p.failPromptRun(ctx, active, reason); err != nil {
 		return err
 	}
-	p.clearPrepared(issueID, runID)
+	p.clearPrepared(issueID, active.run.ID)
 	return p.reloadTODO(ctx, todo, todo.CWD)
 }
 
@@ -554,8 +638,8 @@ func runStartProvider(runtime captaindb.PromptRunRuntime, metadata todos.RunStar
 		metadata.Provider,
 		runtime.Resolved.Provider,
 		runtime.Requested.Provider,
-		todos.RuntimeProviderForBackend(metadata.Backend),
-		todos.RuntimeProviderForBackend(runtime.Resolved.Backend),
+		string(api.Backend(metadata.Backend).Provider()),
+		string(api.Backend(runtime.Resolved.Backend).Provider()),
 	)
 }
 
@@ -868,6 +952,10 @@ func (p *Provider) ActivePromptRun(ctx context.Context, todo *types.TODO) (*capt
 	return active.run, nil
 }
 
+// loadActiveRun resolves the run a caller is acting on. Inside an execution
+// that is the run this execution was prepared for — a TODO may have several
+// runs in flight, and each has to report its own outcome. Outside one (read
+// surfaces, recovery commands) it is the TODO's current active run.
 func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*activeRun, error) {
 	issueID, err := p.todoID(todo)
 	if err != nil {
@@ -877,10 +965,14 @@ func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*active
 	if err != nil {
 		return nil, err
 	}
-	if issue.ActivePromptRunID == nil {
-		return nil, fmt.Errorf("%w: issue %s has no active Captain prompt run", native.ErrNotFound, issue.ID)
+	runID := todos.PromptRunFromContext(ctx)
+	if runID == uuid.Nil {
+		if issue.ActivePromptRunID == nil {
+			return nil, fmt.Errorf("%w: issue %s has no active Captain prompt run", native.ErrNotFound, issue.ID)
+		}
+		runID = *issue.ActivePromptRunID
 	}
-	run, err := p.captain.GetPromptRun(ctx, *issue.ActivePromptRunID)
+	run, err := p.captain.GetPromptRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -898,7 +990,7 @@ func (p *Provider) loadActiveRun(ctx context.Context, todo *types.TODO) (*active
 			return &activeRun{issue: issue, link: &link, run: run, session: session}, nil
 		}
 	}
-	return nil, fmt.Errorf("%w: active prompt run %s is not linked to issue %s", native.ErrLinkConflict, run.ID, issue.ID)
+	return nil, fmt.Errorf("%w: prompt run %s is not linked to issue %s", native.ErrLinkConflict, run.ID, issue.ID)
 }
 
 func (p *Provider) nextPromptOrdinal(ctx context.Context, issueID uuid.UUID, step native.StepKind) (int, error) {
@@ -935,7 +1027,12 @@ func (p *Provider) todoID(todo *types.TODO) (uuid.UUID, error) {
 	return id, nil
 }
 
-func stepForMode(mode types.RunMode) (native.StepKind, error) {
+// classStepForMode is the step a run's behaviour CLASS maps to. It exists only
+// to seed the deterministic dispatch identity: a prompt that records its own
+// step kind (triage) must still seed from its class, or its session and
+// prompt-run UUIDs would change and an in-flight dispatch would be re-admitted
+// as a new run instead of resolving to the one already claimed.
+func classStepForMode(mode types.RunMode) (native.StepKind, error) {
 	switch mode {
 	case types.ModePlan:
 		return native.StepPlan, nil
@@ -946,6 +1043,17 @@ func stepForMode(mode types.RunMode) (native.StepKind, error) {
 	default:
 		return "", fmt.Errorf("unsupported TODO run mode %q", mode)
 	}
+}
+
+// stepFor is the step kind a run is RECORDED under: what the link row stores,
+// what a resume must match, and what a backlog groups by. It differs from the
+// class only for triage, which behaves as a plan-class run but is its own kind
+// so a triage pass is distinguishable from a planning pass.
+func stepFor(promptName string, mode types.RunMode) (native.StepKind, error) {
+	if promptName == string(native.StepTriage) {
+		return native.StepTriage, nil
+	}
+	return classStepForMode(mode)
 }
 
 func terminalState(result *todos.ExecutionResult, step native.StepKind) (
@@ -1022,28 +1130,45 @@ func terminalPromptRun(state captaindb.PromptRunState) bool {
 		state == captaindb.PromptRunStateCancelled
 }
 
+// markPrepared records that this process dispatched a run for an issue. It is a
+// set per issue, not one entry: a TODO can have several runs in flight and each
+// of them is separately this process's to finish.
 func (p *Provider) markPrepared(issueID, runID uuid.UUID) {
 	p.preparedMu.Lock()
 	defer p.preparedMu.Unlock()
 	if p.prepared == nil {
-		p.prepared = map[uuid.UUID]uuid.UUID{}
+		p.prepared = map[uuid.UUID]map[uuid.UUID]struct{}{}
 	}
-	p.prepared[issueID] = runID
+	if p.prepared[issueID] == nil {
+		p.prepared[issueID] = map[uuid.UUID]struct{}{}
+	}
+	p.prepared[issueID][runID] = struct{}{}
 }
 
-func (p *Provider) preparedRun(issueID uuid.UUID) (uuid.UUID, bool) {
+func (p *Provider) isPrepared(issueID, runID uuid.UUID) bool {
 	p.preparedMu.RLock()
 	defer p.preparedMu.RUnlock()
-	runID, ok := p.prepared[issueID]
-	return runID, ok
+	_, ok := p.prepared[issueID][runID]
+	return ok
 }
 
+func (p *Provider) hasPrepared(issueID uuid.UUID) bool {
+	p.preparedMu.RLock()
+	defer p.preparedMu.RUnlock()
+	return len(p.prepared[issueID]) > 0
+}
+
+// clearPrepared drops this process's binding to a finished run. It is the one
+// choke point every terminal path goes through, so it is also where the durable
+// ownership claim is released: a run nothing is driving must not look owned.
 func (p *Provider) clearPrepared(issueID, runID uuid.UUID) {
 	p.preparedMu.Lock()
-	defer p.preparedMu.Unlock()
-	if p.prepared[issueID] == runID {
+	delete(p.prepared[issueID], runID)
+	if len(p.prepared[issueID]) == 0 {
 		delete(p.prepared, issueID)
 	}
+	p.preparedMu.Unlock()
+	p.releaseRun(context.Background(), runID)
 }
 
 func decodeQuestions(value any) []types.AgentQuestion {

@@ -1,10 +1,19 @@
-// Package prompt owns the built-in todo run and plan prompts as captain
-// dotprompt templates. Rendering goes
-// through captain's engine end-to-end: a template's frontmatter (model,
-// permissions.mode, budget, effort) is folded into the returned ai.Request, so
-// the .prompt file — not Go code — declares how a mode executes. The per-todo
-// sections are assembled in Go and injected as {{{body}}}; the mode's
-// structured-output envelope schema rides on the request as a native
+// Package prompt owns gavel's todo prompts as captain dotprompt templates, and
+// the Catalog that resolves a prompt NAME to the template, behaviour class, and
+// result envelope it runs with.
+//
+// Name and class are separate axes. Template selection used to be keyed off
+// types.RunMode, which made "which prompt runs" and "how the run behaves" the
+// same thing: a third prompt required a fourth behaviour class, and a fourth
+// class required widening a database CHECK constraint. A prompt now declares its
+// class, so any number of prompts can share one — triage is plan-class, like the
+// plan prompt, and neither commits nor verifies.
+//
+// Rendering goes through captain's engine end-to-end: a template's frontmatter
+// (model, permissions.mode, budget, effort) is folded into the returned
+// ai.Request, so the .prompt file — not Go code — declares how a prompt executes.
+// The per-todo sections are assembled in Go and injected as {{{body}}}; the
+// prompt's structured-output envelope schema rides on the request as a native
 // SchemaJSON field (never in the prompt text) so .gavel.yaml overrides and the
 // dashboard's editable prompt cannot break the output contract, and each driver
 // delivers it the way its LLM supports.
@@ -29,10 +38,20 @@ var runTemplate string
 //go:embed todos-plan.prompt
 var planTemplate string
 
+//go:embed todos-triage.prompt
+var triageTemplate string
+
 // Options configures Render.
 type Options struct {
 	WorkDir string
-	Mode    types.RunMode // ModeRun or ModePlan
+	// Prompt names the template to render. Empty means the default run prompt.
+	// It is independent of Mode: several prompts share one behaviour class.
+	Prompt string
+	// Envelope is the structured result the prompt returns. Empty derives it from
+	// Mode, so a caller that only knows the behaviour class still gets the right
+	// schema for the two prompts that predate named selection.
+	Envelope EnvelopeKind
+	Mode     types.RunMode // ModeRun or ModePlan
 	// Spec is the canonical Captain run configuration. Render consumes
 	// Prompt.User as the TODO body override and merges every other field over the
 	// template request without projecting it through a Gavel-specific adapter.
@@ -43,26 +62,73 @@ type Options struct {
 	// ExistingPlan is the current content of the todo's recorded plan file (plan
 	// mode only); empty means the todo has no prior plan.
 	ExistingPlan string
+	// Backlog is a compact index of the other open TODOs in the workspace, so a
+	// triage run can spot duplicates. Empty omits the section.
+	Backlog string
 }
 
-// Default returns the embedded .prompt source for mode. It is the lowest
-// template layer: todos/spec renders its frontmatter to seed the run spec, and
-// Render falls back to it when no .gavel.yaml override supplies a template.
-func Default(mode types.RunMode) (string, error) {
-	switch mode {
-	case types.ModeRun:
-		return runTemplate, nil
-	case types.ModePlan:
-		return planTemplate, nil
-	default:
-		return "", fmt.Errorf("mode %q has no todo prompt template (verify runs through the verify engine)", mode)
+// Default returns the embedded .prompt source for a built-in prompt name. It is
+// the lowest template layer: todos/spec renders its frontmatter to seed the run
+// spec, and Render falls back to it when no .gavel.yaml override supplies a
+// template.
+//
+// It takes a name rather than a mode because several prompts share a mode; the
+// mode no longer identifies a template.
+func Default(name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		name = DefaultName
+	}
+	for _, def := range builtins() {
+		if def.Name == name {
+			return def.Builtin, nil
+		}
+	}
+	return "", fmt.Errorf("prompt %q has no built-in template", name)
+}
+
+// TemplateData is the variable set every todo prompt template renders against.
+// It is exported because todos/spec renders the same templates' frontmatter with
+// the same variables, and a template that computes its frontmatter would resolve
+// differently against a divergent set.
+func TemplateData(todoList []*types.TODO, opts Options) map[string]any {
+	multiple := len(todoList) > 1
+	var body strings.Builder
+	for i, todo := range todoList {
+		number := 0
+		if multiple {
+			number = i + 1
+		}
+		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number, opts.Envelope == EnvelopeTriage))
+	}
+	return map[string]any{
+		"multiple":     multiple,
+		"count":        len(todoList),
+		"body":         body.String(),
+		"existingPlan": opts.ExistingPlan,
+		"backlog":      opts.Backlog,
 	}
 }
 
-// Render renders the mode's prompt for a group of todos and returns the full
+// promptName is the name Render reports in errors and stamps on the request.
+//
+// An unnamed prompt falls back to the one matching the behaviour class, not to
+// the default: before prompts had names the mode WAS the selector, so a caller
+// that supplies only Mode must keep getting the template it always got. Falling
+// back to DefaultName instead would silently hand a plan-mode run the run prompt.
+func (o Options) promptName() string {
+	if name := strings.TrimSpace(o.Prompt); name != "" {
+		return name
+	}
+	if o.Mode != "" {
+		return string(o.Mode)
+	}
+	return DefaultName
+}
+
+// Render renders the named prompt for a group of todos and returns the full
 // captain request: frontmatter-declared request options folded in by the
-// engine, the effort directive leading the body, and the mode's envelope
-// schema instruction trailing it. A single todo keeps plain framing; several
+// engine, the effort directive leading the body, and the prompt's envelope
+// schema riding as a native field. A single todo keeps plain framing; several
 // are numbered so the agent can address each in turn.
 func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.Config, error) {
 	if len(todoList) == 0 {
@@ -73,24 +139,9 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 		return captainai.Request{}, captainai.Config{}, err
 	}
 
-	multiple := len(todoList) > 1
-	var body strings.Builder
-	for i, todo := range todoList {
-		number := 0
-		if multiple {
-			number = i + 1
-		}
-		body.WriteString(buildTODOSection(todo, opts.WorkDir, true, number))
-	}
-
-	req, cfg, err := dotprompt.Load(template).Render(map[string]any{
-		"multiple":     multiple,
-		"count":        len(todoList),
-		"body":         body.String(),
-		"existingPlan": opts.ExistingPlan,
-	}, nil)
+	req, cfg, err := dotprompt.Load(template).Render(TemplateData(todoList, opts), nil)
 	if err != nil {
-		return captainai.Request{}, captainai.Config{}, fmt.Errorf("render todos %s prompt: %w", opts.Mode, err)
+		return captainai.Request{}, captainai.Config{}, fmt.Errorf("render todos %s prompt: %w", opts.promptName(), err)
 	}
 
 	user := req.Prompt.User
@@ -109,7 +160,7 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	if directive := EffortDirective(effort); directive != "" {
 		user = directive + "\n\n" + user
 	}
-	schema, err := EnvelopeSchemaJSON(opts.Mode)
+	schema, err := EnvelopeSchemaJSON(opts.envelope())
 	if err != nil {
 		return captainai.Request{}, captainai.Config{}, err
 	}
@@ -121,9 +172,9 @@ func Render(todoList []*types.TODO, opts Options) (captainai.Request, captainai.
 	req.Prompt.User = user
 	req.Prompt.Schema = renderedPrompt.Schema
 	req.Prompt.SchemaJSON = schema
-	req.Prompt.Source = "todos." + string(opts.Mode)
+	req.Prompt.Source = "todos." + opts.promptName()
 	if err := req.Validate(); err != nil {
-		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.Mode, err)
+		return captainai.Request{}, captainai.Config{}, fmt.Errorf("validate todos %s spec: %w", opts.promptName(), err)
 	}
 	return req, cfg, nil
 }
@@ -132,26 +183,37 @@ func templateSource(opts Options) (string, error) {
 	if strings.TrimSpace(opts.Template) != "" {
 		return opts.Template, nil
 	}
-	return Default(opts.Mode)
+	return Default(opts.promptName())
 }
 
-// EnvelopeSchemaJSON is the JSON schema of the mode's structured final result.
+// envelope resolves which structured result this run expects, falling back to
+// the behaviour class for callers that predate named prompts.
+func (o Options) envelope() EnvelopeKind {
+	if o.Envelope != "" {
+		return o.Envelope
+	}
+	return envelopeFor(o.Mode)
+}
+
+// EnvelopeSchemaJSON is the JSON schema of a prompt's structured final result.
 // The executor computes it once per run session and threads the same bytes to
 // every turn (initial, retry, and feedback) so the claude-agent
 // provider's per-turn byte-equality guard holds by identity.
-func EnvelopeSchemaJSON(mode types.RunMode) (json.RawMessage, error) {
+func EnvelopeSchemaJSON(kind EnvelopeKind) (json.RawMessage, error) {
 	var v any
-	switch mode {
-	case types.ModePlan:
+	switch kind {
+	case EnvelopePlan:
 		v = &types.PlanEnvelope{}
-	case types.ModeRun:
+	case EnvelopeResult:
 		v = &types.ResultEnvelope{}
+	case EnvelopeTriage:
+		v = &types.TriageEnvelope{}
 	default:
-		return nil, fmt.Errorf("mode %q has no result envelope", mode)
+		return nil, fmt.Errorf("envelope %q is not one of result, plan, triage", kind)
 	}
 	raw, err := api.SchemaJSON(v)
 	if err != nil {
-		return nil, fmt.Errorf("build %s envelope schema: %w", mode, err)
+		return nil, fmt.Errorf("build %s envelope schema: %w", kind, err)
 	}
 	return raw, nil
 }
@@ -174,24 +236,27 @@ func EffortDirective(effort string) string {
 }
 
 // Prompts returns the overridable todo prompt descriptors for the settings
-// registry: run and plan.
+// registry. It is derived from the built-in catalog rather than restated, so a
+// new built-in prompt appears in the settings UI without a second edit.
+// builtinUsedBy names the commands that run each built-in todo prompt.
+var builtinUsedBy = map[string][]string{
+	"run":    {"gavel todos run"},
+	"plan":   {"gavel todos run --mode plan", "gavel todos plan"},
+	"triage": {"gavel todos run --prompt triage"},
+}
+
 func Prompts() []prompts.Prompt {
-	return []prompts.Prompt{
-		{
-			ID:          prompts.TodosRun,
-			Title:       "Todo run prompt",
-			Description: "The agent prompt for `gavel todos run`: framing, the TODO items, and instructions.",
-			ConfigPath:  "todos.run",
-			Default:     runTemplate,
-			UsedBy:      []string{"gavel todos run"},
-		},
-		{
-			ID:          prompts.TodosPlan,
-			Title:       "Todo plan prompt",
-			Description: "The agent prompt for plan-mode runs: read-only investigation that produces a reviewable implementation plan.",
-			ConfigPath:  "todos.plan",
-			Default:     planTemplate,
-			UsedBy:      []string{"gavel todos run --mode plan", "gavel todos plan"},
-		},
+	defs := builtins()
+	registry := make([]prompts.Prompt, 0, len(defs))
+	for _, def := range defs {
+		registry = append(registry, prompts.Prompt{
+			ID:          "todos." + def.Name,
+			Title:       def.Title,
+			Description: def.Description,
+			ConfigPath:  "todos." + def.Name,
+			Default:     def.Builtin,
+			UsedBy:      builtinUsedBy[def.Name],
+		})
 	}
+	return registry
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/shell"
 	"github.com/flanksource/gavel/fixtures"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/flanksource/gavel/verify"
 )
 
 func newTestTODO(name, impl string) *types.TODO {
@@ -242,10 +243,14 @@ func TestRenderMergesCanonicalSpecWithoutDroppingRuntimeFields(t *testing.T) {
 		t.Fatalf("rendered request lost the TODO envelope schema: %s", req.Prompt.SchemaJSON)
 	}
 
+	// want is the caller's spec plus the fields the template itself contributes.
+	// Those are not drift: a .prompt declaring schemaStrictness is the template
+	// doing its job, and the caller's spec never modelled it.
 	want := spec
 	want.Prompt.User = req.Prompt.User
 	want.Prompt.Source = "todos.run"
 	want.Prompt.SchemaJSON = req.Prompt.SchemaJSON
+	want.Prompt.SchemaStrictness = "retry"
 	if !reflect.DeepEqual(req, want) {
 		t.Fatalf("rendered request dropped or changed Spec fields:\n got: %#v\nwant: %#v", req, want)
 	}
@@ -258,7 +263,7 @@ func TestRenderRejectsVerifyMode(t *testing.T) {
 }
 
 func TestPlanEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
-	raw, err := EnvelopeSchemaJSON(types.ModePlan)
+	raw, err := EnvelopeSchemaJSON(EnvelopePlan)
 	if err != nil {
 		t.Fatalf("EnvelopeSchemaJSON: %v", err)
 	}
@@ -294,6 +299,108 @@ func TestPlanEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
 	}
 	if properties["plan"] != nil {
 		t.Fatalf("PlanEnvelope.plan = %#v, want no nested plan object", properties["plan"])
+	}
+}
+
+// TestTriageEnvelopeSchemaUsesFlatScalarFields mirrors the plan envelope's
+// guard: a nested object becomes a $ref node, which some backends refuse to
+// emit, so every triage field must be a top-level scalar or scalar array.
+func TestTriageEnvelopeSchemaUsesFlatScalarFields(t *testing.T) {
+	raw, err := EnvelopeSchemaJSON(EnvelopeTriage)
+	if err != nil {
+		t.Fatalf("EnvelopeSchemaJSON: %v", err)
+	}
+	got, err := captainai.SchemaJSONForBackend(captainai.BackendCodexAgent, api.Prompt{SchemaJSON: raw})
+	if err != nil {
+		t.Fatalf("SchemaJSONForBackend: %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(got, &root); err != nil {
+		t.Fatalf("decode transformed schema: %v", err)
+	}
+	defs, ok := root["$defs"].(map[string]any)
+	if !ok {
+		t.Fatalf("transformed schema has no $defs: %s", got)
+	}
+	triage, ok := defs["TriageEnvelope"].(map[string]any)
+	if !ok {
+		t.Fatalf("transformed schema has no TriageEnvelope definition: %s", got)
+	}
+	properties, ok := triage["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("TriageEnvelope has no properties: %#v", triage)
+	}
+	for _, field := range []string{
+		"summary", "endStatus", "verdict", "title", "body",
+		"verification", "priority", "status", "duplicateOf", "comment",
+	} {
+		property, ok := properties[field].(map[string]any)
+		if !ok {
+			t.Fatalf("TriageEnvelope.%s is %T, want schema object", field, properties[field])
+		}
+		if property["$ref"] != nil {
+			t.Fatalf("TriageEnvelope.%s = %#v, want a top-level scalar", field, property)
+		}
+	}
+	related, ok := properties["related"].(map[string]any)
+	if !ok {
+		t.Fatalf("TriageEnvelope.related is %T, want schema object", properties["related"])
+	}
+	if related["type"] != "array" {
+		t.Fatalf("TriageEnvelope.related = %#v, want an array of scalars", related)
+	}
+}
+
+// The triage prompt exists to review a fixture, and the command projection used
+// by run/plan discards the frontmatter, CEL predicate and yaml step structure —
+// exactly what is being assessed. So a triage render must carry the fixture
+// source verbatim.
+func TestRenderTriageIncludesRawVerificationFixture(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.VerificationMarkdown = "---\nverify:\n  scope: diff\n---\n```yaml test\npackages: ./todos\n```"
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	for _, want := range []string{"verify:", "scope: diff", "```yaml test", "packages: ./todos"} {
+		if !strings.Contains(user, want) {
+			t.Errorf("triage prompt omitted %q from the fixture source:\n%s", want, user)
+		}
+	}
+}
+
+// A TODO with no fixture is the most important case for triage to act on, so the
+// absence must be stated rather than rendered as an empty section.
+func TestRenderTriageStatesAMissingFixture(t *testing.T) {
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if !strings.Contains(user, "NO verification fixture") {
+		t.Errorf("triage prompt did not flag the missing fixture:\n%s", user)
+	}
+}
+
+func TestRenderTriageIncludesBacklogForDedupe(t *testing.T) {
+	backlog := "- ab12cd Fix the parser panic (pending, high)"
+	user := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{
+		Prompt: "triage", Envelope: EnvelopeTriage, Backlog: backlog,
+	})
+	if !strings.Contains(user, backlog) {
+		t.Errorf("triage prompt omitted the backlog index:\n%s", user)
+	}
+
+	without := renderUser(t, []*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: "triage", Envelope: EnvelopeTriage})
+	if strings.Contains(without, "## Backlog") {
+		t.Errorf("empty backlog should omit the section entirely:\n%s", without)
+	}
+}
+
+// Run and plan must keep the executable command projection: an implementation
+// run needs to know what to execute, not what the fixture source looks like.
+func TestRenderRunKeepsFixtureCommandProjection(t *testing.T) {
+	todo := newTestTODO("solo", "task")
+	todo.VerificationMarkdown = "---\nverify:\n  scope: diff\n---\n"
+
+	user := renderUser(t, []*types.TODO{todo}, Options{Mode: types.ModeRun})
+	if strings.Contains(user, "scope: diff") {
+		t.Errorf("run prompt leaked raw fixture source:\n%s", user)
 	}
 }
 
@@ -344,30 +451,45 @@ func TestRenderExcludesPRButIncludesSource(t *testing.T) {
 // TestEnvelopeSchemaBytesStable pins the schema identity shared by initial,
 // retry, and feedback turns in a claude-agent session.
 func TestEnvelopeSchemaBytesStable(t *testing.T) {
-	for _, mode := range []types.RunMode{types.ModeRun, types.ModePlan} {
-		req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Mode: mode})
+	for _, name := range []string{"run", "plan", "triage"} {
+		req, _, err := Render([]*types.TODO{newTestTODO("solo", "task")}, Options{Prompt: name, Envelope: envelopeForPrompt(t, name)})
 		if err != nil {
-			t.Fatalf("Render(%s): %v", mode, err)
+			t.Fatalf("Render(%s): %v", name, err)
 		}
 		initial := string(req.Prompt.SchemaJSON)
 		if initial == "" {
-			t.Fatalf("Render(%s) produced no envelope schema", mode)
+			t.Fatalf("Render(%s) produced no envelope schema", name)
 		}
 
-		recomputed, err := EnvelopeSchemaJSON(mode)
+		recomputed, err := EnvelopeSchemaJSON(envelopeForPrompt(t, name))
 		if err != nil {
-			t.Fatalf("EnvelopeSchemaJSON(%s): %v", mode, err)
+			t.Fatalf("EnvelopeSchemaJSON(%s): %v", name, err)
 		}
 		if string(recomputed) != initial {
-			t.Errorf("%s: recomputed schema differs from Render's:\n initial=%s\n recomputed=%s", mode, initial, recomputed)
+			t.Errorf("%s: recomputed schema differs from Render's:\n initial=%s\n recomputed=%s", name, initial, recomputed)
 		}
 	}
 }
 
+// envelopeForPrompt resolves a built-in prompt's envelope through the catalog, so
+// the test asserts against the same wiring production uses rather than a literal.
+func envelopeForPrompt(t *testing.T, name string) EnvelopeKind {
+	t.Helper()
+	catalog, err := NewCatalog(verify.TodosConfig{})
+	if err != nil {
+		t.Fatalf("NewCatalog: %v", err)
+	}
+	def, err := catalog.Lookup(name)
+	if err != nil {
+		t.Fatalf("Lookup(%s): %v", name, err)
+	}
+	return def.Envelope
+}
+
 func TestPromptsRegistered(t *testing.T) {
 	got := Prompts()
-	if len(got) != 2 {
-		t.Fatalf("Prompts() returned %d entries, want run/plan", len(got))
+	if len(got) != 3 {
+		t.Fatalf("Prompts() returned %d entries, want run/plan/triage", len(got))
 	}
 	for _, p := range got {
 		if p.ID == "" || strings.TrimSpace(p.Default) == "" || p.ConfigPath == "" {

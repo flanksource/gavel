@@ -12,6 +12,7 @@ import (
 	clickyapi "github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/logger"
+	"github.com/google/uuid"
 )
 
 // ExecutorContext wraps context.Context with logging and user interaction capabilities.
@@ -255,12 +256,36 @@ func (ctx *ExecutorContext) SetRunPreparedHook(fn func(RunPreparationResult)) {
 	ctx.onRunPrepared = fn
 }
 
-// RecordRunPrepared reports Captain's durable admission identity.
+// RecordRunPrepared reports Captain's durable admission identity, and binds the
+// admitted run to this execution's context. A TODO can have more than one run
+// in flight, so every later callback has to report against the run it was
+// prepared for rather than against whichever run the TODO points at now.
 func (ctx *ExecutorContext) RecordRunPrepared(result RunPreparationResult) {
+	if result.PromptRunID != uuid.Nil {
+		ctx.Context = WithPromptRun(ctx.Context, result.PromptRunID)
+	}
 	if result.SessionID == "" || ctx.onRunPrepared == nil {
 		return
 	}
 	ctx.onRunPrepared(result)
+}
+
+type promptRunContextKey struct{}
+
+// WithPromptRun binds a prompt run to a context so the provider callbacks made
+// while executing it resolve that run and no other.
+func WithPromptRun(ctx context.Context, promptRunID uuid.UUID) context.Context {
+	return context.WithValue(ctx, promptRunContextKey{}, promptRunID)
+}
+
+// PromptRunFromContext returns the run bound by WithPromptRun, or uuid.Nil for
+// a caller that is not inside a run (a read surface, or a recovery command).
+func PromptRunFromContext(ctx context.Context) uuid.UUID {
+	if ctx == nil {
+		return uuid.Nil
+	}
+	promptRunID, _ := ctx.Value(promptRunContextKey{}).(uuid.UUID)
+	return promptRunID
 }
 
 // SetRunStartHook registers a callback an executor invokes with the resolved

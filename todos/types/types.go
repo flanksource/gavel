@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/clicky/api/icons"
 	"github.com/flanksource/commons/merge"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/ghodss/yaml"
 	"github.com/samber/lo"
 )
@@ -102,7 +103,17 @@ type TODO struct {
 	Workspace      string                `json:"workspace,omitempty"`
 	ProviderState  string                `json:"provider_state,omitempty"`
 	Labels         []string              `json:"labels,omitempty"`
-	ProviderEvents []ProviderEvent       `json:"provider_events,omitempty"`
+	// LabelDefinitions are the resolved presentations of Labels, in the same
+	// order. The runtime provider populates them from one definition read per
+	// request; a TODO from a source with no definition store leaves them empty
+	// and the renderers fall back to the hashed palette colour.
+	LabelDefinitions labels.Definitions `json:"label_definitions,omitempty"`
+	// PhaseRuns is the latest run per lifecycle phase (plan/triage/run/verify).
+	// The runtime provider populates it from one workspace-wide read per
+	// request; a TODO from a source without run history leaves it empty and the
+	// renderers show every phase as never run.
+	PhaseRuns      PhaseRuns       `json:"phase_runs,omitempty"`
+	ProviderEvents []ProviderEvent `json:"provider_events,omitempty"`
 	// ExternalIssue is the external tracker issue this TODO is linked to, or
 	// nil when it has never been pushed to one.
 	ExternalIssue *ExternalIssue `json:"external_issue,omitempty"`
@@ -184,7 +195,34 @@ func (t TODO) PrettyRow(opts interface{}) map[string]api.Text {
 	if t.LastRun != nil {
 		row["Updated"] = clicky.Text(summaryAge(time.Since(*t.LastRun)), "order-5 text-muted")
 	}
+	// Always emitted, even when empty: clicky's NewTableFromRows takes its
+	// headers from the first row alone, so a conditional column would appear or
+	// vanish depending on whether the first todo happened to carry a label.
+	// A predictable empty cell beats a column that comes and goes with sort order.
+	row["Labels"] = t.labelChips().Text().Styles("order-9")
+	// The phase columns are emitted unconditionally for the same reason, and in
+	// pipeline order so a row reads left to right as the todo progressed.
+	for index, phase := range Phases {
+		row[phaseColumn(phase)] = t.phaseCell(phase).Styles(fmt.Sprintf("order-%d", 5+index))
+	}
 	return row
+}
+
+// phaseColumn is the header a phase renders under. Capitalised because clicky
+// prints the map key verbatim.
+func phaseColumn(phase Phase) string {
+	return strings.ToUpper(string(phase)[:1]) + string(phase)[1:]
+}
+
+// labelChips returns the TODO's labels as resolved presentations. It prefers
+// the definitions the provider resolved; a TODO from a source without a
+// definition store still renders with the hashed palette colour rather than
+// silently losing its labels.
+func (t TODO) labelChips() labels.Definitions {
+	if len(t.LabelDefinitions) > 0 {
+		return t.LabelDefinitions
+	}
+	return labels.Derive(t.Labels)
 }
 
 // summaryAge renders only the largest useful unit so list timestamps stay
@@ -204,6 +242,14 @@ func summaryAge(d time.Duration) string {
 		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }
+
+// GetID and GetName satisfy clicky's EntityItem, which is what lets TODOs be
+// declared as an entity and get their CLI, REST routes and action catalog
+// generated from one declaration. GetID returns the canonical id rather than
+// DisplayID: it is the value a caller passes back to address this TODO.
+func (t TODO) GetID() string { return t.ID }
+
+func (t TODO) GetName() string { return t.Title }
 
 func (t TODO) DisplayID() string {
 	if t.ShortID != "" {
@@ -280,6 +326,17 @@ func (t TODO) PrettyDetailed() api.Text {
 
 	if t.Provider != "" {
 		result = result.Append("Provider: ", "text-gray-500").Append(t.Provider, "").NewLine()
+	}
+
+	if chips := t.labelChips(); len(chips) > 0 {
+		result = result.Append("Labels: ", "text-gray-500").Add(chips.Text()).NewLine()
+	}
+
+	// Only phases that have actually run are listed: a detail view has room to
+	// say what happened, and silence is the honest rendering of a phase that
+	// never started.
+	for _, run := range t.PhaseRuns.Ordered() {
+		result = result.Append(phaseColumn(run.Phase)+": ", "text-gray-500").Add(run.Pretty()).NewLine()
 	}
 
 	// Language

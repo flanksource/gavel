@@ -258,6 +258,22 @@ func setPromptSpecBaseDirs(cfg *GavelConfig, dir string) {
 			v.Addr().Interface().(*PromptSpec).baseDir = dir
 			return
 		}
+		// Map values are not addressable, so a PromptSpec inside todos.prompts
+		// cannot be stamped in place: copy the element, walk the copy, and write it
+		// back. Without this a relative `file:` in a named prompt would resolve
+		// against the process working directory instead of its declaring config.
+		if v.Kind() == reflect.Map {
+			if v.IsNil() {
+				return
+			}
+			for _, key := range v.MapKeys() {
+				element := reflect.New(v.Type().Elem()).Elem()
+				element.Set(v.MapIndex(key))
+				walk(element)
+				v.SetMapIndex(key, element)
+			}
+			return
+		}
 		if v.Kind() != reflect.Struct {
 			return
 		}

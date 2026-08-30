@@ -17,6 +17,7 @@ var (
 	todoCreateBody         string
 	todoCreatePlan         string
 	todoCreateVerification string
+	todoCreateLabels       []string
 	todoCreatePriority     string
 	todoCreateStatus       string
 	todoCreateGitHub       bool
@@ -38,6 +39,8 @@ func init() {
 	todosCreateCmd.Flags().StringVar(&todoCreateBody, "body", "", "TODO body or @path")
 	todosCreateCmd.Flags().StringVar(&todoCreatePlan, "plan", "", "Reviewed implementation plan or @path")
 	todosCreateCmd.Flags().StringVar(&todoCreateVerification, "verification", "", "Verification fixture markdown or @path")
+	todosCreateCmd.Flags().StringSliceVar(&todoCreateLabels, "label", nil,
+		"Attach a label (repeatable). See `gavel todos labels` for their colours and icons")
 	todosCreateCmd.Flags().StringVar(&todoCreatePriority, "priority", string(types.PriorityMedium), "TODO priority: high, medium, or low")
 	todosCreateCmd.Flags().StringVar(&todoCreateStatus, "status", string(types.StatusPending), "TODO status, or approved for a reviewed plan ready to run")
 	todosCreateCmd.Flags().BoolVar(&todoCreateGitHub, "github", false, "After creating it, push the TODO to GitHub as a new issue (see `gavel todos push`)")
@@ -90,7 +93,7 @@ func runTodosCreate(cmd *cobra.Command, args []string) error {
 
 	request := todos.CreateRequest{
 		Title: title, Body: content.Body, Verification: content.Verification,
-		Priority: priority, Status: lifecycle.Status,
+		Priority: priority, Status: lifecycle.Status, Labels: todoCreateLabels,
 	}
 	if content.Plan != "" {
 		request.Plan = &todos.CreatePlanRequest{Markdown: content.Plan, Approved: lifecycle.PlanApproved}

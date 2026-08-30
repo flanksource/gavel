@@ -14,7 +14,7 @@ import (
 func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
 	const fixture = "```bash\necho ok\n```"
 	spec := api.Spec{
-		Model:       api.Model{Name: "claude-code-sonnet", Backend: api.BackendClaudeAgent, Effort: api.EffortHigh},
+		Model:       api.Model{Name: "claude-code-sonnet", Mode: api.ModeAgent, Effort: api.EffortHigh},
 		Budget:      api.Budget{Timeout: "45m", MaxTurns: 12},
 		Permissions: api.Permissions{Mode: api.PermissionPlan},
 	}
@@ -23,7 +23,7 @@ func TestRenderedSpecPersistsTheExecutedRuntime(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "claude-code-sonnet", rendered["model"])
-	assert.Equal(t, string(api.BackendClaudeAgent), rendered["backend"])
+	assert.Equal(t, string(api.ModeAgent), rendered["backend"])
 	assert.Equal(t, string(api.EffortHigh), rendered["effort"])
 	assert.Equal(t, "45m", rendered["budget"].(map[string]any)["timeout"])
 	assert.Equal(t, float64(12), rendered["budget"].(map[string]any)["maxTurns"])

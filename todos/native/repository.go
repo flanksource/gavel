@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
+
+	"github.com/flanksource/gavel/todos/labels"
 )
 
 const MinShortReferenceLength = 8
@@ -352,7 +354,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 	if err != nil {
 		return nil, err
 	}
-	labels := normalizeStrings(input.Labels)
+	normalizedLabels := normalizeStrings(input.Labels)
 	id := input.ID
 	if id == uuid.Nil {
 		id = uuid.New()
@@ -372,7 +374,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 				(id, workspace_id, title, body, verification, labels, priority, status,
 				 version, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now(), now())`,
-			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(labels),
+			id, input.WorkspaceID, title, input.Body, input.Verification, pq.Array(normalizedLabels),
 			priority, status,
 		)
 		if result.Error != nil {
@@ -386,7 +388,7 @@ func (r *Repository) CreateIssue(ctx context.Context, input CreateIssueInput) (*
 			Actor: input.Actor,
 			Payload: map[string]any{
 				"title":     title,
-				"labels":    labels,
+				"labels":    normalizedLabels,
 				"priority":  priority,
 				"status":    status,
 				"workspace": input.WorkspaceID,
@@ -428,6 +430,74 @@ func (r *Repository) CountIssuesByStatus(ctx context.Context, workspaceID uuid.U
 		return nil, result.Error
 	}
 	return counts, nil
+}
+
+// ListIssuePhaseRuns returns the latest prompt run per (issue, phase) for a
+// whole workspace in one query, so a backlog can render per-phase status,
+// progress and elapsed time without a lookup per row. Resolving a todo's phases
+// as it is rendered is the N+1 that made /api/projects take 46 seconds.
+//
+// Two things the SQL does that the phase model does not make obvious:
+//
+//   - The verify phase has two sources. A standalone step_kind='verify' run is
+//     the rare case; most verification happens as phase='verify' INSIDE a
+//     step_kind='run' run, which is why the second arm of the UNION re-emits
+//     those runs as verify. gavel_todo_issue_execution_state already folds the
+//     same two sources (110_todo_projection_functions.sql), and a verify column
+//     that skipped this would read empty for almost every todo.
+//   - It reads captain_prompt_run_overview rather than captain_prompt_runs. The
+//     view already computes duration, iteration counts and cost that
+//     ListPromptRunOverviews does not return.
+func (r *Repository) ListIssuePhaseRuns(ctx context.Context, workspaceID uuid.UUID) ([]IssuePhaseRun, error) {
+	const phaseColumns = `
+		link.issue_id,
+		%s AS phase,
+		link.ordinal,
+		run.state::text                                   AS state,
+		run.phase::text                                   AS run_phase,
+		run.started_at,
+		run.finished_at,
+		run.queued_at,
+		run.duration_seconds,
+		run.iteration_count                               AS iterations,
+		run.succeeded_iteration_count                     AS succeeded,
+		run.failed_iteration_count                        AS failed,
+		COALESCE(run.latest_verification_result::text, '') AS verification_result,
+		run.cost_usd,
+		run.result_json,
+		(run.id = issue.active_prompt_run_id)             AS active`
+
+	const phaseFrom = `
+		FROM todo_issue_prompt_runs AS link
+		JOIN todo_issues AS issue ON issue.id = link.issue_id
+		JOIN captain_prompt_run_overview AS run ON run.id = link.prompt_run_id
+		WHERE issue.workspace_id = ?`
+
+	var records []IssuePhaseRun
+	result := r.db.WithContext(ctx).Raw(`
+		WITH phase_runs AS (
+			SELECT `+fmt.Sprintf(phaseColumns, "link.step_kind::text")+phaseFrom+`
+			UNION ALL
+			SELECT `+fmt.Sprintf(phaseColumns, "'verify'")+phaseFrom+`
+			  AND link.step_kind = 'run'
+			  AND (run.phase = 'verify' OR run.latest_verification_result IS NOT NULL)
+		)
+		SELECT DISTINCT ON (issue_id, phase)
+		       issue_id, phase, state, run_phase, started_at, finished_at,
+		       duration_seconds, iterations, succeeded, failed,
+		       verification_result, cost_usd, result_json, active
+		FROM phase_runs
+		-- queued_at leads, not ordinal: ordinals are numbered per step_kind, so
+		-- for the verify phase — whose rows come from two different kinds — a
+		-- standalone verify at ordinal 0 would otherwise lose to an older run at
+		-- ordinal 3. Within one kind the two agree anyway.
+		ORDER BY issue_id, phase, queued_at DESC NULLS LAST, ordinal DESC`,
+		workspaceID, workspaceID,
+	).Scan(&records)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return records, nil
 }
 
 func (r *Repository) ListIssues(ctx context.Context, workspaceID uuid.UUID) ([]Issue, error) {
@@ -779,9 +849,9 @@ func (r *Repository) UpdateIssue(ctx context.Context, id uuid.UUID, expectedVers
 		payload["verification"] = *patch.Verification
 	}
 	if patch.Labels != nil {
-		labels := normalizeStrings(*patch.Labels)
-		updates["labels"] = pq.Array(labels)
-		payload["labels"] = labels
+		normalizedLabels := normalizeStrings(*patch.Labels)
+		updates["labels"] = pq.Array(normalizedLabels)
+		payload["labels"] = normalizedLabels
 	}
 	if patch.Priority != nil {
 		if !patch.Priority.valid() {
@@ -1181,10 +1251,14 @@ func normalizeAliases(inputs []AliasInput) ([]AliasInput, error) {
 	return aliases, nil
 }
 
+// normalizeStrings normalizes, dedupes and sorts a label set. It defers to
+// labels.Normalize so the form stored in todo_issues.labels is exactly the form
+// a label definition is looked up by — and exactly what the todo_labels name
+// check enforces in SQL.
 func normalizeStrings(values []string) []string {
 	unique := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		if value = normalizeToken(value); value != "" {
+		if value = labels.Normalize(value); value != "" {
 			unique[value] = struct{}{}
 		}
 	}

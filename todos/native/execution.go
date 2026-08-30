@@ -18,6 +18,10 @@ type PromptRunAttachment struct {
 	Ordinal              int
 	ExpectedIssueVersion int64
 	Actor                string
+	// Owner is the process that will drive the run. It is recorded by the same
+	// insert that establishes dispatch ownership, so a run is never live
+	// without a claim naming who has to finish it.
+	Owner *RunOwner
 }
 
 // PlanAttachment is the explicit durable Captain plan selected for an issue.
@@ -82,8 +86,7 @@ func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input Prom
 		}
 
 		var existing PromptRunLink
-		result := tx.Raw(`
-			SELECT issue_id, prompt_run_id, step_kind, ordinal, created_at
+		result := tx.Raw(promptRunLinkSelect+`
 			FROM todo_issue_prompt_runs WHERE prompt_run_id = ?`, input.PromptRunID,
 		).Scan(&existing)
 		if result.Error != nil {
@@ -104,11 +107,17 @@ func (s *ExecutionIntegration) activatePromptRun(ctx context.Context, input Prom
 		}
 
 		if result.RowsAffected == 0 {
+			owner := input.Owner
+			if owner == nil {
+				return fmt.Errorf("%w: dispatching prompt run %s requires an owner", ErrInvalidInput, input.PromptRunID)
+			}
 			insert := tx.Exec(`
 				INSERT INTO todo_issue_prompt_runs
-					(issue_id, prompt_run_id, step_kind, ordinal, created_at)
-				VALUES (?, ?, ?, ?, now())`,
+					(issue_id, prompt_run_id, step_kind, ordinal, created_at,
+					 owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at)
+				VALUES (?, ?, ?, ?, now(), ?, ?, ?, ?, now())`,
 				input.IssueID, input.PromptRunID, input.StepKind, input.Ordinal,
+				owner.HostID, owner.PID, owner.StartedAt.UTC(), owner.Token,
 			)
 			if insert.Error != nil {
 				return mapUniqueError(insert.Error, ErrLinkConflict, "prompt run %s", input.PromptRunID)

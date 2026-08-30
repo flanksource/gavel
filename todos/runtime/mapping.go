@@ -72,6 +72,18 @@ func (p *Provider) todoFromIssue(
 	todo.ProviderState = string(issue.Status)
 	todo.Workspace = workspaceName(workspace)
 	todo.Labels = append([]string(nil), issue.Labels...)
+	if len(todo.Labels) > 0 {
+		resolver, err := p.labelResolver(ctx, issue.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		todo.LabelDefinitions = resolver.ResolveAll(todo.Labels)
+	}
+	phases, err := p.phaseRuns(ctx, issue.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	todo.PhaseRuns = phases[issue.ID]
 	todo.Title = issue.Title
 	todo.Priority = priority
 	todo.Status = status

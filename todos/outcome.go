@@ -27,6 +27,17 @@ func (e *TODOExecutor) Mode() types.RunMode {
 	return e.mode
 }
 
+// PromptName reports which named prompt this run executes, asking the underlying
+// executor and falling back to the prompt that shares the mode's name.
+func (e *TODOExecutor) PromptName() string {
+	if named, ok := e.executor.(RunPromptProvider); ok {
+		if name := strings.TrimSpace(named.RunPromptName()); name != "" {
+			return name
+		}
+	}
+	return string(e.Mode())
+}
+
 // applyOutcome maps a successful agent run's result envelope onto the todo:
 // the status transition, plan bookkeeping, summary/questions persistence, LLM
 // metrics, and the attempt record. It replaces the old always-completed
@@ -60,7 +71,17 @@ func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, resul
 	}
 	update.Questions = &questions
 
+	// A triage run owns the todo's status itself — it either assigned one or
+	// deliberately left it alone — so the generic transition below must not run.
+	// Every other outcome derives a status here and writes it.
+	ownsStatus := true
+
 	switch {
+	case result.Triage != nil:
+		ownsStatus = false
+		if err := e.applyTriageOutcome(ctx, todo, result, &update); err != nil {
+			return err
+		}
 	case mode == types.ModePlan:
 		if err := e.applyPlanOutcome(todo, result, &update); err != nil {
 			return err
@@ -79,12 +100,34 @@ func (e *TODOExecutor) applyOutcome(ctx context.Context, todo *types.TODO, resul
 	default:
 		todo.Status = types.StatusPending
 	}
-	update.Status = &todo.Status
+	if ownsStatus {
+		update.Status = &todo.Status
+	}
 
 	if err := e.saveAttempt(ctx, todo, result); err != nil {
 		return fmt.Errorf("persist TODO attempt: %w", err)
 	}
 	e.updateProviderState(ctx, todo, update)
+	return nil
+}
+
+// applyTriageOutcome performs the edits a triage run asked for. The agent ran
+// read-only, so this is where its verdict actually takes effect.
+//
+// Status is deliberately not derived here. ApplyTriage writes one when the agent
+// assigned one, and otherwise the todo keeps the durable status it already had —
+// triage reshapes work, it does not decide the work is finished. Deriving a
+// status would overwrite that with the in-progress value the run started under.
+//
+// An ask outcome still needs its transition, because nothing was applied.
+func (e *TODOExecutor) applyTriageOutcome(ctx context.Context, todo *types.TODO, result *ExecutionResult, update *StateUpdate) error {
+	if err := ApplyTriage(ctx, e.activeProvider(), todo, result.Triage, TriageOptions{WorkDir: e.workDir}); err != nil {
+		return err
+	}
+	if result.EndStatus == types.EndAsk {
+		todo.Status = types.StatusAsk
+		update.Status = &todo.Status
+	}
 	return nil
 }
 

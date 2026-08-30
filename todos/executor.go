@@ -64,6 +64,10 @@ type ExecutionResult struct {
 	EndStatus types.EndStatus
 	Questions []types.AgentQuestion
 	Plan      *types.PlanResult
+	// Triage is a triage run's verdict and the edits it wants applied. The agent
+	// is read-only, so this is a request, not a record of something that happened;
+	// applyOutcome performs the writes.
+	Triage *types.TriageEnvelope
 	// DoD is the definition-of-done verdict for an implement run: nil when the
 	// todo had no verifiers (Verification fixture / configured checks), else Ran
 	// is true and Passed reports whether every verifier passed within the
@@ -123,6 +127,9 @@ type TODOExecutor struct {
 	sessionID string   // Session ID for resumption across runs
 	provider  Provider
 	resume    bool
+	// concurrent admits this run alongside another that is still live on the
+	// same TODO. The caller confirmed it; see todos/run.Options.Concurrent.
+	concurrent bool
 	// mode drives the envelope→status mapping (see applyOutcome). Post-run
 	// checks live in the run loop itself now: fixture-backed verify plugins
 	// built by BuildCheckVerifiers and threaded through AgentRunConfig.
@@ -134,6 +141,12 @@ type TODOExecutor struct {
 // a new prompt run only when the prior operation is already terminal.
 func (e *TODOExecutor) SetResume(resume bool) {
 	e.resume = resume
+}
+
+// SetConcurrent admits this run against a TODO that already has a live run
+// driven by a running process, rather than refusing the dispatch.
+func (e *TODOExecutor) SetConcurrent(concurrent bool) {
+	e.concurrent = concurrent
 }
 
 // NewTODOExecutor creates a TODO executor with the specified AI backend.
@@ -426,8 +439,10 @@ func (e *TODOExecutor) prepareRun(ctx *ExecutorContext, todo *types.TODO) (RunPr
 	defer cancel()
 	preparation := RunPreparation{
 		Mode:         e.Mode(),
+		Prompt:       e.PromptName(),
 		ExecutorName: e.executor.Name(),
 		Resume:       e.resume,
+		Concurrent:   e.concurrent,
 	}
 	if runtimeProvider, ok := e.executor.(RunRuntimeProvider); ok {
 		preparation.Requested = runtimeProvider.RunRuntimeSelection()

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/gavel/todos"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,8 @@ var (
 	todoEditVerification string
 	todoEditStatus       string
 	todoEditPriority     string
+	todoEditLabels       []string
+	todoEditClearLabels  bool
 
 	todoCommentBody string
 
@@ -64,6 +67,9 @@ func init() {
 	todosEditCmd.Flags().StringVar(&todoEditBody, "body", "", "New body, path, or @path")
 	todosEditCmd.Flags().StringVar(&todoEditPlan, "plan", "", "Set or replace the todo's plan (markdown, path, or @path); the todo returns to review for approval")
 	todosEditCmd.Flags().StringVar(&todoEditVerification, "verification", "", "New verification fixture, path, or @path")
+	todosEditCmd.Flags().StringSliceVar(&todoEditLabels, "label", nil,
+		"Replace the TODO's labels (repeatable). See `gavel todos labels` for their colours and icons")
+	todosEditCmd.Flags().BoolVar(&todoEditClearLabels, "clear-labels", false, "Remove every label from the TODO")
 	todosEditCmd.Flags().StringVar(&todoEditStatus, "status", "",
 		"New status ("+joinStrings(types.AssignableStatuses())+")")
 	todosEditCmd.Flags().StringVar(&todoEditPriority, "priority", "",
@@ -117,6 +123,10 @@ func runTodosEdit(cmd *cobra.Command, args []string) error {
 		}
 		flags.Verification = &verification
 	}
+	if cmd.Flags().Changed("label") {
+		flags.Labels = &todoEditLabels
+	}
+	flags.ClearLabels = todoEditClearLabels
 	changes, err := buildTodoEdit(flags)
 	if err != nil {
 		return err
@@ -163,6 +173,11 @@ type todoEditFlags struct {
 	Verification *string
 	Status       string
 	Priority     string
+	// Labels is nil when --label was not passed. ClearLabels is --clear-labels;
+	// the two are mutually exclusive because "replace with nothing" and "replace
+	// with this list" cannot both be meant.
+	Labels      *[]string
+	ClearLabels bool
 }
 
 type todoEditChanges struct {
@@ -197,6 +212,20 @@ func buildTodoEdit(flags todoEditFlags) (todoEditChanges, error) {
 	if flags.Verification != nil {
 		changes.Content.Verification = flags.Verification
 	}
+	if flags.ClearLabels && flags.Labels != nil {
+		return changes, fmt.Errorf("--clear-labels cannot be combined with --label")
+	}
+	if flags.ClearLabels {
+		changes.Content.Labels = &[]string{}
+	} else if flags.Labels != nil {
+		labelSet := make([]string, 0, len(*flags.Labels))
+		for _, label := range *flags.Labels {
+			if label = labels.Normalize(label); label != "" {
+				labelSet = append(labelSet, label)
+			}
+		}
+		changes.Content.Labels = &labelSet
+	}
 	if raw := strings.TrimSpace(flags.Status); raw != "" {
 		status := types.Status(raw)
 		if err := types.ValidateAssignableStatus(status); err != nil {
@@ -213,7 +242,7 @@ func buildTodoEdit(flags todoEditFlags) (todoEditChanges, error) {
 	}
 
 	if changes.Content.IsEmpty() && changes.Plan == nil && changes.State.Status == nil && changes.State.Priority == nil {
-		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, and/or --priority")
+		return changes, fmt.Errorf("nothing to edit: provide --title, --body, --plan, --verification, --status, --priority, --label, and/or --clear-labels")
 	}
 	return changes, nil
 }

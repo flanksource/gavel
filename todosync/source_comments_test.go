@@ -215,8 +215,8 @@ func (p *sourceSyncProvider) Edit(_ context.Context, todo *types.TODO, edit todo
 	if edit.Path != nil {
 		todo.Path = *edit.Path
 	}
-	if len(edit.Labels) > 0 {
-		todo.Labels = append([]string(nil), edit.Labels...)
+	if edit.Labels != nil {
+		todo.Labels = append([]string(nil), *edit.Labels...)
 	}
 	if todo.Metadata == nil {
 		todo.Metadata = map[string]any{}

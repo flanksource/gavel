@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,27 +23,37 @@ import (
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/drivers"
 	todoprompt "github.com/flanksource/gavel/todos/prompt"
+	"github.com/flanksource/gavel/todos/run"
 	todospec "github.com/flanksource/gavel/todos/spec"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/spf13/cobra"
 )
 
 var (
-	filterStatus  string
-	checkTimeout  time.Duration
-	maxBudget     float64
-	maxTurns      int
-	interactive   bool
-	groupBy       string
-	dirty         bool
-	dryRun        bool
-	commitAfter   bool
-	checkAfter    bool
-	todosMode     string
-	todosDriver   string
-	todoModel     string
-	todoEffort    string
-	resumeSession bool
+	filterStatus     string
+	checkTimeout     time.Duration
+	checkConcurrency int
+	maxBudget        float64
+	maxTurns         int
+	interactive      bool
+	groupBy          string
+	dirty            bool
+	dryRun           bool
+	commitAfter      bool
+	checkAfter       bool
+	todosMode        string
+	todosPrompt      string
+	// todosModeExplicit records whether --mode was actually typed. The flag
+	// defaults to "run", so without this a `--prompt triage` would be read as a
+	// caller asking for a run-class triage and rejected as contradictory.
+	todosModeExplicit bool
+	todosDriver       string
+	todoModel         string
+	todoEffort        string
+	resumeSession     bool
+	// forceRun answers the "this todo is already running" question up front, so
+	// an unattended run can dispatch alongside the live one without a prompt.
+	forceRun bool
 	// todosRunMode is the parsed public --mode (run/plan). Verify is an internal
 	// issue lifecycle step entered by `todos check`, not an agent run mode.
 	todosRunMode types.RunMode
@@ -164,6 +175,7 @@ func runTodosRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	todosModeExplicit = cmd.Flags().Changed("mode")
 	todosRunMode = mode
 
 	workDir, err := getWorkingDir()
@@ -337,9 +349,16 @@ func todosSpecForMode(workDir string, mode types.RunMode, todoList []*types.TODO
 	if timeout > 0 {
 		override.Budget.Timeout = timeout.String()
 	}
+	// A named prompt declares its own behaviour class, so the defaulted --mode
+	// must not be passed alongside it — only a mode the caller actually typed,
+	// which Resolve then checks for agreement.
+	if strings.TrimSpace(todosPrompt) != "" && !todosModeExplicit {
+		mode = ""
+	}
 	return todospec.Resolve(todospec.Input{
 		WorkDir:  workDir,
 		Mode:     mode,
+		Prompt:   todosPrompt,
 		Todos:    todoList,
 		Override: override,
 		Driver:   todosDriver,
@@ -395,9 +414,18 @@ func newAgentRunConfig(ctx context.Context, workDir string, todoList []*types.TO
 		Spec:      spec,
 		WorkDir:   workDir,
 		Mode:      resolved.Mode,
+		Prompt:    resolved.Prompt,
+		Envelope:  resolved.Envelope,
 		Template:  resolved.Template,
 		Resume:    resumeSession,
 		Approvals: resolved.Approvals,
+	}
+	if resolved.Envelope == todoprompt.EnvelopeTriage {
+		backlog, err := triageBacklog(ctx, provider, todoList)
+		if err != nil {
+			return todos.AgentRunConfig{}, todospec.Resolved{}, err
+		}
+		cfg.Backlog = backlog
 	}
 	if len(todoList) == 1 && (resolved.Mode == types.ModePlan || resolved.Mode == types.ModeRun) {
 		// Plan mode: the recorded plan feeds a re-plan (updated/unchanged). Run
@@ -413,6 +441,24 @@ func newAgentRunConfig(ctx context.Context, workDir string, todoList []*types.TO
 		cfg.Spec.SessionID = priorSessionID(todoList)
 	}
 	return cfg, resolved, nil
+}
+
+// triageBacklog loads the other open TODOs a triage run compares against for
+// duplicates. A backlog that cannot be listed is not fatal: triage's other four
+// verdicts do not depend on it, so the run proceeds without the section rather
+// than failing outright.
+func triageBacklog(ctx context.Context, provider todos.Provider, todoList []*types.TODO) (string, error) {
+	if provider == nil {
+		return "", nil
+	}
+	candidates, err := provider.List(ctx, todos.DiscoveryFilters{
+		ExcludeStatuses: []types.Status{types.StatusCompleted},
+	})
+	if err != nil {
+		logger.Warnf("triage duplicate detection is degraded: could not list the backlog: %v", err)
+		return "", nil
+	}
+	return todos.BuildBacklogIndex(candidates, todoList), nil
 }
 
 // priorSessionID returns the first recorded agent session among todoList, which
@@ -459,6 +505,7 @@ func executeGroups(workDir string, groups []todos.TODOGroup, interaction *todos.
 		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
 		todoExec.SetMode(todosRunMode)
 		todoExec.SetResume(resumeSession)
+		todoExec.SetConcurrent(forceRun)
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -520,51 +567,18 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 	for i, todo := range todoList {
 		fmt.Println(clicky.Text(fmt.Sprintf("=== Executing TODO %d/%d: %s ===", i+1, len(todoList), todo.Filename()), "text-blue-600 font-bold").ANSI())
 
-		executor, sessionID, timeout, err := newExecutor(workDir, []*types.TODO{todo}, provider)
+		result, execErr, interrupted, err := executeTODO(workDir, todo, interaction, provider, forceRun)
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-
-		execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
-		todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
-		todoExec.SetMode(todosRunMode)
-		todoExec.SetResume(resumeSession)
-
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-		var result *todos.ExecutionResult
-		var execErr error
-		executionDone := make(chan bool, 1)
-
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Errorf("Panic during TODO execution: %v\n%s", r, debug.Stack())
-				}
-				executionDone <- true
-			}()
-			result, execErr = todoExec.Execute(execCtx, todo)
-		}()
-
-		interrupted := false
-		select {
-		case <-executionDone:
-		case sig := <-sigChan:
-			logger.Warnf("Received signal %v, shutting down gracefully...", sig)
-			cancel()
-			fmt.Println(clicky.Text("Interrupted - cleaning up...", "text-yellow-600 font-bold").ANSI())
-			select {
-			case <-executionDone:
-			case <-time.After(5 * time.Second):
-				logger.Warnf("Timeout waiting for graceful shutdown")
+		// A live run on another process is a question, not a failure: ask, and
+		// dispatch alongside it when that is the answer.
+		var owned *todos.ErrRunOwnedElsewhere
+		if errors.As(execErr, &owned) && !forceRun && run.ConfirmConcurrent(context.Background(), owned.Error()) {
+			if result, execErr, interrupted, err = executeTODO(workDir, todo, interaction, provider, true); err != nil {
+				return err
 			}
-			interrupted = true
 		}
-
-		signal.Stop(sigChan)
-		cancel()
 
 		if result != nil {
 			fmt.Println()
@@ -584,6 +598,60 @@ func executeSingleTODOs(workDir string, todoList types.TODOS, interaction *todos
 	fmt.Println()
 	fmt.Println(clicky.MustFormat(clicky.Text("All TODOs processed", "text-blue-600 font-bold")))
 	return nil
+}
+
+// executeTODO runs one TODO to completion under the interrupt handler. The
+// separate `err` is a setup failure that aborts the whole command, where
+// execErr is this TODO's own outcome.
+func executeTODO(
+	workDir string,
+	todo *types.TODO,
+	interaction *todos.UserInteraction,
+	provider todos.Provider,
+	concurrent bool,
+) (result *todos.ExecutionResult, execErr error, interrupted bool, err error) {
+	executor, sessionID, timeout, err := newExecutor(workDir, []*types.TODO{todo}, provider)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	execCtx := todos.NewExecutorContext(ctx, logger.StandardLogger(), interaction)
+	todoExec := todos.NewTODOExecutor(workDir, executor, sessionID, provider)
+	todoExec.SetMode(todosRunMode)
+	todoExec.SetResume(resumeSession)
+	todoExec.SetConcurrent(concurrent)
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	executionDone := make(chan bool, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("Panic during TODO execution: %v\n%s", r, debug.Stack())
+			}
+			executionDone <- true
+		}()
+		result, execErr = todoExec.Execute(execCtx, todo)
+	}()
+
+	select {
+	case <-executionDone:
+	case sig := <-sigChan:
+		logger.Warnf("Received signal %v, shutting down gracefully...", sig)
+		cancel()
+		fmt.Println(clicky.Text("Interrupted - cleaning up...", "text-yellow-600 font-bold").ANSI())
+		select {
+		case <-executionDone:
+		case <-time.After(5 * time.Second):
+			logger.Warnf("Timeout waiting for graceful shutdown")
+		}
+		interrupted = true
+	}
+	return result, execErr, interrupted, nil
 }
 
 func cleanupTODOStatus(todo *types.TODO, result *todos.ExecutionResult) {
@@ -720,18 +788,11 @@ func printCmuxDryRun(group todos.TODOGroup, workDir string, model api.Model, pro
 // buildTodoRunPrompt renders the mode's prompt exactly as a dispatch would:
 // framing, sections, effort directive, and the envelope schema instruction.
 func buildTodoRunPrompt(todoList []*types.TODO, workDir string, provider todos.Provider) (string, error) {
-	cfg, resolved, err := newAgentRunConfig(context.Background(), workDir, todoList, provider)
+	cfg, _, err := newAgentRunConfig(context.Background(), workDir, todoList, provider)
 	if err != nil {
 		return "", err
 	}
-	opts := todoprompt.Options{
-		WorkDir:      workDir,
-		Mode:         resolved.Mode,
-		Spec:         cfg.Spec,
-		Template:     cfg.Template,
-		ExistingPlan: cfg.ExistingPlan,
-	}
-	req, _, err := todoprompt.Render(todoList, opts)
+	req, _, err := todoprompt.Render(todoList, cfg.PromptOptions(workDir))
 	if err != nil {
 		return "", err
 	}

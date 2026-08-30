@@ -51,9 +51,16 @@ type Input struct {
 	// WorkDir is the discovery root the .gavel.yaml layers are loaded from. It is
 	// NOT joined with a todo's CWD — the executor owns that join.
 	WorkDir string
-	// Mode is the todo operation: run, plan, or verify. ModeVerify has no prompt
-	// template and therefore no per-mode PromptSpec layer.
+	// Mode is the behaviour class: run, plan, or verify. ModeVerify has no prompt
+	// template and therefore no per-prompt PromptSpec layer.
+	//
+	// When Prompt names a prompt, that prompt's declared class wins and Mode is
+	// only checked for agreement — supplying both and disagreeing is an error, not
+	// a silent preference for one.
 	Mode types.RunMode
+	// Prompt names the template to run: run, plan, triage, or a name declared in
+	// .gavel.yaml todos.prompts. Empty defaults to the prompt matching Mode.
+	Prompt string
 	// Todos supplies the per-todo `llm:` frontmatter layer. A group run folds each
 	// todo in order, so the last todo's explicit model wins — the same single
 	// agent session runs them all.
@@ -76,10 +83,14 @@ type Resolved struct {
 	// Spec is the executable run configuration, validated except for the prompt
 	// body — which todos/prompt.Render supplies and validates.
 	Spec api.Spec
-	// Mode is Input.Mode defaulted to ModeRun, so callers stop re-deriving it.
+	// Mode is the resolved behaviour class, so callers stop re-deriving it.
 	Mode types.RunMode
-	// Template is the .gavel.yaml override template source; empty means the
-	// embedded default for Mode.
+	// Prompt is the resolved prompt name.
+	Prompt string
+	// Envelope is the structured result the resolved prompt returns.
+	Envelope todoprompt.EnvelopeKind
+	// Template is the template source to render — an override's when it supplies
+	// one, otherwise the embedded built-in.
 	Template string
 	Driver   drivers.Kind
 	GroupBy  string
@@ -98,15 +109,16 @@ type Resolved struct {
 // malformed model, timeout, effort conflict, or permission value rather than
 // dropping the offending value and running with a silent default.
 func Resolve(in Input) (Resolved, error) {
-	if in.Mode == "" {
-		in.Mode = types.ModeRun
-	}
 	cfg, err := verify.LoadGavelConfig(in.WorkDir)
 	if err != nil {
 		return Resolved{}, fmt.Errorf("load .gavel.yaml: %w", err)
 	}
+	definition, err := resolvePrompt(&in, cfg.Todos)
+	if err != nil {
+		return Resolved{}, err
+	}
 
-	byMode, template, err := modeLayers(in, cfg)
+	byMode, template, err := modeLayers(in, cfg, definition)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -161,6 +173,8 @@ func Resolve(in Input) (Resolved, error) {
 	return Resolved{
 		Spec:       folded,
 		Mode:       in.Mode,
+		Prompt:     definition.Name,
+		Envelope:   definition.Envelope,
 		Template:   template,
 		Driver:     driver,
 		GroupBy:    cfg.Todos.GroupBy,
@@ -182,25 +196,63 @@ func applyModeInvariants(s *api.Spec, mode types.RunMode) {
 	s.Workflow.Commits = nil
 }
 
-// modeLayers returns the configuration layers the mode itself contributes, plus
-// the template source Render should use.
+// resolvePrompt picks the prompt this run executes and reconciles it with the
+// requested behaviour class, mutating in.Mode to the class that actually applies.
 //
-// Run and plan are prompt-driven: the mode's .prompt frontmatter, an optional
-// `file:` override's frontmatter, and the .gavel.yaml PromptSpec. Verification
-// has no prompt — its checklist is generated from the todo's acceptance criteria
-// — but it is still a run, and which model grades a definition of done is a
-// configuration decision like any other, so todos.verify contributes a spec.
-func modeLayers(in Input, cfg verify.GavelConfig) ([]Layer, string, error) {
-	switch in.Mode {
-	case types.ModeRun:
-		return templateLayers(in, cfg.Todos.Run, "todos.run")
-	case types.ModePlan:
-		return templateLayers(in, cfg.Todos.Plan, "todos.plan")
-	case types.ModeVerify:
-		return []Layer{{Name: ".gavel.yaml todos.verify", Spec: cfg.Todos.Verify}}, "", nil
-	default:
-		return nil, "", fmt.Errorf("unknown todo run mode %q", in.Mode)
+// The two inputs can disagree, and the disagreement is always the caller's error
+// rather than a preference to resolve silently: `--prompt triage --mode run`
+// means the caller asked for a read-only pass AND for a committing one.
+// Verification is the exception — it runs no prompt at all.
+func resolvePrompt(in *Input, cfg verify.TodosConfig) (todoprompt.Definition, error) {
+	if in.Mode == types.ModeVerify {
+		if strings.TrimSpace(in.Prompt) != "" {
+			return todoprompt.Definition{}, fmt.Errorf(
+				"prompt %q cannot be used with verify, which runs the fixture rather than an agent prompt", in.Prompt)
+		}
+		return todoprompt.Definition{Name: string(types.ModeVerify), Class: types.ModeVerify}, nil
 	}
+
+	catalog, err := todoprompt.NewCatalog(cfg)
+	if err != nil {
+		return todoprompt.Definition{}, err
+	}
+	name := strings.TrimSpace(in.Prompt)
+	if name == "" {
+		// No prompt named: the mode still selects one, which is what keeps every
+		// pre-existing `--mode plan` caller working unchanged.
+		name = string(in.Mode)
+		if in.Mode == "" {
+			name = todoprompt.DefaultName
+		}
+	}
+	definition, err := catalog.Lookup(name)
+	if err != nil {
+		return todoprompt.Definition{}, err
+	}
+	if in.Mode != "" && in.Mode != definition.Class {
+		return todoprompt.Definition{}, fmt.Errorf(
+			"prompt %q runs as %s, but mode %s was requested; drop one",
+			definition.Name, definition.Class, in.Mode)
+	}
+	in.Mode = definition.Class
+	in.Prompt = definition.Name
+	return definition, nil
+}
+
+// modeLayers returns the configuration layers the prompt itself contributes,
+// plus the template source Render should use.
+//
+// Run, plan, and triage are prompt-driven: the prompt's .prompt frontmatter, an
+// optional `file:` override's frontmatter, and the .gavel.yaml PromptSpec.
+// Verification has no prompt — its checklist is generated from the todo's
+// acceptance criteria — but it is still a run, and which model grades a
+// definition of done is a configuration decision like any other, so todos.verify
+// contributes a spec.
+func modeLayers(in Input, cfg verify.GavelConfig, definition todoprompt.Definition) ([]Layer, string, error) {
+	if in.Mode == types.ModeVerify {
+		return []Layer{{Name: ".gavel.yaml todos.verify", Spec: cfg.Todos.Verify}}, "", nil
+	}
+	return templateLayers(in, definition)
 }
 
 // templateLayers renders the frontmatter of each template that contributes to
@@ -210,36 +262,37 @@ func modeLayers(in Input, cfg verify.GavelConfig) ([]Layer, string, error) {
 // Frontmatter is rendered with the same variables Render uses so a template that
 // computes its frontmatter resolves; the todo body is empty here because only
 // the spec half is being extracted.
-func templateLayers(in Input, op verify.PromptSpec, key string) ([]Layer, string, error) {
-	data := map[string]any{
-		"multiple":     len(in.Todos) > 1,
-		"count":        len(in.Todos),
-		"body":         "",
-		"existingPlan": "",
+func templateLayers(in Input, definition todoprompt.Definition) ([]Layer, string, error) {
+	data := todoprompt.TemplateData(in.Todos, todoprompt.Options{
+		WorkDir:  in.WorkDir,
+		Prompt:   definition.Name,
+		Envelope: definition.Envelope,
+		Mode:     definition.Class,
+	})
+	data["body"] = ""
+
+	key := "todos." + definition.Name
+	var layers []Layer
+	if strings.TrimSpace(definition.Builtin) != "" {
+		builtinSpec, err := verify.RenderPromptSpec(definition.Builtin, data)
+		if err != nil {
+			return nil, "", fmt.Errorf("render built-in %s prompt frontmatter: %w", definition.Name, err)
+		}
+		layers = append(layers, Layer{Name: "todos-" + definition.Name + ".prompt", Spec: withoutPromptBody(builtinSpec)})
 	}
 
-	builtin, err := todoprompt.Default(in.Mode)
+	template, err := definition.Template(in.WorkDir)
 	if err != nil {
 		return nil, "", err
 	}
-	builtinSpec, err := verify.RenderPromptSpec(builtin, data)
-	if err != nil {
-		return nil, "", fmt.Errorf("render built-in %s prompt frontmatter: %w", in.Mode, err)
-	}
-	layers := []Layer{{Name: "todos-" + string(in.Mode) + ".prompt", Spec: withoutPromptBody(builtinSpec)}}
-
-	template, err := op.TemplateSource(in.WorkDir, "")
-	if err != nil {
-		return nil, "", fmt.Errorf("resolve %s override: %w", key, err)
-	}
-	if op.File != "" {
+	if definition.Override.File != "" {
 		fileSpec, err := verify.RenderPromptSpec(template, data)
 		if err != nil {
 			return nil, "", fmt.Errorf("render %s file frontmatter: %w", key, err)
 		}
 		layers = append(layers, Layer{Name: key + " file", Spec: withoutPromptBody(fileSpec)})
 	}
-	layers = append(layers, Layer{Name: ".gavel.yaml " + key, Spec: withoutPromptBody(op.Spec)})
+	layers = append(layers, Layer{Name: ".gavel.yaml " + key, Spec: withoutPromptBody(definition.Override.Spec)})
 	return layers, template, nil
 }
 

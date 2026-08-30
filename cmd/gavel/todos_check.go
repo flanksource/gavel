@@ -202,11 +202,12 @@ func runTodosCheck(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	checkOpts := todos.CheckOptions{
-		WorkDir:  workDir,
-		Timeout:  resolved.Timeout,
-		Logger:   logger.StandardLogger(),
-		Provider: provider,
-		Spec:     &resolved.Spec,
+		WorkDir:     workDir,
+		Timeout:     resolved.Timeout,
+		Logger:      logger.StandardLogger(),
+		Provider:    provider,
+		Spec:        &resolved.Spec,
+		Concurrency: resolveCheckConcurrency(workDir),
 	}
 
 	ctx := context.Background()
@@ -257,7 +258,11 @@ func init() {
 	todosRunCmd.Flags().IntVar(&maxTurns, "max-turns", 0, "Maximum conversation turns")
 	todosRunCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Interactively select TODOs to run")
 	todosRunCmd.Flags().StringVar(&groupBy, "group-by", "", "Group TODOs by: file, directory, repo, all, or none")
-	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Todo operation: run (implement) or plan (propose a reviewable plan)")
+	todosRunCmd.Flags().StringVar(&todosMode, "mode", "run", "Behaviour class: run (implement and commit) or plan (propose a reviewable plan). Prefer --prompt")
+	todosRunCmd.Flags().StringVar(&todosPrompt, "prompt", "",
+		"Prompt to run: run, plan, triage, or a name from .gavel.yaml todos.prompts. "+
+			"Each declares its own behaviour class, so --mode is only needed to assert one. "+
+			"Run `gavel todos prompts` to list them")
 	todosRunCmd.Flags().StringVar(&todosDriver, "driver", "", "Execution mechanism: api, agent, cli, or cmux (default: cmux). The coding agent is derived from --model")
 	todosRunCmd.Flags().StringVar(&todoModel, "model", "", "LLM model override for TODO execution (empty: the mode's .prompt frontmatter default)")
 	// Empty, not "medium": the flag is the highest resolution layer, so a non-zero
@@ -265,6 +270,7 @@ func init() {
 	// applies medium once nothing else has spoken.
 	todosRunCmd.Flags().StringVar(&todoEffort, "effort", "", "Reasoning effort directive: low, medium, high, or xhigh (empty: the mode's .prompt frontmatter, else medium)")
 	todosRunCmd.Flags().BoolVar(&resumeSession, "resume", false, "Resume the TODO's prior agent session instead of starting a fresh one")
+	todosRunCmd.Flags().BoolVar(&forceRun, "force", false, "Dispatch even when the TODO already has a live run on another process: the two runs proceed in parallel (without it you are asked)")
 	todosRunCmd.Flags().BoolVar(&dirty, "dirty", false, "Carry the working tree's uncommitted changes into the configured checkout's worktree (no-op without one: the run already happens in the dirty tree)")
 	todosRunCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands and prompts without executing")
 	todosRunCmd.Flags().BoolVar(&commitAfter, "commit", true, "Run the equivalent of `gavel commit` after each TODO's agent completes (use --commit=false to disable)")
@@ -272,6 +278,8 @@ func init() {
 
 	todosCheckCmd.Flags().StringVar(&filterStatus, "status", "", "Filter TODOs by status")
 	todosCheckCmd.Flags().DurationVar(&checkTimeout, "timeout", 0, "Test execution timeout (empty: .gavel.yaml todos.timeout, else 30m)")
+	todosCheckCmd.Flags().IntVar(&checkConcurrency, "concurrency", 0,
+		"How many TODOs to check at once (0: .gavel.yaml todos.checkConcurrency, else 4). Each check runs that TODO's fixture")
 }
 
 func newTodosProvider(workDir string) (todos.Provider, error) {

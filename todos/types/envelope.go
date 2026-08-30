@@ -71,6 +71,113 @@ func (e *ResultEnvelope) Validate() error {
 	return nil
 }
 
+// TriageVerdict is the fate a triage run assigns a TODO. The five verdicts are
+// the ones the gavel-triage workflow defines; they decide which fields of the
+// envelope gavel is expected to act on.
+type TriageVerdict string
+
+const (
+	// VerdictReady means the TODO is implementable as written; only its priority
+	// may need correcting.
+	VerdictReady TriageVerdict = "ready"
+	// VerdictShape means the work is real but under-specified: the body and the
+	// verification fixture are rewritten.
+	VerdictShape TriageVerdict = "shape"
+	// VerdictInvestigate means the solution is genuinely unknown, so the TODO is
+	// left for a planning run rather than reshaped.
+	VerdictInvestigate TriageVerdict = "investigate"
+	// VerdictDone means the agent believes the work is already implemented. It is
+	// a claim, never a status write: the definition-of-done check proves it.
+	VerdictDone TriageVerdict = "done"
+	// VerdictRetire means the TODO is obsolete, a duplicate, or won't be done.
+	VerdictRetire TriageVerdict = "retire"
+)
+
+// KnownTriageVerdicts returns every verdict a triage envelope may carry.
+func KnownTriageVerdicts() []TriageVerdict {
+	return []TriageVerdict{VerdictReady, VerdictShape, VerdictInvestigate, VerdictDone, VerdictRetire}
+}
+
+// TriageEnvelope is the triage structured result: the run envelope plus the
+// verdict and the edits gavel applies on the agent's behalf. The agent itself is
+// read-only — it proposes, gavel writes — so every field here is an instruction,
+// validated before it reaches storage.
+//
+// Every field is a top-level scalar (or a scalar array) for the same reason
+// PlanEnvelope's are: nested objects become $ref nodes that some backends refuse
+// to emit. See TestTriageEnvelopeSchemaUsesFlatScalarFields.
+type TriageEnvelope struct {
+	ResultEnvelope
+	Verdict      TriageVerdict `json:"verdict" jsonschema:"required,enum=ready,enum=shape,enum=investigate,enum=done,enum=retire" jsonschema_description:"ready = implementable as written, shape = rewrite body and fixture, investigate = needs a planning run, done = believed already implemented, retire = obsolete or duplicate"`
+	Title        string        `json:"title,omitempty" jsonschema_description:"Replacement title, when the current one does not describe the work"`
+	Body         string        `json:"body,omitempty" jsonschema_description:"The compacted description: problem statement, then ## Acceptance Criteria, then ## Scope. Required when verdict is shape"`
+	Verification string        `json:"verification,omitempty" jsonschema_description:"The rewritten ## Verification fixture markdown, without the outer heading"`
+	Priority     string        `json:"priority,omitempty" jsonschema:"enum=high,enum=medium,enum=low"`
+	Status       string        `json:"status,omitempty" jsonschema:"enum=draft,enum=pending,enum=verified,enum=completed,enum=skipped" jsonschema_description:"Only directly-assignable statuses; run projections such as review or in_progress are rejected"`
+	DuplicateOf  string        `json:"duplicateOf,omitempty" jsonschema_description:"Short id of the surviving TODO this one duplicates"`
+	Related      []string      `json:"related,omitempty" jsonschema_description:"Short ids of related TODOs to link"`
+	Comment      string        `json:"comment,omitempty" jsonschema_description:"Rationale recorded on the TODO. Required when verdict is retire"`
+}
+
+// Validate extends ResultEnvelope.Validate with the triage contract. It rejects
+// a status or priority storage would decline rather than letting the write be
+// silently dropped, and it holds the two verdicts that mean nothing without
+// their payload to that promise.
+//
+// Ask/failed sessions are exempt: an agent that stopped to ask a question has no
+// verdict to honour.
+func (e *TriageEnvelope) Validate() error {
+	if err := e.ResultEnvelope.Validate(); err != nil {
+		return err
+	}
+	if e.EndStatus != EndCompleted {
+		return nil
+	}
+	if !e.knownVerdict() {
+		return fmt.Errorf("triage verdict %q is not one of %s", e.Verdict, joinVerdicts(KnownTriageVerdicts()))
+	}
+	if e.Verdict == VerdictShape && strings.TrimSpace(e.Body) == "" {
+		return fmt.Errorf("triage verdict %q requires a rewritten body", VerdictShape)
+	}
+	if e.Verdict == VerdictRetire && strings.TrimSpace(e.Comment) == "" {
+		return fmt.Errorf("triage verdict %q requires a comment recording why", VerdictRetire)
+	}
+	if raw := strings.TrimSpace(e.Status); raw != "" {
+		if err := ValidateAssignableStatus(Status(raw)); err != nil {
+			return fmt.Errorf("triage status: %w", err)
+		}
+	}
+	if raw := strings.TrimSpace(e.Priority); raw != "" {
+		if err := ValidatePriority(Priority(raw)); err != nil {
+			return fmt.Errorf("triage priority: %w", err)
+		}
+	}
+	return nil
+}
+
+// ChangesFixture reports whether acting on this envelope alters the TODO's
+// definition of done, which is what decides whether it earns a verification run.
+func (e *TriageEnvelope) ChangesFixture() bool {
+	return strings.TrimSpace(e.Verification) != "" || e.Verdict == VerdictDone
+}
+
+func (e *TriageEnvelope) knownVerdict() bool {
+	for _, known := range KnownTriageVerdicts() {
+		if e.Verdict == known {
+			return true
+		}
+	}
+	return false
+}
+
+func joinVerdicts(verdicts []TriageVerdict) string {
+	names := make([]string, 0, len(verdicts))
+	for _, verdict := range verdicts {
+		names = append(names, string(verdict))
+	}
+	return strings.Join(names, ", ")
+}
+
 // PlanEnvelope is the plan-mode structured result: the run envelope plus the
 // required plan definition.
 type PlanEnvelope struct {

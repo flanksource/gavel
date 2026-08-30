@@ -247,8 +247,9 @@ func syncExistingSourceTodo(ctx context.Context, provider todos.Provider, todo *
 	wantTitle := sourceTodoTitle(comment)
 	wantBody := sourceTodoBody(comment)
 	path := types.StringOrSlice{comment.PathRef()}
+	sourceLabels := sourceTodoLabels(comment)
 	edit := todos.EditRequest{
-		Labels:   sourceTodoLabels(comment),
+		Labels:   &sourceLabels,
 		Metadata: sourceTodoMetadata(comment),
 	}
 	needsEdit := false

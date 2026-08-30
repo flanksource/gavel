@@ -56,12 +56,18 @@ const (
 )
 
 // StepKind identifies the purpose of a linked Captain prompt run.
+//
+// StepTriage is a step kind but NOT a run mode: triage still behaves as a
+// plan-class run (todos/prompt/catalog.go declares it Class: ModePlan), it just
+// records itself under its own kind so a backlog can tell a triage pass apart
+// from a planning pass. types.RunMode deliberately stays three-valued.
 type StepKind string
 
 const (
 	StepPlan   StepKind = "plan"
 	StepRun    StepKind = "run"
 	StepVerify StepKind = "verify"
+	StepTriage StepKind = "triage"
 )
 
 // Workspace is the durable repository identity containing native issues.
@@ -116,6 +122,39 @@ type IssueStatusCount struct {
 	Count          int            `json:"count"`
 }
 
+// IssuePhaseRun is the latest Captain prompt run one issue has for one phase:
+// what a backlog needs to show a per-phase status, progress and elapsed time
+// without opening the todo.
+//
+// DurationSeconds comes from captain_prompt_run_overview, which measures an
+// unfinished run against clock_timestamp() — so a live phase's value ticks, and
+// is therefore only a starting point for a UI that should tick locally rather
+// than re-poll.
+type IssuePhaseRun struct {
+	IssueID    uuid.UUID  `json:"issueId"`
+	Phase      StepKind   `json:"phase"`
+	State      string     `json:"state"`
+	RunPhase   string     `json:"runPhase"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	// DurationSeconds is null until the run starts.
+	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
+	// Iterations/Succeeded/Failed are the progress of a plan, run or triage
+	// pass. Verification counts its own fixture results instead — see
+	// VerificationResult and the definition-of-done snapshot in ResultJSON.
+	Iterations         int     `json:"iterations"`
+	Succeeded          int     `json:"succeeded"`
+	Failed             int     `json:"failed"`
+	VerificationResult string  `json:"verificationResult,omitempty"`
+	CostUSD            float64 `json:"costUsd"`
+	// Active marks the run the issue currently points at, so a caller can tell a
+	// phase that is running now from one that merely ran last.
+	Active bool `json:"active"`
+	// ResultJSON carries the run's structured result; the verify phase reads its
+	// definitionOfDone.progress snapshot out of it for pass/fail counts.
+	ResultJSON []byte `json:"-"`
+}
+
 // Alias is a normalized workspace-scoped reference to an issue.
 type Alias struct {
 	WorkspaceID uuid.UUID `json:"workspaceId"`
@@ -156,6 +195,24 @@ type PromptRunLink struct {
 	StepKind    StepKind  `json:"stepKind"`
 	Ordinal     int       `json:"ordinal"`
 	CreatedAt   time.Time `json:"createdAt"`
+	// The dispatching process, when one currently holds the run. See
+	// ownership.go: a link without an owner is a run nothing is driving.
+	OwnerHostID      *string    `gorm:"column:owner_host_id" json:"ownerHostId,omitempty"`
+	OwnerPID         *int64     `gorm:"column:owner_pid" json:"ownerPid,omitempty"`
+	OwnerStartedAt   *time.Time `gorm:"column:owner_started_at" json:"ownerStartedAt,omitempty"`
+	OwnerToken       *uuid.UUID `gorm:"column:owner_token" json:"ownerToken,omitempty"`
+	OwnerHeartbeatAt *time.Time `gorm:"column:owner_heartbeat_at" json:"ownerHeartbeatAt,omitempty"`
+}
+
+// Owner returns the claim recorded on the link, or nil when the run is unowned.
+func (l PromptRunLink) Owner() *RunOwner {
+	if l.OwnerHostID == nil || l.OwnerPID == nil || l.OwnerStartedAt == nil || l.OwnerToken == nil {
+		return nil
+	}
+	return &RunOwner{
+		HostID: *l.OwnerHostID, PID: *l.OwnerPID, StartedAt: *l.OwnerStartedAt,
+		Token: *l.OwnerToken, HeartbeatAt: l.OwnerHeartbeatAt,
+	}
 }
 
 // PlanLink associates a durable Captain plan with an issue.

@@ -3,13 +3,15 @@ package todos
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/flanksource/captain/pkg/api"
 	captaindb "github.com/flanksource/captain/pkg/database"
 	"github.com/flanksource/gavel/fixtures"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/types"
+	"github.com/google/uuid"
 )
 
 const ProviderDB = "db"
@@ -24,6 +26,26 @@ var (
 	// Captain operation using a different Gavel step kind.
 	ErrRunResumeModeMismatch = errors.New("native TODO run resume mode mismatch")
 )
+
+// ErrRunOwnedElsewhere reports that a TODO already has a live run, driven by a
+// process that is still running. It is not a failure of the new dispatch so
+// much as a decision for the caller: run alongside the incumbent, or don't.
+// The dispatcher is named because "still running" is only meaningful with the
+// process that is doing the running.
+type ErrRunOwnedElsewhere struct {
+	IssueID     uuid.UUID
+	PromptRunID uuid.UUID
+	StepKind    string
+	Owner       string
+	Since       time.Duration
+}
+
+func (e *ErrRunOwnedElsewhere) Error() string {
+	return fmt.Sprintf(
+		"todo %s already has an active %s run %s, driven by %s for %s — rerun with --force to run alongside it",
+		e.IssueID, e.StepKind, e.PromptRunID, e.Owner, e.Since.Round(time.Second),
+	)
+}
 
 // Provider is the persistence boundary for TODO storage.
 type Provider interface {
@@ -48,10 +70,19 @@ type Provider interface {
 // dispatched. PostgreSQL-backed providers use it to create and attach the
 // authoritative Captain prompt run before any provider session starts.
 type RunPreparation struct {
-	Mode         types.RunMode
+	Mode types.RunMode
+	// Prompt is the name of the prompt being dispatched. Several prompts share a
+	// Mode, so it — not Mode — distinguishes two runs of the same behaviour class
+	// against one issue version. Empty means the prompt matching Mode.
+	Prompt       string
 	ExecutorName string
 	Resume       bool
-	Requested    captaindb.PromptRunRuntimeSelection
+	// Concurrent dispatches alongside a run that is still live and owned by a
+	// running process, instead of refusing. The caller has confirmed it (the
+	// --force flag, or the dashboard's confirmation), so the two runs get
+	// distinct Captain identities and each reports its own outcome.
+	Concurrent bool
+	Requested  captaindb.PromptRunRuntimeSelection
 	// Spec is the exact request the executor will dispatch — model, budget,
 	// permissions, setup, workflow and the rendered user prompt. Native storage
 	// persists it on Captain's prompt run before external execution, so a later
@@ -65,6 +96,10 @@ type RunPreparation struct {
 // not the provider-specific session identity reported after launch.
 type RunPreparationResult struct {
 	SessionID string
+	// PromptRunID is the run this execution owns. With concurrent runs allowed
+	// on one TODO, the issue's active-run pointer is no longer enough to tell
+	// an executor's callbacks which run they are reporting on.
+	PromptRunID uuid.UUID
 }
 
 // RunRuntimeProvider exposes the configuration known before dispatch.
@@ -72,18 +107,12 @@ type RunRuntimeProvider interface {
 	RunRuntimeSelection() captaindb.PromptRunRuntimeSelection
 }
 
-// RuntimeProviderForBackend maps Captain's built-in backend families to their
-// provider. Unknown custom backends remain unreported instead of being guessed.
-func RuntimeProviderForBackend(backend string) string {
-	backend = strings.ToLower(strings.TrimSpace(backend))
-	switch {
-	case strings.Contains(backend, "claude"):
-		return "anthropic"
-	case strings.Contains(backend, "codex"), strings.Contains(backend, "openai"):
-		return "openai"
-	default:
-		return ""
-	}
+// RunPromptProvider reports which named prompt an executor is about to run. It
+// is derived from the executor rather than set alongside the mode because the
+// two must agree, and a caller that remembers one and forgets the other would
+// give the run an identity that collides with a different prompt's.
+type RunPromptProvider interface {
+	RunPromptName() string
 }
 
 // RunSpecProvider exposes the exact request an executor will dispatch.
@@ -206,6 +235,21 @@ type PlanRevisionProvider interface {
 	SavePlanRevision(ctx context.Context, todo *types.TODO, markdown, actor string) (*types.TODO, error)
 }
 
+// LabelDefinitionProvider exposes the editable label taxonomy — the colour,
+// glyph and description a raw label string renders as. A definition is global
+// (every workspace) or workspace-scoped; a workspace row shadows the global one
+// of the same name, which shadows the built-in default. Labels themselves stay
+// plain strings on the TODO: this is presentation, not content.
+type LabelDefinitionProvider interface {
+	LabelDefinitions(ctx context.Context) (labels.Definitions, error)
+	SetLabelDefinition(ctx context.Context, definition labels.Definition, global bool) (labels.Definition, error)
+	// DeleteLabelDefinition retires a label. Removing it from this workspace
+	// also strips it from every TODO here; removing the global definition drops
+	// only the shared presentation, since that scope spans every project.
+	DeleteLabelDefinition(ctx context.Context, name string, global bool) (labels.Removal, error)
+	LabelCounts(ctx context.Context) (map[string]int, error)
+}
+
 type CreateRequest struct {
 	Title        string
 	Body         string
@@ -230,13 +274,17 @@ type EditRequest struct {
 	Body         *string
 	Verification *string
 	Path         *types.StringOrSlice
-	Labels       []string
-	Metadata     map[string]any
+	// Labels replaces the TODO's whole label set. A nil pointer leaves them
+	// unchanged; a non-nil empty slice clears every label. The two are different
+	// requests, which a bare slice cannot express — a plain []string made
+	// "remove the last label" indistinguishable from "don't touch labels".
+	Labels   *[]string
+	Metadata map[string]any
 }
 
 // IsEmpty reports whether the edit would change nothing.
 func (e EditRequest) IsEmpty() bool {
-	return e.Title == nil && e.Body == nil && e.Verification == nil && e.Path == nil && len(e.Labels) == 0 && len(e.Metadata) == 0
+	return e.Title == nil && e.Body == nil && e.Verification == nil && e.Path == nil && e.Labels == nil && len(e.Metadata) == 0
 }
 
 func TODOReference(todo *types.TODO) string {

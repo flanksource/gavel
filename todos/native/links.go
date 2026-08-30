@@ -8,6 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// promptRunLinkSelect is the single column list every PromptRunLink read uses,
+// so a new link column cannot be added to one query and forgotten in another.
+const promptRunLinkSelect = `
+	SELECT issue_id, prompt_run_id, step_kind, ordinal, created_at,
+	       owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at`
+
 func (r *Repository) LinkPromptRun(
 	ctx context.Context,
 	issueID, promptRunID uuid.UUID,
@@ -36,7 +42,8 @@ func (r *Repository) LinkPromptRun(
 			INSERT INTO todo_issue_prompt_runs
 				(issue_id, prompt_run_id, step_kind, ordinal, created_at)
 			VALUES (?, ?, ?, ?, now())
-			RETURNING issue_id, prompt_run_id, step_kind, ordinal, created_at`,
+			RETURNING issue_id, prompt_run_id, step_kind, ordinal, created_at,
+			          owner_host_id, owner_pid, owner_started_at, owner_token, owner_heartbeat_at`,
 			issueID, promptRunID, stepKind, ordinal,
 		).Scan(&link)
 		if result.Error != nil {
@@ -171,8 +178,7 @@ func (r *Repository) UnlinkPromptRun(
 
 func (r *Repository) ListPromptRuns(ctx context.Context, issueID uuid.UUID) ([]PromptRunLink, error) {
 	var links []PromptRunLink
-	result := r.db.WithContext(ctx).Raw(`
-		SELECT issue_id, prompt_run_id, step_kind, ordinal, created_at
+	result := r.db.WithContext(ctx).Raw(promptRunLinkSelect+`
 		FROM todo_issue_prompt_runs
 		WHERE issue_id = ? ORDER BY step_kind, ordinal, created_at`, issueID,
 	).Scan(&links)

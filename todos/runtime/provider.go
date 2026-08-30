@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/gavel/internal/database"
 	"github.com/flanksource/gavel/todos"
 	"github.com/flanksource/gavel/todos/githubpush"
+	"github.com/flanksource/gavel/todos/labels"
 	"github.com/flanksource/gavel/todos/native"
 	"github.com/flanksource/gavel/todos/types"
 	"github.com/google/uuid"
@@ -34,7 +35,20 @@ type Provider struct {
 	coordinator *native.LaunchCoordinator
 	workspace   *native.Workspace
 	preparedMu  sync.RWMutex
-	prepared    map[uuid.UUID]uuid.UUID
+	prepared    map[uuid.UUID]map[uuid.UUID]struct{}
+	// ownership drives the heartbeats that prove this process is still running
+	// the prompt runs it dispatched. See ownership.go.
+	ownership runOwnership
+	// labelsCache memoizes one resolver per workspace for the provider's
+	// lifetime. See labelResolver — it is what keeps label rendering off the
+	// per-row query path.
+	labelsMu    sync.RWMutex
+	labelsCache map[uuid.UUID]*labels.Resolver
+	// phasesCache memoizes one workspace's per-phase run index for the
+	// provider's lifetime. See phaseRuns — it is what keeps the four phase
+	// columns off the per-row query path.
+	phasesMu    sync.RWMutex
+	phasesCache map[uuid.UUID]map[uuid.UUID]types.PhaseRuns
 }
 
 var _ todos.Provider = (*Provider)(nil)
@@ -81,7 +95,7 @@ func OpenGlobal(ctx context.Context) (*Provider, error) {
 	}
 	return &Provider{
 		db: db, repository: repository, captain: captain, coordinator: coordinator,
-		prepared: map[uuid.UUID]uuid.UUID{},
+		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{},
 	}, nil
 }
 
@@ -114,7 +128,7 @@ func New(ctx context.Context, db *gorm.DB, options WorkspaceOptions) (*Provider,
 	return &Provider{
 		workDir: options.RootPath, db: db, repository: repository,
 		captain: captain, coordinator: coordinator, workspace: workspace,
-		prepared: map[uuid.UUID]uuid.UUID{},
+		prepared: map[uuid.UUID]map[uuid.UUID]struct{}{},
 	}, nil
 }
 

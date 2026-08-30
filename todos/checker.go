@@ -15,6 +15,12 @@ import (
 	"github.com/flanksource/gavel/todos/types"
 )
 
+// DefaultCheckConcurrency bounds how many definition-of-done checks run at once
+// when nothing configures it. Each check runs the TODO's fixture — a real test
+// suite — so an unbounded fan-out over a large selection thrashes the machine
+// rather than finishing sooner.
+const DefaultCheckConcurrency = 4
+
 // CheckOptions configures the TODO check operation.
 type CheckOptions struct {
 	WorkDir  string        // Working directory for test execution
@@ -22,6 +28,9 @@ type CheckOptions struct {
 	Logger   logger.Logger // Logger for output
 	Provider Provider
 	Spec     *api.Spec
+	// Concurrency caps how many checks run at once; zero uses
+	// DefaultCheckConcurrency.
+	Concurrency int
 }
 
 // CheckTODOs executes each issue's fixture-backed definition of done in
@@ -31,12 +40,16 @@ func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) 
 	if opts.Logger == nil {
 		opts.Logger = logger.StandardLogger()
 	}
-	todoGroup := task.StartGroup[*types.CheckResult]("TODO Checks")
+	concurrency := opts.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultCheckConcurrency
+	}
+	todoGroup := task.StartGroup[*types.CheckResult]("TODO Checks", task.WithConcurrency(concurrency))
 
 	for _, todo := range todoList {
 		todoRef := todo
 		todoGroup.Add(
-			todoRef.Filename(),
+			checkTaskName(todoRef),
 			func(_ flanksourceContext.Context, t *task.Task) (*types.CheckResult, error) {
 				result := CheckTODO(ctx, todoRef, CheckOptions{
 					WorkDir:  opts.WorkDir,
@@ -69,6 +82,21 @@ func CheckTODOs(ctx context.Context, todoList []*types.TODO, opts CheckOptions) 
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// checkTaskName labels one check in the task group. Filename() falls back to the
+// title for DB-backed TODOs, which two TODOs can share — and a group of
+// identically-named rows is unreadable while they run. The short id disambiguates
+// them without losing the title.
+func checkTaskName(todo *types.TODO) string {
+	name := todo.Filename()
+	if todo.ShortID == "" {
+		return name
+	}
+	if name == "" || name == todo.ShortID {
+		return todo.ShortID
+	}
+	return todo.ShortID + " " + name
 }
 
 // CheckTODO runs one issue's complete definition of done: configured test/lint

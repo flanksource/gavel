@@ -12,7 +12,14 @@ import (
 // buildTODOSection renders one TODO. grouped omits the per-todo PR context (the
 // group framing carries it instead); number, when > 0, prefixes the heading with
 // its position in the list so multi-todo runs read as a numbered checklist.
-func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int) string {
+//
+// rawFixture renders the verification section as its literal fixture source
+// rather than as the bash commands it contains. An implementation run only needs
+// to know what to execute, but a run that must REVIEW the fixture cannot judge
+// what it cannot see: the frontmatter, the CEL predicate, and the yaml step
+// structure are exactly what is being assessed, and the command projection
+// discards all three.
+func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int, rawFixture bool) string {
 	var section string
 
 	if todo.Prompt != "" {
@@ -80,15 +87,30 @@ func buildTODOSection(todo *types.TODO, workDir string, grouped bool, number int
 		section += fmt.Sprintf("## Implementation\n\n%s\n\n", todo.Implementation)
 	}
 
-	if len(todo.Verification) > 0 {
-		section += "## Verification\n\nAfter implementing your fix, verify it works by running:\n\n"
-		for _, node := range todo.Verification {
-			if node.Test != nil {
-				section += fmt.Sprintf("```bash\n%s\n```\n\n", node.Test.String())
-			}
+	section += buildVerificationSection(todo, rawFixture)
+
+	return section
+}
+
+// buildVerificationSection renders the TODO's definition of done: its literal
+// fixture source when the caller must review it, otherwise the commands to run.
+func buildVerificationSection(todo *types.TODO, rawFixture bool) string {
+	if rawFixture {
+		fixture := strings.TrimSpace(todo.VerificationMarkdown)
+		if fixture == "" {
+			return "## Verification\n\nThis TODO has NO verification fixture — nothing can currently prove it done.\n\n"
+		}
+		return fmt.Sprintf("## Verification\n\nThe current fixture, verbatim:\n\n````markdown\n%s\n````\n\n", fixture)
+	}
+	if len(todo.Verification) == 0 {
+		return ""
+	}
+	section := "## Verification\n\nAfter implementing your fix, verify it works by running:\n\n"
+	for _, node := range todo.Verification {
+		if node.Test != nil {
+			section += fmt.Sprintf("```bash\n%s\n```\n\n", node.Test.String())
 		}
 	}
-
 	return section
 }
 

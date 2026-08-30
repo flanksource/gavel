@@ -22,6 +22,7 @@ type PromptRunLaunchAttachment struct {
 	Ordinal              int
 	ExpectedIssueVersion int64
 	Actor                string
+	Owner                *RunOwner
 }
 
 type PromptRunLaunchInput struct {
@@ -171,6 +172,7 @@ func (c *LaunchCoordinator) LaunchPromptRun(
 			Ordinal:              input.Attachment.Ordinal,
 			ExpectedIssueVersion: input.Attachment.ExpectedIssueVersion,
 			Actor:                input.Attachment.Actor,
+			Owner:                input.Attachment.Owner,
 		})
 		if err != nil {
 			return err

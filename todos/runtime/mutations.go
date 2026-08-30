@@ -60,8 +60,10 @@ func (p *Provider) Edit(ctx context.Context, todo *types.TODO, edit todos.EditRe
 		patch.Verification = &verification
 		hasNativeChange = true
 	}
-	if len(edit.Labels) > 0 {
-		labels := append([]string(nil), edit.Labels...)
+	// A non-nil pointer is a request to replace the label set, including with an
+	// empty one. Gating on length instead made clearing the last label a no-op.
+	if edit.Labels != nil {
+		labels := append([]string(nil), *edit.Labels...)
 		patch.Labels = &labels
 		hasNativeChange = true
 	}

@@ -321,6 +321,14 @@ func todosSchema(specSchema map[string]any) map[string]any {
 			"plan": promptSpecSchema(prompts.TodosPlan,
 				"AI spec for the plan-mode prompt: the read-only investigation framing that produces a "+
 					"reviewable implementation plan."),
+			"triage": promptSpecSchema(prompts.TodosTriage,
+				"AI spec for the triage prompt: a read-only pass that compacts the TODO's description and "+
+					"reviews its verification fixture, reporting the edits for gavel to apply."),
+			"prompts": namedPromptsSchema(),
+			"checkConcurrency": intProp(
+				"How many definition-of-done checks run at once (`gavel todos check`, and the verification " +
+					"phase after a bulk triage). Each check runs the TODO's fixture, so an unbounded fan-out " +
+					"over a large selection thrashes the machine. Defaults to 4."),
 			"verify": specNodeSchema(specSchema,
 				"Spec a verification run executes as: `gavel todos check`, the dashboard's verify action, "+
 					"and the acceptance-criteria grader inside a run's definition-of-done loop. It overrides "+
@@ -370,6 +378,37 @@ func testSchema() map[string]any {
 					"{{ids}} (the test ids), {{file}}, {{source}}. The output schema (tests[]) is fixed."),
 		},
 	)
+}
+
+// namedPromptsSchema models todos.prompts: additional runnable prompts keyed by
+// name. Each entry is a PromptSpec plus the metadata that makes it selectable —
+// which behaviour class it runs as, and how it is labelled.
+//
+// It carries no x-prompt-id: the settings UI links a field to one built-in
+// descriptor, and these entries are user-declared with no built-in default.
+func namedPromptsSchema() map[string]any {
+	entry := promptSpecSchema("", "One named prompt, runnable with `gavel todos run --prompt <name>`.")
+	delete(entry, "x-prompt-id")
+	properties, ok := entry["properties"].(map[string]any)
+	if !ok {
+		panic("promptSpecSchema has no properties")
+	}
+	properties["class"] = map[string]any{
+		"description": "Behaviour class this prompt runs as: run commits and verifies its work, plan does " +
+			"neither. Defaults to plan — a prompt that was never told it may commit must not inherit " +
+			"the right to.",
+		"enum": []any{"run", "plan"},
+	}
+	properties["title"] = stringProp("Short label shown by `gavel todos prompts` and the dashboard.")
+	properties["description"] = stringProp("What this prompt does and when to run it.")
+	return map[string]any{
+		"description": "Additional named prompts, keyed by name. A named prompt supplies the template and " +
+			"model; class says which behaviour it runs as, so a project can add a security or docs " +
+			"pass without gavel gaining a run mode. Built-in names (run, plan, triage) may be " +
+			"redeclared here to replace their template wholesale.",
+		"type":                 "object",
+		"additionalProperties": entry,
+	}
 }
 
 // promptSpecSchema models a PromptSpec: one AI operation's captain api.Spec
